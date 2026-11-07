@@ -6084,7 +6084,7 @@
         "ordinal": "?Counter",
         "nullable": "?bool",
         "primary_key": "?bool",
-        "default_value": "?Text",
+        "default_value": "?DefaultValueText",
         "column_key": "?Label",
         "extra": "?Text",
         "unique": "?bool",

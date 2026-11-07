@@ -120,10 +120,6 @@ pub(super) async fn read(
             "Server catalog grants determine visibility; grant metadata visibility for full coverage.",
         ],
     )?;
-    if c.request.test_only {
-        conn.close().await.map_err(classify)?;
-        return Ok(c.finish(profile));
-    }
     let mut collector = c;
     let mut names = Vec::new();
     {
@@ -174,6 +170,10 @@ pub(super) async fn read(
             .any(|v| !names.iter().any(|n| n == v.0.as_str()))
     {
         return Err(MetadataFailure::AccessDenied);
+    }
+    if collector.request.test_only {
+        conn.close().await.map_err(classify)?;
+        return Ok(collector.finish(profile));
     }
     for name in names {
         let mut catalog = Catalog::new(collector, name.clone())?;

@@ -63,6 +63,19 @@ impl Draft {
             ca_file: None,
         }
     }
+    fn changed_engine(&mut self) {
+        let file = self.config["engine"] == "Sqlite";
+        self.config["authentication"] = json!(if file { "File" } else { "Password" });
+        if file {
+            for key in ["tls", "credentialRef", "caCertificate", "username"] {
+                self.config.as_object_mut().unwrap().remove(key);
+            }
+            self.password.clear();
+            self.ca_file = None;
+        } else {
+            self.config["tls"] = json!("VerifyFull");
+        }
+    }
     pub fn edit(source: &SchemaConnection, scope: Option<String>) -> Option<Self> {
         Some(Self {
             id: Some(source.id.as_str().into()),
@@ -307,7 +320,7 @@ impl DatabasesScreen {
             ui.add_enabled_ui(!self.busy,|ui|{
                 text(ui,"Database source name",&mut draft.config,"name");
                 let old=draft.config["engine"].clone();choice(ui,"Database engine",&mut draft.config,"engine",&["Sqlite","MariaDb","MySql","Postgres","SqlServer"]);
-                if draft.config["engine"]!=old {let file=draft.config["engine"]=="Sqlite";draft.config["authentication"]=json!(if file{"File"}else{"Password"});if file{draft.config.as_object_mut().unwrap().remove("tls");}else{draft.config["tls"]=json!("VerifyFull");}}
+                if draft.config["engine"]!=old {draft.changed_engine();}
                 text(ui,"Database file or endpoint",&mut draft.config,"endpoint");
                 if draft.config["engine"]=="Sqlite" {if button(ui,"Choose database file").clicked(){actions.push(Action::PickDatabase);}}else{
                     text(ui,"Database username",&mut draft.config,"username");field(ui,"Database password (blank keeps saved password)",&mut draft.password,true);

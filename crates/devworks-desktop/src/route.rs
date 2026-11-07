@@ -239,10 +239,10 @@ pub static SCREENS: [Screen; 20] = [
         summary: "Indexed database structure and separately permitted access.",
         group: NavGroup::Intelligence,
         help_topic: "databases",
-        subviews: &["Schema", "Relationships", "Access"],
-        inner_sidebar: Some("Database sources"),
+        subviews: &[],
+        inner_sidebar: None,
         summary_strip: &[],
-        pending: pending("database schema sources and access", "DW-36, DW-37"),
+        pending: None,
         link: None,
     },
     Screen {

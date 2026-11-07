@@ -92,3 +92,8 @@ def append_metadata_cases(case, sample, request, artifact):
     output=dict(kind='schemas.connections',value=dict(items=[leased],hasMore=False))
     case('dw36-r5-retained-view','operation-result.r5',output)
     case('dw36-before5-retained-view','operation-result.r4',output,False,False)
+
+    for name, default, valid in [('empty', '', True), ('maximum', 'x'*4096, True), ('over-bound', 'x'*4097, False)]:
+        candidate = copy.deepcopy(obj)
+        candidate['metadata']['defaultValue'] = default
+        case('dw36-r5-default-'+name, 'operation-result.r5', dict(kind='schemas.objects', value=dict(items=[candidate], hasMore=False)), valid, valid)

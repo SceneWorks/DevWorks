@@ -22693,7 +22693,7 @@
         "defaultValue": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Text1To4096"
+              "$ref": "#/$defs/Text0To4096"
             },
             {
               "type": "null"
@@ -23422,6 +23422,12 @@
         "observedAtMs"
       ],
       "type": "object"
+    },
+    "Text0To4096": {
+      "maxLength": 4096,
+      "minLength": 0,
+      "pattern": "^[^\\u0000]*$",
+      "type": "string"
     },
     "Text0To65536": {
       "maxLength": 65536,

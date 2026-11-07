@@ -16874,7 +16874,7 @@ pub struct SchemaObjectMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_key: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_value: Option<Text>,
+    pub default_value: Option<DefaultValueText>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column_key: Option<Label>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

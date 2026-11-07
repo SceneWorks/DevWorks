@@ -273,11 +273,20 @@ impl Shell {
             .map(|p| (p.id.0.as_str().into(), p.name.0.clone()))
             .collect::<Vec<_>>();
         let mut actions = Vec::new();
-        let online = self.online().is_ok();
+        let availability = self.online();
+        let online = availability.is_ok();
         eframe::egui::ScrollArea::vertical()
             .id_salt(("database-screen", self.databases.project.clone()))
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                if let Err(reason) = &availability {
+                    crate::widgets::state_block(
+                        ui,
+                        &crate::widgets::ViewState::Offline {
+                            reason: reason.clone(),
+                        },
+                    );
+                }
                 self.databases.ui(ui, online, &projects, &mut actions)
             });
         for action in actions {
@@ -393,6 +402,7 @@ impl Shell {
                 self.databases.focus_object = true;
             }
             Action::Children(id) => {
+                self.databases.object_id = None;
                 self.databases.parent = Some(id);
                 self.load_database_objects(false);
             }

@@ -3,6 +3,10 @@ on:
   pull_request:
     paths:
       - 'crates/devworks-adapters/**'
+      - 'crates/devworks-desktop/**'
+      - 'crates/devworks-engine/src/schemas.rs'
+      - 'crates/devworks-engine/src/runtime.rs'
+      - 'crates/devworks-core/src/services/schemas/**'
       - 'crates/devworks-core/src/ports/database.rs'
       - 'tools/ci/schema_sqlserver_fixture.py'
       - 'docs/architecture/validation/schema-sources/**'

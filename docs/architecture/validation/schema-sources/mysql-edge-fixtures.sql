@@ -6,3 +6,5 @@ SET @ddl=CONCAT('CREATE TABLE meta_large_default(value TEXT DEFAULT (''',REPEAT(
 PREPARE metadata_fixture_ddl FROM @ddl;
 EXECUTE metadata_fixture_ddl;
 DEALLOCATE PREPARE metadata_fixture_ddl;
+
+CREATE TABLE meta_empty_default(value VARCHAR(20) DEFAULT '', absent_value VARCHAR(20) DEFAULT NULL);
