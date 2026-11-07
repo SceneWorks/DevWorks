@@ -117,6 +117,7 @@ mod diagnostics;
 mod embedding;
 mod evals;
 mod git;
+mod github;
 mod graph;
 mod help;
 mod indexing;

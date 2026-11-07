@@ -13,6 +13,7 @@ pub mod cursor;
 pub mod diagnostics;
 pub mod evals;
 pub mod git;
+pub mod github;
 pub mod graph;
 pub mod help;
 pub mod history;

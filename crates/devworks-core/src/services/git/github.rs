@@ -119,7 +119,7 @@ fn parse(repository: &Repository, value: &Value) -> Result<PullRequest, Fault> {
     })
 }
 impl GitHubClient {
-    fn token(&self, store: &dyn ApplicationStore) -> Result<Secret, Fault> {
+    pub(crate) fn token(&self, store: &dyn ApplicationStore) -> Result<Secret, Fault> {
         let reference = read_snapshot(store, &ReadOptions::default(), |s| {
             let layer = current_layer(s.configuration(), &ConfigScope::Workspace)?;
             let d = descriptor("github.credential").expect("catalog credential");
