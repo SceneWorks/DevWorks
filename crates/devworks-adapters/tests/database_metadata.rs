@@ -1154,3 +1154,22 @@ fn native_postgres_probe_checks_selected_catalog_access() {
 fn native_sql_server_probe_checks_selected_catalog_access() {
     selected_catalog_probe("SqlServer", "DEVWORKS_METADATA_SQLSERVER");
 }
+
+#[test]
+#[ignore = "explicit isolated PostgreSQL primary key INCLUDE fixture"]
+fn native_review7_postgres_included_column_is_not_a_primary_key() {
+    let snapshot = boundary_snapshot(
+        "Postgres",
+        "DEVWORKS_METADATA_POSTGRES",
+        "meta_include_primary",
+    );
+    for (name, primary, nullable) in [("id", true, false), ("payload", false, true)] {
+        let column = snapshot
+            .objects
+            .iter()
+            .find(|o| o.kind == "Column" && o.metadata.name.0 == name)
+            .unwrap();
+        assert_eq!(column.metadata.primary_key, Some(primary), "{name}");
+        assert_eq!(column.metadata.nullable, Some(nullable), "{name}");
+    }
+}
