@@ -892,6 +892,14 @@ impl Backend for DesktopBackend {
             .stage_api_key(self.host.ctx.principal(), key)
             .map_err(|e| e.to_string())
     }
+    fn generate_database_encryption_key(&self) -> Result<Secret, String> {
+        self.host
+            .runtime
+            .schemas()
+            .ok_or_else(|| "Database metadata is unavailable".to_owned())?
+            .generate_encryption_key(&self.host.ctx, &devworks_adapters::OsEntropy)
+            .map_err(|_| "Encryption key generation is unavailable".to_owned())
+    }
     fn stage_database_password(&self, password: Secret) -> Result<Id, String> {
         self.host
             .runtime

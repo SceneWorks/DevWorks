@@ -241,6 +241,18 @@ impl Shell {
     }
     fn database_action(&mut self, action: Action) {
         match action {
+            Action::GenerateKey => match self
+                .backend()
+                .ok_or_else(|| "Application is offline".to_owned())
+                .and_then(|b| b.generate_database_encryption_key())
+            {
+                Ok(key) => {
+                    self.databases.generated_key = Some(key);
+                    self.databases.error = None;
+                }
+                Err(error) => self.databases.error = Some(error),
+            },
+            Action::ClearKey => self.databases.generated_key = None,
             Action::Refresh => {
                 self.databases.view = None;
                 self.databases.read_pin = None;
@@ -326,7 +338,10 @@ impl Shell {
                 self.databases.filter.clear();
                 self.load_database_objects(false);
             }
-            Action::Inspect(object) => self.databases.selected_object = Some(object),
+            Action::Inspect(object) => {
+                self.databases.selected_object = Some(object);
+                self.databases.focus_object = true;
+            }
             Action::Children(id) => {
                 self.databases.parent = Some(id);
                 self.load_database_objects(false);

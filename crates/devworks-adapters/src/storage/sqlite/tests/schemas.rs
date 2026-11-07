@@ -1767,3 +1767,59 @@ fn certificate_copy_rechecks_original_artifact_after_preparation_before_commit()
     assert_eq!(reader.calls.load(Ordering::SeqCst), 0);
     service.stop();
 }
+
+#[test]
+fn retained_key_generation_is_human_only_exact_base64_and_never_staged_as_a_credential() {
+    use devworks_core::ports::{
+        http::Entropy,
+        secrets::{SecretStore, SessionSecrets},
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct RecordedEntropy(AtomicUsize);
+    impl Entropy for RecordedEntropy {
+        fn fill(&self, bytes: &mut [u8]) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(bytes.len(), 32);
+            for (n, b) in bytes.iter_mut().enumerate() {
+                *b = n as u8;
+            }
+        }
+    }
+    let h = Harness::new();
+    let s = Arc::new(h.store());
+    let secrets = Arc::new(SessionSecrets::new());
+    let service =
+        devworks_core::services::schemas::SchemaService::new(h.ids.clone(), h.clock.clone())
+            .with_credentials(s.clone(), secrets.clone());
+    let entropy = RecordedEntropy(AtomicUsize::new(0));
+    let human = schema_context(&s, "schema-owner");
+    let key = service.generate_encryption_key(&human, &entropy).unwrap();
+    assert_eq!(key.expose(), "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+    assert!(!format!("{key:?}").contains(key.expose()));
+    assert!(
+        secrets
+            .list(&format!("{}:schema-sources", s.info().store_id.0.as_str()))
+            .unwrap()
+            .is_empty()
+    );
+    let agent = devworks_core::context::HostIngress::new(&*s).context(
+        ActorId(id("key-agent")),
+        devworks_core::context::PrincipalKind::Agent,
+        id("key-invocation"),
+        id("key-tools"),
+        devworks_core::protocol::Counter::new(s.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    assert!(matches!(
+        service.generate_encryption_key(&agent, &entropy),
+        Err(devworks_core::ports::secrets::SecretError::Denied)
+    ));
+    assert_eq!(
+        entropy.0.load(Ordering::SeqCst),
+        1,
+        "denied caller never reaches entropy"
+    );
+}

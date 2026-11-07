@@ -4,6 +4,8 @@ use eframe::egui::{self, Ui};
 use serde_json::{Value, json};
 #[derive(Default)]
 pub struct DatabasesScreen {
+    pub generated_key: Option<devworks_core::ports::secrets::Secret>,
+    pub focus_object: bool,
     pub project: Option<String>,
     pub loaded: bool,
     pub loading: bool,
@@ -72,6 +74,8 @@ impl Draft {
     }
 }
 pub enum Action {
+    GenerateKey,
+    ClearKey,
     Refresh,
     More,
     New,
@@ -232,6 +236,20 @@ impl DatabasesScreen {
             },
         ));
         ui.label("Manage target connections and explore read-only structural metadata.");
+        ui.horizontal_wrapped(|ui| {
+            if button_enabled(ui, "Generate encryption key", online).clicked() {
+                actions.push(Action::GenerateKey);
+            }
+            if let Some(key) = &self.generated_key {
+                ui.label("256-bit Base64 key ready");
+                if button(ui, "Copy generated encryption key").clicked() {
+                    ui.ctx().copy_text(key.expose().to_owned());
+                }
+                if button(ui, "Clear generated encryption key").clicked() {
+                    actions.push(Action::ClearKey);
+                }
+            }
+        });
         if let Some(error) = &self.error {
             ui.colored_label(egui::Color32::LIGHT_RED, error);
         }
@@ -507,7 +525,11 @@ impl DatabasesScreen {
         }
         if let Some(object) = &self.selected_object {
             ui.separator();
-            ui.heading(&object.qualified_name.0);
+            let heading = ui.heading(&object.qualified_name.0);
+            if self.focus_object {
+                heading.scroll_to_me(Some(egui::Align::TOP));
+                self.focus_object = false;
+            }
             let coverage = &object.coverage;
             ui.label(format!("Object coverage: {:?}", coverage.state));
             for gap in &coverage.gaps {

@@ -265,3 +265,18 @@ bytes; two native schema-job cases pass10.71s. Workspace/all-target strict check
 pass39.11s before final current-main integration. No learned computation, real
 credential store access or OS trust changes occur. Review/CI/merge/acceptance remain
 required; this checkpoint does not complete DW-36.
+
+Final retained utility checkpoint: the frozen admin GenerateKey endpoint and UI
+specify a32-byte CSPRNG AES key encoded as standard padded Base64. SchemaService
+now owns this same native Human-only utility using the existing Entropy/OsEntropy
+boundary. The value is a redacted transient Secret, masked in the screen, explicitly
+copyable/clearable and dropped on navigation. It never changes source configuration,
+creates a credential handle, or enters protocol/history/persisted UI memory.
+Thirteen native source/custody/utility cases pass11.39s; all5 native Databases UI
+cases pass24.98s, including exact clipboard command bytes and privacy/clear behavior.
+Inspect actions bring their actual object details into view. One earlier
+uninstrumented missing-coverage-label event remains unattributed; that case passed
+unchanged alone, and the final full suite preserves its assertions and bounds.
+Final workspace/all-target strict checks pass11.86s. The retained-source audit maps
+all source entries without dropping the admin utility or conflating metadata with
+DW37's data operations. Review, actual supported-x86CI, merge and acceptance remain.

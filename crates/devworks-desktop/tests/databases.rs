@@ -301,7 +301,17 @@ fn native_database_inspector_explains_partial_object_metadata() {
                 .any(|o| o.qualified_name.0 == "main.defaults.value")
     });
     click(&mut h, Role::Button, "Column main.defaults.value");
-    assert!(h.query_by_label("Object coverage: Partial").is_some());
+    assert!(
+        h.query_by_label("Object coverage: Partial").is_some(),
+        "selected={:?}; error={:?}; labels={:?}",
+        h.state()
+            .databases
+            .selected_object
+            .as_ref()
+            .map(|o| (&o.qualified_name.0, &o.coverage.state)),
+        h.state().databases.error,
+        labels(&h, Role::Label)
+    );
     assert!(
         h.query_by_label("Object coverage gap: sqlite_default_size_limit")
             .is_some()
@@ -321,4 +331,64 @@ fn native_database_inspector_explains_partial_object_metadata() {
         4096
     );
     assert_eq!(std::fs::read(path).unwrap(), original);
+}
+
+#[test]
+fn native_database_key_utility_generates_32_bytes_without_persisting_or_reconfiguring() {
+    use base64::Engine as _;
+    let _native_case = native_runtime_case();
+    let root = Root::new("database-key-utility");
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1200.0);
+    h.state_mut().navigate(Route::Databases);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Generate encryption key");
+    let key = h
+        .state()
+        .databases
+        .generated_key
+        .as_ref()
+        .expect("human utility result")
+        .expose()
+        .to_owned();
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&key)
+            .unwrap()
+            .len(),
+        32
+    );
+    assert!(!format!("{:?}", h.state().databases.generated_key).contains(&key));
+    assert!(h.query_by_label(&key).is_none(), "key bytes remain masked");
+    h.get_by_role_and_label(Role::Button, "Copy generated encryption key")
+        .click();
+    let mut copied = false;
+    for _ in 0..12 {
+        h.step();
+        copied |= h
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .any(|command| matches!(command,egui::OutputCommand::CopyText(text) if text==&key));
+        if copied {
+            break;
+        }
+    }
+    assert!(
+        copied,
+        "native clipboard command contains the exact generated key"
+    );
+    assert!(h.state().databases.connections.is_empty());
+    assert!(
+        !serde_json::to_string(&h.state().memory())
+            .unwrap()
+            .contains(&key)
+    );
+    click(&mut h, Role::Button, "Clear generated encryption key");
+    assert!(h.state().databases.generated_key.is_none());
+    click(&mut h, Role::Button, "Generate encryption key");
+    h.state_mut().navigate(Route::Chat);
+    settle(&mut h);
+    assert!(h.state().databases.generated_key.is_none());
 }

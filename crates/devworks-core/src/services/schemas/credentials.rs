@@ -73,6 +73,28 @@ impl SchemaService {
         });
         self
     }
+    /// Retained admin GenerateKey utility: fresh 32-byte AES key, standard padded Base64.
+    /// Returned only to native human ingress, never persisted or added to a protocol/history record.
+    pub fn generate_encryption_key(
+        &self,
+        context: &InvocationContext,
+        entropy: &dyn crate::ports::http::Entropy,
+    ) -> Result<Secret, SecretError> {
+        use base64::Engine as _;
+        let owner = self.credentials.as_ref().ok_or(SecretError::Denied)?;
+        let info = owner.store.info();
+        if context.principal_kind() != PrincipalKind::Human
+            || context.store_id() != &info.store_id
+            || context.restore_epoch().get() != info.restore_epoch
+        {
+            return Err(SecretError::Denied);
+        }
+        let mut bytes = [0; 32];
+        entropy.fill(&mut bytes);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes.as_slice());
+        bytes.fill(0);
+        Ok(Secret::new(encoded))
+    }
     /// Called by authenticated native human ingress. Password whitespace is meaningful.
     /// No secret is accepted from a tool body or another subsystem's opaque handle.
     pub fn stage_password(

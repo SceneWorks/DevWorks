@@ -448,6 +448,9 @@ impl Shell {
     /// Navigates to `route`. Returning Home closes the coordinator sidebar and shows the same
     /// conversation in the centre pane; navigating elsewhere never opens it (UI-13).
     pub fn navigate(&mut self, route: Route) {
+        if route != Route::Databases {
+            self.databases.generated_key = None;
+        }
         if route == Route::Chat {
             self.coordinator_open = false;
         }

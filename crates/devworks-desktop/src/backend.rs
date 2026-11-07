@@ -121,12 +121,15 @@ pub trait Backend: Send + Sync {
     fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
         Vec::new()
     }
-    /// Writes an API key the user typed into the OS secret store and returns its opaque handle
-    /// for the user's `router.configure` `Connection` action (user ingress only; DW-18). The
-    /// key never passes through a frame, receipt or log.
+    /// Human-only retained AES key utility. The returned value is transient and redacted.
+    fn generate_database_encryption_key(&self) -> Result<Secret, String> {
+        Err("Encryption key generation is unavailable".into())
+    }
+    /// Human-only purpose-bound database password intake; only its opaque handle enters commands.
     fn stage_database_password(&self, _password: Secret) -> Result<Id, String> {
         Err("Database credential intake is unavailable".into())
     }
+    /// Stages the user's provider API key without putting raw bytes in a frame or receipt.
     fn stage_api_key(&self, _key: Secret) -> Result<Id, String> {
         Err("credential entry is not available".into())
     }
