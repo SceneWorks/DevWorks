@@ -10680,7 +10680,7 @@
         "project_id": "ProjectId",
         "manifest_id": "Id",
         "expected_revision": "Revision",
-        "page": "Limit"
+        "page": "PageRequest"
       },
       "result": "ProjectPurgeManifestPage",
       "effect": "Local",

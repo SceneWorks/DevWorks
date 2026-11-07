@@ -347,6 +347,13 @@ pub struct ProjectManagedFileRecovery {
 }
 
 pub trait ProjectRead {
+    fn purge_inventory_with_client_keepers(
+        &self,
+        _project: &ProjectId,
+        _keepers: &[crate::protocol::provider::ArtifactRef],
+    ) -> Result<Option<ProjectPurgeInventory>, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
     fn purge_inventory(
         &self,
         _project: &ProjectId,

@@ -5492,3 +5492,134 @@ fn purge_inventory_materializes_exact_file_and_client_owners_without_deleting_sh
         ))]
     );
 }
+
+#[test]
+fn purge_client_keeper_retains_only_its_exact_version_and_minimal_artifact_header() {
+    let fx = Fx::new();
+    let first = fx
+        .saved(
+            "client-keeper-first",
+            "private header",
+            "text/plain",
+            b"independent draft reference",
+        )
+        .artifact;
+    let bytes = b"other private project version";
+    fx.source(
+        "client-keeper-second",
+        "second.bin",
+        bytes,
+        SourceOrigin::default(),
+    );
+    let user = fx.user();
+    let source = ArtifactSource::Upload {
+        ticket_id: id("client-keeper-second"),
+    };
+    let digest = Digest::try_from(sha256_hex(bytes)).unwrap();
+    let scope = ArtifactScope::Project(project("project-a"));
+    let request_digest = sha256_hex(b"client-keeper-replacement");
+    let staged = match fx
+        .svc
+        .stage(
+            &Preparation::new(&*fx.store, None, None),
+            &user,
+            &StageRequest {
+                scope: &scope,
+                source: &source,
+                expected_digest: &digest,
+                expected_bytes: bytes.len() as i64,
+                request_digest: &request_digest,
+            },
+        )
+        .unwrap()
+    {
+        Staging::Staged(s) => s,
+        other => panic!("{other:?}"),
+    };
+    let (svc, ctx, artifact) = (fx.svc.clone(), user.clone(), first.artifact_id.clone());
+    let second = fx.write(move |tx| {
+        as_failure(svc.publish_version(
+            tx,
+            &ctx,
+            &artifact,
+            &Revision::new(1).unwrap(),
+            "text/plain",
+            &staged,
+        ))
+    });
+    let native = rusqlite::Connection::open(fx.h.root.0.join("workspace.sqlite")).unwrap();
+    super::super::project_purge::guard::register(&native, false).unwrap();
+    let planning = super::super::project_purge::classification::planning_with_client_keepers(
+        &native,
+        &project("project-a"),
+        std::slice::from_ref(&first),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(planning.is_resolved(), "{:?}", planning.unresolved);
+    let inventory = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |s| {
+        s.projects().purge_inventory_with_client_keepers(
+            &project("project-a"),
+            std::slice::from_ref(&first),
+        )
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        inventory.planning.is_resolved(),
+        "{:?}",
+        inventory.planning.unresolved
+    );
+    let action = |table: &str, key: &Id| {
+        let key = sha256_hex(serde_json::to_vec(&[key.as_str()]).unwrap().as_slice());
+        inventory
+            .planning
+            .rows
+            .iter()
+            .find(|r| r.table == table && r.key_digest == key)
+            .unwrap()
+            .action
+            .clone()
+    };
+    assert_eq!(
+        action("artifact_versions", &first.version_id),
+        ProjectPurgeRowAction::Keep
+    );
+    assert_eq!(
+        action("artifact_versions", &second.id),
+        ProjectPurgeRowAction::Delete
+    );
+    assert_eq!(
+        action("artifacts", &first.artifact_id),
+        ProjectPurgeRowAction::Scrub
+    );
+    use devworks_core::ports::project_purge::PurgeFileOwner;
+    assert!(
+        inventory
+            .kept_files
+            .owners
+            .contains(&PurgeFileOwner::Preview {
+                version_id: first.version_id.clone()
+            })
+    );
+    assert!(
+        inventory
+            .removing_files
+            .owners
+            .contains(&PurgeFileOwner::Preview {
+                version_id: second.id
+            })
+    );
+    assert!(
+        fx.read(|s| s.artifacts().version(&first.version_id))
+            .is_some()
+    );
+    let mut forged = first;
+    forged.sha256 = Digest::try_from("f".repeat(64)).unwrap();
+    assert!(
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |s| s
+            .projects()
+            .purge_inventory_with_client_keepers(&project("project-a"), &[forged]))
+        .is_err()
+    );
+}

@@ -93,3 +93,13 @@ sentinel removal with shared/other-project/workspace keepers and source bytes in
 The ownership assessment digest includes the actual compiled finite minimal-header
 allowlist and retained/cleared FK column policy. Changing those rules invalidates an
 older preparation even when no stored project row changed.
+
+A surviving independently scoped client draft retains its exact validated artifact
+version, digest, length and media type. It does not retain the project's other
+versions. If no independent artifact share already keeps the full artifact, retain
+a sanitized Live artifact header needed by exact content reads: opaque owner/scope
+and origin identity, monotonic fences, a fixed deleted label and an existing retained
+version as its head. Clear private provenance and replace the old head; unrelated
+owned versions and their previews remain removable. This finite header case is bound
+into the compiled scrub/FK policy and the canonical client-keeper set is included in
+the assessment digest. A mismatched or missing native version refuses assessment.

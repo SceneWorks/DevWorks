@@ -83,3 +83,20 @@ pub trait ProjectPurgeFiles: Send + Sync {
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<(), PurgeFileFault>;
 }
+
+/// Host-produced client ownership witness. Inspecting it never restarts pending commands.
+#[derive(Clone, Debug)]
+pub struct PurgeClientSnapshot {
+    pub digest: String,
+    pub surviving_artifacts: Vec<crate::protocol::provider::ArtifactRef>,
+    /// Exact original commands, local producers or their recovery outcomes remain unsettled.
+    pub pending: bool,
+    pub removing_drafts: u64,
+}
+
+pub trait ProjectPurgeClient: Send + Sync {
+    fn inspect(
+        &self,
+        scope: &crate::ports::storage::ProjectPurgeClientScope,
+    ) -> Result<PurgeClientSnapshot, PurgeFileFault>;
+}

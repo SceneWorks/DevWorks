@@ -124,9 +124,18 @@ fn scrub_columns(table: &str) -> Option<ScrubColumns> {
     Some(match table {
         "projects" => (&[], &[]),
         "project_details" => (&["project_id"], &[]),
+        "artifacts" => (
+            &[
+                "owner_actor_id",
+                "current_project_id",
+                "origin_project_id",
+                "origin_work_id",
+            ],
+            &["current_version_id"],
+        ),
         "work_items" => (
             &["project_id", "status_id"],
-            &["parent_id", "feature_id", "active_plan_id"],
+            &["parent_feature_id", "associated_feature_id"],
         ),
         "workflow_statuses" | "index_runs" => (&["project_id"], &[]),
         "events" => (&["actor_id", "project_id"], &["root_id", "operation_id"]),
@@ -167,6 +176,7 @@ fn minimal_identity(table: &str) -> bool {
     matches!(
         table,
         "projects"
+            | "artifacts"
             | "work_items"
             | "workflow_statuses"
             | "events"
@@ -420,6 +430,13 @@ pub(in crate::storage::sqlite) fn planning(
     conn: &Connection,
     project: &ProjectId,
 ) -> Result<Option<ProjectPurgePlanning>, StorageError> {
+    planning_with_client_keepers(conn, project, &[])
+}
+pub(in crate::storage::sqlite) fn planning_with_client_keepers(
+    conn: &Connection,
+    project: &ProjectId,
+    keepers: &[devworks_core::protocol::provider::ArtifactRef],
+) -> Result<Option<ProjectPurgePlanning>, StorageError> {
     let Some(snapshot) = super::candidates::snapshot(conn, project)? else {
         return Ok(None);
     };
@@ -488,6 +505,7 @@ pub(in crate::storage::sqlite) fn planning(
     super::mixed::managed_files(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     super::mixed::source_access(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     propagate_content(&snapshot, &mut rows, &mut unresolved)?;
+    super::client_keepers::retain(conn, keepers, &snapshot, &mut rows, &mut unresolved)?;
     // Only retention decisions propagate. A reference can never add a deletion.
     loop {
         let mut changed = false;
@@ -601,7 +619,7 @@ pub(in crate::storage::sqlite) fn planning(
         "policy":devworks_core::fingerprint::sha256_hex(POLICIES.as_bytes()),
         "extension":devworks_core::fingerprint::sha256_hex(EXTENSION.as_bytes()),
         "stagingExtension":devworks_core::fingerprint::sha256_hex(STAGING_EXTENSION.as_bytes()),
-        "scrubPolicy":scrub_policy,"selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
+        "scrubPolicy":scrub_policy,"clientKeepers":super::client_keepers::digest(keepers),"selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
     })).map_err(|_|invalid())?.as_bytes());
     Ok(Some(ProjectPurgePlanning {
         snapshot,

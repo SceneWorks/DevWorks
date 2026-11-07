@@ -209,7 +209,7 @@ pub struct PurgeManifestInput {
     pub project_id: ProjectId,
     pub manifest_id: Id,
     pub expected_revision: Revision,
-    pub page: Limit,
+    pub page: PageRequest,
 }
 impl Check for PurgeManifestInput {
     fn check(&self) -> Result<(), String> {

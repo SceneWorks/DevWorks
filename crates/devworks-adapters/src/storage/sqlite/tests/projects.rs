@@ -32,6 +32,154 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+struct PurgeOwners(std::sync::Mutex<(String, bool)>);
+impl devworks_core::ports::project_purge::ProjectPurgeClient for PurgeOwners {
+    fn inspect(
+        &self,
+        _: &ProjectPurgeClientScope,
+    ) -> Result<
+        devworks_core::ports::project_purge::PurgeClientSnapshot,
+        devworks_core::ports::project_purge::PurgeFileFault,
+    > {
+        let state = self.0.lock().unwrap();
+        Ok(devworks_core::ports::project_purge::PurgeClientSnapshot {
+            digest: state.0.clone(),
+            surviving_artifacts: vec![],
+            pending: state.1,
+            removing_drafts: 0,
+        })
+    }
+}
+impl devworks_core::ports::project_purge::ProjectPurgeFiles for PurgeOwners {
+    fn inventory(
+        &self,
+        selection: &devworks_core::ports::project_purge::PurgeFileSelection,
+        _: &mut dyn FnMut() -> bool,
+    ) -> Result<
+        devworks_core::ports::project_purge::PurgeFileSnapshot,
+        devworks_core::ports::project_purge::PurgeFileFault,
+    > {
+        assert!(
+            selection.owners.is_empty(),
+            "this fixture has no managed files"
+        );
+        Ok(devworks_core::ports::project_purge::PurgeFileSnapshot {
+            selection: selection.clone(),
+            files: vec![],
+            digest: "1".repeat(64),
+        })
+    }
+    fn remove_reviewed(
+        &self,
+        _: &devworks_core::ports::project_purge::PurgeFileWitness,
+        _: &mut dyn FnMut() -> bool,
+    ) -> Result<(), devworks_core::ports::project_purge::PurgeFileFault> {
+        panic!("preparation and authorization cannot unlink")
+    }
+}
+
+#[test]
+fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirmation() {
+    use devworks_core::operations::projects::{PreparePurgeInput, PurgeInput, PurgeManifestInput};
+    use devworks_core::services::projects::purge::PurgeCoordinator;
+    let fx = Fx::new();
+    let active = fx.create("private purge preview", &["repo-1"]);
+    fx.bind_agents(&active.id);
+    let archived = project_of(applied(fx.lifecycle(
+        &fx.user(),
+        "projects.archive",
+        &active,
+    )));
+    fx.stop_ran(&archived.id);
+    let deleted = project_of(applied(fx.lifecycle(
+        &fx.user(),
+        "projects.delete",
+        &archived,
+    )));
+    let owners = Arc::new(PurgeOwners(std::sync::Mutex::new(("a".repeat(64), false))));
+    let service = Arc::new(PurgeCoordinator::new(
+        fx.h.ids.clone(),
+        owners.clone(),
+        owners.clone(),
+    ));
+    let prepare = PreparePurgeInput {
+        project_id: deleted.id.clone(),
+        expected_revision: deleted.revision.clone(),
+    };
+    let agent = fx.workspace_agent();
+    let (s, ctx) = (service.clone(), agent.clone());
+    let manifest = fx.write(move |tx| {
+        s.prepare(tx, &ctx, &prepare)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    let input = PurgeInput {
+        project_id: deleted.id.clone(),
+        manifest_id: manifest.id.clone(),
+        expected_revision: manifest.revision.clone(),
+        expected_digest: manifest.digest.clone(),
+        expected_project_revision: deleted.revision,
+        confirm: true,
+    };
+    let ingress = HostIngress::new(&*fx.store);
+    assert!(ingress.project_purge_context(&agent, &input).is_none());
+    let user = fx.user();
+    let sealed = ingress.project_purge_context(&user, &input).unwrap();
+    let (s, ctx, i) = (service.clone(), user.clone(), input.clone());
+    assert!(
+        run_write(&*fx.store, WriteOptions::default(), move |tx| s
+            .authorize(tx, &ctx, &i)
+            .map(|_| ())
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}"))))
+        .is_err()
+    );
+    let (s, ctx, i) = (service.clone(), sealed.clone(), input.clone());
+    fx.write(move |tx| {
+        let permit = s
+            .authorize(tx, &ctx, &i)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+        assert_eq!(permit.reviewed().manifest.digest, i.expected_digest);
+        assert_eq!(permit.confirmed_by(), ctx.principal());
+        Ok(())
+    });
+    let mut page = PurgeManifestInput {
+        project_id: deleted.id.clone(),
+        manifest_id: manifest.id.clone(),
+        expected_revision: manifest.revision.clone(),
+        page: serde_json::from_value(json!({"limit":1})).unwrap(),
+    };
+    let first = fx.read(|read| {
+        PurgeCoordinator::manifest_page(read, &user, &page)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    assert!(first.entries.has_more);
+    page.page.cursor = first.entries.next_cursor;
+    assert!(
+        read_snapshot(&*fx.store, &ReadOptions::default(), |read| {
+            PurgeCoordinator::manifest_page(read, &agent, &page)
+                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        })
+        .is_err()
+    );
+    let next = fx.read(|read| {
+        PurgeCoordinator::manifest_page(read, &user, &page)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    assert_ne!(first.entries.items.0[0].id, next.entries.items.0[0].id);
+    owners.0.lock().unwrap().0 = "b".repeat(64);
+    let (s, ctx, i) = (service, sealed, input);
+    assert!(
+        run_write(&*fx.store, WriteOptions::default(), move |tx| s
+            .authorize(tx, &ctx, &i)
+            .map(|_| ())
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}"))))
+        .is_err()
+    );
+    assert_eq!(
+        fx.get(&user, &deleted.id).unwrap().name.0.as_str(),
+        "private purge preview"
+    );
+}
+
 fn id(s: &str) -> Id {
     Id::new(s).unwrap()
 }

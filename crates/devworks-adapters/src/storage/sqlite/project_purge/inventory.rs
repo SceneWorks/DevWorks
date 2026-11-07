@@ -146,7 +146,16 @@ pub(in crate::storage::sqlite) fn read(
     conn: &Connection,
     project: &ProjectId,
 ) -> Result<Option<ProjectPurgeInventory>, StorageError> {
-    let Some(planning) = super::classification::planning(conn, project)? else {
+    read_with_client_keepers(conn, project, &[])
+}
+pub(in crate::storage::sqlite) fn read_with_client_keepers(
+    conn: &Connection,
+    project: &ProjectId,
+    keepers: &[devworks_core::protocol::provider::ArtifactRef],
+) -> Result<Option<ProjectPurgeInventory>, StorageError> {
+    let Some(planning) =
+        super::classification::planning_with_client_keepers(conn, project, keepers)?
+    else {
         return Ok(None);
     };
     if !planning.is_resolved() {

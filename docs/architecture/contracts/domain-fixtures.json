@@ -2158,7 +2158,7 @@
   {
     "id": "input-projects.purge_manifest-Query",
     "entry": "domain-request.r6",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"projects.purge_manifest\",\"projectId\":\"project-a\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"page\":20},\"schemaRevision\":6}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"projects.purge_manifest\",\"projectId\":\"project-a\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"page\":{\"limit\":20}},\"schemaRevision\":6}",
     "typedValid": true,
     "schemaValid": true
   },

@@ -10982,7 +10982,7 @@
               "$ref": "#/$defs/Id"
             },
             "page": {
-              "$ref": "#/$defs/Limit"
+              "$ref": "#/$defs/PageRequest"
             },
             "projectId": {
               "$ref": "#/$defs/Id"

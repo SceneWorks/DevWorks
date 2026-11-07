@@ -119,6 +119,8 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+pub mod purge;
+
 /// The operations [`ProjectService`] is registered for.
 pub const PROJECT_OPERATIONS: [&str; 8] = [
     "projects.list",

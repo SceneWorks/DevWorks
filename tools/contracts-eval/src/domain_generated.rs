@@ -18450,7 +18450,7 @@ pub enum DomainQuery {
         project_id: ProjectId,
         manifest_id: Id,
         expected_revision: Revision,
-        page: Limit,
+        page: PageRequest,
     },
     #[schemars(extend("x-since" = 6))]
     #[serde(rename = "projects.purge_status")]
