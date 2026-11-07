@@ -76,6 +76,8 @@ impl<const MIN: usize, const MAX: usize> Check for BoundedText<MIN, MAX> {
 }
 pub type Label = BoundedText<1, 256>;
 pub type Text = BoundedText<1, 4096>;
+/// A present default may be empty; absence remains None.
+pub type DefaultValueText = BoundedText<0, 4096>;
 pub type Content = BoundedText<0, 65536>;
 
 /// A bounded verbatim source fragment, including legal NUL characters; not executable input.

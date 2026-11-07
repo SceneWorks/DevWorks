@@ -213,8 +213,8 @@ jobs:
         shell: bash
         run: bash tools/ci/native-tests.sh foundation
 
-  windows_desktop:
-    name: test (windows-desktop)
+  windows_desktop_0:
+    name: test (windows-desktop-0)
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -225,9 +225,44 @@ jobs:
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
         with:
           shared-key: test-desktop
-      - name: Run complete desktop partition
+      - name: Run disjoint desktop shard 1 of 2
         shell: bash
-        run: bash tools/ci/native-tests.sh desktop
+        run: |
+          python tools/ci/test_desktop_shard.py
+          python tools/ci/desktop-shard.py --verify
+          bash tools/ci/native-tests.sh desktop-shard 0 2
+
+  windows_desktop_1:
+    name: test (windows-desktop-1)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: test-desktop
+      - name: Run disjoint desktop shard 2 of 2
+        shell: bash
+        run: |
+          python tools/ci/test_desktop_shard.py
+          python tools/ci/desktop-shard.py --verify
+          bash tools/ci/native-tests.sh desktop-shard 1 2
+
+  windows_desktop:
+    name: test (windows-desktop)
+    needs: [windows_desktop_0, windows_desktop_1]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require both complete desktop shards
+        run: |
+          set -eu
+          test "${{ needs.windows_desktop_0.result }}" = success
+          test "${{ needs.windows_desktop_1.result }}" = success
 
   windows_engine:
     name: test (windows-engine)

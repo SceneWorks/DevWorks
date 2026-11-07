@@ -26,6 +26,14 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlite-vec = "=0.1.7"
+# Native target metadata readers; SQLite target files reuse the bundled rusqlite above.
+sqlx = { version = "=0.9.0", default-features = false, features = ["mysql-rsa", "runtime-tokio", "tls-rustls-ring-webpki"] }
+tiberius = { version = "=0.13.0", default-features = false, features = ["tds73", "rustls-webpki-roots"] }
+futures-util = { version = "=0.3.32", default-features = false, features = ["std", "async-await", "sink"] }
+tokio-util = { version = "=0.7.20", default-features = false, features = ["compat"] }
+tokio-postgres = "=0.7.18"
+postgres-native-tls = "=0.5.3"
+native-tls = "=0.2.18"
 # Native web fetching and search (DW-51): HTTP/1.1 written over rustls with the ring provider
 # (no aws-lc build tooling on Windows), Mozilla's root set bundled (an explicit trust policy, not
 # the OS store), httparse for response heads. The transport connects only to the address the
@@ -36,6 +44,7 @@ rustls = { version = "=0.23.46", default-features = false, features = ["ring", "
 webpki-roots = "=1.0.11"
 # The provider endpoint and query string are built with the same WHATWG URL type core decides on.
 url = "=2.5.8"
+percent-encoding = "=2.3.2"
 tokio = { version = "=1.54.1", default-features = false, features = ["sync", "rt-multi-thread", "net", "time", "macros"] }
 # Provider streaming owns its async runtime, uses asynchronous DNS, bundled rustls roots and
 # the user's proxy environment. No cookies, compression, automatic retries or redirects.

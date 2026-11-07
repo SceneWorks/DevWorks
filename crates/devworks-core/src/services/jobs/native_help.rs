@@ -1,4 +1,4 @@
-//! Retained empty maintenance-job arguments capture current owner metadata once per actual run.
+//! Current-target maintenance-job arguments capture owner metadata once per actual run.
 //! Manual commands retain their own explicit argument contracts.
 use super::*;
 use crate::ports::storage::{KnowledgeScope, WriteTransaction};
@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 pub(super) const OPERATION: &str = "help.generate_capability_docs";
 pub(super) const CONVENTION_INDEX: &str = "conventions.index";
 pub(super) fn supports(operation: &str, revision: SchemaRevision) -> bool {
-    operation == OPERATION || operation == CONVENTION_INDEX && revision.0 >= 3
+    operation == OPERATION
+        || operation == CONVENTION_INDEX && revision.0 >= 3
+        || operation == crate::services::schemas::scheduled::OPERATION && revision.0 >= 5
 }
 
 #[derive(Serialize, Deserialize, schemars::JsonSchema)]
@@ -26,7 +28,15 @@ pub(super) fn argument_schema(operation: &str, revision: SchemaRevision) -> Opti
         serde_json::to_value(descriptor.binding(Mode::Command)?.input_schema(revision)).ok()?;
     // References in the selected input schema remain rooted at the combined document.
     let definitions = explicit.as_object_mut()?.remove("$defs");
-    let mut schema = json!({"anyOf":[schemars::schema_for!(EmptyJobRequest),explicit]});
+    let current = if operation == crate::services::schemas::scheduled::OPERATION {
+        serde_json::to_value(schemars::schema_for!(
+            crate::services::schemas::scheduled::CurrentSource
+        ))
+        .ok()?
+    } else {
+        serde_json::to_value(schemars::schema_for!(EmptyJobRequest)).ok()?
+    };
+    let mut schema = json!({"anyOf":[current,explicit]});
     if let Some(definitions) = definitions {
         schema["$defs"] = definitions;
     }
@@ -45,6 +55,14 @@ pub(super) fn is_empty(value: &Value) -> bool {
     value.as_object().is_some_and(|m| m.is_empty())
 }
 
+pub(super) fn is_current(operation: &str, value: &Value) -> bool {
+    if operation == crate::services::schemas::scheduled::OPERATION {
+        crate::services::schemas::scheduled::current(value).is_some()
+    } else {
+        is_empty(value)
+    }
+}
+
 /// Cancellation follows the actual Accepted child operation, never a reconstructed request
 /// key. The Help owner validates its own immutable delivery binding before touching the queue.
 pub(super) fn cancel_accepted(
@@ -61,6 +79,10 @@ pub(super) fn cancel_accepted(
         && let Some(operation) = &run.inner_operation_id
     {
         crate::services::conventions::indexing::cancellation::request_cancel(tx, operation)?;
+    }
+    if matches!(definition,JobDefinition::Native{capability_id:ref id,..} if id==&super::capability_id(crate::services::schemas::scheduled::OPERATION))
+    {
+        crate::services::schemas::scheduled::cancel_accepted(tx, run)?;
     }
     Ok(())
 }
@@ -87,6 +109,9 @@ pub(super) fn invocation(
     operation: &str,
     revision: i64,
 ) -> Result<(Id, Vec<u8>), StorageError> {
+    if operation == crate::services::schemas::scheduled::OPERATION {
+        return crate::services::schemas::scheduled::invocation(tx, run, revision);
+    }
     let invalid = || StorageError::InvalidRecord("invalid captured Help job invocation".into());
     if let Some(saved) = &run.checkpoint {
         let saved: CapturedInvocation = serde_json::from_str(saved).map_err(|_| invalid())?;

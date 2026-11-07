@@ -348,7 +348,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1827), 1827);
+    assert_eq!(run("domain-fixtures.json", 1870), 1870);
 }
 
 #[test]
@@ -431,8 +431,8 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // Help adds four revision-3 queries; all twenty graph operations add revision 3.
     // These add24 to546. Conventions and embedding spaces add fourteen revision-3 bindings;
     // fixture admission independently verifies all584 bindings.
-    // Accepted DW89 adds history.events revision3.
-    assert_eq!(admitted.len(), 589);
+    // Accepted DW89 adds one admission; DW36 adds eight revision5 admissions.
+    assert_eq!(admitted.len(), 597);
 }
 
 #[test]

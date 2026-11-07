@@ -1300,3 +1300,27 @@ pub fn pin_for_backup(
 pub fn release_backup(tx: &mut dyn WriteTransaction, holder: &Id) -> Result<i64, StorageError> {
     tx.artifacts().release_pins(holder)
 }
+
+/// Fresh, exact source visibility used when a Human copies certificate input into a
+/// connection definition. This is a validation predicate, not an artifact read grant.
+pub(crate) fn exact_reference_readable_in(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    reference: &ArtifactRef,
+) -> Result<bool, StorageError> {
+    let viewer = Viewer::resolve(tx.authority(), ctx)?;
+    let read = tx.artifacts();
+    let Some(artifact) = read.artifact(&reference.artifact_id)? else {
+        return Ok(false);
+    };
+    if artifact.state != ArtifactState::Live || !visible(read, &viewer, &artifact)? {
+        return Ok(false);
+    }
+    Ok(read.version(&reference.version_id)?.is_some_and(|v| {
+        v.live()
+            && v.artifact_id == artifact.id
+            && v.blob_digest == reference.sha256.as_str()
+            && v.byte_count == reference.byte_length.get()
+            && v.media_type == reference.media_type
+    }))
+}

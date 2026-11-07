@@ -2723,7 +2723,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "Page<SchemaConnection>",
         result_schema: schema_of::<Page<SchemaConnection>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(5)],
     },
     OperationDescriptor {
         name: "schemas.objects",
@@ -2745,7 +2745,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "Page<SchemaObject>",
         result_schema: schema_of::<Page<SchemaObject>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(5)],
     },
     OperationDescriptor {
         name: "schemas.relationships",
@@ -2767,7 +2767,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "Page<SchemaRelation>",
         result_schema: schema_of::<Page<SchemaRelation>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(5)],
     },
     OperationDescriptor {
         name: "schemas.index",
@@ -2789,7 +2789,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(5)],
     },
     OperationDescriptor {
         name: "schemas.refresh",
@@ -2811,7 +2811,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(5)],
     },
     OperationDescriptor {
         name: "schemas.remove_index",
@@ -2833,7 +2833,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(5)],
     },
     OperationDescriptor {
         name: "schemas.configure",
@@ -2855,7 +2855,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "SchemaConnection",
         result_schema: schema_of::<SchemaConnection>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(5)],
     },
     OperationDescriptor {
         name: "database.read",
@@ -2965,7 +2965,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "SchemaConnection",
         result_schema: schema_of::<SchemaConnection>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(5)],
     },
     OperationDescriptor {
         name: "knowledge.search",

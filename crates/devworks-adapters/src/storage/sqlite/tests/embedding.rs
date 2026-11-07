@@ -289,7 +289,11 @@ fn sql33_preserves_prefix_and_initial_selection_is_explicit_cas() {
         MIGRATION_0033_SHA256
     );
     assert_eq!(
-        MIGRATIONS.iter().map(|m| m.version).collect::<Vec<_>>(),
+        MIGRATIONS
+            .iter()
+            .filter(|m| m.version <= 33)
+            .map(|m| m.version)
+            .collect::<Vec<_>>(),
         (1..=33).collect::<Vec<_>>()
     );
     let h = Harness::new();

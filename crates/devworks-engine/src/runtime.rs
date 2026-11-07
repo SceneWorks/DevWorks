@@ -191,6 +191,7 @@ pub struct Composition {
 
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
+    pub schemas: Option<crate::schemas::SchemaComposition>,
     /// Native bounded credential-free price source and cadence; absent sources refuse refresh.
     pub price_refresh: Option<crate::prices::PriceComposition>,
     pub dispatcher: DispatcherConfig,
@@ -238,6 +239,7 @@ impl RuntimeConfig {
         Self {
             dispatcher: DispatcherConfig::new(owner),
             price_refresh: None,
+            schemas: None,
             collect_interval: Duration::from_secs(15 * 60),
             reply_max_in_flight: None,
             machine_resources: vec![desktop()],
@@ -340,6 +342,7 @@ pub struct Runtime {
     providers: Option<Arc<crate::providers::driver::NativeProviders>>,
     embedding_probes: Option<Arc<crate::conventions::probes::ProbeRuntime>>,
     conventions: Arc<devworks_core::services::conventions::ConventionService>,
+    schemas: Option<Arc<devworks_core::services::schemas::SchemaService>>,
     usage_task: Mutex<Option<JoinHandle<()>>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
     /// itself is `admission`.
@@ -558,6 +561,33 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     ));
     consumers.push(crate::conventions_import::consumer(conventions.imports()));
     let use_cases = use_cases.with_conventions(conventions.clone());
+    let schemas = config.schemas.as_ref().map(|ports| {
+        Arc::new(
+            devworks_core::services::schemas::SchemaService::new(ids.clone(), clock.clone())
+                .with_credentials(store.clone(), ports.secrets.clone())
+                .with_runtime(store.clone(), ports.reader.clone(), artifacts.clone()),
+        )
+    });
+    let use_cases = if let Some(service) = &schemas {
+        // Namespace/reference-only cleanup precedes password intake and command exposure.
+        match service.reconcile_credential_orphans() {
+            Ok(_)
+            | Err(
+                devworks_core::ports::secrets::SecretError::Unavailable(_)
+                | devworks_core::ports::secrets::SecretError::Denied,
+            ) => {}
+            Err(_) => {
+                return Err(BootError::Composition(StorageError::unavailable(
+                    Unavailable::Io,
+                    "schema credential reference reconciliation failed",
+                )));
+            }
+        }
+        consumers.push(crate::schemas::consumer(store.clone(), service.clone()));
+        use_cases.with_schemas(service.clone())
+    } else {
+        use_cases
+    };
     // A deliberately supplied native-job fixture may own DOCS. Production composes the
     // complete Help family and its consumer together; it never attaches to a foreign journal.
     let help = (!use_cases.has_command("help.generate_capability_docs")).then(|| {
@@ -1003,6 +1033,16 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             }
         }));
     }
+    if let Some(service) = &schemas {
+        let service = service.clone();
+        tasks.push(tokio::spawn(async move {
+            while !service.is_stopped() {
+                let current = service.clone();
+                let _ = tokio::task::spawn_blocking(move || current.cleanup_retained_views()).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }));
+    }
     if let Some(worker) = &embedding_probes {
         let worker = worker.clone();
         tasks.push(tokio::spawn(async move {
@@ -1052,6 +1092,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         providers,
         embedding_probes,
         conventions,
+        schemas,
         usage_task: Mutex::new(Some(usage_task)),
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
         admission,
@@ -1202,6 +1243,9 @@ impl Runtime {
     }
     /// Canonical native producers and bounded historical accounting over the same router.
     /// The same owner serves UI/tools, durable body indexing and scheduled maintenance.
+    pub fn schemas(&self) -> Option<&Arc<devworks_core::services::schemas::SchemaService>> {
+        self.schemas.as_ref()
+    }
     pub fn conventions(&self) -> &Arc<devworks_core::services::conventions::ConventionService> {
         &self.conventions
     }
@@ -1606,6 +1650,9 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        if let Some(service) = &self.schemas {
+            service.stop();
+        }
         self.conventions.stop();
         if let Some(probes) = &self.embedding_probes {
             probes.stop();

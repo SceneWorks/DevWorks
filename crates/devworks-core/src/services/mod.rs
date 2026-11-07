@@ -29,6 +29,7 @@ pub mod queue;
 pub mod resources;
 pub mod router;
 pub mod runs;
+pub mod schemas;
 pub mod sessions;
 pub mod usage;
 pub mod web;
@@ -326,6 +327,22 @@ impl UseCases {
     /// Registers the repository registration operations (`RepositoryService`).
     pub fn with_repositories(mut self, service: Arc<projects::RepositoryService>) -> Self {
         for op in projects::REPOSITORY_OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// One shared metadata source owner for native UI and agent ingress.
+    pub fn with_schemas(mut self, service: Arc<schemas::SchemaService>) -> Self {
+        for op in [
+            "schemas.connections",
+            "schemas.objects",
+            "schemas.relationships",
+            "schemas.index",
+            "schemas.refresh",
+            "schemas.remove_index",
+            "schemas.configure",
+        ] {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

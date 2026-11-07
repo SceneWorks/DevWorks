@@ -413,6 +413,13 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0033_embedding_spaces.sql"),
         rebuilds_tables: false,
     },
+    Migration {
+        version: 34,
+        minimum_reader: 8,
+        minimum_writer: 34,
+        sql: include_str!("migrations/0034_schemas.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -754,3 +761,7 @@ pub const MIGRATION_0032_SHA256: &str =
 /// Recorded checksum of migration 33.
 pub const MIGRATION_0033_SHA256: &str =
     "2c1687e7ee2d039a99fbe5ddc088a8bbd275322905315b343db4ebf17c39f4bb";
+
+/// Recorded checksum of database metadata storage migration34.
+pub const MIGRATION_0034_SHA256: &str =
+    "ab4492daa17015c6f409259dc313abede9035c2fa9bf4c412c42746cdbdf151b";

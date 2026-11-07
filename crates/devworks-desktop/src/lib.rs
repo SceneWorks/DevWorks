@@ -69,3 +69,5 @@ pub mod work_ops;
 
 /// The application version shown in the sidebar footer.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub mod databases_screen;

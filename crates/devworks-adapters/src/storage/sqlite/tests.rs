@@ -128,6 +128,7 @@ mod replies;
 mod resources;
 mod router;
 mod runs;
+mod schemas;
 mod sessions;
 mod settings;
 mod usage;

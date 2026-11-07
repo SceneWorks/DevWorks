@@ -69,7 +69,7 @@ lines=['//! Generated architecture DTOs. Edit domain_spec.py and regenerate; no 
  'use super::domain_support::*;',
  'use crate::{Id,Revision,Counter,ProjectId,RootId,ActorId,AssignmentId,OperationId,QueryId,RequestKey,CommandId,EventId,StoreId,ResourceId,CorrelationId,Protocol,ReadStamp,OperationState,RootControl,Activation,Blockers,EligibilityTarget,Purpose,Event,CommandReply};',
  'use crate::provider::{Digest,ArtifactRef,SchemaRef,TranscriptPage};',
- 'use crate::data_delivery::{DataScope,ViewSelection,Coverage,GitOid,GraphPage,RetrievalPage,DeliveryBarrier,DeliverySnapshot,ArtifactTags,Citation,RepositorySnapshot};',
+ 'use crate::data_delivery::{DataScope,ViewSelection,Coverage,GitOid,GraphPage,RetrievalPage,DeliveryBarrier,DeliverySnapshot,ArtifactTags,Citation,RepositorySnapshot,ResolvedViewSet};',
  'use serde::{Serialize,Deserialize}; use schemars::JsonSchema;', '']
 for name,d in TYPES.items():
  if d['kind']=='record':
