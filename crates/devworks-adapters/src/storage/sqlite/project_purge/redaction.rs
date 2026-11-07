@@ -33,9 +33,9 @@ pub(super) fn scrub(
         "operations" => format!("root_id=NULL,assignment_id=NULL,args_digest='{zero_digest}',payload_json='{{}}',revision=revision+1"),
         "sessions" => format!("root_id=NULL,title='Deleted session',pin_json=NULL,context_epoch=context_epoch+1,revision=revision+1,closed_at=COALESCE(closed_at,{now}),closed_by=COALESCE(closed_by,{human}),checkpoint_seq=0"),
         "conversations" => "root_id=NULL".into(),
-        "assignments" => "parent_id=NULL,execution_id=NULL,state='Stopped',slot_held=0,generation=generation+1,revision=revision+1,checkpoint_json=NULL,scope_key=NULL,scope_digest=NULL,plan_revision=NULL,instruction_revision=0".into(),
+        "assignments" => "parent_id=NULL,execution_id=NULL,state='Superseded',slot_held=0,generation=generation+1,revision=revision+1,checkpoint_json=NULL,scope_key=NULL,scope_digest=NULL,plan_revision=NULL,instruction_revision=0".into(),
         "resources" => format!("name='Deleted resource',canonical_identity='purged:'||id,labels_json='[]',revision=revision+1,fence_seq=fence_seq+1,queue_seq=queue_seq+1,updated_at={now}"),
-        "blockers" => format!("root_id=NULL,assignment_id=NULL,operation_id=NULL,cause='Purged',origin_id='purged',origin_revision=origin_revision+1,state='Cleared',revision=revision+1,clearance_json='{{}}',reason='',cleared_at=COALESCE(cleared_at,{now}),cleared_by=COALESCE(cleared_by,{human})"),
+        "blockers" => format!("root_id=NULL,assignment_id=NULL,operation_id=NULL,cause='Policy',origin_id='purged',origin_revision=origin_revision+1,state='Cleared',revision=revision+1,clearance_json='{{}}',reason='Deleted blocker',cleared_at=COALESCE(cleared_at,{now}),cleared_by=COALESCE(cleared_by,{human})"),
         "artifacts" => {
             let head = kept_version.ok_or_else(||invalid("purged artifact has no exact kept version"))?;
             let head = bind(Value::Text(head.as_str().into()));

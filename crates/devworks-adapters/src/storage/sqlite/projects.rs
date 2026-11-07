@@ -363,6 +363,11 @@ fn text_of(raw: TextRaw) -> Result<StoredRepositoryText, StorageError> {
 macro_rules! project_reads {
     ($t:ty) => {
         impl ProjectRead for $t {
+            fn purge_file_effect_reviewed(&self,witness:&devworks_core::ports::project_purge::PurgeFileWitness)->Result<bool,StorageError>{super::project_purge::effects::file_reviewed(self.conn,witness)}
+
+            fn purge_validate_client_fence(&self,scope:&ProjectPurgeClientScope,digest:&str)->Result<bool,StorageError>{super::project_purge::effects::validate_client_fence(self.conn,scope,digest)}
+
+            fn purge_file_artifact_keepers(&self, project:&ProjectId, owners:&[devworks_core::ports::project_purge::PurgeFileOwner])->Result<Vec<devworks_core::protocol::provider::ArtifactRef>,StorageError>{super::project_purge::client_keepers::file_references(self.conn,project,owners)}
             fn purge_inventory(&self,project:&ProjectId)->Result<Option<ProjectPurgeInventory>,StorageError> {super::project_purge::inventory::read(self.conn,project)}
             fn purge_fenced(&self,project:&ProjectId)->Result<bool,StorageError> {db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM project_purge_manifests WHERE project_id=?1 AND phase IN('RemovingBytes','Held','Complete'))",[project.0.as_str()],|r|r.get(0)))}
             fn purge_pending_effects(&self,limit:u16)->Result<Vec<devworks_core::ports::project_purge::PurgeEffect>,StorageError> {super::project_purge::effects::pending(self.conn,limit)}

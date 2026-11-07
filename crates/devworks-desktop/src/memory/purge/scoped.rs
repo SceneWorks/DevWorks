@@ -70,6 +70,39 @@ pub fn project_scoped_editors(
         active_database_batch: false,
         sessions,
     };
+    for command in &memory.pending.commands {
+        if super::frames::affinity(
+            &command.operation,
+            devworks_core::registry::Mode::Command,
+            &command.frame,
+            scope,
+        )? == super::frames::Affinity::Owned
+        {
+            if !result.sessions.unsettled_commands.contains(command) {
+                result.sessions.unsettled_commands.push(command.clone());
+            }
+            result
+                .sessions
+                .after
+                .pending
+                .commands
+                .retain(|c| c != command);
+        }
+    }
+    if let Some(import) = &memory.pending.knowledge_import
+        && super::frames::affinity(
+            "artifacts.save",
+            devworks_core::registry::Mode::Command,
+            &import.frame,
+            scope,
+        )? == super::frames::Affinity::Owned
+    {
+        result
+            .sessions
+            .unsettled_attachments
+            .push(import.frame.clone());
+        result.sessions.after.pending.knowledge_import = None;
+    }
     if !memory.pending.conventions.is_null() {
         let mut conventions: Conventions = checked(&memory.pending.conventions)?;
         for (key, pipeline) in &conventions.pipelines {

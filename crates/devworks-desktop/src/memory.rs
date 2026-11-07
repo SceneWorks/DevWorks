@@ -169,6 +169,12 @@ pub struct SettingsMemory {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Memory {
+    #[serde(default)]
+    pub purge_reviews: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub purge_live: Option<crate::project_purge::Live>,
+    #[serde(default)]
+    pub purge_fences: BTreeMap<String, crate::project_purge::Fence>,
     pub version: u32,
     pub route: Route,
     pub intelligence_open: bool,
@@ -199,6 +205,9 @@ impl Default for Memory {
     fn default() -> Self {
         Self {
             version: VERSION,
+            purge_reviews: BTreeMap::new(),
+            purge_fences: BTreeMap::new(),
+            purge_live: None,
             route: Route::Chat,
             intelligence_open: true,
             coordinator_open: false,

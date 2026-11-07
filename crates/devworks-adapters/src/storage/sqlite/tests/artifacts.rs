@@ -5223,6 +5223,139 @@ fn purge_planning_kept_artifact_subjects_retain_minimal_assignment_resource_and_
     }
     assert!(!format!("{:?}", after.rows).contains("private"));
     assert_ne!(before.digest, after.digest);
+    // Execute the native logical/physical owners too: retained polymorphic subjects must
+    // remain readable through ordinary typed repositories, with no copied private fields.
+    use devworks_core::{
+        operations::projects::{PreparePurgeInput, PurgeInput},
+        ports::project_purge::*,
+        services::projects::purge::{PurgeCoordinator, PurgeWorker},
+    };
+    struct EmptyClient;
+    impl ProjectPurgeClient for EmptyClient {
+        fn inspect(
+            &self,
+            _: &ProjectPurgeClientScope,
+        ) -> Result<PurgeClientSnapshot, PurgeFileFault> {
+            Ok(PurgeClientSnapshot {
+                digest: "e".repeat(64),
+                surviving_artifacts: vec![],
+                pending: false,
+                removing_drafts: 0,
+                confirmation_ready: true,
+                surviving_paths: vec![],
+            })
+        }
+        fn remove_reviewed(
+            &self,
+            _: &ProjectPurgeClientScope,
+            digest: &str,
+        ) -> Result<(), PurgeFileFault> {
+            if digest == "e".repeat(64) {
+                Ok(())
+            } else {
+                Err(PurgeFileFault::Changed)
+            }
+        }
+    }
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute(
+                "UPDATE projects SET lifecycle='Deleted' WHERE id='project-a'",
+                [],
+            ))
+            .map(|_| ())
+        })
+        .unwrap();
+    let files = Arc::new(
+        crate::fs::purge::NativeProjectPurgeFiles::new(
+            fx.h.root.0.clone(),
+            fx.h.root.0.with_extension("cache"),
+            fx.store.clone(),
+        )
+        .with_read_fence(fx.svc.clone()),
+    );
+    let client = Arc::new(EmptyClient);
+    let coordinator = Arc::new(PurgeCoordinator::new(
+        fx.h.ids.clone(),
+        files.clone(),
+        client.clone(),
+    ));
+    let (svc, ctx) = (coordinator.clone(), fx.user());
+    let reviewed = fx.write(move |tx| {
+        svc.prepare(
+            tx,
+            &ctx,
+            &PreparePurgeInput {
+                project_id: project("project-a"),
+                expected_revision: Revision::new(1).unwrap(),
+            },
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    let input = PurgeInput {
+        project_id: project("project-a"),
+        manifest_id: reviewed.id.clone(),
+        expected_revision: reviewed.revision.clone(),
+        expected_digest: reviewed.digest.clone(),
+        expected_project_revision: reviewed.project_revision.clone(),
+        confirm: true,
+    };
+    let ctx = HostIngress::new(&*fx.store)
+        .project_purge_context(&fx.user(), &input)
+        .unwrap();
+    fx.write(move |tx| {
+        let permit = coordinator
+            .authorize(tx, &ctx, &input)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+        tx.projects().apply_project_purge(&permit)
+    });
+    let worker = PurgeWorker::new(fx.store.clone(), fx.h.ids.clone(), files, client);
+    assert_eq!(worker.step(&mut || false).unwrap(), 1);
+    let assignment = fx
+        .read(|r| {
+            r.runs()
+                .assignment(&devworks_core::protocol::AssignmentId(id(
+                    "kept-assignment",
+                )))
+        })
+        .unwrap();
+    assert_eq!(assignment.state, AssignmentState::Superseded);
+    assert!(assignment.checkpoint.is_none() && assignment.scope_key.is_none());
+    let session = fx
+        .read(|r| r.sessions().session(&id("keeper-session")))
+        .unwrap();
+    assert_eq!(session.title, "Deleted session");
+    let root = fx.read(|r| r.work().work(&id("root-a"))).unwrap();
+    assert_eq!(root.title, "Deleted work");
+    let blocker = fx.read(|r| r.runs().blocker(&id("kept-blocker"))).unwrap();
+    assert_eq!(blocker.cause, HoldCause::Policy);
+    assert_eq!(blocker.reason, "Deleted blocker");
+    assert_eq!(blocker.clearance, json!({}));
+    let encoded = serde_json::to_string(
+        &fx.read(|r| {
+            r.projects()
+                .purge_manifest(&project("project-a"), &reviewed.id)
+        })
+        .unwrap()
+        .manifest,
+    )
+    .unwrap();
+    assert!(!encoded.contains("private"));
+    assert_eq!(
+        read_text(&fx, &fx.user(), &kept.artifact),
+        "independent workspace history"
+    );
+    assert_eq!(
+        fx.read(|r| r.work().work(&id("root-b"))).unwrap().title,
+        "Feature B"
+    );
+    let violations: i64 =
+        fx.h.raw()
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+    assert_eq!(violations, 0);
 }
 
 #[test]

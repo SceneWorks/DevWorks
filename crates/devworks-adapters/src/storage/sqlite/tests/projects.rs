@@ -74,6 +74,8 @@ impl devworks_core::ports::project_purge::ProjectPurgeClient for PurgeOwners {
             surviving_artifacts: vec![],
             pending: state.1,
             removing_drafts: 0,
+            confirmation_ready: true,
+            surviving_paths: vec![],
         })
     }
     fn remove_reviewed(
@@ -135,6 +137,13 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
         "projects.delete",
         &archived,
     )));
+    // This fixture has no publisher/dispatcher. Cancel its never-started deliveries;
+    // production composition acceptance exercises real publication before preparation.
+    fx.store.with_writer_connection(|c| {
+        let claimed:i64=super::super::conn::db(c.query_row("SELECT count(*) FROM queue_entries WHERE consumer='receipt_replies' AND state='Claimed'",[],|r|r.get(0)))?;
+        assert_eq!(claimed,0);
+        super::super::conn::db(c.execute("UPDATE queue_entries SET state='Cancelled' WHERE consumer='receipt_replies' AND state='Ready'",[])).map(|_|())
+    }).unwrap();
     let owners = Arc::new(PurgeOwners(std::sync::Mutex::new(("a".repeat(64), false))));
     let service = Arc::new(PurgeCoordinator::new(
         fx.h.ids.clone(),
@@ -2272,11 +2281,6 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_forget_settled_bo
     let h = Harness::new();
     let store = h.store();
     let mut prepared = purge_storage_fixture(&store);
-    let copy = prepared.clone();
-    run_write(&store, WriteOptions::default(), move |tx| {
-        tx.projects().insert_purge_manifest(&copy)
-    })
-    .unwrap();
     let scope = ProjectPurgeClientScope {
         project_id: project("purge-a"),
         session_ids: vec![id("owned-session")],
@@ -2284,13 +2288,28 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_forget_settled_bo
         work_ids: vec![],
         operation_ids: vec![],
         deleted_artifact_ids: vec![],
+        record_ids: [("sessions".into(), vec![id("owned-session")])].into(),
     };
     let owner_digest = devworks_core::fingerprint::sha256_hex(&serde_json::to_vec(&scope).unwrap());
-    let body = serde_json::to_string(&PurgeEffectIntent::Client {
+    let intent = PurgeEffectIntent::Client {
         scope,
         digest: "a".repeat(64),
+    };
+    prepared.rows.push(ProjectPurgeRowWitness {
+        table: "sessions".into(),
+        key_digest: devworks_core::fingerprint::sha256_hex(br#"["owned-session"]"#),
+        row_digest: "f".repeat(64),
+        action: ProjectPurgeRowAction::Delete,
+        reason: ProjectPurgeRowReason::OwnedLineage,
+    });
+    prepared.entries.push(serde_json::from_value(json!({"id":devworks_core::ports::project_purge::reviewed_effect_entry(&intent),"kind":"RecordClass","recordClass":"client_state","disposition":"Remove","recordCount":"0","byteCount":"0","reason":"OwnedClientState"})).unwrap());
+    prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
+    let copy = prepared.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().insert_purge_manifest(&copy)
     })
     .unwrap();
+    let body = serde_json::to_string(&intent).unwrap();
     let effect = devworks_core::fingerprint::sha256_hex(body.as_bytes());
     prepared.manifest.phase = devworks_core::protocol::records::PurgePhase::RemovingBytes;
     let operation = devworks_core::protocol::OperationId(id("purge-operation"));
@@ -2318,6 +2337,38 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_forget_settled_bo
         )
         .unwrap();
     h.raw().execute("INSERT INTO project_purge_effects(manifest_id,id,kind,owner_digest,body_json,byte_count,state) VALUES('purge-manifest',?1,'Client',?2,?3,0,'Pending')",rusqlite::params![effect,owner_digest,body]).unwrap();
+    let mut forged = intent.clone();
+    if let PurgeEffectIntent::Client { digest, .. } = &mut forged {
+        *digest = "b".repeat(64);
+    }
+    let forged_body = serde_json::to_string(&forged).unwrap();
+    let forged_id = devworks_core::fingerprint::sha256_hex(forged_body.as_bytes());
+    h.raw()
+        .execute(
+            "UPDATE project_purge_effects SET id=?1,body_json=?2 WHERE id=?3",
+            rusqlite::params![forged_id, forged_body, effect],
+        )
+        .unwrap();
+    let attempted = forged_id.clone();
+    assert!(
+        run_write(&store, WriteOptions::default(), move |tx| {
+            let until = tx.now_ms() + 1000;
+            tx.projects().claim_purge_effect(
+                &id("purge-manifest"),
+                &attempted,
+                &id("unreviewed-owner"),
+                until,
+            )
+        })
+        .is_err(),
+        "a self-consistent replacement body is not the Human-reviewed intent"
+    );
+    h.raw()
+        .execute(
+            "UPDATE project_purge_effects SET id=?1,body_json=?2 WHERE id=?3",
+            rusqlite::params![effect, body, forged_id],
+        )
+        .unwrap();
     let claim = |store: &SqliteStore, owner: &str| {
         let effect = effect.clone();
         let owner = id(owner);

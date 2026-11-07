@@ -257,6 +257,10 @@ pub struct ProjectPurgeClientScope {
     pub work_ids: Vec<Id>,
     pub operation_ids: Vec<Id>,
     pub deleted_artifact_ids: Vec<Id>,
+    /// Single-ID targets for the remaining native panes. Membership-only global
+    /// records and independently retained publications do not become owned editors.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub record_ids: std::collections::BTreeMap<String, Vec<Id>>,
 }
 
 /// Read-only materialization from the same verified ownership assessment. These owner
@@ -268,6 +272,7 @@ pub struct ProjectPurgeInventory {
     pub kept_files: crate::ports::project_purge::PurgeFileSelection,
     pub client: ProjectPurgeClientScope,
     pub unsettled_operations: Vec<crate::protocol::OperationId>,
+    pub unsettled_deliveries: Vec<Id>,
 }
 
 #[derive(Clone, Debug)]
@@ -348,6 +353,29 @@ pub struct ProjectManagedFileRecovery {
 }
 
 pub trait ProjectRead {
+    fn purge_file_effect_reviewed(
+        &self,
+        _witness: &crate::ports::project_purge::PurgeFileWitness,
+    ) -> Result<bool, StorageError> {
+        Ok(false)
+    }
+
+    fn purge_validate_client_fence(
+        &self,
+        _scope: &ProjectPurgeClientScope,
+        _digest: &str,
+    ) -> Result<bool, StorageError> {
+        Ok(false)
+    }
+
+    fn purge_file_artifact_keepers(
+        &self,
+        _project: &ProjectId,
+        _owners: &[crate::ports::project_purge::PurgeFileOwner],
+    ) -> Result<Vec<crate::protocol::provider::ArtifactRef>, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+
     fn purge_fenced(&self, _project: &ProjectId) -> Result<bool, StorageError> {
         Err(StorageError::ScopeDenied)
     }

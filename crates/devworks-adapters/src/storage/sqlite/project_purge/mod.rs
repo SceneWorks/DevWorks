@@ -2,7 +2,7 @@
 mod blobs;
 pub(super) mod candidates;
 pub(super) mod classification;
-mod client_keepers;
+pub(super) mod client_keepers;
 pub(super) mod effects;
 pub(super) mod guard;
 pub(super) mod inventory;

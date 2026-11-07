@@ -39,7 +39,7 @@ pub(in crate::storage::sqlite) fn pending(
     if limit == 0 || limit > 500 {
         return Err(invalid("purge effect page limit"));
     }
-    let mut statement = db(conn.prepare("SELECT e.manifest_id,e.id,e.body_json,e.lease_owner FROM project_purge_effects e JOIN project_purge_manifests m ON m.id=e.manifest_id WHERE e.state IN('Pending','Held') AND m.phase IN('RemovingBytes','Held') ORDER BY COALESCE(e.lease_until,0),e.manifest_id,e.id LIMIT ?1"))?;
+    let mut statement = db(conn.prepare("SELECT e.manifest_id,e.id,e.body_json,e.lease_owner FROM project_purge_effects e JOIN project_purge_manifests m ON m.id=e.manifest_id WHERE e.state IN('Pending','Held') AND m.phase IN('RemovingBytes','Held') ORDER BY CASE json_extract(e.body_json,'$.kind') WHEN 'Client' THEN 0 ELSE 1 END,COALESCE(e.lease_until,0),e.manifest_id,e.id LIMIT ?1"))?;
     db(statement.query_map([limit], |r| {
         Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
     }))?
@@ -66,6 +66,7 @@ pub(in crate::storage::sqlite) fn claim(
     owner: &Id,
     until: i64,
 ) -> Result<Option<PurgeEffect>, StorageError> {
+    super::schema::verify(conn)?;
     let boot = info.boot_id.as_ref().ok_or(StorageError::ScopeDenied)?;
     if until <= now || until > now.saturating_add(120_000) {
         return Err(invalid("purge effect lease bound"));
@@ -89,6 +90,21 @@ pub(in crate::storage::sqlite) fn claim(
         [manifest.as_str()],
         |r| r.get(0),
     ))?;
+    let project_id = devworks_core::protocol::ProjectId(
+        Id::new(&project).map_err(|_| invalid("purge effect project"))?,
+    );
+    let reviewed =
+        super::manifest(conn, &project_id, manifest)?.ok_or(StorageError::ScopeDenied)?;
+    let entry = devworks_core::ports::project_purge::reviewed_effect_entry(&result.intent);
+    if !reviewed.entries.iter().any(|e| {
+        e.id.as_str() == entry
+            && matches!(
+                e.disposition,
+                devworks_core::protocol::records::PurgeDisposition::Remove
+            )
+    }) {
+        return Err(invalid("recovered effect was not in the reviewed manifest"));
+    }
     match &result.intent {
         PurgeEffectIntent::File { witness } => {
             if witness.store_id != info.store_id
@@ -106,7 +122,9 @@ pub(in crate::storage::sqlite) fn claim(
             {
                 let blocked: bool = db(conn.query_row("SELECT EXISTS(SELECT 1 FROM blobs WHERE digest=?1 AND generation=?2) AND (EXISTS(SELECT 1 FROM artifact_blob_pins WHERE blob_digest=?1) OR EXISTS(SELECT 1 FROM artifact_versions WHERE blob_digest=?1 AND deleted_at IS NULL) OR EXISTS(SELECT 1 FROM graph_source_captures WHERE blob_digest=?1) OR EXISTS(SELECT 1 FROM convention_import_artifacts a JOIN convention_imports d ON d.operation_id=a.operation_id WHERE a.blob_digest=?1 AND d.phase!='Published'))", params![digest,generation], |r| r.get(0)))?;
                 if blocked {
-                    return Err(StorageError::Busy);
+                    db(conn.execute("UPDATE project_purge_effects SET state='Held',error_code='OwnerInUse',lease_owner=NULL,lease_boot_id=NULL,lease_until=?3 WHERE manifest_id=?1 AND id=?2",params![manifest.as_str(),id,now.saturating_add(1000)]))?;
+                    refresh(conn, manifest)?;
+                    return Ok(None);
                 }
             }
         }
@@ -123,9 +141,139 @@ pub(in crate::storage::sqlite) fn claim(
             {
                 return Err(invalid("purge client effect changed"));
             }
+            validate_scope(conn, &reviewed, scope)?;
         }
     }
     Ok(Some(result))
+}
+fn validate_scope(
+    conn: &Connection,
+    reviewed: &devworks_core::ports::storage::StoredProjectPurge,
+    scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
+) -> Result<(), StorageError> {
+    for (table, ids) in [
+        ("sessions", &scope.session_ids),
+        ("conversations", &scope.conversation_ids),
+        ("work_items", &scope.work_ids),
+        ("operations", &scope.operation_ids),
+        ("artifacts", &scope.deleted_artifact_ids),
+    ] {
+        let expected = reviewed
+            .rows
+            .iter()
+            .filter(|r| {
+                r.table == table
+                    && (table != "artifacts"
+                        || r.action == devworks_core::ports::storage::ProjectPurgeRowAction::Delete)
+            })
+            .map(|r| r.key_digest.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut observed = std::collections::BTreeSet::new();
+        for id in ids {
+            let key = super::guard::key_digest(
+                &serde_json::to_string(&[id.as_str()]).expect("client scope key"),
+            )?;
+            if !observed.insert(key) {
+                return Err(invalid("client scope was not in the reviewed manifest"));
+            }
+        }
+        if observed != expected {
+            return Err(invalid("client scope differs from the reviewed manifest"));
+        }
+    }
+    let mut expected_records =
+        std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    for row in reviewed.rows.iter().filter(|r| {
+        matches!(
+            r.action,
+            devworks_core::ports::storage::ProjectPurgeRowAction::Delete
+                | devworks_core::ports::storage::ProjectPurgeRowAction::Scrub
+        ) && !matches!(
+            r.reason,
+            devworks_core::ports::storage::ProjectPurgeRowReason::ProjectMembership
+                | devworks_core::ports::storage::ProjectPurgeRowReason::PurgeControlAudit
+        )
+    }) {
+        if super::candidates::primary_keys(conn, &row.table)? == ["id"] {
+            expected_records
+                .entry(row.table.clone())
+                .or_default()
+                .insert(row.key_digest.clone());
+        }
+    }
+    let mut records = std::collections::BTreeMap::new();
+    for (table, ids) in &scope.record_ids {
+        let mut keys = std::collections::BTreeSet::new();
+        for id in ids {
+            let key = super::guard::key_digest(
+                &serde_json::to_string(&[id.as_str()]).expect("record key"),
+            )?;
+            if !keys.insert(key) {
+                return Err(invalid("duplicate client record scope"));
+            }
+        }
+        records.insert(table.clone(), keys);
+    }
+    if records != expected_records {
+        return Err(invalid("client record scope differs from review"));
+    }
+    Ok(())
+}
+pub(in crate::storage::sqlite) fn validate_client_fence(
+    conn: &Connection,
+    scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
+    digest: &str,
+) -> Result<bool, StorageError> {
+    let id:Option<String>=db(conn.query_row("SELECT id FROM project_purge_manifests WHERE project_id=?1 AND phase IN('RemovingBytes','Held','Complete')",[scope.project_id.0.as_str()],|r|r.get(0)).optional())?;
+    let Some(id) = id else {
+        return Ok(false);
+    };
+    let reviewed = super::manifest(
+        conn,
+        &scope.project_id,
+        &Id::new(id).map_err(|_| invalid("purge fence"))?,
+    )?
+    .ok_or(StorageError::ScopeDenied)?;
+    let entry =
+        devworks_core::ports::project_purge::reviewed_effect_entry(&PurgeEffectIntent::Client {
+            scope: scope.clone(),
+            digest: digest.into(),
+        });
+    Ok(reviewed.entries.iter().any(|e| {
+        e.id.as_str() == entry
+            && matches!(
+                e.disposition,
+                devworks_core::protocol::records::PurgeDisposition::Remove
+            )
+    }) && validate_scope(conn, &reviewed, scope).is_ok())
+}
+pub(in crate::storage::sqlite) fn file_reviewed(
+    conn: &Connection,
+    witness: &devworks_core::ports::project_purge::PurgeFileWitness,
+) -> Result<bool, StorageError> {
+    let intent = PurgeEffectIntent::File {
+        witness: witness.clone(),
+    };
+    let body = serde_json::to_string(&intent).map_err(|_| invalid("purge file effect"))?;
+    let id = sha256_hex(body.as_bytes());
+    let manifest:Option<String>=db(conn.query_row("SELECT m.id FROM project_purge_effects e JOIN project_purge_manifests m ON m.id=e.manifest_id WHERE e.id=?1 AND e.body_json=?2 AND e.state IN('Pending','Held') AND m.phase IN('RemovingBytes','Held') AND m.project_id=?3 AND m.store_id=?4 AND m.restore_epoch=?5",params![id,body,witness.project_id.0.as_str(),witness.store_id.0.as_str(),witness.restore_epoch],|r|r.get(0)).optional())?;
+    let Some(manifest) = manifest else {
+        return Ok(false);
+    };
+    let reviewed = super::manifest(
+        conn,
+        &witness.project_id,
+        &Id::new(manifest).map_err(|_| invalid("purge file manifest"))?,
+    )?
+    .ok_or(StorageError::ScopeDenied)?;
+    let entry = devworks_core::ports::project_purge::reviewed_effect_entry(&intent);
+    Ok(reviewed.entries.iter().any(|e| {
+        e.id.as_str() == entry
+            && matches!(
+                e.disposition,
+                devworks_core::protocol::records::PurgeDisposition::Remove
+            )
+    }))
 }
 fn fault_code(f: PurgeFileFault) -> &'static str {
     match f {

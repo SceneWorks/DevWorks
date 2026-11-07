@@ -79,6 +79,19 @@ pub trait ProjectPurgeReadFence: Send + Sync {
 }
 
 pub trait ProjectPurgeFiles: Send + Sync {
+    /// Native path keepers are local client references, never deletion inputs.
+    fn client_keepers(
+        &self,
+        _selection: &PurgeFileSelection,
+        paths: &[std::path::PathBuf],
+    ) -> Result<Vec<PurgeFileOwner>, PurgeFileFault> {
+        if paths.is_empty() {
+            Ok(vec![])
+        } else {
+            Err(PurgeFileFault::Unsupported)
+        }
+    }
+
     /// Enumerate every file/directory of exactly the supplied native owners. A class
     /// that cannot be completely attributed refuses the whole preview.
     fn inventory(
@@ -104,6 +117,8 @@ pub struct PurgeClientSnapshot {
     /// Exact original commands, local producers or their recovery outcomes remain unsettled.
     pub pending: bool,
     pub removing_drafts: u64,
+    pub confirmation_ready: bool,
+    pub surviving_paths: Vec<std::path::PathBuf>,
 }
 
 pub trait ProjectPurgeClient: Send + Sync {
@@ -133,6 +148,16 @@ pub enum PurgeEffectIntent {
         scope: crate::ports::storage::ProjectPurgeClientScope,
         digest: String,
     },
+}
+/// Recovery checks this against the immutable reviewed entry, beyond the mutable
+/// effect row's own checksum. A recovered body cannot select an unreviewed effect.
+pub fn reviewed_effect_entry(intent: &PurgeEffectIntent) -> String {
+    let bytes = match intent {
+        PurgeEffectIntent::File { witness } => serde_json::to_vec(&(0usize, witness)),
+        PurgeEffectIntent::Client { digest, .. } => serde_json::to_vec(&("client_state", digest)),
+    }
+    .expect("typed purge entry");
+    crate::fingerprint::sha256_hex(&bytes)
 }
 #[derive(Clone, Debug)]
 pub struct PurgeEffect {

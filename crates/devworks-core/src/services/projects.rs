@@ -505,6 +505,7 @@ pub struct ProjectService {
     ids: Arc<dyn IdSource>,
     runs: Arc<ControlService>,
     work: Option<Arc<crate::services::work::WorkService>>,
+    purge: Option<Arc<purge::PurgeCoordinator>>,
 }
 
 impl ProjectService {
@@ -514,12 +515,20 @@ impl ProjectService {
             ids,
             runs,
             work: None,
+            purge: None,
         }
     }
     /// Creates a new project's initial plan (`initialPlan`) through the work service.
     pub fn with_work(mut self, work: Arc<crate::services::work::WorkService>) -> Self {
         self.work = Some(work);
         self
+    }
+    pub fn with_purge(mut self, purge: Arc<purge::PurgeCoordinator>) -> Self {
+        self.purge = Some(purge);
+        self
+    }
+    pub fn supports_purge(&self) -> bool {
+        self.purge.is_some()
     }
     fn correlation(&self) -> CorrelationId {
         CorrelationId(self.ids.next_id(IdKind::Correlation))
@@ -1104,6 +1113,14 @@ impl QueryHandler for ProjectService {
                     Ok((OperationResult::ProjectsGet { value }, p.scope_revision))
                 })
             }
+            OperationInput::Projects(pops::Input::PurgeManifest(i)) if self.supports_purge() => {
+                purge::PurgeCoordinator::manifest_page(snapshot, ctx, i)
+                    .map(|value| (OperationResult::ProjectsPurgeManifest { value }, 1))
+            }
+            OperationInput::Projects(pops::Input::PurgeStatus(i)) if self.supports_purge() => {
+                purge::PurgeCoordinator::status(snapshot, ctx, i)
+                    .map(|value| (OperationResult::ProjectsPurgeStatus { value }, 1))
+            }
             _ => Err(refuse(
                 DomainErrorCode::UnsupportedCapability,
                 "operation",
@@ -1135,13 +1152,41 @@ impl CommandHandler for ProjectService {
             OperationInput::Projects(pops::Input::Archive(i)) => self.archive(tx, ctx, i),
             OperationInput::Projects(pops::Input::Restore(i)) => self.restore(tx, ctx, i),
             OperationInput::Projects(pops::Input::Delete(i)) => self.delete(tx, ctx, i),
+            OperationInput::Projects(pops::Input::PreparePurge(i)) if self.supports_purge() => self
+                .purge
+                .as_ref()
+                .expect("configured")
+                .prepare(tx, ctx, i)
+                .map(|value| DomainDecision::Applied {
+                    result: OperationResult::ProjectsPreparePurge { value },
+                }),
+            OperationInput::Projects(pops::Input::Purge(i)) if self.supports_purge() => self
+                .purge
+                .as_ref()
+                .expect("configured")
+                .authorize(tx, ctx, i)
+                .and_then(|permit| {
+                    tx.projects()
+                        .apply_project_purge(&permit)
+                        .map_err(Failure::Storage)
+                })
+                .map(|value| DomainDecision::Applied {
+                    result: OperationResult::ProjectsPurge { value },
+                }),
             _ => Err(refuse(
                 DomainErrorCode::UnsupportedCapability,
                 "operation",
                 None,
             )),
         };
-        decided(tx, outcome)
+        let mut decision = decided(tx, outcome)?;
+        if let DomainDecision::Applied {
+            result: OperationResult::ProjectsPurge { value },
+        } = &decision.decision
+        {
+            decision.operation_id = value.operation_id.clone();
+        }
+        Ok(decision)
     }
 }
 

@@ -300,6 +300,7 @@ impl NativeProjectPurgeFiles {
         binding: &PurgeFileSelection,
         relative: &str,
         owner: &PurgeFileOwner,
+        verify_registration: bool,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<Option<PurgeFileWitness>, PurgeFileFault> {
         use devworks_core::authority::destructive::{EntryKind, FilesystemResolver};
@@ -317,9 +318,10 @@ impl NativeProjectPurgeFiles {
         };
         if metadata.is_file() && !super::reparse(&metadata) {
             let witness = capture_managed_file(root, binding, relative, owner.clone(), stopped)?;
-            if self
-                .registered(owner, binding)?
-                .is_some_and(|published| published != witness)
+            if verify_registration
+                && self
+                    .registered(owner, binding)?
+                    .is_some_and(|published| published != witness)
             {
                 return Err(PurgeFileFault::Changed);
             }
@@ -491,6 +493,38 @@ fn link_digest(path: &Path) -> String {
 }
 
 impl ProjectPurgeFiles for NativeProjectPurgeFiles {
+    fn client_keepers(
+        &self,
+        selection: &PurgeFileSelection,
+        paths: &[PathBuf],
+    ) -> Result<Vec<PurgeFileOwner>, PurgeFileFault> {
+        if paths.is_empty() {
+            return Ok(vec![]);
+        }
+        let paths = paths
+            .iter()
+            .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
+            .collect::<Vec<_>>();
+        let mut owners = vec![];
+        for owner in &selection.owners {
+            let Some(root) = self.root(owner)? else {
+                continue;
+            };
+            let root = std::fs::canonicalize(&root).map_err(|_| PurgeFileFault::Io)?;
+            for relative in self.candidates(owner, selection, &root)? {
+                let candidate = joined_relative(&root, &relative)?;
+                if paths
+                    .iter()
+                    .any(|p| p == &candidate || p.starts_with(&candidate))
+                {
+                    owners.push(owner.clone());
+                    break;
+                }
+            }
+        }
+        Ok(owners)
+    }
+
     fn inventory(
         &self,
         selection: &PurgeFileSelection,
@@ -523,7 +557,7 @@ impl ProjectPurgeFiles for NativeProjectPurgeFiles {
             let mut pending = self.candidates(owner, selection, &root)?;
             while let Some(relative) = pending.pop() {
                 let Some(witness) =
-                    self.capture_entry(&root, selection, &relative, owner, stopped)?
+                    self.capture_entry(&root, selection, &relative, owner, true, stopped)?
                 else {
                     continue;
                 };
@@ -563,6 +597,7 @@ impl ProjectPurgeFiles for NativeProjectPurgeFiles {
                     selection,
                     &witness.relative_entry,
                     &witness.owner,
+                    true,
                     stopped,
                 )?
                 .as_ref()
@@ -614,11 +649,28 @@ impl NativeProjectPurgeFiles {
         let Some(root) = self.root(&witness.owner)? else {
             return Ok(());
         };
+        // Blob/quarantine removal holds the reader-registry lock. Its callback must
+        // never acquire a SQLite read connection; only published transient metadata
+        // needs this original-effect lookup after logical scrubbing.
+        let reviewed = if matches!(
+            witness.owner,
+            PurgeFileOwner::DiagnosticExport { .. }
+                | PurgeFileOwner::ClientPaste { .. }
+                | PurgeFileOwner::ClientStaging { .. }
+        ) {
+            read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                read.projects().purge_file_effect_reviewed(witness)
+            })
+            .map_err(|_| PurgeFileFault::Io)?
+        } else {
+            false
+        };
         if let Some(mut current) = self.capture_entry(
             &root,
             &binding,
             &witness.relative_entry,
             &witness.owner,
+            !reviewed,
             stopped,
         )? {
             // The reviewed children are intentionally removed first. Directory identity

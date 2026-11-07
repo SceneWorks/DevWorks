@@ -49,6 +49,44 @@ pub struct DecisionsUi {
     config_kinds_saving: Option<String>,
 }
 
+impl DecisionsUi {
+    pub(super) fn purge_owned(
+        &mut self,
+        scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
+    ) {
+        use devworks_core::protocol::data::DataScope;
+        let owned=self.selected.as_ref().is_some_and(|r| matches!(&r.scope,Some(DataScope::Project{project_id}) if project_id==&scope.project_id));
+        if owned {
+            self.selected = None;
+            self.inspecting = None;
+            self.current = None;
+            self.rationale.clear();
+            self.text = None;
+            self.decision_error = None;
+        }
+        self.approvals.clear();
+        self.gathering.clear();
+        self.loaded = false;
+        self.reviews.clear();
+        self.review_gathering.clear();
+        self.reviews_loaded = false;
+        self.notifications.clear();
+        self.notification_gathering.clear();
+        self.notifications_loaded = false;
+        self.notification = None;
+        self.reading_notification = None;
+        self.completions.clear();
+        self.completion_gathering.clear();
+        if self.project.as_deref() == Some(scope.project_id.0.as_str()) {
+            self.project = None;
+        }
+        if self.notification_project.as_deref() == Some(scope.project_id.0.as_str()) {
+            self.notification_project = None;
+        }
+        // Notification configuration drafts are independent workspace authoring state.
+    }
+}
+
 struct ApprovalStatus {
     revision: String,
     state: ApprovalState,

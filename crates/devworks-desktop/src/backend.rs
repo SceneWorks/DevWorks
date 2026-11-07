@@ -55,6 +55,22 @@ pub trait Backend: Send + Sync {
             "trusted native project purge confirmation ingress".into(),
         ))
     }
+    fn purge_client_publish(
+        &self,
+        _memory: crate::memory::Memory,
+        _live: crate::project_purge::Live,
+        _save: bool,
+    ) -> Result<Option<Vec<devworks_core::ports::storage::ProjectPurgeClientScope>>, String> {
+        Ok(None)
+    }
+    fn purge_client_acknowledge(
+        &self,
+        _scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
+    ) {
+    }
+    fn purge_client_freeze(&self, _project: &str, _frozen: bool) -> Result<(), String> {
+        Err("Native project purge custody is unavailable".into())
+    }
     /// Volatile host-owned response text, authorized against the current session on each read.
     /// This is not a transcript entry or a generic tool operation.
     fn text_preview(
@@ -191,6 +207,10 @@ pub struct SecretStoreStatus {
 /// Who is waiting for a reply. Equal slots supersede each other.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Slot {
+    PurgePrepare,
+    PurgePage,
+    PurgeConfirm,
+    PurgeStatus,
     DatabaseList(u64, bool),
     DatabaseObjects(u64, bool),
     DatabaseRelations(u64, bool),
@@ -535,6 +555,12 @@ pub enum CommandDispatch {
     ProjectPurge,
 }
 
+struct PendingQuery {
+    operation: &'static str,
+    frame: Vec<u8>,
+    options: Option<devworks_core::ports::storage::ReadOptions>,
+}
+
 struct Pending {
     slot: Slot,
     ticket: u64,
@@ -542,11 +568,13 @@ struct Pending {
     started: Instant,
     /// A command's operation and exact frame, kept until its outcome is known.
     command: Option<(&'static str, Vec<u8>, CommandDispatch)>,
+    query: Option<PendingQuery>,
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
 pub const COMMANDS: &[&str] = &[
     "projects.purge",
+    "projects.prepare_purge",
     "code.set_trust",
     "help.generate_capability_docs",
     "router.price_refresh",
@@ -714,6 +742,7 @@ pub struct Activity {
 
 /// Runs requests on worker threads and returns their replies to the frame loop.
 pub struct Client {
+    purge_reviewing: bool,
     backend: Arc<dyn Backend>,
     jobs: Sender<(u64, Job)>,
     replies: Receiver<(u64, Reply)>,
@@ -785,6 +814,7 @@ impl Client {
             }
         }
         Self {
+            purge_reviewing: false,
             backend,
             jobs,
             replies,
@@ -806,6 +836,9 @@ impl Client {
         self.join_bound = bound;
     }
 
+    pub fn set_purge_reviewing(&mut self, reviewing: bool) {
+        self.purge_reviewing = reviewing;
+    }
     pub fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
     }
@@ -844,6 +877,7 @@ impl Client {
             label: label.to_owned(),
             started: Instant::now(),
             command,
+            query: None,
         });
         *self
             .shared
@@ -874,13 +908,23 @@ impl Client {
         operation: &'static str,
         frame: Vec<u8>,
     ) -> bool {
-        self.submit(
+        let kept = frame.clone();
+        let ticket = self.submit(
             slot,
             label,
             Box::new(move |b| Reply::Query(b.query(operation, &frame))),
             None,
-        )
-        .is_some()
+        );
+        if let Some(ticket) = ticket
+            && let Some(p) = self.pending.iter_mut().find(|p| p.ticket == ticket)
+        {
+            p.query = Some(PendingQuery {
+                operation,
+                frame: kept,
+                options: None,
+            });
+        }
+        ticket.is_some()
     }
 
     pub fn query_cancellable(
@@ -891,13 +935,24 @@ impl Client {
         frame: Vec<u8>,
         options: devworks_core::ports::storage::ReadOptions,
     ) -> bool {
-        self.submit(
+        let kept = frame.clone();
+        let kept_options = options.clone();
+        let ticket = self.submit(
             slot,
             label,
             Box::new(move |b| Reply::Query(b.query_cancellable(operation, &frame, &options))),
             None,
-        )
-        .is_some()
+        );
+        if let Some(ticket) = ticket
+            && let Some(p) = self.pending.iter_mut().find(|p| p.ticket == ticket)
+        {
+            p.query = Some(PendingQuery {
+                operation,
+                frame: kept,
+                options: Some(kept_options),
+            });
+        }
+        ticket.is_some()
     }
 
     /// Admits a command through [`resolve_command`]. If its outcome is still unknown, the exact
@@ -945,6 +1000,10 @@ impl Client {
         frame: Vec<u8>,
         dispatch: CommandDispatch,
     ) -> bool {
+        if self.purge_reviewing && !matches!(operation, "projects.prepare_purge" | "projects.purge")
+        {
+            return false;
+        }
         // A slot holding an unresolved command keeps it until `resubmit_unresolved` settles
         // that exact frame: a new request would replace it, and could commit a second time.
         if self.unresolved.iter().any(|u| u.slot == slot) {
@@ -1033,6 +1092,9 @@ impl Client {
         label: &str,
         task: impl FnOnce(&dyn Backend) -> Result<TaskOutput, String> + Send + 'static,
     ) -> bool {
+        if self.purge_reviewing {
+            return false;
+        }
         self.submit(slot, label, Box::new(move |b| Reply::Task(task(b))), None)
             .is_some()
     }
@@ -1065,6 +1127,48 @@ impl Client {
             }
         }
         out
+    }
+
+    /// Fence replies already in flight when a project is removed. Commands retain their
+    /// exact original frames and receipt outcomes; later queries get fresh tickets.
+    pub fn invalidate_project_queries(
+        &mut self,
+        _scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
+    ) {
+        // Workspace lists can include the removed project without naming it. Re-read every
+        // outstanding data query at a fresh snapshot, retaining command receipts unchanged.
+        let queries = self
+            .pending
+            .iter()
+            .filter(|p| self.latest.get(&p.slot) == Some(&p.ticket))
+            .filter_map(|p| {
+                p.query
+                    .as_ref()
+                    .filter(|q| !q.operation.starts_with("projects.purge_"))
+                    .map(|q| {
+                        (
+                            p.slot.clone(),
+                            p.label.clone(),
+                            q.operation,
+                            q.frame.clone(),
+                            q.options.clone(),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        for (slot, label, op, frame, options) in queries {
+            if let Some(options) = options {
+                self.query_cancellable(slot, &label, op, frame, options);
+            } else {
+                self.query(slot, &label, op, frame);
+            }
+        }
+    }
+
+    pub fn has_local_tasks(&self) -> bool {
+        self.pending
+            .iter()
+            .any(|p| p.command.is_none() && p.query.is_none())
     }
 
     /// Whether a request for `slot` is waiting for its reply.

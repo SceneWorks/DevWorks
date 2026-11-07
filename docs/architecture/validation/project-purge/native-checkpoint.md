@@ -1,8 +1,38 @@
 # DW-83 native implementation checkpoint
 
-This is unfinished implementation evidence. The native storage executor and leased
-effect worker exist, but no purge operation is routed in production and no Human
-confirmation UI is enabled. None of DW-83's acceptance criteria is complete.
+The native storage executor, leased effect worker, four revision-6 operations and
+Human confirmation UI are now composed in the desktop. Local integrated acceptance
+passes, including privacy-sentinel checks across ordinary/FTS-shadow SQLite rows,
+shared and unshared real files, typed minimal history, actual Git preservation,
+client draft cleanup, saved-review status and restart without renewed consent.
+DW-83 remains in progress until full regression qualification, exact-head automated
+review, CI, merge and the final acceptance report are complete.
+
+Current integrated cases are in `crates/devworks-desktop/tests/project_purge.rs`.
+Both pass on native macOS (25.40 seconds). They cover native staged paste removal,
+unshared blob/staging removal, exact shared-version reads, independently picked
+managed-path keepers, Home/other-project draft preservation, generic-ingress
+refusal, stale review refusal, complete paging before confirmation, unchanged real
+shared Git/repository registration, persisted client fences and a second UI boot.
+The native retained-subject case in adapter artifact tests also executes the full
+logical/physical owner and reads minimal sessions, work, assignments and blockers
+through their ordinary typed repositories (1.63 seconds).
+
+Preparation now requires every non-control owned delivery to settle as well as
+owned journal operations and client producers. Only validated minimal purge-control
+publication is excluded from both the business row digest and file witness; its
+own publication cannot stale a review. Exact physical recovery uses the original
+reviewed root/file identity and content after logical cleanup has scrubbed custody
+metadata. That recovery path first verifies the exact effect against its committed
+immutable manifest; ordinary file inventory/removal still rejects a forged current
+witness or replacement. Live completion waits for the UI's scoped cache cleanup acknowledgement;
+old data queries re-read at fresh snapshots, original command frames retain their
+receipt identities, and stale autosaves cannot restore purged draft content.
+
+Native client checkpoints use bounded, create-new temporary writes and atomic
+replacement. An interrupted or unrecognized saved state holds cleanup. Restored
+client fences must match the committed immutable manifest and row hashes. Saved
+manifest IDs restore status only; they never restore a confirmation flag or proof.
 
 The current support layer includes revision 6 contracts and terminal purged receipt
 replay, migration 36 manifest storage and exact-row immutable-delete guards, durable

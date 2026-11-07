@@ -181,6 +181,7 @@ pub struct Host {
     async_runtime: tokio::runtime::Handle,
     ctx: InvocationContext,
     sources: Arc<HostArtifactSources>,
+    purge_client: Arc<crate::project_purge::NativePurgeClient>,
     data_root: PathBuf,
     ids: Arc<HostIds>,
     waker: Arc<Mutex<Option<Waker>>>,
@@ -348,7 +349,26 @@ async fn compose(
         (config.web)(connections.clone()),
     ));
     let use_cases = use_cases.with_web(web.clone());
+    let purge_client = Arc::new(
+        crate::project_purge::NativePurgeClient::new(
+            config.data_root.join(crate::memory::FILE),
+            sources.clone(),
+        )
+        .with_store(&*store),
+    );
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
+    runtime_config.purge = Some(devworks_engine::runtime::PurgeComposition {
+        files: Arc::new(
+            devworks_adapters::fs::purge::NativeProjectPurgeFiles::new(
+                config.data_root.clone(),
+                config.data_root.join("cache"),
+                store.clone(),
+            )
+            .with_paste_root(config.data_root.join("staging-ui"))
+            .with_read_fence(artifacts.clone()),
+        ),
+        client: purge_client.clone(),
+    });
     runtime_config.shutdown_bound = config.shutdown_bound;
     runtime_config.schemas = Some(devworks_engine::schemas::SchemaComposition {
         reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
@@ -503,6 +523,7 @@ async fn compose(
         async_runtime: tokio::runtime::Handle::current(),
         ctx,
         sources,
+        purge_client,
         data_root: config.data_root.clone(),
         ids,
         waker: Arc::new(Mutex::new(None)),
@@ -744,6 +765,25 @@ pub struct DesktopBackend {
     host: Arc<Host>,
 }
 impl Backend for DesktopBackend {
+    fn purge_client_acknowledge(
+        &self,
+        scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
+    ) {
+        self.host.purge_client.acknowledge(scope);
+    }
+
+    fn purge_client_publish(
+        &self,
+        memory: crate::memory::Memory,
+        live: crate::project_purge::Live,
+        save: bool,
+    ) -> Result<Option<Vec<devworks_core::ports::storage::ProjectPurgeClientScope>>, String> {
+        self.host.purge_client.publish(memory, live, save).map(Some)
+    }
+    fn purge_client_freeze(&self, project: &str, frozen: bool) -> Result<(), String> {
+        self.host.purge_client.freeze(project, frozen)
+    }
+
     fn query(&self, operation: &str, frame: &[u8]) -> QueryOutcome {
         self.host.runtime.query(&self.host.ctx, operation, frame)
     }

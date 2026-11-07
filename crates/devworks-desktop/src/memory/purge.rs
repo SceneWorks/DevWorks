@@ -10,8 +10,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 mod database;
+pub mod frames;
 mod scoped;
-pub use scoped::project_scoped_editors;
+pub use scoped::{ScopedProjection, project_scoped_editors};
 
 /// Hash only the typed removed projection and independently surviving byte keepers.
 /// A control frame or unrelated draft edit does not alter the reviewed ownership witness.
@@ -289,6 +290,7 @@ mod tests {
             work_ids: vec![],
             operation_ids: vec![],
             deleted_artifact_ids: vec![],
+            record_ids: Default::default(),
         }
     }
     #[test]

@@ -55,6 +55,7 @@ pub mod native_notifications;
 pub mod notifications;
 pub mod ops;
 pub mod platform;
+pub mod project_purge;
 pub mod route;
 pub mod routing;
 pub mod settings_screen;

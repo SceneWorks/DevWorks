@@ -48,11 +48,11 @@ impl PurgeWorker {
         })?;
         pending.sort_by_key(|e| match &e.intent {
             crate::ports::project_purge::PurgeEffectIntent::File { witness } => (
-                if witness.directory { 1 } else { 0 },
+                if witness.directory { 2 } else { 1 },
                 std::cmp::Reverse(witness.relative_entry.matches('/').count()),
             ),
             crate::ports::project_purge::PurgeEffectIntent::Client { .. } => {
-                (2, std::cmp::Reverse(0))
+                (0, std::cmp::Reverse(0))
             }
         });
         let mut settled = 0;
@@ -171,13 +171,24 @@ impl PurgeCoordinator {
             .ok_or_else(|| not_found("project", &project.0))?;
         if !inventory.planning.is_resolved()
             || !inventory.unsettled_operations.is_empty()
+            || !inventory.unsettled_deliveries.is_empty()
             || !ProjectService::activity(tx, project)?.is_empty()
         {
             return Err(file_fault(PurgeFileFault::InUse));
         }
-        let client = self.client.inspect(&inventory.client).map_err(file_fault)?;
+        let mut client = self.client.inspect(&inventory.client).map_err(file_fault)?;
         if client.pending {
             return Err(file_fault(PurgeFileFault::InUse));
+        }
+        let kept_owners = self
+            .files
+            .client_keepers(&inventory.removing_files, &client.surviving_paths)
+            .map_err(file_fault)?;
+        if !kept_owners.is_empty() {
+            client.surviving_artifacts.extend(
+                tx.projects()
+                    .purge_file_artifact_keepers(project, &kept_owners)?,
+            );
         }
         if !client.surviving_artifacts.is_empty() {
             inventory = tx
@@ -187,6 +198,15 @@ impl PurgeCoordinator {
             let checked = self.client.inspect(&inventory.client).map_err(file_fault)?;
             if checked.digest != client.digest || checked.pending {
                 return Err(file_fault(PurgeFileFault::Changed));
+            }
+        }
+        inventory
+            .removing_files
+            .owners
+            .retain(|owner| !kept_owners.contains(owner));
+        for owner in kept_owners {
+            if !inventory.kept_files.owners.contains(&owner) {
+                inventory.kept_files.owners.push(owner);
             }
         }
         let removing = self
@@ -281,6 +301,9 @@ impl PurgeCoordinator {
             return Err(invalid());
         }
         let snapshot = self.snapshot(tx, &project.id)?;
+        if !snapshot.client.confirmation_ready {
+            return Err(file_fault(PurgeFileFault::InUse));
+        }
         let fresh = build(
             stored.manifest.id.clone(),
             stored.manifest.created_at_ms.get(),
@@ -292,7 +315,14 @@ impl PurgeCoordinator {
         if fresh.manifest.digest != stored.manifest.digest
             || project_purge_digest(&stored) != stored.manifest.digest.as_str()
         {
-            return Err(invalid());
+            let reason = if fresh.policy_digest != stored.policy_digest {
+                "purge_record_review_changed"
+            } else if fresh.witness_digest != stored.witness_digest {
+                "purge_client_or_file_review_changed"
+            } else {
+                "purge_witness_changed"
+            };
+            return Err(refuse(DomainErrorCode::Conflict, reason, None));
         }
         Ok(PurgePermit {
             reviewed: stored,
@@ -476,19 +506,19 @@ fn build(
             });
         }
     }
-    if snapshot.client.removing_drafts > 0 {
+    {
         removing_records = removing_records
             .checked_add(snapshot.client.removing_drafts)
             .ok_or_else(invalid)?;
         entries.push(ProjectPurgeEntry {
-            id: Digest::try_from(hash(&("client_drafts", &snapshot.client.digest)))
+            id: Digest::try_from(hash(&("client_state", &snapshot.client.digest)))
                 .map_err(|_| invalid())?,
             kind: PurgeEntryKind::RecordClass,
-            record_class: label("client_drafts", "client"),
+            record_class: label("client_state", "client"),
             disposition: PurgeDisposition::Remove,
             record_count: checked_count(snapshot.client.removing_drafts)?,
             byte_count: counter(0),
-            reason: label("OwnedClientDrafts", "owned"),
+            reason: label("OwnedClientState", "owned"),
             relative_path: None,
         });
     }
@@ -604,8 +634,10 @@ mod tests {
                     work_ids: vec![],
                     operation_ids: vec![],
                     deleted_artifact_ids: vec![],
+                    record_ids: Default::default(),
                 },
                 unsettled_operations: vec![],
+                unsettled_deliveries: vec![],
             },
             removing: files.clone(),
             kept: files,
@@ -614,6 +646,8 @@ mod tests {
                 surviving_artifacts: vec![],
                 pending: false,
                 removing_drafts: 2,
+                confirmation_ready: true,
+                surviving_paths: vec![],
             },
         };
         (store, project, snapshot)

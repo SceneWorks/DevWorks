@@ -91,6 +91,18 @@ impl Default for JobForm {
     }
 }
 impl JobForm {
+    pub(super) fn purge_owner<'a>(&'a self, new_scope: &'a Option<String>) -> Option<&'a str> {
+        match &self.editing {
+            Some(job) => match &job.scope {
+                Some(devworks_core::protocol::data::DataScope::Project { project_id }) => {
+                    Some(project_id.0.as_str())
+                }
+                _ => None,
+            },
+            None => new_scope.as_deref(),
+        }
+    }
+
     /// A form opened on an existing job, every definition member carried over.
     pub fn edit(job: &JobRecord) -> Self {
         let mut f = Self {
@@ -391,6 +403,30 @@ pub struct PromptPage {
 }
 
 impl JobsUi {
+    pub(super) fn purge_draft(&self) -> Option<(String, serde_json::Value)> {
+        let form = self.form.as_ref()?;
+        let owner = form.purge_owner(&self.scope).unwrap_or("").to_owned();
+        let original = form.editing.as_ref().and_then(|j| match &j.definition {
+            JobDefinition::Inference { prompt, .. } => Some(prompt),
+            _ => None,
+        });
+        let changed =
+            original.is_none_or(|r| form.prompt.as_deref() != Some(r.artifact_id.as_str()));
+        let selected = changed
+            .then(|| {
+                self.prompt_pages
+                    .values()
+                    .flat_map(|p| p.items.iter())
+                    .find(|r| form.prompt.as_deref() == Some(r.artifact.artifact_id.as_str()))
+                    .map(|r| &r.artifact)
+            })
+            .flatten();
+        Some((
+            owner,
+            serde_json::json!({"form":format!("{form:?}"),"record":form.editing,"selectedPrompt":selected}),
+        ))
+    }
+
     /// Selects `job` (`None`: no job). A different selection drops everything held for the
     /// previous one (its inspection, active run and loaded history pages with their cursor), so
     /// nothing of one job is shown or paged as another's. Every selection change goes through

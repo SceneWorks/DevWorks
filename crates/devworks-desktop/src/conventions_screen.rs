@@ -59,7 +59,7 @@ pub struct Reader {
     pub error: Option<String>,
     pub generation: u64,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Draft {
     pub identity: u64,
     pub generation: u64,

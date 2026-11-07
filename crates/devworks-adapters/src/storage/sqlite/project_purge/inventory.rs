@@ -171,6 +171,23 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
     let mut removing = BTreeMap::new();
     let mut kept = BTreeMap::new();
     let mut unsettled_operations = Vec::new();
+    let mut unsettled_deliveries = Vec::new();
+    for (row, values) in materialize(
+        conn,
+        &selection,
+        &planning,
+        "queue_entries",
+        &["id", "state"],
+    )? {
+        if row.reason != Reason::PurgeControlAudit {
+            match text(&values[1])? {
+                "Ready" | "Claimed" | "Reconciling" => unsettled_deliveries.push(id(&values[0])?),
+                "Completed" | "Failed" | "Cancelled" | "Dismissed" => {}
+                _ => return Err(invalid()),
+            }
+        }
+    }
+
     let mut client = ProjectPurgeClientScope {
         project_id: project.clone(),
         session_ids: Vec::new(),
@@ -178,7 +195,41 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
         work_ids: Vec::new(),
         operation_ids: Vec::new(),
         deleted_artifact_ids: Vec::new(),
+        record_ids: BTreeMap::new(),
     };
+    for table in planning
+        .rows
+        .iter()
+        .filter(|r| {
+            matches!(r.action, Action::Delete | Action::Scrub)
+                && !matches!(
+                    r.reason,
+                    Reason::ProjectMembership | Reason::PurgeControlAudit
+                )
+        })
+        .map(|r| r.table.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        if primary_keys(conn, table)? != ["id"] {
+            continue;
+        }
+        let mut ids = Vec::new();
+        for (row, values) in materialize(conn, &selection, &planning, table, &["id"])? {
+            if matches!(row.action, Action::Delete | Action::Scrub)
+                && !matches!(
+                    row.reason,
+                    Reason::ProjectMembership | Reason::PurgeControlAudit
+                )
+            {
+                ids.push(id(&values[0])?);
+            }
+        }
+        ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        ids.dedup();
+        if !ids.is_empty() {
+            client.record_ids.insert(table.into(), ids);
+        }
+    }
     for (table, destination) in [
         ("sessions", &mut client.session_ids),
         ("conversations", &mut client.conversation_ids),
@@ -211,7 +262,9 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
                 unsettled_operations.push(OperationId(operation.clone()));
             }
         }
-        if text(&values[1])? == devworks_core::ports::storage::STAGE_CAPABILITY {
+        if row.reason != Reason::PurgeControlAudit
+            && text(&values[1])? == devworks_core::ports::storage::STAGE_CAPABILITY
+        {
             // A replay fence/kept version can require the operation header while its
             // unshared temporary bytes still belong to P and must be removed.
             let set = if row.reason == Reason::PurgeControlAudit {
@@ -228,6 +281,9 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
         }
     }
     for (row, values) in materialize(conn, &selection, &planning, "artifact_versions", &["id"])? {
+        if row.reason == Reason::PurgeControlAudit {
+            continue;
+        }
         let set = match row.action {
             Action::Delete => &mut removing,
             Action::Keep => &mut kept,
@@ -247,6 +303,9 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
         "blobs",
         &["digest", "generation"],
     )? {
+        if row.reason == Reason::PurgeControlAudit {
+            continue;
+        }
         let set = match (&row.action, &row.reason) {
             (Action::Scrub, Reason::DerivedContent) => &mut removing,
             (
@@ -326,5 +385,6 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
         kept_files,
         client,
         unsettled_operations,
+        unsettled_deliveries,
     }))
 }

@@ -318,6 +318,16 @@ impl UseCases {
 
     /// Registers the projects family (`WorkService` projects).
     pub fn with_projects(mut self, service: Arc<projects::ProjectService>) -> Self {
+        if service.supports_purge() {
+            for op in [
+                "projects.prepare_purge",
+                "projects.purge_manifest",
+                "projects.purge",
+                "projects.purge_status",
+            ] {
+                self.register(op, Some(service.clone()), Some(service.clone()));
+            }
+        }
         for op in projects::PROJECT_OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }

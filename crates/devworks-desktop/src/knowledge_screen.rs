@@ -421,6 +421,14 @@ pub struct KnowledgeScreen {
 }
 
 impl KnowledgeScreen {
+    pub(crate) fn purge_owner(&self) -> Option<&str> {
+        match self.listed_scope.as_ref() {
+            Some(scope) if scope["kind"].as_str() == Some("Project") => scope["projectId"].as_str(),
+            Some(scope) if scope["kind"].as_str() == Some("Workspace") => None,
+            _ => self.project.as_deref(),
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             lifecycles: [true, false, false, false],
