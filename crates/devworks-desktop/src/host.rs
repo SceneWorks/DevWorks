@@ -555,10 +555,7 @@ impl Engine {
         let thread = std::thread::Builder::new()
             .name("devworks-engine".into())
             .spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_time()
-                    .build()
-                {
+                let rt = match desktop_runtime() {
                     Ok(rt) => rt,
                     Err(e) => {
                         let _ = booted_tx.send(Err(StartError::Thread(e.to_string())));
@@ -963,3 +960,30 @@ mod usage_shutdown_tests;
 #[cfg(test)]
 #[path = "host/provider_refresh_lock_tests.rs"]
 mod provider_refresh_lock_tests;
+
+// This is the runtime used by production desktop consumers, including native metadata sockets.
+fn desktop_runtime() -> Result<tokio::runtime::Runtime, std::io::Error> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+}
+#[cfg(test)]
+mod metadata_runtime_tests {
+    #[test]
+    fn production_metadata_runtime_supports_socket_io() {
+        super::desktop_runtime().unwrap().block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                    .await
+                    .unwrap();
+                let address = listener.local_addr().unwrap();
+                let (connected, accepted) =
+                    tokio::join!(tokio::net::TcpStream::connect(address), listener.accept());
+                assert!(connected.is_ok());
+                assert!(accepted.is_ok());
+            })
+            .await
+            .expect("production metadata runtime I/O completes");
+        });
+    }
+}

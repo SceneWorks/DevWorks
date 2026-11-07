@@ -567,7 +567,7 @@ pub fn step_until(h: &mut Harness<'_, Shell>, what: &str, done: impl Fn(&Shell) 
     while !done(h.state()) {
         assert!(
             std::time::Instant::now() < deadline,
-            "{what} never happened; route={:?}; help_scope={:?}; help_selected={:?}; help_loading={}; help_reading={}; help_error={:?}; help_read_error={:?}; help_notice={:?}",
+            "{what} never happened; route={:?}; help_scope={:?}; help_selected={:?}; help_loading={}; help_reading={}; help_error={:?}; help_read_error={:?}; help_notice={:?}; database_selected={:?}; database_busy={}; database_loading={}; database_error={:?}; database_notice={:?}; database_sources={:?}",
             h.state().route(),
             h.state().help.scope,
             h.state().help.selected,
@@ -575,7 +575,13 @@ pub fn step_until(h: &mut Harness<'_, Shell>, what: &str, done: impl Fn(&Shell) 
             h.state().help.reading,
             h.state().help.error,
             h.state().help.read_error,
-            h.state().help.notice
+            h.state().help.notice,
+            h.state().databases.selected,
+            h.state().databases.busy,
+            h.state().databases.loading,
+            h.state().databases.error,
+            h.state().databases.notice,
+            h.state().databases.connections
         );
         h.step();
         std::thread::sleep(Duration::from_millis(2));

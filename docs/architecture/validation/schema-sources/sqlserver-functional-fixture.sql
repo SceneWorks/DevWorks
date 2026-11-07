@@ -37,3 +37,14 @@ CREATE VIEW dbo.meta_indexed_view WITH SCHEMABINDING AS SELECT id,note FROM dbo.
 GO
 CREATE UNIQUE CLUSTERED INDEX meta_indexed_view_key ON dbo.meta_indexed_view(id);
 GO
+
+USE metadata_fixture;
+GO
+CREATE TYPE dbo.meta_table_ids AS TABLE (id INT NOT NULL PRIMARY KEY, note NVARCHAR(20), CHECK(id>0));
+GO
+DECLARE @ddl NVARCHAR(MAX)=N'CREATE VIEW dbo.meta_oversized_definition AS SELECT CAST(1 AS INT) AS id /*'+REPLICATE(CAST(N'x' AS NVARCHAR(MAX)),40000)+N'*/';
+EXEC sys.sp_executesql @ddl;
+GO
+EXEC sys.sp_addextendedproperty @name=N'MS_Description',@value=N'column description',@level0type=N'SCHEMA',@level0name=N'dbo',@level1type=N'TABLE',@level1name=N'parent',@level2type=N'COLUMN',@level2name=N'id';
+EXEC sys.sp_addextendedproperty @name=N'MS_Description',@value=N'index description',@level0type=N'SCHEMA',@level0name=N'dbo',@level1type=N'TABLE',@level1name=N'parent',@level2type=N'INDEX',@level2name=N'parent_pk';
+GO

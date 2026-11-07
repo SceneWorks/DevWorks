@@ -7,7 +7,7 @@ use devworks_core::protocol::data::CoverageState;
 use serde_json::json;
 
 fn request(engine: &str, endpoint: &str) -> MetadataRequest {
-    MetadataRequest {connection_id:Id::new("metadata-fixture").unwrap(),config:serde_json::from_value(json!({"name":"Isolated metadata fixture","engine":engine,"endpoint":endpoint,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":["meta_large_default"],"writesEnabled":false,"enabled":true,"authentication":"Password","username":"metadata_reader","tls":"LoopbackPlaintext"})).unwrap(),password:Some(Secret::new("devworks_metadata_reader")),ca_certificate:None,test_only:false,limits:MetadataLimits::default(),cancellation:Default::default()}
+    MetadataRequest {connection_id:Id::new("metadata-fixture").unwrap(),config:serde_json::from_value(json!({"name":"Isolated metadata fixture","engine":engine,"endpoint":endpoint,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":["meta_large_default","meta_oversized_definition"],"writesEnabled":false,"enabled":true,"authentication":"Password","username":"metadata_reader","tls":"LoopbackPlaintext"})).unwrap(),password:Some(Secret::new("devworks_metadata_reader")),ca_certificate:None,test_only:false,limits:MetadataLimits::default(),cancellation:Default::default()}
 }
 fn qualify(engine: &str, var: &str) {
     let endpoint = std::env::var(var).expect("explicit isolated fixture endpoint is required");
@@ -699,4 +699,136 @@ fn native_postgres_selects_requested_catalog_before_discovery_limit() {
         .collect::<Vec<_>>();
     assert_eq!(catalogs, ["metadata_limits"]);
     assert!(snapshot.objects.iter().any(|o| o.kind == "Table"));
+}
+
+#[test]
+#[ignore = "explicit isolated MySQL empty-default fixture"]
+fn native_mysql_preserves_present_empty_default_distinct_from_absence() {
+    let endpoint = std::env::var("DEVWORKS_METADATA_MYSQL").unwrap();
+    let mut req = request("MySql", &endpoint);
+    req.config.include_patterns = serde_json::from_value(json!(["meta_empty_default"])).unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let snapshot = rt.block_on(NetworkMetadataReader.read(req)).unwrap();
+    let value = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Column" && o.metadata.name.0 == "value")
+        .unwrap();
+    assert_eq!(
+        value.metadata.default_value.as_ref().map(|v| v.0.as_str()),
+        Some("")
+    );
+    let absent = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Column" && o.metadata.name.0 == "absent_value")
+        .unwrap();
+    assert!(absent.metadata.default_value.is_none());
+}
+fn probe_missing_catalog(engine: &str, variable: &str) {
+    let endpoint = std::env::var(variable).unwrap();
+    let absent = format!(
+        "{}/devworks_absent_metadata_catalog",
+        endpoint.rsplit_once('/').unwrap().0
+    );
+    let mut req = request(engine, &absent);
+    req.test_only = true;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    assert!(matches!(
+        rt.block_on(NetworkMetadataReader.read(req)),
+        Err(MetadataFailure::AccessDenied)
+    ));
+    let mut req = request(
+        engine,
+        &format!("{}/", endpoint.rsplit_once('/').unwrap().0),
+    );
+    req.test_only = true;
+    req.config.catalogs =
+        serde_json::from_value(json!(["devworks_absent_metadata_catalog"])).unwrap();
+    assert!(matches!(
+        rt.block_on(NetworkMetadataReader.read(req)),
+        Err(MetadataFailure::AccessDenied)
+    ));
+}
+#[test]
+#[ignore = "explicit isolated MySQL selected-catalog probe"]
+fn native_mysql_test_refuses_missing_selected_catalog() {
+    probe_missing_catalog("MySql", "DEVWORKS_METADATA_MYSQL");
+}
+#[test]
+#[ignore = "explicit isolated MariaDB selected-catalog probe"]
+fn native_mariadb_test_refuses_missing_selected_catalog() {
+    probe_missing_catalog("MariaDb", "DEVWORKS_METADATA_MARIADB");
+}
+fn sql_server_selected(pattern: &str) -> MetadataSnapshot {
+    let endpoint = std::env::var("DEVWORKS_METADATA_SQLSERVER").unwrap();
+    let mut req = request("SqlServer", &endpoint);
+    req.config.include_patterns = serde_json::from_value(json!([pattern])).unwrap();
+    req.config.exclude_patterns = serde_json::from_value(json!([])).unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(NetworkMetadataReader.read(req))
+        .unwrap()
+}
+#[test]
+#[ignore = "explicit isolated SQLServer oversized-view fixture"]
+fn native_sql_server_oversized_view_retains_parent_and_partial_coverage() {
+    let snapshot = sql_server_selected("meta_oversized_definition");
+    let view = snapshot.objects.iter().find(|o| o.kind == "View").unwrap();
+    assert!(view.metadata.definition_sql.is_none());
+    assert!(matches!(view.coverage.state, CoverageState::Partial));
+    assert!(matches!(snapshot.coverage.state, CoverageState::Partial));
+    let column = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Column")
+        .unwrap();
+    assert_eq!(column.parent_key.as_ref(), Some(&view.key));
+}
+#[test]
+#[ignore = "explicit isolated SQLServer table-type fixture"]
+fn native_sql_server_table_type_children_reference_the_retained_type() {
+    let snapshot = sql_server_selected("meta_table_ids");
+    let parent = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Type" && o.metadata.name.0 == "meta_table_ids")
+        .unwrap();
+    for kind in ["Column", "Index", "Constraint"] {
+        assert!(
+            snapshot
+                .objects
+                .iter()
+                .any(|o| o.kind == kind && o.parent_key.as_ref() == Some(&parent.key)),
+            "table-type {kind} retained under Type identity"
+        );
+    }
+    assert!(snapshot.objects.iter().all(|o| {
+        o.parent_key
+            .as_ref()
+            .is_none_or(|p| snapshot.objects.iter().any(|parent| &parent.key == p))
+    }));
+}
+#[test]
+#[ignore = "explicit isolated SQLServer extended-property fixture"]
+fn native_sql_server_column_description_is_not_duplicated_by_index_properties() {
+    let snapshot = sql_server_selected("parent");
+    let columns = snapshot
+        .objects
+        .iter()
+        .filter(|o| o.kind == "Column" && o.metadata.name.0 == "id")
+        .collect::<Vec<_>>();
+    assert_eq!(columns.len(), 1);
+    assert_eq!(
+        columns[0].metadata.comment.as_ref().map(|v| v.0.as_str()),
+        Some("column description")
+    );
 }

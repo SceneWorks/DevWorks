@@ -117,6 +117,20 @@ fn native_databases_create_sync_page_inspect_and_remove_only_indexed_metadata() 
         .clone();
     let label = format!("{:?} {}", parent.kind, parent.qualified_name.0);
     click(&mut h, Role::Button, &label);
+    click(&mut h, Role::Button, "Inspect schema relationships");
+    step_until(&mut h, "native parent relationships", |s| {
+        !s.databases.read_loading && !s.databases.relations.is_empty()
+    });
+    // A relationship endpoint deliberately installs an exact-object filter before children.
+    let endpoint = format!("Inspect relationship target: {}", parent.qualified_name.0);
+    h.query_all_by_role_and_label(Role::Button, &endpoint)
+        .next()
+        .expect("parent relationship target")
+        .click_accesskit();
+    settle(&mut h);
+    step_until(&mut h, "exact relationship endpoint", |s| {
+        !s.databases.read_loading && s.databases.object_id.as_deref() == Some(parent.id.as_str())
+    });
     click(&mut h, Role::Button, "Inspect schema children");
     step_until(&mut h, "native table columns", |s| {
         !s.databases.read_loading
@@ -500,7 +514,12 @@ fn native_database_search_refreshes_a_missing_prepared_capture_before_reading_ob
     settle(&mut h);
     h.get_by_label("Capture source").click_accesskit();
     settle(&mut h);
-    click(&mut h, Role::Button, "Sync database metadata");
+    // A late source-status reply can reflow the selected-source controls.
+    // Activate the native control by identity, as an accessibility client does.
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Sync database metadata")
+        .click_accesskit();
+    settle(&mut h);
     step_until(&mut h, "capture source published", |s| {
         s.databases
             .connections
@@ -547,4 +566,200 @@ fn native_database_search_refreshes_a_missing_prepared_capture_before_reading_ob
         h.state().databases.error
     );
     settle(&mut h);
+}
+
+#[test]
+fn native_database_boot_without_secret_facility_keeps_sqlite_metadata_and_native_fallback_accessible()
+ {
+    use devworks_core::ports::secrets::{Secret, SecretError, SecretKey, SecretStore};
+    use devworks_core::protocol::{CommandReply, Id, results::DomainDecision};
+    struct UnavailableMemory;
+    impl SecretStore for UnavailableMemory {
+        fn name(&self) -> &'static str {
+            "Controlled unavailable memory store"
+        }
+        fn put(&self, _: &SecretKey, _: &Secret) -> Result<(), SecretError> {
+            Err(SecretError::Unavailable(
+                "controlled unavailable memory store".into(),
+            ))
+        }
+        fn get(&self, _: &SecretKey) -> Result<Option<Secret>, SecretError> {
+            Err(SecretError::Unavailable(
+                "controlled unavailable memory store".into(),
+            ))
+        }
+        fn delete(&self, _: &SecretKey) -> Result<bool, SecretError> {
+            Err(SecretError::Unavailable(
+                "controlled unavailable memory store".into(),
+            ))
+        }
+        fn list(&self, _: &str) -> Result<Vec<Id>, SecretError> {
+            Err(SecretError::Unavailable(
+                "controlled unavailable memory store".into(),
+            ))
+        }
+    }
+    let _native_case = native_runtime_case();
+    let root = Root::new("database-unavailable-secret-facility");
+    let path = root.file("local.sqlite", b"");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE local_table(id INT);")
+        .unwrap();
+    let mut cfg = config(&root.0);
+    cfg.secrets = Some(std::sync::Arc::new(UnavailableMemory));
+    let engine = devworks_desktop::host::Engine::start(cfg)
+        .expect("credential unavailability is a degraded capability");
+    let backend = engine.backend();
+    assert!(
+        backend
+            .stage_database_password(Secret::new("controlled-never-stored-value"))
+            .is_err()
+    );
+    let frame = serde_json::json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":backend.token("unavailable-facility-source"),"body":{"kind":"schemas.configure","scope":{"kind":"Workspace"},"config":{"name":"Local without credentials","engine":"Sqlite","endpoint":path,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"projectAccess":[],"workspaceExposed":false,"exposureMode":"SchemaOnly","authentication":"File"}}}).to_string().into_bytes();
+    assert!(
+        matches!(backend.command("schemas.configure", &frame).unwrap(),CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..}))
+    );
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1200.0);
+    h.state_mut().navigate(Route::Databases);
+    settle(&mut h);
+    h.get_by_label("Local without credentials")
+        .click_accesskit();
+    settle(&mut h);
+    click(&mut h, Role::Button, "Sync database metadata");
+    step_until(&mut h, "credential-free SQLite still publishes", |s| {
+        s.databases
+            .connections
+            .first()
+            .is_some_and(|c| c.current_view_id.is_some() && c.active_operation_id.is_none())
+    });
+    click_nav(&mut h, "Settings");
+    assert_eq!(
+        h.state().route(),
+        Route::Settings,
+        "native Settings remains available for fallback selection"
+    );
+}
+
+#[test]
+fn native_database_switching_saved_network_source_to_sqlite_clears_network_custody_and_pending_input()
+ {
+    use devworks_core::ports::secrets::Secret;
+    use devworks_core::protocol::{CommandReply, results::DomainDecision};
+    let _native_case = native_runtime_case();
+    let root = Root::new("database-engine-conversion");
+    let path = root.file("converted.sqlite", b"");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE converted(id INT);")
+        .unwrap();
+    let engine = start(&root);
+    let backend = engine.backend();
+    let credential = backend
+        .stage_database_password(Secret::new("controlled-saved-password"))
+        .unwrap();
+    let frame=serde_json::json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":backend.token("conversion-source"),"body":{"kind":"schemas.configure","scope":{"kind":"Workspace"},"config":{"name":"Convertible source","engine":"MySql","endpoint":"mysql://127.0.0.1:9/unused","credentialRef":credential,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"projectAccess":[],"workspaceExposed":false,"exposureMode":"SchemaOnly","authentication":"Password","username":"metadata_reader","tls":"LoopbackPlaintext"}}}).to_string().into_bytes();
+    assert!(
+        matches!(backend.command("schemas.configure",&frame).unwrap(),CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..}))
+    );
+    let dialogs = Script::default();
+    dialogs.files.lock().unwrap().push(vec![path]);
+    let mut h = harness(shell(&engine, &root, dialogs), 1600.0, 1200.0);
+    h.state_mut().navigate(Route::Databases);
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Edit Convertible source")
+        .click_accesskit();
+    settle(&mut h);
+    let draft = h.state_mut().databases.draft.as_mut().unwrap();
+    draft.config["caCertificate"] = serde_json::json!({"artifactId":"copied-ca","versionId":"copied-ca-version","sha256":"a".repeat(64),"byteLength":"8","mediaType":"application/x-pem-file"});
+    draft.password = "controlled-pending-password".into();
+    draft.ca_file = Some(root.file("pending-ca.pem", b"never imported after switch"));
+    click(&mut h, Role::ComboBox, "Database engine");
+    h.get_by_label("Sqlite").click_accesskit();
+    settle(&mut h);
+    let draft = h.state().databases.draft.as_ref().unwrap();
+    assert_eq!(draft.config["engine"], "Sqlite", "selected file engine");
+    for key in ["credentialRef", "caCertificate", "tls", "username"] {
+        assert!(
+            draft.config.get(key).is_none(),
+            "network-only {key} cleared"
+        );
+    }
+    assert!(draft.password.is_empty());
+    assert!(draft.ca_file.is_none());
+    h.get_by_role_and_label(Role::Button, "Choose database file")
+        .click_accesskit();
+    settle(&mut h);
+    assert_eq!(
+        h.state().databases.draft.as_ref().unwrap().config["engine"],
+        "Sqlite",
+        "file chooser retains engine"
+    );
+    h.get_by_role_and_label(Role::Button, "Save database source")
+        .click_accesskit();
+    settle(&mut h);
+    step_until(&mut h, "converted source saved", |s| {
+        !s.databases.busy && s.databases.draft.is_none() && !s.databases.loading
+    });
+    // A late source-status reply can reflow the selected-source controls.
+    // Activate the native control by identity, as an accessibility client does.
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Sync database metadata")
+        .click_accesskit();
+    settle(&mut h);
+    step_until(
+        &mut h,
+        "converted SQLite publishes without network custody",
+        |s| {
+            s.databases
+                .connections
+                .first()
+                .is_some_and(|c| c.current_view_id.is_some() && c.active_operation_id.is_none())
+        },
+    );
+    assert!(
+        h.state().databases.error.is_none(),
+        "{:?}",
+        h.state().databases.error
+    );
+}
+
+#[test]
+fn native_database_accessible_editor_control_survives_a_late_layout_change() {
+    let root = Root::new("database-accessible-control");
+    let mut h = harness(
+        shell_with(
+            Err("Controlled offline fixture".into()),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1500.0,
+        1800.0,
+    );
+    h.state_mut().navigate(Route::Databases);
+    h.state_mut().databases.draft = Some(devworks_desktop::databases_screen::Draft::new(None));
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Cancel database edit")
+        .scroll_to_me();
+    settle(&mut h);
+    // A backend reply may reflow the form between its accessibility snapshot and input frame.
+    h.get_by_role_and_label(Role::Button, "Cancel database edit")
+        .click();
+    h.state_mut().databases.notice = Some("Late native publication status\n".repeat(8));
+    h.step();
+    assert!(
+        h.state().databases.draft.is_some(),
+        "stale coordinates do not identify the intended control"
+    );
+    h.state_mut().databases.notice = None;
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Cancel database edit")
+        .click_accesskit();
+    h.state_mut().databases.notice = Some("Late native publication status\n".repeat(8));
+    h.step();
+    assert!(
+        h.state().databases.draft.is_none(),
+        "native accessible activation retains editor/control identity across late replies"
+    );
 }

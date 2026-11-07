@@ -570,12 +570,19 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     });
     let use_cases = if let Some(service) = &schemas {
         // Namespace/reference-only cleanup precedes password intake and command exposure.
-        service.reconcile_credential_orphans().map_err(|_| {
-            BootError::Composition(StorageError::unavailable(
-                Unavailable::Io,
-                "schema credential reconciliation unavailable",
-            ))
-        })?;
+        match service.reconcile_credential_orphans() {
+            Ok(_)
+            | Err(
+                devworks_core::ports::secrets::SecretError::Unavailable(_)
+                | devworks_core::ports::secrets::SecretError::Denied,
+            ) => {}
+            Err(_) => {
+                return Err(BootError::Composition(StorageError::unavailable(
+                    Unavailable::Io,
+                    "schema credential reference reconciliation failed",
+                )));
+            }
+        }
         consumers.push(crate::schemas::consumer(store.clone(), service.clone()));
         use_cases.with_schemas(service.clone())
     } else {

@@ -342,3 +342,50 @@ DW139. Failure-only route/topic/loading/error diagnostics preserve all assertion
 and timeouts; the unchanged instrumented case passes13.55s locally. Its original
 cause is still unknown, so that pass is not claimed as a repair. Review/CI/merge and
 final acceptance remain pending on the next published head.
+
+## Second review corrections (2026-11-07, acceptance pending)
+
+Empty MySQL defaults now use a dedicated bounded0–4096-character primitive, preserving
+empty versus absent values and the existing upper limit. Three new wire cases cover
+empty, exact-limit and over-limit values. All1867 earlier fixture entries and71 earlier
+schema files remain unchanged; the1870-case corpus passes all7 native recorded checks,
+all8 revision checks,13 generator checks and43 independent DW36 JSON Schema cases.
+
+Actual-server regressions cover explicit missing-catalog connection tests, a40K SQLServer
+view definition retained as a bounded partial parent, extended-property class isolation,
+and table-type columns/indexes/constraints under their public Type parent. All29 adapter
+network cases pass1.07s. The original table-type orphan premise was not reproduced on
+SQLServer16.0.4305.5: internal TT objects were filtered as system-shipped. The new case
+instead qualifies full public table-type structure, including resolvable child parents.
+
+The actual production desktop runtime now enables socket I/O. Its controlled loopback
+regression fails with the previous timer-only builder and passes with the production
+builder. Four explicitly dispatched real-server cases pass14.20s through Engine,
+SchemaService, durable workers and publication: MariaDB, MySQL, PostgreSQL and SQLServer.
+Credential facilities are controlled SessionSecrets; ordinary CI ignores these cases.
+The dedicated isolated SQLServer workflow now also exercises this production path.
+
+Unavailable/denied secret facilities degrade credential capability instead of aborting
+boot. A controlled unavailable store regression fails before the correction and passes
+6.99s after it, including SQLite publication and native Settings access. Genuine reference
+reconciliation failures still fail boot. Switching a saved network source to SQLite clears
+credential/CA references, username, TLS and pending password/CA input; native file selection,
+save and actual SQLite publication pass7.01s. Endpoint-to-children exploration clears the
+exact-object filter; the original workflow assertion fails without that correction.
+
+A controlled late-layout case demonstrates why queued pointer coordinates can miss an
+intended editor control; native AccessKit activation preserves its identity. New source
+setup checks use that native input route while existing pointer workflows remain. No sole
+cause is assigned to DW139's earlier uninstrumented Windows Help timeout. Database failure
+diagnostics now include actual source status. The live route registry describes the actual
+combined database manager/explorer, and offline UI displays its exact availability reason;
+the existing integrated-route and offline checks pass unchanged (7.29s and0.25s).
+Fresh complete UI/storage/jobs/strict checks, exact-head review, platform CI, supported-x86
+qualification, merge and final retained-source acceptance still gate delivery.
+
+Final local qualification on the second review tree:10 native DB UI cases pass39.80s,
+13 source/storage/custody cases pass11.44s, strict workspace/all-target checks pass44.41s
+(and0.23s after explicitly declaring Tokio net). A newly created isolated SQLServer
+fixture passes7 adapter cases plus1 production Engine case, then is removed. The local
+report is arm64/nativeX86=false; fresh actual-x86 CI is still required. A first scheduled
+job command used a plural filter and ran zero cases; it is excluded from evidence.
