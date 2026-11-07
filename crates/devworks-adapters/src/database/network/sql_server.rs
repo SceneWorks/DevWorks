@@ -127,7 +127,8 @@ pub(super) async fn read(
             "Fixed sys catalog statements enforce this adapter's metadata boundary; use a metadata-only login with VIEW DEFINITION for full visibility.",
         ],
     )?;
-    if c.request.test_only {
+    if c.request.test_only && (!target.catalog.is_empty() || c.request.config.catalogs.0.is_empty())
+    {
         conn.close().await.map_err(classify)?;
         return Ok(c.finish(profile));
     }
@@ -171,6 +172,18 @@ pub(super) async fn read(
         names
     };
     conn.close().await.map_err(classify)?;
+    if c.request.test_only {
+        // A selected server-only source probes its actual catalogs after bounded discovery,
+        // without constructing a structural snapshot or querying source rows.
+        for name in names {
+            connect(&c, &target, &name)
+                .await?
+                .close()
+                .await
+                .map_err(classify)?;
+        }
+        return Ok(c.finish(profile));
+    }
     for name in names {
         let mut conn = connect(&c, &target, &name).await?;
         conn.simple_query("SET LOCK_TIMEOUT 500; SET XACT_ABORT ON; BEGIN TRANSACTION")

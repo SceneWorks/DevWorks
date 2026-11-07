@@ -439,3 +439,24 @@ pass39.13s, all40 desktop unit cases5.50s, and all25 shell cases37.95s. Final st
 workspace/all-target checks pass16.61s. Fresh exact-head review, platform CI, actual-x86,
 merge and full retained-source acceptance remain gates. DW139's older Windows Help event
 is still unattributed and is not declared fixed by these database changes.
+
+Fifth-review corrections: server-only PostgreSQL and SQLServer connection probes now
+validate explicitly selected catalogs and shallow-connect their actual targets. Missing
+and inaccessible catalog probes reproduce false success0.04s before the fix; valid
+selection succeeds with no object/relationship extraction. SQLite rowid-alias nullability
+reproduces a false nullable flag0.05s. Metadata now distinguishes actual INTEGER aliases
+from INT, inline PRIMARY KEY DESC, composite keys, table-level DESC, STRICT and WITHOUT
+ROWID variants using native index metadata, without parsing or executing source SQL.
+
+Three native UI cases reproduce foreign endpoint filtering and lost/replaced password
+handles13.68s. Source selection/configuration resets only source-bound read identities,
+pages and relationships. A host-staged handle is copied to its current draft before save
+submission, so correcting a refused create or edit uses the supplied replacement password;
+plaintext stays consumed and absent from persisted draft state. Controlled SessionSecrets
+verify the exact published handle and value; no OS credential facility is touched.
+
+All42 actual adapter cases pass0.73s, all11 SQLite cases0.03s, all14 native database UI
+cases48.31s, all5 actual production Engine cases20.04s, and final strict workspace/all-target
+checks16.60s. Fresh isolated SQLServer runs9adapter+1Engine cases and cleans up its container;
+local report remains arm64/nativeX86=false. Fresh completed exact-head review, platform CI,
+supported-x86, merge-tree verification and final acceptance still gate delivery.

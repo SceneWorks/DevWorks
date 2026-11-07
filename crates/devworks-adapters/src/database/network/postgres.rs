@@ -132,7 +132,7 @@ async fn read_catalog(
             "Metadata visibility follows source grants; read-only transactions and fixed catalog queries.",
         ],
     )?;
-    if c.request.test_only {
+    if c.request.test_only && !discovery {
         return Ok((c, Vec::new(), profile));
     }
     if discovery {
@@ -223,7 +223,8 @@ pub(super) async fn read(
     } else {
         &target.catalog
     };
-    let discovery = target.catalog.is_empty() && !c.request.test_only;
+    let discovery = target.catalog.is_empty()
+        && (!c.request.test_only || !c.request.config.catalogs.0.is_empty());
     let (mut c, names, mut profile) = session(c, &target, database, discovery).await?;
     if discovery {
         for name in names {

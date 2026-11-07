@@ -1027,3 +1027,42 @@ fn native_metadata_boundary_mariadb_many_parameters() {
 fn native_sql_server_many_parameters_publish_bounded_partial() {
     many_parameters("SqlServer", "DEVWORKS_METADATA_SQLSERVER");
 }
+
+fn selected_catalog_probe(engine: &str, variable: &str) {
+    let endpoint = std::env::var(variable).unwrap();
+    let server = endpoint.rsplit_once('/').unwrap().0;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for catalog in ["metadata_probe_missing", "metadata_inaccessible"] {
+        let mut probe = request(engine, server);
+        probe.config.catalogs = serde_json::from_value(json!([catalog])).unwrap();
+        probe.test_only = true;
+        assert!(
+            matches!(
+                rt.block_on(NetworkMetadataReader.read(probe)),
+                Err(MetadataFailure::AccessDenied)
+            ),
+            "selected catalog {catalog} is not usable"
+        );
+    }
+    let mut probe = request(engine, server);
+    probe.config.catalogs = serde_json::from_value(json!(["metadata_fixture"])).unwrap();
+    probe.test_only = true;
+    let snapshot = rt.block_on(NetworkMetadataReader.read(probe)).unwrap();
+    assert!(
+        snapshot.objects.is_empty() && snapshot.relationships.is_empty(),
+        "connection probe reads no structural objects or rows"
+    );
+}
+#[test]
+#[ignore = "explicit isolated PostgreSQL selected-catalog probe"]
+fn native_postgres_probe_checks_selected_catalog_access() {
+    selected_catalog_probe("Postgres", "DEVWORKS_METADATA_POSTGRES");
+}
+#[test]
+#[ignore = "explicit isolated SQLServer selected-catalog probe"]
+fn native_sql_server_probe_checks_selected_catalog_access() {
+    selected_catalog_probe("SqlServer", "DEVWORKS_METADATA_SQLSERVER");
+}

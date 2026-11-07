@@ -28,3 +28,5 @@ BEGIN
   (SELECT string_agg(quote_literal('label_'||lpad(g::text,4,'0')||'_'||repeat('x',30)),',') FROM generate_series(1,2000) g) || ')';
 END
 $metadata_fixture$;
+CREATE DATABASE metadata_inaccessible;
+REVOKE CONNECT ON DATABASE metadata_inaccessible FROM PUBLIC;

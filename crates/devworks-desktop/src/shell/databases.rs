@@ -353,6 +353,10 @@ impl Shell {
                 self.databases.view = None;
                 self.databases.read_pin = None;
                 self.databases.parent = None;
+                self.databases.object_id = None;
+                self.databases.object_next = None;
+                self.databases.relation_next = None;
+                self.databases.relation_ids.clear();
                 self.databases.objects.clear();
                 self.databases.relations.clear();
                 self.databases.selected_object = None;
@@ -523,6 +527,16 @@ impl Shell {
             }
             (Slot::DatabasePrepare, Reply::Task(result)) => match result {
                 Ok(TaskOutput::Prepared { frame }) => {
+                    // Keep the host-staged reference for corrected retries; plaintext was
+                    // consumed during preparation and never returns to persisted form state.
+                    if let Ok(prepared) = serde_json::from_slice::<Value>(&frame)
+                        && let Some(handle) = prepared
+                            .pointer("/body/config/credentialRef")
+                            .and_then(Value::as_str)
+                        && let Some(draft) = self.databases.draft.as_mut()
+                    {
+                        draft.config["credentialRef"] = json!(handle);
+                    }
                     if !self.command(
                         Slot::DatabaseCommand("schemas.configure".into()),
                         "Saving database source",
@@ -597,6 +611,11 @@ impl Shell {
                                 self.databases.tab = 0;
                                 self.databases.view = None;
                                 self.databases.read_pin = None;
+                                self.databases.object_id = None;
+                                self.databases.parent = None;
+                                self.databases.object_next = None;
+                                self.databases.relation_next = None;
+                                self.databases.relation_ids.clear();
                                 self.databases.objects.clear();
                                 self.databases.relations.clear();
                                 self.databases.selected_object = None;
