@@ -1676,10 +1676,21 @@ fn frequent_command_wakeups_cannot_starve_a_parked_claims_lease() {
         let wake = t.d.wakeup();
         // Commands notify supervisors faster than the 100ms renewal interval. Keep doing
         // so for two full leases while readiness/permit admission remains parked.
-        for _ in 0..30 {
+        for step in 0..30 {
             t.h.advance(20);
             wake.wake();
             tokio::time::sleep(Duration::from_millis(20)).await;
+            if (step + 1) % 10 == 0 {
+                // Store time is injected independently of Tokio time and the actual writer.
+                // Keep sending traffic while waiting for the due renewal before advancing
+                // another lease's worth of injected time. A reset-on-wakeup timer still
+                // starves here and fails the original watchdog; a slow writer can catch up.
+                let now = t.h.now();
+                while t.lease_until(&t.parked) < now + PermitStarved::LEASE_MS {
+                    wake.wake();
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }
         }
         let now = t.h.now();
         assert!(
