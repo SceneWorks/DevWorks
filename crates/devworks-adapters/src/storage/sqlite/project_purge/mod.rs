@@ -3,6 +3,7 @@ mod blobs;
 pub(super) mod candidates;
 pub(super) mod classification;
 pub(super) mod guard;
+pub(super) mod inventory;
 mod leases;
 mod mixed;
 mod receipts;

@@ -297,3 +297,14 @@ seconds), the additional closed-shape refusal case passes (1.63 seconds), and st
 workspace/all-target checks pass (7.60 seconds). Read-only assessment is still not a
 purge permit. Full legacy attribution, native file/client inventory, coordination,
 logical/physical execution and final integrated acceptance remain pending.
+
+The native read-only owner inventory now materializes exact file owners and client
+session/conversation/work/operation IDs from that same verified assessment. A kept
+replay header does not keep its unshared staging bytes. Shared previews/content and
+Workspace attachment versions referenced by a P subject are explicitly kept; the
+latter omission failed the added regression (1.35 seconds) before correction.
+Removing/kept file sets must be disjoint. Unsettled rootless staging is reported as
+a hold for the coordinator. The combined real artifact/share/session/Workspace
+keeper case passes (1.65 seconds); strict workspace/all-target checks pass (18.21
+seconds). The inventory performs no filesystem or logical deletion and does not
+yet include live/persisted client state or legacy file-attribution completeness.

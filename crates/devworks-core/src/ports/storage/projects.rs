@@ -246,6 +246,29 @@ impl ProjectPurgePlanning {
     }
 }
 
+/// Native transient identities for client cleanup; never supplied by a caller or persisted
+/// as private source keys in an audit. Shared artifacts keep their independent references.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectPurgeClientScope {
+    pub project_id: ProjectId,
+    pub session_ids: Vec<Id>,
+    pub conversation_ids: Vec<Id>,
+    pub work_ids: Vec<Id>,
+    pub operation_ids: Vec<Id>,
+    pub deleted_artifact_ids: Vec<Id>,
+}
+
+/// Read-only materialization from the same verified ownership assessment. These owner
+/// sets do not authorize unlink, redaction, or logical deletion.
+#[derive(Clone, Debug)]
+pub struct ProjectPurgeInventory {
+    pub planning: ProjectPurgePlanning,
+    pub removing_files: crate::ports::project_purge::PurgeFileSelection,
+    pub kept_files: crate::ports::project_purge::PurgeFileSelection,
+    pub client: ProjectPurgeClientScope,
+    pub unsettled_staging: Vec<crate::protocol::OperationId>,
+}
+
 #[derive(Clone, Debug)]
 /// Durable reviewed purge intent. Private source keys are never copied here.
 pub struct StoredProjectPurge {
@@ -324,6 +347,12 @@ pub struct ProjectManagedFileRecovery {
 }
 
 pub trait ProjectRead {
+    fn purge_inventory(
+        &self,
+        _project: &ProjectId,
+    ) -> Result<Option<ProjectPurgeInventory>, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
     fn purge_planning(
         &self,
         project: &ProjectId,

@@ -10,6 +10,15 @@ use rusqlite::Connection;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
+pub(super) const ARTIFACT_SUBJECT_TARGETS: &[(&str, &str)] = &[
+    ("root", "work_items"),
+    ("assignment", "assignments"),
+    ("operation", "operations"),
+    ("resource", "resources"),
+    ("blocker", "blockers"),
+    ("session", "sessions"),
+];
+
 fn invalid(message: &str) -> StorageError {
     StorageError::InvalidRecord(message.into())
 }
@@ -130,14 +139,7 @@ fn typed_references(
     // These are the six closed SubjectKey variants used by native artifact links.
     // Their targets remain candidates: an audit link is not a grant to retain
     // executable/private state or to remove its independently owned source.
-    for (kind, target) in [
-        ("root", "work_items"),
-        ("assignment", "assignments"),
-        ("operation", "operations"),
-        ("resource", "resources"),
-        ("blocker", "blockers"),
-        ("session", "sessions"),
-    ] {
+    for &(kind, target) in ARTIFACT_SUBJECT_TARGETS {
         collect(
             conn,
             selection,

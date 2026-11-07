@@ -5335,3 +5335,160 @@ fn purge_planning_staging_scope_comes_from_the_native_journal_and_kept_version_p
             .any(|r| r.table == "operations" && r.key_digest == key)
     );
 }
+
+#[test]
+fn purge_inventory_materializes_exact_file_and_client_owners_without_deleting_shared_content() {
+    use devworks_core::ports::project_purge::PurgeFileOwner;
+    let fx = Fx::new();
+    let artifact = fx.saved(
+        "inventory-source",
+        "private inventory artifact",
+        "text/plain",
+        b"inventory bytes",
+    );
+    let version_id = artifact.artifact.version_id.clone();
+    let stage = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |s| {
+        let version = s.artifacts().version(&version_id)?.unwrap();
+        let id = serde_json::from_value(version.source["operationId"].clone()).unwrap();
+        s.operations().operation(&id)
+    })
+    .unwrap()
+    .unwrap();
+    fx.write(|tx| {
+        for (name, scope) in [
+            ("inventory-project-session", Some(project("project-a"))),
+            ("inventory-home-session", None),
+        ] {
+            tx.sessions().insert_session(&StoredSession {
+                id: id(name),
+                conversation_id: id(&format!("{name}-conversation")),
+                agent_id: actor("user-a"),
+                project_id: scope,
+                root_id: None,
+                title: "private draft owner".into(),
+                context_epoch: 0,
+                revision: 1,
+                created_by: actor("user-a"),
+                created_at_ms: T0,
+                closed_at_ms: None,
+                closed_by: None,
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            })?;
+        }
+        Ok(())
+    });
+    let independent = saved(fx.save_workspace(
+        &fx.user(),
+        "independent-inventory-reference",
+        "workspace keeper",
+        b"independent workspace keeper bytes",
+        json!([]),
+        3,
+    ));
+    let independent_version = independent.artifact.version_id.clone();
+    fx.write(move |tx| {
+        tx.artifacts()
+            .add_link(&ArtifactLink {
+                version_id: independent_version,
+                subject: SubjectKey::session(&id("inventory-project-session")),
+                purpose: LinkPurpose::Reference,
+            })
+            .map(|_| ())
+    });
+    let inventory = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |s| {
+            s.projects().purge_inventory(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let owned = inventory();
+    assert!(owned.planning.is_resolved());
+    assert!(
+        owned.kept_files.owners.contains(&PurgeFileOwner::Preview {
+            version_id: independent.artifact.version_id.clone()
+        }),
+        "a workspace attachment referenced by P must appear among the kept files"
+    );
+    assert_eq!(owned.removing_files.store_id, fx.store.info().store_id);
+    assert_eq!(
+        owned.removing_files.restore_epoch,
+        fx.store.info().restore_epoch
+    );
+    assert_eq!(
+        owned.client.session_ids,
+        vec![id("inventory-project-session")]
+    );
+    assert_eq!(
+        owned.client.conversation_ids,
+        vec![id("inventory-project-session-conversation")]
+    );
+    assert!(
+        owned
+            .client
+            .deleted_artifact_ids
+            .contains(&artifact.artifact.artifact_id)
+    );
+    assert!(owned.unsettled_staging.is_empty());
+    let staging = PurgeFileOwner::ArtifactStaging {
+        operation_id: stage.id.clone().0,
+    };
+    assert!(
+        owned.removing_files.owners.contains(&staging),
+        "a retained replay header does not retain temporary bytes"
+    );
+    let artifact_id = artifact.artifact.artifact_id.clone();
+    fx.write(move |tx| {
+        tx.artifacts()
+            .add_share(&artifact_id, &project("project-b"))?;
+        Ok(())
+    });
+    let shared = inventory();
+    assert!(
+        !shared
+            .client
+            .deleted_artifact_ids
+            .contains(&artifact.artifact.artifact_id)
+    );
+    assert!(shared.kept_files.owners.contains(&PurgeFileOwner::Preview {
+        version_id: artifact.artifact.version_id.clone()
+    }));
+    assert!(
+        !shared
+            .removing_files
+            .owners
+            .contains(&PurgeFileOwner::Preview {
+                version_id: artifact.artifact.version_id.clone()
+            })
+    );
+    assert!(shared.removing_files.owners.contains(&staging));
+    assert!(
+        shared
+            .removing_files
+            .owners
+            .iter()
+            .all(|o| !shared.kept_files.owners.contains(o))
+    );
+    let payload = stage.payload;
+    fx.write(move |tx| {
+        tx.operations()
+            .record_intent(NewOperation {
+                id: devworks_core::protocol::OperationId(id("inventory-inflight-stage")),
+                root_id: None,
+                assignment_id: None,
+                capability: STAGE_CAPABILITY.into(),
+                schema_version: 1,
+                args_digest: sha256_hex(payload.to_string().as_bytes()),
+                payload,
+            })
+            .map(|_| ())
+    });
+    let active = inventory();
+    assert_eq!(
+        active.unsettled_staging,
+        vec![devworks_core::protocol::OperationId(id(
+            "inventory-inflight-stage"
+        ))]
+    );
+}
