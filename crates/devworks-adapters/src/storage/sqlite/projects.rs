@@ -363,6 +363,10 @@ fn text_of(raw: TextRaw) -> Result<StoredRepositoryText, StorageError> {
 macro_rules! project_reads {
     ($t:ty) => {
         impl ProjectRead for $t {
+            fn purge_manifest(&self, project: &ProjectId, manifest: &Id) -> Result<Option<StoredProjectPurge>, StorageError> {
+                super::project_purge::manifest(self.conn, project, manifest)
+            }
+
             fn project(&self, id: &ProjectId) -> Result<Option<StoredProject>, StorageError> {
                 one_project(self.conn, id)
             }
@@ -519,6 +523,10 @@ fn repository_exists(conn: &Connection, id: &Id) -> Result<bool, StorageError> {
 }
 
 impl ProjectRepository for Unit<'_> {
+    fn insert_purge_manifest(&mut self, manifest: &StoredProjectPurge) -> Result<(), StorageError> {
+        super::project_purge::insert_manifest(self.conn, self.info, manifest)
+    }
+
     fn insert_project(&mut self, p: &StoredProject) -> Result<(), StorageError> {
         check_project(p)?;
         if p.revision != 1 {

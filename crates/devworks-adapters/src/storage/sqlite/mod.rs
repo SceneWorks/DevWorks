@@ -44,6 +44,7 @@ mod knowledge;
 mod migrations;
 mod notification_delivery;
 mod packages;
+mod project_purge;
 mod projects;
 mod repos;
 mod resources;

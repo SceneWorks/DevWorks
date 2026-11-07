@@ -1944,6 +1944,14 @@ impl RouterRepository for Unsupported {
     }
 }
 impl ProjectRead for Unsupported {
+    fn purge_manifest(
+        &self,
+        _: &ProjectId,
+        _: &Id,
+    ) -> Result<Option<StoredProjectPurge>, StorageError> {
+        nope()
+    }
+
     fn project(&self, _: &ProjectId) -> Result<Option<StoredProject>, StorageError> {
         nope()
     }
@@ -2118,6 +2126,10 @@ impl WorkRepository for Unsupported {
     }
 }
 impl ProjectRepository for Unsupported {
+    fn insert_purge_manifest(&mut self, _: &StoredProjectPurge) -> Result<(), StorageError> {
+        nope()
+    }
+
     fn insert_project(&mut self, _: &StoredProject) -> Result<(), StorageError> {
         nope()
     }

@@ -87,9 +87,10 @@ impl Harness {
     pub(super) fn store(&self) -> SqliteStore {
         SqliteStore::open(self.config()).expect("open store")
     }
-    fn raw(&self) -> Connection {
+    pub(super) fn raw(&self) -> Connection {
         let c = Connection::open(self.root.0.join(DATABASE_FILE)).unwrap();
         c.pragma_update(None, "foreign_keys", true).unwrap();
+        super::project_purge::guard::register(&c, false).unwrap();
         c
     }
 }

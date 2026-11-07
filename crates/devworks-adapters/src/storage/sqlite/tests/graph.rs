@@ -767,7 +767,7 @@ fn graph31_capture_binding_fault_rolls_back_and_migration_is_additive() {
     assert_eq!((m.minimum_reader, m.minimum_writer), (8, 31));
     assert!(!m.rebuilds_tables);
     let h = Harness::new();
-    let s = h.store();
+    let s = SqliteStore::open_with(h.config(), &through(31)).unwrap();
     write(&s, |tx| {
         repository(tx, "repo")?;
         generation(tx, "g", "repo", LAYER_BASELINE)

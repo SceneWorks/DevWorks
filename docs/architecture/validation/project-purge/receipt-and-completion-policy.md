@@ -63,3 +63,13 @@ PurgedReceiptOutcome. The receipt lookup remains state Recorded (the original
 commit exists) with a gated purged outcome marker instead of private reply refs.
 Its original command/sequence/operation must match the outer committed identity.
 Earlier readers never receive a fabricated Recorded observation without a reply.
+
+Implementation clarification: validated revision6 `projects.prepare_purge` and
+`projects.purge` receipts, plus their minimal CommandDecided control audit, are
+retained independently. Prepare returns only manifest counts/opaque identities and
+digests; private entry paths are read by query and are absent from its retained
+control receipt. Exemption requires typed validation of that known operation and
+outcome, not a matching command-name string. The gateway appends this control audit
+after the preparation handler freezes its snapshot, so including it as new business
+content would make the just-prepared manifest stale immediately. Other project
+receipts remain selected by actual CommandDecided ownership, never scope_key alone.

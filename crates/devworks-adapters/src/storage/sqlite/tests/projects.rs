@@ -1686,9 +1686,7 @@ fn compact_receipt_for_test(
         DomainDecision::Applied { .. } => (PurgedDecisionKind::Applied, None),
         DomainDecision::NoChange { .. } => (PurgedDecisionKind::NoChange, None),
         DomainDecision::Accepted { .. } => (PurgedDecisionKind::Accepted, None),
-        DomainDecision::Refused { fault } => {
-            (PurgedDecisionKind::Refused, Some(fault.code))
-        }
+        DomainDecision::Refused { fault } => (PurgedDecisionKind::Refused, Some(fault.code)),
     };
     let outcome = PurgedReceiptOutcome {
         command_id: stored.receipt.command_id,
@@ -1903,4 +1901,148 @@ fn purged_receipt_revision6_preserves_an_original_refusal_as_a_terminal_outcome(
         p.revision,
         "terminal replay does not prepare or mutate the project"
     );
+}
+
+fn purge_storage_fixture(store: &SqliteStore) -> StoredProjectPurge {
+    let info = store.info();
+    run_write(store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&actor("purge-human"), PrincipalKind::Human, "Human")?;
+        for name in ["purge-a", "purge-b"] {
+            tx.projects().insert_project(&StoredProject {
+                id: project(name),
+                name: "private project title".into(),
+                description: "private project body".into(),
+                lifecycle: DELETED.into(),
+                revision: 1,
+                scope_revision: 2,
+                created_at_ms: T0,
+                updated_at_ms: T0,
+                archived_at_ms: Some(T0),
+                deleted_at_ms: Some(T0),
+                archive_epoch: 1,
+                archive_stop_pending: false,
+            })?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let mut prepared=StoredProjectPurge {
+        manifest:serde_json::from_value(json!({"id":"purge-manifest","projectId":"purge-a","revision":"1","projectRevision":"1","digest":"a".repeat(64),"phase":"Prepared","recordCount":"2","managedByteCount":"0","keptRecordCount":"1","keptByteCount":"0","pendingEffects":"0","createdAtMs":T0.to_string()})).unwrap(),
+        actor_id:actor("purge-human"),store_id:info.store_id,restore_epoch:info.restore_epoch,scope_revision:2,policy_digest:"b".repeat(64),witness_digest:"c".repeat(64),
+        entries:vec![serde_json::from_value(json!({"id":"d".repeat(64),"kind":"RecordClass","recordClass":"work_items","disposition":"Remove","recordCount":"2","byteCount":"0","reason":"OwnedProjectRecords"})).unwrap()]
+    };
+    prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
+    prepared
+}
+
+#[test]
+fn purge_manifest_storage_survives_restart_and_requires_its_exact_project() {
+    let h = Harness::new();
+    let store = h.store();
+    let prepared = purge_storage_fixture(&store);
+    let expected = prepared.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().insert_purge_manifest(&prepared)
+    })
+    .unwrap();
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .purge_manifest(&project("purge-b"), &id("purge-manifest")))
+        .unwrap()
+        .is_none()
+    );
+    drop(store);
+    let store = h.store();
+    let found = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects()
+            .purge_manifest(&project("purge-a"), &id("purge-manifest"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&found.manifest).unwrap(),
+        serde_json::to_value(&expected.manifest).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&found.entries).unwrap(),
+        serde_json::to_value(&expected.entries).unwrap()
+    );
+    assert_eq!(found.policy_digest, expected.policy_digest);
+    assert_eq!(found.witness_digest, expected.witness_digest);
+    assert_eq!(found.actor_id, expected.actor_id);
+    assert_eq!(found.store_id, expected.store_id);
+    assert!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .insert_purge_manifest(&expected))
+        .is_err(),
+        "a reviewed ID cannot be replaced"
+    );
+}
+
+#[test]
+fn purge_manifest_storage_refuses_stale_store_project_and_entry_fences_atomically() {
+    let h = Harness::new();
+    let store = h.store();
+    let prepared = purge_storage_fixture(&store);
+    for mode in 0..7 {
+        let mut invalid = prepared.clone();
+        match mode {
+            0 => invalid.restore_epoch += 1,
+            1 => invalid.scope_revision += 1,
+            2 => invalid.manifest.project_revision = Revision::new(2).unwrap(),
+            3 => invalid.entries.push(invalid.entries[0].clone()),
+            4 => invalid.policy_digest = "invalid".into(),
+            5 => invalid.store_id = devworks_core::protocol::StoreId(id("another-store")),
+            _ => {}
+        }
+        invalid.manifest.digest = project_purge_digest(&invalid).try_into().unwrap();
+        if mode == 6 {
+            invalid.manifest.digest = "e".repeat(64).try_into().unwrap();
+        }
+        assert!(
+            run_write(&store, WriteOptions::default(), move |tx| tx
+                .projects()
+                .insert_purge_manifest(&invalid))
+            .is_err(),
+            "mode {mode}"
+        );
+        assert!(
+            read_snapshot(&store, &ReadOptions::default(), |r| r
+                .projects()
+                .purge_manifest(&project("purge-a"), &id("purge-manifest")))
+            .unwrap()
+            .is_none()
+        );
+    }
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().insert_purge_manifest(&prepared)
+    })
+    .unwrap();
+    let migration = MIGRATIONS.iter().find(|m| m.version == 36).unwrap();
+    assert_eq!(
+        (migration.minimum_reader, migration.minimum_writer),
+        (36, 36)
+    );
+    assert!(!migration.rebuilds_tables);
+}
+
+#[test]
+fn purge_migration36_refuses_an_older_reader_before_changing_the_store() {
+    let h = Harness::new();
+    drop(h.store());
+    let before = super::file_digest(&h);
+    let boot_count = super::boots(&h);
+    match SqliteStore::open_with(h.config(), &through(35)) {
+        Err(StorageError::IncompatibleSchema(message)) => {
+            assert!(message.contains("reader version 36"))
+        }
+        _ => panic!("an older reader must not interpret compact purge identities"),
+    }
+    assert_eq!(super::file_digest(&h), before);
+    assert_eq!(super::boots(&h), boot_count);
+    let current = h.store();
+    assert!(current.integrity_check().unwrap().problems.is_empty());
 }

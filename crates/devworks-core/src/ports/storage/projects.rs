@@ -139,7 +139,45 @@ pub struct ProjectPosition {
     pub id: ProjectId,
 }
 
+/// Durable reviewed purge intent. Private source keys are never copied here.
+#[derive(Clone, Debug)]
+pub struct StoredProjectPurge {
+    pub manifest: crate::protocol::records::ProjectPurgeManifest,
+    pub actor_id: crate::protocol::ActorId,
+    pub store_id: crate::protocol::StoreId,
+    pub restore_epoch: i64,
+    pub scope_revision: i64,
+    pub policy_digest: String,
+    pub witness_digest: String,
+    pub entries: Vec<crate::protocol::records::ProjectPurgeEntry>,
+}
+
+/// Content identity remains stable while execution status advances. The native producer
+/// and storage fence use this same encoding; no secret or caller-minted authority is involved.
+pub fn project_purge_digest(p: &StoredProjectPurge) -> String {
+    let m = &p.manifest;
+    crate::fingerprint::sha256_hex(
+        serde_json::to_string(&serde_json::json!({
+            "manifestId":m.id,"projectId":m.project_id,"projectRevision":m.project_revision,
+            "scopeRevision":p.scope_revision,"storeId":p.store_id,"restoreEpoch":p.restore_epoch,
+            "actorId":p.actor_id,"policyDigest":p.policy_digest,"witnessDigest":p.witness_digest,
+            "recordCount":m.record_count,"managedByteCount":m.managed_byte_count,
+            "keptRecordCount":m.kept_record_count,"keptByteCount":m.kept_byte_count,
+            "createdAtMs":m.created_at_ms,"entries":p.entries
+        }))
+        .expect("purge digest values are JSON")
+        .as_bytes(),
+    )
+}
+
 pub trait ProjectRead {
+    /// Exact project binding is mandatory even when the manifest ID is known.
+    fn purge_manifest(
+        &self,
+        project: &ProjectId,
+        manifest: &Id,
+    ) -> Result<Option<StoredProjectPurge>, StorageError>;
+
     fn project(&self, id: &ProjectId) -> Result<Option<StoredProject>, StorageError>;
     /// At most `limit` projects after `after`, by creation time then ID.
     fn projects(
@@ -180,6 +218,9 @@ pub trait ProjectRead {
 }
 
 pub trait ProjectRepository: ProjectRead {
+    /// Records an immutable preparation under its current project/store fences.
+    fn insert_purge_manifest(&mut self, manifest: &StoredProjectPurge) -> Result<(), StorageError>;
+
     /// Creates a project (revision 1). An existing ID is `Duplicate`.
     fn insert_project(&mut self, project: &StoredProject) -> Result<(), StorageError>;
     /// Replaces the project at `expected_revision` (a stale one is a `Scope` revision conflict).
