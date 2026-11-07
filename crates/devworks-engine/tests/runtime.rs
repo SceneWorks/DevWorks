@@ -460,6 +460,25 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
     }
 }
 
+fn reply_published(
+    store: &dyn ApplicationStore,
+    command: &devworks_core::protocol::CommandId,
+) -> bool {
+    read(store, |r| {
+        r.history().page(
+            &devworks_core::ports::storage::EventFilter::Aggregate {
+                kind: "receipt_reply".into(),
+                id: command.0.as_str().into(),
+            },
+            0,
+            1,
+        )
+    })
+    .events
+    .iter()
+    .any(|e| e.kind == "ReceiptReplyPublished")
+}
+
 #[test]
 fn boot_registers_the_reply_consumer_and_a_caller_cannot_displace_it() {
     let h = Harness::new();
@@ -483,15 +502,32 @@ fn boot_registers_the_reply_consumer_and_a_caller_cannot_displace_it() {
             sources(&h),
         )))
         .unwrap();
-    assert!(matches!(
-        start(&app, &user, "start-1"),
-        CommandReply::Recorded { .. }
-    ));
+    // A completed unrelated reply must not satisfy the tested command's publication wait.
+    let CommandReply::Recorded {
+        receipt: unrelated, ..
+    } = start(&app, &user, "unrelated-start")
+    else {
+        panic!("unrelated receipt");
+    };
+    rt.block_on(within("unrelated reply setup", async {
+        let mut changes = app.dispatcher().subscribe();
+        while !reply_published(&*store, &unrelated.command_id) {
+            changes.changed().await.unwrap();
+        }
+    }));
+    let CommandReply::Recorded {
+        receipt: target, ..
+    } = start(&app, &user, "start-1")
+    else {
+        panic!("target receipt");
+    };
     // The command woke delivery: the running dispatcher publishes the reply without any other
     // prompt.
     rt.block_on(within("published by the running dispatcher", async {
         let mut changes = app.dispatcher().subscribe();
-        while read(&*store, |s| s.queue().status(REPLY_CONSUMER)).completed < 1 {
+        while read(&*store, |s| s.queue().status(REPLY_CONSUMER)).completed < 1
+            || !reply_published(&*store, &target.command_id)
+        {
             changes.changed().await.unwrap();
         }
     }));
