@@ -604,6 +604,7 @@ pub trait ActorRegistry: ActorRead {
 #[derive(Clone, Debug)]
 pub enum LedgerEntry {
     Current(StoredReceipt),
+    Purged(crate::ports::StoredPurgedReceipt),
     /// Written under a different contract revision or no longer decodable: a visible
     /// incompatible-record hold. It is never replayed or treated as a different intent.
     Incompatible {
@@ -641,6 +642,7 @@ pub trait CommandLedgerRead {
             None => false,
             Some(LedgerEntry::Incompatible { .. }) => true,
             Some(LedgerEntry::Current(stored)) => stored.receipt.command_id == *command,
+            Some(LedgerEntry::Purged(stored)) => stored.outcome.command_id == *command,
         })
     }
 }

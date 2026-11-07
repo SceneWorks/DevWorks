@@ -237,6 +237,16 @@ pub struct StoredReceipt {
     pub receipt: Receipt<DomainDecision>,
 }
 
+/// The exact replay fence survives deliberate removal of private receipt content.
+#[derive(Clone, Debug)]
+pub struct StoredPurgedReceipt {
+    pub operation: String,
+    pub contract: String,
+    pub schema_revision: SchemaRevision,
+    pub fingerprint: Fingerprint,
+    pub outcome: crate::protocol::records::PurgedReceiptOutcome,
+}
+
 /// A bounded, scoped read result with its freshness stamp.
 #[derive(Clone, Debug)]
 pub struct QueryAnswer {

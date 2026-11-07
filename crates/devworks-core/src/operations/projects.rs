@@ -9,6 +9,7 @@
 //! registry decodes a body only into the input of the operation and mode the host selected.
 //! Specialized envelopes keep their recorded candidate shape and selector.
 use crate::protocol::data::DataScope;
+use crate::protocol::provider::Digest;
 #[allow(unused_imports)]
 use crate::protocol::records::*;
 #[allow(unused_imports)]
@@ -183,6 +184,84 @@ impl Revisioned for DeleteInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `projects.prepare_purge` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PreparePurgeInput {
+    pub project_id: ProjectId,
+    pub expected_revision: Revision,
+}
+impl Check for PreparePurgeInput {
+    fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
+        self.expected_revision.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for PreparePurgeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `projects.purge_manifest` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PurgeManifestInput {
+    pub manifest_id: Id,
+    pub expected_revision: Revision,
+    pub page: Limit,
+}
+impl Check for PurgeManifestInput {
+    fn check(&self) -> Result<(), String> {
+        self.manifest_id.check()?;
+        self.expected_revision.check()?;
+        self.page.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for PurgeManifestInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `projects.purge` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PurgeInput {
+    pub manifest_id: Id,
+    pub expected_revision: Revision,
+    pub expected_digest: Digest,
+    pub expected_project_revision: Revision,
+    pub confirm: bool,
+}
+impl Check for PurgeInput {
+    fn check(&self) -> Result<(), String> {
+        self.manifest_id.check()?;
+        self.expected_revision.check()?;
+        self.expected_digest.check()?;
+        self.expected_project_revision.check()?;
+        self.confirm.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for PurgeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `projects.purge_status` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PurgeStatusInput {
+    pub manifest_id: Id,
+}
+impl Check for PurgeStatusInput {
+    fn check(&self) -> Result<(), String> {
+        self.manifest_id.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for PurgeStatusInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `projects` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -202,6 +281,14 @@ pub enum Input {
     Restore(RestoreInput),
     /// `projects.delete` (Command).
     Delete(DeleteInput),
+    /// `projects.prepare_purge` (Command).
+    PreparePurge(PreparePurgeInput),
+    /// `projects.purge_manifest` (Query).
+    PurgeManifest(PurgeManifestInput),
+    /// `projects.purge` (Command).
+    Purge(PurgeInput),
+    /// `projects.purge_status` (Query).
+    PurgeStatus(PurgeStatusInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -214,6 +301,10 @@ impl Input {
             Self::Archive(_) => "projects.archive",
             Self::Restore(_) => "projects.restore",
             Self::Delete(_) => "projects.delete",
+            Self::PreparePurge(_) => "projects.prepare_purge",
+            Self::PurgeManifest(_) => "projects.purge_manifest",
+            Self::Purge(_) => "projects.purge",
+            Self::PurgeStatus(_) => "projects.purge_status",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -226,6 +317,10 @@ impl Input {
             Self::Archive(_) => Mode::Command,
             Self::Restore(_) => Mode::Command,
             Self::Delete(_) => Mode::Command,
+            Self::PreparePurge(_) => Mode::Command,
+            Self::PurgeManifest(_) => Mode::Query,
+            Self::Purge(_) => Mode::Command,
+            Self::PurgeStatus(_) => Mode::Query,
         }
     }
 }

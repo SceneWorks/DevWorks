@@ -200,6 +200,8 @@ pub type CommandOutcome = Result<DomainCommandReply, GatewayFailure>;
 enum Unit {
     Recorded(Receipt<DomainDecision>),
     Replayed(Receipt<DomainDecision>),
+    Purged(crate::protocol::records::PurgedReceiptOutcome),
+    PurgedLegacy,
     IdempotencyConflict,
     /// A stored receipt under a different contract/schema revision: visible incompatible hold.
     IncompatibleRecord,
@@ -510,7 +512,21 @@ impl Gateway<'_> {
         let preparing = if authorization.is_replay_only() {
             Ok(None)
         } else {
-            handler.prepare(ctx, &admitted, &env)
+            // Removed content is a committed terminal outcome, never a reason to recreate
+            // files or reopen source arguments before the transactional replay fence.
+            env.read(|r| {
+                Ok(matches!(
+                    r.receipts().lookup(admitted.identity())?,
+                    Some(LedgerEntry::Purged(_))
+                ))
+            })
+            .and_then(|purged| {
+                if purged {
+                    Ok(None)
+                } else {
+                    handler.prepare(ctx, &admitted, &env)
+                }
+            })
         };
         match preparing {
             Ok(prepared) => admitted.prepared = prepared,
@@ -556,6 +572,16 @@ impl Gateway<'_> {
                 receipt,
                 replayed: true,
             },
+            Ok(Unit::Purged(outcome)) => CommandReply::ReceiptPurged {
+                protocol: Protocol::Draft1,
+                request_key,
+                outcome,
+            },
+            Ok(Unit::PurgedLegacy) => self.rejected(
+                request_key,
+                Rejection::UnsupportedSchema,
+                RetryAdvice::ResolveReceipt,
+            ),
             Ok(Unit::IdempotencyConflict) => self.rejected(
                 request_key,
                 Rejection::IdempotencyConflict,
@@ -792,6 +818,25 @@ fn unit_of_work(
     // intent instead of an incompatible record. A receipt under another *registered* revision is
     // a different intent of the same key (its fingerprint differs), never a replay.
     match tx.receipts().lookup(&command.identity)? {
+        Some(LedgerEntry::Purged(stored)) => {
+            if stored.operation != command.descriptor.name {
+                return Ok(Unit::IdempotencyConflict);
+            }
+            if stored.contract != CONTRACT || !command.descriptor.supports(stored.schema_revision) {
+                hold_incompatible(tx, ctx, command, &stored.contract, stored.schema_revision)?;
+                return Ok(Unit::IncompatibleRecord);
+            }
+            if stored.schema_revision != command.revision
+                || stored.fingerprint != command.fingerprint
+            {
+                return Ok(Unit::IdempotencyConflict);
+            }
+            return Ok(if command.revision.0 >= 6 {
+                Unit::Purged(stored.outcome)
+            } else {
+                Unit::PurgedLegacy
+            });
+        }
         Some(LedgerEntry::Current(stored)) => {
             if stored.operation != command.descriptor.name {
                 return Ok(Unit::IdempotencyConflict);

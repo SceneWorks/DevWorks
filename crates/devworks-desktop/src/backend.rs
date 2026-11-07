@@ -470,6 +470,41 @@ fn resolve_dispatched(
         }
         outcome = invoke();
     }
+    // An older command envelope cannot carry the current terminal representation.
+    // Resolve only an explicit receipt hold, under the exact original fingerprint.
+    if matches!(
+        &outcome,
+        Ok(CommandReply::Rejected {
+            code: devworks_core::protocol::Rejection::UnsupportedSchema,
+            retry: devworks_core::protocol::RetryAdvice::ResolveReceipt,
+            ..
+        })
+    ) && let Ok(decoded) = devworks_core::admission::decode(
+        devworks_core::admission::Selection {
+            operation,
+            mode: devworks_core::registry::Mode::Command,
+        },
+        frame,
+    ) && let devworks_core::admission::CallerKey::Command(request_key) = decoded.key
+    {
+        let lookup = serde_json::json!({"protocol":"1.0-draft.1","schemaRevision":6,"queryId":backend.token("purged-receipt"),"query":{"kind":"history.command_receipt","requestKey":request_key}}).to_string().into_bytes();
+        if let Ok(devworks_core::protocol::results::DomainQueryReply::Result {
+            result:
+                devworks_core::protocol::results::OperationResult::HistoryCommandReceipt { value },
+            ..
+        }) = backend.query("history.command_receipt", &lookup)
+            && value.request_key == request_key
+            && let Some(purged) = value.purged
+            && purged.request_digest.as_str() == decoded.fingerprint.as_str()
+        {
+            return Ok(CommandReply::ReceiptPurged {
+                protocol: devworks_core::protocol::Protocol::Draft1,
+                request_key,
+                outcome: purged,
+            });
+        }
+    }
+
     outcome
 }
 
@@ -1139,14 +1174,31 @@ mod human_dispatch_tests {
     #[derive(Default)]
     struct NoHuman {
         generic: AtomicUsize,
+        queries: AtomicUsize,
+        frames: std::sync::Mutex<Vec<Vec<u8>>>,
+        command_reply:
+            std::sync::Mutex<Option<devworks_core::protocol::results::DomainCommandReply>>,
+        query_reply: std::sync::Mutex<Option<devworks_core::protocol::results::DomainQueryReply>>,
     }
     impl Backend for NoHuman {
         fn query(&self, op: &str, _: &[u8]) -> QueryOutcome {
-            Err(GatewayFailure::NoUseCase(op.into()))
+            self.queries.fetch_add(1, Ordering::SeqCst);
+            self.query_reply
+                .lock()
+                .unwrap()
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(|| Err(GatewayFailure::NoUseCase(op.into())))
         }
-        fn command(&self, op: &str, _: &[u8]) -> CommandOutcome {
+        fn command(&self, op: &str, frame: &[u8]) -> CommandOutcome {
             self.generic.fetch_add(1, Ordering::SeqCst);
-            Err(GatewayFailure::NoUseCase(op.into()))
+            self.frames.lock().unwrap().push(frame.to_vec());
+            self.command_reply
+                .lock()
+                .unwrap()
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(|| Err(GatewayFailure::NoUseCase(op.into())))
         }
         fn mint_workspace_upload(&self, _: &Path) -> Result<Id, String> {
             Err("unavailable".into())
@@ -1222,5 +1274,61 @@ mod human_dispatch_tests {
         let stored = serde_json::json!({"slot":"SettingsSave","label":"old","operation":"settings.save_revision","frame":[1,2]});
         let old: crate::memory::PendingCommand = serde_json::from_value(stored).unwrap();
         assert_eq!(old.dispatch, CommandDispatch::Generic);
+    }
+    fn purged_backend() -> (NoHuman, Vec<u8>) {
+        let b = NoHuman::default();
+        let frame=serde_json::json!({"protocol":"1.0-draft.1","mode":"Command","requestKey":"original-key","body":{"kind":"projects.create","name":"private original name","description":"","repositoryIds":[]}}).to_string().into_bytes();
+        let decoded = devworks_core::admission::decode(
+            devworks_core::admission::Selection {
+                operation: "projects.create",
+                mode: devworks_core::registry::Mode::Command,
+            },
+            &frame,
+        )
+        .unwrap();
+        *b.command_reply.lock().unwrap()=Some(serde_json::from_value(serde_json::json!({"kind":"Rejected","protocol":"1.0-draft.1","requestKey":"original-key","code":"UnsupportedSchema","retry":"ResolveReceipt","correlationId":"correlation-a"})).unwrap());
+        *b.query_reply.lock().unwrap()=Some(serde_json::from_value(serde_json::json!({"kind":"Result","protocol":"1.0-draft.1","queryId":"purged-receipt","stamp":{"storeId":"store-a","restoreEpoch":"0","sequence":"9","policyRevision":"1","scopeRevision":"1"},"result":{"kind":"history.command_receipt","value":{"requestKey":"original-key","commandId":"committed-command","committedSequence":"8","state":"Recorded","purged":{"commandId":"committed-command","committedSequence":"8","acceptedAtMs":"100","requestDigest":decoded.fingerprint.as_str(),"originalDecision":"Applied","purgeId":"purge-a"}}}})).unwrap());
+        (b, frame)
+    }
+    #[test]
+    fn purged_legacy_command_resolves_once_without_resubmission_or_new_identity() {
+        let (b, frame) = purged_backend();
+        assert!(
+            matches!(resolve_command(&b,"projects.create",&frame),Ok(CommandReply::ReceiptPurged{request_key,outcome,..}) if request_key.0.as_str()=="original-key" && outcome.command_id.0.as_str()=="committed-command")
+        );
+        assert_eq!(b.generic.load(Ordering::SeqCst), 1);
+        assert_eq!(b.queries.load(Ordering::SeqCst), 1);
+        assert_eq!(*b.frames.lock().unwrap(), [frame]);
+    }
+    #[test]
+    fn purged_lookup_for_another_key_or_intent_cannot_replace_the_original_outcome() {
+        for another_key in [false, true] {
+            let (b, frame) = purged_backend();
+            if let Some(devworks_core::protocol::results::DomainQueryReply::Result {
+                result:
+                    devworks_core::protocol::results::OperationResult::HistoryCommandReceipt { value },
+                ..
+            }) = b.query_reply.lock().unwrap().as_mut()
+            {
+                if another_key {
+                    value.request_key =
+                        devworks_core::protocol::RequestKey(Id::new("another-key").unwrap());
+                } else {
+                    value.purged.as_mut().unwrap().request_digest =
+                        devworks_core::protocol::provider::Digest::try_from("b".repeat(64))
+                            .unwrap();
+                }
+            }
+            assert!(matches!(
+                resolve_command(&b, "projects.create", &frame),
+                Ok(CommandReply::Rejected {
+                    code: devworks_core::protocol::Rejection::UnsupportedSchema,
+                    ..
+                })
+            ));
+            assert_eq!(b.generic.load(Ordering::SeqCst), 1);
+            assert_eq!(b.queries.load(Ordering::SeqCst), 1);
+            assert_eq!(*b.frames.lock().unwrap(), [frame]);
+        }
     }
 }

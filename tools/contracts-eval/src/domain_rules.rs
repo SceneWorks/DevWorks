@@ -444,24 +444,29 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
             present(v, "value") != present(v, "credentialRef"),
             "environment needs value or credential reference",
         )?,
+        "PurgedReceiptOutcome" => {
+            require(v["originalDecision"] != "Accepted" || present(v,"operationId"), "accepted purged receipt needs its original operation")?;
+            require(v["originalDecision"] == "Refused" || !present(v,"originalFaultCode"), "only an originally refused receipt carries a fault code")?;
+        }
+        "ProjectPurgeEntryPage" => require(v["hasMore"] == present(v,"nextCursor"),"purge page continuation mismatch")?,
+        "ProjectPurgeManifest" => {
+            require(v["phase"] != "Complete" || v["pendingEffects"] == "0", "complete purge has no pending effects")?;
+            require(v["phase"] != "Complete" || !present(v,"errorCode"), "complete purge has no unresolved failure")?;
+            require(v["phase"] != "Held" || present(v,"errorCode"), "held purge needs its actual failure code")?;
+            require(!matches!(v["phase"].as_str(),Some("RemovingBytes"|"Held"|"Complete")) || present(v,"operationId"), "committed purge needs durable operation identity")?;
+        }
         "ReceiptObservation" => {
             let recorded = v["state"] == "Recorded";
-            require(
-                !recorded
-                    || [
-                        "commandId",
-                        "committedSequence",
-                        "replyArtifact",
-                        "replySchema",
-                    ]
-                    .iter()
-                    .all(|k| present(v, k)),
-                "recorded receipt needs durable typed reply",
-            )?;
-            require(
-                recorded || !present(v, "replyArtifact"),
-                "unrecorded receipt cannot claim reply",
-            )?
+            let purged = present(v,"purged");
+            require(!purged || recorded,"only an originally committed receipt can be purged")?;
+            require(!recorded || ["commandId","committedSequence"].iter().all(|k|present(v,k)),"recorded receipt needs its committed identity")?;
+            require(!recorded || purged || ["replyArtifact","replySchema"].iter().all(|k|present(v,k)),"recorded receipt needs durable typed reply or explicit purged outcome")?;
+            require(recorded && !purged || !present(v,"replyArtifact") && !present(v,"replySchema"),"unrecorded/purged receipt cannot claim reply content")?;
+            if purged {
+                for key in ["commandId","committedSequence","operationId"] {
+                    require(v.get(key)==v["purged"].get(key),"purged receipt identity mismatch")?;
+                }
+            }
         }
         "DiagnosticPage" => require(
             v["hasMore"] == present(v, "nextCursor"),
@@ -545,6 +550,8 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
     Ok(())
 }
 pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
+    if op == "projects.purge" { require(v["confirm"] == true,"permanent purge needs explicit confirmation")?; }
+
     if op == "router.configure" && v["action"]["kind"] == "CreateEmbeddingSpace" {
         require(v["action"]["dimensions"].as_str().and_then(|s| s.parse::<u32>().ok()).is_some_and(|n| (1..=65536).contains(&n)), "embedding dimensions are 1..65536")?;
     }

@@ -30,6 +30,7 @@ pub enum Failure {
     Refused(DomainFault),
     /// The gateway rejected the frame before any use case ran.
     Rejected(String),
+    Purged(devworks_core::protocol::records::PurgedReceiptOutcome),
     /// The command's outcome is unknown (lost acknowledgment); its receipt resolves it.
     Unknown,
     /// No use case is registered for the operation (owned by a later item).
@@ -53,6 +54,11 @@ impl Failure {
                 )
             }
             Self::Rejected(r) => format!("The request was rejected: {r}."),
+            Self::Purged(outcome) => format!(
+                "The original request {} was recorded as {:?}. Its saved result was removed by project purge.",
+                outcome.command_id.0.as_str(),
+                outcome.original_decision
+            ),
             Self::Unknown => {
                 "The outcome is not known yet; it is resolved from the durable receipt.".into()
             }
@@ -89,6 +95,7 @@ pub fn command_result(outcome: CommandOutcome) -> Result<OperationResult, Failur
             DomainDecision::Refused { fault } => Err(Failure::Refused(fault)),
         },
         CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
+        CommandReply::ReceiptPurged { outcome, .. } => Err(Failure::Purged(outcome)),
         CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
     }
 }
@@ -454,6 +461,7 @@ pub fn browser_closed(outcome: CommandOutcome) -> Result<bool, Failure> {
             DomainDecision::Refused { fault } => Err(Failure::Refused(fault)),
         },
         CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
+        CommandReply::ReceiptPurged { outcome, .. } => Err(Failure::Purged(outcome)),
         CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
     }
 }
@@ -1236,6 +1244,7 @@ pub fn configured(outcome: CommandOutcome) -> Result<bool, Failure> {
             ))),
         },
         CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
+        CommandReply::ReceiptPurged { outcome, .. } => Err(Failure::Purged(outcome)),
         CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
     }
 }

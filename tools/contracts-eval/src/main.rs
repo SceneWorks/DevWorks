@@ -136,16 +136,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }),
                         "domain-query-reply" => decode_domain::<DomainQueryReply>(&raw, |v| {
                             if let DomainQueryReply::Result { result, .. } = v {
-                                result.check_revision(revision)?;
+                                at_revision(result, revision)?;
                             }
                             v.validate()
                         }),
                         "domain-command-reply" => decode_domain::<DomainCommandReply>(&raw, |v| {
+                            v.validate_revision(revision).map_err(str::to_owned)?;
                             if let CommandReply::Recorded { receipt, .. } = v {
                                 if let DomainDecision::Applied { result }
                                 | DomainDecision::NoChange { result } = &receipt.decision
                                 {
-                                    result.check_revision(revision)?;
+                                    at_revision(result, revision)?;
                                 }
                             }
                             validate_command_reply(v)
@@ -164,7 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }),
                         "operation-completion" => decode_domain::<OperationCompletion>(&raw, |v| {
                             if let OperationCompletion::Succeeded { result, .. } = v {
-                                result.check_revision(revision)?;
+                                at_revision(result, revision)?;
                             }
                             v.validate()
                         }),
@@ -185,6 +186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "command-reply" => serde_json::from_str::<CommandReply>(&raw)
                             .map_err(|e| e.to_string())
                             .and_then(|v| {
+                                v.validate_revision(revision).map_err(str::to_owned)?;
                                 v.validate().map_err(str::to_owned)?;
                                 serde_json::to_value(v).map_err(|e| e.to_string())
                             }),
@@ -278,13 +280,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "addon-command-reply" => serde_json::from_str::<AddonCommandReply>(&raw)
                             .map_err(|e| e.to_string())
                             .and_then(|v| {
-                                validate_domain_reply(&v).map_err(str::to_owned)?;
+                                v.validate_revision(revision).map_err(str::to_owned)?;
+                                    validate_domain_reply(&v).map_err(str::to_owned)?;
                                 serde_json::to_value(v).map_err(|e| e.to_string())
                             }),
                         "session-command-reply" => {
                             serde_json::from_str::<SessionCommandReply>(&raw)
                                 .map_err(|e| e.to_string())
                                 .and_then(|v| {
+                                    v.validate_revision(revision).map_err(str::to_owned)?;
                                     validate_domain_reply(&v).map_err(str::to_owned)?;
                                     serde_json::to_value(v).map_err(|e| e.to_string())
                                 })
@@ -367,6 +371,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             serde_json::from_str::<ArtifactCommandReply>(&raw)
                                 .map_err(|e| e.to_string())
                                 .and_then(|v| {
+                                    v.validate_revision(revision).map_err(str::to_owned)?;
                                     validate_domain_reply(&v).map_err(str::to_owned)?;
                                     serde_json::to_value(v).map_err(|e| e.to_string())
                                 })

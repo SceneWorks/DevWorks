@@ -1661,3 +1661,175 @@ fn migration_14_is_additive_and_closes_older_writers_out() {
         Err(StorageError::RevisionConflict(_))
     ));
 }
+
+// Receipt-only fixture for the DW83 terminal wire/storage path. Full project purge has
+// separate ownership/byte-effect acceptance; this deliberately replaces only the receipt.
+fn compact_receipt_for_test(
+    fx: &Fx,
+    ctx: &InvocationContext,
+    key: &str,
+) -> devworks_core::protocol::records::PurgedReceiptOutcome {
+    use devworks_core::protocol::records::{PurgedDecisionKind, PurgedReceiptOutcome};
+    let scope = devworks_core::context::ScopeKey::of(ctx);
+    let (operation,digest,result):(String,String,String)=fx.h.raw().query_row("SELECT command_kind,payload_digest,result_json FROM command_receipts WHERE actor_id=?1 AND scope_key=?2 AND idempotency_key=?3",rusqlite::params![ctx.principal().0.as_str(),scope.as_str(),key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    let body: Value = serde_json::from_str(&result).unwrap();
+    let stored = devworks_core::ports::StoredReceipt {
+        operation,
+        contract: body["contract"].as_str().unwrap().into(),
+        schema_revision: devworks_core::registry::SchemaRevision(
+            body["schemaRevision"].as_u64().unwrap().try_into().unwrap(),
+        ),
+        fingerprint: devworks_core::fingerprint::Fingerprint::from_hex(&digest).unwrap(),
+        receipt: serde_json::from_value(body["receipt"].clone()).unwrap(),
+    };
+    let (original_decision, original_fault_code) = match &stored.receipt.decision {
+        DomainDecision::Applied { .. } => (PurgedDecisionKind::Applied, None),
+        DomainDecision::NoChange { .. } => (PurgedDecisionKind::NoChange, None),
+        DomainDecision::Accepted { .. } => (PurgedDecisionKind::Accepted, None),
+        DomainDecision::Refused { fault } => {
+            (PurgedDecisionKind::Refused, Some(fault.code.clone()))
+        }
+    };
+    let outcome = PurgedReceiptOutcome {
+        command_id: stored.receipt.command_id,
+        committed_sequence: stored.receipt.committed_sequence,
+        accepted_at_ms: stored.receipt.accepted_at_ms,
+        request_digest: devworks_core::protocol::provider::Digest::try_from(
+            stored.fingerprint.as_str().to_owned(),
+        )
+        .unwrap(),
+        operation_id: stored.receipt.operation_id,
+        original_decision,
+        original_fault_code,
+        purge_id: id("purge-receipt-fixture"),
+    };
+    let body = json!({"contract":stored.contract,"schemaRevision":stored.schema_revision.0,"purged":outcome});
+    assert!(!body.to_string().contains("PRIVATE_RECEIPT_CONTENT"));
+    assert_eq!(fx.h.raw().execute("UPDATE command_receipts SET result_json=?1 WHERE actor_id=?2 AND scope_key=?3 AND idempotency_key=?4",rusqlite::params![body.to_string(),ctx.principal().0.as_str(),scope.as_str(),key]).unwrap(),1);
+    outcome
+}
+fn receipt_lookup_at(
+    fx: &Fx,
+    ctx: &InvocationContext,
+    key: &str,
+    revision: u32,
+) -> DomainQueryReply {
+    let authority = fx.authority();
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*fx.store,
+        ids: &*fx.h.ids,
+    };
+    let frame=json!({"protocol":"1.0-draft.1","schemaRevision":revision,"queryId":"purged-receipt-lookup","query":{"kind":"history.command_receipt","requestKey":key}}).to_string();
+    gateway
+        .query(
+            ctx,
+            "history.command_receipt",
+            frame.as_bytes(),
+            &devworks_core::services::history::HistoryService::new(fx.h.ids.clone()),
+        )
+        .unwrap()
+}
+#[test]
+fn purged_receipt_keeps_legacy_replay_fences_and_current_observation_after_restart() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let key = "purged-legacy-create";
+    let body = json!({"name":"PRIVATE_RECEIPT_CONTENT","description":"private original description","repositoryIds":["repo-1"]});
+    let first = fx.command_keyed(&user, "projects.create", key, body.clone());
+    let CommandReply::Recorded { receipt, .. } = first else {
+        panic!("original receipt")
+    };
+    let outcome = compact_receipt_for_test(&fx, &user, key);
+    assert_eq!(outcome.command_id, receipt.command_id);
+    let Fx {
+        h,
+        store,
+        runs,
+        cases,
+        n,
+    } = fx;
+    drop(store);
+    let store = Arc::new(h.store());
+    let fx = Fx {
+        h,
+        store,
+        runs,
+        cases,
+        n,
+    };
+    let user = fx.user();
+    assert!(matches!(
+        fx.command_keyed(&user, "projects.create", key, body),
+        CommandReply::Rejected {
+            code: Rejection::UnsupportedSchema,
+            retry: devworks_core::protocol::RetryAdvice::ResolveReceipt,
+            ..
+        }
+    ));
+    assert!(matches!(
+        fx.command_keyed(
+            &user,
+            "projects.create",
+            key,
+            json!({"name":"another intent","description":"","repositoryIds":[]})
+        ),
+        CommandReply::Rejected {
+            code: Rejection::IdempotencyConflict,
+            ..
+        }
+    ));
+    assert_eq!(
+        fx.events("ProjectCreated").len(),
+        1,
+        "a purged result never reexecutes its original command"
+    );
+    let DomainQueryReply::Result {
+        result: OperationResult::HistoryCommandReceipt { value },
+        ..
+    } = receipt_lookup_at(&fx, &user, key, 6)
+    else {
+        panic!("current purged observation")
+    };
+    assert!(value.reply_artifact.is_none() && value.reply_schema.is_none());
+    assert_eq!(value.command_id, Some(receipt.command_id));
+    assert_eq!(value.committed_sequence, Some(receipt.committed_sequence));
+    assert_eq!(value.purged.unwrap().request_digest, outcome.request_digest);
+    assert!(
+        matches!(receipt_lookup_at(&fx,&user,key,1),DomainQueryReply::Rejected{fault,..} if fault.code==DomainErrorCode::ViewUnavailable && fault.target_kind.as_ref().is_some_and(|k|k.0=="receipt_content_purged"))
+    );
+    assert!(
+        matches!(receipt_lookup_at(&fx,&user,"never-recorded-key",6),DomainQueryReply::Result{result:OperationResult::HistoryCommandReceipt{value},..} if matches!(value.state,devworks_core::protocol::records::ReceiptLookupState::NotFound) && value.purged.is_none())
+    );
+}
+#[test]
+fn purged_receipt_never_bypasses_current_principal_revocation() {
+    let fx = Fx::new();
+    let p = fx.create("Purge principal fixture", &[]);
+    fx.bind_agents(&p.id);
+    let principal = fx.project_agent(&p.id);
+    let key = "purged-agent-edit";
+    let body = json!({"projectId":p.id,"expectedRevision":"1","changes":{"name":"PRIVATE_RECEIPT_CONTENT"}});
+    let reply = fx.command_keyed(&principal, "projects.edit", key, body.clone());
+    assert!(
+        matches!(reply,CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..})),
+        "original edit"
+    );
+    compact_receipt_for_test(&fx, &principal, key);
+    let user = fx.user();
+    fx.write(move |tx| {
+        auth::revoke_principal(tx, &user, &actor("agent-p"), 1)
+            .map(|_| ())
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    assert!(matches!(
+        fx.command_keyed(&principal, "projects.edit", key, body),
+        CommandReply::Rejected {
+            code: Rejection::PermissionDenied,
+            ..
+        }
+    ));
+    assert!(
+        matches!(receipt_lookup_at(&fx,&principal,key,6),DomainQueryReply::Rejected{fault,..} if fault.code==DomainErrorCode::PermissionDenied)
+    );
+}

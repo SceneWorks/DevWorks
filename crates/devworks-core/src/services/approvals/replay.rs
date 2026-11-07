@@ -367,6 +367,16 @@ impl ApprovalService {
             .ok()
             .map(|r| serde_json::to_value(r).unwrap());
         let state = match outcome {
+            Ok(CommandReply::ReceiptPurged { outcome, .. }) => {
+                if matches!(
+                    outcome.original_decision,
+                    crate::protocol::records::PurgedDecisionKind::Refused
+                ) {
+                    "Refused"
+                } else {
+                    "Admitted"
+                }
+            }
             Ok(CommandReply::Recorded { receipt, .. }) => {
                 if matches!(receipt.decision, DomainDecision::Refused { .. }) {
                     "Refused"
@@ -390,6 +400,14 @@ impl ApprovalService {
             Err(_) => "Unknown",
         }
         .to_owned();
+        let needs_purged_lookup = matches!(
+            outcome,
+            Ok(CommandReply::Rejected {
+                code: crate::protocol::Rejection::UnsupportedSchema,
+                retry: crate::protocol::RetryAdvice::ResolveReceipt,
+                ..
+            })
+        );
         run_write(store, WriteOptions::default(), move |tx| {
             let Some(mut r) = tx.decisions().approval_resume(&id)? else {
                 return Ok(());
@@ -418,12 +436,39 @@ impl ApprovalService {
             }
             let identity =
                 crate::context::ReceiptIdentity::bind(&original, RequestKey(r.request_key.clone()));
-            let durable = if state == "Refused" {
+
+            let durable = if state == "Refused" || needs_purged_lookup {
                 tx.receipts().lookup(&identity)?
             } else {
                 None
             };
             let (state, value) = match durable {
+                Some(LedgerEntry::Purged(stored))
+                    if stored.operation == operation
+                        && stored.contract == crate::protocol::CONTRACT
+                        && stored.schema_revision == schema_revision
+                        && stored.fingerprint == fingerprint =>
+                {
+                    let state = if matches!(
+                        stored.outcome.original_decision,
+                        crate::protocol::records::PurgedDecisionKind::Refused
+                    ) {
+                        "Refused"
+                    } else {
+                        "Admitted"
+                    };
+                    (
+                        state.to_owned(),
+                        Some(
+                            serde_json::to_value(CommandReply::<DomainDecision>::ReceiptPurged {
+                                protocol: crate::protocol::Protocol::Draft1,
+                                request_key: request_key.clone(),
+                                outcome: stored.outcome,
+                            })
+                            .expect("purged receipt identity"),
+                        ),
+                    )
+                }
                 Some(LedgerEntry::Current(stored))
                     if stored.operation == operation
                         && stored.contract == crate::protocol::CONTRACT

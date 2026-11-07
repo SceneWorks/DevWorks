@@ -1,0 +1,462 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "DomainErrorCode": {
+      "enum": [
+        "NotFound",
+        "RevisionConflict",
+        "InvalidArgument",
+        "PermissionDenied",
+        "UnsupportedCapability",
+        "UnsupportedTarget",
+        "CredentialsRequired",
+        "ApprovalRequired",
+        "ContinueRequired",
+        "DependencyBlocked",
+        "CapacityWait",
+        "BudgetHold",
+        "SchemaMismatch",
+        "SourceChanged",
+        "ViewUnavailable",
+        "CursorExpired",
+        "LeaseLost",
+        "Conflict",
+        "Cancelled",
+        "ExternalFailure",
+        "OutcomeUnknown",
+        "StorageUnavailable"
+      ],
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "PackageDecision": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Staged",
+              "type": "string"
+            },
+            "manifestDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "packageId": {
+              "$ref": "#/$defs/Id"
+            },
+            "waits": {
+              "items": {
+                "$ref": "#/$defs/PackageWait"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "packageId",
+            "manifestDigest",
+            "waits"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Activated",
+              "type": "string"
+            },
+            "manifestDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "packageId": {
+              "$ref": "#/$defs/Id"
+            },
+            "registryRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "stateGeneration": {
+              "$ref": "#/$defs/Revision"
+            }
+          },
+          "required": [
+            "kind",
+            "packageId",
+            "manifestDigest",
+            "registryRevision",
+            "stateGeneration"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Disabled",
+              "type": "string"
+            },
+            "packageId": {
+              "$ref": "#/$defs/Id"
+            },
+            "registryRevision": {
+              "$ref": "#/$defs/Revision"
+            }
+          },
+          "required": [
+            "kind",
+            "packageId",
+            "registryRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Uninstalled",
+              "type": "string"
+            },
+            "packageId": {
+              "$ref": "#/$defs/Id"
+            },
+            "registryRevision": {
+              "$ref": "#/$defs/Revision"
+            }
+          },
+          "required": [
+            "kind",
+            "packageId",
+            "registryRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "current": {
+              "$ref": "#/$defs/Revision"
+            },
+            "expected": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "RevisionConflict",
+              "type": "string"
+            },
+            "revisionKind": {
+              "$ref": "#/$defs/RevisionKind"
+            }
+          },
+          "required": [
+            "kind",
+            "revisionKind",
+            "expected",
+            "current"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Rejected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "code"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PackageWait": {
+      "enum": [
+        "TrustApproval",
+        "ExactVersionApproval",
+        "AccessApproval",
+        "Compatibility",
+        "Quiescence"
+      ],
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "PurgedDecisionKind": {
+      "enum": [
+        "Applied",
+        "Accepted",
+        "NoChange",
+        "Refused"
+      ],
+      "type": "string"
+    },
+    "PurgedReceiptOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "commandId": {
+          "$ref": "#/$defs/Id"
+        },
+        "committedSequence": {
+          "$ref": "#/$defs/Revision"
+        },
+        "operationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "originalDecision": {
+          "$ref": "#/$defs/PurgedDecisionKind"
+        },
+        "originalFaultCode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DomainErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "purgeId": {
+          "$ref": "#/$defs/Id"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "commandId",
+        "committedSequence",
+        "acceptedAtMs",
+        "requestDigest",
+        "originalDecision",
+        "purgeId"
+      ],
+      "type": "object"
+    },
+    "Receipt": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "commandId": {
+          "$ref": "#/$defs/Id"
+        },
+        "committedSequence": {
+          "$ref": "#/$defs/Revision"
+        },
+        "decision": {
+          "$ref": "#/$defs/PackageDecision"
+        },
+        "operationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestDigest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "commandId",
+        "committedSequence",
+        "acceptedAtMs",
+        "requestDigest",
+        "decision"
+      ],
+      "type": "object"
+    },
+    "Rejection": {
+      "enum": [
+        "InvalidRequest",
+        "UnsupportedSchema",
+        "PermissionDenied",
+        "InvalidTarget",
+        "IdempotencyConflict",
+        "StorageUnavailable"
+      ],
+      "type": "string"
+    },
+    "RetryAdvice": {
+      "enum": [
+        "Never",
+        "SameCommand",
+        "AfterBlockerClears",
+        "ResolveReceipt",
+        "ReconcileOperation",
+        "RefreshAndNewRequest"
+      ],
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "RevisionKind": {
+      "enum": [
+        "Work",
+        "Control",
+        "Blocker",
+        "Operation",
+        "Policy",
+        "Scope",
+        "Plan",
+        "Authority"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:addon-command-reply.r6",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "ReceiptPurged",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/PurgedReceiptOutcome"
+        },
+        "protocol": {
+          "$ref": "#/$defs/Protocol"
+        },
+        "requestKey": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "requestKey",
+        "outcome"
+      ],
+      "type": "object",
+      "x-since": 6
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "Recorded",
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/$defs/Protocol"
+        },
+        "receipt": {
+          "$ref": "#/$defs/Receipt"
+        },
+        "replayed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "receipt",
+        "replayed"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/Rejection"
+        },
+        "correlationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "kind": {
+          "const": "Rejected",
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/$defs/Protocol"
+        },
+        "requestKey": {
+          "$ref": "#/$defs/Id"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryAdvice"
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "requestKey",
+        "code",
+        "retry",
+        "correlationId"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "correlationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "kind": {
+          "const": "CommandStatusUnknown",
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/$defs/Protocol"
+        },
+        "requestKey": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "kind",
+        "protocol",
+        "requestKey",
+        "correlationId"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "CommandReply"
+}

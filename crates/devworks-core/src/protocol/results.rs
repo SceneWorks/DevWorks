@@ -35,6 +35,18 @@ pub enum OperationResult {
     ProjectsRestore { value: ProjectRecord },
     #[serde(rename = "projects.delete")]
     ProjectsDelete { value: ProjectRecord },
+    #[schemars(extend("x-since" = 6))]
+    #[serde(rename = "projects.prepare_purge")]
+    ProjectsPreparePurge { value: ProjectPurgeManifest },
+    #[schemars(extend("x-since" = 6))]
+    #[serde(rename = "projects.purge_manifest")]
+    ProjectsPurgeManifest { value: ProjectPurgeManifestPage },
+    #[schemars(extend("x-since" = 6))]
+    #[serde(rename = "projects.purge")]
+    ProjectsPurge { value: ProjectPurgeManifest },
+    #[schemars(extend("x-since" = 6))]
+    #[serde(rename = "projects.purge_status")]
+    ProjectsPurgeStatus { value: ProjectPurgeManifest },
     #[serde(rename = "features.list")]
     FeaturesList { value: Page<WorkRecord> },
     #[serde(rename = "features.get")]
@@ -757,6 +769,10 @@ impl OperationResult {
             Self::ProjectsArchive { .. } => "projects.archive",
             Self::ProjectsRestore { .. } => "projects.restore",
             Self::ProjectsDelete { .. } => "projects.delete",
+            Self::ProjectsPreparePurge { .. } => "projects.prepare_purge",
+            Self::ProjectsPurgeManifest { .. } => "projects.purge_manifest",
+            Self::ProjectsPurge { .. } => "projects.purge",
+            Self::ProjectsPurgeStatus { .. } => "projects.purge_status",
             Self::FeaturesList { .. } => "features.list",
             Self::FeaturesGet { .. } => "features.get",
             Self::FeaturesCreate { .. } => "features.create",
@@ -1127,6 +1143,10 @@ impl Check for OperationResult {
             Self::ProjectsArchive { value } => value.check()?,
             Self::ProjectsRestore { value } => value.check()?,
             Self::ProjectsDelete { value } => value.check()?,
+            Self::ProjectsPreparePurge { value } => value.check()?,
+            Self::ProjectsPurgeManifest { value } => value.check()?,
+            Self::ProjectsPurge { value } => value.check()?,
+            Self::ProjectsPurgeStatus { value } => value.check()?,
             Self::FeaturesList { value } => value.check()?,
             Self::FeaturesGet { value } => value.check()?,
             Self::FeaturesCreate { value } => value.check()?,
@@ -1528,6 +1548,7 @@ impl Revisioned for OperationResult {
             Self::HistoryGitLinks { value } => value.retain_revision(revision),
             Self::HistoryEvidenceLinks { value } => value.retain_revision(revision),
             Self::HistoryToolUsage { value } => value.retain_revision(revision),
+            Self::HistoryCommandReceipt { value } => value.retain_revision(revision),
             Self::CodeSearch { value } => value.retain_revision(revision),
             Self::CodeArchitecture { value } => value.retain_revision(revision),
             Self::CodeDependency { value } => value.retain_revision(revision),
@@ -1649,6 +1670,18 @@ impl Revisioned for OperationResult {
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
+            Self::ProjectsPreparePurge { .. } if revision < 6 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ProjectsPurgeManifest { .. } if revision < 6 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ProjectsPurge { .. } if revision < 6 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ProjectsPurgeStatus { .. } if revision < 6 => {
+                Err("operation result predates its introduction".into())
+            }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {
                 Err("operation result predates its introduction".into())
             }

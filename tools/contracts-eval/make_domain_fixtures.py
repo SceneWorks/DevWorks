@@ -56,6 +56,7 @@ def request(name,mode):
  if name=='tasks.create':body['parentId']='feature-a'
  if name=='tasks.assign':body['clearAssignment']=True
  if name=='tasks.set_feature':body['clearFeature']=True
+ if name=='projects.purge':body['confirm']=True
  if name=='workflows.reassign_and_remove':body['destinationStatusId']='status-other'
  if name in ['knowledge.entity_bundle','knowledge.entity_graph','knowledge.expand_frontier']:body['query']['entityIds']=['entity-a']
  if name=='knowledge.claim_bundle':body['query']['claimIds']=['claim-a']
@@ -1192,6 +1193,14 @@ for invalid in [None,'true']:
 # DW36: source metadata revision5, all native engine declarations and strict field gates.
 from metadata_fixtures import append_metadata_cases
 append_metadata_cases(case,sample,request,ART)
+
+# DW140: history.events registers revision3; qualify its continuation and empty-tail
+# output shapes alongside the already recorded newest-first request fixtures.
+for suffix in ['more','empty-tail']:
+ case('dw140-r3-history-events-'+suffix,'operation-result.r3',copy.deepcopy(POS['r2-result-history.events-'+suffix]))
+
+from purge_fixtures import append_purge_cases
+append_purge_cases(case,sample,request)
 
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

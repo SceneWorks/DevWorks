@@ -638,6 +638,10 @@ impl Shell {
                             self.databases.error = Some(Failure::Refused(fault).describe())
                         }
                     },
+                    Ok(CommandReply::ReceiptPurged { outcome, .. }) => {
+                        self.databases.clear_explorer();
+                        self.databases.error = Some(Failure::Purged(outcome).describe());
+                    }
                     Ok(CommandReply::CommandStatusUnknown { .. }) => {
                         self.databases.busy = true;
                         self.databases.error = Some(Failure::Unknown.describe());

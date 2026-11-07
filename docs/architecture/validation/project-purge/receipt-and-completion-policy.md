@@ -57,3 +57,9 @@ revoked authority, already-purged content lookup, no accidental reexecution by t
 scheduler/publisher/client, old schema hashes, shared artifact/history survival,
 physical failure/retry/restart, pins, mixed scopes, and unchanged shared repository
 and source filesystem bytes. No OS credential access or learned inference is needed.
+
+Revision6 representation: CommandReply.ReceiptPurged is terminal and carries only
+PurgedReceiptOutcome. The receipt lookup remains state Recorded (the original
+commit exists) with a gated purged outcome marker instead of private reply refs.
+Its original command/sequence/operation must match the outer committed identity.
+Earlier readers never receive a fabricated Recorded observation without a reply.

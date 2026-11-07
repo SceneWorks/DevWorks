@@ -7155,6 +7155,13 @@ pub struct ReceiptObservation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_schema: Option<SchemaRef>,
     pub state: ReceiptLookupState,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PurgedReceiptOutcome", extend("x-since" = 6))]
+    pub purged: Option<PurgedReceiptOutcome>,
 }
 impl Check for ReceiptObservation {
     fn check(&self) -> Result<(), String> {
@@ -7165,11 +7172,20 @@ impl Check for ReceiptObservation {
         self.reply_artifact.check()?;
         self.reply_schema.check()?;
         self.state.check()?;
+        self.purged.check()?;
         crate::protocol::rules::record(
             "ReceiptObservation",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ReceiptObservation {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 6 {
+            self.purged = None;
+        }
     }
 }
 
@@ -16921,6 +16937,203 @@ impl Check for SchemaObjectMetadata {
         self.definition_sql.check()?;
         crate::protocol::rules::record(
             "SchemaObjectMetadata",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PurgePhase {
+    Prepared,
+    RemovingBytes,
+    Held,
+    Complete,
+    Superseded,
+}
+impl Check for PurgePhase {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PurgeDisposition {
+    Remove,
+    Scrub,
+    Keep,
+}
+impl Check for PurgeDisposition {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PurgeEntryKind {
+    RecordClass,
+    ManagedFile,
+    SharedKeeper,
+}
+impl Check for PurgeEntryKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PurgedDecisionKind {
+    Applied,
+    Accepted,
+    NoChange,
+    Refused,
+}
+impl Check for PurgedDecisionKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PurgedReceiptOutcome {
+    pub command_id: CommandId,
+    pub committed_sequence: Revision,
+    pub accepted_at_ms: Counter,
+    pub request_digest: Digest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<OperationId>,
+    pub original_decision: PurgedDecisionKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_fault_code: Option<DomainErrorCode>,
+    pub purge_id: Id,
+}
+impl Check for PurgedReceiptOutcome {
+    fn check(&self) -> Result<(), String> {
+        self.command_id.check()?;
+        self.committed_sequence.check()?;
+        self.accepted_at_ms.check()?;
+        self.request_digest.check()?;
+        self.operation_id.check()?;
+        self.original_decision.check()?;
+        self.original_fault_code.check()?;
+        self.purge_id.check()?;
+        crate::protocol::rules::record(
+            "PurgedReceiptOutcome",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectPurgeManifest {
+    pub id: Id,
+    pub project_id: ProjectId,
+    pub revision: Revision,
+    pub project_revision: Revision,
+    pub digest: Digest,
+    pub phase: PurgePhase,
+    pub record_count: Counter,
+    pub managed_byte_count: Counter,
+    pub kept_record_count: Counter,
+    pub kept_byte_count: Counter,
+    pub pending_effects: Counter,
+    pub created_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<OperationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<Label>,
+}
+impl Check for ProjectPurgeManifest {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.project_id.check()?;
+        self.revision.check()?;
+        self.project_revision.check()?;
+        self.digest.check()?;
+        self.phase.check()?;
+        self.record_count.check()?;
+        self.managed_byte_count.check()?;
+        self.kept_record_count.check()?;
+        self.kept_byte_count.check()?;
+        self.pending_effects.check()?;
+        self.created_at_ms.check()?;
+        self.operation_id.check()?;
+        self.error_code.check()?;
+        crate::protocol::rules::record(
+            "ProjectPurgeManifest",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectPurgeEntry {
+    pub id: Digest,
+    pub kind: PurgeEntryKind,
+    pub record_class: Label,
+    pub disposition: PurgeDisposition,
+    pub record_count: Counter,
+    pub byte_count: Counter,
+    pub reason: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_path: Option<Text>,
+}
+impl Check for ProjectPurgeEntry {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.kind.check()?;
+        self.record_class.check()?;
+        self.disposition.check()?;
+        self.record_count.check()?;
+        self.byte_count.check()?;
+        self.reason.check()?;
+        self.relative_path.check()?;
+        crate::protocol::rules::record(
+            "ProjectPurgeEntry",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectPurgeManifestPage {
+    pub manifest: ProjectPurgeManifest,
+    pub entries: ProjectPurgeEntryPage,
+}
+impl Check for ProjectPurgeManifestPage {
+    fn check(&self) -> Result<(), String> {
+        self.manifest.check()?;
+        self.entries.check()?;
+        crate::protocol::rules::record(
+            "ProjectPurgeManifestPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectPurgeEntryPage {
+    pub items: Items<ProjectPurgeEntry>,
+    pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for ProjectPurgeEntryPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.has_more.check()?;
+        self.next_cursor.check()?;
+        crate::protocol::rules::record(
+            "ProjectPurgeEntryPage",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
