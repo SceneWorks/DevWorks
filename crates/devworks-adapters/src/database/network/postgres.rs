@@ -186,8 +186,11 @@ async fn read_catalog(
         .map_err(classify)?;
     let mut catalog = Catalog::new(c, database.into())?;
     for query in QUERIES {
+        // Keep bounded structural identities/references when payload bytes exceed the wire
+        // limit. Skipping a parent would strand later columns/indexes and fail publication.
+        // PostgreSQL identifiers are bounded; unbounded payload lives in these two fields.
         let bounded = format!(
-            "SELECT CASE WHEN octet_length(document)>131072 THEN NULL ELSE document END FROM ({}) metadata(document)",
+            "SELECT CASE WHEN octet_length(document)>131072 THEN ((document::jsonb - 'metadata' - 'definition') || jsonb_build_object('truncated',true))::text ELSE document END FROM ({}) metadata(document)",
             query.sql
         );
         let rows = client

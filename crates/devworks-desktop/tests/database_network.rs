@@ -9,6 +9,9 @@ use devworks_core::protocol::{
 };
 use serde_json::json;
 fn qualify(engine: &str, variable: &str) {
+    qualify_selected(engine, variable, None);
+}
+fn qualify_selected(engine: &str, variable: &str, selected: Option<&str>) {
     let _native_case = native_runtime_case();
     let endpoint = std::env::var(variable).expect("explicit isolated server endpoint required");
     let root = Root::new("production-network-metadata");
@@ -17,7 +20,7 @@ fn qualify(engine: &str, variable: &str) {
     let credential = backend
         .stage_database_password(Secret::new("devworks_metadata_reader"))
         .unwrap();
-    let frame=json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":backend.token("native-network-source"),"body":{"kind":"schemas.configure","scope":{"kind":"Workspace"},"config":{"name":"Production runtime network fixture","engine":engine,"endpoint":endpoint,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":["meta_large_default","meta_oversized_definition"],"writesEnabled":false,"enabled":true,"projectAccess":[],"workspaceExposed":false,"exposureMode":"SchemaOnly","authentication":"Password","username":"metadata_reader","credentialRef":credential,"tls":"LoopbackPlaintext"}}}).to_string().into_bytes();
+    let frame=json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":backend.token("native-network-source"),"body":{"kind":"schemas.configure","scope":{"kind":"Workspace"},"config":{"name":"Production runtime network fixture","engine":engine,"endpoint":endpoint,"catalogs":[],"schemas":[],"includePatterns":selected.into_iter().collect::<Vec<_>>(),"excludePatterns":if selected.is_some(){Vec::<&str>::new()}else{vec!["meta_large_default","meta_oversized_definition"]},"writesEnabled":false,"enabled":true,"projectAccess":[],"workspaceExposed":false,"exposureMode":"SchemaOnly","authentication":"Password","username":"metadata_reader","credentialRef":credential,"tls":"LoopbackPlaintext"}}}).to_string().into_bytes();
     let CommandReply::Recorded { receipt, .. } =
         backend.command("schemas.configure", &frame).unwrap()
     else {
@@ -63,6 +66,12 @@ fn qualify(engine: &str, variable: &str) {
         }
         std::thread::sleep(std::time::Duration::from_millis(2));
     };
+    if selected.is_some() {
+        assert!(matches!(
+            published.coverage.as_ref().unwrap().state,
+            devworks_core::protocol::data::CoverageState::Partial
+        ));
+    }
     assert!(published.last_error.is_none());
     assert!(published.profile.is_some());
     let frame=json!({"protocol":"1.0-draft.1","mode":"Query","schemaRevision":5,"queryId":backend.token("native-network-objects"),"body":{"kind":"schemas.objects","scope":{"kind":"Workspace"},"connectionId":source.id,"views":{"kind":"Exact","viewIds":[published.current_view_id.unwrap()]},"kinds":[],"page":{"limit":100}}}).to_string().into_bytes();
@@ -73,13 +82,11 @@ fn qualify(engine: &str, variable: &str) {
     else {
         panic!("published native objects");
     };
-    assert!(
-        value
-            .items
-            .0
-            .iter()
-            .any(|v| v.metadata.as_ref().is_some_and(|m| m.name.0 == "parent"))
-    );
+    assert!(value.items.0.iter().any(|v| {
+        v.metadata
+            .as_ref()
+            .is_some_and(|m| m.name.0 == selected.unwrap_or("parent"))
+    }));
     assert!(
         !serde_json::to_string(&value)
             .unwrap()
@@ -105,4 +112,14 @@ fn native_mariadb_production_engine_metadata() {
 #[ignore = "explicit isolated PostgreSQL production-engine dispatch"]
 fn native_postgres_production_engine_metadata() {
     qualify("Postgres", "DEVWORKS_METADATA_POSTGRES");
+}
+
+#[test]
+#[ignore = "explicit isolated PostgreSQL multibyte view through production engine"]
+fn native_postgres_production_engine_multibyte_view_metadata() {
+    qualify_selected(
+        "Postgres",
+        "DEVWORKS_METADATA_POSTGRES",
+        Some("meta_oversized_definition"),
+    );
 }

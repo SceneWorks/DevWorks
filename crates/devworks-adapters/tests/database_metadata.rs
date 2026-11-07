@@ -832,3 +832,38 @@ fn native_sql_server_column_description_is_not_duplicated_by_index_properties() 
         Some("column description")
     );
 }
+
+#[test]
+#[ignore = "explicit isolated PostgreSQL multibyte oversized-view fixture"]
+fn native_postgres_oversized_multibyte_view_retains_parent_and_partial_coverage() {
+    let endpoint = std::env::var("DEVWORKS_METADATA_POSTGRES").unwrap();
+    let mut req = request("Postgres", &endpoint);
+    req.config.include_patterns =
+        serde_json::from_value(json!(["meta_oversized_definition"])).unwrap();
+    req.config.exclude_patterns = serde_json::from_value(json!([])).unwrap();
+    let snapshot = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(NetworkMetadataReader.read(req))
+        .unwrap();
+    let view = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "View")
+        .expect("bounded parent retained");
+    assert!(view.metadata.definition_sql.is_none());
+    assert!(matches!(view.coverage.state, CoverageState::Partial));
+    assert!(matches!(snapshot.coverage.state, CoverageState::Partial));
+    let column = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Column")
+        .unwrap();
+    assert_eq!(column.parent_key.as_ref(), Some(&view.key));
+    assert!(snapshot.objects.iter().all(|o| {
+        o.parent_key
+            .as_ref()
+            .is_none_or(|p| snapshot.objects.iter().any(|parent| &parent.key == p))
+    }));
+}
