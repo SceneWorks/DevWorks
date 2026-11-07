@@ -57,6 +57,9 @@ pub(super) fn partition(
             continue;
         }
         let mut keeper = false;
+        let mut control_only = rows
+            .get(&("blobs".into(), key_digest.clone()))
+            .is_some_and(|r| r.reason == Reason::PurgeControlAudit);
         let mut versions = db(conn.prepare(
             "SELECT id FROM artifact_versions WHERE blob_digest=?1 AND deleted_at IS NULL",
         ))?;
@@ -69,6 +72,9 @@ pub(super) fn partition(
             );
             keeper |= rows.get(&key).is_none_or(|r| r.action != Action::Delete)
                 || unresolved.contains_key(&key);
+            control_only &= rows
+                .get(&key)
+                .is_some_and(|r| r.reason == Reason::PurgeControlAudit);
         }
         for reference in snapshot.references.iter().filter(|edge| {
             edge.to_table == "blobs"
@@ -81,11 +87,17 @@ pub(super) fn partition(
             );
             keeper |= rows.get(&key).is_none_or(|r| r.action != Action::Delete)
                 || unresolved.contains_key(&key);
+            control_only &= reference.from_table == "artifact_blob_pins"
+                || rows
+                    .get(&key)
+                    .is_some_and(|r| r.reason == Reason::PurgeControlAudit);
         }
         assign(
             candidate,
             if keeper { Action::Keep } else { Action::Scrub },
-            if keeper {
+            if control_only {
+                Reason::PurgeControlAudit
+            } else if keeper {
                 Reason::SharedContent
             } else {
                 Reason::DerivedContent
@@ -93,6 +105,25 @@ pub(super) fn partition(
             rows,
             unresolved,
         );
+        if control_only {
+            for reference in snapshot.references.iter().filter(|edge| {
+                edge.to_table == "blobs"
+                    && edge.to_key_digest == key_digest
+                    && edge.from_table == "artifact_blob_pins"
+            }) {
+                if let Some(pin) = snapshot.rows.iter().find(|r| {
+                    r.table == reference.from_table && r.key_digest == reference.from_key_digest
+                }) {
+                    assign(
+                        pin,
+                        Action::Keep,
+                        Reason::PurgeControlAudit,
+                        rows,
+                        unresolved,
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }

@@ -112,6 +112,7 @@ fn published_reply(
     receipt: &Receipt<DomainDecision>,
     op: &str,
     revision: u32,
+    control: Option<&ProjectId>,
 ) -> Result<Vec<Key>, StorageError> {
     let Some(descriptor) = devworks_core::registry::find(op) else {
         return Ok(vec![]);
@@ -132,20 +133,108 @@ fn published_reply(
     {
         return Ok(vec![]);
     }
-    Ok(vec![
+    let mut keys = vec![
         (
             "receipt_replies".into(),
             super::guard::key_digest(&serde_json::to_string(&identity).expect("reply key"))?,
         ),
         (
             "artifacts".into(),
-            super::guard::key_digest(&serde_json::to_string(&[artifact]).expect("artifact key"))?,
+            super::guard::key_digest(&serde_json::to_string(&[&artifact]).expect("artifact key"))?,
         ),
         (
             "artifact_versions".into(),
-            super::guard::key_digest(&serde_json::to_string(&[version]).expect("version key"))?,
+            super::guard::key_digest(&serde_json::to_string(&[&version]).expect("version key"))?,
         ),
-    ])
+    ];
+    if let Some(project) = control {
+        let Some(blob) = minimal_control_publication(
+            conn,
+            &artifact,
+            &version,
+            receipt,
+            op,
+            revision,
+            (project, identity[0]),
+        )?
+        else {
+            return Ok(vec![]);
+        };
+        keys.push((
+            "blobs".into(),
+            super::guard::key_digest(&serde_json::to_string(&[blob]).expect("control blob key"))?,
+        ));
+    }
+    Ok(keys)
+}
+
+fn minimal_control_publication(
+    conn: &Connection,
+    artifact: &str,
+    version: &str,
+    receipt: &Receipt<DomainDecision>,
+    op: &str,
+    revision: u32,
+    scope: (&ProjectId, &str),
+) -> Result<Option<String>, StorageError> {
+    let (project, actor) = scope;
+    type Minimal = (String, String, String, String);
+    let raw:Option<Minimal>=db(conn.query_row("SELECT a.title,a.provenance_json,v.source_json,v.blob_digest FROM artifacts a JOIN artifact_versions v ON v.artifact_id=a.id WHERE a.id=?1 AND v.id=?2 AND a.state='Live' AND ((a.scope_kind='Project' AND a.current_project_id=?3 AND a.origin_project_id=?3) OR (a.scope_kind='Workspace' AND a.current_project_id IS NULL AND a.origin_project_id IS NULL)) AND a.origin_work_id IS NULL AND v.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM artifact_shares WHERE artifact_id=a.id)",[artifact,version,project.0.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional())?;
+    let Some((title, provenance, source, blob)) = raw else {
+        return Ok(None);
+    };
+    let (Ok(provenance), Ok(source)) = (
+        serde_json::from_str::<Value>(&provenance),
+        serde_json::from_str::<Value>(&source),
+    ) else {
+        return Ok(None);
+    };
+    let Some(host) = provenance["producedBy"].as_str() else {
+        return Ok(None);
+    };
+    let valid_host: bool = db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM actors WHERE id=?1 AND kind=?2)",
+        [
+            host,
+            super::super::repos::principal_name(devworks_core::context::PrincipalKind::Host),
+        ],
+        |r| r.get(0),
+    ))?;
+    if !valid_host
+        || title != format!("{op} reply")
+        || provenance
+            != serde_json::json!({"producedBy":host,"principalKind":"Host","sourceKind":"ReceiptReply","receiptActor":actor,"commandId":receipt.command_id,"operation":op})
+    {
+        return Ok(None);
+    }
+    let Some(operation) = source["operationId"].as_str() else {
+        return Ok(None);
+    };
+    let valid_stage: bool = db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM operations WHERE id=?1 AND capability='artifacts.stage_file')",
+        [operation],
+        |r| r.get(0),
+    ))?;
+    if !valid_stage
+        || source
+            != serde_json::json!({"source":{"kind":"ReceiptReply","commandId":receipt.command_id},"operationId":operation,"producedBy":host,"principalKind":"Host"})
+    {
+        return Ok(None);
+    }
+    let Some(fingerprint) = Fingerprint::from_hex(&receipt.request_digest) else {
+        return Ok(None);
+    };
+    let stored = devworks_core::ports::StoredReceipt {
+        operation: op.into(),
+        contract: CONTRACT.into(),
+        schema_revision: SchemaRevision(revision),
+        fingerprint,
+        receipt: receipt.clone(),
+    };
+    let Ok(bytes) = devworks_core::services::artifacts::replies::reply_bytes(&stored) else {
+        return Ok(None);
+    };
+    Ok((devworks_core::fingerprint::sha256_hex(&bytes) == blob).then_some(blob))
 }
 
 pub(super) fn partition(
@@ -275,23 +364,30 @@ pub(super) fn partition(
             rows,
             unresolved,
         );
-        if !control {
-            for key in published_reply(
-                conn,
-                [&actor, &scope, &key],
-                receipt,
-                &op,
-                body.schema_revision,
-            )? {
-                if let Some(candidate) = candidates.get(&key) {
-                    assign(
-                        candidate,
-                        Action::Delete,
-                        Reason::OwnedLineage,
-                        rows,
-                        unresolved,
-                    );
-                }
+        for key in published_reply(
+            conn,
+            [&actor, &scope, &key],
+            receipt,
+            &op,
+            body.schema_revision,
+            control.then_some(project),
+        )? {
+            if let Some(candidate) = candidates.get(&key) {
+                assign(
+                    candidate,
+                    if control {
+                        Action::Keep
+                    } else {
+                        Action::Delete
+                    },
+                    if control {
+                        Reason::PurgeControlAudit
+                    } else {
+                        Reason::OwnedLineage
+                    },
+                    rows,
+                    unresolved,
+                );
             }
         }
         if owned {

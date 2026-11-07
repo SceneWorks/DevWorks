@@ -214,6 +214,16 @@ writer must remove only P's edge, advance source CAS revision, and preserve the
 unchanged metadata configuration revision/view/other-project leases; integrated
 native acceptance of that write is still pending.
 
+The actual native reply publisher now participates in the control stability proof,
+including a Deleted project's workspace-fallback reply artifact. Exact actor/command/
+schema, closed host provenance and staging source, and the native canonical reply
+byte digest are required before its minimal artifact/version/blob/pin metadata can
+be excluded from business staleness. Unknown provenance remains a hold. The new
+native case initially failed (1.51 seconds); correcting the actual stored host-kind
+binding and validating the real deleted-project publication scope resolves it.
+All thirteen native planning cases pass (19.51 seconds), with strict checks
+(15.94 seconds). This does not route prepare/purge or grant any execution permit.
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view

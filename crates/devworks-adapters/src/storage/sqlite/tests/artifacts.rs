@@ -4873,3 +4873,121 @@ fn purge_planning_blob_generations_preserve_surviving_versions_and_unproved_pins
         "planning neither claims nor unlinks bytes"
     );
 }
+
+#[test]
+fn purge_planning_minimal_control_publication_does_not_stale_business_review() {
+    use devworks_core::services::artifacts::replies::{
+        REPLY_CONSUMER, ReceiptReplies, ReplyOutcome,
+    };
+    struct Preview(devworks_core::protocol::records::ProjectPurgeManifest);
+    impl CommandHandler for Preview {
+        fn decide(
+            &self,
+            _: &InvocationContext,
+            _: &devworks_core::gateway::AdmittedCommand,
+            _: &mut dyn WriteTransaction,
+        ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
+            Ok(devworks_core::ports::Decided {
+                decision: DomainDecision::Applied {
+                    result: OperationResult::ProjectsPreparePurge {
+                        value: self.0.clone(),
+                    },
+                },
+                operation_id: None,
+            })
+        }
+    }
+    let fx = Fx::new();
+    fx.h.raw()
+        .execute(
+            "UPDATE projects SET lifecycle='Deleted' WHERE id='project-a'",
+            [],
+        )
+        .unwrap();
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let before = assess();
+    let manifest=serde_json::from_value(json!({"id":"minimal-control-manifest","projectId":"project-a","revision":"1","projectRevision":"1","digest":"a".repeat(64),"phase":"Prepared","recordCount":"2","managedByteCount":"0","keptRecordCount":"1","keptByteCount":"0","pendingEffects":"0","createdAtMs":T0.to_string()})).unwrap();
+    let frame = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":6,"requestKey":"minimal-control-preview","body":{"kind":"projects.prepare_purge","projectId":"project-a","expectedRevision":"1"}});
+    let authority = fx.authority();
+    let gateway = Gateway {
+        authority: &authority,
+        store: fx.store.as_ref(),
+        ids: fx.h.ids.as_ref(),
+    };
+    let reply = gateway
+        .command(
+            &fx.user(),
+            "projects.prepare_purge",
+            frame.to_string().as_bytes(),
+            Arc::new(Preview(manifest)),
+        )
+        .unwrap();
+    assert!(
+        matches!(reply,CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..}))
+    );
+    assert_eq!(
+        before.digest,
+        assess().digest,
+        "gateway control bookkeeping is minimal"
+    );
+    let claims = fx.write(|tx| {
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: REPLY_CONSUMER.into(),
+            owner: id("control-publisher"),
+            lease_ms: 60_000,
+            limit: 10,
+        })
+    });
+    assert_eq!(claims.len(), 1);
+    let publisher = ReceiptReplies::new(fx.svc.clone());
+    let reference = match publisher.publish(fx.store.as_ref(), &claims[0]) {
+        ReplyOutcome::Published(value) => value,
+        other => panic!("actual publication: {other:?}"),
+    };
+    let after = assess();
+    assert_eq!(
+        before.digest, after.digest,
+        "actual minimal control publication cannot invalidate its own business review"
+    );
+    assert!(
+        !after.unresolved.iter().any(|r| matches!(
+            r.table.as_str(),
+            "receipt_replies" | "artifacts" | "artifact_versions" | "blobs"
+        )),
+        "{:?}",
+        after.unresolved
+    );
+    for table in ["receipt_replies", "artifacts", "artifact_versions", "blobs"] {
+        assert!(
+            after.rows.iter().any(|r| r.table == table
+                && r.action == ProjectPurgeRowAction::Keep
+                && r.reason == ProjectPurgeRowReason::PurgeControlAudit),
+            "{table}"
+        );
+    }
+    let original =
+        fx.h.raw()
+            .query_row(
+                "SELECT provenance_json FROM artifacts WHERE id=?1",
+                [reference.artifact_id.as_str()],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap();
+    let mut unknown: Value = serde_json::from_str(&original).unwrap();
+    unknown["privateCopy"] = json!("unknown control artifact content");
+    fx.h.raw()
+        .execute(
+            "UPDATE artifacts SET provenance_json=?1 WHERE id=?2",
+            rusqlite::params![unknown.to_string(), reference.artifact_id.as_str()],
+        )
+        .unwrap();
+    let held = assess();
+    assert!(held.unresolved.iter().any(|r| r.table == "artifacts"));
+    assert_ne!(before.digest, held.digest);
+}
