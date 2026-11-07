@@ -540,3 +540,18 @@ Index metadata now retains its bounded WHERE predicate and marks unavailable or
 truncated predicates Partial. The explicit native-x86 workflow seeds and checks
 this case; local SQLServer uses emulation and does not establish native-x86 proof.
 All51 real adapter cases pass1.02s and5 production Engine cases pass20.44s.
+
+## Tenth review batch: unresolved SQLite views and PostgreSQL domain nullability
+
+A fresh metadata connection cannot resolve application-defined SQLite functions.
+The new real-file fixture, including a dependent view, reproduced source-wide
+Unavailable before the fix(0.04s). Fixed catalog-only view introspection now retains
+both view identities and DDL with explicit Partial column coverage, continues the
+ordinary table, and preserves the source file byte-for-byte. Twelve SQLite cases
+pass0.03s. A fixture compilation error used the wrong parent field and was corrected
+before collecting the meaningful RED; it is not regression evidence.
+
+The actual PostgreSQL required-domain fixture reproduced nullable=true before the
+fix(0.09s). Column nullability now includes the domain type's typnotnull flag.
+Required-domain, nullable-domain and explicit-column NOT NULL cases pass; all52 real
+network adapter cases pass1.08s and5 production Engine cases20.09s.

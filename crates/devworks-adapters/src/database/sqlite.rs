@@ -162,11 +162,37 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
         if truncated {
             partial(&mut c, &mut node, "sqlite_definition_size_limit");
         }
+        // A view can be valid in its owning application while this isolated metadata
+        // connection cannot resolve its functions/dependencies. Never execute the view.
+        let columns_unavailable = if kind == "view" {
+            match conn.query_row(
+                "SELECT count(*) FROM pragma_table_xinfo(?1,'main')",
+                [&name],
+                |r| r.get::<_, i64>(0),
+            ) {
+                Ok(_) => false,
+                Err(rusqlite::Error::SqliteFailure(error, _))
+                    if error.extended_code == rusqlite::ffi::SQLITE_ERROR =>
+                {
+                    c.check()?;
+                    true
+                }
+                Err(_) => return Err(failure(&c)),
+            }
+        } else {
+            false
+        };
+        if columns_unavailable {
+            partial(&mut c, &mut node, "sqlite_column_metadata_unavailable");
+        }
         let table = node.key.clone();
         if !c.object(node)? {
             break;
         }
         c.relationship(&schema_key, &table, "CONTAINS")?;
+        if columns_unavailable {
+            continue;
+        }
         // Rowid-alias INTEGER primary keys have no separate primary-key index. In
         // particular, SQLite's inline PRIMARY KEY DESC exception does have that index.
         let indexed_primary: bool = conn
@@ -853,6 +879,44 @@ mod tests {
             assert_eq!(column.metadata.nullable, Some(nullable), "{table}");
             assert!(matches!(column.coverage.state, CoverageState::Complete));
         }
+        assert_eq!(before, std::fs::read(&target.0).unwrap());
+    }
+    #[test]
+    fn native_sqlite_unresolved_view_columns_keep_identity_ddl_and_other_tables() {
+        let target = Target::new(
+            "CREATE TABLE ordinary(id INTEGER PRIMARY KEY); CREATE VIEW unresolved AS SELECT application_function(id) AS transformed FROM ordinary; CREATE VIEW dependent AS SELECT * FROM unresolved; INSERT INTO ordinary VALUES(1);",
+        );
+        let before = std::fs::read(&target.0).unwrap();
+        let snapshot =
+            run(target.request()).expect("per-view resolution does not abort the source");
+        assert!(matches!(snapshot.coverage.state, CoverageState::Partial));
+        for name in ["unresolved", "dependent"] {
+            let view = snapshot
+                .objects
+                .iter()
+                .find(|o| o.kind == "View" && o.metadata.name.0 == name)
+                .unwrap();
+            assert!(view.metadata.definition_sql.is_some());
+            assert!(matches!(view.coverage.state, CoverageState::Partial));
+            assert!(
+                view.coverage
+                    .gaps
+                    .iter()
+                    .any(|g| g.as_str() == "sqlite_column_metadata_unavailable")
+            );
+            assert!(
+                !snapshot
+                    .objects
+                    .iter()
+                    .any(|o| o.kind == "Column" && o.parent_key.as_ref() == Some(&view.key))
+            );
+        }
+        assert!(
+            snapshot
+                .objects
+                .iter()
+                .any(|o| o.kind == "Column" && o.metadata.name.0 == "id")
+        );
         assert_eq!(before, std::fs::read(&target.0).unwrap());
     }
 }
