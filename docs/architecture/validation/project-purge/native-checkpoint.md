@@ -274,3 +274,13 @@ all15 planning cases pass (23.78 seconds), all18 convention UI cases pass (136.0
 seconds), all23 work UI cases pass (37.91 seconds), and strict workspace/all-target
 checks pass (44.48 seconds). The new class has local native evidence; fresh Windows
 runtime evidence and the complete purge/client executor remain pending.
+
+The finite artifact-subject keeper closure now covers assignment, resource and
+blocker headers as well as the already mapped root, operation and session subjects.
+A real SQLite/workspace-artifact link regression first refused all three known
+subjects (1.32 seconds). All16 planning cases now pass (23.51 seconds); strict
+workspace/all-target checks pass (18.28 seconds). Required assignment root/work/
+session identities survive minimally; nullable blocker/execution/parent references
+are cleared. The planning digest now includes the actual compiled minimal-header
+allowlist and retained/cleared FK policy, so policy changes stale older preparation.
+No logical redaction or deletion is executed by this read-only checkpoint.

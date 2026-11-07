@@ -53,6 +53,15 @@ Known cross-owner keeper cases are explicit:
   root/private transcript and checkpoint content. A rootless project session still
   owns its conversation through sessions.conversation_id. This is an explicit
   finite keeper case, not a generic FK retention or deletion rule.
+- A surviving workspace/shared artifact may reference an assignment, project-private
+  resource, or blocker. Keep a minimal terminal header for that exact typed subject.
+  Assignment headers retain their required root/work/session identities but clear
+  execution, parent, checkpoint and approved-scope text. Resource headers keep the
+  project and monotonic fences with an opaque deleted label, without original name,
+  canonical private key or labels. Blocker headers become cleared placeholders with
+  no reason, origin text or clearance payload; nullable root/assignment/operation
+  links are cleared. The native purged-subject registry prevents these placeholders
+  from being decoded or reused as live work/resource/control records.
 - A surviving work header may require a workflow-status identity: retain only the
   ID/project, fixed deleted label and valid static kind fields. It is a reference
   placeholder, not a live status or allocatable work item.
@@ -80,3 +89,7 @@ introduced. Any later unclassified table or changed owning shape fails closed at
 preview/confirmation. Native acceptance must seed every current ownership class,
 prove ordinary immutable guards still reject deletion, and verify complete private
 sentinel removal with shared/other-project/workspace keepers and source bytes intact.
+
+The ownership assessment digest includes the actual compiled finite minimal-header
+allowlist and retained/cleared FK column policy. Changing those rules invalidates an
+older preparation even when no stored project row changed.

@@ -5095,3 +5095,132 @@ fn purge_planning_rootless_project_sessions_own_conversations_and_keep_only_refe
         "assessment remains read-only"
     );
 }
+
+#[test]
+fn purge_planning_kept_artifact_subjects_retain_minimal_assignment_resource_and_blocker_headers() {
+    let fx = Fx::new();
+    fx.write(|tx| {
+        tx.sessions().insert_session(&StoredSession {
+            id: id("keeper-session"),
+            conversation_id: id("keeper-conversation"),
+            agent_id: actor("user-a"),
+            project_id: Some(project("project-a")),
+            root_id: Some(RootId(id("root-a"))),
+            title: "private keeper session".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor("user-a"),
+            created_at_ms: T0,
+            closed_at_ms: Some(T0),
+            closed_by: Some(actor("user-a")),
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })?;
+        tx.runs().insert_assignment(&StoredAssignment {
+            id: devworks_core::protocol::AssignmentId(id("kept-assignment")),
+            root_id: RootId(id("root-a")),
+            work_id: RootId(id("task-a")),
+            parent_id: None,
+            session_id: id("keeper-session"),
+            execution_id: None,
+            state: AssignmentState::Completed,
+            generation: 1,
+            slot_held: false,
+            revision: 1,
+            checkpoint: Some(json!({"private":"assignment checkpoint"})),
+            scope_key: Some("private scope".into()),
+            scope_digest: Some("a".repeat(64)),
+            plan_revision: None,
+            instruction_revision: 0,
+            created_at_ms: T0,
+        })?;
+        tx.resources().insert_resource(NewResource {
+            id: id("kept-resource"),
+            name: "private-resource-name".into(),
+            scope: ResourceScopeKind::Project,
+            project_id: Some(project("project-a")),
+            physical: false,
+            capacity: 1,
+            labels: vec!["private label".into()],
+        })?;
+        tx.runs().insert_blocker(&StoredBlocker {
+            id: id("kept-blocker"),
+            root_id: Some(RootId(id("root-a"))),
+            assignment_id: None,
+            operation_id: None,
+            cause: HoldCause::HumanPause,
+            origin_id: "private origin".into(),
+            origin_revision: 1,
+            state: BlockerState::Cleared,
+            revision: 1,
+            reason: "private blocker reason".into(),
+            clearance: json!({"private":"clearance"}),
+            created_at_ms: T0,
+            cleared_at_ms: Some(T0),
+            cleared_by: Some(actor("user-a")),
+        })?;
+        Ok(())
+    });
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let subjects = [
+        ("assignment", "assignments", "kept-assignment"),
+        ("resource", "resources", "kept-resource"),
+        ("blocker", "blockers", "kept-blocker"),
+    ];
+    let before = assess();
+    for (_, table, key) in subjects {
+        let digest = devworks_core::fingerprint::sha256_hex(
+            serde_json::to_string(&[key]).unwrap().as_bytes(),
+        );
+        assert!(before.rows.iter().any(|r| r.table == table
+            && r.key_digest == digest
+            && r.action == ProjectPurgeRowAction::Delete));
+    }
+    let kept = saved(fx.save_workspace(
+        &fx.user(),
+        "finite-subject-keepers",
+        "independent workspace history",
+        b"independent workspace history",
+        json!([]),
+        3,
+    ));
+    let version = kept.artifact.version_id.clone();
+    fx.write(move |tx| {
+        for (kind, _, key) in subjects {
+            tx.artifacts().add_link(&ArtifactLink {
+                version_id: version.clone(),
+                subject: SubjectKey { kind, id: id(key) },
+                purpose: LinkPurpose::Reference,
+            })?;
+        }
+        Ok(())
+    });
+    let after = assess();
+    for (_, table, key) in subjects {
+        let digest = devworks_core::fingerprint::sha256_hex(
+            serde_json::to_string(&[key]).unwrap().as_bytes(),
+        );
+        assert!(
+            after.rows.iter().any(|r| r.table == table
+                && r.key_digest == digest
+                && r.action == ProjectPurgeRowAction::Scrub
+                && r.reason == ProjectPurgeRowReason::MinimalDeletedIdentity),
+            "{table} keeper: {:?}",
+            after.unresolved
+        );
+        assert!(
+            !after
+                .unresolved
+                .iter()
+                .any(|r| r.table == table && r.key_digest == digest)
+        );
+    }
+    assert!(!format!("{:?}", after.rows).contains("private"));
+    assert_ne!(before.digest, after.digest);
+}

@@ -119,8 +119,9 @@ fn initial(
         _ => Err(Unresolved::UnmappedTable),
     }
 }
-fn scrub_reference(table: &str, columns: &[String]) -> Option<bool> {
-    let (retained, cleared): (&[&str], &[&str]) = match table {
+type ScrubColumns = (&'static [&'static str], &'static [&'static str]);
+fn scrub_columns(table: &str) -> Option<ScrubColumns> {
+    Some(match table {
         "projects" => (&[], &[]),
         "project_details" => (&["project_id"], &[]),
         "work_items" => (
@@ -141,6 +142,15 @@ fn scrub_reference(table: &str, columns: &[String]) -> Option<bool> {
             &["root_id"],
         ),
         "conversations" => (&[], &["root_id"]),
+        "assignments" => (
+            &["root_id", "work_id", "session_id"],
+            &["parent_id", "execution_id"],
+        ),
+        "resources" => (&["project_id"], &[]),
+        "blockers" => (
+            &["cleared_by"],
+            &["root_id", "assignment_id", "operation_id"],
+        ),
         "command_receipts" => (&["actor_id", "operation_id"], &[]),
         "project_managed_files" => (&["project_id"], &[]),
         "schema_sources" => (&["owner_id"], &[]),
@@ -151,7 +161,26 @@ fn scrub_reference(table: &str, columns: &[String]) -> Option<bool> {
         ),
         "principal_authority" => (&["actor_id", "project_id", "bound_by"], &[]),
         _ => return None,
-    };
+    })
+}
+fn minimal_identity(table: &str) -> bool {
+    matches!(
+        table,
+        "projects"
+            | "work_items"
+            | "workflow_statuses"
+            | "events"
+            | "operations"
+            | "index_runs"
+            | "sessions"
+            | "conversations"
+            | "assignments"
+            | "resources"
+            | "blockers"
+    )
+}
+fn scrub_reference(table: &str, columns: &[String]) -> Option<bool> {
+    let (retained, cleared) = scrub_columns(table)?;
     if columns
         .iter()
         .all(|column| retained.contains(&column.as_str()))
@@ -509,17 +538,7 @@ pub(in crate::storage::sqlite) fn planning(
             if row.action != Action::Delete {
                 continue;
             }
-            if matches!(
-                row.table.as_str(),
-                "projects"
-                    | "work_items"
-                    | "workflow_statuses"
-                    | "events"
-                    | "operations"
-                    | "index_runs"
-                    | "sessions"
-                    | "conversations"
-            ) {
+            if minimal_identity(&row.table) {
                 row.action = Action::Scrub;
                 row.reason = Reason::MinimalDeletedIdentity;
             } else {
@@ -569,12 +588,19 @@ pub(in crate::storage::sqlite) fn planning(
                 )
         })
         .collect::<Vec<_>>();
+    // Bind the actual compiled minimal-header/FK policy, not just prose describing it.
+    let scrub_policy = known
+        .keys()
+        .filter_map(|table| {
+            scrub_columns(table).map(|columns| (table, minimal_identity(table), columns))
+        })
+        .collect::<Vec<_>>();
     let digest=devworks_core::fingerprint::sha256_hex(serde_json::to_string(&serde_json::json!({
         "format":"dw83-ownership-assessment-v1","project":project,
         "policy":devworks_core::fingerprint::sha256_hex(POLICIES.as_bytes()),
         "extension":devworks_core::fingerprint::sha256_hex(EXTENSION.as_bytes()),
         "stagingExtension":devworks_core::fingerprint::sha256_hex(STAGING_EXTENSION.as_bytes()),
-        "selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
+        "scrubPolicy":scrub_policy,"selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
     })).map_err(|_|invalid())?.as_bytes());
     Ok(Some(ProjectPurgePlanning {
         snapshot,
