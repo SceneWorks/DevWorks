@@ -37,6 +37,7 @@ pub struct DatabasesScreen {
     pub batch_failures: usize,
     pub read_sequence: u64,
     pub read_loading: bool,
+    pub pending_object_read: Option<(String, bool)>,
     pub relation_ids: Vec<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]

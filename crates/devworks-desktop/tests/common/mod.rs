@@ -265,6 +265,7 @@ pub struct Gate {
     /// Forward the runtime's change hints (off: every hint is missed, so only the shell's own
     /// bookkeeping can repair a stale reply).
     hints: bool,
+    fail_query: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Gate {
     pub fn new(operation: &'static str) -> Self {
@@ -274,6 +275,7 @@ impl Gate {
             open: Arc::new((Mutex::new(true), std::sync::Condvar::new())),
             after: false,
             hints: true,
+            fail_query: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
     /// A gate that lets the request run and holds only its reply (a slow response).
@@ -296,6 +298,10 @@ impl Gate {
             frame_field: Some(pointer),
             ..self
         }
+    }
+    /// Refuse the next matching query while preserving the real backend for other work.
+    pub fn fail_next_query(&self) {
+        self.fail_query.store(true, Ordering::SeqCst);
     }
     pub fn close(&self) {
         *self.open.0.lock().unwrap() = false;
@@ -330,6 +336,11 @@ struct Gated {
 }
 impl Backend for Gated {
     fn query(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
+        if operation == self.gate.operation && self.gate.fail_query.swap(false, Ordering::SeqCst) {
+            return Err(devworks_core::gateway::GatewayFailure::NoUseCase(
+                "controlled query fault".into(),
+            ));
+        }
         if !self.gate.after {
             self.gate.wait(operation, frame);
         }
@@ -556,7 +567,15 @@ pub fn step_until(h: &mut Harness<'_, Shell>, what: &str, done: impl Fn(&Shell) 
     while !done(h.state()) {
         assert!(
             std::time::Instant::now() < deadline,
-            "{what} never happened"
+            "{what} never happened; route={:?}; help_scope={:?}; help_selected={:?}; help_loading={}; help_reading={}; help_error={:?}; help_read_error={:?}; help_notice={:?}",
+            h.state().route(),
+            h.state().help.scope,
+            h.state().help.selected,
+            h.state().help.loading,
+            h.state().help.reading,
+            h.state().help.error,
+            h.state().help.read_error,
+            h.state().help.notice
         );
         h.step();
         std::thread::sleep(Duration::from_millis(2));

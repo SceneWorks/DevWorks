@@ -76,7 +76,12 @@ class SchemaRevisionRules(unittest.TestCase):
             'conventions.list', 'conventions.read', 'conventions.edit', 'conventions.move',
             'conventions.applicability', 'conventions.delete', 'conventions.delete_resource',
             'conventions.import', 'conventions.retire', 'conventions.index', 'conventions.search',
-            'conventions.resources', 'conventions.version'})
+            'conventions.resources', 'conventions.version',
+            'schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
+            'schemas.configure', 'database.configure_sensitive_columns'})
+        for name in ('schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
+                     'schemas.configure', 'database.configure_sensitive_columns'):
+            self.assertEqual(carried[name], {5})
         self.assertEqual(carried['features.edit'], {2, 3})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2, 3})

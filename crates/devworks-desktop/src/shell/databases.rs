@@ -66,6 +66,10 @@ impl Shell {
         let Some(source) = self.databases.source().cloned() else {
             return;
         };
+        // Invalidate any earlier object/relationship reply when a new read intent starts,
+        // including one that first needs a fresh source capture.
+        self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
+        let n = self.databases.read_sequence;
         if self.databases.view.is_none()
             && let Some(captured) = &source.read_view
         {
@@ -76,18 +80,31 @@ impl Shell {
             self.databases.read_pin = Some(captured.pin_id.as_str().into());
         }
         let Some(pin) = self.databases.read_pin.clone() else {
-            self.databases.error = Some(
-                "No retained schema view is available. Refresh sources or sync this source first."
-                    .into(),
-            );
+            if self.databases.pending_object_read.is_some() {
+                self.databases.pending_object_read = None;
+                self.databases.read_loading = false;
+                self.databases.error = Some("No retained schema view is available. Sync this source before reading its objects.".into());
+                return;
+            }
+            // A fresh status can see a publication that changed during preparation. Ask
+            // the owner once for a matching lease, then resume this same source's intent.
+            self.databases.pending_object_read = Some((source.id.as_str().into(), append));
+            self.databases.read_loading = true;
+            self.databases.error = None;
+            self.load_databases(false);
+            if !self.databases.loading {
+                self.databases.pending_object_read = None;
+                self.databases.read_loading = false;
+                self.databases.error =
+                    Some("Could not refresh the source's retained schema view.".into());
+            }
             return;
         };
+        self.databases.pending_object_read = None;
         if !append {
             self.databases.objects.clear();
             self.databases.object_next = None;
         }
-        self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
-        let n = self.databases.read_sequence;
         let mut body = json!({"scope":self.databases.scope(),"views":{"kind":"Pinned","pinId":pin},"connectionId":source.id,"kinds":if self.databases.kind.is_empty(){vec![]}else{vec![self.databases.kind.clone()]},"page":{"limit":100}});
         if let Some(cursor) = self.databases.object_next.clone().filter(|_| append) {
             body["page"]["cursor"] = json!(cursor);
@@ -109,6 +126,34 @@ impl Shell {
             move |b| query(b, "schemas.objects", body),
         ) {
             self.databases.read_loading = false;
+        }
+    }
+    fn resume_database_object_read(&mut self) {
+        if self.databases.batch_scanning {
+            return;
+        }
+        let Some((id, append)) = self.databases.pending_object_read.clone() else {
+            return;
+        };
+        if self.databases.selected.as_deref() != Some(id.as_str()) {
+            self.databases.pending_object_read = None;
+            self.databases.read_loading = false;
+        } else if self
+            .databases
+            .connections
+            .iter()
+            .any(|source| source.id.as_str() == id)
+        {
+            self.load_database_objects(append);
+        } else if self.databases.next.is_some() {
+            // The selected source can be on a later inventory page. Never substitute the
+            // first source just because a fresh first page does not contain its identity.
+            self.load_databases(true);
+        } else {
+            self.databases.pending_object_read = None;
+            self.databases.read_loading = false;
+            self.databases.error =
+                Some("The selected database source is no longer visible in this scope.".into());
         }
     }
     fn load_database_relations(&mut self, ids: Vec<String>, append: bool) {
@@ -254,6 +299,9 @@ impl Shell {
             },
             Action::ClearKey => self.databases.generated_key = None,
             Action::Refresh => {
+                self.databases.pending_object_read = None;
+                self.databases.read_loading = false;
+                self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
                 self.databases.view = None;
                 self.databases.read_pin = None;
                 self.databases.objects.clear();
@@ -272,6 +320,8 @@ impl Shell {
                     .and_then(|s| Draft::edit(s, self.databases.project.clone()))
             }
             Action::Select(id) => {
+                self.databases.pending_object_read = None;
+                self.databases.read_loading = false;
                 self.databases.selected = Some(id);
                 self.databases.view = None;
                 self.databases.read_pin = None;
@@ -359,6 +409,7 @@ impl Shell {
                     Ok((OperationResult::SchemasConnections { value }, _)) => {
                         if self.databases.batch_scanning {
                             self.scan_database_batch(value);
+                            self.resume_database_object_read();
                             return None;
                         }
                         if !append {
@@ -368,6 +419,7 @@ impl Shell {
                         self.databases.next =
                             value.next_cursor.filter(|_| value.has_more).map(|s| s.0);
                         self.databases.loaded = true;
+                        self.resume_database_object_read();
                     }
                     Ok((other, _)) => {
                         self.databases.error =
@@ -375,10 +427,18 @@ impl Shell {
                     }
                     Err(e) => {
                         self.databases.error = Some(e.describe());
-                        self.databases.batch_scanning = false;
-                        self.databases.batch_active = false;
-                        self.databases.batch_remaining.clear();
-                        self.databases.busy = false;
+                        if self.databases.pending_object_read.take().is_some() {
+                            self.databases.read_loading = false;
+                        }
+                        // Only the inventory scan owns batch cancellation. An unrelated
+                        // refresh may fail while a captured batch command still awaits its
+                        // receipt; retain that command and every remaining captured source.
+                        if self.databases.batch_scanning {
+                            self.databases.batch_scanning = false;
+                            self.databases.batch_active = false;
+                            self.databases.batch_remaining.clear();
+                            self.databases.busy = false;
+                        }
                     }
                 }
             }
