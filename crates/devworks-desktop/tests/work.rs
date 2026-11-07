@@ -1393,7 +1393,34 @@ fn an_approved_requirement_is_dropped_with_a_project_decision_and_can_be_restore
     click(&mut h, Role::Button, "Edit plan");
     h.get_by_label("Dropped requirements").click();
     settle(&mut h);
-    click(&mut h, Role::Button, "Restore requirement E1");
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Restore requirement E1")
+        .scroll_to_me();
+    settle(&mut h);
+    let restore_rect = h
+        .get_by_role_and_label(Role::Button, "Restore requirement E1")
+        .rect();
+    h.get_by_role_and_label(Role::Button, "Restore requirement E1")
+        .click();
+    settle(&mut h);
+    assert!(
+        h.state()
+            .work
+            .plan
+            .as_ref()
+            .unwrap()
+            .requirements
+            .iter()
+            .any(|r| r.id == "E1"),
+        "Restore gesture was not applied; rect={restore_rect:?}, current={:?}, detail_revision={:?}, message={:?}",
+        h.query_by_role_and_label(Role::Button, "Restore requirement E1")
+            .map(|n| n.rect()),
+        h.state()
+            .work
+            .freshest(feature.id.as_str())
+            .map(|f| f.revision),
+        h.state().work.message,
+    );
     click(&mut h, Role::ComboBox, "Status of requirement E1");
     h.get_by_label("Confirmed").click();
     settle(&mut h);
