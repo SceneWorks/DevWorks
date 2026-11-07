@@ -339,7 +339,6 @@ fn native_project_bulk_index_uses_exact_source_revision_after_listing_and_search
     let _native_case = native_runtime_case();
     use devworks_desktop::conventions_screen::Scope;
     use eframe::egui::accesskit::Role;
-    let _case = common::native_runtime_case();
     let f = Fixture::new("convention-exact-source-revision");
     let owner = f.import(false);
     wait_index(&f, &owner);
@@ -396,7 +395,6 @@ fn native_project_bulk_index_uses_exact_source_revision_after_listing_and_search
 #[test]
 fn native_search_pages_large_legal_applicability_inside_real_response_frame() {
     let _native_case = native_runtime_case();
-    let _case = common::native_runtime_case();
     let f = Fixture::new("convention-search-response-budget");
     let body = format!("# Budget\n{}", "budgetneedle source ".repeat(15_000));
     let labels = (0..128)
