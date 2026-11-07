@@ -1,5 +1,6 @@
 //! Durable immutable preparation. Execution and its physical effects share this owner.
 pub(super) mod guard;
+mod schema;
 #[cfg(test)]
 mod selectors;
 use super::conn::db;
@@ -28,6 +29,7 @@ pub(super) fn insert_manifest(
     store: &StoreInfo,
     stored: &StoredProjectPurge,
 ) -> Result<(), StorageError> {
+    schema::verify(conn)?;
     let m = &stored.manifest;
     if pending_managed_writes(conn, &m.project_id)? {
         return Err(StorageError::Busy);

@@ -2622,3 +2622,42 @@ fn native_purge_files_require_the_published_transient_file_identity_and_content(
         b"unreviewed replacement bytes"
     );
 }
+
+#[test]
+fn purge_preparation_refuses_unreviewed_tables_columns_indexes_and_triggers_without_mutation() {
+    for change in [
+        "CREATE TABLE future_project_records(project_id TEXT,private_body TEXT)",
+        "ALTER TABLE projects ADD COLUMN future_private_body TEXT",
+        "CREATE INDEX future_project_owner ON projects(title)",
+        "CREATE TRIGGER future_project_delete AFTER DELETE ON project_details BEGIN DELETE FROM project_repositories WHERE project_id=OLD.project_id; END",
+    ] {
+        let h = Harness::new();
+        let store = h.store();
+        let prepared = purge_storage_fixture(&store);
+        h.raw().execute_batch(change).unwrap();
+        assert!(
+            matches!(
+                run_write(&store, WriteOptions::default(), move |tx| tx
+                    .projects()
+                    .insert_purge_manifest(&prepared)),
+                Err(StorageError::IncompatibleSchema(_))
+            ),
+            "unreviewed shape accepted: {change}"
+        );
+        let raw = h.raw();
+        assert_eq!(
+            raw.query_row("SELECT count(*) FROM project_purge_manifests", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            raw.query_row("SELECT title FROM projects WHERE id='purge-a'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap(),
+            "private project title"
+        );
+        assert!(store.integrity_check().unwrap().problems.is_empty());
+    }
+}
