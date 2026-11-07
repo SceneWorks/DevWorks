@@ -7044,10 +7044,14 @@
             },
             "manifestId": {
               "$ref": "#/$defs/Id"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
             }
           },
           "required": [
             "kind",
+            "projectId",
             "manifestId",
             "expectedRevision",
             "expectedDigest",
@@ -10979,10 +10983,14 @@
             },
             "page": {
               "$ref": "#/$defs/Limit"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
             }
           },
           "required": [
             "kind",
+            "projectId",
             "manifestId",
             "expectedRevision",
             "page"
@@ -10999,10 +11007,14 @@
             },
             "manifestId": {
               "$ref": "#/$defs/Id"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
             }
           },
           "required": [
             "kind",
+            "projectId",
             "manifestId"
           ],
           "type": "object",

@@ -1687,7 +1687,7 @@ fn compact_receipt_for_test(
         DomainDecision::NoChange { .. } => (PurgedDecisionKind::NoChange, None),
         DomainDecision::Accepted { .. } => (PurgedDecisionKind::Accepted, None),
         DomainDecision::Refused { fault } => {
-            (PurgedDecisionKind::Refused, Some(fault.code.clone()))
+            (PurgedDecisionKind::Refused, Some(fault.code))
         }
     };
     let outcome = PurgedReceiptOutcome {
@@ -1831,5 +1831,76 @@ fn purged_receipt_never_bypasses_current_principal_revocation() {
     ));
     assert!(
         matches!(receipt_lookup_at(&fx,&principal,key,6),DomainQueryReply::Rejected{fault,..} if fault.code==DomainErrorCode::PermissionDenied)
+    );
+}
+
+#[test]
+fn purged_receipt_revision6_preserves_an_original_refusal_as_a_terminal_outcome() {
+    struct RefusalProbe(std::sync::atomic::AtomicUsize);
+    impl devworks_core::ports::CommandHandler for RefusalProbe {
+        fn decide(
+            &self,
+            _ctx: &InvocationContext,
+            _command: &devworks_core::gateway::AdmittedCommand,
+            _tx: &mut dyn WriteTransaction,
+        ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(devworks_core::ports::Decided { decision:DomainDecision::Refused {fault:serde_json::from_value(json!({"code":"Conflict","retry":"Never","correlationId":"refusal-probe","blockerIds":[]})).unwrap()},operation_id:None })
+        }
+    }
+    let fx = Fx::new();
+    let p = fx.create("Active project", &[]);
+    let user = fx.user();
+    let key = "purged-current-refusal";
+    // The explicit probe records a real revision6 refusal without claiming the purge
+    // use case is already implemented. Its decision must never run a second time.
+    let mut frame: Value = serde_json::from_str(&Fx::frame(
+        "projects.prepare_purge",
+        key,
+        json!({"projectId":p.id,"expectedRevision":p.revision}),
+    ))
+    .unwrap();
+    frame["schemaRevision"] = json!(6);
+    let raw = frame.to_string();
+    let authority = fx.authority();
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*fx.store,
+        ids: &*fx.h.ids,
+    };
+    let probe = Arc::new(RefusalProbe(std::sync::atomic::AtomicUsize::new(0)));
+    let first = gateway
+        .command(
+            &user,
+            "projects.prepare_purge",
+            raw.as_bytes(),
+            probe.clone(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&first,CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Refused{..})),
+        "original refusal: {first:?}"
+    );
+    let original = compact_receipt_for_test(&fx, &user, key);
+    let replay = gateway
+        .command(
+            &user,
+            "projects.prepare_purge",
+            raw.as_bytes(),
+            probe.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        probe.0.load(Ordering::SeqCst),
+        1,
+        "a terminal purged outcome never reaches the handler again"
+    );
+    assert!(
+        matches!(replay,CommandReply::ReceiptPurged{outcome,..} if outcome.command_id==original.command_id && matches!(outcome.original_decision,devworks_core::protocol::records::PurgedDecisionKind::Refused) && outcome.original_fault_code==original.original_fault_code)
+    );
+    assert_eq!(
+        fx.get(&user, &p.id).unwrap().revision,
+        p.revision,
+        "terminal replay does not prepare or mutate the project"
     );
 }

@@ -10677,6 +10677,7 @@
       "operation": "projects.purge_manifest",
       "mode": "Query",
       "fields": {
+        "project_id": "ProjectId",
         "manifest_id": "Id",
         "expected_revision": "Revision",
         "page": "Limit"
@@ -10691,6 +10692,7 @@
       "operation": "projects.purge",
       "mode": "Command",
       "fields": {
+        "project_id": "ProjectId",
         "manifest_id": "Id",
         "expected_revision": "Revision",
         "expected_digest": "Digest",
@@ -10707,6 +10709,7 @@
       "operation": "projects.purge_status",
       "mode": "Query",
       "fields": {
+        "project_id": "ProjectId",
         "manifest_id": "Id"
       },
       "result": "ProjectPurgeManifest",

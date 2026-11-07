@@ -18447,13 +18447,17 @@ pub enum DomainQuery {
     #[schemars(extend("x-since" = 6))]
     #[serde(rename = "projects.purge_manifest")]
     ProjectsPurgeManifest {
+        project_id: ProjectId,
         manifest_id: Id,
         expected_revision: Revision,
         page: Limit,
     },
     #[schemars(extend("x-since" = 6))]
     #[serde(rename = "projects.purge_status")]
-    ProjectsPurgeStatus { manifest_id: Id },
+    ProjectsPurgeStatus {
+        project_id: ProjectId,
+        manifest_id: Id,
+    },
 }
 impl DomainQuery {
     pub fn operation(&self) -> &'static str {
@@ -19745,15 +19749,21 @@ impl Check for DomainQuery {
                 page.check()?;
             }
             Self::ProjectsPurgeManifest {
+                project_id,
                 manifest_id,
                 expected_revision,
                 page,
             } => {
+                project_id.check()?;
                 manifest_id.check()?;
                 expected_revision.check()?;
                 page.check()?;
             }
-            Self::ProjectsPurgeStatus { manifest_id } => {
+            Self::ProjectsPurgeStatus {
+                project_id,
+                manifest_id,
+            } => {
+                project_id.check()?;
                 manifest_id.check()?;
             }
         }
@@ -21850,6 +21860,7 @@ pub enum DomainCommand {
     #[schemars(extend("x-since" = 6))]
     #[serde(rename = "projects.purge")]
     ProjectsPurge {
+        project_id: ProjectId,
         manifest_id: Id,
         expected_revision: Revision,
         expected_digest: Digest,
@@ -23859,12 +23870,14 @@ impl Check for DomainCommand {
                 expected_revision.check()?;
             }
             Self::ProjectsPurge {
+                project_id,
                 manifest_id,
                 expected_revision,
                 expected_digest,
                 expected_project_revision,
                 confirm,
             } => {
+                project_id.check()?;
                 manifest_id.check()?;
                 expected_revision.check()?;
                 expected_digest.check()?;

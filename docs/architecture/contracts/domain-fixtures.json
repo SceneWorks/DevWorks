@@ -2158,21 +2158,21 @@
   {
     "id": "input-projects.purge_manifest-Query",
     "entry": "domain-request.r6",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"projects.purge_manifest\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"page\":20},\"schemaRevision\":6}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"projects.purge_manifest\",\"projectId\":\"project-a\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"page\":20},\"schemaRevision\":6}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-projects.purge-Command",
     "entry": "domain-request.r6",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.purge\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedProjectRevision\":\"1\",\"confirm\":true},\"schemaRevision\":6}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.purge\",\"projectId\":\"project-a\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedProjectRevision\":\"1\",\"confirm\":true},\"schemaRevision\":6}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-projects.purge_status-Query",
     "entry": "domain-request.r6",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"projects.purge_status\",\"manifestId\":\"id-a\"},\"schemaRevision\":6}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"projects.purge_status\",\"projectId\":\"project-a\",\"manifestId\":\"id-a\"},\"schemaRevision\":6}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -13253,35 +13253,35 @@
   {
     "id": "dw83-native-confirmation-shape",
     "entry": "domain-request.r6",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.purge\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedProjectRevision\":\"1\",\"confirm\":true},\"schemaRevision\":6}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.purge\",\"projectId\":\"project-a\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedProjectRevision\":\"1\",\"confirm\":true},\"schemaRevision\":6}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "dw83-purge-needs-explicit-confirmation",
     "entry": "domain-request.r6",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.purge\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedProjectRevision\":\"1\",\"confirm\":false},\"schemaRevision\":6}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.purge\",\"projectId\":\"project-a\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedProjectRevision\":\"1\",\"confirm\":false},\"schemaRevision\":6}",
     "typedValid": false,
     "schemaValid": true
   },
   {
     "id": "dw83-purge-cannot-inject-human-authority",
     "entry": "domain-request.r6",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.purge\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedProjectRevision\":\"1\",\"confirm\":true,\"actorKind\":\"Human\"},\"schemaRevision\":6}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.purge\",\"projectId\":\"project-a\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedProjectRevision\":\"1\",\"confirm\":true,\"actorKind\":\"Human\"},\"schemaRevision\":6}",
     "typedValid": false,
     "schemaValid": false
   },
   {
     "id": "dw83-purge-cannot-use-query-mode",
     "entry": "domain-request.r6",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.purge\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedProjectRevision\":\"1\",\"confirm\":true},\"schemaRevision\":6}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.purge\",\"projectId\":\"project-a\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedProjectRevision\":\"1\",\"confirm\":true},\"schemaRevision\":6}",
     "typedValid": false,
     "schemaValid": false
   },
   {
     "id": "dw83-purge-before-r6",
     "entry": "domain-request.r5",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.purge\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedProjectRevision\":\"1\",\"confirm\":true},\"schemaRevision\":5}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.purge\",\"projectId\":\"project-a\",\"manifestId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedProjectRevision\":\"1\",\"confirm\":true},\"schemaRevision\":5}",
     "typedValid": false,
     "schemaValid": false
   },

@@ -206,12 +206,14 @@ impl Revisioned for PreparePurgeInput {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PurgeManifestInput {
+    pub project_id: ProjectId,
     pub manifest_id: Id,
     pub expected_revision: Revision,
     pub page: Limit,
 }
 impl Check for PurgeManifestInput {
     fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
         self.manifest_id.check()?;
         self.expected_revision.check()?;
         self.page.check()?;
@@ -226,6 +228,7 @@ impl Revisioned for PurgeManifestInput {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PurgeInput {
+    pub project_id: ProjectId,
     pub manifest_id: Id,
     pub expected_revision: Revision,
     pub expected_digest: Digest,
@@ -234,6 +237,7 @@ pub struct PurgeInput {
 }
 impl Check for PurgeInput {
     fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
         self.manifest_id.check()?;
         self.expected_revision.check()?;
         self.expected_digest.check()?;
@@ -250,10 +254,12 @@ impl Revisioned for PurgeInput {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PurgeStatusInput {
+    pub project_id: ProjectId,
     pub manifest_id: Id,
 }
 impl Check for PurgeStatusInput {
     fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
         self.manifest_id.check()?;
         Ok(())
     }
