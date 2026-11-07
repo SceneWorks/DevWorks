@@ -2,7 +2,7 @@
 use crate::{
     context::{InvocationContext, PrincipalKind},
     ports::{IdKind, storage::*},
-    protocol::{ActorId, Id, OperationState, ProjectId, StoreId, records::JobDefinition},
+    protocol::{ActorId, Id, ProjectId, StoreId, records::JobDefinition},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -248,26 +248,6 @@ pub(crate) fn cancel_accepted(
     if !entry.cancel_requested {
         tx.queue().cancel(&job.delivery_id)?;
     }
-    // An undispatched cancellation is already terminal: no executor will clear activity.
-    if tx
-        .operations()
-        .operation(inner)?
-        .is_some_and(|op| op.state == OperationState::CancelledBeforeDispatch)
-        && let Some(mut source) = tx.schemas().schema_source(&job.connection_id)?
-        && source.connection.active_operation_id.as_ref() == Some(&inner.0)
-    {
-        let expected = source.connection.revision.get();
-        source.connection.revision = source
-            .connection
-            .revision
-            .checked_next()
-            .ok_or_else(invalid)?;
-        source.connection.active_operation_id = None;
-        source.connection.last_error = Some(crate::protocol::support::BoundedText(
-            "MetadataCancelled".into(),
-        ));
-        source.updated_at_ms = tx.now_ms();
-        tx.schemas().revise_schema_source(&source, expected)?;
-    }
+    super::indexing::settle_cancelled(tx, inner)?;
     Ok(())
 }

@@ -480,3 +480,28 @@ That setup error is not reproduction evidence. Fixture DDL is retained in the sh
 MySQL/Maria edge file and the MySQL-only functional-index file. There are no source
 row reads, OS credential/trust changes or learned inference. Fresh exact-head review
 and platform CI remain required before merge and acceptance.
+
+## Generic cancellation, index removal and PostgreSQL INCLUDE correction
+
+Exactc82 review found a generic queue.resolve cancellation path outside the scheduled
+job owner, stale native explorer state after removing an index, and PostgreSQL INCLUDE
+columns being mislabeled primary. Meaningful RED cases reproduce the source activity
+leak0.84s, native removed-object display7.14s, and incorrect payload flag0.12s. The first
+queue setup used an unregistered schema revision and is excluded; its actual revision1
+resolution then reproduced the leak. A nonexistent result variant caused a temporary
+UI compile failure and was corrected before qualification.
+
+The schema owner now settles only its matching CancelledBeforeDispatch source in the
+same generic cancellation writer unit. Scheduled cancellation uses that same helper;
+published view and configuration revision survive. Successful index removal invalidates
+the explorer, exact filters, retained view/pin, cursors, selected detail and outstanding
+read generations. The native flow removes the index, reindexes and reads the replacement
+without reselection. PostgreSQL primary-key membership now uses only indnkeyatts key
+positions; included payload remains nullable and non-primary.
+
+All14 storage/source cases pass11.75s;46 actual-server cases pass0.70s;14 native database
+UI cases pass47.54s;5 production Engine cases pass19.90s;3 actual scheduled schema-job
+cases pass17.60s;7 generic queue cases pass7.38s. Strict workspace/all-target checks
+pass39.20s. Earlier zero-case filters are excluded. No assertions/timeouts were removed
+or extended; source rows remain unread and OS credential/trust stores untouched.
+Fresh changed-head review, CI and acceptance remain required.

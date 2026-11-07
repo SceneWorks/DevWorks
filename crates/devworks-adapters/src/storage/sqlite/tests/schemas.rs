@@ -1882,3 +1882,137 @@ fn retained_key_generation_is_human_only_exact_base64_and_never_staged_as_a_cred
         "denied caller never reaches entropy"
     );
 }
+
+#[test]
+fn native_review7_generic_queue_cancellation_releases_source_without_losing_publication() {
+    use devworks_core::protocol::{
+        CommandReply,
+        results::{DomainDecision, OperationResult},
+    };
+    use devworks_core::services::schemas::indexing::{SchemaJob, SchemaOutcome};
+    let h = Harness::new();
+    let s = std::sync::Arc::new(h.store());
+    schema_seed_humans(&h, &s);
+    let path = h.root.0.join("generic-cancel-source.sqlite");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE retained_parent(id INTEGER PRIMARY KEY);")
+        .unwrap();
+    let reader = std::sync::Arc::new(CountingMetadata(std::sync::atomic::AtomicUsize::new(0)));
+    let owner = metadata_owner(&h, s.clone(), reader.clone());
+    let mut config =
+        serde_json::to_value(source("generic-cancel", true).connection.config.unwrap()).unwrap();
+    config["endpoint"] = json!(path.to_str().unwrap());
+    let DomainDecision::Applied {
+        result: OperationResult::SchemasConfigure { value: source },
+    } = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "generic-cancel-create",
+        "schemas.configure",
+        json!({"scope":{"kind":"Workspace"},"config":config}),
+    )
+    else {
+        panic!("source")
+    };
+    let DomainDecision::Accepted { operation_id } = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "generic-cancel-index",
+        "schemas.index",
+        json!({"connectionId":source.id,"expectedRevision":source.revision}),
+    ) else {
+        panic!("index")
+    };
+    let operation = dispatch_metadata(&s, operation_id, false);
+    assert!(matches!(
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(owner.run_metadata(&operation, &Cancellation::new()))
+            .unwrap(),
+        SchemaOutcome::Completed(_)
+    ));
+    let before = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.schemas().schema_source(&source.id)
+    })
+    .unwrap()
+    .unwrap();
+    let DomainDecision::Accepted { operation_id } = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "generic-cancel-refresh",
+        "schemas.refresh",
+        json!({"connectionId":source.id,"expectedRevision":before.connection.revision,"testOnly":true}),
+    ) else {
+        panic!("refresh")
+    };
+    let op = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.operations().operation(&operation_id)
+    })
+    .unwrap()
+    .unwrap();
+    let job: SchemaJob = serde_json::from_value(op.payload).unwrap();
+    let entry = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.queue().entry(&job.delivery_id)
+    })
+    .unwrap()
+    .unwrap();
+    let authority = devworks_core::authority::HostAuthority {
+        store: &*s,
+        clock: &*h.clock,
+        protected_branches: &[],
+    };
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &authority,
+        store: &*s,
+        ids: &*h.ids,
+    };
+    let frame=json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":1,"requestKey":"generic-cancel-resolution","body":{"kind":"queue.resolve","deliveryId":entry.id,"expectedRevision":entry.revision.to_string(),"expectedFence":entry.generation.to_string(),"resolution":"CancelBeforeDispatch","reason":"Cancel an undispatched metadata probe"}}).to_string();
+    let reply = gateway
+        .command(
+            &schema_context(&s, "schema-owner"),
+            "queue.resolve",
+            frame.as_bytes(),
+            std::sync::Arc::new(devworks_core::services::queue::QueueService),
+        )
+        .unwrap();
+    assert!(
+        matches!(&reply,CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..})),
+        "queue resolution: {reply:?}"
+    );
+    let after = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.schemas().schema_source(&source.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        after.connection.active_operation_id.is_none(),
+        "cancelled metadata must release source activity"
+    );
+    assert_eq!(
+        before.connection.current_view_id,
+        after.connection.current_view_id
+    );
+    assert_eq!(before.configuration_revision, after.configuration_revision);
+    assert_eq!(
+        reader.0.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "cancelled probe never executes"
+    );
+    assert!(matches!(
+        owner_command(
+            &h,
+            &s,
+            owner,
+            "generic-cancel-next",
+            "schemas.index",
+            json!({"connectionId":source.id,"expectedRevision":after.connection.revision})
+        ),
+        DomainDecision::Accepted { .. }
+    ));
+}

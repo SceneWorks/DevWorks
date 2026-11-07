@@ -601,28 +601,21 @@ impl Shell {
                     Ok(CommandReply::Recorded { receipt, .. }) => match receipt.decision {
                         DomainDecision::Applied { result }
                         | DomainDecision::NoChange { result } => {
-                            if let OperationResult::SchemasConfigure { value } = result {
-                                self.databases.selected = (!matches!(
-                                    value.state,
-                                    devworks_core::protocol::records::ItemState::Disabled
-                                ))
-                                .then(|| value.id.as_str().into());
-                                self.databases.draft = None;
-                                self.databases.tab = 0;
-                                self.databases.view = None;
-                                self.databases.read_pin = None;
-                                self.databases.object_id = None;
-                                self.databases.parent = None;
-                                self.databases.object_next = None;
-                                self.databases.relation_next = None;
-                                self.databases.relation_ids.clear();
-                                self.databases.objects.clear();
-                                self.databases.relations.clear();
-                                self.databases.selected_object = None;
-                                self.databases.pending_read = None;
-                                self.databases.read_loading = false;
-                                self.databases.read_sequence =
-                                    self.databases.read_sequence.wrapping_add(1);
+                            match result {
+                                OperationResult::SchemasConfigure { value } => {
+                                    self.databases.selected = (!matches!(
+                                        value.state,
+                                        devworks_core::protocol::records::ItemState::Disabled
+                                    ))
+                                    .then(|| value.id.as_str().into());
+                                    self.databases.draft = None;
+                                    self.databases.tab = 0;
+                                    self.databases.clear_explorer();
+                                }
+                                OperationResult::SchemasRemoveIndex { .. } => {
+                                    self.databases.clear_explorer()
+                                }
+                                _ => {}
                             }
                             self.databases.notice = Some("Database source change recorded.".into());
                             self.databases.error = None;
