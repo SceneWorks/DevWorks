@@ -32,8 +32,8 @@
     },
     {
       "table": "project_managed_files",
-      "selector": "project_id=P and exact managed-root/file-identity proof",
-      "disposition": "review exact owned bytes; retain recovery identity until settled, then scrub path/identity payload; never register source files or picked inputs"
+      "selector": "all project_id=P metadata, including settled rows; live bytes additionally require exact managed-root/file-identity proof",
+      "disposition": "review exact owned bytes; retain recovery identity until settled, then scrub path/identity payload; settled owned metadata is removed by logical purge; never register source files or picked inputs"
     }
   ],
   "guardRule": "Only exact canonical primary-key digest and Delete/Scrub action on the current writer connection; ordinary immutable UPDATE rules stay unchanged. Enabling guard remains test-only until reviewed purge execution is wired.",

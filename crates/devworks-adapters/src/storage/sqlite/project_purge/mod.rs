@@ -4,6 +4,7 @@ pub(super) mod candidates;
 pub(super) mod classification;
 pub(super) mod guard;
 mod leases;
+mod mixed;
 mod receipts;
 mod references;
 mod schema;

@@ -5291,3 +5291,78 @@ fn approval_review_queue_cursor_expires_on_challenge_and_recurrence_changes() {
     fx.set_threshold(4);
     assert_expired(&before.next_cursor.as_ref().unwrap().0);
 }
+
+#[test]
+fn purge_planning_source_heads_follow_all_surviving_basis_without_copying_source_text() {
+    let fx = Fx::new();
+    let owned = fx.claim_id(
+        &fx.user(),
+        proj("project-a"),
+        "owned topic",
+        draft("Fact", "private claim"),
+    );
+    let other = fx.claim_id(
+        &fx.user(),
+        proj("project-b"),
+        "independent topic",
+        draft("Fact", "independent claim"),
+    );
+    let source = "private-source-path-only-owned-by-basis";
+    fx.h.raw()
+        .execute(
+            "INSERT INTO knowledge_claim_basis VALUES(?1,?2,'revision-1')",
+            rusqlite::params![owned.as_str(), source],
+        )
+        .unwrap();
+    fx.write(|tx| {
+        tx.knowledge()
+            .observe_knowledge_source(source, "revision-2", super::T0)
+    });
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let before = assess();
+    assert!(
+        before
+            .rows
+            .iter()
+            .any(|r| r.table == "knowledge_source_heads"
+                && r.action == ProjectPurgeRowAction::Delete)
+    );
+    assert!(!format!("{:?}", before.rows).contains(source));
+    fx.h.raw()
+        .execute(
+            "INSERT INTO knowledge_claim_basis VALUES(?1,?2,'revision-1')",
+            rusqlite::params![other.as_str(), source],
+        )
+        .unwrap();
+    let kept = assess();
+    assert_ne!(
+        before.digest, kept.digest,
+        "new independently owned basis invalidates the reviewed decision"
+    );
+    assert!(kept.rows.iter().any(|r| r.table == "knowledge_source_heads"
+        && r.action == ProjectPurgeRowAction::Keep
+        && r.reason == ProjectPurgeRowReason::SharedContent));
+    assert_eq!(
+        fx.h.raw()
+            .query_row(
+                "SELECT source_revision FROM knowledge_source_heads WHERE source_ref=?1",
+                [source],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "revision-2"
+    );
+    assert_eq!(
+        fx.claim(&fx.user(), proj("project-b"), &other)
+            .value
+            .unwrap()
+            .0,
+        "independent claim"
+    );
+}

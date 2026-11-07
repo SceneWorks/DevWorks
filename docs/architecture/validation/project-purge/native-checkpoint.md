@@ -192,6 +192,17 @@ unknown independent-reference holds and unchanged live blob state. Workspace/all
 target strict checks pass (17.22 seconds). The sealed physical executor and its
 reader/generation rechecks are still required before any byte deletion is possible.
 
+Mixed metadata now resolves exact typed grant revocation, intake deduplication
+identity, owned integration edges, and global source heads according to all final
+surviving basis/evidence references. Workspace/other-project grants and history
+remain outside ownership, malformed bindings/states hold, and sensitive source text
+never enters audit rows. Managed metadata holds unfinished writes and forged
+owners; live attribution is distinct from native file/epoch/content inventory.
+Settled Removed metadata is included for logical deletion. Candidate policy hashes
+now include compiled anchors and predicates as well as the frozen policy source.
+All eleven native planning cases pass (16.72 seconds), four candidate cases pass
+(5.64 seconds), and workspace/all-target strict checks pass (16.51 seconds).
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view

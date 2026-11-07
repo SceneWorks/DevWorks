@@ -201,7 +201,7 @@ pub(super) fn selection(project: &ProjectId) -> Result<Selection, StorageError> 
     );
     predicates.insert(
         "project_managed_files".into(),
-        Value::String("project_id=?1 AND state<>'Removed'".into()),
+        Value::String("project_id=?1".into()),
     );
     Ok(Selection {
         project: project.clone(),
@@ -251,7 +251,14 @@ pub(in crate::storage::sqlite) fn snapshot(
     {
         return Err(invalid("duplicate purge candidate identity"));
     }
-    let policy_digest = sha256_hex(POLICY.as_bytes());
+    let policy_digest = sha256_hex(
+        serde_json::to_string(&serde_json::json!({
+            "format":"dw83-native-selection-v2", "policy":sha256_hex(POLICY.as_bytes()),
+            "anchors":anchors,"predicates":predicates
+        }))
+        .map_err(|_| invalid("purge selection policy digest"))?
+        .as_bytes(),
+    );
     let digest = sha256_hex(
         serde_json::to_string(
             &serde_json::json!({"project":project,"policy":policy_digest,"rows":rows,"references":references}),

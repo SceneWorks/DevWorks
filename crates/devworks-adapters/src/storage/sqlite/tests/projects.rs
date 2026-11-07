@@ -3385,3 +3385,255 @@ fn purge_preparation_refuses_unreviewed_tables_columns_indexes_and_triggers_with
         assert!(store.integrity_check().unwrap().problems.is_empty());
     }
 }
+
+#[test]
+fn purge_planning_grants_require_typed_scope_and_preserve_monotonic_revocation_identity() {
+    let fx = Fx::new();
+    let p = fx.create("private grant project", &[]);
+    let other = fx.create("independent grant project", &[]);
+    fx.bind_agents(&p.id);
+    let mut grants = vec![];
+    for target in [Some(p.id.clone()), Some(other.id.clone()), None] {
+        let user = fx.user();
+        let grant = fx
+            .write(move |tx| {
+                Ok(auth::mint_grant(
+                    tx,
+                    &user,
+                    actor("agent-w"),
+                    GrantKind::Operation,
+                    GrantBinding {
+                        operation: "projects.archive".into(),
+                        action: None,
+                        request_digest: Some("a".repeat(64)),
+                        project_id: target,
+                        root_id: None,
+                        policy_digest: None,
+                    },
+                    GrantBounds {
+                        expires_at_ms: T0 + 60_000,
+                        uses: 1,
+                    },
+                ))
+            })
+            .unwrap();
+        grants.push(grant);
+    }
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&p.id)
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let plan = assess();
+    assert_eq!(
+        plan.rows
+            .iter()
+            .filter(|r| r.table == "authority_grants"
+                && r.action == ProjectPurgeRowAction::Scrub
+                && r.reason == ProjectPurgeRowReason::RevokedAuthority)
+            .count(),
+        1
+    );
+    assert!(
+        !plan
+            .unresolved
+            .iter()
+            .any(|r| r.table == "authority_grants"),
+        "{:?}",
+        plan.unresolved
+    );
+    let mut malformed = grants[0].binding.clone();
+    malformed["privateCopy"] = json!("unknown grant payload");
+    fx.h.raw()
+        .execute(
+            "UPDATE authority_grants SET binding_json=?1 WHERE id=?2",
+            rusqlite::params![malformed.to_string(), grants[0].id.as_str()],
+        )
+        .unwrap();
+    let held = assess();
+    assert!(
+        held.unresolved
+            .iter()
+            .any(|r| r.table == "authority_grants")
+    );
+    assert!(
+        !serde_json::to_string(&held.unresolved)
+            .unwrap()
+            .contains("unknown grant payload")
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row(
+                "SELECT count(*) FROM authority_grants WHERE state='Active' AND revision=1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        3,
+        "read-only preparation never consumes or revokes any grant"
+    );
+}
+
+#[test]
+fn purge_planning_intake_keeps_remote_deduplication_identity_and_removes_only_owned_edges() {
+    let fx = Fx::new();
+    let p = fx.create("private intake project", &[]);
+    let other = fx.create("independent intake project", &[]);
+    fx.seed_roots(&p.id, &["purge-local-work"]);
+    fx.seed_roots(&other.id, &["independent-local-work"]);
+    for (n, owner, work) in [
+        (1, &p.id, "purge-local-work"),
+        (2, &other.id, "independent-local-work"),
+    ] {
+        fx.h.raw()
+            .execute(
+                "INSERT INTO github_issue_intake VALUES('repo-1',?1,1,'Working',?2,?3,?4,NULL)",
+                rusqlite::params![
+                    n,
+                    owner.0.as_str(),
+                    work,
+                    json!({"title":"copied private remote snapshot"}).to_string()
+                ],
+            )
+            .unwrap();
+    }
+    for (record, owner, work) in [
+        ("owned-integration", &p.id, "purge-local-work"),
+        (
+            "independent-integration",
+            &other.id,
+            "independent-local-work",
+        ),
+    ] {
+        fx.h.raw().execute("INSERT INTO integration_records VALUES(?1,?2,'repo-1',?3,'issue',?1,1,'Observed',?4)",rusqlite::params![record,owner.0.as_str(),work,json!({"privateBody":"copied integration detail"}).to_string()]).unwrap();
+    }
+    fx.h.raw().execute_batch("INSERT INTO integration_links VALUES('owned-integration','independent-local-work','reference');INSERT INTO integration_links VALUES('independent-integration','purge-local-work','reference');INSERT INTO integration_links VALUES('independent-integration','independent-local-work','reference');").unwrap();
+    let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(plan.rows.iter().filter(|r|r.table=="github_issue_intake" && r.action==ProjectPurgeRowAction::Scrub).count(),1);
+    assert_eq!(
+        plan.rows
+            .iter()
+            .filter(|r| r.table == "integration_links" && r.action == ProjectPurgeRowAction::Delete)
+            .count(),
+        2
+    );
+    assert!(
+        !plan.unresolved.iter().any(|r| matches!(
+            r.table.as_str(),
+            "github_issue_intake" | "integration_links"
+        )),
+        "{:?}",
+        plan.unresolved
+    );
+    assert!(!format!("{:?}", plan.rows).contains("copied private remote snapshot"));
+    fx.h.raw()
+        .execute(
+            "UPDATE github_issue_intake SET state='UnknownLegacyState' WHERE issue_number=1",
+            [],
+        )
+        .unwrap();
+    let held = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        held.unresolved
+            .iter()
+            .any(|r| r.table == "github_issue_intake")
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row("SELECT count(*) FROM github_issue_intake", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row("SELECT count(*) FROM integration_links", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        3,
+        "planning changes neither local nor remote resources"
+    );
+}
+
+#[test]
+fn purge_planning_managed_metadata_holds_writing_and_forged_owners_before_native_inventory() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    let reservation = managed_reservation(&store, "private-managed-export");
+    let saved = reservation.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&saved)
+    })
+    .unwrap();
+    let assess = || {
+        read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("purge-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    assert!(
+        assess()
+            .unresolved
+            .iter()
+            .any(|r| r.table == "project_managed_files"
+                && r.reason == ProjectPurgeUnresolvedReason::ManagedBytes)
+    );
+    let publication = managed_publication(&reservation);
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().register_project_managed_file(&publication)
+    })
+    .unwrap();
+    let plan = assess();
+    assert!(plan.rows.iter().any(|r|r.table=="project_managed_files" && r.action==ProjectPurgeRowAction::Scrub));
+    assert!(!format!("{:?}", plan.rows).contains("private-managed-export"));
+    let original = h
+        .raw()
+        .query_row(
+            "SELECT identity_json FROM project_managed_files WHERE id=?1",
+            [reservation.id.as_str()],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap();
+    let mut forged: Value = serde_json::from_str(&original).unwrap();
+    forged["projectId"] = json!("purge-b");
+    h.raw()
+        .execute(
+            "UPDATE project_managed_files SET identity_json=?1 WHERE id=?2",
+            rusqlite::params![forged.to_string(), reservation.id.as_str()],
+        )
+        .unwrap();
+    assert!(
+        assess()
+            .unresolved
+            .iter()
+            .any(|r| r.table == "project_managed_files")
+    );
+    h.raw()
+        .execute(
+            "UPDATE project_managed_files SET identity_json=?1 WHERE id=?2",
+            rusqlite::params![original, reservation.id.as_str()],
+        )
+        .unwrap();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects()
+            .finish_project_managed_file(&reservation.project_id, &reservation.id)
+    })
+    .unwrap();
+    assert!(
+        assess().rows.iter().any(
+            |r| r.table == "project_managed_files" && r.action == ProjectPurgeRowAction::Delete
+        )
+    );
+}

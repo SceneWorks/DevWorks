@@ -127,6 +127,12 @@ fn scrub_reference(table: &str, columns: &[String]) -> Option<bool> {
         "events" => (&["actor_id", "project_id"], &["root_id", "operation_id"]),
         "operations" => (&[], &["root_id", "assignment_id"]),
         "command_receipts" => (&["actor_id", "operation_id"], &[]),
+        "project_managed_files" => (&["project_id"], &[]),
+        "authority_grants" => (&["actor_id", "issued_by", "revoked_by"], &[]),
+        "github_issue_intake" => (
+            &["repository_id", "project_id"],
+            &["work_id", "operation_id"],
+        ),
         "principal_authority" => (&["actor_id", "project_id", "bound_by"], &[]),
         _ => return None,
     };
@@ -430,6 +436,9 @@ pub(in crate::storage::sqlite) fn planning(
     }
     super::receipts::partition(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     super::leases::partition(conn, project, &snapshot, &mut rows, &mut unresolved)?;
+    super::mixed::grants(conn, project, &snapshot, &mut rows, &mut unresolved)?;
+    super::mixed::intake(conn, project, &snapshot, &mut rows, &mut unresolved)?;
+    super::mixed::managed_files(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     propagate_content(&snapshot, &mut rows, &mut unresolved)?;
     // Only retention decisions propagate. A reference can never add a deletion.
     loop {
@@ -500,6 +509,7 @@ pub(in crate::storage::sqlite) fn planning(
             break;
         }
     }
+    super::mixed::source_heads(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     // Keeper closure can retain a version that was initially owned; byte
     // eligibility must use those final decisions, never the earlier partition.
     super::blobs::partition(conn, project, &snapshot, &mut rows, &mut unresolved)?;
