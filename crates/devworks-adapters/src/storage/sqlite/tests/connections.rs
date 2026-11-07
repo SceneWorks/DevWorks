@@ -3943,3 +3943,34 @@ fn settings_secret_legacy_orphan_receives_grace_and_collection_preserves_other_s
         "fixture-other-store"
     );
 }
+
+#[test]
+fn settings_secret_failed_intake_preserves_fallback_after_successful_cleanup() {
+    let cx = Cx::new();
+    let secrets = cx.secrets.clone();
+    *cx.hooked.during_put.lock().unwrap() = Some(Box::new(move |_| {
+        secrets.set_unavailable(Some("fixture put unavailable"))
+    }));
+    let secrets = cx.secrets.clone();
+    *cx.hooked.during_delete.lock().unwrap() =
+        Some(Box::new(move |_| secrets.set_unavailable(None)));
+    let error = cx
+        .svc
+        .stage_setting_secret(Secret::new("fixture-failed-settings-value"))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        devworks_core::ports::secrets::SecretError::Unavailable(_)
+    ));
+    assert_eq!(
+        cx.svc.secret_store_unavailable().as_deref(),
+        Some("fixture put unavailable")
+    );
+    assert!(
+        cx.secrets
+            .list(cx.store.info().store_id.0.as_str())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!cx.database_text().contains("fixture-failed-settings-value"));
+}

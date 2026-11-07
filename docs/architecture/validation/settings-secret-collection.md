@@ -34,3 +34,10 @@ additional legacy-isolation case; production behavior is unchanged by that addit
 No real Keychain, credential facility, OS trust settings, remote provider or learned
 inference was accessed during validation. Review, CI, merge and final acceptance
 remain required.
+
+The ninth review batch reproduced successful cleanup clearing a failed intake's
+availability state (new native SQLite/controlled-secret regression,0.76s).
+Failed intake now records its original error after best-effort cleanup, preserving
+the native session-only fallback. All9 custody cases pass6.95s,4 native settings UI
+cases14.47s and strict workspace/all-target checks39.10s. No real OS secret store
+is accessed by these fixtures.
