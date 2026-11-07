@@ -16,9 +16,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Fence {
+#[derive(Clone, Debug, PartialEq)]
+struct Fence {
     pub scope: ProjectPurgeClientScope,
     pub digest: String,
 }
@@ -43,6 +42,7 @@ struct State {
     frozen: BTreeSet<String>,
     cleaned: Vec<ProjectPurgeClientScope>,
     awaiting_ui: BTreeSet<String>,
+    fences: BTreeMap<String, Fence>,
 }
 pub struct NativePurgeClient {
     path: PathBuf,
@@ -161,33 +161,52 @@ impl NativePurgeClient {
                 frozen: BTreeSet::new(),
                 cleaned: vec![],
                 awaiting_ui: BTreeSet::new(),
+                fences: BTreeMap::new(),
             }),
         }
     }
     /// Restore fences only from the exact committed native manifest, never from a forged
     /// UI-state scope. This checks identities against the immutable reviewed row hashes.
     pub fn with_store(self, store: &dyn devworks_core::ports::storage::ApplicationStore) -> Self {
-        let restored = purge::load(&self.path).ok().filter(|memory| {
-            devworks_core::ports::storage::read_snapshot(store, &Default::default(), |read| {
-                for fence in memory.purge_fences.values() {
-                    if !read
-                        .projects()
-                        .purge_validate_client_fence(&fence.scope, &fence.digest)?
-                    {
-                        return Ok(false);
+        let restored = purge::load(&self.path).ok().and_then(|memory| {
+            let fences =
+                devworks_core::ports::storage::read_snapshot(store, &Default::default(), |read| {
+                    let mut fences = BTreeMap::new();
+                    for (project, digest) in &memory.purge_fences {
+                        let project_id = devworks_core::protocol::ProjectId(
+                            devworks_core::protocol::Id::new(project).map_err(|_| {
+                                devworks_core::ports::storage::StorageError::ScopeDenied
+                            })?,
+                        );
+                        let Some(scope) =
+                            read.projects().purge_client_fence(&project_id, digest)?
+                        else {
+                            return Ok(None);
+                        };
+                        fences.insert(
+                            project.clone(),
+                            Fence {
+                                scope,
+                                digest: digest.clone(),
+                            },
+                        );
                     }
-                }
-                Ok(true)
-            })
-            .unwrap_or(false)
+                    Ok(Some(fences))
+                })
+                .ok()
+                .flatten()?;
+            Some((memory, fences))
         });
         {
             let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-            state.live = restored
-                .as_ref()
-                .and_then(|m| m.purge_live.clone())
-                .unwrap_or_default();
-            state.memory = restored;
+            if let Some((memory, fences)) = restored {
+                state.live = memory.purge_live.clone().unwrap_or_default();
+                state.memory = Some(memory);
+                state.fences = fences;
+            } else {
+                state.memory = None;
+                state.fences.clear();
+            }
         }
         self
     }
@@ -206,7 +225,7 @@ impl NativePurgeClient {
             .as_ref()
             .ok_or("Purge custody could not validate the saved client state")?;
         memory.purge_fences = current.purge_fences.clone();
-        for fence in memory.purge_fences.values().cloned().collect::<Vec<_>>() {
+        for fence in state.fences.values() {
             let fences = memory.purge_fences.clone();
             memory = purge::project_scoped_editors(&memory, &fence.scope)
                 .map_err(|_| "Client cleanup is held by unknown saved state")?
@@ -273,9 +292,8 @@ impl ProjectPurgeClient for NativePurgeClient {
         }
         let key = scope.project_id.0.as_str();
         if state
-            .memory
-            .as_ref()
-            .and_then(|m| m.purge_fences.get(key))
+            .fences
+            .get(key)
             .is_some_and(|f| f.scope == *scope && f.digest == digest)
         {
             self.sources.revoke_project(&scope.project_id);
@@ -296,14 +314,17 @@ impl ProjectPurgeClient for NativePurgeClient {
         live.references.remove(key);
         live.paths.remove(key);
         after.purge_live = Some(live);
-        after.purge_fences.insert(
+        // Persist only the compact commitment. Exact identities already live in the
+        // immutable native effect and are restored through the validating store port.
+        after.purge_fences.insert(key.into(), digest.into());
+        save_checkpoint(&after, &self.path).map_err(|_| PurgeFileFault::Io)?;
+        state.fences.insert(
             key.into(),
             Fence {
                 scope: scope.clone(),
                 digest: digest.into(),
             },
         );
-        save_checkpoint(&after, &self.path).map_err(|_| PurgeFileFault::Io)?;
         state.memory = Some(after);
         state.live.projects.remove(key);
         state.live.references.remove(key);
@@ -399,6 +420,35 @@ mod tests {
         restarted
             .remove_reviewed(&scope(), &reviewed.digest)
             .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn large_native_record_inventory_keeps_the_client_checkpoint_compact() {
+        let root =
+            std::env::temp_dir().join(format!("dw83-large-{}", HostIds::new().token("fixture")));
+        let path = root.join("ui-state.json");
+        let client = client(path.clone());
+        let mut scope = scope();
+        scope.record_ids.insert(
+            "messages".into(),
+            (0..200_000)
+                .map(|i| Id::new(format!("record-{i:08}-{}", "x".repeat(80))).unwrap())
+                .collect(),
+        );
+        assert!(serde_json::to_vec(&scope).unwrap().len() as u64 > crate::memory::MAX_BYTES);
+        client
+            .publish(Memory::default(), Live::default(), true)
+            .unwrap();
+        let reviewed = client.inspect(&scope).unwrap();
+        assert_eq!(
+            client.remove_reviewed(&scope, &reviewed.digest),
+            Err(PurgeFileFault::InUse)
+        );
+        assert!(std::fs::metadata(&path).unwrap().len() < 16_384);
+        let saved = purge::load(&path).unwrap();
+        assert_eq!(saved.purge_fences.get("p"), Some(&reviewed.digest));
+        client.acknowledge(&scope);
+        client.remove_reviewed(&scope, &reviewed.digest).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

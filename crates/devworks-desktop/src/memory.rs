@@ -174,7 +174,7 @@ pub struct Memory {
     #[serde(default)]
     pub purge_live: Option<crate::project_purge::Live>,
     #[serde(default)]
-    pub purge_fences: BTreeMap<String, crate::project_purge::Fence>,
+    pub purge_fences: BTreeMap<String, String>,
     pub version: u32,
     pub route: Route,
     pub intelligence_open: bool,

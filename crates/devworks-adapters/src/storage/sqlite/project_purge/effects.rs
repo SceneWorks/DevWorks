@@ -219,6 +219,29 @@ fn validate_scope(
     }
     Ok(())
 }
+pub(in crate::storage::sqlite) fn client_fence(
+    conn: &Connection,
+    project: &devworks_core::protocol::ProjectId,
+    digest: &str,
+) -> Result<Option<devworks_core::ports::storage::ProjectPurgeClientScope>, StorageError> {
+    let mut query = db(conn.prepare("SELECT e.body_json FROM project_purge_effects e JOIN project_purge_manifests m ON m.id=e.manifest_id WHERE m.project_id=?1 AND m.phase IN('RemovingBytes','Held','Complete') AND json_extract(e.body_json,'$.kind')='Client'"))?;
+    let bodies = db(query.query_map([project.0.as_str()], |r| r.get::<_, String>(0)))?;
+    for body in bodies {
+        let intent: PurgeEffectIntent =
+            serde_json::from_str(&db(body)?).map_err(|_| invalid("client fence effect"))?;
+        if let PurgeEffectIntent::Client {
+            scope,
+            digest: committed,
+        } = intent
+            && scope.project_id == *project
+            && committed == digest
+            && validate_client_fence(conn, &scope, digest)?
+        {
+            return Ok(Some(scope));
+        }
+    }
+    Ok(None)
+}
 pub(in crate::storage::sqlite) fn validate_client_fence(
     conn: &Connection,
     scope: &devworks_core::ports::storage::ProjectPurgeClientScope,

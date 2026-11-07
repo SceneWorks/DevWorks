@@ -365,7 +365,7 @@ macro_rules! project_reads {
         impl ProjectRead for $t {
             fn purge_file_effect_reviewed(&self,witness:&devworks_core::ports::project_purge::PurgeFileWitness)->Result<bool,StorageError>{super::project_purge::effects::file_reviewed(self.conn,witness)}
 
-            fn purge_validate_client_fence(&self,scope:&ProjectPurgeClientScope,digest:&str)->Result<bool,StorageError>{super::project_purge::effects::validate_client_fence(self.conn,scope,digest)}
+            fn purge_client_fence(&self,project:&ProjectId,digest:&str)->Result<Option<ProjectPurgeClientScope>,StorageError>{super::project_purge::effects::client_fence(self.conn,project,digest)}
 
             fn purge_file_artifact_keepers(&self, project:&ProjectId, owners:&[devworks_core::ports::project_purge::PurgeFileOwner])->Result<Vec<devworks_core::protocol::provider::ArtifactRef>,StorageError>{super::project_purge::client_keepers::file_references(self.conn,project,owners)}
             fn purge_inventory(&self,project:&ProjectId)->Result<Option<ProjectPurgeInventory>,StorageError> {super::project_purge::inventory::read(self.conn,project)}

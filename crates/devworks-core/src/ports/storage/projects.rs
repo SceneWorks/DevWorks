@@ -360,12 +360,14 @@ pub trait ProjectRead {
         Ok(false)
     }
 
-    fn purge_validate_client_fence(
+    /// Resolve a compact persisted client commitment through the original reviewed
+    /// native effect. UI checkpoints must not duplicate an unbounded record inventory.
+    fn purge_client_fence(
         &self,
-        _scope: &ProjectPurgeClientScope,
+        _project: &ProjectId,
         _digest: &str,
-    ) -> Result<bool, StorageError> {
-        Ok(false)
+    ) -> Result<Option<ProjectPurgeClientScope>, StorageError> {
+        Err(StorageError::ScopeDenied)
     }
 
     fn purge_file_artifact_keepers(

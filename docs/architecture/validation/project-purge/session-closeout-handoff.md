@@ -68,7 +68,9 @@ must not acquire a SQLite read connection.
 
 Native client custody checkpoints live and saved state, refuses unrecognized
 shapes, uses bounded create-new/atomic writes, and verifies restored fences against
-committed manifest row hashes. Interrupted writes hold cleanup. Ownership comes
+committed manifest row hashes. Only compact project/digest commitments are stored in
+the bounded UI checkpoint; exact scopes are restored from the native client effect,
+so large native inventories do not exhaust that checkpoint. Interrupted writes hold cleanup. Ownership comes
 from typed scopes/native IDs, never prose or a path substring. Independent paths
 and exact artifact versions are keepers. The review freezes new client producers;
 original unresolved commands retain their frames and receipt identities. Cleanup
@@ -84,7 +86,7 @@ worktrees and GitHub resources remain outside its physical removal authority.
 `crates/devworks-desktop/tests/project_purge.rs` exercises the production composition
 and headless native UI, including generic/stale confirmation refusal, complete
 review, owned draft/paste removal, unshared blob/staging unlink, shared exact reads,
-independently picked managed paths, unchanged actual shared Git state and repository
+independently picked managed paths, unchanged committed shared Git source, refs, linked worktree state and repository
 registration, ordinary/FTS-shadow SQLite privacy-sentinel scans, client autosave
 fences, restart and saved-review status without renewed consent.
 

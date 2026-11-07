@@ -97,6 +97,48 @@ fn native_review_purge_preserves_shared_git_and_other_drafts_and_recovers_after_
         b"repository input survives byte exact",
     )
     .unwrap();
+    let no_hooks = root.dir("no-hooks");
+    let git_run = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&git)
+            .arg("-c")
+            .arg(format!("core.hooksPath={}", no_hooks.display()))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    };
+    git_run(&["add", "source.txt"]);
+    git_run(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgSign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "shared source",
+    ]);
+    git_run(&["branch", "kept-branch"]);
+    let linked = git.parent().unwrap().join("linked-worktree");
+    git_run(&[
+        "worktree",
+        "add",
+        "--quiet",
+        "--detach",
+        linked.to_str().unwrap(),
+        "HEAD",
+    ]);
+    let refs_before = git_run(&["show-ref"]);
+    let worktrees_before = git_run(&["worktree", "list", "--porcelain"]);
     let before = Command::new("git")
         .arg("-C")
         .arg(&git)
@@ -412,6 +454,15 @@ fn native_review_purge_preserves_shared_git_and_other_drafts_and_recovers_after_
         .0,
     );
     assert!(matches!(status.phase, PurgePhase::Complete));
+    assert_eq!(git_run(&["show-ref"]), refs_before);
+    assert_eq!(
+        git_run(&["worktree", "list", "--porcelain"]),
+        worktrees_before
+    );
+    assert_eq!(
+        std::fs::read(linked.join("source.txt")).unwrap(),
+        b"repository input survives byte exact"
+    );
     assert_eq!(
         std::fs::read(git.join("source.txt")).unwrap(),
         b"repository input survives byte exact"
