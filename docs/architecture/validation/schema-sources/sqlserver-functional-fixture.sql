@@ -23,3 +23,17 @@ GO
 DECLARE @ddl NVARCHAR(MAX)=N'CREATE TABLE dbo.meta_large_default(value NVARCHAR(MAX) DEFAULT(N''' + REPLICATE(CAST(N'x' AS NVARCHAR(MAX)),6000) + N'''));';
 EXEC sys.sp_executesql @ddl;
 GO
+
+-- Indexed views must retain View parent identity for both columns and indexes.
+SET ANSI_NULLS ON;
+SET ANSI_PADDING ON;
+SET ANSI_WARNINGS ON;
+SET ARITHABORT ON;
+SET CONCAT_NULL_YIELDS_NULL ON;
+SET QUOTED_IDENTIFIER ON;
+SET NUMERIC_ROUNDABORT OFF;
+GO
+CREATE VIEW dbo.meta_indexed_view WITH SCHEMABINDING AS SELECT id,note FROM dbo.parent;
+GO
+CREATE UNIQUE CLUSTERED INDEX meta_indexed_view_key ON dbo.meta_indexed_view(id);
+GO

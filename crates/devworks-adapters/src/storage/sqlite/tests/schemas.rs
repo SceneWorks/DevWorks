@@ -1039,6 +1039,12 @@ fn native_schema_pins_keep_captured_views_but_never_extend_expiry_or_access() {
             "CREATE TABLE original(id INTEGER PRIMARY KEY); INSERT INTO original VALUES(7);",
         )
         .unwrap();
+    // A retained view must span multiple physical pruning pages.
+    for n in 0..260 {
+        target
+            .execute_batch(&format!("CREATE TABLE retained_{n}(id INT);"))
+            .unwrap();
+    }
     let reader = Arc::new(CountingMetadata(std::sync::atomic::AtomicUsize::new(0)));
     let service = metadata_owner(&h, s.clone(), reader.clone());
     let mut config =
@@ -1232,6 +1238,59 @@ fn native_schema_pins_keep_captured_views_but_never_extend_expiry_or_access() {
         ),
         DomainQueryReply::Rejected { .. }
     ));
+    let retired = first.schema_views[0].snapshot_id.clone();
+    let retiring = retired.clone();
+    let expired_at = first.expires_at_ms.get();
+    run_write(&*s, WriteOptions::default(), move |tx| {
+        tx.schemas().expire_schema_pins(expired_at, 500)?;
+        assert!(tx.schemas().prune_schema_views(500)? <= 500);
+        Ok(())
+    })
+    .unwrap();
+    let remaining: i64 = h
+        .raw()
+        .query_row(
+            "SELECT count(*) FROM schema_objects WHERE view_id=?1",
+            [retired.as_str()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        remaining > 0,
+        "first page leaves physical rows for bounded cleanup"
+    );
+    assert!(
+        read_snapshot(&*s, &ReadOptions::default(), |r| r
+            .schemas()
+            .schema_view(&retired))
+        .unwrap()
+        .is_none(),
+        "retiring view is atomically unavailable"
+    );
+    assert!(
+        read_snapshot(&*s, &ReadOptions::default(), |r| r
+            .schemas()
+            .schema_relations(&retired, &[], None, 500))
+        .unwrap()
+        .is_empty()
+    );
+    assert!(
+        read_snapshot(&*s, &ReadOptions::default(), |r| r
+            .schemas()
+            .schema_objects(&retired, &SchemaObjectFilter::default(), None, 500))
+        .unwrap()
+        .is_empty()
+    );
+    assert!(
+        matches!(query("schema-owner", "schemas.objects", json!({"scope":{"kind":"Workspace"},"views":{"kind":"Exact","viewIds":[retired]},"connectionId":created.id,"kinds":[],"page":{"limit":10}})), DomainQueryReply::Rejected { fault, .. } if fault.code == devworks_core::protocol::DomainErrorCode::ViewUnavailable)
+    );
+    assert!(
+        run_write(&*s, WriteOptions::default(), move |tx| tx
+            .schemas()
+            .seal_schema_view(&retiring))
+        .is_err(),
+        "retirement cannot resurrect a view"
+    );
     for _ in 0..10 {
         assert!(service.cleanup_retained_views().unwrap() <= 1000);
     }

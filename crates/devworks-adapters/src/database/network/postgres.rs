@@ -137,7 +137,15 @@ async fn read_catalog(
     }
     if discovery {
         let mut names = Vec::new();
-        let rows=client.query("SELECT datname FROM pg_catalog.pg_database WHERE datallowconn AND NOT datistemplate AND pg_catalog.has_database_privilege(oid,'CONNECT') ORDER BY datname LIMIT 129",&[]).await.map_err(classify)?;
+        let selected = c
+            .request
+            .config
+            .catalogs
+            .0
+            .iter()
+            .map(|v| v.0.as_str())
+            .collect::<Vec<_>>();
+        let rows=client.query("SELECT datname FROM pg_catalog.pg_database WHERE datallowconn AND NOT datistemplate AND pg_catalog.has_database_privilege(oid,'CONNECT') AND (cardinality($1::text[])=0 OR datname=ANY($1::text[])) ORDER BY datname LIMIT 129",&[&selected]).await.map_err(classify)?;
         let mut c = c;
         for row in rows {
             c.check()?;

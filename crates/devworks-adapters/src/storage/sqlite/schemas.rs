@@ -257,26 +257,41 @@ impl SchemaRepository for Unit<'_> {
         let budget = limit(n)?;
         // Expired lease records are removed separately in bounded pages. Any remaining
         // lease blocks physical deletion, so FK cascades cannot exceed this page budget.
-        let candidate:Option<String>=db(self.conn.query_row(
-            "SELECT v.id FROM schema_views v JOIN schema_sources s ON s.id=v.connection_id WHERE v.sealed=1 AND COALESCE(json_extract(s.body_json,'$.connection.currentViewId'),'')<>v.id AND NOT EXISTS(SELECT 1 FROM schema_read_pins p WHERE p.view_id=v.id) AND (s.deleted=1 OR s.configuration_revision<>v.configuration_revision OR 2<=(SELECT count(*) FROM (SELECT newer.id FROM schema_views newer WHERE newer.connection_id=v.connection_id AND newer.sealed=1 AND newer.source_revision>v.source_revision LIMIT 2))) ORDER BY v.created_at,v.id LIMIT 1",[],|r|r.get(0)).optional())?;
-        let Some(view) = candidate else {
+        let candidate: Option<(String, i64)> = db(self.conn.query_row(
+            "SELECT v.id,v.sealed FROM schema_views v JOIN schema_sources s ON s.id=v.connection_id WHERE v.sealed IN(1,2) AND COALESCE(json_extract(s.body_json,'$.connection.currentViewId'),'')<>v.id AND NOT EXISTS(SELECT 1 FROM schema_read_pins p WHERE p.view_id=v.id) AND (v.sealed=2 OR s.deleted=1 OR s.configuration_revision<>v.configuration_revision OR 2<=(SELECT count(*) FROM (SELECT newer.id FROM schema_views newer WHERE newer.connection_id=v.connection_id AND newer.sealed=1 AND newer.source_revision>v.source_revision LIMIT 2))) ORDER BY v.sealed DESC,v.source_revision,v.id LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?))).optional())?;
+        let Some((view, state)) = candidate else {
             return Ok(0);
         };
-        let relations=db(self.conn.execute("DELETE FROM schema_relations WHERE rowid IN(SELECT rowid FROM schema_relations WHERE view_id=?1 LIMIT ?2)",params![view,budget]))?;
+        // State 2 is retiring, distinct from unpublished staging (0). Every reader
+        // requires state 1. Hide the entire immutable snapshot in this transaction
+        // before its first physical deletion, and never allow it to be sealed again.
+        let hidden = if state == 1 {
+            db(self.conn.execute(
+                "UPDATE schema_views SET sealed=2 WHERE id=?1 AND sealed=1",
+                [&view],
+            ))?
+        } else {
+            0
+        };
+        if hidden == budget as usize {
+            return Ok(hidden);
+        }
+        let relations=db(self.conn.execute("DELETE FROM schema_relations WHERE rowid IN(SELECT rowid FROM schema_relations WHERE view_id=?1 LIMIT ?2)",params![view,budget-hidden as i64]))?;
+        let used = hidden + relations;
         let remaining: bool = db(self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_relations WHERE view_id=?1)",
             [&view],
             |r| r.get(0),
         ))?;
-        if remaining || relations == budget as usize {
-            return Ok(relations);
+        if remaining || used == budget as usize {
+            return Ok(used);
         }
-        let objects=db(self.conn.execute("DELETE FROM schema_objects WHERE rowid IN(SELECT rowid FROM schema_objects WHERE view_id=?1 LIMIT ?2)",params![view,budget-relations as i64]))?;
-        let used = relations + objects;
+        let objects=db(self.conn.execute("DELETE FROM schema_objects WHERE rowid IN(SELECT rowid FROM schema_objects WHERE view_id=?1 LIMIT ?2)",params![view,budget-used as i64]))?;
+        let used = used + objects;
         if used == budget as usize {
             return Ok(used);
         }
-        let header=db(self.conn.execute("DELETE FROM schema_views WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM schema_objects WHERE view_id=?1)",[view]))?;
+        let header=db(self.conn.execute("DELETE FROM schema_views WHERE id=?1 AND sealed=2 AND NOT EXISTS(SELECT 1 FROM schema_objects WHERE view_id=?1)",[view]))?;
         Ok(used + header)
     }
 

@@ -106,6 +106,13 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
         "limitations":["One file source exposes its main schema; SQLite has no stored-procedure catalog.","CHECK expressions remain in table DDL and are not separately enumerated."]}),
     )?;
     if c.request.test_only {
+        // Opening SQLite is lazy: force a fixed catalog read before declaring a healthy target.
+        conn.query_row(
+            "SELECT count(*) FROM (SELECT name FROM main.sqlite_schema LIMIT 1)",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(|_| failure(&c))?;
         conn.execute_batch("ROLLBACK").map_err(|_| failure(&c))?;
         return Ok(c.finish(profile));
     }
@@ -265,7 +272,7 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
             }
             let (definition,truncated): (Option<String>,Option<bool>) = conn.query_row(
                 "SELECT CASE WHEN length(sql)<=65536 THEN sql END,length(sql)>65536 FROM main.sqlite_schema WHERE type='index' AND name=?1",
-                [&index_name], |r| Ok((r.get(0)?,r.get(1)?))).map_err(|_|failure(&c))?;
+                [&index_name], |r| Ok((r.get(0)?,r.get(1)?))).optional().map_err(|_|failure(&c))?.unwrap_or((None, None));
             let origin: String = index.get(2).map_err(|_| MetadataFailure::InvalidMetadata)?;
             if origin == "u" {
                 let constraint = object(
@@ -669,6 +676,38 @@ mod tests {
                 .gaps
                 .iter()
                 .any(|g| g.as_str() == "sqlite_definition_size_limit")
+        );
+    }
+    #[test]
+    fn native_sqlite_without_rowid_primary_index_has_no_catalog_ddl() {
+        let target = Target::new("CREATE TABLE no_rowid(id TEXT PRIMARY KEY) WITHOUT ROWID;");
+        let snapshot = run(target.request()).unwrap();
+        assert!(matches!(snapshot.coverage.state, CoverageState::Complete));
+        let index = snapshot.objects.iter().find(|o| o.kind == "Index").unwrap();
+        assert!(index.metadata.definition_sql.is_none());
+        assert!(
+            snapshot
+                .relationships
+                .iter()
+                .any(|r| r.kind == "HAS_INDEX" && r.to_key == index.key)
+        );
+    }
+
+    #[test]
+    fn native_sqlite_probe_reads_catalog_and_refuses_plaintext_without_writes() {
+        let target = Target::new("CREATE TABLE valid(id INTEGER PRIMARY KEY);");
+        let original = std::fs::read(&target.0).unwrap();
+        let mut probe = target.request();
+        probe.test_only = true;
+        assert!(run(probe).unwrap().objects.is_empty());
+        assert_eq!(std::fs::read(&target.0).unwrap(), original);
+        std::fs::write(&target.0, b"ordinary text is not a SQLite database").unwrap();
+        let mut probe = target.request();
+        probe.test_only = true;
+        assert!(matches!(run(probe), Err(MetadataFailure::Unavailable)));
+        assert_eq!(
+            std::fs::read(&target.0).unwrap(),
+            b"ordinary text is not a SQLite database"
         );
     }
 }

@@ -571,3 +571,132 @@ fn long_default(engine: &str, variable: &str) {
             <= 4096
     );
 }
+
+#[test]
+#[ignore = "explicit isolated x86 SQL Server indexed-view fixture"]
+fn native_sql_server_indexed_view_retains_view_parent_and_index_edge() {
+    let endpoint = std::env::var("DEVWORKS_METADATA_SQLSERVER").unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let snapshot = rt
+        .block_on(NetworkMetadataReader.read(request("SqlServer", &endpoint)))
+        .unwrap();
+    assert!(matches!(snapshot.coverage.state, CoverageState::Complete));
+    let view = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "View" && o.metadata.name.0 == "meta_indexed_view")
+        .unwrap();
+    let index = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Index" && o.metadata.name.0 == "meta_indexed_view_key")
+        .unwrap();
+    assert_eq!(index.parent_key.as_ref(), Some(&view.key));
+    assert!(
+        snapshot
+            .relationships
+            .iter()
+            .any(|r| r.kind == "HAS_INDEX" && r.from_key == view.key && r.to_key == index.key)
+    );
+    assert!(snapshot.objects.iter().all(|o| {
+        o.parent_key
+            .as_ref()
+            .is_none_or(|p| snapshot.objects.iter().any(|parent| &parent.key == p))
+    }));
+}
+
+fn mysql_late_selected_catalogs(engine: &str, variable: &str) {
+    let endpoint = std::env::var(variable).unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        // The endpoint's explicit catalog sorts after 130 other visible catalogs.
+        let explicit = NetworkMetadataReader
+            .read(request(engine, &endpoint))
+            .await
+            .unwrap();
+        assert!(
+            explicit
+                .objects
+                .iter()
+                .any(|o| o.kind == "Table" && o.metadata.name.0 == "parent")
+        );
+        let server = format!("{}/", endpoint.rsplit_once('/').unwrap().0);
+        let mut selected = request(engine, &server);
+        selected.config.catalogs =
+            serde_json::from_value(json!(["zzz_metadata_child", "zzz_metadata_parent"])).unwrap();
+        let snapshot = NetworkMetadataReader.read(selected).await.unwrap();
+        assert!(matches!(snapshot.coverage.state, CoverageState::Complete));
+        let parent = snapshot
+            .objects
+            .iter()
+            .find(|o| o.kind == "Table" && o.metadata.name.0 == "parent")
+            .unwrap();
+        let child = snapshot
+            .objects
+            .iter()
+            .find(|o| o.kind == "Table" && o.metadata.name.0 == "child")
+            .unwrap();
+        let constraint = snapshot
+            .objects
+            .iter()
+            .find(|o| o.kind == "Constraint" && o.metadata.name.0 == "cross_catalog_parent:1")
+            .unwrap();
+        assert!(
+            snapshot
+                .relationships
+                .iter()
+                .any(|r| r.kind == "FOREIGN_KEY"
+                    && r.from_key == child.key
+                    && r.to_key == parent.key)
+        );
+        assert!(snapshot.relationships.iter().any(|r| r.kind == "REFERENCES"
+            && r.from_key == constraint.key
+            && r.to_key == parent.key));
+        let mut catalogs = snapshot
+            .objects
+            .iter()
+            .filter(|o| o.kind == "Catalog")
+            .map(|o| o.metadata.name.0.as_str())
+            .collect::<Vec<_>>();
+        catalogs.sort_unstable();
+        assert_eq!(catalogs, ["zzz_metadata_child", "zzz_metadata_parent"]);
+    });
+}
+#[test]
+#[ignore = "explicit isolated MySQL catalog-discovery/cross-catalog fixture"]
+fn native_mysql_late_selected_catalogs_and_cross_catalog_foreign_key() {
+    mysql_late_selected_catalogs("MySql", "DEVWORKS_METADATA_MYSQL");
+}
+#[test]
+#[ignore = "explicit isolated MariaDB catalog-discovery/cross-catalog fixture"]
+fn native_mariadb_late_selected_catalogs_and_cross_catalog_foreign_key() {
+    mysql_late_selected_catalogs("MariaDb", "DEVWORKS_METADATA_MARIADB");
+}
+
+#[test]
+#[ignore = "explicit isolated PostgreSQL130-earlier-catalog fixture"]
+fn native_postgres_selects_requested_catalog_before_discovery_limit() {
+    let endpoint = std::env::var("DEVWORKS_METADATA_POSTGRES").unwrap();
+    let server = format!("{}/", endpoint.rsplit_once('/').unwrap().0);
+    let mut selected = request("Postgres", &server);
+    selected.config.catalogs = serde_json::from_value(json!(["metadata_limits"])).unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let snapshot = rt.block_on(NetworkMetadataReader.read(selected)).unwrap();
+    let catalogs = snapshot
+        .objects
+        .iter()
+        .filter(|o| o.kind == "Catalog")
+        .map(|o| o.metadata.name.0.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(catalogs, ["metadata_limits"]);
+    assert!(snapshot.objects.iter().any(|o| o.kind == "Table"));
+}

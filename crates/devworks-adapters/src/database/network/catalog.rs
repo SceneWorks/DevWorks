@@ -200,7 +200,11 @@ impl Catalog {
                 .get("table")
                 .and_then(Value::as_str)
                 .ok_or(MetadataFailure::InvalidMetadata)?;
-            let target = key(&[&self.catalog, target_schema, "Table", target_table]);
+            let target_catalog = reference
+                .get("catalog")
+                .and_then(Value::as_str)
+                .unwrap_or(&self.catalog);
+            let target = key(&[target_catalog, target_schema, "Table", target_table]);
             self.collector
                 .relationship(&parent_id, &target, "FOREIGN_KEY")?;
             self.collector.relationship(&id, &target, "REFERENCES")?;

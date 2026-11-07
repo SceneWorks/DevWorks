@@ -22,7 +22,7 @@ const QUERIES: &[Query] = &[
         sql: constraint_query!(""),
     },
     Query {
-        sql: r#"SELECT CASE WHEN OCTET_LENGTH(metadata.document)>131072 THEN NULL ELSE CAST(metadata.document AS CHAR CHARACTER SET utf8mb4) END FROM (SELECT JSON_OBJECT('schema',k.TABLE_SCHEMA,'kind','Constraint','name',CONCAT(k.CONSTRAINT_NAME,':',k.ORDINAL_POSITION),'parent',k.TABLE_NAME,'metadata',JSON_OBJECT('constraintType','ForeignKeyColumn','ordinal',CAST(k.ORDINAL_POSITION AS CHAR),'columnNames',JSON_ARRAY(k.COLUMN_NAME),'referencedTable',CONCAT(k.REFERENCED_TABLE_SCHEMA,'.',k.REFERENCED_TABLE_NAME),'referencedColumns',JSON_ARRAY(k.REFERENCED_COLUMN_NAME)),'reference',JSON_OBJECT('schema',k.REFERENCED_TABLE_SCHEMA,'table',k.REFERENCED_TABLE_NAME)) AS document FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k WHERE k.TABLE_SCHEMA=? AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.TABLE_NAME,k.CONSTRAINT_NAME,k.ORDINAL_POSITION) metadata"#,
+        sql: r#"SELECT CASE WHEN OCTET_LENGTH(metadata.document)>131072 THEN NULL ELSE CAST(metadata.document AS CHAR CHARACTER SET utf8mb4) END FROM (SELECT JSON_OBJECT('schema',k.TABLE_SCHEMA,'kind','Constraint','name',CONCAT(k.CONSTRAINT_NAME,':',k.ORDINAL_POSITION),'parent',k.TABLE_NAME,'metadata',JSON_OBJECT('constraintType','ForeignKeyColumn','ordinal',CAST(k.ORDINAL_POSITION AS CHAR),'columnNames',JSON_ARRAY(k.COLUMN_NAME),'referencedTable',CONCAT(k.REFERENCED_TABLE_SCHEMA,'.',k.REFERENCED_TABLE_NAME),'referencedColumns',JSON_ARRAY(k.REFERENCED_COLUMN_NAME)),'reference',JSON_OBJECT('catalog',k.REFERENCED_TABLE_SCHEMA,'schema',k.REFERENCED_TABLE_SCHEMA,'table',k.REFERENCED_TABLE_NAME)) AS document FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k WHERE k.TABLE_SCHEMA=? AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.TABLE_NAME,k.CONSTRAINT_NAME,k.ORDINAL_POSITION) metadata"#,
     },
     Query {
         sql: r#"SELECT CASE WHEN OCTET_LENGTH(metadata.document)>131072 THEN NULL ELSE CAST(metadata.document AS CHAR CHARACTER SET utf8mb4) END FROM (SELECT JSON_OBJECT('schema',r.ROUTINE_SCHEMA,'kind','Procedure','name',r.SPECIFIC_NAME,'definition',LEFT(r.ROUTINE_DEFINITION,65536),'truncated',JSON_EXTRACT(IF(OCTET_LENGTH(r.ROUTINE_DEFINITION)>65536,'true','false'),'$'),'metadata',JSON_OBJECT('routineType',r.ROUTINE_TYPE,'comment',r.ROUTINE_COMMENT,'parameters',COALESCE((SELECT JSON_ARRAYAGG(JSON_OBJECT('name',COALESCE(p.PARAMETER_NAME,'return'),'ordinal',CAST(p.ORDINAL_POSITION AS CHAR),'mode',COALESCE(p.PARAMETER_MODE,'RETURN'),'dataType',COALESCE(p.DTD_IDENTIFIER,p.DATA_TYPE),'nullable',JSON_EXTRACT('true','$'))) FROM INFORMATION_SCHEMA.PARAMETERS p WHERE p.SPECIFIC_SCHEMA=r.ROUTINE_SCHEMA AND p.SPECIFIC_NAME=r.SPECIFIC_NAME),JSON_ARRAY()))) AS document FROM INFORMATION_SCHEMA.ROUTINES r WHERE r.ROUTINE_SCHEMA=? ORDER BY r.SPECIFIC_NAME) metadata"#,
@@ -127,7 +127,19 @@ pub(super) async fn read(
     let mut collector = c;
     let mut names = Vec::new();
     {
-        let mut rows=sqlx::query("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME NOT IN('information_schema','mysql','performance_schema','sys') ORDER BY SCHEMA_NAME LIMIT 129").fetch(&mut conn);
+        let selected = serde_json::to_string(
+            &collector
+                .request
+                .config
+                .catalogs
+                .0
+                .iter()
+                .map(|v| v.0.as_str())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|_| MetadataFailure::InvalidTarget)?;
+        let mut rows=sqlx::query("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME NOT IN('information_schema','mysql','performance_schema','sys') AND (?='' OR SCHEMA_NAME=?) AND (?='[]' OR JSON_CONTAINS(?,JSON_QUOTE(SCHEMA_NAME))) ORDER BY SCHEMA_NAME LIMIT 129")
+            .bind(&target.catalog).bind(&target.catalog).bind(&selected).bind(&selected).fetch(&mut conn);
         while let Some(row) = rows.try_next().await.map_err(classify)? {
             collector.check()?;
             let name: String = row

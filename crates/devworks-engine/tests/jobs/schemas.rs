@@ -298,3 +298,113 @@ fn schema_schedule_rechecks_project_access_before_dispatch_and_later_authorized_
     );
     rt.block_on(app.runtime.shutdown());
 }
+
+#[test]
+fn cancelling_ready_schema_child_clears_only_its_activity_and_allows_next_run() {
+    let _native_case = crate::common::native_runtime_case();
+    let h = Harness::new();
+    drop(h.open());
+    seed(&h);
+    let path = h.root.join("ready-cancel-target.sqlite");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE original(id INTEGER PRIMARY KEY);")
+        .unwrap();
+    let rt = runtime();
+    let reader = Arc::new(Reader::default());
+    let app = boot_help_with_metadata(
+        &rt,
+        &h,
+        Arc::new(NativeArtifactFiles::new(
+            h.root.clone(),
+            h.root.with_extension("cache"),
+        )),
+        Some(devworks_engine::schemas::SchemaComposition {
+            reader: reader.clone(),
+            secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+        }),
+    );
+    let configured = value(app.command("schemas.configure", json!({"scope":{"kind":"Workspace"},"config":{"name":"Queued cancel source","engine":"Sqlite","endpoint":path,
+        "catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"projectAccess":[],"workspaceExposed":false,"exposureMode":"SchemaOnly","authentication":"File"}}), 5));
+    let connection = id(configured["id"].as_str().unwrap());
+    let (scheduler, _) = scheduler_for(&app, 0, "schemas.index");
+    let job = app.create(
+        "Ready metadata cancellation",
+        json!({"kind":"Interval","seconds":"3600"}),
+        definition(&app, &connection),
+        true,
+    );
+    h.advance(3_601_000);
+    app.tick(&rt, &scheduler);
+    assert_eq!(app.settle(&rt, &scheduler, &job).status, "Succeeded");
+    let published = source(&app, &connection);
+    assert!(published.connection.current_view_id.is_some());
+    assert_eq!(reader.calls.load(Ordering::SeqCst), 1);
+    // Stop queue admission before creating the next child, establishing Ready deterministically.
+    app.runtime.dispatcher().stop();
+    h.advance(3_601_000);
+    app.tick(&rt, &scheduler);
+    let ready = app.runs(&job).into_iter().max_by_key(|r| r.seq).unwrap();
+    assert_eq!(ready.status, "Running");
+    let operation = ready.inner_operation_id.as_ref().unwrap().clone();
+    let delivery = read(&*app.store, |s| s.operations().operation(&operation))
+        .unwrap()
+        .payload["deliveryId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        read(&*app.store, |s| s.queue().entry(&id(&delivery)))
+            .unwrap()
+            .state,
+        QueueState::Ready
+    );
+    assert_eq!(
+        source(&app, &connection).connection.active_operation_id,
+        Some(operation.0.clone())
+    );
+    app.command(
+        "jobs.cancel",
+        json!({"jobId":job,"runId":ready.id,"expectedRevision":ready.revision.to_string()}),
+        2,
+    );
+    assert_eq!(app.settle(&rt, &scheduler, &job).status, "Cancelled");
+    let after = source(&app, &connection);
+    assert!(after.connection.active_operation_id.is_none());
+    assert_eq!(
+        after.connection.current_view_id,
+        published.connection.current_view_id
+    );
+    assert_eq!(
+        after.configuration_revision,
+        published.configuration_revision
+    );
+    assert_eq!(
+        read(&*app.store, |s| s.operations().operation(&operation))
+            .unwrap()
+            .state,
+        OperationState::CancelledBeforeDispatch
+    );
+    assert_eq!(
+        reader.calls.load(Ordering::SeqCst),
+        1,
+        "cancelled child never executes"
+    );
+    h.advance(3_601_000);
+    app.tick(&rt, &scheduler);
+    let next = app.runs(&job).into_iter().max_by_key(|r| r.seq).unwrap();
+    assert!(next.seq > ready.seq);
+    assert_eq!(next.status, "Running", "source is eligible for a later run");
+    assert_ne!(next.inner_operation_id, Some(operation));
+    assert_eq!(
+        source(&app, &connection).connection.active_operation_id,
+        next.inner_operation_id.as_ref().map(|op| op.0.clone())
+    );
+    app.command(
+        "jobs.cancel",
+        json!({"jobId":job,"runId":next.id,"expectedRevision":next.revision.to_string()}),
+        2,
+    );
+    assert_eq!(app.settle(&rt, &scheduler, &job).status, "Cancelled");
+    rt.block_on(app.runtime.shutdown());
+}

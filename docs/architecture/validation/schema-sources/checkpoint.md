@@ -1,9 +1,12 @@
-# DW-36 implementation checkpoint (unfinished)
+# DW-36 delivery evidence (acceptance pending)
 
-The work branch contains revision5 metadata contracts, native target metadata
-adapters, migration34 and immutable structural storage, plus the shared service's
-configuration/removal and source/object/relationship queries. Runtime composition
-and native Databases screens are not yet registered or advertised.
+The current work branch wires the seven revision5 metadata operations, native target
+adapters, immutable structural storage, runtime workers and maintenance, recurring
+jobs, connection-owned CA custody and the native Databases manager/explorer. The
+retained encryption-key utility shares SchemaService and native Human ingress.
+The sections below preserve chronological checkpoints; earlier statements of
+unfinished implementation describe those checkpoints, not the current branch.
+Fresh exact-head review, platform CI, merge and final acceptance still gate delivery.
 
 Native qualification to date uses isolated fixtures only:
 
@@ -280,3 +283,38 @@ unchanged alone, and the final full suite preserves its assertions and bounds.
 Final workspace/all-target strict checks pass11.86s. The retained-source audit maps
 all source entries without dropping the admin utility or conflating metadata with
 DW37's data operations. Review, actual supported-x86CI, merge and acceptance remain.
+
+
+PR48 review regressions: missing SQLite WITHOUT ROWID index DDL and lazy plaintext
+connection probes both reproduce against the published implementation (two failures,
+0.04s); corrected file-reader suite passes6cases0.02s. A retained snapshot with more
+than500 physical rows reproduces partial published visibility after one pruning
+page (1.35s). Internal state2 now atomically hides the retiring view before any row
+removal, stays distinct from unpublished staging, cannot be resealed, and continues
+bounded cleanup. Direct readers and Exact gateway selection reject the retiring
+view; native storage13cases pass11.28s, including unchanged pin/access/expiry checks.
+
+The scheduled Ready-child case proves terminal pre-dispatch cancellation without
+executing the metadata reader. Removing its exact matching-activity cleanup fails
+the original assertion6.43s; all3 native schema jobs pass17.51s after restoration.
+The prior published view/configuration revision survive and a later scheduled run
+is admitted with a new operation identity.
+
+Actual MySQL8.4/MariaDB11.4 and PostgreSQL17 fixtures now expose130 earlier visible
+catalogs. Selection is bound inside SQL before discovery limits. Reverting those
+adapters reproduces3 selection failures0.04s. Cross-database MySQL/Maria FK fixtures
+retain both FOREIGN_KEY and REFERENCES edges; reverting only target-catalog identity
+reproduces2 edge failures0.10s. A real indexed SQLServer view retains a View parent
+for its index and HAS_INDEX edge; the original adapter fails that assertion0.07s.
+All23 explicit actual-server cases pass0.48s with the corrections. New admin fixture
+scripts are scoped to disposable qualification containers; no source row values
+are collected and no real Keychain or OS trust settings are accessed.
+
+The initial native-x86 workflow42326825930 passed on8299dfd1. The expanded workflow
+runs4 SQLServer cases including indexed views and must qualify the corrected head
+again. Workspace/all-target strict checks pass43.02s. Review/CI/merge/acceptance are
+still pending; the initial platform result is not reused as final changed-head proof.
+
+Final restored-tree integration: all5 native Databases UI cases pass21.10s and all23
+actual-server cases pass0.44s. The7 review findings each have a native failing
+regression with their correction removed; temporary faults are fully restored.

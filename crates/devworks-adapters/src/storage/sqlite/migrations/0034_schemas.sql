@@ -20,7 +20,7 @@ CREATE TABLE schema_views (
  coverage_json TEXT NOT NULL CHECK(json_valid(coverage_json)),
  operation_id TEXT NOT NULL REFERENCES operations(id),
  digest TEXT NOT NULL CHECK(length(digest)=64 AND digest NOT GLOB '*[^0-9a-f]*'),
- sealed INTEGER NOT NULL CHECK(sealed IN(0,1)),
+ sealed INTEGER NOT NULL CHECK(sealed IN(0,1,2)),
  created_at INTEGER NOT NULL CHECK(created_at>=0),
  UNIQUE(connection_id,operation_id)
 ) STRICT;
