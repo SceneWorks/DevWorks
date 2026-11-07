@@ -170,6 +170,8 @@ struct FakeBrowser {
     /// Once: when a page receives this method, it first navigates to this URL (its document is
     /// replaced while the request is answered), then answers from the new document.
     navigate_on: Option<(String, String)>,
+    /// One navigation commits without the optional load lifecycle notification.
+    suppress_next_load: bool,
     /// Hover opens a same-document cover before a click can press.
     cover_on_move: bool,
 }
@@ -544,7 +546,7 @@ impl FakeBrowser {
                     return;
                 }
                 let (f, l) = self.load(i, &url);
-                if !url.contains("slow") {
+                if !url.contains("slow") && !std::mem::take(&mut self.suppress_next_load) {
                     let s = self.pages[i].session.clone();
                     self.emit(Some(&s), "Page.lifecycleEvent", json!({"frameId": f, "loaderId": l, "name": "load"}));
                 }
@@ -5087,16 +5089,20 @@ fn source_fixture(
 }
 #[test]
 fn browser_evidence_resolves_its_invocation_worktree_and_preserves_old_sources() {
-    browser_source_case(false);
+    browser_source_case(false, false);
+}
+#[test]
+fn browser_evidence_records_source_when_a_load_event_is_missing() {
+    browser_source_case(false, true);
 }
 #[test]
 fn installed_browser_records_real_worktree_provenance_when_opted_in() {
     if std::env::var("DEVWORKS_BROWSER_TESTS").ok().as_deref() != Some("1") {
         return;
     }
-    browser_source_case(true);
+    browser_source_case(true, false);
 }
-fn browser_source_case(native: bool) {
+fn browser_source_case(native: bool, missing_load: bool) {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let h = Harness::new();
     let tree = h.root.join("tested-owned/tree");
@@ -5115,7 +5121,14 @@ fn browser_source_case(native: bool) {
         .find(|a| a.qualification == Qualification::Present)
         .unwrap()
         .id;
-    let fx = Fx::boot_with_source(h, platform, real, BrowserConfig::default(), true);
+    // The fake's missing lifecycle notification must settle within the fixture's
+    // completion bound. Production navigation alone may consume that entire bound.
+    let browser = if native {
+        BrowserConfig::default()
+    } else {
+        config()
+    };
+    let fx = Fx::boot_with_source(h, platform, real, browser, true);
     assert!(
         fx.app().git().is_some(),
         "Git source must qualify before browser admission"
@@ -5147,6 +5160,13 @@ fn browser_source_case(native: bool) {
     let initial_head = source_git(&tree, &["rev-parse", "HEAD"]);
     assert_eq!(original["head"]["hex"], initial_head);
     std::fs::write(tree.join("source.txt"), "changed\n").unwrap();
+    if missing_load {
+        fx.platform
+            .browser(&session)
+            .lock()
+            .unwrap()
+            .suppress_next_load = true;
+    }
     let nav=fx.accepted(&bound,"browser.navigate",json!({"sessionId":session,"expectedRevision":fx.session(&session).revision.to_string(),"location":{"kind":"Blank"}}));
     let snap = fx.snapshot(fx.completion(&bound, &nav));
     let evidence = |artifact: &ArtifactRef| {
