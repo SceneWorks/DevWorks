@@ -201,6 +201,11 @@ impl Shell {
             (Slot::GraphTrust(id), Reply::Command(outcome)) => {
                 self.graph.trust_busy = false;
                 match &outcome {
+                    Ok(devworks_core::protocol::CommandReply::ReceiptPurged {
+                        outcome, ..
+                    }) => {
+                        self.graph.trust_reference = Some(outcome.command_id.0.as_str().into());
+                    }
                     Ok(devworks_core::protocol::CommandReply::Recorded { receipt, .. }) => {
                         self.graph.trust_reference = Some(receipt.command_id.0.as_str().into())
                     }

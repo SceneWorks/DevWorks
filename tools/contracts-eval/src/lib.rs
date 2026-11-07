@@ -376,6 +376,12 @@ pub enum Rejection {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum CommandReply<D = Decision> {
+    #[schemars(extend("x-since" = 6))]
+    ReceiptPurged {
+        protocol: Protocol,
+        request_key: RequestKey,
+        outcome: crate::domain_generated::PurgedReceiptOutcome,
+    },
     Recorded {
         protocol: Protocol,
         receipt: Receipt<D>,
@@ -674,6 +680,7 @@ impl Receipt {
 }
 impl CommandReply {
     pub fn validate(&self) -> Result<(), &'static str> {
+        validate_domain_reply(self)?;
         if let Self::Recorded { receipt, .. } = self {
             receipt.validate()?;
         }
@@ -801,8 +808,20 @@ pub mod package;
 pub mod package_probe;
 pub mod provider;
 
+impl<D> CommandReply<D> {
+    pub fn validate_revision(&self, revision: u32) -> Result<(), &'static str> {
+        if revision < 6 && matches!(self, Self::ReceiptPurged { .. }) {
+            return Err("purged receipt outcomes require schema revision6");
+        }
+        Ok(())
+    }
+}
+
 /// Common receipt header checks reused by domain-specific reply candidates.
 pub fn validate_domain_reply<D>(reply: &CommandReply<D>) -> Result<(), &'static str> {
+    if let CommandReply::ReceiptPurged { outcome, .. } = reply {
+        crate::domain_support::Check::check(outcome).map_err(|_| "invalid purged receipt outcome")?;
+    }
     if let CommandReply::Recorded { receipt, .. } = reply {
         if receipt.request_digest.len() != 64
             || !receipt

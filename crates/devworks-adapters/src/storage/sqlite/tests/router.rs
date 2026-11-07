@@ -2008,7 +2008,7 @@ fn pin_identity_migration_captures_only_upgrade_catalog_semantics_and_fences_old
                    ('old-missing','pin-missing',1,'removed','conn-codex','{}','Default','Default','[]','Initial',1);"))
     }).unwrap();
     drop(old);
-    let store = h.store();
+    let store = SqliteStore::open_with(h.config(), &super::through(25)).unwrap();
     let current = read_snapshot(&store, &ReadOptions::default(), |r| {
         r.router().session_pin(&id("old-current"))
     })

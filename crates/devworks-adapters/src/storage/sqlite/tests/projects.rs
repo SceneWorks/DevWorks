@@ -32,6 +32,345 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+struct PurgeOwners(std::sync::Mutex<(String, bool)>);
+
+#[test]
+fn purge_inventory_holds_any_unsettled_owned_operation_not_only_staging() {
+    let fx = Fx::new();
+    let p = fx.create("owned effect", &[]);
+    fx.seed_roots(&p.id, &["pending-owned-work"]);
+    fx.write(|tx| {
+        tx.operations()
+            .record_intent(NewOperation {
+                id: devworks_core::protocol::OperationId(id("pending-owned-effect")),
+                root_id: Some(RootId(id("pending-owned-work"))),
+                assignment_id: None,
+                capability: "process.spawn".into(),
+                schema_version: 1,
+                args_digest: "a".repeat(64),
+                payload: json!({"neverDispatched":true}),
+            })
+            .map(|_| ())
+    });
+    let inventory = fx.read(|s| s.projects().purge_inventory(&p.id)).unwrap();
+    assert_eq!(
+        inventory.unsettled_operations,
+        vec![devworks_core::protocol::OperationId(id(
+            "pending-owned-effect"
+        ))]
+    );
+}
+impl devworks_core::ports::project_purge::ProjectPurgeClient for PurgeOwners {
+    fn inspect(
+        &self,
+        _: &ProjectPurgeClientScope,
+    ) -> Result<
+        devworks_core::ports::project_purge::PurgeClientSnapshot,
+        devworks_core::ports::project_purge::PurgeFileFault,
+    > {
+        let state = self.0.lock().unwrap();
+        Ok(devworks_core::ports::project_purge::PurgeClientSnapshot {
+            digest: state.0.clone(),
+            surviving_artifacts: vec![],
+            pending: state.1,
+            removing_drafts: 0,
+            confirmation_ready: true,
+            surviving_paths: vec![],
+        })
+    }
+    fn remove_reviewed(
+        &self,
+        _: &ProjectPurgeClientScope,
+        digest: &str,
+    ) -> Result<(), devworks_core::ports::project_purge::PurgeFileFault> {
+        let state = self.0.lock().unwrap();
+        if state.0 != digest || state.1 {
+            return Err(devworks_core::ports::project_purge::PurgeFileFault::Changed);
+        }
+        Ok(())
+    }
+}
+impl devworks_core::ports::project_purge::ProjectPurgeFiles for PurgeOwners {
+    fn inventory(
+        &self,
+        selection: &devworks_core::ports::project_purge::PurgeFileSelection,
+        _: &mut dyn FnMut() -> bool,
+    ) -> Result<
+        devworks_core::ports::project_purge::PurgeFileSnapshot,
+        devworks_core::ports::project_purge::PurgeFileFault,
+    > {
+        assert!(
+            selection.owners.is_empty(),
+            "this fixture has no managed files"
+        );
+        Ok(devworks_core::ports::project_purge::PurgeFileSnapshot {
+            selection: selection.clone(),
+            files: vec![],
+            digest: "1".repeat(64),
+        })
+    }
+    fn remove_reviewed(
+        &self,
+        _: &devworks_core::ports::project_purge::PurgeFileWitness,
+        _: &mut dyn FnMut() -> bool,
+    ) -> Result<(), devworks_core::ports::project_purge::PurgeFileFault> {
+        panic!("preparation and authorization cannot unlink")
+    }
+}
+
+#[test]
+fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirmation() {
+    use devworks_core::operations::projects::{PreparePurgeInput, PurgeInput, PurgeManifestInput};
+    use devworks_core::services::projects::purge::PurgeCoordinator;
+    let fx = Fx::new();
+    let active = fx.create("private purge preview", &["repo-1"]);
+    let survivor = fx.create("independent project", &["repo-1"]);
+    fx.bind_agents(&active.id);
+    let archived = project_of(applied(fx.lifecycle(
+        &fx.user(),
+        "projects.archive",
+        &active,
+    )));
+    fx.stop_ran(&archived.id);
+    let deleted = project_of(applied(fx.lifecycle(
+        &fx.user(),
+        "projects.delete",
+        &archived,
+    )));
+    // This fixture has no publisher/dispatcher. Cancel its never-started deliveries;
+    // production composition acceptance exercises real publication before preparation.
+    fx.store.with_writer_connection(|c| {
+        let claimed:i64=super::super::conn::db(c.query_row("SELECT count(*) FROM queue_entries WHERE consumer='receipt_replies' AND state='Claimed'",[],|r|r.get(0)))?;
+        assert_eq!(claimed,0);
+        super::super::conn::db(c.execute("UPDATE queue_entries SET state='Cancelled' WHERE consumer='receipt_replies' AND state='Ready'",[])).map(|_|())
+    }).unwrap();
+    let owners = Arc::new(PurgeOwners(std::sync::Mutex::new(("a".repeat(64), false))));
+    let service = Arc::new(PurgeCoordinator::new(
+        fx.h.ids.clone(),
+        owners.clone(),
+        owners.clone(),
+    ));
+    let prepare = PreparePurgeInput {
+        project_id: deleted.id.clone(),
+        expected_revision: deleted.revision.clone(),
+    };
+    let agent = fx.workspace_agent();
+    let (s, ctx) = (service.clone(), agent.clone());
+    let manifest = fx.write(move |tx| {
+        s.prepare(tx, &ctx, &prepare)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    let input = PurgeInput {
+        project_id: deleted.id.clone(),
+        manifest_id: manifest.id.clone(),
+        expected_revision: manifest.revision.clone(),
+        expected_digest: manifest.digest.clone(),
+        expected_project_revision: deleted.revision,
+        confirm: true,
+    };
+    let ingress = HostIngress::new(&*fx.store);
+    assert!(ingress.project_purge_context(&agent, &input).is_none());
+    let user = fx.user();
+    use devworks_core::ports::files::ArtifactSources;
+    let sources =
+        crate::fs::sources::HostArtifactSources::new(fx.h.clock.clone(), fx.h.ids.clone())
+            .with_store(fx.store.clone());
+    let picked = fx.h.root.0.join("independent-picked-input.txt");
+    std::fs::write(&picked, b"user input stays byte exact").unwrap();
+    let owner_context = user
+        .clone()
+        .with_lineage(Some(deleted.id.clone()), None, None);
+    let survivor_context = user
+        .clone()
+        .with_lineage(Some(survivor.id.clone()), None, None);
+    let owner_ticket = sources
+        .mint_upload(&owner_context, &picked, 60_000)
+        .unwrap();
+    let survivor_ticket = sources
+        .mint_upload(&survivor_context, &picked, 60_000)
+        .unwrap();
+    let workspace_ticket = sources
+        .mint_workspace_upload(&user, &picked, 60_000)
+        .unwrap();
+    let sealed = ingress.project_purge_context(&user, &input).unwrap();
+    let (s, ctx, i) = (service.clone(), user.clone(), input.clone());
+    assert!(
+        run_write(&*fx.store, WriteOptions::default(), move |tx| s
+            .authorize(tx, &ctx, &i)
+            .map(|_| ())
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}"))))
+        .is_err()
+    );
+    let (s, ctx, i) = (service.clone(), sealed.clone(), input.clone());
+    fx.write(move |tx| {
+        let permit = s
+            .authorize(tx, &ctx, &i)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+        assert_eq!(permit.reviewed().manifest.digest, i.expected_digest);
+        assert_eq!(permit.confirmed_by(), ctx.principal());
+        Ok(())
+    });
+    let mut page = PurgeManifestInput {
+        project_id: deleted.id.clone(),
+        manifest_id: manifest.id.clone(),
+        expected_revision: manifest.revision.clone(),
+        page: serde_json::from_value(json!({"limit":1})).unwrap(),
+    };
+    let first = fx.read(|read| {
+        PurgeCoordinator::manifest_page(read, &user, &page)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    assert!(first.entries.has_more);
+    page.page.cursor = first.entries.next_cursor;
+    assert!(
+        read_snapshot(&*fx.store, &ReadOptions::default(), |read| {
+            PurgeCoordinator::manifest_page(read, &agent, &page)
+                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        })
+        .is_err()
+    );
+    let next = fx.read(|read| {
+        PurgeCoordinator::manifest_page(read, &user, &page)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    assert_ne!(first.entries.items.0[0].id, next.entries.items.0[0].id);
+    owners.0.lock().unwrap().0 = "b".repeat(64);
+    let (s, ctx, i) = (service.clone(), sealed.clone(), input.clone());
+    assert!(
+        run_write(&*fx.store, WriteOptions::default(), move |tx| s
+            .authorize(tx, &ctx, &i)
+            .map(|_| ())
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}"))))
+        .is_err()
+    );
+    assert_eq!(
+        fx.get(&user, &deleted.id).unwrap().name.0.as_str(),
+        "private purge preview"
+    );
+    owners.0.lock().unwrap().0 = "a".repeat(64);
+    let repository = serde_json::to_value(fx.repo(&user, "repo-1").unwrap()).unwrap();
+    let (s, ctx, i) = (service.clone(), sealed.clone(), input.clone());
+    let rolled_back: Result<(), StorageError> =
+        run_write(&*fx.store, WriteOptions::default(), move |tx| {
+            let permit = s
+                .authorize(tx, &ctx, &i)
+                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+            tx.projects().apply_project_purge(&permit)?;
+            Err(StorageError::Cancelled)
+        });
+    assert!(matches!(rolled_back, Err(StorageError::Cancelled)));
+    assert_eq!(
+        fx.get(&user, &deleted.id).unwrap().name.0,
+        "private purge preview"
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row("SELECT count(*) FROM project_purge_effects", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let source = devworks_core::protocol::data::ArtifactSource::Upload {
+        ticket_id: owner_ticket.clone(),
+    };
+    assert!(
+        sources
+            .resolve(&owner_context, &source, Some(&deleted.id))
+            .is_ok(),
+        "rollback preserves the original source authority"
+    );
+    let (s, ctx, i) = (service, sealed, input);
+    let committed = fx.write(move |tx| {
+        let permit = s
+            .authorize(tx, &ctx, &i)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+        tx.projects().apply_project_purge(&permit)
+    });
+    assert!(matches!(
+        committed.phase,
+        devworks_core::protocol::records::PurgePhase::RemovingBytes
+    ));
+    assert_eq!(committed.pending_effects.get(), 1);
+    assert!(committed.operation_id.is_some());
+    assert_eq!(
+        fx.get(&user, &deleted.id).unwrap().name.0,
+        "Deleted project"
+    );
+    assert_eq!(
+        serde_json::to_value(fx.repo(&user, "repo-1").unwrap()).unwrap(),
+        repository
+    );
+    let remaining = fx.h.raw().query_row("SELECT count(*) FROM command_receipts WHERE result_json LIKE '%private purge preview%'",[],|r|r.get::<_,i64>(0)).unwrap();
+    assert_eq!(remaining, 0);
+    assert!(
+        sources
+            .resolve(&owner_context, &source, Some(&deleted.id))
+            .is_err()
+    );
+    assert!(
+        sources
+            .mint_upload(&owner_context, &picked, 60_000)
+            .is_err()
+    );
+    assert!(
+        sources
+            .resolve(
+                &survivor_context,
+                &devworks_core::protocol::data::ArtifactSource::Upload {
+                    ticket_id: survivor_ticket
+                },
+                Some(&survivor.id)
+            )
+            .is_ok()
+    );
+    assert!(
+        sources
+            .resolve(
+                &user,
+                &devworks_core::protocol::data::ArtifactSource::Upload {
+                    ticket_id: workspace_ticket
+                },
+                None
+            )
+            .is_ok()
+    );
+    assert_eq!(
+        std::fs::read(&picked).unwrap(),
+        b"user input stays byte exact"
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        0
+    );
+    let worker = devworks_core::services::projects::purge::PurgeWorker::new(
+        fx.store.clone(),
+        fx.h.ids.clone(),
+        owners.clone(),
+        owners,
+    );
+    assert_eq!(worker.step(&mut || false).unwrap(), 1);
+    let finished = fx
+        .read(|s| s.projects().purge_manifest(&deleted.id, &manifest.id))
+        .unwrap();
+    assert!(matches!(
+        finished.manifest.phase,
+        devworks_core::protocol::records::PurgePhase::Complete
+    ));
+    assert_eq!(finished.manifest.pending_effects.get(), 0);
+    let operation = finished.manifest.operation_id.unwrap();
+    assert_eq!(
+        fx.read(|s| s.operations().operation(&operation))
+            .unwrap()
+            .state,
+        devworks_core::protocol::OperationState::ObservedComplete
+    );
+}
+
 fn id(s: &str) -> Id {
     Id::new(s).unwrap()
 }
@@ -1660,4 +1999,2674 @@ fn migration_14_is_additive_and_closes_older_writers_out() {
             .update_project(&stale, 2)),
         Err(StorageError::RevisionConflict(_))
     ));
+}
+
+// Receipt-only fixture for the DW83 terminal wire/storage path. Full project purge has
+// separate ownership/byte-effect acceptance; this deliberately replaces only the receipt.
+fn compact_receipt_for_test(
+    fx: &Fx,
+    ctx: &InvocationContext,
+    key: &str,
+) -> devworks_core::protocol::records::PurgedReceiptOutcome {
+    use devworks_core::protocol::records::{PurgedDecisionKind, PurgedReceiptOutcome};
+    let scope = devworks_core::context::ScopeKey::of(ctx);
+    let (operation,digest,result):(String,String,String)=fx.h.raw().query_row("SELECT command_kind,payload_digest,result_json FROM command_receipts WHERE actor_id=?1 AND scope_key=?2 AND idempotency_key=?3",rusqlite::params![ctx.principal().0.as_str(),scope.as_str(),key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    let body: Value = serde_json::from_str(&result).unwrap();
+    let stored = devworks_core::ports::StoredReceipt {
+        operation,
+        contract: body["contract"].as_str().unwrap().into(),
+        schema_revision: devworks_core::registry::SchemaRevision(
+            body["schemaRevision"].as_u64().unwrap().try_into().unwrap(),
+        ),
+        fingerprint: devworks_core::fingerprint::Fingerprint::from_hex(&digest).unwrap(),
+        receipt: serde_json::from_value(body["receipt"].clone()).unwrap(),
+    };
+    let (original_decision, original_fault_code) = match &stored.receipt.decision {
+        DomainDecision::Applied { .. } => (PurgedDecisionKind::Applied, None),
+        DomainDecision::NoChange { .. } => (PurgedDecisionKind::NoChange, None),
+        DomainDecision::Accepted { .. } => (PurgedDecisionKind::Accepted, None),
+        DomainDecision::Refused { fault } => (PurgedDecisionKind::Refused, Some(fault.code)),
+    };
+    let outcome = PurgedReceiptOutcome {
+        command_id: stored.receipt.command_id,
+        committed_sequence: stored.receipt.committed_sequence,
+        accepted_at_ms: stored.receipt.accepted_at_ms,
+        request_digest: devworks_core::protocol::provider::Digest::try_from(
+            stored.fingerprint.as_str().to_owned(),
+        )
+        .unwrap(),
+        operation_id: stored.receipt.operation_id,
+        original_decision,
+        original_fault_code,
+        purge_id: id("purge-receipt-fixture"),
+    };
+    let body = json!({"contract":stored.contract,"schemaRevision":stored.schema_revision.0,"purged":outcome});
+    assert!(!body.to_string().contains("PRIVATE_RECEIPT_CONTENT"));
+    assert_eq!(fx.h.raw().execute("UPDATE command_receipts SET result_json=?1 WHERE actor_id=?2 AND scope_key=?3 AND idempotency_key=?4",rusqlite::params![body.to_string(),ctx.principal().0.as_str(),scope.as_str(),key]).unwrap(),1);
+    outcome
+}
+fn receipt_lookup_at(
+    fx: &Fx,
+    ctx: &InvocationContext,
+    key: &str,
+    revision: u32,
+) -> DomainQueryReply {
+    let authority = fx.authority();
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*fx.store,
+        ids: &*fx.h.ids,
+    };
+    let frame=json!({"protocol":"1.0-draft.1","schemaRevision":revision,"queryId":"purged-receipt-lookup","query":{"kind":"history.command_receipt","requestKey":key}}).to_string();
+    gateway
+        .query(
+            ctx,
+            "history.command_receipt",
+            frame.as_bytes(),
+            &devworks_core::services::history::HistoryService::new(fx.h.ids.clone()),
+        )
+        .unwrap()
+}
+#[test]
+fn purged_receipt_keeps_legacy_replay_fences_and_current_observation_after_restart() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let key = "purged-legacy-create";
+    let body = json!({"name":"PRIVATE_RECEIPT_CONTENT","description":"private original description","repositoryIds":["repo-1"]});
+    let first = fx.command_keyed(&user, "projects.create", key, body.clone());
+    let CommandReply::Recorded { receipt, .. } = first else {
+        panic!("original receipt")
+    };
+    let outcome = compact_receipt_for_test(&fx, &user, key);
+    assert_eq!(outcome.command_id, receipt.command_id);
+    let Fx {
+        h,
+        store,
+        runs,
+        cases,
+        n,
+    } = fx;
+    drop(store);
+    let store = Arc::new(h.store());
+    let fx = Fx {
+        h,
+        store,
+        runs,
+        cases,
+        n,
+    };
+    let user = fx.user();
+    assert!(matches!(
+        fx.command_keyed(&user, "projects.create", key, body),
+        CommandReply::Rejected {
+            code: Rejection::UnsupportedSchema,
+            retry: devworks_core::protocol::RetryAdvice::ResolveReceipt,
+            ..
+        }
+    ));
+    assert!(matches!(
+        fx.command_keyed(
+            &user,
+            "projects.create",
+            key,
+            json!({"name":"another intent","description":"","repositoryIds":[]})
+        ),
+        CommandReply::Rejected {
+            code: Rejection::IdempotencyConflict,
+            ..
+        }
+    ));
+    assert_eq!(
+        fx.events("ProjectCreated").len(),
+        1,
+        "a purged result never reexecutes its original command"
+    );
+    let DomainQueryReply::Result {
+        result: OperationResult::HistoryCommandReceipt { value },
+        ..
+    } = receipt_lookup_at(&fx, &user, key, 6)
+    else {
+        panic!("current purged observation")
+    };
+    assert!(value.reply_artifact.is_none() && value.reply_schema.is_none());
+    assert_eq!(value.command_id, Some(receipt.command_id));
+    assert_eq!(value.committed_sequence, Some(receipt.committed_sequence));
+    assert_eq!(value.purged.unwrap().request_digest, outcome.request_digest);
+    assert!(
+        matches!(receipt_lookup_at(&fx,&user,key,1),DomainQueryReply::Rejected{fault,..} if fault.code==DomainErrorCode::ViewUnavailable && fault.target_kind.as_ref().is_some_and(|k|k.0=="receipt_content_purged"))
+    );
+    assert!(
+        matches!(receipt_lookup_at(&fx,&user,"never-recorded-key",6),DomainQueryReply::Result{result:OperationResult::HistoryCommandReceipt{value},..} if matches!(value.state,devworks_core::protocol::records::ReceiptLookupState::NotFound) && value.purged.is_none())
+    );
+}
+#[test]
+fn purged_receipt_never_bypasses_current_principal_revocation() {
+    let fx = Fx::new();
+    let p = fx.create("Purge principal fixture", &[]);
+    fx.bind_agents(&p.id);
+    let principal = fx.project_agent(&p.id);
+    let key = "purged-agent-edit";
+    let body = json!({"projectId":p.id,"expectedRevision":"1","changes":{"name":"PRIVATE_RECEIPT_CONTENT"}});
+    let reply = fx.command_keyed(&principal, "projects.edit", key, body.clone());
+    assert!(
+        matches!(reply,CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..})),
+        "original edit"
+    );
+    compact_receipt_for_test(&fx, &principal, key);
+    let user = fx.user();
+    fx.write(move |tx| {
+        auth::revoke_principal(tx, &user, &actor("agent-p"), 1)
+            .map(|_| ())
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    assert!(matches!(
+        fx.command_keyed(&principal, "projects.edit", key, body),
+        CommandReply::Rejected {
+            code: Rejection::PermissionDenied,
+            ..
+        }
+    ));
+    assert!(
+        matches!(receipt_lookup_at(&fx,&principal,key,6),DomainQueryReply::Rejected{fault,..} if fault.code==DomainErrorCode::PermissionDenied)
+    );
+}
+
+#[test]
+fn purged_receipt_revision6_preserves_an_original_refusal_as_a_terminal_outcome() {
+    struct RefusalProbe(std::sync::atomic::AtomicUsize);
+    impl devworks_core::ports::CommandHandler for RefusalProbe {
+        fn decide(
+            &self,
+            _ctx: &InvocationContext,
+            _command: &devworks_core::gateway::AdmittedCommand,
+            _tx: &mut dyn WriteTransaction,
+        ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(devworks_core::ports::Decided { decision:DomainDecision::Refused {fault:serde_json::from_value(json!({"code":"Conflict","retry":"Never","correlationId":"refusal-probe","blockerIds":[]})).unwrap()},operation_id:None })
+        }
+    }
+    let fx = Fx::new();
+    let p = fx.create("Active project", &[]);
+    let user = fx.user();
+    let key = "purged-current-refusal";
+    // The explicit probe records a real revision6 refusal without claiming the purge
+    // use case is already implemented. Its decision must never run a second time.
+    let mut frame: Value = serde_json::from_str(&Fx::frame(
+        "projects.prepare_purge",
+        key,
+        json!({"projectId":p.id,"expectedRevision":p.revision}),
+    ))
+    .unwrap();
+    frame["schemaRevision"] = json!(6);
+    let raw = frame.to_string();
+    let authority = fx.authority();
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*fx.store,
+        ids: &*fx.h.ids,
+    };
+    let probe = Arc::new(RefusalProbe(std::sync::atomic::AtomicUsize::new(0)));
+    let first = gateway
+        .command(
+            &user,
+            "projects.prepare_purge",
+            raw.as_bytes(),
+            probe.clone(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&first,CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Refused{..})),
+        "original refusal: {first:?}"
+    );
+    let original = compact_receipt_for_test(&fx, &user, key);
+    let replay = gateway
+        .command(
+            &user,
+            "projects.prepare_purge",
+            raw.as_bytes(),
+            probe.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        probe.0.load(Ordering::SeqCst),
+        1,
+        "a terminal purged outcome never reaches the handler again"
+    );
+    assert!(
+        matches!(replay,CommandReply::ReceiptPurged{outcome,..} if outcome.command_id==original.command_id && matches!(outcome.original_decision,devworks_core::protocol::records::PurgedDecisionKind::Refused) && outcome.original_fault_code==original.original_fault_code)
+    );
+    assert_eq!(
+        fx.get(&user, &p.id).unwrap().revision,
+        p.revision,
+        "terminal replay does not prepare or mutate the project"
+    );
+}
+
+fn purge_storage_fixture(store: &SqliteStore) -> StoredProjectPurge {
+    let info = store.info();
+    run_write(store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&actor("purge-human"), PrincipalKind::Human, "Human")?;
+        for name in ["purge-a", "purge-b"] {
+            tx.projects().insert_project(&StoredProject {
+                id: project(name),
+                name: "private project title".into(),
+                description: "private project body".into(),
+                lifecycle: DELETED.into(),
+                revision: 1,
+                scope_revision: 2,
+                created_at_ms: T0,
+                updated_at_ms: T0,
+                archived_at_ms: Some(T0),
+                deleted_at_ms: Some(T0),
+                archive_epoch: 1,
+                archive_stop_pending: false,
+            })?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let mut prepared=StoredProjectPurge {
+        manifest:serde_json::from_value(json!({"id":"purge-manifest","projectId":"purge-a","revision":"1","projectRevision":"1","digest":"a".repeat(64),"phase":"Prepared","recordCount":"2","managedByteCount":"0","keptRecordCount":"1","keptByteCount":"0","pendingEffects":"0","createdAtMs":T0.to_string()})).unwrap(),
+        actor_id:actor("purge-human"),store_id:info.store_id,restore_epoch:info.restore_epoch,scope_revision:2,policy_digest:"b".repeat(64),witness_digest:"c".repeat(64),
+        entries:vec![serde_json::from_value(json!({"id":"d".repeat(64),"kind":"RecordClass","recordClass":"work_items","disposition":"Remove","recordCount":"2","byteCount":"0","reason":"OwnedProjectRecords"})).unwrap()],rows:vec![]
+    };
+    prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
+    prepared
+}
+
+#[test]
+fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_client_identities() {
+    use devworks_core::ports::project_purge::{PurgeEffectIntent, PurgeFileFault};
+    let h = Harness::new();
+    let store = h.store();
+    let mut prepared = purge_storage_fixture(&store);
+    let scope = ProjectPurgeClientScope {
+        project_id: project("purge-a"),
+        session_ids: vec![id("owned-session")],
+        conversation_ids: vec![],
+        work_ids: vec![],
+        operation_ids: vec![],
+        deleted_artifact_ids: vec![],
+        record_ids: [("sessions".into(), vec![id("owned-session")])].into(),
+    };
+    let owner_digest = devworks_core::fingerprint::sha256_hex(&serde_json::to_vec(&scope).unwrap());
+    let intent = PurgeEffectIntent::Client {
+        scope,
+        digest: "a".repeat(64),
+    };
+    prepared.rows.push(ProjectPurgeRowWitness {
+        table: "sessions".into(),
+        key_digest: devworks_core::fingerprint::sha256_hex(br#"["owned-session"]"#),
+        row_digest: "f".repeat(64),
+        action: ProjectPurgeRowAction::Delete,
+        reason: ProjectPurgeRowReason::OwnedLineage,
+    });
+    prepared.entries.push(serde_json::from_value(json!({"id":devworks_core::ports::project_purge::reviewed_effect_entry(&intent),"kind":"RecordClass","recordClass":"client_state","disposition":"Remove","recordCount":"0","byteCount":"0","reason":"OwnedClientState"})).unwrap());
+    prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
+    let copy = prepared.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().insert_purge_manifest(&copy)
+    })
+    .unwrap();
+    let body = serde_json::to_string(&intent).unwrap();
+    let effect = devworks_core::fingerprint::sha256_hex(body.as_bytes());
+    prepared.manifest.phase = devworks_core::protocol::records::PurgePhase::RemovingBytes;
+    let operation = devworks_core::protocol::OperationId(id("purge-operation"));
+    let op = operation.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.operations()
+            .record_intent(NewOperation {
+                id: op,
+                root_id: None,
+                assignment_id: None,
+                capability: "projects.purge".into(),
+                schema_version: 1,
+                args_digest: "a".repeat(64),
+                payload: json!({"manifestId":"purge-manifest"}),
+            })
+            .map(|_| ())
+    })
+    .unwrap();
+    prepared.manifest.operation_id = Some(operation);
+    prepared.manifest.pending_effects = Counter::new(1).unwrap();
+    h.raw()
+        .execute(
+            "UPDATE project_purge_manifests SET phase='RemovingBytes',operation_id='purge-operation',body_json=?1",
+            [serde_json::to_string(&prepared.manifest).unwrap()],
+        )
+        .unwrap();
+    h.raw().execute("INSERT INTO project_purge_effects(manifest_id,id,kind,owner_digest,body_json,byte_count,state) VALUES('purge-manifest',?1,'Client',?2,?3,0,'Pending')",rusqlite::params![effect,owner_digest,body]).unwrap();
+    let mut forged = intent.clone();
+    if let PurgeEffectIntent::Client { digest, .. } = &mut forged {
+        *digest = "b".repeat(64);
+    }
+    let forged_body = serde_json::to_string(&forged).unwrap();
+    let forged_id = devworks_core::fingerprint::sha256_hex(forged_body.as_bytes());
+    h.raw()
+        .execute(
+            "UPDATE project_purge_effects SET id=?1,body_json=?2 WHERE id=?3",
+            rusqlite::params![forged_id, forged_body, effect],
+        )
+        .unwrap();
+    let attempted = forged_id.clone();
+    assert!(
+        run_write(&store, WriteOptions::default(), move |tx| {
+            let until = tx.now_ms() + 1000;
+            tx.projects().claim_purge_effect(
+                &id("purge-manifest"),
+                &attempted,
+                &id("unreviewed-owner"),
+                until,
+            )
+        })
+        .is_err(),
+        "a self-consistent replacement body is not the Human-reviewed intent"
+    );
+    h.raw()
+        .execute(
+            "UPDATE project_purge_effects SET id=?1,body_json=?2 WHERE id=?3",
+            rusqlite::params![effect, body, forged_id],
+        )
+        .unwrap();
+    let claim = |store: &SqliteStore, owner: &str| {
+        let effect = effect.clone();
+        let owner = id(owner);
+        run_write(store, WriteOptions::default(), move |tx| {
+            let until = tx.now_ms() + 10_000;
+            tx.projects()
+                .claim_purge_effect(&id("purge-manifest"), &effect, &owner, until)
+        })
+        .unwrap()
+    };
+    assert!(claim(&store, "owner-a").is_some());
+    assert!(claim(&store, "owner-b").is_none());
+    let stale = effect.clone();
+    assert!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .settle_purge_effect(
+                &id("purge-manifest"),
+                &stale,
+                &id("owner-b"),
+                Ok(())
+            ))
+        .is_err()
+    );
+    let failed = effect.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().settle_purge_effect(
+            &id("purge-manifest"),
+            &failed,
+            &id("owner-a"),
+            Err(PurgeFileFault::Io),
+        )
+    })
+    .unwrap();
+    let held = read_snapshot(&store, &ReadOptions::default(), |s| {
+        s.projects()
+            .purge_manifest(&project("purge-a"), &id("purge-manifest"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        held.manifest.phase,
+        devworks_core::protocol::records::PurgePhase::Held
+    ));
+    assert_eq!(held.manifest.pending_effects.get(), 1);
+    assert!(
+        claim(&store, "owner-b").is_none(),
+        "the held retry respects its backoff"
+    );
+    h.clock.0.fetch_add(1000, Ordering::SeqCst);
+    assert!(claim(&store, "owner-b").is_some());
+    drop(store);
+    let reopened = h.store();
+    assert!(
+        claim(&reopened, "owner-c").is_some(),
+        "restart adopts the original intent, not a new effect"
+    );
+    let stale = effect.clone();
+    assert!(
+        run_write(&reopened, WriteOptions::default(), move |tx| tx
+            .projects()
+            .settle_purge_effect(
+                &id("purge-manifest"),
+                &stale,
+                &id("owner-b"),
+                Ok(())
+            ))
+        .is_err()
+    );
+    let done = effect.clone();
+    run_write(&reopened, WriteOptions::default(), move |tx| {
+        tx.projects()
+            .settle_purge_effect(&id("purge-manifest"), &done, &id("owner-c"), Ok(()))
+    })
+    .unwrap();
+    let complete = read_snapshot(&reopened, &ReadOptions::default(), |s| {
+        s.projects()
+            .purge_manifest(&project("purge-a"), &id("purge-manifest"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        complete.manifest.phase,
+        devworks_core::protocol::records::PurgePhase::Complete
+    ));
+    assert_eq!(complete.manifest.pending_effects.get(), 0);
+    assert_eq!(complete.manifest.digest, prepared.manifest.digest);
+    assert!(complete.manifest.error_code.is_none());
+    let forgotten: Option<String> = h
+        .raw()
+        .query_row(
+            "SELECT body_json FROM project_purge_effects WHERE id=?1",
+            [effect],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&forgotten.unwrap()).unwrap(),
+        serde_json::to_value(&intent).unwrap()
+    );
+    let PurgeEffectIntent::Client { scope, digest } = intent else {
+        panic!("client fixture")
+    };
+    assert_eq!(
+        read_snapshot(&reopened, &ReadOptions::default(), |s| s
+            .projects()
+            .purge_client_fence(&scope.project_id, &digest))
+        .unwrap(),
+        Some(scope.clone())
+    );
+    assert!(
+        read_snapshot(&reopened, &ReadOptions::default(), |s| s
+            .projects()
+            .purge_client_fence(&scope.project_id, &"b".repeat(64)))
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
+fn purge_manifest_storage_survives_restart_and_requires_its_exact_project() {
+    let h = Harness::new();
+    let store = h.store();
+    let prepared = purge_storage_fixture(&store);
+    let expected = prepared.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().insert_purge_manifest(&prepared)
+    })
+    .unwrap();
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .purge_manifest(&project("purge-b"), &id("purge-manifest")))
+        .unwrap()
+        .is_none()
+    );
+    drop(store);
+    let store = h.store();
+    let found = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects()
+            .purge_manifest(&project("purge-a"), &id("purge-manifest"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&found.manifest).unwrap(),
+        serde_json::to_value(&expected.manifest).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&found.entries).unwrap(),
+        serde_json::to_value(&expected.entries).unwrap()
+    );
+    assert_eq!(found.policy_digest, expected.policy_digest);
+    assert_eq!(found.witness_digest, expected.witness_digest);
+    assert_eq!(found.actor_id, expected.actor_id);
+    assert_eq!(found.store_id, expected.store_id);
+    assert!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .insert_purge_manifest(&expected))
+        .is_err(),
+        "a reviewed ID cannot be replaced"
+    );
+}
+
+#[test]
+fn purge_row_witnesses_survive_restart_bind_the_review_and_refuse_duplicates_atomically() {
+    let h = Harness::new();
+    let store = h.store();
+    let mut prepared = purge_storage_fixture(&store);
+    let private_key = "private source locator that must never be copied to audit";
+    prepared.rows = vec![
+        ProjectPurgeRowWitness {
+            table: "work_items".into(),
+            key_digest: devworks_core::fingerprint::sha256_hex(private_key.as_bytes()),
+            row_digest: "e".repeat(64),
+            action: ProjectPurgeRowAction::Delete,
+            reason: ProjectPurgeRowReason::OwnedProjectRecords,
+        },
+        ProjectPurgeRowWitness {
+            table: "projects".into(),
+            key_digest: "f".repeat(64),
+            row_digest: "d".repeat(64),
+            action: ProjectPurgeRowAction::Scrub,
+            reason: ProjectPurgeRowReason::MinimalDeletedIdentity,
+        },
+    ];
+    prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
+    let mut duplicate = prepared.clone();
+    duplicate.rows.push(duplicate.rows[0].clone());
+    duplicate.manifest.digest = project_purge_digest(&duplicate).try_into().unwrap();
+    assert!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .insert_purge_manifest(&duplicate))
+        .is_err()
+    );
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT count(*) FROM project_purge_manifests", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let expected = prepared.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().insert_purge_manifest(&prepared)
+    })
+    .unwrap();
+    let raw = h.raw();
+    let text:String=raw.query_row("SELECT group_concat(table_name||key_digest||row_digest||action||reason) FROM project_purge_rows",[],|r|r.get(0)).unwrap();
+    assert!(!text.contains(private_key));
+    drop(raw);
+    drop(store);
+    let store = h.store();
+    let found = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects()
+            .purge_manifest(&project("purge-a"), &id("purge-manifest"))
+    })
+    .unwrap()
+    .unwrap();
+    let mut expected_rows = expected.rows.clone();
+    expected_rows.sort_by(|a, b| (&a.table, &a.key_digest).cmp(&(&b.table, &b.key_digest)));
+    assert_eq!(found.rows, expected_rows);
+    assert_eq!(found.manifest.digest, expected.manifest.digest);
+    h.raw()
+        .execute(
+            "UPDATE project_purge_rows SET action='Keep' WHERE table_name='work_items'",
+            [],
+        )
+        .unwrap();
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .purge_manifest(&project("purge-a"), &id("purge-manifest")))
+        .is_err(),
+        "a changed row decision invalidates the reviewed manifest"
+    );
+}
+
+#[test]
+fn purge_candidate_reader_hashes_full_scoped_rows_without_copying_keys_or_other_project_changes() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    let snapshot = || {
+        read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(&project("purge-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let original = snapshot();
+    assert!(original.rows.iter().any(|row| row.table == "projects"));
+    let encoded = serde_json::to_string(&original.rows).unwrap();
+    assert!(!encoded.contains("private project title"));
+    assert!(!encoded.contains("purge-a"));
+    h.raw()
+        .execute(
+            "UPDATE projects SET title='another project changed' WHERE id='purge-b'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(snapshot().digest, original.digest);
+    // Detect a full-row change even when no revision counter was advanced.
+    h.raw()
+        .execute(
+            "UPDATE projects SET title='new private project title' WHERE id='purge-a'",
+            [],
+        )
+        .unwrap();
+    let changed = snapshot();
+    assert_ne!(changed.digest, original.digest);
+    assert_eq!(changed.rows.len(), original.rows.len());
+    assert_eq!(changed.policy_digest, original.policy_digest);
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .purge_candidates(&project("missing-project")))
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
+fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it_for_deletion() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    store.with_writer_connection(|c| {
+        super::super::conn::db(c.execute_batch(
+            "INSERT INTO artifacts(id,title,revision,scope_revision,origin_project_id,current_project_id,scope_kind,owner_actor_id) VALUES
+             ('owned-private','private sentinel',1,1,'purge-a','purge-a','Project',NULL),
+             ('moved-in','currently owned sentinel',1,1,'purge-b','purge-a','Project',NULL),
+             ('shared-out','shared sentinel',1,1,'purge-a','purge-a','Project',NULL),
+             ('moved-workspace','independent workspace sentinel',1,1,'purge-a',NULL,'Workspace','purge-human'),
+             ('shared-in','other project sentinel',1,1,'purge-b','purge-b','Project',NULL),
+             ('unrelated','unrelated sentinel',1,1,'purge-b','purge-b','Project',NULL);
+             INSERT INTO artifact_shares VALUES('shared-out','purge-b'),('shared-in','purge-a');
+             INSERT INTO knowledge_entries VALUES
+             ('knowledge-owned','purge-a','fact','Project',1,'Active','{\"private\":\"sentinel\"}',1),
+             ('knowledge-shared','purge-a','fact','Project',1,'Active','{\"shared\":\"sentinel\"}',1),
+             ('knowledge-other','purge-b','fact','Project',1,'Active','{}',1);
+             INSERT INTO knowledge_shares VALUES('knowledge-shared','purge-b');
+             INSERT INTO knowledge_revisions VALUES('knowledge-owned',1,'purge-human','{}'),('knowledge-shared',1,'purge-human','{}');
+             INSERT INTO knowledge_tags VALUES('knowledge-owned','owned-private-tag'),('knowledge-shared','shared-tag');
+             INSERT INTO knowledge_links VALUES('knowledge-owned','knowledge-shared','supports','{}'),('knowledge-shared','knowledge-other','supports','{}');"
+        ))
+    }).unwrap();
+    let snapshot = || {
+        read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(&project("purge-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let before = snapshot();
+    let count = |table: &str| before.rows.iter().filter(|r| r.table == table).count();
+    assert_eq!(count("artifacts"), 5);
+    assert_eq!(count("artifact_shares"), 2);
+    for edge in before
+        .references
+        .iter()
+        .filter(|e| e.from_table == "artifact_shares" && e.to_table == "artifacts")
+    {
+        assert!(
+            before
+                .rows
+                .iter()
+                .any(|r| r.table == "artifact_shares" && r.key_digest == edge.from_key_digest),
+            "composite source keys use the native guard encoding"
+        );
+        assert!(
+            before
+                .rows
+                .iter()
+                .any(|r| r.table == "artifacts" && r.key_digest == edge.to_key_digest)
+        );
+    }
+
+    assert_eq!(count("knowledge_entries"), 2);
+    assert_eq!(count("knowledge_shares"), 1);
+    assert!(
+        !serde_json::to_string(&before.rows)
+            .unwrap()
+            .contains("sentinel")
+    );
+    let planning = || {
+        read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("purge-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let plan = planning();
+    assert!(plan.is_resolved(), "{:?}", plan.unresolved);
+    for (table, key, action) in [
+        (
+            "artifacts",
+            json!(["owned-private"]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "artifacts",
+            json!(["moved-in"]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "artifacts",
+            json!(["shared-out"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "artifacts",
+            json!(["moved-workspace"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "artifacts",
+            json!(["shared-in"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "artifact_shares",
+            json!(["shared-in", "purge-a"]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "artifact_shares",
+            json!(["shared-out", "purge-b"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "knowledge_entries",
+            json!(["knowledge-owned"]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "knowledge_entries",
+            json!(["knowledge-shared"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "knowledge_revisions",
+            json!(["knowledge-owned", 1]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "knowledge_revisions",
+            json!(["knowledge-shared", 1]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "knowledge_tags",
+            json!(["knowledge-owned", "owned-private-tag"]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "knowledge_tags",
+            json!(["knowledge-shared", "shared-tag"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "knowledge_links",
+            json!(["knowledge-owned", "knowledge-shared", "supports"]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "knowledge_links",
+            json!(["knowledge-shared", "knowledge-other", "supports"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+    ] {
+        let digest = devworks_core::fingerprint::sha256_hex(key.to_string().as_bytes());
+        assert!(
+            plan.rows
+                .iter()
+                .any(|r| r.table == table && r.key_digest == digest && r.action == action),
+            "{table} {key}: {action:?}"
+        );
+    }
+    assert!(
+        !serde_json::to_string(&plan.rows)
+            .unwrap()
+            .contains("owned-private-tag")
+    );
+    h.raw()
+        .execute(
+            "UPDATE artifacts SET title='unrelated changed' WHERE id='unrelated'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(snapshot().digest, before.digest);
+    h.raw()
+        .execute(
+            "DELETE FROM artifact_shares WHERE artifact_id='shared-out'",
+            [],
+        )
+        .unwrap();
+    let changed = planning();
+    let shared_key =
+        devworks_core::fingerprint::sha256_hex(json!(["shared-out"]).to_string().as_bytes());
+    assert!(
+        changed.rows.iter().any(|r| r.table == "artifacts"
+            && r.key_digest == shared_key
+            && r.action == ProjectPurgeRowAction::Delete),
+        "removing a keeper changes the exact content decision"
+    );
+    assert_ne!(
+        snapshot().digest,
+        before.digest,
+        "a changed keeper invalidates the snapshot"
+    );
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT count(*) FROM artifacts", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        6
+    );
+    assert_eq!(
+        h.raw()
+            .query_row(
+                "SELECT title FROM artifacts WHERE id='moved-workspace'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "independent workspace sentinel"
+    );
+}
+
+#[test]
+fn purge_candidate_receipts_include_actual_events_and_explicit_creation_snapshots() {
+    let fx = Fx::new();
+    let p = fx.create("Receipt project", &[]);
+    let other = fx.create("Other receipt project", &[]);
+    applied(fx.command(&fx.user(), "projects.edit", json!({"projectId":p.id,"expectedRevision":"1","changes":{"name":"Renamed private project"}})));
+    applied(fx.command(
+        &fx.user(),
+        "projects.edit",
+        json!({"projectId":p.id,"expectedRevision":"2","changes":{"name":"Renamed again"}}),
+    ));
+    applied(fx.command(
+        &fx.user(),
+        "projects.edit",
+        json!({"projectId":other.id,"expectedRevision":"1","changes":{"name":"Other renamed"}}),
+    ));
+    assert_eq!(fx.h.raw().query_row("SELECT count(*) FROM events WHERE kind='CommandDecided' AND project_id IS NULL AND json_extract(payload_json,'$.operation')='projects.create'", [], |r| r.get::<_,i64>(0)).unwrap(), 2, "workspace creation receipts need typed snapshot redaction, not invented project ownership");
+    let snapshot = |p: &ProjectId| {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(p)
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let count = |p: &ProjectId| {
+        snapshot(p)
+            .rows
+            .iter()
+            .filter(|r| r.table == "command_receipts")
+            .count()
+    };
+    assert_eq!(count(&p.id), 3);
+    assert_eq!(count(&other.id), 2);
+    // Every command used the same current Human/store scope. Attribution still
+    // follows actual CommandDecided targets plus explicit typed creation snapshots.
+    assert_eq!(fx.h.raw().query_row("SELECT count(DISTINCT scope_key) FROM command_receipts WHERE command_kind IN('projects.create','projects.edit')",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    assert_eq!(count(&p.id), 3);
+}
+
+#[test]
+fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_ownership() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    store.with_writer_connection(|c| super::super::conn::db(c.execute_batch(
+        "INSERT INTO operations(id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES('owned-operation','schemas.index',5,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}','Completed',1,0);
+         INSERT INTO events(id,actor_id,project_id,operation_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('owned-command-event','purge-human','purge-a','owned-operation','command','owned-command',1,'CommandDecided',0,'{}');"
+    ))).unwrap();
+    let snapshot = || {
+        read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(&project("purge-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let before = snapshot();
+    let operation = before
+        .rows
+        .iter()
+        .find(|r| r.table == "operations")
+        .unwrap();
+    store.with_writer_connection(|c| super::super::conn::db(c.execute(
+        "INSERT INTO usage_price_status(provider,revision,refresh_pending,refresh_operation_id) VALUES('independent-provider',1,0,'owned-operation')",[]
+    )).map(|_|())).unwrap();
+    store.with_writer_connection(|c| super::super::conn::db(c.execute_batch(
+        "INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('global-package-event','purge-human','package','global-package',1,'GlobalFixture',0,'{}');
+         INSERT INTO package_handler_commits(package_id,subscription_id,event_id,receipt_id,payload_digest,state_generation,state_revision,checkpoint,intents_json) VALUES('independent-package','subscription','global-package-event','processing-receipt','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,1,1,'[{\"actionKey\":\"private-action-key\",\"operationId\":\"owned-operation\"}]');
+         INSERT INTO artifacts(id,title,revision,scope_revision,scope_kind,owner_actor_id) VALUES('independent-artifact','independent artifact sentinel',1,1,'Workspace','purge-human');
+         INSERT INTO blobs(digest,byte_count,relative_path,state,generation) VALUES('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',1,'controlled-reference-fixture','Live','fixture');
+         INSERT INTO artifact_versions(id,artifact_id,version_no,blob_digest,media_type,created_at,source_json) VALUES('independent-version','independent-artifact',1,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc','text/plain',0,'{}');
+         INSERT INTO artifact_links VALUES('independent-version','operation','owned-operation','Origin');"
+    ))).unwrap();
+    let after = snapshot();
+    assert_eq!(
+        before.rows, after.rows,
+        "a reference does not establish ownership of its source row"
+    );
+    assert_ne!(
+        before.digest, after.digest,
+        "a new surviving reference invalidates the reviewed identity closure"
+    );
+    let edge = after
+        .references
+        .iter()
+        .find(|edge| edge.from_table == "usage_price_status")
+        .unwrap();
+    assert_eq!(edge.kind, ProjectPurgeReferenceKind::ForeignKey);
+    assert_eq!(edge.to_table, "operations");
+    assert_eq!(edge.to_key_digest, operation.key_digest);
+    assert_eq!(edge.from_columns, ["refresh_operation_id"]);
+    assert_eq!(
+        edge.to_columns,
+        ["id"],
+        "implicit REFERENCES resolves the actual parent primary key"
+    );
+    for (kind, table) in [
+        (
+            ProjectPurgeReferenceKind::PackageIntent,
+            "package_handler_commits",
+        ),
+        (ProjectPurgeReferenceKind::ArtifactSubject, "artifact_links"),
+    ] {
+        let edge = after.references.iter().find(|e| e.kind == kind).unwrap();
+        assert_eq!(edge.from_table, table);
+        assert_eq!(edge.to_table, "operations");
+        assert_eq!(edge.to_key_digest, operation.key_digest);
+    }
+    assert!(
+        !after.rows.iter().any(|r| matches!(
+            r.table.as_str(),
+            "package_handler_commits" | "artifact_links" | "artifacts"
+        )),
+        "typed references cannot claim independently owned content"
+    );
+    assert_eq!(
+        h.raw()
+            .query_row(
+                "SELECT title FROM artifacts WHERE id='independent-artifact'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "independent artifact sentinel"
+    );
+    let audit = serde_json::to_string(&after.references).unwrap();
+    assert!(!audit.contains("private-action-key"));
+    assert!(!audit.contains("independent artifact sentinel"));
+    assert!(!audit.contains("independent-provider"));
+    assert!(!audit.contains("owned-operation"));
+    let plan = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&project("purge-a"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(plan.rows.iter().any(|r| r.table == "operations"
+        && r.key_digest == operation.key_digest
+        && r.action == ProjectPurgeRowAction::Scrub
+        && r.reason == ProjectPurgeRowReason::MinimalDeletedIdentity));
+    assert!(
+        !plan.is_resolved(),
+        "control-receipt ownership is still an explicit unresolved partition"
+    );
+    assert_eq!(
+        h.raw()
+            .query_row(
+                "SELECT state FROM operations WHERE id='owned-operation'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "Completed"
+    );
+    let original_intents=h.raw().query_row("SELECT intents_json FROM package_handler_commits WHERE receipt_id='processing-receipt'",[],|r|r.get::<_,String>(0)).unwrap();
+    for unknown in [
+        json!({"actionKey":"key","operationId":"owned-operation"}),
+        json!([{"actionKey":"key","operationId":"owned-operation","arguments":"unmapped private arguments"}]),
+        json!([{"actionKey":"","operationId":"owned-operation"}]),
+        json!([{"actionKey":"key","operationId":42}]),
+    ] {
+        h.raw().execute("UPDATE package_handler_commits SET intents_json=?1 WHERE receipt_id='processing-receipt'",[unknown.to_string()]).unwrap();
+        let refused = read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(&project("purge-a"))
+        });
+        assert!(
+            refused.is_err(),
+            "unmapped intent formats must hold ownership planning"
+        );
+        assert_eq!(
+            h.raw()
+                .query_row(
+                    "SELECT payload_json FROM operations WHERE id='owned-operation'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "{}"
+        );
+    }
+    h.raw().execute("UPDATE package_handler_commits SET intents_json=?1 WHERE receipt_id='processing-receipt'",[original_intents]).unwrap();
+    assert_eq!(snapshot().digest, after.digest);
+    assert_eq!(h.raw().query_row("SELECT refresh_operation_id FROM usage_price_status WHERE provider='independent-provider'",[],|r|r.get::<_,String>(0)).unwrap(),"owned-operation");
+}
+
+#[test]
+fn purge_planning_classifies_records_read_only_and_never_enables_ordinary_delete_guards() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    h.raw().execute("INSERT INTO allocation_replays(project_id,key,intent_digest,result_json) VALUES('purge-a',?1,?2,'{}')",rusqlite::params!["a".repeat(64),"b".repeat(64)]).unwrap();
+    let plan = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&project("purge-a"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(plan.is_resolved(), "{:?}", plan.unresolved);
+    assert_eq!(plan.rows.len(), 3);
+    assert!(
+        plan.rows
+            .iter()
+            .filter(|r| matches!(r.table.as_str(), "projects" | "project_details"))
+            .all(|r| r.action == ProjectPurgeRowAction::Scrub
+                && r.reason == ProjectPurgeRowReason::MinimalDeletedIdentity)
+    );
+    assert!(
+        plan.rows
+            .iter()
+            .any(|r| r.table == "allocation_replays" && r.action == ProjectPurgeRowAction::Delete)
+    );
+    assert!(
+        h.raw()
+            .execute("DELETE FROM allocation_replays", [])
+            .is_err(),
+        "an assessment is not a native purge permit"
+    );
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT count(*) FROM allocation_replays", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT title FROM projects WHERE id='purge-a'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap(),
+        "private project title"
+    );
+}
+
+#[test]
+fn purge_planning_compacts_typed_creation_snapshots_and_holds_unmapped_legacy_mappings() {
+    let fx = Fx::new();
+    let p = fx.create("Private copied project name", &[]);
+    let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(plan.rows.iter().any(|r| r.table == "command_receipts"
+        && r.action == ProjectPurgeRowAction::Scrub
+        && r.reason == ProjectPurgeRowReason::ReceiptReplayFence));
+    assert!(
+        !plan
+            .unresolved
+            .iter()
+            .any(|r| r.table == "command_receipts"),
+        "{:?}",
+        plan.unresolved
+    );
+    let audit = serde_json::to_string(&plan.unresolved).unwrap();
+    assert!(!audit.contains("Private copied project name"));
+    assert_eq!(
+        fx.get(&fx.user(), &p.id).unwrap().name.0,
+        "Private copied project name"
+    );
+    let original=fx.h.raw().query_row("SELECT result_json FROM command_receipts WHERE command_kind='projects.create' AND json_extract(result_json,'$.receipt.decision.result.value.id')=?1",[p.id.0.as_str()],|r|r.get::<_,String>(0)).unwrap();
+    let mut malformed: Value = serde_json::from_str(&original).unwrap();
+    malformed["unmappedPrivateBody"] = json!("unrecognized receipt body");
+    fx.h.raw().execute("UPDATE command_receipts SET result_json=?1 WHERE command_kind='projects.create' AND json_extract(result_json,'$.receipt.decision.result.value.id')=?2",rusqlite::params![malformed.to_string(),p.id.0.as_str()]).unwrap();
+    let refused = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        refused
+            .unresolved
+            .iter()
+            .any(|r| r.table == "command_receipts")
+    );
+    assert!(
+        !serde_json::to_string(&refused.unresolved)
+            .unwrap()
+            .contains("unrecognized receipt body")
+    );
+    fx.h.raw().execute("UPDATE command_receipts SET result_json=?1 WHERE command_kind='projects.create' AND json_extract(result_json,'$.receipt.decision.result.value.id')=?2",rusqlite::params![original,p.id.0.as_str()]).unwrap();
+    fx.h.raw().execute("INSERT INTO import_mappings VALUES('legacy-import','unknown-kind','private-source-key','opaque-local-id','digest')",[]).unwrap();
+    let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        plan.unresolved.iter().any(|r| r.table == "import_mappings"
+            && r.reason == ProjectPurgeUnresolvedReason::LegacyMapping)
+    );
+    assert!(
+        !serde_json::to_string(&plan.unresolved)
+            .unwrap()
+            .contains("private-source-key")
+    );
+}
+
+#[test]
+fn purge_planning_business_digest_excludes_only_validated_minimal_control_audit() {
+    struct PrepareProbe(devworks_core::protocol::records::ProjectPurgeManifest);
+    impl devworks_core::ports::CommandHandler for PrepareProbe {
+        fn decide(
+            &self,
+            _: &InvocationContext,
+            _: &devworks_core::gateway::AdmittedCommand,
+            _: &mut dyn WriteTransaction,
+        ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
+            Ok(devworks_core::ports::Decided {
+                decision: DomainDecision::Applied {
+                    result: OperationResult::ProjectsPreparePurge {
+                        value: self.0.clone(),
+                    },
+                },
+                operation_id: None,
+            })
+        }
+    }
+    let fx = Fx::new();
+    let p = fx.create("private control digest project", &[]);
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&p.id)
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let before = assess();
+    let manifest=serde_json::from_value(json!({"id":"control-manifest","projectId":p.id,"revision":"1","projectRevision":p.revision,"digest":"a".repeat(64),"phase":"Prepared","recordCount":"2","managedByteCount":"0","keptRecordCount":"1","keptByteCount":"0","pendingEffects":"0","createdAtMs":T0.to_string()})).unwrap();
+    let mut frame: Value = serde_json::from_str(&Fx::frame(
+        "projects.prepare_purge",
+        "control-digest-preview",
+        json!({"projectId":p.id,"expectedRevision":p.revision}),
+    ))
+    .unwrap();
+    frame["schemaRevision"] = json!(6);
+    let authority = fx.authority();
+    let gateway = Gateway {
+        authority: &authority,
+        store: fx.store.as_ref(),
+        ids: fx.h.ids.as_ref(),
+    };
+    let reply = gateway
+        .command(
+            &fx.user(),
+            "projects.prepare_purge",
+            frame.to_string().as_bytes(),
+            Arc::new(PrepareProbe(manifest)),
+        )
+        .unwrap();
+    assert!(
+        matches!(reply,CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..}))
+    );
+    let after = assess();
+    assert_ne!(
+        before.snapshot.digest, after.snapshot.digest,
+        "the gateway really appended its control audit"
+    );
+    assert_eq!(
+        before.digest, after.digest,
+        "minimal validated control publication cannot stale its own business review"
+    );
+    assert_eq!(
+        after
+            .rows
+            .iter()
+            .filter(|r| r.reason == ProjectPurgeRowReason::PurgeControlAudit)
+            .count(),
+        3
+    );
+    let event=fx.h.raw().query_row("SELECT seq,payload_json FROM events WHERE kind='CommandDecided' AND json_extract(payload_json,'$.operation')='projects.prepare_purge'",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?))).unwrap();
+    let mut payload: Value = serde_json::from_str(&event.1).unwrap();
+    payload["subject"] = json!({"privateBody":"unexpected copied content"});
+    fx.h.raw()
+        .execute(
+            "UPDATE events SET payload_json=?1 WHERE seq=?2",
+            rusqlite::params![payload.to_string(), event.0],
+        )
+        .unwrap();
+    let changed = assess();
+    assert_ne!(
+        before.digest, changed.digest,
+        "unknown control content remains business content"
+    );
+    assert!(
+        !changed
+            .rows
+            .iter()
+            .any(|r| r.reason == ProjectPurgeRowReason::PurgeControlAudit)
+    );
+    assert_eq!(
+        fx.get(&fx.user(), &p.id).unwrap().name.0,
+        "private control digest project"
+    );
+}
+
+#[test]
+fn purge_manifest_storage_refuses_stale_store_project_and_entry_fences_atomically() {
+    let h = Harness::new();
+    let store = h.store();
+    let prepared = purge_storage_fixture(&store);
+    for mode in 0..7 {
+        let mut invalid = prepared.clone();
+        match mode {
+            0 => invalid.restore_epoch += 1,
+            1 => invalid.scope_revision += 1,
+            2 => invalid.manifest.project_revision = Revision::new(2).unwrap(),
+            3 => invalid.entries.push(invalid.entries[0].clone()),
+            4 => invalid.policy_digest = "invalid".into(),
+            5 => invalid.store_id = devworks_core::protocol::StoreId(id("another-store")),
+            _ => {}
+        }
+        invalid.manifest.digest = project_purge_digest(&invalid).try_into().unwrap();
+        if mode == 6 {
+            invalid.manifest.digest = "e".repeat(64).try_into().unwrap();
+        }
+        assert!(
+            run_write(&store, WriteOptions::default(), move |tx| tx
+                .projects()
+                .insert_purge_manifest(&invalid))
+            .is_err(),
+            "mode {mode}"
+        );
+        assert!(
+            read_snapshot(&store, &ReadOptions::default(), |r| r
+                .projects()
+                .purge_manifest(&project("purge-a"), &id("purge-manifest")))
+            .unwrap()
+            .is_none()
+        );
+    }
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().insert_purge_manifest(&prepared)
+    })
+    .unwrap();
+    let migration = MIGRATIONS.iter().find(|m| m.version == 36).unwrap();
+    assert_eq!(
+        (migration.minimum_reader, migration.minimum_writer),
+        (36, 36)
+    );
+    assert!(!migration.rebuilds_tables);
+}
+
+#[test]
+fn purge_migrations_refuse_an_older_reader_before_changing_the_store() {
+    let h = Harness::new();
+    drop(h.store());
+    let before = super::file_digest(&h);
+    let boot_count = super::boots(&h);
+    match SqliteStore::open_with(h.config(), &through(35)) {
+        Err(StorageError::IncompatibleSchema(message)) => {
+            assert!(message.contains("reader version 38"))
+        }
+        _ => panic!("an older reader must not interpret compact purge identities"),
+    }
+    assert_eq!(super::file_digest(&h), before);
+    assert_eq!(super::boots(&h), boot_count);
+    let current = h.store();
+    assert!(current.integrity_check().unwrap().problems.is_empty());
+}
+
+fn managed_reservation(store: &SqliteStore, name: &str) -> ProjectManagedFileReservation {
+    let info = store.info();
+    ProjectManagedFileReservation {
+        id: id(name),
+        project_id: project("purge-a"),
+        kind: "DiagnosticExport".into(),
+        relative_path: format!("{name}.jsonl"),
+        root: devworks_core::authority::destructive::FileIdentity { volume: 1, file: 2 },
+        created_identity: None,
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        boot_id: info.boot_id,
+        created_at_ms: T0,
+    }
+}
+
+#[test]
+fn client_paste_custody_uses_stored_session_scope_and_preserves_independent_files() {
+    use crate::fs::client_staging::NativeClientStagingFiles;
+    let fx = Fx::new();
+    let p = fx.create("paste project", &[]);
+    let project_id = p.id.clone();
+    fx.write(move |tx| {
+        for (name, scope) in [
+            ("project-paste-session", Some(project_id)),
+            ("home-paste-session", None),
+        ] {
+            tx.sessions().insert_session(&StoredSession {
+                id: id(name),
+                conversation_id: id(&format!("{name}-conversation")),
+                agent_id: actor("user-a"),
+                project_id: scope,
+                root_id: None,
+                title: "private session".into(),
+                context_epoch: 0,
+                revision: 1,
+                created_by: actor("user-a"),
+                created_at_ms: T0,
+                closed_at_ms: None,
+                closed_by: None,
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            })?;
+        }
+        Ok(())
+    });
+    let root = fx.h.root.0.join("staging-ui");
+    let files = NativeClientStagingFiles::new(root.clone(), fx.store.clone());
+    let path = files
+        .write(
+            Some(&id("project-paste-session")),
+            &id("owned-paste"),
+            b"private PNG bytes",
+        )
+        .unwrap();
+    let stored = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().project_managed_file(&p.id, &id("owned-paste"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(stored.kind, "ClientPaste");
+    assert_eq!(stored.witness.byte_count, 17);
+    assert_eq!(
+        stored.witness.identity,
+        crate::fs::identity_at(&path, &std::fs::metadata(&path).unwrap()).unwrap()
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"private PNG bytes");
+    assert!(
+        files
+            .write(
+                Some(&id("project-paste-session")),
+                &id("owned-paste"),
+                b"replacement"
+            )
+            .is_err()
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"private PNG bytes");
+    for (session, name) in [
+        (Some(id("home-paste-session")), "home-paste"),
+        (None, "new-paste"),
+    ] {
+        let path = files
+            .write(session.as_ref(), &id(name), b"independent PNG")
+            .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"independent PNG");
+    }
+    assert_eq!(
+        fx.h.raw()
+            .query_row("SELECT COUNT(*) FROM project_managed_files", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(
+        files
+            .write(
+                Some(&id("missing-session")),
+                &id("missing-paste"),
+                b"must not appear"
+            )
+            .is_err()
+    );
+    assert!(!root.join("missing-paste.png").exists());
+    let collision = root.join("independent-collision.png");
+    std::fs::write(&collision, b"independent input").unwrap();
+    assert!(
+        files
+            .write(
+                Some(&id("project-paste-session")),
+                &id("independent-collision"),
+                b"replacement"
+            )
+            .is_err()
+    );
+    assert_eq!(std::fs::read(collision).unwrap(), b"independent input");
+    assert!(
+        !read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().pending_project_managed_writes(&p.id)
+        })
+        .unwrap()
+    );
+}
+
+#[test]
+fn client_paste_refuses_ambiguous_legacy_session_scope_before_creating_bytes() {
+    use crate::fs::client_staging::NativeClientStagingFiles;
+    let fx = Fx::new();
+    let p = fx.create("legacy paste project", &[]);
+    fx.seed_roots(&p.id, &["legacy-paste-root"]);
+    fx.write(|tx| {
+        tx.sessions().insert_session(&StoredSession {
+            id: id("legacy-paste-session"),
+            conversation_id: id("legacy-paste-conversation"),
+            agent_id: actor("user-a"),
+            project_id: None,
+            root_id: Some(RootId(id("legacy-paste-root"))),
+            title: "legacy session".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor("user-a"),
+            created_at_ms: T0,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })
+    });
+    let root = fx.h.root.0.join("staging-ui");
+    let files = NativeClientStagingFiles::new(root.clone(), fx.store.clone());
+    assert!(
+        files
+            .write(
+                Some(&id("legacy-paste-session")),
+                &id("legacy-paste"),
+                b"private bytes"
+            )
+            .is_err()
+    );
+    assert!(!root.join("legacy-paste.png").exists());
+    assert_eq!(
+        fx.h.raw()
+            .query_row("SELECT COUNT(*) FROM project_managed_files", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
+    use crate::fs::client_staging::NativeClientStagingFiles;
+    use std::io::Write;
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    purge_storage_fixture(store.as_ref());
+    let root = h.root.0.join("staging-ui");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut reservation = managed_reservation(store.as_ref(), "interrupted-paste");
+    reservation.kind = "ClientPaste".into();
+    reservation.relative_path = "interrupted-paste.png".into();
+    reservation.root = crate::fs::identity_at(&root, &std::fs::metadata(&root).unwrap()).unwrap();
+    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&reservation)
+    })
+    .unwrap();
+    let path = root.join("interrupted-paste.png");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .unwrap();
+    let identity = crate::fs::identity_for_file(&file).unwrap();
+    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().begin_project_managed_file_write(
+            &project("purge-a"),
+            &id("interrupted-paste"),
+            identity,
+        )
+    })
+    .unwrap();
+    file.write_all(b"interrupted private PNG").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let files = NativeClientStagingFiles::new(root.clone(), store.clone());
+    let independent = files
+        .write(None, &id("workspace-paste"), b"workspace PNG")
+        .unwrap();
+    files.recover_abandoned().unwrap();
+    assert!(
+        path.exists(),
+        "current-boot writing is never mistaken for an abandoned producer"
+    );
+    drop(files);
+    drop(store);
+    let store = Arc::new(h.store());
+    let files = NativeClientStagingFiles::new(root, store.clone());
+    files.recover_abandoned().unwrap();
+    assert!(!path.exists());
+    assert_eq!(std::fs::read(independent).unwrap(), b"workspace PNG");
+    assert!(
+        !read_snapshot(store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects()
+                .pending_project_managed_writes(&project("purge-a"))
+        })
+        .unwrap()
+    );
+    files.recover_abandoned().unwrap();
+}
+
+#[test]
+fn client_paste_recovery_holds_a_replaced_file_without_deleting_either_identity() {
+    use crate::fs::client_staging::NativeClientStagingFiles;
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    purge_storage_fixture(store.as_ref());
+    let root = h.root.0.join("staging-ui");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut reserved = managed_reservation(store.as_ref(), "replaced-paste");
+    reserved.kind = "ClientPaste".into();
+    reserved.relative_path = "replaced-paste.png".into();
+    reserved.root = crate::fs::identity_at(&root, &std::fs::metadata(&root).unwrap()).unwrap();
+    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&reserved)
+    })
+    .unwrap();
+    let path = root.join("replaced-paste.png");
+    std::fs::write(&path, b"original private bytes").unwrap();
+    let identity = crate::fs::identity_at(&path, &std::fs::metadata(&path).unwrap()).unwrap();
+    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().begin_project_managed_file_write(
+            &project("purge-a"),
+            &id("replaced-paste"),
+            identity,
+        )
+    })
+    .unwrap();
+    let moved = h.root.0.join("retained-original");
+    std::fs::rename(&path, &moved).unwrap();
+    std::fs::write(&path, b"independent replacement").unwrap();
+    drop(store);
+    let store = Arc::new(h.store());
+    let files = NativeClientStagingFiles::new(root, store.clone());
+    assert!(files.recover_abandoned().is_err());
+    assert_eq!(std::fs::read(path).unwrap(), b"independent replacement");
+    assert_eq!(std::fs::read(moved).unwrap(), b"original private bytes");
+    assert!(
+        read_snapshot(store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects()
+                .pending_project_managed_writes(&project("purge-a"))
+        })
+        .unwrap()
+    );
+}
+
+#[test]
+fn client_staging_custody_covers_plan_and_convention_sources_without_claiming_workspace_inputs() {
+    use crate::fs::{client_staging::NativeClientStagingFiles, purge::NativeProjectPurgeFiles};
+    use devworks_core::ports::project_purge::{
+        ProjectPurgeFiles, PurgeFileOwner, PurgeFileSelection,
+    };
+    let fx = Fx::new();
+    let p = fx.create("text staging project", &[]);
+    let root = fx.h.root.0.join("staging-ui");
+    let files = NativeClientStagingFiles::new(root.clone(), fx.store.clone());
+    let mut owners = Vec::new();
+    let mut paths = Vec::new();
+    for extension in ["md", "txt", "json"] {
+        let file_id = id(&format!("private-{extension}"));
+        paths.push(
+            files
+                .write_project(Some(&p.id), &file_id, extension, b"private editor bytes")
+                .unwrap(),
+        );
+        owners.push(PurgeFileOwner::ClientStaging { file_id });
+    }
+    let workspace = files
+        .write_project(None, &id("workspace-editor"), "txt", b"workspace editor")
+        .unwrap();
+    let picked = root.join("picked-input.txt");
+    std::fs::write(&picked, b"independent picked file").unwrap();
+    let info = fx.store.info();
+    let selection = PurgeFileSelection {
+        project_id: p.id.clone(),
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        owners,
+    };
+    let physical = NativeProjectPurgeFiles::new(
+        fx.h.root.0.clone(),
+        fx.h.root.0.join("cache"),
+        fx.store.clone(),
+    )
+    .with_paste_root(root);
+    let snapshot = physical.inventory(&selection, &mut || false).unwrap();
+    assert_eq!(snapshot.files.len(), 3);
+    assert!(
+        snapshot
+            .files
+            .iter()
+            .all(|f| matches!(f.owner, PurgeFileOwner::ClientStaging { .. }))
+    );
+    for witness in &snapshot.files {
+        physical.remove_reviewed(witness, &mut || false).unwrap()
+    }
+    assert!(paths.iter().all(|p| !p.exists()));
+    assert_eq!(std::fs::read(workspace).unwrap(), b"workspace editor");
+    assert_eq!(std::fs::read(picked).unwrap(), b"independent picked file");
+}
+
+#[test]
+fn client_staging_migration_preserves_existing_custody_and_fences_older_builds() {
+    let h = Harness::new();
+    let store = SqliteStore::open_with(h.config(), &through(36)).unwrap();
+    purge_storage_fixture(&store);
+    let reserved = managed_reservation(&store, "prior-custody");
+    let expected = reserved.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&reserved)
+    })
+    .unwrap();
+    drop(store);
+    let store = h.store();
+    let rows = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects()
+            .managed_file_recovery("DiagnosticExport", None, 500)
+    })
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, expected.id);
+    assert_eq!(rows[0].relative_path, expected.relative_path);
+    assert_eq!(rows[0].root, expected.root);
+    assert_eq!(rows[0].store_id, expected.store_id);
+    assert_eq!(rows[0].restore_epoch, expected.restore_epoch);
+    assert!(rows[0].writing);
+    drop(store);
+    let before = super::file_digest(&h);
+    assert!(matches!(
+        SqliteStore::open_with(h.config(), &through(36)),
+        Err(StorageError::IncompatibleSchema(_))
+    ));
+    assert_eq!(super::file_digest(&h), before);
+}
+fn managed_publication(r: &ProjectManagedFileReservation) -> StoredProjectManagedFile {
+    StoredProjectManagedFile {
+        id: r.id.clone(),
+        project_id: r.project_id.clone(),
+        kind: r.kind.clone(),
+        relative_path: r.relative_path.clone(),
+        created_at_ms: r.created_at_ms,
+        witness: devworks_core::ports::project_purge::PurgeFileWitness {
+            project_id: r.project_id.clone(),
+            store_id: r.store_id.clone(),
+            restore_epoch: r.restore_epoch,
+            owner: devworks_core::ports::project_purge::PurgeFileOwner::DiagnosticExport {
+                file_id: r.id.clone(),
+            },
+            root: r.root,
+            relative_entry: r.relative_path.clone(),
+            identity: devworks_core::authority::destructive::FileIdentity { volume: 1, file: 3 },
+            byte_count: 3,
+            content_digest: "a".repeat(64),
+            directory: false,
+            link: false,
+        },
+    }
+}
+#[test]
+fn managed_purge_file_reservations_survive_restart_block_preview_and_publish_only_the_reserved_identity()
+ {
+    let h = Harness::new();
+    let store = h.store();
+    let prepared = purge_storage_fixture(&store);
+    let reservation = managed_reservation(&store, "managed-export");
+    let saved = reservation.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&saved)
+    })
+    .unwrap();
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+    assert!(matches!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .insert_purge_manifest(&prepared)),
+        Err(StorageError::Busy)
+    ));
+    drop(store);
+    let store = h.store();
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+    let old = managed_publication(&reservation);
+    assert!(
+        matches!(
+            run_write(&store, WriteOptions::default(), move |tx| tx
+                .projects()
+                .register_project_managed_file(&old)),
+            Err(StorageError::ScopeDenied)
+        ),
+        "a restarted host cannot publish a previous boot's unfinished write"
+    );
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects()
+            .finish_project_managed_file(&project("purge-a"), &reservation.id)
+    })
+    .unwrap();
+    let reservation = managed_reservation(&store, "managed-recovered-export");
+    let saved = reservation.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&saved)
+    })
+    .unwrap();
+    let published = managed_publication(&reservation);
+    let mut wrong = published.clone();
+    wrong.witness.root.file += 1;
+    assert!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .register_project_managed_file(&wrong))
+        .is_err()
+    );
+    let saved = published.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().register_project_managed_file(&saved)
+    })
+    .unwrap();
+    assert!(
+        !read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .project_managed_file(
+                &project("purge-b"),
+                &id("managed-recovered-export")
+            ))
+        .unwrap()
+        .is_none()
+    );
+    let found = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects()
+            .project_managed_file(&project("purge-a"), &id("managed-recovered-export"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(found.witness, published.witness);
+    run_write(&store, WriteOptions::default(), |tx| {
+        tx.projects()
+            .finish_project_managed_file(&project("purge-a"), &id("managed-recovered-export"))
+    })
+    .unwrap();
+    let saved = published;
+    assert!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .register_project_managed_file(&saved))
+        .is_err(),
+        "retired file identities never revive"
+    );
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .project_managed_files(&project("purge-a"), None, 10))
+        .unwrap()
+        .is_empty()
+    );
+    let raw = h.raw();
+    let (path,witness):(String,String)=raw.query_row("SELECT relative_path,identity_json FROM project_managed_files WHERE id='managed-export'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+    assert!(path.is_empty());
+    assert_eq!(witness, "{}");
+}
+
+#[test]
+fn project_preview_writes_refuse_a_logically_purged_project_and_leave_workspace_cache_untouched() {
+    use devworks_core::ports::files::ArtifactFiles;
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let prepared = purge_storage_fixture(store.as_ref());
+    let files =
+        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"))
+            .with_store(store.clone());
+    let key = devworks_core::services::artifacts::preview::preview_id("before-purge");
+    files
+        .write_project_derived(&project("purge-a"), &key, b"private preview")
+        .unwrap();
+    assert_eq!(
+        files.read_derived(&key, 100).unwrap().unwrap(),
+        b"private preview"
+    );
+    assert!(
+        !read_snapshot(store.as_ref(), &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+    let mut manifest = prepared.manifest.clone();
+    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().insert_purge_manifest(&prepared)?;
+        tx.operations().record_intent(NewOperation {
+            id: devworks_core::protocol::OperationId(id("purge-preview-fence")),
+            root_id: None,
+            assignment_id: None,
+            capability: "projects.purge".into(),
+            schema_version: 6,
+            args_digest: "a".repeat(64),
+            payload: json!({}),
+        })?;
+        Ok(())
+    })
+    .unwrap();
+    manifest.phase = devworks_core::protocol::records::PurgePhase::RemovingBytes;
+    manifest.revision = Revision::new(2).unwrap();
+    manifest.operation_id = Some(devworks_core::protocol::OperationId(id(
+        "purge-preview-fence",
+    )));
+    manifest.pending_effects = Counter::new(1).unwrap();
+    h.raw().execute("UPDATE project_purge_manifests SET phase='RemovingBytes',revision=2,operation_id='purge-preview-fence',body_json=?1 WHERE id='purge-manifest'",[serde_json::to_string(&manifest).unwrap()]).unwrap();
+    let late = devworks_core::services::artifacts::preview::preview_id("late-purge");
+    assert!(
+        files
+            .write_project_derived(&project("purge-a"), &late, b"late private bytes")
+            .is_err()
+    );
+    assert!(files.read_derived(&late, 100).unwrap().is_none());
+    let workspace = devworks_core::services::artifacts::preview::preview_id("workspace-kept");
+    files.write_derived(&workspace, b"workspace cache").unwrap();
+    assert_eq!(
+        files.read_derived(&workspace, 100).unwrap().unwrap(),
+        b"workspace cache"
+    );
+}
+
+#[test]
+fn project_preview_recovery_discards_only_the_interrupted_native_key_after_restart() {
+    use devworks_core::ports::files::ArtifactFiles;
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let _ = purge_storage_fixture(store.as_ref());
+    let files =
+        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"))
+            .with_store(store.clone());
+    let workspace = devworks_core::services::artifacts::preview::preview_id("workspace-kept");
+    files.write_derived(&workspace, b"workspace cache").unwrap();
+    let key = devworks_core::services::artifacts::preview::preview_id("interrupted-key");
+    let dir = h.root.0.join("cache").join("artifact-previews");
+    let mut reserved = managed_reservation(store.as_ref(), "interrupted-preview");
+    reserved.kind = "Preview".into();
+    reserved.relative_path = key.clone();
+    reserved.root = crate::fs::identity_at(&dir, &std::fs::metadata(&dir).unwrap()).unwrap();
+    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&reserved)
+    })
+    .unwrap();
+    let temp = dir.join(format!("{key}.123-1.tmp"));
+    std::fs::write(&temp, b"interrupted private cache").unwrap();
+    drop(files);
+    drop(store);
+    let store = Arc::new(h.store());
+    assert!(
+        read_snapshot(store.as_ref(), &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+    let files =
+        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"))
+            .with_store(store.clone());
+    files.recover_project_derived().unwrap();
+    assert!(!temp.exists());
+    assert!(
+        !read_snapshot(store.as_ref(), &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+    assert_eq!(
+        files.read_derived(&workspace, 100).unwrap().unwrap(),
+        b"workspace cache"
+    );
+}
+
+fn native_managed_file(
+    store: &SqliteStore,
+    root: &std::path::Path,
+    name: &str,
+    kind: &str,
+    owner: devworks_core::ports::project_purge::PurgeFileOwner,
+    binding: &devworks_core::ports::project_purge::PurgeFileSelection,
+) {
+    std::fs::create_dir_all(root).unwrap();
+    let mut reservation = managed_reservation(store, name);
+    reservation.kind = kind.into();
+    reservation.relative_path = name.into();
+    reservation.root = crate::fs::identity_at(root, &std::fs::metadata(root).unwrap()).unwrap();
+    let saved = reservation.clone();
+    run_write(store, WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&saved)
+    })
+    .unwrap();
+    std::fs::write(root.join(name), b"owned transient bytes").unwrap();
+    let witness =
+        crate::fs::purge::capture_managed_file(root, binding, name, owner, &mut || false).unwrap();
+    let live = StoredProjectManagedFile {
+        id: reservation.id,
+        project_id: reservation.project_id,
+        kind: reservation.kind,
+        relative_path: reservation.relative_path,
+        created_at_ms: T0,
+        witness,
+    };
+    run_write(store, WriteOptions::default(), move |tx| {
+        tx.projects().register_project_managed_file(&live)
+    })
+    .unwrap();
+}
+
+#[test]
+fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_generations() {
+    use devworks_core::ports::project_purge::{
+        ProjectPurgeFiles, PurgeFileOwner as O, PurgeFileSelection,
+    };
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let _ = purge_storage_fixture(store.as_ref());
+    let data = &h.root.0;
+    let cache = data.join("cache");
+    let paste = data.join("paste");
+    let digest = devworks_core::fingerprint::sha256_hex(b"owned blob");
+    let version = id("purge-version");
+    let key = devworks_core::services::artifacts::preview::preview_id(version.as_str());
+    let blob = format!("artifacts/sha256/{}/{}.g1", &digest[..2], digest);
+    let independent = format!("artifacts/sha256/{}/{}.g2", &digest[..2], digest);
+    let mut kept = vec![
+        independent,
+        "staging/other.part".into(),
+        "quarantine/other.g1.1".into(),
+        "browser/sessions/other/profile".into(),
+        "source/.git/config".into(),
+        "source/main.rs".into(),
+    ];
+    let owned = [
+        blob,
+        "staging/purge-op.part".into(),
+        format!("quarantine/{digest}.g1.123-1"),
+        "browser/sessions/purge-session/nested/profile".into(),
+    ];
+    for name in owned.iter().chain(kept.iter()) {
+        let path = data.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"fixture bytes").unwrap();
+    }
+    std::fs::create_dir_all(data.join("browser/sessions/purge-session/empty")).unwrap();
+    std::fs::create_dir_all(cache.join("artifact-previews")).unwrap();
+    for name in [&key, &format!("{key}.123-1.tmp"), "workspace-cache"] {
+        std::fs::write(cache.join("artifact-previews").join(name), b"preview bytes").unwrap();
+    }
+    kept.push("cache/artifact-previews/workspace-cache".into());
+    let info = store.info();
+    let selection = PurgeFileSelection {
+        project_id: project("purge-a"),
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        owners: vec![
+            O::Blob {
+                digest: digest.clone(),
+                generation: "g1".into(),
+            },
+            O::ArtifactStaging {
+                operation_id: id("purge-op"),
+            },
+            O::Quarantine {
+                digest,
+                generation: "g1".into(),
+            },
+            O::Preview {
+                version_id: version,
+            },
+            O::BrowserProfile {
+                session_id: id("purge-session"),
+            },
+            O::DiagnosticExport {
+                file_id: id("purge-export"),
+            },
+            O::ClientPaste {
+                file_id: id("purge-paste"),
+            },
+        ],
+    };
+    native_managed_file(
+        store.as_ref(),
+        &data.join("diagnostics/exports"),
+        "purge-export",
+        "DiagnosticExport",
+        selection.owners[5].clone(),
+        &selection,
+    );
+    native_managed_file(
+        store.as_ref(),
+        &paste,
+        "purge-paste",
+        "ClientPaste",
+        selection.owners[6].clone(),
+        &selection,
+    );
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        data.join("source/main.rs"),
+        data.join("browser/sessions/purge-session/source-link"),
+    )
+    .unwrap();
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(
+                data.join("browser")
+                    .join("sessions")
+                    .join("purge-session")
+                    .join("source-link"),
+            )
+            .arg(data.join("source"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "fixture junction creation: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let files = crate::fs::purge::NativeProjectPurgeFiles::new(data.clone(), cache, store)
+        .with_paste_root(paste)
+        .with_read_fence(Arc::new(
+            devworks_core::services::artifacts::lifecycle::Readers::default(),
+        ));
+    let mut snapshot = files.inventory(&selection, &mut || false).unwrap();
+    for owner in &selection.owners {
+        assert!(
+            snapshot.files.iter().any(|w| w.owner == *owner),
+            "missing class {owner:?}"
+        );
+    }
+    snapshot.files.sort_by_key(|w| {
+        (
+            std::cmp::Reverse(w.relative_entry.matches('/').count()),
+            w.directory,
+        )
+    });
+    for w in &snapshot.files {
+        files.remove_reviewed(w, &mut || false).unwrap();
+    }
+    for w in &snapshot.files {
+        files.remove_reviewed(w, &mut || false).unwrap();
+    }
+    assert!(
+        files
+            .inventory(&selection, &mut || false)
+            .unwrap()
+            .files
+            .is_empty()
+    );
+    for path in owned {
+        assert!(!data.join(path).exists());
+    }
+    assert!(!data.join("browser/sessions/purge-session").exists());
+    for path in kept {
+        assert!(
+            data.join(&path).exists(),
+            "independent file removed: {path}"
+        );
+    }
+    assert_eq!(
+        std::fs::read(data.join("source/main.rs")).unwrap(),
+        b"fixture bytes"
+    );
+    assert_eq!(
+        std::fs::read(data.join("source/.git/config")).unwrap(),
+        b"fixture bytes"
+    );
+}
+
+#[test]
+fn native_purge_files_refuse_replacements_new_entries_wrong_bindings_and_forged_names() {
+    use devworks_core::ports::project_purge::{
+        ProjectPurgeFiles, PurgeFileFault, PurgeFileOwner as O, PurgeFileSelection,
+    };
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let _ = purge_storage_fixture(store.as_ref());
+    let root = h.root.0.join("browser/sessions/purge-session");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("profile"), b"original").unwrap();
+    let info = store.info();
+    let selection = PurgeFileSelection {
+        project_id: project("purge-a"),
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        owners: vec![O::BrowserProfile {
+            session_id: id("purge-session"),
+        }],
+    };
+    let files = crate::fs::purge::NativeProjectPurgeFiles::new(
+        h.root.0.clone(),
+        h.root.0.join("cache"),
+        store,
+    );
+    let snapshot = files.inventory(&selection, &mut || false).unwrap();
+    let profile = snapshot.files.iter().find(|w| !w.directory).unwrap();
+    let dir = snapshot.files.iter().find(|w| w.directory).unwrap();
+    let mut forged = profile.clone();
+    forged.relative_entry = "other-session/profile".into();
+    assert_eq!(
+        files.remove_reviewed(&forged, &mut || false),
+        Err(PurgeFileFault::Unattributed)
+    );
+    let mut stale = profile.clone();
+    stale.restore_epoch += 1;
+    assert_eq!(
+        files.remove_reviewed(&stale, &mut || false),
+        Err(PurgeFileFault::Changed)
+    );
+    assert_eq!(
+        files.remove_reviewed(profile, &mut || true),
+        Err(PurgeFileFault::Cancelled)
+    );
+    std::fs::write(root.join("profile"), b"modified").unwrap();
+    assert_eq!(
+        files.remove_reviewed(profile, &mut || false),
+        Err(PurgeFileFault::Changed)
+    );
+    std::fs::rename(root.join("profile"), root.join("held-original")).unwrap();
+    std::fs::write(root.join("profile"), b"original").unwrap();
+    assert_eq!(
+        files.remove_reviewed(profile, &mut || false),
+        Err(PurgeFileFault::Changed)
+    );
+    std::fs::remove_file(root.join("profile")).unwrap();
+    std::fs::remove_file(root.join("held-original")).unwrap();
+    std::fs::write(root.join("unreviewed"), b"new private bytes").unwrap();
+    assert_eq!(
+        files.remove_reviewed(dir, &mut || false),
+        Err(PurgeFileFault::InUse)
+    );
+    assert_eq!(
+        std::fs::read(root.join("unreviewed")).unwrap(),
+        b"new private bytes"
+    );
+    std::fs::remove_file(root.join("unreviewed")).unwrap();
+    files.remove_reviewed(dir, &mut || false).unwrap();
+    assert!(!root.exists());
+}
+
+#[test]
+fn native_purge_files_require_the_published_transient_file_identity_and_content() {
+    use devworks_core::ports::project_purge::{
+        ProjectPurgeFiles, PurgeFileFault, PurgeFileOwner as O, PurgeFileSelection,
+    };
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let _ = purge_storage_fixture(store.as_ref());
+    let root = h.root.0.join("diagnostics/exports");
+    let info = store.info();
+    let selection = PurgeFileSelection {
+        project_id: project("purge-a"),
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        owners: vec![O::DiagnosticExport {
+            file_id: id("purge-export"),
+        }],
+    };
+    native_managed_file(
+        store.as_ref(),
+        &root,
+        "purge-export",
+        "DiagnosticExport",
+        selection.owners[0].clone(),
+        &selection,
+    );
+    let files = crate::fs::purge::NativeProjectPurgeFiles::new(
+        h.root.0.clone(),
+        h.root.0.join("cache"),
+        store,
+    );
+    let snapshot = files.inventory(&selection, &mut || false).unwrap();
+    let original = &snapshot.files[0];
+    std::fs::write(root.join("purge-export"), b"unreviewed replacement bytes").unwrap();
+    assert!(matches!(
+        files.inventory(&selection, &mut || false),
+        Err(PurgeFileFault::Changed)
+    ));
+    let mut forged = original.clone();
+    forged.content_digest = devworks_core::fingerprint::sha256_hex(b"unreviewed replacement bytes");
+    forged.byte_count = b"unreviewed replacement bytes".len() as u64;
+    assert_eq!(
+        files.remove_reviewed(&forged, &mut || false),
+        Err(PurgeFileFault::Changed)
+    );
+    assert_eq!(
+        std::fs::read(root.join("purge-export")).unwrap(),
+        b"unreviewed replacement bytes"
+    );
+}
+
+#[test]
+fn purge_preparation_refuses_unreviewed_tables_columns_indexes_and_triggers_without_mutation() {
+    for change in [
+        "CREATE TABLE future_project_records(project_id TEXT,private_body TEXT)",
+        "ALTER TABLE projects ADD COLUMN future_private_body TEXT",
+        "CREATE INDEX future_project_owner ON projects(title)",
+        "CREATE TRIGGER future_project_delete AFTER DELETE ON project_details BEGIN DELETE FROM project_repositories WHERE project_id=OLD.project_id; END",
+    ] {
+        let h = Harness::new();
+        let store = h.store();
+        let prepared = purge_storage_fixture(&store);
+        h.raw().execute_batch(change).unwrap();
+        assert!(
+            matches!(
+                run_write(&store, WriteOptions::default(), move |tx| tx
+                    .projects()
+                    .insert_purge_manifest(&prepared)),
+                Err(StorageError::IncompatibleSchema(_))
+            ),
+            "unreviewed shape accepted: {change}"
+        );
+        let raw = h.raw();
+        assert_eq!(
+            raw.query_row("SELECT count(*) FROM project_purge_manifests", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            raw.query_row("SELECT title FROM projects WHERE id='purge-a'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap(),
+            "private project title"
+        );
+        assert!(store.integrity_check().unwrap().problems.is_empty());
+    }
+}
+
+#[test]
+fn purge_planning_grants_require_typed_scope_and_preserve_monotonic_revocation_identity() {
+    let fx = Fx::new();
+    let p = fx.create("private grant project", &[]);
+    let other = fx.create("independent grant project", &[]);
+    fx.bind_agents(&p.id);
+    let mut grants = vec![];
+    for target in [Some(p.id.clone()), Some(other.id.clone()), None] {
+        let user = fx.user();
+        let grant = fx
+            .write(move |tx| {
+                Ok(auth::mint_grant(
+                    tx,
+                    &user,
+                    actor("agent-w"),
+                    GrantKind::Operation,
+                    GrantBinding {
+                        operation: "projects.archive".into(),
+                        action: None,
+                        request_digest: Some("a".repeat(64)),
+                        project_id: target,
+                        root_id: None,
+                        policy_digest: None,
+                    },
+                    GrantBounds {
+                        expires_at_ms: T0 + 60_000,
+                        uses: 1,
+                    },
+                ))
+            })
+            .unwrap();
+        grants.push(grant);
+    }
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&p.id)
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let plan = assess();
+    assert_eq!(
+        plan.rows
+            .iter()
+            .filter(|r| r.table == "authority_grants"
+                && r.action == ProjectPurgeRowAction::Scrub
+                && r.reason == ProjectPurgeRowReason::RevokedAuthority)
+            .count(),
+        1
+    );
+    assert!(
+        !plan
+            .unresolved
+            .iter()
+            .any(|r| r.table == "authority_grants"),
+        "{:?}",
+        plan.unresolved
+    );
+    let mut malformed = grants[0].binding.clone();
+    malformed["privateCopy"] = json!("unknown grant payload");
+    fx.h.raw()
+        .execute(
+            "UPDATE authority_grants SET binding_json=?1 WHERE id=?2",
+            rusqlite::params![malformed.to_string(), grants[0].id.as_str()],
+        )
+        .unwrap();
+    let held = assess();
+    assert!(
+        held.unresolved
+            .iter()
+            .any(|r| r.table == "authority_grants")
+    );
+    assert!(
+        !serde_json::to_string(&held.unresolved)
+            .unwrap()
+            .contains("unknown grant payload")
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row(
+                "SELECT count(*) FROM authority_grants WHERE state='Active' AND revision=1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        3,
+        "read-only preparation never consumes or revokes any grant"
+    );
+}
+
+#[test]
+fn purge_planning_intake_keeps_remote_deduplication_identity_and_removes_only_owned_edges() {
+    let fx = Fx::new();
+    let p = fx.create("private intake project", &[]);
+    let other = fx.create("independent intake project", &[]);
+    fx.seed_roots(&p.id, &["purge-local-work"]);
+    fx.seed_roots(&other.id, &["independent-local-work"]);
+    for (n, owner, work) in [
+        (1, &p.id, "purge-local-work"),
+        (2, &other.id, "independent-local-work"),
+    ] {
+        fx.h.raw()
+            .execute(
+                "INSERT INTO github_issue_intake VALUES('repo-1',?1,1,'Working',?2,?3,?4,NULL)",
+                rusqlite::params![
+                    n,
+                    owner.0.as_str(),
+                    work,
+                    json!({"title":"copied private remote snapshot"}).to_string()
+                ],
+            )
+            .unwrap();
+    }
+    for (record, owner, work) in [
+        ("owned-integration", &p.id, "purge-local-work"),
+        (
+            "independent-integration",
+            &other.id,
+            "independent-local-work",
+        ),
+    ] {
+        fx.h.raw().execute("INSERT INTO integration_records VALUES(?1,?2,'repo-1',?3,'issue',?1,1,'Observed',?4)",rusqlite::params![record,owner.0.as_str(),work,json!({"privateBody":"copied integration detail"}).to_string()]).unwrap();
+    }
+    fx.h.raw().execute_batch("INSERT INTO integration_links VALUES('owned-integration','independent-local-work','reference');INSERT INTO integration_links VALUES('independent-integration','purge-local-work','reference');INSERT INTO integration_links VALUES('independent-integration','independent-local-work','reference');").unwrap();
+    let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(plan.rows.iter().filter(|r|r.table=="github_issue_intake" && r.action==ProjectPurgeRowAction::Scrub).count(),1);
+    assert_eq!(
+        plan.rows
+            .iter()
+            .filter(|r| r.table == "integration_links" && r.action == ProjectPurgeRowAction::Delete)
+            .count(),
+        2
+    );
+    assert!(
+        !plan.unresolved.iter().any(|r| matches!(
+            r.table.as_str(),
+            "github_issue_intake" | "integration_links"
+        )),
+        "{:?}",
+        plan.unresolved
+    );
+    assert!(!format!("{:?}", plan.rows).contains("copied private remote snapshot"));
+    fx.h.raw()
+        .execute(
+            "UPDATE github_issue_intake SET state='UnknownLegacyState' WHERE issue_number=1",
+            [],
+        )
+        .unwrap();
+    let held = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        held.unresolved
+            .iter()
+            .any(|r| r.table == "github_issue_intake")
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row("SELECT count(*) FROM github_issue_intake", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row("SELECT count(*) FROM integration_links", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        3,
+        "planning changes neither local nor remote resources"
+    );
+}
+
+#[test]
+fn purge_planning_managed_metadata_holds_writing_and_forged_owners_before_native_inventory() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    let reservation = managed_reservation(&store, "private-managed-export");
+    let saved = reservation.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&saved)
+    })
+    .unwrap();
+    let assess = || {
+        read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("purge-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    assert!(
+        assess()
+            .unresolved
+            .iter()
+            .any(|r| r.table == "project_managed_files"
+                && r.reason == ProjectPurgeUnresolvedReason::ManagedBytes)
+    );
+    let publication = managed_publication(&reservation);
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().register_project_managed_file(&publication)
+    })
+    .unwrap();
+    let plan = assess();
+    assert!(plan.rows.iter().any(|r|r.table=="project_managed_files" && r.action==ProjectPurgeRowAction::Scrub));
+    assert!(!format!("{:?}", plan.rows).contains("private-managed-export"));
+    let original = h
+        .raw()
+        .query_row(
+            "SELECT identity_json FROM project_managed_files WHERE id=?1",
+            [reservation.id.as_str()],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap();
+    let mut forged: Value = serde_json::from_str(&original).unwrap();
+    forged["projectId"] = json!("purge-b");
+    h.raw()
+        .execute(
+            "UPDATE project_managed_files SET identity_json=?1 WHERE id=?2",
+            rusqlite::params![forged.to_string(), reservation.id.as_str()],
+        )
+        .unwrap();
+    assert!(
+        assess()
+            .unresolved
+            .iter()
+            .any(|r| r.table == "project_managed_files")
+    );
+    h.raw()
+        .execute(
+            "UPDATE project_managed_files SET identity_json=?1 WHERE id=?2",
+            rusqlite::params![original, reservation.id.as_str()],
+        )
+        .unwrap();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects()
+            .finish_project_managed_file(&reservation.project_id, &reservation.id)
+    })
+    .unwrap();
+    assert!(
+        assess().rows.iter().any(
+            |r| r.table == "project_managed_files" && r.action == ProjectPurgeRowAction::Delete
+        )
+    );
+}
+
+#[test]
+fn managed_created_identity_is_single_bind_current_boot_and_survives_restart_before_bytes() {
+    use devworks_core::authority::destructive::FileIdentity;
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    let reservation = managed_reservation(&store, "bound-before-private-bytes");
+    let saved = reservation.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&saved)
+    })
+    .unwrap();
+    let identity = FileIdentity { volume: 1, file: 3 };
+    for _ in 0..2 {
+        run_write(&store, WriteOptions::default(), move |tx| {
+            tx.projects().begin_project_managed_file_write(
+                &project("purge-a"),
+                &id("bound-before-private-bytes"),
+                identity,
+            )
+        })
+        .unwrap();
+    }
+    assert!(matches!(
+        run_write(&store, WriteOptions::default(), |tx| tx
+            .projects()
+            .begin_project_managed_file_write(
+                &project("purge-a"),
+                &id("bound-before-private-bytes"),
+                FileIdentity { volume: 1, file: 4 }
+            )),
+        Err(StorageError::ScopeDenied)
+    ));
+    let mut wrong = managed_publication(&reservation);
+    wrong.witness.identity = FileIdentity { volume: 1, file: 4 };
+    assert!(matches!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .register_project_managed_file(&wrong)),
+        Err(StorageError::ScopeDenied)
+    ));
+    let recovery = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects()
+            .managed_file_recovery("DiagnosticExport", None, 500)
+    })
+    .unwrap();
+    assert_eq!(recovery.len(), 1);
+    assert!(recovery[0].writing);
+    assert_eq!(recovery[0].file_identity, Some(identity));
+    drop(store);
+    let reopened = h.store();
+    let recovery = read_snapshot(&reopened, &ReadOptions::default(), |r| {
+        r.projects()
+            .managed_file_recovery("DiagnosticExport", None, 500)
+    })
+    .unwrap();
+    assert_eq!(
+        recovery[0].file_identity,
+        Some(identity),
+        "the actual create-new identity survives a crash before publication"
+    );
+    assert!(
+        matches!(
+            run_write(&reopened, WriteOptions::default(), move |tx| tx
+                .projects()
+                .begin_project_managed_file_write(
+                    &project("purge-a"),
+                    &id("bound-before-private-bytes"),
+                    identity
+                )),
+            Err(StorageError::ScopeDenied)
+        ),
+        "another boot cannot continue the previous write"
+    );
+    assert!(
+        read_snapshot(&reopened, &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+}
+
+#[test]
+fn purge_planning_legacy_project_root_without_session_scope_refuses_ownership_inference() {
+    let fx = Fx::new();
+    let p = fx.create("legacy scope fixture", &[]);
+    fx.seed_roots(&p.id, &["legacy-project-root"]);
+    fx.write(|tx| {
+        tx.sessions().insert_session(&StoredSession {
+            id: id("legacy-root-session"),
+            conversation_id: id("legacy-root-conversation"),
+            agent_id: actor("user-a"),
+            project_id: None,
+            root_id: Some(RootId(id("legacy-project-root"))),
+            title: "ambiguous private session".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor("user-a"),
+            created_at_ms: T0,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })
+    });
+    let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(!plan.is_resolved());
+    assert!(
+        plan.unresolved
+            .iter()
+            .any(|r| r.table == "sessions"
+                && r.reason == ProjectPurgeUnresolvedReason::LegacyMapping)
+    );
+    assert!(!format!("{:?}", plan.rows).contains("ambiguous private session"));
+    assert_eq!(
+        fx.h.raw()
+            .query_row(
+                "SELECT title FROM sessions WHERE id='legacy-root-session'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "ambiguous private session"
+    );
 }

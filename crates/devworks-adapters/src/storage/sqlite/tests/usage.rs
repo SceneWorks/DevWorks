@@ -246,6 +246,14 @@ fn usage28_migration_is_checksummed_old_writers_refused_and_new_records_reopen()
     })
     .unwrap();
     drop(old);
+    // Isolate this migration's writer floor before later reader-floor migrations.
+    drop(SqliteStore::open_with(h.config(), &through(28)).unwrap());
+    let old = SqliteStore::open_with(h.config(), &through(27)).unwrap();
+    assert!(matches!(
+        old.compatibility().unwrap().access,
+        AccessMode::ReadOnly { .. }
+    ));
+    drop(old);
     let s = seeded(&h);
     read_snapshot(&s, &ReadOptions::default(), |r| {
         let route = r.router().route_request(&id("legacy-request"))?.unwrap();
@@ -267,12 +275,6 @@ fn usage28_migration_is_checksummed_old_writers_refused_and_new_records_reopen()
     })
     .unwrap();
     drop(s);
-    let old = SqliteStore::open_with(h.config(), &through(27)).unwrap();
-    assert!(matches!(
-        old.compatibility().unwrap().access,
-        AccessMode::ReadOnly { .. }
-    ));
-    drop(old);
     let s = h.store();
     assert_eq!(
         read_snapshot(&s, &ReadOptions::default(), |r| r

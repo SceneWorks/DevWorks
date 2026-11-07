@@ -428,6 +428,29 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0035_settings_secrets.sql"),
         rebuilds_tables: false,
     },
+    // Compact purge identities and receipt outcomes require both new readers and writers.
+    Migration {
+        version: 36,
+        minimum_reader: 36,
+        minimum_writer: 36,
+        sql: include_str!("migrations/0036_project_purge.sql"),
+        rebuilds_tables: false,
+    },
+    // Preserve existing managed-file custody while recognizing all owned UI staging.
+    Migration {
+        version: 37,
+        minimum_reader: 37,
+        minimum_writer: 37,
+        sql: include_str!("migrations/0037_client_staging_custody.sql"),
+        rebuilds_tables: true,
+    },
+    Migration {
+        version: 38,
+        minimum_reader: 38,
+        minimum_writer: 38,
+        sql: include_str!("migrations/0038_purge_effect_leases.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

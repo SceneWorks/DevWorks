@@ -7150,6 +7150,13 @@ pub struct ReceiptObservation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_schema: Option<SchemaRef>,
     pub state: ReceiptLookupState,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PurgedReceiptOutcome", extend("x-since" = 6))]
+    pub purged: Option<PurgedReceiptOutcome>,
 }
 impl Check for ReceiptObservation {
     fn check(&self) -> Result<(), String> {
@@ -7160,11 +7167,20 @@ impl Check for ReceiptObservation {
         self.reply_artifact.check()?;
         self.reply_schema.check()?;
         self.state.check()?;
+        self.purged.check()?;
         super::domain_rules::record(
             "ReceiptObservation",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ReceiptObservation {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 6 {
+            self.purged = None;
+        }
     }
 }
 
@@ -16929,6 +16945,203 @@ impl Check for SchemaObjectMetadata {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PurgePhase {
+    Prepared,
+    RemovingBytes,
+    Held,
+    Complete,
+    Superseded,
+}
+impl Check for PurgePhase {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PurgeDisposition {
+    Remove,
+    Scrub,
+    Keep,
+}
+impl Check for PurgeDisposition {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PurgeEntryKind {
+    RecordClass,
+    ManagedFile,
+    SharedKeeper,
+}
+impl Check for PurgeEntryKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PurgedDecisionKind {
+    Applied,
+    Accepted,
+    NoChange,
+    Refused,
+}
+impl Check for PurgedDecisionKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PurgedReceiptOutcome {
+    pub command_id: CommandId,
+    pub committed_sequence: Revision,
+    pub accepted_at_ms: Counter,
+    pub request_digest: Digest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<OperationId>,
+    pub original_decision: PurgedDecisionKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_fault_code: Option<DomainErrorCode>,
+    pub purge_id: Id,
+}
+impl Check for PurgedReceiptOutcome {
+    fn check(&self) -> Result<(), String> {
+        self.command_id.check()?;
+        self.committed_sequence.check()?;
+        self.accepted_at_ms.check()?;
+        self.request_digest.check()?;
+        self.operation_id.check()?;
+        self.original_decision.check()?;
+        self.original_fault_code.check()?;
+        self.purge_id.check()?;
+        super::domain_rules::record(
+            "PurgedReceiptOutcome",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectPurgeManifest {
+    pub id: Id,
+    pub project_id: ProjectId,
+    pub revision: Revision,
+    pub project_revision: Revision,
+    pub digest: Digest,
+    pub phase: PurgePhase,
+    pub record_count: Counter,
+    pub managed_byte_count: Counter,
+    pub kept_record_count: Counter,
+    pub kept_byte_count: Counter,
+    pub pending_effects: Counter,
+    pub created_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<OperationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<Label>,
+}
+impl Check for ProjectPurgeManifest {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.project_id.check()?;
+        self.revision.check()?;
+        self.project_revision.check()?;
+        self.digest.check()?;
+        self.phase.check()?;
+        self.record_count.check()?;
+        self.managed_byte_count.check()?;
+        self.kept_record_count.check()?;
+        self.kept_byte_count.check()?;
+        self.pending_effects.check()?;
+        self.created_at_ms.check()?;
+        self.operation_id.check()?;
+        self.error_code.check()?;
+        super::domain_rules::record(
+            "ProjectPurgeManifest",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectPurgeEntry {
+    pub id: Digest,
+    pub kind: PurgeEntryKind,
+    pub record_class: Label,
+    pub disposition: PurgeDisposition,
+    pub record_count: Counter,
+    pub byte_count: Counter,
+    pub reason: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_path: Option<Text>,
+}
+impl Check for ProjectPurgeEntry {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.kind.check()?;
+        self.record_class.check()?;
+        self.disposition.check()?;
+        self.record_count.check()?;
+        self.byte_count.check()?;
+        self.reason.check()?;
+        self.relative_path.check()?;
+        super::domain_rules::record(
+            "ProjectPurgeEntry",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectPurgeManifestPage {
+    pub manifest: ProjectPurgeManifest,
+    pub entries: ProjectPurgeEntryPage,
+}
+impl Check for ProjectPurgeManifestPage {
+    fn check(&self) -> Result<(), String> {
+        self.manifest.check()?;
+        self.entries.check()?;
+        super::domain_rules::record(
+            "ProjectPurgeManifestPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectPurgeEntryPage {
+    pub items: Items<ProjectPurgeEntry>,
+    pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for ProjectPurgeEntryPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.has_more.check()?;
+        self.next_cursor.check()?;
+        super::domain_rules::record(
+            "ProjectPurgeEntryPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DomainQuery {
     #[serde(rename = "projects.list")]
@@ -18231,6 +18444,20 @@ pub enum DomainQuery {
     #[schemars(extend("x-since" = 3))]
     #[serde(rename = "router.embedding_spaces")]
     RouterEmbeddingSpaces { page: PageRequest },
+    #[schemars(extend("x-since" = 6))]
+    #[serde(rename = "projects.purge_manifest")]
+    ProjectsPurgeManifest {
+        project_id: ProjectId,
+        manifest_id: Id,
+        expected_revision: Revision,
+        page: PageRequest,
+    },
+    #[schemars(extend("x-since" = 6))]
+    #[serde(rename = "projects.purge_status")]
+    ProjectsPurgeStatus {
+        project_id: ProjectId,
+        manifest_id: Id,
+    },
 }
 impl DomainQuery {
     pub fn operation(&self) -> &'static str {
@@ -18377,6 +18604,8 @@ impl DomainQuery {
             Self::NextWorkInspectQueue { .. } => "next_work.inspect_queue",
             Self::ApprovalsReviewQueue { .. } => "approvals.review_queue",
             Self::RouterEmbeddingSpaces { .. } => "router.embedding_spaces",
+            Self::ProjectsPurgeManifest { .. } => "projects.purge_manifest",
+            Self::ProjectsPurgeStatus { .. } => "projects.purge_status",
         }
     }
 }
@@ -19519,6 +19748,24 @@ impl Check for DomainQuery {
             Self::RouterEmbeddingSpaces { page } => {
                 page.check()?;
             }
+            Self::ProjectsPurgeManifest {
+                project_id,
+                manifest_id,
+                expected_revision,
+                page,
+            } => {
+                project_id.check()?;
+                manifest_id.check()?;
+                expected_revision.check()?;
+                page.check()?;
+            }
+            Self::ProjectsPurgeStatus {
+                project_id,
+                manifest_id,
+            } => {
+                project_id.check()?;
+                manifest_id.check()?;
+            }
         }
         super::domain_rules::input(
             self.operation(),
@@ -19902,6 +20149,12 @@ impl Revisioned for DomainQuery {
                 Err("operation predates its introduction".into())
             }
             Self::RouterEmbeddingSpaces { .. } if revision < 3 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::ProjectsPurgeManifest { .. } if revision < 6 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::ProjectsPurgeStatus { .. } if revision < 6 => {
                 Err("operation predates its introduction".into())
             }
             Self::RepositoriesNodes { scope, .. } if revision >= 3 && scope.is_none() => {
@@ -21598,6 +21851,22 @@ pub enum DomainCommand {
         expected_revision: Revision,
         read: bool,
     },
+    #[schemars(extend("x-since" = 6))]
+    #[serde(rename = "projects.prepare_purge")]
+    ProjectsPreparePurge {
+        project_id: ProjectId,
+        expected_revision: Revision,
+    },
+    #[schemars(extend("x-since" = 6))]
+    #[serde(rename = "projects.purge")]
+    ProjectsPurge {
+        project_id: ProjectId,
+        manifest_id: Id,
+        expected_revision: Revision,
+        expected_digest: Digest,
+        expected_project_revision: Revision,
+        confirm: bool,
+    },
 }
 impl DomainCommand {
     pub fn operation(&self) -> &'static str {
@@ -21771,6 +22040,8 @@ impl DomainCommand {
             Self::ArtifactsTag { .. } => "artifacts.tag",
             Self::EvalsGrade { .. } => "evals.grade",
             Self::NotificationsMarkRead { .. } => "notifications.mark_read",
+            Self::ProjectsPreparePurge { .. } => "projects.prepare_purge",
+            Self::ProjectsPurge { .. } => "projects.purge",
         }
     }
 }
@@ -23591,6 +23862,28 @@ impl Check for DomainCommand {
                 expected_revision.check()?;
                 read.check()?;
             }
+            Self::ProjectsPreparePurge {
+                project_id,
+                expected_revision,
+            } => {
+                project_id.check()?;
+                expected_revision.check()?;
+            }
+            Self::ProjectsPurge {
+                project_id,
+                manifest_id,
+                expected_revision,
+                expected_digest,
+                expected_project_revision,
+                confirm,
+            } => {
+                project_id.check()?;
+                manifest_id.check()?;
+                expected_revision.check()?;
+                expected_digest.check()?;
+                expected_project_revision.check()?;
+                confirm.check()?;
+            }
         }
         super::domain_rules::input(
             self.operation(),
@@ -23982,6 +24275,12 @@ impl Revisioned for DomainCommand {
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::NotificationsMarkRead { .. } if revision < 3 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::ProjectsPreparePurge { .. } if revision < 6 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::ProjectsPurge { .. } if revision < 6 => {
                 Err("operation predates its introduction".into())
             }
             Self::RouterConfigure { action, .. } => {
@@ -24649,6 +24948,18 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 3))]
     #[serde(rename = "router.embedding_spaces")]
     RouterEmbeddingSpaces { value: EmbeddingSpacePage },
+    #[schemars(extend("x-since" = 6))]
+    #[serde(rename = "projects.prepare_purge")]
+    ProjectsPreparePurge { value: ProjectPurgeManifest },
+    #[schemars(extend("x-since" = 6))]
+    #[serde(rename = "projects.purge_manifest")]
+    ProjectsPurgeManifest { value: ProjectPurgeManifestPage },
+    #[schemars(extend("x-since" = 6))]
+    #[serde(rename = "projects.purge")]
+    ProjectsPurge { value: ProjectPurgeManifest },
+    #[schemars(extend("x-since" = 6))]
+    #[serde(rename = "projects.purge_status")]
+    ProjectsPurgeStatus { value: ProjectPurgeManifest },
     #[serde(rename = "runs.start")]
     RunsStart { value: RootSnapshot },
     #[serde(rename = "runs.pause")]
@@ -25075,6 +25386,10 @@ impl OperationResult {
             Self::ApprovalsReviewQueue { .. } => "approvals.review_queue",
             Self::NotificationsMarkRead { .. } => "notifications.mark_read",
             Self::RouterEmbeddingSpaces { .. } => "router.embedding_spaces",
+            Self::ProjectsPreparePurge { .. } => "projects.prepare_purge",
+            Self::ProjectsPurgeManifest { .. } => "projects.purge_manifest",
+            Self::ProjectsPurge { .. } => "projects.purge",
+            Self::ProjectsPurgeStatus { .. } => "projects.purge_status",
             Self::RunsStart { .. } => "runs.start",
             Self::RunsPause { .. } => "runs.pause",
             Self::RunsContinue { .. } => "runs.continue",
@@ -25441,6 +25756,10 @@ impl Check for OperationResult {
             Self::ApprovalsReviewQueue { value } => value.check()?,
             Self::NotificationsMarkRead { value } => value.check()?,
             Self::RouterEmbeddingSpaces { value } => value.check()?,
+            Self::ProjectsPreparePurge { value } => value.check()?,
+            Self::ProjectsPurgeManifest { value } => value.check()?,
+            Self::ProjectsPurge { value } => value.check()?,
+            Self::ProjectsPurgeStatus { value } => value.check()?,
             Self::RunsStart { value } => value.check()?,
             Self::RunsPause { value } => value.check()?,
             Self::RunsContinue { value } => value.check()?,
@@ -25635,6 +25954,7 @@ impl Revisioned for OperationResult {
             Self::ApprovalsReviewQueue { value } => value.retain_revision(revision),
             Self::NotificationsMarkRead { value } => value.retain_revision(revision),
             Self::RouterEmbeddingSpaces { value } => value.retain_revision(revision),
+            Self::HistoryCommandReceipt { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),
             Self::AddonsInstall { value } => value.retain_revision(revision),
@@ -25679,6 +25999,18 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::RouterEmbeddingSpaces { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ProjectsPreparePurge { .. } if revision < 6 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ProjectsPurgeManifest { .. } if revision < 6 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ProjectsPurge { .. } if revision < 6 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ProjectsPurgeStatus { .. } if revision < 6 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),

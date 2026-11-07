@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
-  "date": "2026-11-06",
-  "catalogSha256": "085730605dacb2ce7d0168a3e1c9b95fd8d61d3c2771e53157a8bd8455512c9c",
+  "date": "2026-11-07",
+  "catalogSha256": "4cb587925523074a21c8537d92690fc915543e1e064d89872ef8499ea76432bc",
   "familyCount": 49,
-  "operationCount": 360,
-  "concreteInputCandidates": 360,
+  "operationCount": 364,
+  "concreteInputCandidates": 364,
   "domainInputsPending": 0,
   "families": [
     {
@@ -52,7 +52,7 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "",
-          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive.",
+          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
           "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
@@ -98,7 +98,7 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "",
-          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive.",
+          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
           "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
@@ -152,7 +152,7 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": " Feature budget authoring (schema3) is feature-only: omitted existing/imported values preserve configuration, new feature defaultsOff. Only actual human authority may raise/remove an existing cap. Draft/import cap changes apply only with exact human approval; staging is not adoption. Raising/Off never clears a budget Continue latch or other holds. Issues/tasks/jobs have no independent cap.",
-          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive.",
+          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
           "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
@@ -198,7 +198,7 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "",
-          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive.",
+          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
           "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
@@ -244,7 +244,7 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "Replace membership atomically; authorize every added/removed repository and preserve shared registrations.",
-          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive.",
+          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
           "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
@@ -290,7 +290,7 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "Archive immediately fences active work. Deletion tombstones app records; never removes source Git resources. Concrete destructive confirmation where required.",
-          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive.",
+          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
           "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
@@ -336,7 +336,7 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "Archive immediately fences active work. Deletion tombstones app records; never removes source Git resources. Concrete destructive confirmation where required.",
-          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive.",
+          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
           "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
@@ -382,7 +382,195 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "Archive immediately fences active work. Deletion tombstones app records; never removes source Git resources. Concrete destructive confirmation where required.",
-          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive.",
+          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 6,
+          "operation": "projects.prepare_purge",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "projects.prepare_purge",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "projects.prepare_purge"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "projects.prepare_purge"
+          },
+          "resultValueType": "ProjectPurgeManifest",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 6,
+              "inputSchema": "domain-request.r6.schema.json",
+              "resultSchema": "operation-result.r6.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r6.schema.json",
+              "completionSchema": "operation-completion.r6.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Prepare a complete immutable ownership/file preview for a deleted quiescent project. Preparation does not authorize deletion.",
+          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 6,
+          "operation": "projects.purge_manifest",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "projects.purge_manifest",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "projects.purge_manifest"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "projects.purge_manifest"
+          },
+          "resultValueType": "ProjectPurgeManifestPage",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 6,
+              "inputSchema": "domain-request.r6.schema.json",
+              "resultSchema": "operation-result.r6.schema.json",
+              "queryReplySchema": "domain-query-reply.r6.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Every page is bound to the exact manifest revision, actor scope, policy and digest. Unknown ownership/schema refuses preview.",
+          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 6,
+          "operation": "projects.purge",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "projects.purge",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "projects.purge"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "HumanDecision",
+              "effect": "Journaled"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "projects.purge"
+          },
+          "resultValueType": "ProjectPurgeManifest",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 6,
+              "inputSchema": "domain-request.r6.schema.json",
+              "resultSchema": "operation-result.r6.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r6.schema.json",
+              "completionSchema": "operation-completion.r6.schema.json"
+            }
+          ],
+          "authority": "HumanDecision",
+          "effect": "Journaled",
+          "semanticRules": "Native Human confirmation only; exact reviewed digest/revision, fresh authority/quiescence/keepers. Commit selected logical rows and exact physical intents atomically. Report completion only after all reviewed managed effects settle. No Git/source/remote cleanup.",
+          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 6,
+          "operation": "projects.purge_status",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "projects.purge_status",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "projects.purge_status"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "projects.purge_status"
+          },
+          "resultValueType": "ProjectPurgeManifest",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 6,
+              "inputSchema": "domain-request.r6.schema.json",
+              "resultSchema": "operation-result.r6.schema.json",
+              "queryReplySchema": "domain-query-reply.r6.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Observe logical and physical completion and retryable holds honestly; preserve the original purge and operation identity.",
+          "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
           "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
@@ -3942,6 +4130,14 @@
               "inputSchema": "query-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 6,
+              "inputSchema": "query-request.r3.schema.json",
+              "resultSchema": "operation-result.r6.schema.json",
+              "queryReplySchema": "domain-query-reply.r6.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }

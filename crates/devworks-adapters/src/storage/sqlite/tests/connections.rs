@@ -3404,7 +3404,7 @@ fn account_identity_migration_initializes_existing_rows_and_fences_older_writers
          VALUES('old-native','Existing native','CompatibleChat','https://example.test/v1',7,'Connected',4,?1,?1)",
         [T0],
     ).unwrap();
-    let store = h.store();
+    let store = SqliteStore::open_with(h.config(), &super::through(29)).unwrap();
     let before = read_snapshot(&store, &ReadOptions::default(), |r| {
         r.router().connection(&id("old-native"))
     })

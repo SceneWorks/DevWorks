@@ -1327,6 +1327,9 @@ impl JobService {
             ""
         };
         Ok(Some(match outcome {
+            Ok(CommandReply::ReceiptPurged { outcome, .. }) => {
+                self.settle_purged(tx, &run, outcome)?
+            }
             Ok(CommandReply::Recorded { receipt, .. }) => {
                 self.settle_decision(tx, &run, &receipt.decision, late)?
             }
@@ -1431,6 +1434,41 @@ impl JobService {
             },
             run.revision,
         )
+    }
+
+    fn settle_purged(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        run: &StoredJobRun,
+        outcome: &crate::protocol::records::PurgedReceiptOutcome,
+    ) -> Result<StoredJobRun, StorageError> {
+        use crate::protocol::records::PurgedDecisionKind;
+        match outcome.original_decision {
+            PurgedDecisionKind::Applied | PurgedDecisionKind::NoChange => finish(
+                tx,
+                run,
+                "Succeeded",
+                Some(OperationState::ObservedComplete),
+                Some("the original command committed; its private receipt content was purged"),
+                json!({"receiptPurged":true,"commandId":outcome.command_id}),
+            ),
+            PurgedDecisionKind::Refused => finish(
+                tx,
+                run,
+                "Failed",
+                Some(OperationState::Failed),
+                Some("the original command was refused; its private receipt content was purged"),
+                json!({"receiptPurged":true,"commandId":outcome.command_id}),
+            ),
+            PurgedDecisionKind::Accepted => {
+                let operation_id = outcome.operation_id.clone().ok_or_else(|| {
+                    StorageError::InvalidRecord(
+                        "purged accepted receipt lacks its operation".into(),
+                    )
+                })?;
+                self.settle_decision(tx, run, &DomainDecision::Accepted { operation_id }, "")
+            }
+        }
     }
 
     fn settle_decision(
@@ -1717,6 +1755,10 @@ impl JobService {
             return Ok(false);
         };
         match self.native_receipt(tx, run)? {
+            Some(LedgerEntry::Purged(stored)) => {
+                self.settle_purged(tx, run, &stored.outcome)?;
+                Ok(true)
+            }
             Some(LedgerEntry::Current(stored)) => {
                 transition(
                     tx,

@@ -12,6 +12,141 @@ fn source(name: &str, shared: bool) -> StoredSchemaSource {
     StoredSchemaSource{configuration_revision:1,connection:serde_json::from_value(json!({"id":name,"revision":"1","name":name,"engine":"Sqlite","state":"Enabled","writesEnabled":false,"metadataOnly":true,"ownerId":"host","config":{"name":name,"engine":"Sqlite","endpoint":"/tmp/metadata-fixture.sqlite","catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"workspaceExposed":shared,"projectAccess":[{"projectId":"metadata-project","metadataEnabled":shared,"dataReadEnabled":false,"dataWriteEnabled":false}],"exposureMode":"SchemaOnly","authentication":"File"}})).unwrap(),owner_id:ActorId(id("host")),deleted:false,created_at_ms:T0,updated_at_ms:T0}
 }
 #[test]
+fn purge_planning_schema_leases_require_closed_body_and_matching_storage_columns() {
+    use devworks_core::protocol::{ProjectId, data::DataScope};
+    let h = Harness::new();
+    let s = h.store();
+    let project = ProjectId(id("purge-schema-project"));
+    let p = project.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.projects().insert_project(&StoredProject {
+            id: p,
+            name: "private schema project".into(),
+            description: "private body".into(),
+            lifecycle: DELETED.into(),
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            archived_at_ms: Some(T0),
+            deleted_at_ms: Some(T0),
+            archive_epoch: 1,
+            archive_stop_pending: false,
+        })?;
+        tx.schemas()
+            .create_schema_source(&source("purge-schema-source", false))?;
+        let operation = OperationId(id("purge-schema-index"));
+        tx.operations().record_intent(NewOperation {
+            id: operation.clone(),
+            root_id: None,
+            assignment_id: None,
+            capability: "schemas.index".into(),
+            schema_version: 5,
+            args_digest: sha256_hex(b"purge-schema-fixture"),
+            payload: json!({}),
+        })?;
+        tx.schemas().create_schema_view(&StoredSchemaView {
+            id: id("purge-schema-view"),
+            connection_id: id("purge-schema-source"),
+            source_revision: 1,
+            configuration_revision: 1,
+            coverage: serde_json::from_value(
+                json!({"state":"Complete","gaps":[],"moreGaps":false}),
+            )
+            .unwrap(),
+            operation_id: operation,
+            digest: sha256_hex(b"schema-view"),
+            sealed: false,
+            created_at_ms: T0,
+        })?;
+        tx.schemas().seal_schema_view(&id("purge-schema-view"))
+    })
+    .unwrap();
+    let pin = StoredSchemaReadPin {
+        id: id("project-schema-lease"),
+        owner_namespace: "opaque-lease-owner".into(),
+        store_id: s.info().store_id,
+        restore_epoch: s.info().restore_epoch,
+        scope_digest: sha256_hex(
+            serde_json::to_string(&DataScope::Project {
+                project_id: project.clone(),
+            })
+            .unwrap()
+            .as_bytes(),
+        ),
+        intent_digest: sha256_hex(b"lease-intent"),
+        connection_id: id("purge-schema-source"),
+        view_id: id("purge-schema-view"),
+        view_digest: sha256_hex(b"schema-view"),
+        configuration_revision: 1,
+        created_at_ms: T0,
+        expires_at_ms: T0 + 1000,
+    };
+    let mut other = pin.clone();
+    other.id = id("workspace-schema-lease");
+    other.scope_digest = sha256_hex(b"workspace");
+    let saved = pin.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.schemas().create_schema_pin(&saved)?;
+        tx.schemas().create_schema_pin(&other)
+    })
+    .unwrap();
+    let assess = || {
+        read_snapshot(&s, &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project)
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let plan = assess();
+    assert!(plan.is_resolved(), "{:?}", plan.unresolved);
+    assert_eq!(
+        plan.rows
+            .iter()
+            .filter(|r| r.table == "schema_read_pins"
+                && r.action == ProjectPurgeRowAction::Delete
+                && r.reason == ProjectPurgeRowReason::ScopedReadLease)
+            .count(),
+        1
+    );
+    let original = serde_json::to_value(&pin).unwrap();
+    let mut malformed = original.clone();
+    malformed["privateCopy"] = json!("unknown lease shape");
+    h.raw()
+        .execute(
+            "UPDATE schema_read_pins SET body_json=?1 WHERE id=?2",
+            rusqlite::params![malformed.to_string(), pin.id.as_str()],
+        )
+        .unwrap();
+    assert!(
+        assess()
+            .unresolved
+            .iter()
+            .any(|r| r.table == "schema_read_pins"
+                && r.reason == ProjectPurgeUnresolvedReason::TypedLease)
+    );
+    h.raw()
+        .execute(
+            "UPDATE schema_read_pins SET body_json=?1,expires_at=expires_at+1 WHERE id=?2",
+            rusqlite::params![original.to_string(), pin.id.as_str()],
+        )
+        .unwrap();
+    assert!(
+        assess()
+            .unresolved
+            .iter()
+            .any(|r| r.table == "schema_read_pins")
+    );
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT count(*) FROM schema_read_pins", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        2,
+        "assessment preserves both native leases"
+    );
+}
+#[test]
 fn source_visibility_precedes_keyset_limit_and_revision_cas_preserves_identity() {
     let h = Harness::new();
     let s = h.store();
@@ -2172,5 +2307,97 @@ fn native_schema_pin_preparation_survives_a_clock_tick_after_writer_admission() 
     assert_eq!(
         repeated.expires_at_ms, first.expires_at_ms,
         "clock progress must not renew the lease"
+    );
+}
+
+#[test]
+fn purge_planning_shared_source_access_keeps_independent_configuration_and_operation_identity() {
+    let h = Harness::new();
+    let s = h.store();
+    let project = devworks_core::protocol::ProjectId(id("metadata-project"));
+    let p = project.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.projects().insert_project(&StoredProject {
+            id: p,
+            name: "private source project".into(),
+            description: "private project body".into(),
+            lifecycle: DELETED.into(),
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            archived_at_ms: Some(T0),
+            deleted_at_ms: Some(T0),
+            archive_epoch: 1,
+            archive_stop_pending: false,
+        })
+    })
+    .unwrap();
+    h.raw().execute_batch("INSERT INTO work_items VALUES('source-purge-work','metadata-project','issue',NULL,NULL,NULL,'private owned work',1,0,1,1,1,'{}');").unwrap();
+    let mut shared = source("independent-shared-source", true);
+    shared.connection.config.as_mut().unwrap().project_access=Some(serde_json::from_value(json!([{"projectId":"metadata-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false},{"projectId":"other-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false}])).unwrap());
+    shared.connection.active_operation_id = Some(id("source-purge-operation"));
+    let saved = shared.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.operations().record_intent(NewOperation {
+            id: OperationId(id("source-purge-operation")),
+            root_id: Some(devworks_core::protocol::RootId(id("source-purge-work"))),
+            assignment_id: None,
+            capability: "schemas.refresh".into(),
+            schema_version: 5,
+            args_digest: sha256_hex(b"shared-source-operation"),
+            payload: json!({"privateCopy":"owned operation arguments"}),
+        })?;
+        tx.schemas().create_schema_source(&saved)
+    })
+    .unwrap();
+    let assess = || {
+        read_snapshot(&s, &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project)
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let plan = assess();
+    assert!(plan.rows.iter().any(|r| r.table == "schema_sources"
+        && r.action == ProjectPurgeRowAction::Scrub
+        && r.reason == ProjectPurgeRowReason::ProjectMembership));
+    assert!(
+        plan.snapshot
+            .references
+            .iter()
+            .any(|r| r.kind == ProjectPurgeReferenceKind::SchemaSourceOperation)
+    );
+    assert!(plan.rows.iter().any(|r| r.table == "operations"
+        && r.action == ProjectPurgeRowAction::Scrub
+        && r.reason == ProjectPurgeRowReason::MinimalDeletedIdentity));
+    assert!(
+        !plan.unresolved.iter().any(|r| r.table == "schema_sources"),
+        "{:?}",
+        plan.unresolved
+    );
+    let stored = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.schemas().schema_source(&shared.connection.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(stored).unwrap(),
+        serde_json::to_value(&shared).unwrap(),
+        "assessment preserves both projects' access and the independent source"
+    );
+    let mut unknown = serde_json::to_value(&shared).unwrap();
+    unknown["unknownPrivateCopy"] = json!("unmapped source content");
+    h.raw()
+        .execute(
+            "UPDATE schema_sources SET body_json=?1 WHERE id=?2",
+            rusqlite::params![unknown.to_string(), shared.connection.id.as_str()],
+        )
+        .unwrap();
+    assert!(
+        assess()
+            .unresolved
+            .iter()
+            .any(|r| r.table == "schema_sources")
     );
 }

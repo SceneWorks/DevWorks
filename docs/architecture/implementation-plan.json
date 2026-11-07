@@ -11,25 +11,25 @@
   ],
   "sourceSha256": {
     "implementation-slices.json": "f0f40f1cc6db56465b4e73590a16d5b0744dc9a04346f41093c08f2c87b236bb",
-    "devworks-capability-catalog.json": "085730605dacb2ce7d0168a3e1c9b95fd8d61d3c2771e53157a8bd8455512c9c",
+    "devworks-capability-catalog.json": "4cb587925523074a21c8537d92690fc915543e1e064d89872ef8499ea76432bc",
     "devworks-requirements-traceability.json": "23d4eaab9420af10bd850fcafd2025cd99498cd371aec8554aac4db09c4de407",
     "codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "bb3e6077544760f1d666d5db718764141c057dccad7e6c7eccc77242b5f417ea",
+    "contracts/family-coverage.json": "09b1daf71b741bc11e82d040e3c9ae99f22863161fe03b11d4970cdf8fdf3ee2",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4"
   },
   "counts": {
     "slices": 79,
     "operationFamilies": 49,
-    "operations": 360,
+    "operations": 364,
     "requirements": 377,
     "requirementsByStatus": {
       "Confirmed": 230,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 360,
+    "inputSchemaCandidates": 364,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -927,6 +927,10 @@
         "projects.archive",
         "projects.restore",
         "projects.delete",
+        "projects.prepare_purge",
+        "projects.purge_manifest",
+        "projects.purge",
+        "projects.purge_status",
         "repositories.list",
         "repositories.get",
         "repositories.remove_index",
@@ -12646,6 +12650,62 @@
       "resultValueType": "ProjectRecord",
       "requestModes": [
         "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "projects.prepare_purge",
+      "family": "projects",
+      "serviceOwner": "WorkService",
+      "primarySlice": "projects",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "ProjectPurgeManifest",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "projects.purge_manifest",
+      "family": "projects",
+      "serviceOwner": "WorkService",
+      "primarySlice": "projects",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "ProjectPurgeManifestPage",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "projects.purge",
+      "family": "projects",
+      "serviceOwner": "WorkService",
+      "primarySlice": "projects",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "ProjectPurgeManifest",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "projects.purge_status",
+      "family": "projects",
+      "serviceOwner": "WorkService",
+      "primarySlice": "projects",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "ProjectPurgeManifest",
+      "requestModes": [
+        "Query"
       ],
       "acceptanceStatus": "Planned; no production operation acceptance claimed"
     },

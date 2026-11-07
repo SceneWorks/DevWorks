@@ -2515,7 +2515,11 @@
         "operation_id": "?OperationId",
         "reply_artifact": "?ArtifactRef",
         "reply_schema": "?SchemaRef",
-        "state": "ReceiptLookupState"
+        "state": "ReceiptLookupState",
+        "purged": "?PurgedReceiptOutcome"
+      },
+      "since": {
+        "purged": 6
       }
     },
     "ReceiptLookupState": {
@@ -6097,6 +6101,101 @@
         "routine_type": "?Label",
         "parameters": "Items<SchemaParameter>",
         "definition_sql": "?Content"
+      }
+    },
+    "PurgePhase": {
+      "kind": "enum",
+      "values": [
+        "Prepared",
+        "RemovingBytes",
+        "Held",
+        "Complete",
+        "Superseded"
+      ]
+    },
+    "PurgeDisposition": {
+      "kind": "enum",
+      "values": [
+        "Remove",
+        "Scrub",
+        "Keep"
+      ]
+    },
+    "PurgeEntryKind": {
+      "kind": "enum",
+      "values": [
+        "RecordClass",
+        "ManagedFile",
+        "SharedKeeper"
+      ]
+    },
+    "PurgedDecisionKind": {
+      "kind": "enum",
+      "values": [
+        "Applied",
+        "Accepted",
+        "NoChange",
+        "Refused"
+      ]
+    },
+    "PurgedReceiptOutcome": {
+      "kind": "record",
+      "fields": {
+        "command_id": "CommandId",
+        "committed_sequence": "Revision",
+        "accepted_at_ms": "Counter",
+        "request_digest": "Digest",
+        "operation_id": "?OperationId",
+        "original_decision": "PurgedDecisionKind",
+        "original_fault_code": "?DomainErrorCode",
+        "purge_id": "Id"
+      }
+    },
+    "ProjectPurgeManifest": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "project_id": "ProjectId",
+        "revision": "Revision",
+        "project_revision": "Revision",
+        "digest": "Digest",
+        "phase": "PurgePhase",
+        "record_count": "Counter",
+        "managed_byte_count": "Counter",
+        "kept_record_count": "Counter",
+        "kept_byte_count": "Counter",
+        "pending_effects": "Counter",
+        "created_at_ms": "Counter",
+        "operation_id": "?OperationId",
+        "error_code": "?Label"
+      }
+    },
+    "ProjectPurgeEntry": {
+      "kind": "record",
+      "fields": {
+        "id": "Digest",
+        "kind": "PurgeEntryKind",
+        "record_class": "Label",
+        "disposition": "PurgeDisposition",
+        "record_count": "Counter",
+        "byte_count": "Counter",
+        "reason": "Label",
+        "relative_path": "?Text"
+      }
+    },
+    "ProjectPurgeManifestPage": {
+      "kind": "record",
+      "fields": {
+        "manifest": "ProjectPurgeManifest",
+        "entries": "ProjectPurgeEntryPage"
+      }
+    },
+    "ProjectPurgeEntryPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Items<ProjectPurgeEntry>",
+        "has_more": "bool",
+        "next_cursor": "?Cursor"
       }
     }
   },
@@ -10560,6 +10659,64 @@
       "authority": "Scoped",
       "rules": "Read-only bounded persistent embedding-space inventory and revisioned explicit selection. Status is derived from host-owned qualification evidence and current connection/account/model/endpoint/config identity. No space is inferred from a conversation or first route. Historical identity is retained when unavailable. Cursor binds inventory and selection snapshot. Dimensions are 1..65536; candidate identity excludes display names and pricing metadata.",
       "introducedRevision": 3
+    },
+    "projects.prepare_purge": {
+      "operation": "projects.prepare_purge",
+      "mode": "Command",
+      "fields": {
+        "project_id": "ProjectId",
+        "expected_revision": "Revision"
+      },
+      "result": "ProjectPurgeManifest",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Prepare a complete immutable ownership/file preview for a deleted quiescent project. Preparation does not authorize deletion.",
+      "introducedRevision": 6
+    },
+    "projects.purge_manifest": {
+      "operation": "projects.purge_manifest",
+      "mode": "Query",
+      "fields": {
+        "project_id": "ProjectId",
+        "manifest_id": "Id",
+        "expected_revision": "Revision",
+        "page": "PageRequest"
+      },
+      "result": "ProjectPurgeManifestPage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Every page is bound to the exact manifest revision, actor scope, policy and digest. Unknown ownership/schema refuses preview.",
+      "introducedRevision": 6
+    },
+    "projects.purge": {
+      "operation": "projects.purge",
+      "mode": "Command",
+      "fields": {
+        "project_id": "ProjectId",
+        "manifest_id": "Id",
+        "expected_revision": "Revision",
+        "expected_digest": "Digest",
+        "expected_project_revision": "Revision",
+        "confirm": "bool"
+      },
+      "result": "ProjectPurgeManifest",
+      "effect": "Journaled",
+      "authority": "HumanDecision",
+      "rules": "Native Human confirmation only; exact reviewed digest/revision, fresh authority/quiescence/keepers. Commit selected logical rows and exact physical intents atomically. Report completion only after all reviewed managed effects settle. No Git/source/remote cleanup.",
+      "introducedRevision": 6
+    },
+    "projects.purge_status": {
+      "operation": "projects.purge_status",
+      "mode": "Query",
+      "fields": {
+        "project_id": "ProjectId",
+        "manifest_id": "Id"
+      },
+      "result": "ProjectPurgeManifest",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Observe logical and physical completion and retryable holds honestly; preserve the original purge and operation identity.",
+      "introducedRevision": 6
     }
   },
   "earlierInputResults": {
@@ -11374,10 +11531,26 @@
     "database.configure_sensitive_columns": [
       1,
       5
+    ],
+    "projects.prepare_purge": [
+      6
+    ],
+    "projects.purge_manifest": [
+      6
+    ],
+    "projects.purge": [
+      6
+    ],
+    "projects.purge_status": [
+      6
+    ],
+    "history.command_receipt": [
+      1,
+      6
     ]
   },
   "familyRules": {
-    "projects": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive.",
+    "projects": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.",
     "features": "Features own their plan. One active approved plan plus at most one pending revision; no independent plan work item or user-facing version management. Draft edits/approval requests/rejection preserve the active plan and eligible execution. Exact human approval atomically replaces it; current authority/controls and affected task checks still apply.",
     "issues": "Clear standalone issues may implement immediately under explicit Start. Remote publish/link preserves exact issue/repository identity and conflict observations.",
     "tasks": "ProjectTask belongs to one project and has an optional feature relationship. Standalone tasks are shown as issues and share the same stable work identity across task/issue entry points. Task/Issue wire tags cannot establish feature membership or execution authority. Feature-linked work stays in feature allocation; standalone work uses issue allocation/execution/usage/delivery. Assignment parentage is separate; no manual child-assignment Pause/Continue. Humans and agents share task priority and project-wide blocking-link operations. Cross-feature links do not change membership. Eligibility precedes descending priority and ascending queue rank; graph-cycle and current controls apply on every claim/dispatch.",

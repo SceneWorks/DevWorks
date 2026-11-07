@@ -116,6 +116,7 @@ pub struct InvocationContext {
     worktree: Option<BoundWorktree>,
     /// Bound only by the trusted host's dedicated human interaction path, never wire data.
     human_decision: Option<String>,
+    human_project_purge: Option<String>,
     reviewed_operation: Option<ReviewedOperation>,
 }
 /// The host's trusted ingress for one store: the only public way to create an
@@ -152,6 +153,27 @@ impl HostIngress {
         }
         let mut bound = context.clone();
         bound.human_decision = Some(decision_digest(decision)?);
+        Some(bound)
+    }
+
+    /// Dedicated native confirmation of one exact reviewed project purge. This
+    /// private marker is never a wire argument, approval grant or agent capability.
+    pub fn project_purge_context(
+        &self,
+        context: &InvocationContext,
+        input: &crate::operations::projects::PurgeInput,
+    ) -> Option<InvocationContext> {
+        if context.store_id != self.store_id
+            || context.principal_kind != PrincipalKind::Human
+            || context
+                .project_id
+                .as_ref()
+                .is_some_and(|project| *project != input.project_id)
+        {
+            return None;
+        }
+        let mut bound = context.clone();
+        bound.human_project_purge = Some(project_purge_digest(context, input)?);
         Some(bound)
     }
 
@@ -207,6 +229,7 @@ impl InvocationContext {
             authority_sources: Vec::new(),
             worktree: None,
             human_decision: None,
+            human_project_purge: None,
             reviewed_operation: None,
         }
     }
@@ -220,6 +243,12 @@ impl InvocationContext {
         self.principal_kind == PrincipalKind::Human
             && self.human_decision.is_some()
             && self.human_decision == decision_digest(decision)
+    }
+
+    pub fn project_purge_matches(&self, input: &crate::operations::projects::PurgeInput) -> bool {
+        self.principal_kind == PrincipalKind::Human
+            && self.human_project_purge.is_some()
+            && self.human_project_purge == project_purge_digest(self, input)
     }
 
     pub fn reviewed_operation(&self) -> Option<&ReviewedOperation> {
@@ -322,6 +351,34 @@ fn decision_digest(
     decision: &crate::operations::approvals::RecordHumanDecisionInput,
 ) -> Option<String> {
     let value = serde_json::to_value(decision).ok()?;
+    let canonical = crate::jcs::canonicalize(&value).ok()?;
+    Some(crate::fingerprint::sha256_hex(canonical.as_bytes()))
+}
+
+fn project_purge_digest(
+    context: &InvocationContext,
+    input: &crate::operations::projects::PurgeInput,
+) -> Option<String> {
+    use crate::protocol::Check;
+    input.check().ok()?;
+    if !input.confirm {
+        return None;
+    }
+    let worktree = context.worktree.as_ref().map(|tree| serde_json::json!({
+        "id":tree.id,"repository":tree.repository_id,"work":tree.work_id,"revision":tree.ownership_revision
+    }));
+    let reviewed = context.reviewed_operation.as_ref().map(|reviewed| serde_json::json!({
+        "approval":reviewed.approval_id,"approver":reviewed.approver,"operation":reviewed.operation,
+        "schemaRevision":reviewed.schema_revision,"requestDigest":reviewed.request_digest,"ownerBinding":reviewed.owner_binding
+    }));
+    let value = serde_json::json!({
+        "purpose":"projects.purge", "input":input,
+        "actor":context.principal,"invocation":context.invocation_id,"ingress":context.ingress_namespace,
+        "store":context.store_id,"restore":context.restore_epoch,"policy":context.policy_revision,
+        "project":context.project_id,"root":context.root_id,"assignment":context.assignment_id,
+        "session":context.session_id,"jobRun":context.job_run_id,"registration":context.capability_registration,
+        "authoritySources":context.authority_sources,"worktree":worktree,"reviewed":reviewed
+    });
     let canonical = crate::jcs::canonicalize(&value).ok()?;
     Some(crate::fingerprint::sha256_hex(canonical.as_bytes()))
 }
@@ -454,6 +511,91 @@ mod human_decision_tests {
             changed[field] = value;
             let changed: RecordHumanDecisionInput = serde_json::from_value(changed).unwrap();
             assert!(!bound.human_decision_matches(&changed));
+        }
+    }
+
+    #[test]
+    fn project_purge_proof_requires_native_human_confirmation_and_exact_content_and_context() {
+        use crate::operations::projects::PurgeInput;
+        let ingress = HostIngress {
+            store_id: StoreId(id("store-1")),
+        };
+        let input: PurgeInput = serde_json::from_value(json!({"projectId":"project-a","manifestId":"manifest-a","expectedRevision":"1","expectedDigest":"a".repeat(64),"expectedProjectRevision":"2","confirm":true})).unwrap();
+        let generic = context(&ingress, PrincipalKind::Human);
+        assert!(!generic.project_purge_matches(&input));
+        let bound = ingress.project_purge_context(&generic, &input).unwrap();
+        assert!(bound.project_purge_matches(&input));
+        for kind in [
+            PrincipalKind::Agent,
+            PrincipalKind::Host,
+            PrincipalKind::Schedule,
+            PrincipalKind::Package,
+            PrincipalKind::McpClient,
+        ] {
+            assert!(
+                ingress
+                    .project_purge_context(&context(&ingress, kind), &input)
+                    .is_none()
+            );
+        }
+        let other = HostIngress {
+            store_id: StoreId(id("store-2")),
+        };
+        assert!(other.project_purge_context(&generic, &input).is_none());
+        let foreign_scope =
+            generic
+                .clone()
+                .with_lineage(Some(ProjectId(id("project-b"))), None, None);
+        assert!(
+            ingress
+                .project_purge_context(&foreign_scope, &input)
+                .is_none()
+        );
+        for (field, value) in [
+            ("projectId", json!("project-b")),
+            ("manifestId", json!("manifest-b")),
+            ("expectedRevision", json!("2")),
+            ("expectedDigest", json!("b".repeat(64))),
+            ("expectedProjectRevision", json!("3")),
+            ("confirm", json!(false)),
+        ] {
+            let mut changed = serde_json::to_value(&input).unwrap();
+            changed[field] = value;
+            let changed: PurgeInput = serde_json::from_value(changed).unwrap();
+            assert!(!bound.project_purge_matches(&changed), "{field}");
+            if !changed.confirm {
+                assert!(ingress.project_purge_context(&generic, &changed).is_none());
+            }
+        }
+        let changed = bound.clone().with_lineage(
+            Some(ProjectId(id("project-a"))),
+            Some(RootId(id("new-root"))),
+            None,
+        );
+        assert!(!changed.project_purge_matches(&input));
+        for field in [
+            "store",
+            "restore",
+            "policy",
+            "actor",
+            "invocation",
+            "ingress",
+            "session",
+            "authority",
+        ] {
+            let mut changed = bound.clone();
+            match field {
+                "store" => changed.store_id = StoreId(id("store-2")),
+                "restore" => changed.restore_epoch = Counter::new(1).unwrap(),
+                "policy" => changed.policy_revision = Revision::new(2).unwrap(),
+                "actor" => changed.principal = ActorId(id("another-human")),
+                "invocation" => changed.invocation_id = id("another-invocation"),
+                "ingress" => changed.ingress_namespace = id("another-ingress"),
+                "session" => changed.session_id = Some(id("another-session")),
+                "authority" => changed.authority_sources.push(id("another-grant")),
+                _ => unreachable!(),
+            }
+            assert!(!changed.project_purge_matches(&input), "{field}");
         }
     }
 }

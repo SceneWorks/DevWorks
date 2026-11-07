@@ -249,6 +249,31 @@ fn lookup_receipt(
             "receipt digest is not a fingerprint".into(),
         )));
     };
+    if let Some(purged) = stored.get("purged") {
+        let outcome = match serde_json::from_value::<
+            devworks_core::protocol::records::PurgedReceiptOutcome,
+        >(purged.clone())
+        {
+            Ok(outcome) => outcome,
+            Err(_) => return Ok(Some(incompatible("purged receipt does not decode".into()))),
+        };
+        use devworks_core::protocol::Check;
+        if outcome.check().is_err()
+            || outcome.request_digest.as_str() != fp.as_str()
+            || stored.get("receipt").is_some()
+        {
+            return Ok(Some(incompatible("invalid purged receipt fence".into())));
+        }
+        return Ok(Some(LedgerEntry::Purged(
+            devworks_core::ports::StoredPurgedReceipt {
+                operation,
+                contract,
+                schema_revision,
+                fingerprint: fp,
+                outcome,
+            },
+        )));
+    }
     match serde_json::from_value::<Receipt<DomainDecision>>(stored["receipt"].clone()) {
         Ok(receipt) => Ok(Some(LedgerEntry::Current(StoredReceipt {
             operation,

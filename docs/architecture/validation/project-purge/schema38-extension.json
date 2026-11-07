@@ -1,0 +1,14 @@
+{
+  "schema": 38,
+  "policy": "dw83-purge-effect-lease-v1",
+  "tables": {
+    "project_purge_effects": {
+      "ownership": "PurgeControlAudit",
+      "addedColumns": ["lease_owner", "lease_boot_id", "lease_until"],
+      "purpose": "Current-boot compare-and-set claims of exact previously reviewed effects; no new deletion authority."
+    }
+  },
+  "indexes": ["project_purge_effect_pending"],
+  "readerFloor": 38,
+  "writerFloor": 38
+}

@@ -174,7 +174,7 @@ fn migration_27_preserves_legacy_absence_and_captures_new_plan_snapshots() {
         db(c.execute("INSERT INTO plan_proposals(id,feature_id,revision,plan_revision,plan_digest,state,requested_by,requested_at,summary) VALUES('legacy','feature',1,1,?1,'Pending','host',?2,'legacy')",rusqlite::params!["a".repeat(64),T0]))?;Ok(())
     }).unwrap();
     drop(old);
-    let s = h.store();
+    let s = SqliteStore::open_with(h.config(), &through(27)).unwrap();
     run_write(&s, WriteOptions::default(), |tx| {
         tx.actors()
             .register(&actor("human-a"), PrincipalKind::Human, "Human")?;

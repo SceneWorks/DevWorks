@@ -181,6 +181,7 @@ pub struct Host {
     async_runtime: tokio::runtime::Handle,
     ctx: InvocationContext,
     sources: Arc<HostArtifactSources>,
+    purge_client: Arc<crate::project_purge::NativePurgeClient>,
     data_root: PathBuf,
     ids: Arc<HostIds>,
     waker: Arc<Mutex<Option<Waker>>>,
@@ -222,11 +223,13 @@ async fn compose(
 ) -> Result<Host, StartError> {
     let store: Arc<dyn ApplicationStore> = sqlite.clone();
     let id_source: Arc<dyn IdSource> = ids.clone();
-    let sources = Arc::new(HostArtifactSources::new(clock.clone(), id_source.clone()));
-    let artifact_files = Arc::new(NativeArtifactFiles::new(
-        config.data_root.clone(),
-        config.data_root.join("cache"),
-    ));
+    let sources = Arc::new(
+        HostArtifactSources::new(clock.clone(), id_source.clone()).with_store(store.clone()),
+    );
+    let artifact_files = Arc::new(
+        NativeArtifactFiles::new(config.data_root.clone(), config.data_root.join("cache"))
+            .with_store(store.clone()),
+    );
     let artifacts = Arc::new(ArtifactService::new(
         artifact_files.clone(),
         sources.clone(),
@@ -306,10 +309,13 @@ async fn compose(
         clock.clone(),
         Some(sqlite as Arc<dyn StorageHealthProbe>),
     ));
-    diagnostics.set_export_staging(Arc::new(DiagnosticExports::new(
-        config.data_root.join("diagnostics").join("exports"),
-        sources.clone(),
-    )));
+    diagnostics.set_export_staging(Arc::new(
+        DiagnosticExports::new(
+            config.data_root.join("diagnostics").join("exports"),
+            sources.clone(),
+        )
+        .with_store(store.clone()),
+    ));
     // Managed executable packages (ADDON-01..04, EXT-01..07): verified bundles install into
     // content-addressed directories under the data root; helpers launch through the process
     // owner. No optional runtime is assumed present until a runtime probe is qualified.
@@ -343,7 +349,26 @@ async fn compose(
         (config.web)(connections.clone()),
     ));
     let use_cases = use_cases.with_web(web.clone());
+    let purge_client = Arc::new(
+        crate::project_purge::NativePurgeClient::new(
+            config.data_root.join(crate::memory::FILE),
+            sources.clone(),
+        )
+        .with_store(&*store),
+    );
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
+    runtime_config.purge = Some(devworks_engine::runtime::PurgeComposition {
+        files: Arc::new(
+            devworks_adapters::fs::purge::NativeProjectPurgeFiles::new(
+                config.data_root.clone(),
+                config.data_root.join("cache"),
+                store.clone(),
+            )
+            .with_paste_root(config.data_root.join("staging-ui"))
+            .with_read_fence(artifacts.clone()),
+        ),
+        client: purge_client.clone(),
+    });
     runtime_config.shutdown_bound = config.shutdown_bound;
     runtime_config.schemas = Some(devworks_engine::schemas::SchemaComposition {
         reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
@@ -458,6 +483,17 @@ async fn compose(
     };
     // Recovery and every required consumer start here, before any request below is admitted.
     let runtime = boot(composition).await.map_err(StartError::Boot)?;
+    // A previous boot cannot still be producing a paste. Live draft files require the
+    // client keeper snapshot; this owner only reconciles incomplete reserved writes.
+    if let Err(error) = devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
+        config.data_root.join("staging-ui"),
+        store.clone(),
+    )
+    .recover_abandoned()
+    {
+        // Its durable Writing row continues to hold purge preparation on uncertainty.
+        eprintln!("UI staging recovery remains held: {error}");
+    }
     // Host bookkeeping after recovery: the local user is the human principal of the UI.
     let user = ActorId(Id::new(USER_ACTOR).expect("valid actor"));
     let (registered, name) = (user.clone(), config.user_name.clone());
@@ -487,6 +523,7 @@ async fn compose(
         async_runtime: tokio::runtime::Handle::current(),
         ctx,
         sources,
+        purge_client,
         data_root: config.data_root.clone(),
         ids,
         waker: Arc::new(Mutex::new(None)),
@@ -728,6 +765,25 @@ pub struct DesktopBackend {
     host: Arc<Host>,
 }
 impl Backend for DesktopBackend {
+    fn purge_client_acknowledge(
+        &self,
+        scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
+    ) {
+        self.host.purge_client.acknowledge(scope);
+    }
+
+    fn purge_client_publish(
+        &self,
+        memory: crate::memory::Memory,
+        live: crate::project_purge::Live,
+        save: bool,
+    ) -> Result<Option<Vec<devworks_core::ports::storage::ProjectPurgeClientScope>>, String> {
+        self.host.purge_client.publish(memory, live, save).map(Some)
+    }
+    fn purge_client_freeze(&self, project: &str, frozen: bool) -> Result<(), String> {
+        self.host.purge_client.freeze(project, frozen)
+    }
+
     fn query(&self, operation: &str, frame: &[u8]) -> QueryOutcome {
         self.host.runtime.query(&self.host.ctx, operation, frame)
     }
@@ -751,6 +807,11 @@ impl Backend for DesktopBackend {
         self.host
             .runtime
             .record_human_decision(&self.host.ctx, frame)
+    }
+    fn confirm_project_purge(&self, frame: &[u8]) -> CommandOutcome {
+        self.host
+            .runtime
+            .confirm_project_purge(&self.host.ctx, frame)
     }
     fn text_preview(
         &self,
@@ -823,6 +884,30 @@ impl Backend for DesktopBackend {
     }
     fn scratch_dir(&self) -> PathBuf {
         self.host.data_root.join("staging-ui")
+    }
+    fn stage_pasted_image(&self, session: Option<&Id>, png: &[u8]) -> Result<PathBuf, String> {
+        devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
+            self.scratch_dir(),
+            self.host.runtime.store().clone(),
+        )
+        .write(session, &self.host.ids.next_id(IdKind::Artifact), png)
+    }
+    fn stage_project_text(
+        &self,
+        project: Option<&devworks_core::protocol::ProjectId>,
+        extension: &str,
+        bytes: &[u8],
+    ) -> Result<PathBuf, String> {
+        devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
+            self.scratch_dir(),
+            self.host.runtime.store().clone(),
+        )
+        .write_project(
+            project,
+            &self.host.ids.next_id(IdKind::Artifact),
+            extension,
+            bytes,
+        )
     }
     fn refresh_packages(&self) -> Result<(), String> {
         let host = self

@@ -550,6 +550,169 @@ fn pin(f: &Fx, name: &str) -> StoredGraphReadPin {
     }
 }
 #[test]
+fn purge_planning_leases_use_typed_scope_and_validate_exact_graph_children() {
+    use devworks_core::protocol::{ProjectId, data::DataScope};
+    let f = Fx::new();
+    let project = ProjectId(id("purge-lease-project"));
+    let p = project.clone();
+    write(&f.s, move |tx| {
+        tx.projects().insert_project(&StoredProject {
+            id: p,
+            name: "private lease project".into(),
+            description: "private body".into(),
+            lifecycle: DELETED.into(),
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            archived_at_ms: Some(T0),
+            deleted_at_ms: Some(T0),
+            archive_epoch: 1,
+            archive_stop_pending: false,
+        })
+    });
+    let mut owned = pin(&f, "owned-project-lease");
+    owned.scope_digest = sha256_hex(
+        serde_json::to_string(&DataScope::Project {
+            project_id: project.clone(),
+        })
+        .unwrap()
+        .as_bytes(),
+    );
+    // The owner namespace deliberately does not mention the project.
+    let saved = owned.clone();
+    write(&f.s, move |tx| tx.graph().acquire_graph_pin(&saved));
+    let mut other = pin(&f, "workspace-lease");
+    other.owner_namespace = project.0.as_str().into();
+    let saved = other.clone();
+    write(&f.s, move |tx| tx.graph().acquire_graph_pin(&saved));
+    let assess = || read(&f.s, |r| r.projects().purge_planning(&project)).unwrap();
+    let plan = assess();
+    assert!(plan.is_resolved(), "{:?}", plan.unresolved);
+    assert_eq!(
+        plan.rows
+            .iter()
+            .filter(|r| r.reason == ProjectPurgeRowReason::ScopedReadLease
+                && r.action == ProjectPurgeRowAction::Delete)
+            .count(),
+        5,
+        "one header and two exact view/index child pairs"
+    );
+    assert_eq!(read(&f.s, |r| r.graph().graph_pin(&other.id)), Some(other));
+    let original =
+        f.h.raw()
+            .query_row(
+                "SELECT scope_json FROM graph_read_pins WHERE id=?1",
+                [owned.id.as_str()],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap();
+    let mut malformed: serde_json::Value = serde_json::from_str(&original).unwrap();
+    malformed["privateCopy"] = json!("unmapped lease content");
+    f.h.raw()
+        .execute(
+            "UPDATE graph_read_pins SET scope_json=?1 WHERE id=?2",
+            rusqlite::params![malformed.to_string(), owned.id.as_str()],
+        )
+        .unwrap();
+    let held = assess();
+    assert!(
+        held.unresolved.iter().any(|r| r.table == "graph_read_pins"
+            && r.reason == ProjectPurgeUnresolvedReason::TypedLease)
+    );
+    assert!(
+        !serde_json::to_string(&held.unresolved)
+            .unwrap()
+            .contains("unmapped lease content")
+    );
+    f.h.raw()
+        .execute(
+            "UPDATE graph_read_pins SET scope_json=?1 WHERE id=?2",
+            rusqlite::params![original, owned.id.as_str()],
+        )
+        .unwrap();
+    f.h.raw().execute("UPDATE index_pins SET lease_until=lease_until+1 WHERE id IN(SELECT index_pin_id FROM graph_read_pin_views WHERE pin_id=?1)",[owned.id.as_str()]).unwrap();
+    assert!(
+        assess()
+            .unresolved
+            .iter()
+            .any(|r| r.table == "graph_read_pins")
+    );
+    assert_eq!(
+        f.h.raw()
+            .query_row("SELECT count(*) FROM graph_read_pin_views", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        4,
+        "planning never retires either scope's native leases"
+    );
+}
+#[test]
+fn graph31_project_purge_candidates_select_only_the_typed_project_digest_and_its_child_leases() {
+    use devworks_core::protocol::{ProjectId, data::DataScope};
+    let f = Fx::new();
+    let mut selected_digest = String::new();
+    for (name, scope) in [
+        (
+            "purge-project",
+            DataScope::Project {
+                project_id: ProjectId(id("purge-a")),
+            },
+        ),
+        (
+            "other-project",
+            DataScope::Project {
+                project_id: ProjectId(id("purge-b")),
+            },
+        ),
+        ("workspace", DataScope::Workspace),
+    ] {
+        let mut p = pin(&f, name);
+        p.scope_digest = sha256_hex(serde_json::to_string(&scope).unwrap().as_bytes());
+        if name == "purge-project" {
+            selected_digest = p.scope_digest.clone();
+        }
+        write(&f.s, move |tx| tx.graph().acquire_graph_pin(&p));
+    }
+    // All three pins have the same exact view set and owner namespace; neither
+    // can substitute for the independently bound project scope digest.
+    let policy: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/architecture/validation/project-purge/native-row-selectors.json"
+    )))
+    .unwrap();
+    let anchors = policy["anchors"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(name, sql)| format!("{name} AS ({})", sql.as_str().unwrap()))
+        .collect::<Vec<_>>()
+        .join(",");
+    let raw = f.h.raw();
+    for (table, expected) in [
+        ("graph_read_pins", 1),
+        ("graph_read_pin_views", 2),
+        ("index_pins", 2),
+    ] {
+        let sql = format!(
+            "WITH {anchors} SELECT count(*) FROM {table} WHERE ({})",
+            policy["candidatePredicates"][table].as_str().unwrap()
+        );
+        assert_eq!(
+            raw.query_row(&sql, ["purge-a", &selected_digest], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            expected,
+            "{table}"
+        );
+    }
+    for name in ["purge-project", "other-project", "workspace"] {
+        assert!(
+            read(&f.s, |r| r.graph().graph_pin(&id(name))).is_some(),
+            "selection must not mutate {name}"
+        );
+    }
+}
+#[test]
 fn graph31_pin_renewal_ownership_expiry_reopen_and_gc_are_atomic() {
     let f = Fx::new();
     let p = pin(&f, "lease");
@@ -767,7 +930,7 @@ fn graph31_capture_binding_fault_rolls_back_and_migration_is_additive() {
     assert_eq!((m.minimum_reader, m.minimum_writer), (8, 31));
     assert!(!m.rebuilds_tables);
     let h = Harness::new();
-    let s = h.store();
+    let s = SqliteStore::open_with(h.config(), &through(31)).unwrap();
     write(&s, |tx| {
         repository(tx, "repo")?;
         generation(tx, "g", "repo", LAYER_BASELINE)

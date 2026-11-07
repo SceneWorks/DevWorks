@@ -8,6 +8,7 @@ pub trait Check {
 }
 macro_rules! checked_leaf {($($t:ty),*)=>{$(impl Check for $t{fn check(&self)->Result<(),String>{Ok(())}})*};}
 checked_leaf!(
+    DomainErrorCode,
     bool,
     i32,
     Id,

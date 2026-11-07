@@ -152,6 +152,85 @@ impl Readers {
             .is_some_and(|n| *n > 0)
     }
 }
+impl crate::ports::project_purge::ProjectPurgeReadFence for Readers {
+    fn busy(&self, owner: &crate::ports::project_purge::PurgeFileOwner) -> bool {
+        use crate::ports::project_purge::PurgeFileOwner;
+        match owner {
+            PurgeFileOwner::Blob { digest, .. } | PurgeFileOwner::Quarantine { digest, .. } => {
+                self.holds(digest)
+            }
+            _ => false,
+        }
+    }
+    fn remove_if_idle(
+        &self,
+        owner: &crate::ports::project_purge::PurgeFileOwner,
+        work: &mut dyn FnMut() -> Result<(), crate::ports::project_purge::PurgeFileFault>,
+    ) -> Result<(), crate::ports::project_purge::PurgeFileFault> {
+        use crate::ports::project_purge::{PurgeFileFault, PurgeFileOwner};
+        let readers = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        if let PurgeFileOwner::Blob { digest, .. } | PurgeFileOwner::Quarantine { digest, .. } =
+            owner
+            && readers.get(digest).is_some_and(|n| *n > 0)
+        {
+            return Err(PurgeFileFault::InUse);
+        }
+        work()
+    }
+}
+impl crate::ports::project_purge::ProjectPurgeReadFence for ArtifactService {
+    fn busy(&self, owner: &crate::ports::project_purge::PurgeFileOwner) -> bool {
+        crate::ports::project_purge::ProjectPurgeReadFence::busy(&self.readers, owner)
+    }
+    fn remove_if_idle(
+        &self,
+        owner: &crate::ports::project_purge::PurgeFileOwner,
+        work: &mut dyn FnMut() -> Result<(), crate::ports::project_purge::PurgeFileFault>,
+    ) -> Result<(), crate::ports::project_purge::PurgeFileFault> {
+        crate::ports::project_purge::ProjectPurgeReadFence::remove_if_idle(
+            &self.readers,
+            owner,
+            work,
+        )
+    }
+}
+
+#[cfg(test)]
+mod purge_read_fence_tests {
+    use super::*;
+    use crate::ports::project_purge::{ProjectPurgeReadFence, PurgeFileFault, PurgeFileOwner};
+    #[test]
+    fn purge_reader_fence_never_enters_unlink_with_a_reader_and_releases_after_failure() {
+        let readers = Readers::default();
+        let owner = PurgeFileOwner::Blob {
+            digest: "a".repeat(64),
+            generation: "g".into(),
+        };
+        let hold = readers.acquire(&"a".repeat(64));
+        let mut entered = false;
+        assert_eq!(
+            readers.remove_if_idle(&owner, &mut || {
+                entered = true;
+                Ok(())
+            }),
+            Err(PurgeFileFault::InUse)
+        );
+        assert!(!entered);
+        drop(hold);
+        assert_eq!(
+            readers.remove_if_idle(&owner, &mut || {
+                entered = true;
+                Err(PurgeFileFault::Io)
+            }),
+            Err(PurgeFileFault::Io)
+        );
+        assert!(entered);
+        let hold = readers.acquire(&"a".repeat(64));
+        assert!(readers.busy(&owner));
+        drop(hold);
+        assert!(readers.remove_if_idle(&owner, &mut || Ok(())).is_ok());
+    }
+}
 /// Releases its reader hold on drop.
 pub struct ReaderGuard {
     readers: Readers,
@@ -600,6 +679,7 @@ impl ArtifactService {
     /// generation's file, and records the outcome under the same ownership; a failure is
     /// visible and retried. It first retries staging resolutions deferred earlier in this boot.
     pub fn collect(&self, store: &dyn ApplicationStore) -> Result<CollectReport, StorageError> {
+        let _ = self.files.recover_project_derived();
         self.retry_pending(&Preparation::new(store, None, None));
         let owner = self.claimant(store);
         let mut report = CollectReport::default();
@@ -789,6 +869,12 @@ impl ArtifactService {
                     let Some(from) = b.claim_owner.as_deref() else {
                         continue;
                     };
+                    if tx
+                        .projects()
+                        .purge_blob_claim_reserved(&b.digest, &b.generation, from)?
+                    {
+                        continue;
+                    }
                     if from != me
                         && tx
                             .artifacts()
@@ -823,6 +909,7 @@ impl ArtifactService {
     /// * Present generations are verified: a missing file is reported; a corrupt one (even with
     ///   the right length) is quarantined and reported. Metadata is never changed to hide either.
     pub fn recover(&self, store: &dyn ApplicationStore) -> Result<RecoveryReport, StorageError> {
+        let _ = self.files.recover_project_derived();
         let env = Preparation::new(store, None, None);
         self.retry_pending(&env);
         let owner = self.claimant(store);

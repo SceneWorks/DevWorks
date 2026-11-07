@@ -254,6 +254,7 @@ fn check(case: &Fixture) -> Result<(), String> {
             v.validate()
         }),
         "domain-command-reply" => dto::<DomainCommandReply>(raw, |v| {
+            s(v.validate_revision(revision))?;
             if let CommandReply::Recorded { receipt, .. } = v
                 && let DomainDecision::Applied { result } | DomainDecision::NoChange { result } =
                     &receipt.decision
@@ -280,7 +281,10 @@ fn check(case: &Fixture) -> Result<(), String> {
             }
             v.validate()
         }),
-        "command-reply" => dto::<CommandReply>(raw, |v| s(v.validate())),
+        "command-reply" => dto::<CommandReply>(raw, |v| {
+            s(v.validate_revision(revision))?;
+            s(v.validate())
+        }),
         "query-reply" => dto::<QueryReply>(raw, |v| s(v.validate())),
         "event" => dto::<Event>(raw, |v| s(v.validate())),
         "inference-request" => dto::<InferenceRequest>(raw, |v| s(v.validate())),
@@ -291,11 +295,18 @@ fn check(case: &Fixture) -> Result<(), String> {
         "attempt-envelope" => dto::<AttemptEnvelope>(raw, |v| s(v.validate())),
         "route-decision" => dto::<RouteDecision>(raw, ok),
         "capability-snapshot" => dto::<CapabilitySnapshot>(raw, ok),
-        "session-command-reply" => dto::<SessionCommandReply>(raw, |v| s(validate_domain_reply(v))),
-        "addon-command-reply" => dto::<AddonCommandReply>(raw, |v| s(validate_domain_reply(v))),
-        "artifact-command-reply" => {
-            dto::<ArtifactCommandReply>(raw, |v| s(validate_domain_reply(v)))
-        }
+        "session-command-reply" => dto::<SessionCommandReply>(raw, |v| {
+            s(v.validate_revision(revision))?;
+            s(validate_domain_reply(v))
+        }),
+        "addon-command-reply" => dto::<AddonCommandReply>(raw, |v| {
+            s(v.validate_revision(revision))?;
+            s(validate_domain_reply(v))
+        }),
+        "artifact-command-reply" => dto::<ArtifactCommandReply>(raw, |v| {
+            s(v.validate_revision(revision))?;
+            s(validate_domain_reply(v))
+        }),
         "graph-page" => dto::<GraphPage>(raw, |v| {
             at_revision(v, revision)?;
             s(v.validate())
@@ -348,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1870), 1870);
+    assert_eq!(run("domain-fixtures.json", 1901), 1901);
 }
 
 #[test]
@@ -432,7 +443,9 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // These add24 to546. Conventions and embedding spaces add fourteen revision-3 bindings;
     // fixture admission independently verifies all584 bindings.
     // Accepted DW89 adds one admission; DW36 adds eight revision5 admissions.
-    assert_eq!(admitted.len(), 597);
+    // DW83 adds four revision-6 project purge bindings and history.command_receipt
+    // at revision 6: five additional recorded native admissions.
+    assert_eq!(admitted.len(), 602);
 }
 
 #[test]

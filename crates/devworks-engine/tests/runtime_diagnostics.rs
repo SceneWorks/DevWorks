@@ -82,7 +82,8 @@ fn compose(h: &Harness, consumers: Vec<Consumer>) -> (Composition, Parts) {
         Some(sqlite.clone() as Arc<dyn StorageHealthProbe>),
     ));
     diagnostics.register_secret(SECRET);
-    let exports = Arc::new(DiagnosticExports::new(exports_dir(h), sources.clone()));
+    let exports =
+        Arc::new(DiagnosticExports::new(exports_dir(h), sources.clone()).with_store(store.clone()));
     diagnostics.set_export_staging(exports.clone());
     let mut config = RuntimeConfig::new(id("dispatcher-1"));
     config.collect_interval = Duration::from_secs(3600);
@@ -1027,4 +1028,90 @@ fn a_lost_acknowledgment_of_the_intent_keeps_the_staged_file_and_resolves_durabl
     assert_eq!(fresh.media_type, "application/json");
     assert!(staged_files(&h).is_empty(), "{:?}", staged_files(&h));
     rt.block_on(app.shutdown());
+}
+
+#[test]
+fn export_staging_attribution_survives_restart_and_normal_owner_reconciles_completed_and_missing_writes()
+ {
+    use devworks_core::ports::diagnostics::ExportStaging;
+    let h = Harness::new();
+    drop(h.open());
+    seed_root(&h, "root-a");
+    let (composition, parts) = compose(&h, Vec::new());
+    let project = ProjectId(id("project-a"));
+    let user = principal(parts.sqlite.as_ref(), "user-a", PrincipalKind::Human).with_lineage(
+        Some(project.clone()),
+        None,
+        None,
+    );
+    parts
+        .exports
+        .stage(&user, "owned-export.jsonl", b"project-owned-export-private")
+        .unwrap();
+    let rows = read_snapshot(parts.sqlite.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().project_managed_files(&project, None, 10)
+    })
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    let actual = rows[0].clone();
+    assert_eq!(
+        actual.witness.content_digest,
+        devworks_core::fingerprint::sha256_hex(b"project-owned-export-private")
+    );
+    let info = parts.sqlite.info();
+    let pending = ProjectManagedFileReservation {
+        id: id("missing-diagnostic-write"),
+        project_id: project.clone(),
+        kind: "DiagnosticExport".into(),
+        relative_path: "missing-write.jsonl".into(),
+        root: actual.witness.root,
+        created_identity: None,
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        boot_id: info.boot_id,
+        created_at_ms: 1,
+    };
+    run_write(parts.sqlite.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&pending)
+    })
+    .unwrap();
+    drop(parts);
+    drop(composition);
+    let (composition, parts) = compose(&h, Vec::new());
+    assert!(
+        read_snapshot(parts.sqlite.as_ref(), &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project))
+        .unwrap()
+    );
+    let recovered = read_snapshot(parts.sqlite.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().project_managed_files(&project, None, 10)
+    })
+    .unwrap();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].witness, actual.witness);
+    let path = exports_dir(&h).join(&actual.relative_path);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
+        .unwrap();
+    assert_eq!(parts.exports.sweep(), 1);
+    assert!(!path.exists());
+    assert!(
+        read_snapshot(parts.sqlite.as_ref(), &ReadOptions::default(), |r| r
+            .projects()
+            .project_managed_files(&project, None, 10))
+        .unwrap()
+        .is_empty()
+    );
+    assert!(
+        !read_snapshot(parts.sqlite.as_ref(), &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project))
+        .unwrap()
+    );
+    drop(parts);
+    drop(composition);
 }

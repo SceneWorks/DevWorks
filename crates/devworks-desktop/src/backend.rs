@@ -50,6 +50,27 @@ pub trait Backend: Send + Sync {
             "trusted native human decision ingress".into(),
         ))
     }
+    fn confirm_project_purge(&self, _frame: &[u8]) -> CommandOutcome {
+        Err(devworks_core::gateway::GatewayFailure::NoUseCase(
+            "trusted native project purge confirmation ingress".into(),
+        ))
+    }
+    fn purge_client_publish(
+        &self,
+        _memory: crate::memory::Memory,
+        _live: crate::project_purge::Live,
+        _save: bool,
+    ) -> Result<Option<Vec<devworks_core::ports::storage::ProjectPurgeClientScope>>, String> {
+        Ok(None)
+    }
+    fn purge_client_acknowledge(
+        &self,
+        _scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
+    ) {
+    }
+    fn purge_client_freeze(&self, _project: &str, _frozen: bool) -> Result<(), String> {
+        Err("Native project purge custody is unavailable".into())
+    }
     /// Volatile host-owned response text, authorized against the current session on each read.
     /// This is not a transcript entry or a generic tool operation.
     fn text_preview(
@@ -95,6 +116,18 @@ pub trait Backend: Send + Sync {
     fn token(&self, prefix: &str) -> String;
     /// A directory for files the UI materializes before attaching them (pasted images).
     fn scratch_dir(&self) -> PathBuf;
+    /// Stage native paste bytes under the stored session's scope before exposing a path.
+    fn stage_pasted_image(&self, _session: Option<&Id>, _png: &[u8]) -> Result<PathBuf, String> {
+        Err("pasted-image custody is not available here".into())
+    }
+    fn stage_project_text(
+        &self,
+        _project: Option<&devworks_core::protocol::ProjectId>,
+        _extension: &str,
+        _bytes: &[u8],
+    ) -> Result<PathBuf, String> {
+        Err("project text staging is not available here".into())
+    }
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;
@@ -174,6 +207,10 @@ pub struct SecretStoreStatus {
 /// Who is waiting for a reply. Equal slots supersede each other.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Slot {
+    PurgePrepare,
+    PurgePage,
+    PurgeConfirm,
+    PurgeStatus,
     DatabaseList(u64, bool),
     DatabaseObjects(u64, bool),
     DatabaseRelations(u64, bool),
@@ -462,6 +499,7 @@ fn resolve_dispatched(
     let invoke = || match dispatch {
         CommandDispatch::Generic => backend.command(operation, frame),
         CommandDispatch::HumanDecision => backend.human_decision(frame),
+        CommandDispatch::ProjectPurge => backend.confirm_project_purge(frame),
     };
     let mut outcome = invoke();
     for _ in 0..UNKNOWN_RESUBMISSIONS {
@@ -470,6 +508,41 @@ fn resolve_dispatched(
         }
         outcome = invoke();
     }
+    // An older command envelope cannot carry the current terminal representation.
+    // Resolve only an explicit receipt hold, under the exact original fingerprint.
+    if matches!(
+        &outcome,
+        Ok(CommandReply::Rejected {
+            code: devworks_core::protocol::Rejection::UnsupportedSchema,
+            retry: devworks_core::protocol::RetryAdvice::ResolveReceipt,
+            ..
+        })
+    ) && let Ok(decoded) = devworks_core::admission::decode(
+        devworks_core::admission::Selection {
+            operation,
+            mode: devworks_core::registry::Mode::Command,
+        },
+        frame,
+    ) && let devworks_core::admission::CallerKey::Command(request_key) = decoded.key
+    {
+        let lookup = serde_json::json!({"protocol":"1.0-draft.1","schemaRevision":6,"queryId":backend.token("purged-receipt"),"query":{"kind":"history.command_receipt","requestKey":request_key}}).to_string().into_bytes();
+        if let Ok(devworks_core::protocol::results::DomainQueryReply::Result {
+            result:
+                devworks_core::protocol::results::OperationResult::HistoryCommandReceipt { value },
+            ..
+        }) = backend.query("history.command_receipt", &lookup)
+            && value.request_key == request_key
+            && let Some(purged) = value.purged
+            && purged.request_digest.as_str() == decoded.fingerprint.as_str()
+        {
+            return Ok(CommandReply::ReceiptPurged {
+                protocol: devworks_core::protocol::Protocol::Draft1,
+                request_key,
+                outcome: purged,
+            });
+        }
+    }
+
     outcome
 }
 
@@ -479,6 +552,13 @@ pub enum CommandDispatch {
     #[default]
     Generic,
     HumanDecision,
+    ProjectPurge,
+}
+
+struct PendingQuery {
+    operation: &'static str,
+    frame: Vec<u8>,
+    options: Option<devworks_core::ports::storage::ReadOptions>,
 }
 
 struct Pending {
@@ -488,10 +568,13 @@ struct Pending {
     started: Instant,
     /// A command's operation and exact frame, kept until its outcome is known.
     command: Option<(&'static str, Vec<u8>, CommandDispatch)>,
+    query: Option<PendingQuery>,
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
 pub const COMMANDS: &[&str] = &[
+    "projects.purge",
+    "projects.prepare_purge",
     "code.set_trust",
     "help.generate_capability_docs",
     "router.price_refresh",
@@ -606,6 +689,17 @@ impl Unresolved {
         {
             return None;
         }
+        if dispatch == CommandDispatch::ProjectPurge && operation != "projects.purge" {
+            return None;
+        }
+        // Restored disk state can resolve an existing receipt, but cannot create
+        // a new native Human confirmation. A missing original receipt requires
+        // another explicit review; a dispatch flag is never consent.
+        let dispatch = if dispatch == CommandDispatch::ProjectPurge {
+            CommandDispatch::Generic
+        } else {
+            dispatch
+        };
         Some(Self {
             slot,
             label,
@@ -648,6 +742,7 @@ pub struct Activity {
 
 /// Runs requests on worker threads and returns their replies to the frame loop.
 pub struct Client {
+    purge_reviewing: bool,
     backend: Arc<dyn Backend>,
     jobs: Sender<(u64, Job)>,
     replies: Receiver<(u64, Reply)>,
@@ -719,6 +814,7 @@ impl Client {
             }
         }
         Self {
+            purge_reviewing: false,
             backend,
             jobs,
             replies,
@@ -740,6 +836,9 @@ impl Client {
         self.join_bound = bound;
     }
 
+    pub fn set_purge_reviewing(&mut self, reviewing: bool) {
+        self.purge_reviewing = reviewing;
+    }
     pub fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
     }
@@ -778,6 +877,7 @@ impl Client {
             label: label.to_owned(),
             started: Instant::now(),
             command,
+            query: None,
         });
         *self
             .shared
@@ -808,13 +908,23 @@ impl Client {
         operation: &'static str,
         frame: Vec<u8>,
     ) -> bool {
-        self.submit(
+        let kept = frame.clone();
+        let ticket = self.submit(
             slot,
             label,
             Box::new(move |b| Reply::Query(b.query(operation, &frame))),
             None,
-        )
-        .is_some()
+        );
+        if let Some(ticket) = ticket
+            && let Some(p) = self.pending.iter_mut().find(|p| p.ticket == ticket)
+        {
+            p.query = Some(PendingQuery {
+                operation,
+                frame: kept,
+                options: None,
+            });
+        }
+        ticket.is_some()
     }
 
     pub fn query_cancellable(
@@ -825,13 +935,24 @@ impl Client {
         frame: Vec<u8>,
         options: devworks_core::ports::storage::ReadOptions,
     ) -> bool {
-        self.submit(
+        let kept = frame.clone();
+        let kept_options = options.clone();
+        let ticket = self.submit(
             slot,
             label,
             Box::new(move |b| Reply::Query(b.query_cancellable(operation, &frame, &options))),
             None,
-        )
-        .is_some()
+        );
+        if let Some(ticket) = ticket
+            && let Some(p) = self.pending.iter_mut().find(|p| p.ticket == ticket)
+        {
+            p.query = Some(PendingQuery {
+                operation,
+                frame: kept,
+                options: Some(kept_options),
+            });
+        }
+        ticket.is_some()
     }
 
     /// Admits a command through [`resolve_command`]. If its outcome is still unknown, the exact
@@ -860,6 +981,17 @@ impl Client {
         )
     }
 
+    /// Called only after the user reviews and confirms the exact purge manifest.
+    pub fn confirm_project_purge(&mut self, slot: Slot, label: &str, frame: Vec<u8>) -> bool {
+        self.dispatched_command(
+            slot,
+            label,
+            "projects.purge",
+            frame,
+            CommandDispatch::ProjectPurge,
+        )
+    }
+
     fn dispatched_command(
         &mut self,
         slot: Slot,
@@ -868,6 +1000,10 @@ impl Client {
         frame: Vec<u8>,
         dispatch: CommandDispatch,
     ) -> bool {
+        if self.purge_reviewing && !matches!(operation, "projects.prepare_purge" | "projects.purge")
+        {
+            return false;
+        }
         // A slot holding an unresolved command keeps it until `resubmit_unresolved` settles
         // that exact frame: a new request would replace it, and could commit a second time.
         if self.unresolved.iter().any(|u| u.slot == slot) {
@@ -956,6 +1092,9 @@ impl Client {
         label: &str,
         task: impl FnOnce(&dyn Backend) -> Result<TaskOutput, String> + Send + 'static,
     ) -> bool {
+        if self.purge_reviewing {
+            return false;
+        }
         self.submit(slot, label, Box::new(move |b| Reply::Task(task(b))), None)
             .is_some()
     }
@@ -988,6 +1127,48 @@ impl Client {
             }
         }
         out
+    }
+
+    /// Fence replies already in flight when a project is removed. Commands retain their
+    /// exact original frames and receipt outcomes; later queries get fresh tickets.
+    pub fn invalidate_project_queries(
+        &mut self,
+        _scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
+    ) {
+        // Workspace lists can include the removed project without naming it. Re-read every
+        // outstanding data query at a fresh snapshot, retaining command receipts unchanged.
+        let queries = self
+            .pending
+            .iter()
+            .filter(|p| self.latest.get(&p.slot) == Some(&p.ticket))
+            .filter_map(|p| {
+                p.query
+                    .as_ref()
+                    .filter(|q| !q.operation.starts_with("projects.purge_"))
+                    .map(|q| {
+                        (
+                            p.slot.clone(),
+                            p.label.clone(),
+                            q.operation,
+                            q.frame.clone(),
+                            q.options.clone(),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        for (slot, label, op, frame, options) in queries {
+            if let Some(options) = options {
+                self.query_cancellable(slot, &label, op, frame, options);
+            } else {
+                self.query(slot, &label, op, frame);
+            }
+        }
+    }
+
+    pub fn has_local_tasks(&self) -> bool {
+        self.pending
+            .iter()
+            .any(|p| p.command.is_none() && p.query.is_none())
     }
 
     /// Whether a request for `slot` is waiting for its reply.
@@ -1139,14 +1320,31 @@ mod human_dispatch_tests {
     #[derive(Default)]
     struct NoHuman {
         generic: AtomicUsize,
+        queries: AtomicUsize,
+        frames: std::sync::Mutex<Vec<Vec<u8>>>,
+        command_reply:
+            std::sync::Mutex<Option<devworks_core::protocol::results::DomainCommandReply>>,
+        query_reply: std::sync::Mutex<Option<devworks_core::protocol::results::DomainQueryReply>>,
     }
     impl Backend for NoHuman {
         fn query(&self, op: &str, _: &[u8]) -> QueryOutcome {
-            Err(GatewayFailure::NoUseCase(op.into()))
+            self.queries.fetch_add(1, Ordering::SeqCst);
+            self.query_reply
+                .lock()
+                .unwrap()
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(|| Err(GatewayFailure::NoUseCase(op.into())))
         }
-        fn command(&self, op: &str, _: &[u8]) -> CommandOutcome {
+        fn command(&self, op: &str, frame: &[u8]) -> CommandOutcome {
             self.generic.fetch_add(1, Ordering::SeqCst);
-            Err(GatewayFailure::NoUseCase(op.into()))
+            self.frames.lock().unwrap().push(frame.to_vec());
+            self.command_reply
+                .lock()
+                .unwrap()
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(|| Err(GatewayFailure::NoUseCase(op.into())))
         }
         fn mint_workspace_upload(&self, _: &Path) -> Result<Id, String> {
             Err("unavailable".into())
@@ -1190,6 +1388,56 @@ mod human_dispatch_tests {
         assert_eq!(b.generic.load(Ordering::SeqCst), 0);
     }
     #[test]
+    fn unsupported_purge_confirmation_never_falls_back_to_generic_commands() {
+        let b = NoHuman::default();
+        assert!(matches!(
+            resolve_dispatched(
+                &b,
+                CommandDispatch::ProjectPurge,
+                "projects.purge",
+                b"exact"
+            ),
+            Err(GatewayFailure::NoUseCase(_))
+        ));
+        assert_eq!(b.generic.load(Ordering::SeqCst), 0);
+    }
+    #[test]
+    fn restored_purge_frames_preserve_the_original_frame_without_minting_human_consent() {
+        let restored = Unresolved::restored_dispatch(
+            Slot::ProjectCommand("project-a".into()),
+            "purge".into(),
+            "projects.purge",
+            b"original exact frame".to_vec(),
+            CommandDispatch::ProjectPurge,
+        )
+        .unwrap();
+        assert_eq!(restored.dispatch, CommandDispatch::Generic);
+        assert_eq!(restored.operation(), "projects.purge");
+        assert_eq!(restored.frame(), b"original exact frame");
+        assert!(
+            Unresolved::restored_dispatch(
+                Slot::SettingsSave,
+                "wrong purpose".into(),
+                "settings.save_revision",
+                vec![],
+                CommandDispatch::ProjectPurge
+            )
+            .is_none()
+        );
+        let backend = NoHuman::default();
+        let _ = resolve_dispatched(
+            &backend,
+            restored.dispatch,
+            restored.operation(),
+            restored.frame(),
+        );
+        assert_eq!(backend.generic.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            backend.frames.lock().unwrap().as_slice(),
+            &[b"original exact frame".to_vec()]
+        );
+    }
+    #[test]
     fn restart_keeps_the_explicit_dispatch_and_never_upgrades_old_generic_frames() {
         let legacy = Unresolved::restored(
             Slot::ApprovalDecision("p".into()),
@@ -1222,5 +1470,61 @@ mod human_dispatch_tests {
         let stored = serde_json::json!({"slot":"SettingsSave","label":"old","operation":"settings.save_revision","frame":[1,2]});
         let old: crate::memory::PendingCommand = serde_json::from_value(stored).unwrap();
         assert_eq!(old.dispatch, CommandDispatch::Generic);
+    }
+    fn purged_backend() -> (NoHuman, Vec<u8>) {
+        let b = NoHuman::default();
+        let frame=serde_json::json!({"protocol":"1.0-draft.1","mode":"Command","requestKey":"original-key","body":{"kind":"projects.create","name":"private original name","description":"","repositoryIds":[]}}).to_string().into_bytes();
+        let decoded = devworks_core::admission::decode(
+            devworks_core::admission::Selection {
+                operation: "projects.create",
+                mode: devworks_core::registry::Mode::Command,
+            },
+            &frame,
+        )
+        .unwrap();
+        *b.command_reply.lock().unwrap()=Some(serde_json::from_value(serde_json::json!({"kind":"Rejected","protocol":"1.0-draft.1","requestKey":"original-key","code":"UnsupportedSchema","retry":"ResolveReceipt","correlationId":"correlation-a"})).unwrap());
+        *b.query_reply.lock().unwrap()=Some(serde_json::from_value(serde_json::json!({"kind":"Result","protocol":"1.0-draft.1","queryId":"purged-receipt","stamp":{"storeId":"store-a","restoreEpoch":"0","sequence":"9","policyRevision":"1","scopeRevision":"1"},"result":{"kind":"history.command_receipt","value":{"requestKey":"original-key","commandId":"committed-command","committedSequence":"8","state":"Recorded","purged":{"commandId":"committed-command","committedSequence":"8","acceptedAtMs":"100","requestDigest":decoded.fingerprint.as_str(),"originalDecision":"Applied","purgeId":"purge-a"}}}})).unwrap());
+        (b, frame)
+    }
+    #[test]
+    fn purged_legacy_command_resolves_once_without_resubmission_or_new_identity() {
+        let (b, frame) = purged_backend();
+        assert!(
+            matches!(resolve_command(&b,"projects.create",&frame),Ok(CommandReply::ReceiptPurged{request_key,outcome,..}) if request_key.0.as_str()=="original-key" && outcome.command_id.0.as_str()=="committed-command")
+        );
+        assert_eq!(b.generic.load(Ordering::SeqCst), 1);
+        assert_eq!(b.queries.load(Ordering::SeqCst), 1);
+        assert_eq!(*b.frames.lock().unwrap(), [frame]);
+    }
+    #[test]
+    fn purged_lookup_for_another_key_or_intent_cannot_replace_the_original_outcome() {
+        for another_key in [false, true] {
+            let (b, frame) = purged_backend();
+            if let Some(devworks_core::protocol::results::DomainQueryReply::Result {
+                result:
+                    devworks_core::protocol::results::OperationResult::HistoryCommandReceipt { value },
+                ..
+            }) = b.query_reply.lock().unwrap().as_mut()
+            {
+                if another_key {
+                    value.request_key =
+                        devworks_core::protocol::RequestKey(Id::new("another-key").unwrap());
+                } else {
+                    value.purged.as_mut().unwrap().request_digest =
+                        devworks_core::protocol::provider::Digest::try_from("b".repeat(64))
+                            .unwrap();
+                }
+            }
+            assert!(matches!(
+                resolve_command(&b, "projects.create", &frame),
+                Ok(CommandReply::Rejected {
+                    code: devworks_core::protocol::Rejection::UnsupportedSchema,
+                    ..
+                })
+            ));
+            assert_eq!(b.generic.load(Ordering::SeqCst), 1);
+            assert_eq!(b.queries.load(Ordering::SeqCst), 1);
+            assert_eq!(*b.frames.lock().unwrap(), [frame]);
+        }
     }
 }

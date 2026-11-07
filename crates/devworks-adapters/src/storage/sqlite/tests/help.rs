@@ -211,7 +211,7 @@ fn help30_migration_initial_sentinel_reopens_and_old_writer_is_read_only() {
     assert!(!m.rebuilds_tables);
     let h = Harness::new();
     drop(SqliteStore::open_with(h.config(), &through(29)).unwrap());
-    let s = h.store();
+    let s = SqliteStore::open_with(h.config(), &through(30)).unwrap();
     let head = read(&s, |r| r.help().help_head());
     assert_eq!(head.revision, 1);
     assert_eq!(head.registry_revision, 1);

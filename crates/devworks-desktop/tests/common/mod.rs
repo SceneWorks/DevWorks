@@ -418,6 +418,21 @@ impl Backend for Gated {
     fn scratch_dir(&self) -> PathBuf {
         self.inner.scratch_dir()
     }
+    fn stage_pasted_image(
+        &self,
+        session: Option<&devworks_core::protocol::Id>,
+        png: &[u8],
+    ) -> Result<PathBuf, String> {
+        self.inner.stage_pasted_image(session, png)
+    }
+    fn stage_project_text(
+        &self,
+        project: Option<&devworks_core::protocol::ProjectId>,
+        extension: &str,
+        bytes: &[u8],
+    ) -> Result<PathBuf, String> {
+        self.inner.stage_project_text(project, extension, bytes)
+    }
     fn read_stream(
         &self,
         stream: &devworks_core::protocol::Id,
@@ -558,6 +573,21 @@ impl Backend for LoseAcks {
     }
     fn scratch_dir(&self) -> PathBuf {
         self.inner.scratch_dir()
+    }
+    fn stage_pasted_image(
+        &self,
+        session: Option<&devworks_core::protocol::Id>,
+        png: &[u8],
+    ) -> Result<PathBuf, String> {
+        self.inner.stage_pasted_image(session, png)
+    }
+    fn stage_project_text(
+        &self,
+        project: Option<&devworks_core::protocol::ProjectId>,
+        extension: &str,
+        bytes: &[u8],
+    ) -> Result<PathBuf, String> {
+        self.inner.stage_project_text(project, extension, bytes)
     }
     fn read_stream(
         &self,

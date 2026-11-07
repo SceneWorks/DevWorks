@@ -363,6 +363,29 @@ fn text_of(raw: TextRaw) -> Result<StoredRepositoryText, StorageError> {
 macro_rules! project_reads {
     ($t:ty) => {
         impl ProjectRead for $t {
+            fn purge_file_effect_reviewed(&self,witness:&devworks_core::ports::project_purge::PurgeFileWitness)->Result<bool,StorageError>{super::project_purge::effects::file_reviewed(self.conn,witness)}
+
+            fn purge_client_fence(&self,project:&ProjectId,digest:&str)->Result<Option<ProjectPurgeClientScope>,StorageError>{super::project_purge::effects::client_fence(self.conn,project,digest)}
+
+            fn purge_file_artifact_keepers(&self, project:&ProjectId, owners:&[devworks_core::ports::project_purge::PurgeFileOwner])->Result<Vec<devworks_core::protocol::provider::ArtifactRef>,StorageError>{super::project_purge::client_keepers::file_references(self.conn,project,owners)}
+            fn purge_inventory(&self,project:&ProjectId)->Result<Option<ProjectPurgeInventory>,StorageError> {super::project_purge::inventory::read(self.conn,project)}
+            fn purge_fenced(&self,project:&ProjectId)->Result<bool,StorageError> {db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM project_purge_manifests WHERE project_id=?1 AND phase IN('RemovingBytes','Held','Complete'))",[project.0.as_str()],|r|r.get(0)))}
+            fn purge_pending_effects(&self,limit:u16)->Result<Vec<devworks_core::ports::project_purge::PurgeEffect>,StorageError> {super::project_purge::effects::pending(self.conn,limit)}
+            fn purge_blob_claim_reserved(&self,digest:&str,generation:&str,owner:&str)->Result<bool,StorageError> {super::project_purge::effects::reserved(self.conn,digest,generation,owner)}
+            fn purge_inventory_with_client_keepers(&self,project:&ProjectId,keepers:&[devworks_core::protocol::provider::ArtifactRef])->Result<Option<ProjectPurgeInventory>,StorageError> {super::project_purge::inventory::read_with_client_keepers(self.conn,project,keepers)}
+            fn purge_planning(&self,project:&ProjectId)->Result<Option<ProjectPurgePlanning>,StorageError> {super::project_purge::classification::planning(self.conn,project)}
+            fn purge_candidates(&self,project:&ProjectId)->Result<Option<ProjectPurgeCandidates>,StorageError> {super::project_purge::candidates::snapshot(self.conn,project)}
+            fn managed_file_recovery(&self,kind:&str,after:Option<&Id>,n:u16)->Result<Vec<ProjectManagedFileRecovery>,StorageError> {super::project_purge::managed_recovery(self.conn,kind,after,n)}
+
+            fn pending_project_managed_writes(&self, project:&ProjectId)->Result<bool,StorageError> {super::project_purge::pending_managed_writes(self.conn,project)}
+
+            fn project_managed_file(&self, project:&ProjectId, id:&Id) -> Result<Option<StoredProjectManagedFile>,StorageError> { super::project_purge::managed_file(self.conn,project,id) }
+            fn project_managed_files(&self, project:&ProjectId, after:Option<&Id>, n:u16) -> Result<Vec<StoredProjectManagedFile>,StorageError> { super::project_purge::managed_files(self.conn,project,after,n) }
+
+            fn purge_manifest(&self, project: &ProjectId, manifest: &Id) -> Result<Option<StoredProjectPurge>, StorageError> {
+                super::project_purge::manifest(self.conn, project, manifest)
+            }
+
             fn project(&self, id: &ProjectId) -> Result<Option<StoredProject>, StorageError> {
                 one_project(self.conn, id)
             }
@@ -519,6 +542,70 @@ fn repository_exists(conn: &Connection, id: &Id) -> Result<bool, StorageError> {
 }
 
 impl ProjectRepository for Unit<'_> {
+    fn apply_project_purge(
+        &mut self,
+        permit: &devworks_core::services::projects::purge::PurgePermit,
+    ) -> Result<devworks_core::protocol::records::ProjectPurgeManifest, StorageError> {
+        let operation = devworks_core::protocol::OperationId(
+            self.ids.next_id(devworks_core::ports::IdKind::Operation),
+        );
+        super::project_purge::logical::apply(self.conn, self.info, self.now, operation, permit)
+    }
+    fn claim_purge_effect(
+        &mut self,
+        manifest: &Id,
+        effect: &str,
+        owner: &Id,
+        until: i64,
+    ) -> Result<Option<devworks_core::ports::project_purge::PurgeEffect>, StorageError> {
+        super::project_purge::effects::claim(
+            self.conn, self.info, self.now, manifest, effect, owner, until,
+        )
+    }
+    fn settle_purge_effect(
+        &mut self,
+        manifest: &Id,
+        effect: &str,
+        owner: &Id,
+        outcome: Result<(), devworks_core::ports::project_purge::PurgeFileFault>,
+    ) -> Result<(), StorageError> {
+        super::project_purge::effects::settle(
+            self.conn, self.info, self.now, manifest, effect, owner, outcome,
+        )
+    }
+    fn begin_project_managed_file_write(
+        &mut self,
+        project: &ProjectId,
+        id: &Id,
+        identity: devworks_core::authority::destructive::FileIdentity,
+    ) -> Result<(), StorageError> {
+        super::project_purge::begin_managed_write(self.conn, self.info, project, id, identity)
+    }
+    fn reserve_project_managed_file(
+        &mut self,
+        file: &ProjectManagedFileReservation,
+    ) -> Result<(), StorageError> {
+        super::project_purge::reserve_managed_file(self.conn, self.info, file)
+    }
+
+    fn register_project_managed_file(
+        &mut self,
+        file: &StoredProjectManagedFile,
+    ) -> Result<(), StorageError> {
+        super::project_purge::register_managed_file(self.conn, self.info, file)
+    }
+    fn finish_project_managed_file(
+        &mut self,
+        project: &ProjectId,
+        id: &Id,
+    ) -> Result<(), StorageError> {
+        super::project_purge::finish_managed_file(self.conn, project, id)
+    }
+
+    fn insert_purge_manifest(&mut self, manifest: &StoredProjectPurge) -> Result<(), StorageError> {
+        super::project_purge::insert_manifest(self.conn, self.info, manifest)
+    }
+
     fn insert_project(&mut self, p: &StoredProject) -> Result<(), StorageError> {
         check_project(p)?;
         if p.revision != 1 {

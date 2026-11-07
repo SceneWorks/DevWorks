@@ -1,0 +1,13 @@
+{
+  "schema": 37,
+  "inheritsSchema36": "schema36-extension.json",
+  "additionalTables": [],
+  "changedTables": [
+    {
+      "table": "project_managed_files",
+      "change": "Preserve all schema36 custody rows; allow ClientStaging for feature plan/decision Markdown and convention editor text/portable manifests under the verified native staging-ui root.",
+      "owner": "Native plan snapshot.project_id or typed convention Scope.Project; Workspace stays independent; selected navigation project is never ownership."
+    }
+  ],
+  "completion": "ClientStaging uses the same reserve/create-new/bind-before-bytes/publish/recovery protocol as ClientPaste. Include only exact owned client records with no surviving draft/pipeline/receipt keeper. No arbitrary picked/imported paths, Git/source resources or global package caches."
+}

@@ -243,10 +243,8 @@ fn preview_bytes(bytes: &[u8]) -> Result<TaskOutput, String> {
     })
 }
 
-/// Writes a pasted image to `dir` as PNG so it can be attached like a picked file.
-pub fn materialize_paste(image: &ColorImage, dir: &Path, name: &str) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let path = dir.join(name);
+/// Encode first; native custody records the actual session scope before creating a file.
+pub fn encode_paste(image: &ColorImage) -> Result<Vec<u8>, String> {
     let [w, h] = image.size;
     let rgba: Vec<u8> = image
         .pixels
@@ -255,10 +253,11 @@ pub fn materialize_paste(image: &ColorImage, dir: &Path, name: &str) -> Result<P
         .collect();
     let buffer = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
         .ok_or_else(|| "the pasted image has no pixels".to_owned())?;
+    let mut encoded = std::io::Cursor::new(Vec::new());
     buffer
-        .save_with_format(&path, image::ImageFormat::Png)
+        .write_to(&mut encoded, image::ImageFormat::Png)
         .map_err(|e| e.to_string())?;
-    Ok(path)
+    Ok(encoded.into_inner())
 }
 
 /// A pasted text that names an existing local file (a copied file path or `file://` URL).
@@ -384,7 +383,9 @@ mod tests {
     fn a_pasted_image_round_trips_through_png() {
         let dir = std::env::temp_dir().join(format!("devworks-paste-img-{}", std::process::id()));
         let img = ColorImage::new([3, 2], vec![eframe::egui::Color32::RED; 6]);
-        let p = materialize_paste(&img, &dir, "p.png").unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("p.png");
+        std::fs::write(&p, encode_paste(&img).unwrap()).unwrap();
         match preview(&p).unwrap() {
             TaskOutput::Preview { size, rgba } => {
                 assert_eq!(size, [3, 2]);

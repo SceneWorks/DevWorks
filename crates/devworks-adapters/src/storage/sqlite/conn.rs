@@ -93,6 +93,7 @@ pub(crate) fn open(path: &Path, role: Role, busy: Duration) -> Result<Connection
     register_vec(&conn)?;
     super::conventions::register_functions(&conn)?;
     super::graph::register_name_match(&conn)?;
+    super::project_purge::guard::register(&conn, role == Role::Writer)?;
     db(conn.busy_timeout(busy))?;
     db(conn.pragma_update(None, "foreign_keys", true))?;
     match role {

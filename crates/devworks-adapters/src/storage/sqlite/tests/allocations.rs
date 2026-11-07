@@ -37,7 +37,10 @@ fn work(name: &str, kind: &str, parent: Option<&str>) -> StoredWork {
     }
 }
 fn seeded(h: &Harness) -> SqliteStore {
-    let s = h.store();
+    seeded_with(h, MIGRATIONS)
+}
+fn seeded_with(h: &Harness, migrations: &[crate::storage::sqlite::Migration]) -> SqliteStore {
+    let s = SqliteStore::open_with(h.config(), migrations).unwrap();
     run_write(&s, WriteOptions::default(), |tx| {
         tx.projects().insert_project(&StoredProject {
             id: project(),
@@ -133,7 +136,7 @@ fn migration_26_is_checksummed_and_closes_unaware_writers_without_rebuilding() {
     assert!(!migration.rebuilds_tables);
     let h = Harness::new();
     drop(SqliteStore::open_with(h.config(), &through(25)).unwrap());
-    let s = seeded(&h);
+    let s = seeded_with(&h, &through(26));
     insert(&s, claim(&s, "claim", "issue", false)).unwrap();
     drop(s);
     let legacy = SqliteStore::open_with(h.config(), &through(25)).unwrap();

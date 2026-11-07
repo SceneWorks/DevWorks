@@ -184,10 +184,10 @@ impl Fx {
     /// root and source handles.
     fn open(h: Harness, sources: Arc<Sources>, n: Arc<AtomicU64>) -> Self {
         let store = Arc::new(h.store());
-        let files = Arc::new(NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.with_extension("cache"),
-        ));
+        let files = Arc::new(
+            NativeArtifactFiles::new(h.root.0.clone(), h.root.0.with_extension("cache"))
+                .with_store(store.clone()),
+        );
         let svc = Arc::new(ArtifactService::new(
             files.clone(),
             sources.clone(),
@@ -1877,6 +1877,17 @@ impl ArtifactFiles for HookFiles {
     fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
         self.inner.write_derived(k, b)
     }
+    fn write_project_derived(
+        &self,
+        project: &ProjectId,
+        key: &str,
+        bytes: &[u8],
+    ) -> Result<(), FileFault> {
+        self.inner.write_project_derived(project, key, bytes)
+    }
+    fn recover_project_derived(&self) -> Result<(), FileFault> {
+        self.inner.recover_project_derived()
+    }
     fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
         self.inner.read_derived(k, m)
     }
@@ -3333,6 +3344,17 @@ impl ArtifactFiles for Faulty {
     fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
         self.inner.write_derived(k, b)
     }
+    fn write_project_derived(
+        &self,
+        project: &ProjectId,
+        key: &str,
+        bytes: &[u8],
+    ) -> Result<(), FileFault> {
+        self.inner.write_project_derived(project, key, bytes)
+    }
+    fn recover_project_derived(&self) -> Result<(), FileFault> {
+        self.inner.recover_project_derived()
+    }
     fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
         self.inner.read_derived(k, m)
     }
@@ -4641,4 +4663,1096 @@ fn a_use_case_cannot_pin_collect_or_write_receipt_reply_records() {
         fx.read(move |s| s.artifacts().versions(&rid))
     };
     assert_eq!(versions, vec![receipt_version]);
+}
+
+#[test]
+fn purge_planning_compacts_only_the_validated_published_receipt_and_its_content_lineage() {
+    use devworks_core::services::artifacts::replies::{
+        REPLY_CONSUMER, ReceiptReplies, ReplyOutcome,
+    };
+    let fx = Fx::new();
+    let saved = fx.saved(
+        "purge-reply-source",
+        "private receipt title",
+        "text/plain",
+        b"private source bytes",
+    );
+    let claims = fx.write(|tx| {
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: REPLY_CONSUMER.into(),
+            owner: id("purge-reply-publisher"),
+            lease_ms: 60_000,
+            limit: 10,
+        })
+    });
+    assert_eq!(claims.len(), 1);
+    let publisher = ReceiptReplies::new(fx.svc.clone());
+    let reply = match publisher.publish(fx.store.as_ref(), &claims[0]) {
+        ReplyOutcome::Published(value) => value,
+        other => panic!("native publication: {other:?}"),
+    };
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let plan = assess();
+    for table in [
+        "command_receipts",
+        "receipt_replies",
+        "artifacts",
+        "artifact_versions",
+    ] {
+        assert!(
+            !plan.unresolved.iter().any(|r| r.table == table),
+            "{table}: {:?}",
+            plan.unresolved
+        );
+    }
+    let artifact_key = sha256_hex(
+        serde_json::to_string(&[reply.artifact_id.as_str()])
+            .unwrap()
+            .as_bytes(),
+    );
+    assert!(plan.rows.iter().any(|r| r.table == "artifacts"
+        && r.key_digest == artifact_key
+        && r.action == ProjectPurgeRowAction::Delete));
+    assert!(
+        plan.rows
+            .iter()
+            .any(|r| r.table == "receipt_replies" && r.action == ProjectPurgeRowAction::Delete)
+    );
+    let before =
+        fx.h.raw()
+            .query_row(
+                "SELECT schema_json FROM receipt_replies WHERE artifact_id=?1",
+                [reply.artifact_id.as_str()],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap();
+    let mut malformed: Value = serde_json::from_str(&before).unwrap();
+    malformed["unmappedPrivateCopy"] = json!("unrecognized reply schema");
+    fx.h.raw()
+        .execute(
+            "UPDATE receipt_replies SET schema_json=?1 WHERE artifact_id=?2",
+            rusqlite::params![malformed.to_string(), reply.artifact_id.as_str()],
+        )
+        .unwrap();
+    let held = assess();
+    assert!(held.unresolved.iter().any(|r| r.table == "receipt_replies"));
+    assert!(
+        !serde_json::to_string(&held.unresolved)
+            .unwrap()
+            .contains("unrecognized reply schema")
+    );
+    assert_eq!(
+        fx.artifact(&saved.artifact.artifact_id).state,
+        ArtifactState::Live
+    );
+    assert_eq!(
+        fx.artifact(&reply.artifact_id).state,
+        ArtifactState::Live,
+        "assessment never removes the published private content"
+    );
+}
+
+#[test]
+fn purge_planning_blob_generations_preserve_surviving_versions_and_unproved_pins() {
+    let fx = Fx::new();
+    let private = fx.saved(
+        "purge-private-blob",
+        "private bytes",
+        "text/plain",
+        b"unshared project bytes",
+    );
+    let shared = fx.saved(
+        "purge-shared-blob",
+        "shared bytes",
+        "text/plain",
+        b"same content two owners",
+    );
+    fx.source(
+        "purge-other-blob",
+        "purge-other-blob.bin",
+        b"same content two owners",
+        SourceOrigin::default(),
+    );
+    let other = saved(fx.save(
+        &fx.user(),
+        "project-b",
+        "independent other project",
+        "text/plain",
+        "purge-other-blob",
+        b"same content two owners",
+    ));
+    assert_eq!(shared.artifact.sha256, other.artifact.sha256);
+    let private_digest = hex(&private.artifact.sha256);
+    let shared_digest = hex(&shared.artifact.sha256);
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let decision = |plan: &ProjectPurgePlanning, digest: &str| {
+        let key = sha256_hex(serde_json::to_string(&[digest]).unwrap().as_bytes());
+        plan.rows
+            .iter()
+            .find(|r| r.table == "blobs" && r.key_digest == key)
+            .unwrap()
+            .action
+            .clone()
+    };
+    let before = assess();
+    assert_eq!(
+        decision(&before, &private_digest),
+        ProjectPurgeRowAction::Scrub,
+        "only the selected generation becomes a physical-effect candidate"
+    );
+    assert_eq!(
+        decision(&before, &shared_digest),
+        ProjectPurgeRowAction::Keep
+    );
+    let pinned = private_digest.clone();
+    fx.write(move |tx| tx.artifacts().pin(&id("unknown-backup-holder"), &pinned));
+    let held = assess();
+    assert_ne!(
+        before.digest, held.digest,
+        "new keepers invalidate the reviewed business snapshot"
+    );
+    assert_eq!(
+        decision(&held, &private_digest),
+        ProjectPurgeRowAction::Keep
+    );
+    assert!(
+        held.rows
+            .iter()
+            .any(|r| r.table == "artifact_blob_pins" && r.action == ProjectPurgeRowAction::Keep)
+    );
+    fx.write(|tx| tx.artifacts().release_pins(&id("unknown-backup-holder")));
+    assert_eq!(
+        decision(&assess(), &private_digest),
+        ProjectPurgeRowAction::Scrub
+    );
+    // An unknown legacy source carrying a typed version reference is a hold,
+    // never permission to remove its bytes while its owning format is unresolved.
+    let legacy = json!({"configuration_revision":1,"connection":{"id":"legacy-independent-source","revision":"1","config":{"caCertificate":private.artifact}},"owner_id":"user-a"});
+    fx.h.raw().execute("INSERT INTO schema_sources(id,revision,configuration_revision,owner_id,deleted,body_json) VALUES('legacy-independent-source',1,1,'user-a',0,?1)",[legacy.to_string()]).unwrap();
+    let legacy_plan = assess();
+    assert!(
+        legacy_plan
+            .unresolved
+            .iter()
+            .any(|r| r.table == "artifact_versions")
+    );
+    assert_eq!(
+        decision(&legacy_plan, &private_digest),
+        ProjectPurgeRowAction::Keep,
+        "retention closure must run before byte eligibility"
+    );
+    assert_eq!(
+        fx.artifact(&private.artifact.artifact_id).state,
+        ArtifactState::Live
+    );
+    assert_eq!(
+        fx.artifact(&other.artifact.artifact_id).state,
+        ArtifactState::Live
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row(
+                "SELECT state FROM blobs WHERE digest=?1",
+                [private_digest],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "Present",
+        "planning neither claims nor unlinks bytes"
+    );
+}
+
+#[test]
+fn purge_planning_minimal_control_publication_does_not_stale_business_review() {
+    use devworks_core::services::artifacts::replies::{
+        REPLY_CONSUMER, ReceiptReplies, ReplyOutcome,
+    };
+    struct Preview(devworks_core::protocol::records::ProjectPurgeManifest);
+    impl CommandHandler for Preview {
+        fn decide(
+            &self,
+            _: &InvocationContext,
+            _: &devworks_core::gateway::AdmittedCommand,
+            _: &mut dyn WriteTransaction,
+        ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
+            Ok(devworks_core::ports::Decided {
+                decision: DomainDecision::Applied {
+                    result: OperationResult::ProjectsPreparePurge {
+                        value: self.0.clone(),
+                    },
+                },
+                operation_id: None,
+            })
+        }
+    }
+    let fx = Fx::new();
+    fx.h.raw()
+        .execute(
+            "UPDATE projects SET lifecycle='Deleted' WHERE id='project-a'",
+            [],
+        )
+        .unwrap();
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let before = assess();
+    let manifest=serde_json::from_value(json!({"id":"minimal-control-manifest","projectId":"project-a","revision":"1","projectRevision":"1","digest":"a".repeat(64),"phase":"Prepared","recordCount":"2","managedByteCount":"0","keptRecordCount":"1","keptByteCount":"0","pendingEffects":"0","createdAtMs":T0.to_string()})).unwrap();
+    let frame = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":6,"requestKey":"minimal-control-preview","body":{"kind":"projects.prepare_purge","projectId":"project-a","expectedRevision":"1"}});
+    let authority = fx.authority();
+    let gateway = Gateway {
+        authority: &authority,
+        store: fx.store.as_ref(),
+        ids: fx.h.ids.as_ref(),
+    };
+    let reply = gateway
+        .command(
+            &fx.user(),
+            "projects.prepare_purge",
+            frame.to_string().as_bytes(),
+            Arc::new(Preview(manifest)),
+        )
+        .unwrap();
+    assert!(
+        matches!(reply,CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..}))
+    );
+    assert_eq!(
+        before.digest,
+        assess().digest,
+        "gateway control bookkeeping is minimal"
+    );
+    let claims = fx.write(|tx| {
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: REPLY_CONSUMER.into(),
+            owner: id("control-publisher"),
+            lease_ms: 60_000,
+            limit: 10,
+        })
+    });
+    assert_eq!(claims.len(), 1);
+    let publisher = ReceiptReplies::new(fx.svc.clone());
+    let reference = match publisher.publish(fx.store.as_ref(), &claims[0]) {
+        ReplyOutcome::Published(value) => value,
+        other => panic!("actual publication: {other:?}"),
+    };
+    let after = assess();
+    assert_eq!(
+        before.digest, after.digest,
+        "actual minimal control publication cannot invalidate its own business review"
+    );
+    assert!(
+        !after.unresolved.iter().any(|r| matches!(
+            r.table.as_str(),
+            "receipt_replies" | "artifacts" | "artifact_versions" | "blobs"
+        )),
+        "{:?}",
+        after.unresolved
+    );
+    for table in ["receipt_replies", "artifacts", "artifact_versions", "blobs"] {
+        assert!(
+            after.rows.iter().any(|r| r.table == table
+                && r.action == ProjectPurgeRowAction::Keep
+                && r.reason == ProjectPurgeRowReason::PurgeControlAudit),
+            "{table}"
+        );
+    }
+    let original =
+        fx.h.raw()
+            .query_row(
+                "SELECT provenance_json FROM artifacts WHERE id=?1",
+                [reference.artifact_id.as_str()],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap();
+    let mut unknown: Value = serde_json::from_str(&original).unwrap();
+    unknown["privateCopy"] = json!("unknown control artifact content");
+    fx.h.raw()
+        .execute(
+            "UPDATE artifacts SET provenance_json=?1 WHERE id=?2",
+            rusqlite::params![unknown.to_string(), reference.artifact_id.as_str()],
+        )
+        .unwrap();
+    let held = assess();
+    assert!(held.unresolved.iter().any(|r| r.table == "artifacts"));
+    assert_ne!(before.digest, held.digest);
+}
+
+#[test]
+fn purge_planning_rootless_project_sessions_own_conversations_and_keep_only_referenced_headers() {
+    let fx = Fx::new();
+    fx.write(|tx| {
+        tx.sessions().insert_session(&StoredSession {
+            id: id("private-rootless-session"),
+            conversation_id: id("rootless-conversation"),
+            agent_id: actor("user-a"),
+            project_id: Some(project("project-a")),
+            root_id: None,
+            title: "private session title".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor("user-a"),
+            created_at_ms: T0,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })
+    });
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let conversation_key = sha256_hex(
+        serde_json::to_string(&["rootless-conversation"])
+            .unwrap()
+            .as_bytes(),
+    );
+    let session_key = sha256_hex(
+        serde_json::to_string(&["private-rootless-session"])
+            .unwrap()
+            .as_bytes(),
+    );
+    let before = assess();
+    assert!(
+        before.rows.iter().any(|r| r.table == "conversations"
+            && r.key_digest == conversation_key
+            && r.action == ProjectPurgeRowAction::Delete),
+        "rootless project sessions still own their native conversation"
+    );
+    let kept = saved(fx.save_workspace(
+        &fx.user(),
+        "rootless-reference-source",
+        "independent workspace bytes",
+        b"independent workspace bytes",
+        json!([]),
+        3,
+    ));
+    let version = kept.artifact.version_id.clone();
+    fx.write(move |tx| {
+        tx.artifacts().add_link(&ArtifactLink {
+            version_id: version,
+            subject: SubjectKey::session(&id("private-rootless-session")),
+            purpose: LinkPurpose::Reference,
+        })
+    });
+    let after = assess();
+    for (table, key) in [
+        ("sessions", &session_key),
+        ("conversations", &conversation_key),
+    ] {
+        assert!(
+            after.rows.iter().any(|r| r.table == table
+                && &r.key_digest == key
+                && r.action == ProjectPurgeRowAction::Scrub
+                && r.reason == ProjectPurgeRowReason::MinimalDeletedIdentity),
+            "{table}: {:?}",
+            after.unresolved
+        );
+    }
+    assert!(
+        !after
+            .unresolved
+            .iter()
+            .any(|r| matches!(r.table.as_str(), "sessions" | "conversations")),
+        "{:?}",
+        after.unresolved
+    );
+    assert_ne!(
+        before.digest, after.digest,
+        "surviving artifact history changes the exact keeper set"
+    );
+    assert_eq!(
+        fx.artifact(&kept.artifact.artifact_id).state,
+        ArtifactState::Live
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row(
+                "SELECT title FROM sessions WHERE id='private-rootless-session'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "private session title",
+        "assessment remains read-only"
+    );
+}
+
+#[test]
+fn purge_planning_kept_artifact_subjects_retain_minimal_assignment_resource_and_blocker_headers() {
+    let fx = Fx::new();
+    fx.write(|tx| {
+        tx.sessions().insert_session(&StoredSession {
+            id: id("keeper-session"),
+            conversation_id: id("keeper-conversation"),
+            agent_id: actor("user-a"),
+            project_id: Some(project("project-a")),
+            root_id: Some(RootId(id("root-a"))),
+            title: "private keeper session".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor("user-a"),
+            created_at_ms: T0,
+            closed_at_ms: Some(T0),
+            closed_by: Some(actor("user-a")),
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })?;
+        tx.runs().insert_assignment(&StoredAssignment {
+            id: devworks_core::protocol::AssignmentId(id("kept-assignment")),
+            root_id: RootId(id("root-a")),
+            work_id: RootId(id("task-a")),
+            parent_id: None,
+            session_id: id("keeper-session"),
+            execution_id: None,
+            state: AssignmentState::Completed,
+            generation: 1,
+            slot_held: false,
+            revision: 1,
+            checkpoint: Some(json!({"private":"assignment checkpoint"})),
+            scope_key: Some("private scope".into()),
+            scope_digest: Some("a".repeat(64)),
+            plan_revision: None,
+            instruction_revision: 0,
+            created_at_ms: T0,
+        })?;
+        tx.resources().insert_resource(NewResource {
+            id: id("kept-resource"),
+            name: "private-resource-name".into(),
+            scope: ResourceScopeKind::Project,
+            project_id: Some(project("project-a")),
+            physical: false,
+            capacity: 1,
+            labels: vec!["private label".into()],
+        })?;
+        tx.runs().insert_blocker(&StoredBlocker {
+            id: id("kept-blocker"),
+            root_id: Some(RootId(id("root-a"))),
+            assignment_id: None,
+            operation_id: None,
+            cause: HoldCause::HumanPause,
+            origin_id: "private origin".into(),
+            origin_revision: 1,
+            state: BlockerState::Cleared,
+            revision: 1,
+            reason: "private blocker reason".into(),
+            clearance: json!({"private":"clearance"}),
+            created_at_ms: T0,
+            cleared_at_ms: Some(T0),
+            cleared_by: Some(actor("user-a")),
+        })?;
+        Ok(())
+    });
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let subjects = [
+        ("assignment", "assignments", "kept-assignment"),
+        ("resource", "resources", "kept-resource"),
+        ("blocker", "blockers", "kept-blocker"),
+    ];
+    let before = assess();
+    for (_, table, key) in subjects {
+        let digest = devworks_core::fingerprint::sha256_hex(
+            serde_json::to_string(&[key]).unwrap().as_bytes(),
+        );
+        assert!(before.rows.iter().any(|r| r.table == table
+            && r.key_digest == digest
+            && r.action == ProjectPurgeRowAction::Delete));
+    }
+    let kept = saved(fx.save_workspace(
+        &fx.user(),
+        "finite-subject-keepers",
+        "independent workspace history",
+        b"independent workspace history",
+        json!([]),
+        3,
+    ));
+    let version = kept.artifact.version_id.clone();
+    fx.write(move |tx| {
+        for (kind, _, key) in subjects {
+            tx.artifacts().add_link(&ArtifactLink {
+                version_id: version.clone(),
+                subject: SubjectKey { kind, id: id(key) },
+                purpose: LinkPurpose::Reference,
+            })?;
+        }
+        Ok(())
+    });
+    let after = assess();
+    for (_, table, key) in subjects {
+        let digest = devworks_core::fingerprint::sha256_hex(
+            serde_json::to_string(&[key]).unwrap().as_bytes(),
+        );
+        assert!(
+            after.rows.iter().any(|r| r.table == table
+                && r.key_digest == digest
+                && r.action == ProjectPurgeRowAction::Scrub
+                && r.reason == ProjectPurgeRowReason::MinimalDeletedIdentity),
+            "{table} keeper: {:?}",
+            after.unresolved
+        );
+        assert!(
+            !after
+                .unresolved
+                .iter()
+                .any(|r| r.table == table && r.key_digest == digest)
+        );
+    }
+    assert!(!format!("{:?}", after.rows).contains("private"));
+    assert_ne!(before.digest, after.digest);
+    // Execute the native logical/physical owners too: retained polymorphic subjects must
+    // remain readable through ordinary typed repositories, with no copied private fields.
+    use devworks_core::{
+        operations::projects::{PreparePurgeInput, PurgeInput},
+        ports::project_purge::*,
+        services::projects::purge::{PurgeCoordinator, PurgeWorker},
+    };
+    struct EmptyClient;
+    impl ProjectPurgeClient for EmptyClient {
+        fn inspect(
+            &self,
+            _: &ProjectPurgeClientScope,
+        ) -> Result<PurgeClientSnapshot, PurgeFileFault> {
+            Ok(PurgeClientSnapshot {
+                digest: "e".repeat(64),
+                surviving_artifacts: vec![],
+                pending: false,
+                removing_drafts: 0,
+                confirmation_ready: true,
+                surviving_paths: vec![],
+            })
+        }
+        fn remove_reviewed(
+            &self,
+            _: &ProjectPurgeClientScope,
+            digest: &str,
+        ) -> Result<(), PurgeFileFault> {
+            if digest == "e".repeat(64) {
+                Ok(())
+            } else {
+                Err(PurgeFileFault::Changed)
+            }
+        }
+    }
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute(
+                "UPDATE projects SET lifecycle='Deleted' WHERE id='project-a'",
+                [],
+            ))
+            .map(|_| ())
+        })
+        .unwrap();
+    let files = Arc::new(
+        crate::fs::purge::NativeProjectPurgeFiles::new(
+            fx.h.root.0.clone(),
+            fx.h.root.0.with_extension("cache"),
+            fx.store.clone(),
+        )
+        .with_read_fence(fx.svc.clone()),
+    );
+    let client = Arc::new(EmptyClient);
+    let coordinator = Arc::new(PurgeCoordinator::new(
+        fx.h.ids.clone(),
+        files.clone(),
+        client.clone(),
+    ));
+    let (svc, ctx) = (coordinator.clone(), fx.user());
+    let reviewed = fx.write(move |tx| {
+        svc.prepare(
+            tx,
+            &ctx,
+            &PreparePurgeInput {
+                project_id: project("project-a"),
+                expected_revision: Revision::new(1).unwrap(),
+            },
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    let input = PurgeInput {
+        project_id: project("project-a"),
+        manifest_id: reviewed.id.clone(),
+        expected_revision: reviewed.revision.clone(),
+        expected_digest: reviewed.digest.clone(),
+        expected_project_revision: reviewed.project_revision.clone(),
+        confirm: true,
+    };
+    let ctx = HostIngress::new(&*fx.store)
+        .project_purge_context(&fx.user(), &input)
+        .unwrap();
+    fx.write(move |tx| {
+        let permit = coordinator
+            .authorize(tx, &ctx, &input)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+        tx.projects().apply_project_purge(&permit)
+    });
+    let worker = PurgeWorker::new(fx.store.clone(), fx.h.ids.clone(), files, client);
+    assert_eq!(worker.step(&mut || false).unwrap(), 1);
+    let assignment = fx
+        .read(|r| {
+            r.runs()
+                .assignment(&devworks_core::protocol::AssignmentId(id(
+                    "kept-assignment",
+                )))
+        })
+        .unwrap();
+    assert_eq!(assignment.state, AssignmentState::Superseded);
+    assert!(assignment.checkpoint.is_none() && assignment.scope_key.is_none());
+    let session = fx
+        .read(|r| r.sessions().session(&id("keeper-session")))
+        .unwrap();
+    assert_eq!(session.title, "Deleted session");
+    let root = fx.read(|r| r.work().work(&id("root-a"))).unwrap();
+    assert_eq!(root.title, "Deleted work");
+    let blocker = fx.read(|r| r.runs().blocker(&id("kept-blocker"))).unwrap();
+    assert_eq!(blocker.cause, HoldCause::Policy);
+    assert_eq!(blocker.reason, "Deleted blocker");
+    assert_eq!(blocker.clearance, json!({}));
+    let encoded = serde_json::to_string(
+        &fx.read(|r| {
+            r.projects()
+                .purge_manifest(&project("project-a"), &reviewed.id)
+        })
+        .unwrap()
+        .manifest,
+    )
+    .unwrap();
+    assert!(!encoded.contains("private"));
+    assert_eq!(
+        read_text(&fx, &fx.user(), &kept.artifact),
+        "independent workspace history"
+    );
+    assert_eq!(
+        fx.read(|r| r.work().work(&id("root-b"))).unwrap().title,
+        "Feature B"
+    );
+    let violations: i64 =
+        fx.h.raw()
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+    assert_eq!(violations, 0);
+}
+
+#[test]
+fn purge_planning_staging_scope_comes_from_the_native_journal_and_kept_version_provenance() {
+    let fx = Fx::new();
+    let artifact = fx.saved(
+        "scoped-stage-owner",
+        "private staged title",
+        "text/plain",
+        b"private stage bytes",
+    );
+    let version_id = artifact.artifact.version_id.clone();
+    let stage = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |s| {
+        let version = s.artifacts().version(&version_id)?.unwrap();
+        let operation_id = devworks_core::protocol::OperationId(
+            serde_json::from_value(version.source["operationId"].clone()).unwrap(),
+        );
+        s.operations().operation(&operation_id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(stage.root_id.is_none() && stage.assignment_id.is_none());
+    assert_eq!(stage.payload["projectId"], "project-a");
+    let key = sha256_hex(
+        serde_json::to_string(&[stage.id.0.as_str()])
+            .unwrap()
+            .as_bytes(),
+    );
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |s| {
+            s.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let owned = assess();
+    assert!(
+        owned.rows.iter().any(|r| r.table == "operations"
+            && r.key_digest == key
+            && matches!(
+                r.action,
+                ProjectPurgeRowAction::Delete | ProjectPurgeRowAction::Scrub
+            )),
+        "scope journal rows={:?}, unresolved={:?}",
+        owned
+            .rows
+            .iter()
+            .filter(|r| r.table == "operations" && r.key_digest == key)
+            .collect::<Vec<_>>(),
+        owned.unresolved
+    );
+    let artifact_id = artifact.artifact.artifact_id.clone();
+    fx.write(move |tx| {
+        tx.artifacts()
+            .add_share(&artifact_id, &project("project-b"))?;
+        Ok(())
+    });
+    let kept = assess();
+    assert!(
+        kept.snapshot.references.iter().any(|edge| edge.kind
+            == ProjectPurgeReferenceKind::ArtifactVersionOperation
+            && edge.from_table == "artifact_versions"
+            && edge.to_table == "operations"
+            && edge.to_key_digest == key),
+        "the native kept-version provenance is explicit"
+    );
+    assert!(
+        kept.rows.iter().any(|r| r.table == "operations"
+            && r.key_digest == key
+            && r.action == ProjectPurgeRowAction::Scrub
+            && r.reason == ProjectPurgeRowReason::MinimalDeletedIdentity),
+        "kept version provenance requires only the staging operation identity: {:?}",
+        kept.unresolved
+    );
+    assert!(
+        !kept
+            .unresolved
+            .iter()
+            .any(|r| r.table == "operations" && r.key_digest == key)
+    );
+    assert_ne!(owned.digest, kept.digest);
+    let mut unknown = stage.payload.clone();
+    unknown["futureOwnership"] = json!({"private": "unrecognized copied content"});
+    fx.write(move |tx| {
+        tx.operations()
+            .record_intent(NewOperation {
+                id: devworks_core::protocol::OperationId(id("unknown-stage-payload")),
+                root_id: None,
+                assignment_id: None,
+                capability: STAGE_CAPABILITY.into(),
+                schema_version: 1,
+                args_digest: sha256_hex(unknown.to_string().as_bytes()),
+                payload: unknown,
+            })
+            .map(|_| ())
+    });
+    let unknown = assess();
+    let key = sha256_hex(
+        serde_json::to_string(&["unknown-stage-payload"])
+            .unwrap()
+            .as_bytes(),
+    );
+    assert!(unknown.unresolved.iter().any(|r| r.table == "operations"
+        && r.key_digest == key
+        && r.reason == ProjectPurgeUnresolvedReason::AutomaticSnapshot));
+    assert!(
+        !unknown
+            .rows
+            .iter()
+            .any(|r| r.table == "operations" && r.key_digest == key)
+    );
+}
+
+#[test]
+fn purge_inventory_materializes_exact_file_and_client_owners_without_deleting_shared_content() {
+    use devworks_core::ports::project_purge::PurgeFileOwner;
+    let fx = Fx::new();
+    let artifact = fx.saved(
+        "inventory-source",
+        "private inventory artifact",
+        "text/plain",
+        b"inventory bytes",
+    );
+    let version_id = artifact.artifact.version_id.clone();
+    let stage = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |s| {
+        let version = s.artifacts().version(&version_id)?.unwrap();
+        let id = serde_json::from_value(version.source["operationId"].clone()).unwrap();
+        s.operations().operation(&id)
+    })
+    .unwrap()
+    .unwrap();
+    fx.write(|tx| {
+        for (name, scope) in [
+            ("inventory-project-session", Some(project("project-a"))),
+            ("inventory-home-session", None),
+        ] {
+            tx.sessions().insert_session(&StoredSession {
+                id: id(name),
+                conversation_id: id(&format!("{name}-conversation")),
+                agent_id: actor("user-a"),
+                project_id: scope,
+                root_id: None,
+                title: "private draft owner".into(),
+                context_epoch: 0,
+                revision: 1,
+                created_by: actor("user-a"),
+                created_at_ms: T0,
+                closed_at_ms: None,
+                closed_by: None,
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            })?;
+        }
+        Ok(())
+    });
+    let independent = saved(fx.save_workspace(
+        &fx.user(),
+        "independent-inventory-reference",
+        "workspace keeper",
+        b"independent workspace keeper bytes",
+        json!([]),
+        3,
+    ));
+    let independent_version = independent.artifact.version_id.clone();
+    fx.write(move |tx| {
+        tx.artifacts()
+            .add_link(&ArtifactLink {
+                version_id: independent_version,
+                subject: SubjectKey::session(&id("inventory-project-session")),
+                purpose: LinkPurpose::Reference,
+            })
+            .map(|_| ())
+    });
+    let inventory = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |s| {
+            s.projects().purge_inventory(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let owned = inventory();
+    assert!(owned.planning.is_resolved());
+    assert!(
+        owned.kept_files.owners.contains(&PurgeFileOwner::Preview {
+            version_id: independent.artifact.version_id.clone()
+        }),
+        "a workspace attachment referenced by P must appear among the kept files"
+    );
+    assert_eq!(owned.removing_files.store_id, fx.store.info().store_id);
+    assert_eq!(
+        owned.removing_files.restore_epoch,
+        fx.store.info().restore_epoch
+    );
+    assert_eq!(
+        owned.client.session_ids,
+        vec![id("inventory-project-session")]
+    );
+    assert_eq!(
+        owned.client.conversation_ids,
+        vec![id("inventory-project-session-conversation")]
+    );
+    assert!(
+        owned
+            .client
+            .deleted_artifact_ids
+            .contains(&artifact.artifact.artifact_id)
+    );
+    assert!(owned.unsettled_operations.is_empty());
+    let staging = PurgeFileOwner::ArtifactStaging {
+        operation_id: stage.id.clone().0,
+    };
+    assert!(
+        owned.removing_files.owners.contains(&staging),
+        "a retained replay header does not retain temporary bytes"
+    );
+    let artifact_id = artifact.artifact.artifact_id.clone();
+    fx.write(move |tx| {
+        tx.artifacts()
+            .add_share(&artifact_id, &project("project-b"))?;
+        Ok(())
+    });
+    let shared = inventory();
+    assert!(
+        !shared
+            .client
+            .deleted_artifact_ids
+            .contains(&artifact.artifact.artifact_id)
+    );
+    assert!(shared.kept_files.owners.contains(&PurgeFileOwner::Preview {
+        version_id: artifact.artifact.version_id.clone()
+    }));
+    assert!(
+        !shared
+            .removing_files
+            .owners
+            .contains(&PurgeFileOwner::Preview {
+                version_id: artifact.artifact.version_id.clone()
+            })
+    );
+    assert!(shared.removing_files.owners.contains(&staging));
+    assert!(
+        shared
+            .removing_files
+            .owners
+            .iter()
+            .all(|o| !shared.kept_files.owners.contains(o))
+    );
+    let payload = stage.payload;
+    fx.write(move |tx| {
+        tx.operations()
+            .record_intent(NewOperation {
+                id: devworks_core::protocol::OperationId(id("inventory-inflight-stage")),
+                root_id: None,
+                assignment_id: None,
+                capability: STAGE_CAPABILITY.into(),
+                schema_version: 1,
+                args_digest: sha256_hex(payload.to_string().as_bytes()),
+                payload,
+            })
+            .map(|_| ())
+    });
+    let active = inventory();
+    assert_eq!(
+        active.unsettled_operations,
+        vec![devworks_core::protocol::OperationId(id(
+            "inventory-inflight-stage"
+        ))]
+    );
+}
+
+#[test]
+fn purge_client_keeper_retains_only_its_exact_version_and_minimal_artifact_header() {
+    let fx = Fx::new();
+    let first = fx
+        .saved(
+            "client-keeper-first",
+            "private header",
+            "text/plain",
+            b"independent draft reference",
+        )
+        .artifact;
+    let bytes = b"other private project version";
+    fx.source(
+        "client-keeper-second",
+        "second.bin",
+        bytes,
+        SourceOrigin::default(),
+    );
+    let user = fx.user();
+    let source = ArtifactSource::Upload {
+        ticket_id: id("client-keeper-second"),
+    };
+    let digest = Digest::try_from(sha256_hex(bytes)).unwrap();
+    let scope = ArtifactScope::Project(project("project-a"));
+    let request_digest = sha256_hex(b"client-keeper-replacement");
+    let staged = match fx
+        .svc
+        .stage(
+            &Preparation::new(&*fx.store, None, None),
+            &user,
+            &StageRequest {
+                scope: &scope,
+                source: &source,
+                expected_digest: &digest,
+                expected_bytes: bytes.len() as i64,
+                request_digest: &request_digest,
+            },
+        )
+        .unwrap()
+    {
+        Staging::Staged(s) => s,
+        other => panic!("{other:?}"),
+    };
+    let (svc, ctx, artifact) = (fx.svc.clone(), user.clone(), first.artifact_id.clone());
+    let second = fx.write(move |tx| {
+        as_failure(svc.publish_version(
+            tx,
+            &ctx,
+            &artifact,
+            &Revision::new(1).unwrap(),
+            "text/plain",
+            &staged,
+        ))
+    });
+    let native = rusqlite::Connection::open(fx.h.root.0.join("workspace.sqlite")).unwrap();
+    super::super::project_purge::guard::register(&native, false).unwrap();
+    let planning = super::super::project_purge::classification::planning_with_client_keepers(
+        &native,
+        &project("project-a"),
+        std::slice::from_ref(&first),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(planning.is_resolved(), "{:?}", planning.unresolved);
+    let inventory = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |s| {
+        s.projects().purge_inventory_with_client_keepers(
+            &project("project-a"),
+            std::slice::from_ref(&first),
+        )
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        inventory.planning.is_resolved(),
+        "{:?}",
+        inventory.planning.unresolved
+    );
+    let action = |table: &str, key: &Id| {
+        let key = sha256_hex(serde_json::to_vec(&[key.as_str()]).unwrap().as_slice());
+        inventory
+            .planning
+            .rows
+            .iter()
+            .find(|r| r.table == table && r.key_digest == key)
+            .unwrap()
+            .action
+            .clone()
+    };
+    assert_eq!(
+        action("artifact_versions", &first.version_id),
+        ProjectPurgeRowAction::Keep
+    );
+    assert_eq!(
+        action("artifact_versions", &second.id),
+        ProjectPurgeRowAction::Delete
+    );
+    assert_eq!(
+        action("artifacts", &first.artifact_id),
+        ProjectPurgeRowAction::Scrub
+    );
+    use devworks_core::ports::project_purge::PurgeFileOwner;
+    assert!(
+        inventory
+            .kept_files
+            .owners
+            .contains(&PurgeFileOwner::Preview {
+                version_id: first.version_id.clone()
+            })
+    );
+    assert!(
+        inventory
+            .removing_files
+            .owners
+            .contains(&PurgeFileOwner::Preview {
+                version_id: second.id
+            })
+    );
+    assert!(
+        fx.read(|s| s.artifacts().version(&first.version_id))
+            .is_some()
+    );
+    let mut forged = first;
+    forged.sha256 = Digest::try_from("f".repeat(64)).unwrap();
+    assert!(
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |s| s
+            .projects()
+            .purge_inventory_with_client_keepers(&project("project-a"), &[forged]))
+        .is_err()
+    );
 }

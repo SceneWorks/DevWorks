@@ -38,6 +38,7 @@ pub mod help;
 pub mod indexing;
 pub mod jobs;
 mod live_text;
+mod project_purge;
 pub mod projects;
 mod settings_secrets;
 pub mod usage;
@@ -196,6 +197,7 @@ pub struct Shell {
     pub addons: crate::addons::AddonsScreen,
     /// All projects, the project selector and Repositories (DW-11).
     pub projects: projects::ProjectsUi,
+    pub purge: project_purge::PurgeUi,
     pub jobs: jobs::JobsUi,
     /// Features, the board, Issues and Overview of the selected project (DW-12).
     pub work: work::WorkUi,
@@ -212,6 +214,7 @@ pub struct Shell {
     hints: Option<watch::Receiver<u64>>,
     started: bool,
     saved: Option<Memory>,
+    purge_reviews: BTreeMap<String, serde_json::Value>,
     last_save: Instant,
     last_poll: Instant,
     last_preview_poll: Option<Instant>,
@@ -349,6 +352,7 @@ impl Shell {
             browser_parts: BTreeMap::new(),
             addons: Default::default(),
             projects: projects::ProjectsUi::default(),
+            purge: Default::default(),
             jobs: jobs::JobsUi::default(),
             work: work::WorkUi::default(),
             usage: crate::usage_screen::UsageScreen::default(),
@@ -363,6 +367,7 @@ impl Shell {
             hints,
             started: false,
             saved: Some(memory.clone()),
+            purge_reviews: memory.purge_reviews.clone(),
             last_save: Instant::now(),
             last_poll: Instant::now(),
             last_preview_poll: None,
@@ -1537,8 +1542,17 @@ impl Shell {
     /// temporary file removed once the artifact service holds its copy.
     pub fn attach_pasted_image(&mut self, image: &egui::ColorImage) {
         let Some(b) = self.backend() else { return };
-        let name = format!("{}.png", b.token("pasted-image"));
-        match attachments::materialize_paste(image, &b.scratch_dir(), &name) {
+        let session = self
+            .chat
+            .selected
+            .as_deref()
+            .map(devworks_core::protocol::Id::new)
+            .transpose();
+        let result = session.map_err(|e| e.to_string()).and_then(|session| {
+            let png = attachments::encode_paste(image)?;
+            b.stage_pasted_image(session.as_ref(), &png)
+        });
+        match result {
             Ok(path) => self.attach_files(vec![(path, true)]),
             Err(e) => self.announce(format!("The pasted image could not be attached: {e}")),
         }
@@ -1764,6 +1778,9 @@ impl Shell {
             return;
         };
         let Some((slot, reply)) = self.apply_graph(slot, reply) else {
+            return;
+        };
+        let Some((slot, reply)) = self.apply_purge(slot, reply) else {
             return;
         };
         let Some((slot, reply)) = self.apply_projects(slot, reply) else {
@@ -3321,6 +3338,13 @@ impl Shell {
     pub fn memory(&self) -> Memory {
         Memory {
             version: crate::memory::VERSION,
+            purge_live: None,
+            purge_reviews: self.purge_reviews.clone(),
+            purge_fences: self
+                .saved
+                .as_ref()
+                .map(|m| m.purge_fences.clone())
+                .unwrap_or_default(),
             route: self.route,
             intelligence_open: self.intelligence_open,
             coordinator_open: self.coordinator_open,
@@ -3575,6 +3599,19 @@ impl Shell {
     /// Writes view state when it changed (or always, when `force`).
     fn persist(&mut self, force: bool) {
         let memory = self.memory();
+        match self.publish_purge_client(force || self.saved.as_ref() != Some(&memory)) {
+            Ok(true) => {
+                self.saved = Some(memory);
+                self.last_save = Instant::now();
+                return;
+            }
+            Err(e) => {
+                self.announce(e);
+                self.last_save = Instant::now();
+                return;
+            }
+            Ok(false) => {}
+        }
         if let Some(path) = &self.memory_path
             && (force || self.saved.as_ref() != Some(&memory))
             && memory.save(path).is_ok()
@@ -3640,13 +3677,19 @@ impl Shell {
         self.apply_text_scale(&ctx);
         self.advance_lifecycle(&ctx);
         self.drain(&ctx);
-        if self.lifecycle == Lifecycle::Open {
+        if let Err(e) = self.publish_purge_client(false) {
+            self.status = Some(e);
+        }
+        if self.lifecycle == Lifecycle::Open && !self.purge.frozen {
             self.poll_hints();
             self.input(&ctx);
             self.poll_live_text(&ctx);
         }
         if self.lifecycle == Lifecycle::Open {
             self.route_status_due(&ctx);
+        }
+        if self.purge.frozen {
+            ui.disable();
         }
         self.toolbar(ui);
         self.statusbar(ui);
@@ -3658,6 +3701,7 @@ impl Shell {
             .frame(Frame::new().fill(theme::BG).inner_margin(theme::GUTTER))
             .show(ui, |ui| self.content(ui));
         self.overlays(&ctx);
+        self.purge_overlay(&ctx);
         if self.lifecycle == Lifecycle::Open && self.last_save.elapsed() > Duration::from_secs(3) {
             self.save_memory();
         }

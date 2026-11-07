@@ -189,8 +189,19 @@ pub struct Composition {
     pub config: RuntimeConfig,
 }
 
+#[derive(Clone)]
+pub struct PurgeComposition {
+    pub files: Arc<dyn devworks_core::ports::project_purge::ProjectPurgeFiles>,
+    pub client: Arc<dyn devworks_core::ports::project_purge::ProjectPurgeClient>,
+}
+impl std::fmt::Debug for PurgeComposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PurgeComposition")
+    }
+}
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
+    pub purge: Option<PurgeComposition>,
     pub schemas: Option<crate::schemas::SchemaComposition>,
     /// Native bounded credential-free price source and cadence; absent sources refuse refresh.
     pub price_refresh: Option<crate::prices::PriceComposition>,
@@ -238,6 +249,7 @@ impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
         Self {
             dispatcher: DispatcherConfig::new(owner),
+            purge: None,
             price_refresh: None,
             schemas: None,
             collect_interval: Duration::from_secs(15 * 60),
@@ -535,15 +547,32 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .with_staged_plans(artifacts.clone())
             .with_clock(clock.clone()),
     );
+    let mut projects =
+        ProjectService::new(ids.clone(), runs.service.clone()).with_work(work.clone());
+    if let Some(p) = &config.purge {
+        projects = projects.with_purge(Arc::new(
+            devworks_core::services::projects::purge::PurgeCoordinator::new(
+                ids.clone(),
+                p.files.clone(),
+                p.client.clone(),
+            ),
+        ));
+    }
+    let purge_worker = config.purge.as_ref().map(|p| {
+        Arc::new(devworks_core::services::projects::purge::PurgeWorker::new(
+            store.clone(),
+            ids.clone(),
+            p.files.clone(),
+            p.client.clone(),
+        ))
+    });
     let eval_service = Arc::new(EvalService::new(ids.clone(), clock.clone()));
     let use_cases = use_cases
         .with_evals(eval_service.clone())
         .with_artifacts(artifacts.clone())
         .with_resources(resources.clone())
         .with_runs(runs.service.clone())
-        .with_projects(Arc::new(
-            ProjectService::new(ids.clone(), runs.service.clone()).with_work(work.clone()),
-        ))
+        .with_projects(Arc::new(projects))
         .with_work(work)
         .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
         .with_diagnostics(diagnostics.clone());
@@ -934,6 +963,26 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     );
     let browser_supervision = Arc::new(BrowserSupervision::default());
     let mut tasks = vec![delivery, collection, housekeeping];
+    if let Some(worker) = purge_worker {
+        // Client effects run before UI restoration; held effects retain their original authority.
+        let recovered = worker.clone();
+        tokio::task::spawn_blocking(move || recovered.step(&mut || false))
+            .await
+            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.to_string())))?
+            .map_err(BootError::Composition)?;
+        let stopping = collector.clone();
+        tasks.push(tokio::spawn(async move {
+            while !stopping.stopping.load(Ordering::Acquire) {
+                let (worker, flag) = (worker.clone(), stopping.clone());
+                let _ = tokio::task::spawn_blocking(move || {
+                    worker.step(&mut || flag.stopping.load(Ordering::Acquire))
+                })
+                .await;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }));
+    }
+
     let (imports, collection_wakeup) = (conventions.imports(), collector.clone());
     tasks.push(tokio::spawn(async move {
         let mut after = None;
@@ -1401,6 +1450,29 @@ impl Runtime {
             return self.command(&bound, OPERATION, frame);
         }
         // Preserve the normal typed admission/authority refusal. No fallback mints a witness.
+        self.command(ctx, OPERATION, frame)
+    }
+
+    /// Dedicated native confirmation. Generic command/MCP dispatch never mints
+    /// this proof; current authority and manifest freshness remain required.
+    pub fn confirm_project_purge(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
+        const OPERATION: &str = "projects.purge";
+        let decoded = devworks_core::admission::decode(
+            devworks_core::admission::Selection {
+                operation: OPERATION,
+                mode: devworks_core::registry::Mode::Command,
+            },
+            frame,
+        );
+        if let Ok(decoded) = decoded
+            && let devworks_core::operations::OperationInput::Projects(
+                devworks_core::operations::projects::Input::Purge(input),
+            ) = decoded.input
+            && let Some(bound) = devworks_core::context::HostIngress::new(&*self.store)
+                .project_purge_context(ctx, &input)
+        {
+            return self.command(&bound, OPERATION, frame);
+        }
         self.command(ctx, OPERATION, frame)
     }
 

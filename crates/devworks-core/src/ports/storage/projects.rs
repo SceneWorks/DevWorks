@@ -139,7 +139,313 @@ pub struct ProjectPosition {
     pub id: ProjectId,
 }
 
+/// The exact native action covered by a reviewed row witness.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ProjectPurgeRowAction {
+    Delete,
+    Scrub,
+    Keep,
+}
+
+/// Fixed audit vocabulary: no project-authored text is accepted as a row reason.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ProjectPurgeRowReason {
+    OwnedProjectRecords,
+    OwnedLineage,
+    ProjectMembership,
+    MinimalDeletedIdentity,
+    SharedContent,
+    IndependentPublication,
+    RevokedAuthority,
+    ReceiptReplayFence,
+    PurgeControlAudit,
+    ScopedReadLease,
+    DerivedContent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProjectPurgeRowWitness {
+    pub table: String,
+    pub key_digest: String,
+    pub row_digest: String,
+    pub action: ProjectPurgeRowAction,
+    pub reason: ProjectPurgeRowReason,
+}
+
+/// A scoped planning candidate, deliberately without a deletion action or permit.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ProjectPurgeCandidate {
+    pub table: String,
+    pub key_digest: String,
+    pub row_digest: String,
+}
+#[derive(Clone, Debug)]
+pub struct ProjectPurgeCandidates {
+    pub project_id: ProjectId,
+    pub policy_digest: String,
+    pub digest: String,
+    pub rows: Vec<ProjectPurgeCandidate>,
+    pub references: Vec<ProjectPurgeReference>,
+}
+
+/// A real reference to a scoped candidate. This identifies a possible keeper;
+/// it never establishes ownership of the referring record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub enum ProjectPurgeReferenceKind {
+    ForeignKey,
+    ArtifactSubject,
+    ArtifactVersionOperation,
+    IndexOverlayRun,
+    PackageIntent,
+    SearchChunk,
+    SchemaCertificate,
+    SchemaSourceOperation,
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub struct ProjectPurgeReference {
+    pub kind: ProjectPurgeReferenceKind,
+    pub from_table: String,
+    pub from_key_digest: String,
+    pub from_columns: Vec<String>,
+    pub to_table: String,
+    pub to_key_digest: String,
+    pub to_columns: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum ProjectPurgeUnresolvedReason {
+    AutomaticSnapshot,
+    LegacyMapping,
+    MixedOwnership,
+    ReceiptControl,
+    TypedLease,
+    ManagedBytes,
+    LegacySharing,
+    SurvivingReference,
+    ScrubReference,
+    UnmappedTable,
+}
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ProjectPurgeUnresolved {
+    pub table: String,
+    pub key_digest: String,
+    pub reason: ProjectPurgeUnresolvedReason,
+}
+/// A read-only ownership assessment. Unresolved rows prohibit preparation and
+/// confirmation; neither this assessment nor its row decisions grant a permit.
+#[derive(Clone, Debug)]
+pub struct ProjectPurgePlanning {
+    pub snapshot: ProjectPurgeCandidates,
+    pub digest: String,
+    pub rows: Vec<ProjectPurgeRowWitness>,
+    pub unresolved: Vec<ProjectPurgeUnresolved>,
+}
+impl ProjectPurgePlanning {
+    pub fn is_resolved(&self) -> bool {
+        self.unresolved.is_empty() && self.rows.len() == self.snapshot.rows.len()
+    }
+}
+
+/// Native transient identities for client cleanup; never supplied by a caller or persisted
+/// as private source keys in an audit. Shared artifacts keep their independent references.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectPurgeClientScope {
+    pub project_id: ProjectId,
+    pub session_ids: Vec<Id>,
+    pub conversation_ids: Vec<Id>,
+    pub work_ids: Vec<Id>,
+    pub operation_ids: Vec<Id>,
+    pub deleted_artifact_ids: Vec<Id>,
+    /// Single-ID targets for the remaining native panes. Membership-only global
+    /// records and independently retained publications do not become owned editors.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub record_ids: std::collections::BTreeMap<String, Vec<Id>>,
+}
+
+/// Read-only materialization from the same verified ownership assessment. These owner
+/// sets do not authorize unlink, redaction, or logical deletion.
+#[derive(Clone, Debug)]
+pub struct ProjectPurgeInventory {
+    pub planning: ProjectPurgePlanning,
+    pub removing_files: crate::ports::project_purge::PurgeFileSelection,
+    pub kept_files: crate::ports::project_purge::PurgeFileSelection,
+    pub client: ProjectPurgeClientScope,
+    pub unsettled_operations: Vec<crate::protocol::OperationId>,
+    pub unsettled_deliveries: Vec<Id>,
+}
+
+#[derive(Clone, Debug)]
+/// Durable reviewed purge intent. Private source keys are never copied here.
+pub struct StoredProjectPurge {
+    pub manifest: crate::protocol::records::ProjectPurgeManifest,
+    pub actor_id: crate::protocol::ActorId,
+    pub store_id: crate::protocol::StoreId,
+    pub restore_epoch: i64,
+    pub scope_revision: i64,
+    pub policy_digest: String,
+    pub witness_digest: String,
+    pub entries: Vec<crate::protocol::records::ProjectPurgeEntry>,
+    pub rows: Vec<ProjectPurgeRowWitness>,
+}
+
+/// Content identity remains stable while execution status advances. The native producer
+/// and storage fence use this same encoding; no secret or caller-minted authority is involved.
+pub fn project_purge_digest(p: &StoredProjectPurge) -> String {
+    let m = &p.manifest;
+    let mut rows = p.rows.iter().collect::<Vec<_>>();
+    rows.sort_by(|a, b| (&a.table, &a.key_digest).cmp(&(&b.table, &b.key_digest)));
+    crate::fingerprint::sha256_hex(
+        serde_json::to_string(&serde_json::json!({
+            "manifestId":m.id,"projectId":m.project_id,"projectRevision":m.project_revision,
+            "scopeRevision":p.scope_revision,"storeId":p.store_id,"restoreEpoch":p.restore_epoch,
+            "actorId":p.actor_id,"policyDigest":p.policy_digest,"witnessDigest":p.witness_digest,
+            "recordCount":m.record_count,"managedByteCount":m.managed_byte_count,
+            "keptRecordCount":m.kept_record_count,"keptByteCount":m.kept_byte_count,
+            "createdAtMs":m.created_at_ms,"entries":p.entries,"rows":rows
+        }))
+        .expect("purge digest values are JSON")
+        .as_bytes(),
+    )
+}
+
+/// Reserved before external creation; a live write prevents purge preparation.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectManagedFileReservation {
+    pub id: Id,
+    pub project_id: ProjectId,
+    pub kind: String,
+    pub relative_path: String,
+    pub root: crate::authority::destructive::FileIdentity,
+    /// Bound after create-new and before private bytes; absent on older reservations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_identity: Option<crate::authority::destructive::FileIdentity>,
+    pub store_id: crate::protocol::StoreId,
+    pub restore_epoch: i64,
+    pub boot_id: Option<Id>,
+    pub created_at_ms: i64,
+}
+
+/// A host-created transient file, attributed durably before its source handle escapes.
+#[derive(Clone, Debug)]
+pub struct StoredProjectManagedFile {
+    pub id: Id,
+    pub project_id: ProjectId,
+    pub kind: String,
+    pub relative_path: String,
+    pub witness: crate::ports::project_purge::PurgeFileWitness,
+    pub created_at_ms: i64,
+}
+
+/// Recovery view for one normal staging owner, including incomplete writes.
+#[derive(Clone, Debug)]
+pub struct ProjectManagedFileRecovery {
+    pub id: Id,
+    pub project_id: ProjectId,
+    pub relative_path: String,
+    pub root: crate::authority::destructive::FileIdentity,
+    pub file_identity: Option<crate::authority::destructive::FileIdentity>,
+    pub store_id: crate::protocol::StoreId,
+    pub restore_epoch: i64,
+    pub writing: bool,
+    pub boot_id: Option<Id>,
+}
+
 pub trait ProjectRead {
+    fn purge_file_effect_reviewed(
+        &self,
+        _witness: &crate::ports::project_purge::PurgeFileWitness,
+    ) -> Result<bool, StorageError> {
+        Ok(false)
+    }
+
+    /// Resolve a compact persisted client commitment through the original reviewed
+    /// native effect. UI checkpoints must not duplicate an unbounded record inventory.
+    fn purge_client_fence(
+        &self,
+        _project: &ProjectId,
+        _digest: &str,
+    ) -> Result<Option<ProjectPurgeClientScope>, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+
+    fn purge_file_artifact_keepers(
+        &self,
+        _project: &ProjectId,
+        _owners: &[crate::ports::project_purge::PurgeFileOwner],
+    ) -> Result<Vec<crate::protocol::provider::ArtifactRef>, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+
+    fn purge_fenced(&self, _project: &ProjectId) -> Result<bool, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+    fn purge_pending_effects(
+        &self,
+        _limit: u16,
+    ) -> Result<Vec<crate::ports::project_purge::PurgeEffect>, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+    fn purge_blob_claim_reserved(
+        &self,
+        _digest: &str,
+        _generation: &str,
+        _owner: &str,
+    ) -> Result<bool, StorageError> {
+        Ok(false)
+    }
+    fn purge_inventory_with_client_keepers(
+        &self,
+        _project: &ProjectId,
+        _keepers: &[crate::protocol::provider::ArtifactRef],
+    ) -> Result<Option<ProjectPurgeInventory>, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+    fn purge_inventory(
+        &self,
+        _project: &ProjectId,
+    ) -> Result<Option<ProjectPurgeInventory>, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+    fn purge_planning(
+        &self,
+        project: &ProjectId,
+    ) -> Result<Option<ProjectPurgePlanning>, StorageError>;
+    /// Snapshot exact candidate rows for the ownership classifier. This neither
+    /// classifies mixed owners/keepers nor grants permission to delete any row.
+    fn purge_candidates(
+        &self,
+        project: &ProjectId,
+    ) -> Result<Option<ProjectPurgeCandidates>, StorageError>;
+    fn managed_file_recovery(
+        &self,
+        kind: &str,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<ProjectManagedFileRecovery>, StorageError>;
+
+    fn pending_project_managed_writes(&self, project: &ProjectId) -> Result<bool, StorageError>;
+
+    fn project_managed_file(
+        &self,
+        project: &ProjectId,
+        id: &Id,
+    ) -> Result<Option<StoredProjectManagedFile>, StorageError>;
+    fn project_managed_files(
+        &self,
+        project: &ProjectId,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredProjectManagedFile>, StorageError>;
+
+    /// Exact project binding is mandatory even when the manifest ID is known.
+    fn purge_manifest(
+        &self,
+        project: &ProjectId,
+        manifest: &Id,
+    ) -> Result<Option<StoredProjectPurge>, StorageError>;
+
     fn project(&self, id: &ProjectId) -> Result<Option<StoredProject>, StorageError>;
     /// At most `limit` projects after `after`, by creation time then ID.
     fn projects(
@@ -180,6 +486,59 @@ pub trait ProjectRead {
 }
 
 pub trait ProjectRepository: ProjectRead {
+    fn apply_project_purge(
+        &mut self,
+        _permit: &crate::services::projects::purge::PurgePermit,
+    ) -> Result<crate::protocol::records::ProjectPurgeManifest, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+    fn claim_purge_effect(
+        &mut self,
+        _manifest: &Id,
+        _effect: &str,
+        _owner: &Id,
+        _lease_until: i64,
+    ) -> Result<Option<crate::ports::project_purge::PurgeEffect>, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+    fn settle_purge_effect(
+        &mut self,
+        _manifest: &Id,
+        _effect: &str,
+        _owner: &Id,
+        _outcome: Result<(), crate::ports::project_purge::PurgeFileFault>,
+    ) -> Result<(), StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+    fn reserve_project_managed_file(
+        &mut self,
+        file: &ProjectManagedFileReservation,
+    ) -> Result<(), StorageError>;
+
+    /// Current-boot owner binds its create-new handle before writing private bytes.
+    fn begin_project_managed_file_write(
+        &mut self,
+        _project: &ProjectId,
+        _id: &Id,
+        _identity: crate::authority::destructive::FileIdentity,
+    ) -> Result<(), StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+
+    fn register_project_managed_file(
+        &mut self,
+        file: &StoredProjectManagedFile,
+    ) -> Result<(), StorageError>;
+    /// A normal staging owner records physical settlement and forgets its private path.
+    fn finish_project_managed_file(
+        &mut self,
+        project: &ProjectId,
+        id: &Id,
+    ) -> Result<(), StorageError>;
+
+    /// Records an immutable preparation under its current project/store fences.
+    fn insert_purge_manifest(&mut self, manifest: &StoredProjectPurge) -> Result<(), StorageError>;
+
     /// Creates a project (revision 1). An existing ID is `Duplicate`.
     fn insert_project(&mut self, project: &StoredProject) -> Result<(), StorageError>;
     /// Replaces the project at `expected_revision` (a stale one is a `Scope` revision conflict).

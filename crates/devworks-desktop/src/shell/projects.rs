@@ -139,6 +139,7 @@ pub struct GitView {
 #[derive(Clone, Debug)]
 enum Action {
     Reload,
+    Purge(ProjectRecord),
     Create(CreateForm),
     Edit(EditForm),
     Membership(MembershipForm),
@@ -336,6 +337,7 @@ impl Shell {
                         move |b| ops::project_create(b, &name, &description, &repos),
                     );
                 }
+                Action::Purge(project) => self.start_purge_review(project),
                 Action::Edit(form) => {
                     let p = form.snapshot.clone();
                     let name = (form.name != p.name.0).then_some(form.name.clone());
@@ -1628,6 +1630,12 @@ fn project_detail(
     ui.add_space(8.0);
     match p.lifecycle {
         LifeState::Deleted => {
+            if ui
+                .add_enabled(enabled, egui::Button::new("Review permanent purge"))
+                .clicked()
+            {
+                actions.push(Action::Purge(p.clone()));
+            }
             widgets::state_block(
                 ui,
                 &ViewState::Empty {

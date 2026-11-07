@@ -1,0 +1,7083 @@
+{
+  "schemaVersion": 35,
+  "sourceCommit": "133e19dd81ec967d3d1ab354da72f4391cfd8007",
+  "schemaDigest": "2ffa753cd5eb787d9d3d2c9dc2c5b0f32da8094876acc298388c9b1452cfa53b",
+  "tables": [
+    {
+      "name": "actors",
+      "kind": "table",
+      "columns": [
+        "id",
+        "kind",
+        "display_name"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "allocation_claims",
+      "kind": "table",
+      "columns": [
+        "id",
+        "project_id",
+        "root_id",
+        "work_id",
+        "kind",
+        "queue_key",
+        "owner_id",
+        "session_id",
+        "ingress_namespace",
+        "invocation_id",
+        "fence",
+        "expires_at",
+        "state",
+        "revision",
+        "work_revision",
+        "parent_feature_id",
+        "root_control_revision",
+        "queue_revision",
+        "feature_task_set_revision",
+        "created_at",
+        "execution_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "parent_feature_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "project_id"
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "project_id"
+        },
+        {
+          "from": "work_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "project_id"
+        },
+        {
+          "from": "execution_id",
+          "onDelete": "NO ACTION",
+          "target": "executions",
+          "to": null
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        },
+        {
+          "from": "owner_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "allocation_replays",
+      "kind": "table",
+      "columns": [
+        "project_id",
+        "key",
+        "intent_digest",
+        "result_json",
+        "claim_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "claim_id",
+          "onDelete": "NO ACTION",
+          "target": "allocation_claims",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "allocation_claims",
+          "to": "project_id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "app_boots",
+      "kind": "table",
+      "columns": [
+        "id",
+        "started_at",
+        "stopped_at",
+        "shutdown_state"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "approval_resumes",
+      "kind": "table",
+      "columns": [
+        "approval_id",
+        "revision",
+        "state",
+        "principal_id",
+        "principal_kind",
+        "invocation_json",
+        "operation",
+        "schema_revision",
+        "input_json",
+        "request_key",
+        "request_digest",
+        "grant_id",
+        "created_at",
+        "updated_at",
+        "result_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "grant_id",
+          "onDelete": "NO ACTION",
+          "target": "authority_grants",
+          "to": null
+        },
+        {
+          "from": "principal_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "approval_id",
+          "onDelete": "NO ACTION",
+          "target": "decision_approvals",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "approvals",
+      "kind": "table",
+      "columns": [
+        "id",
+        "operation_id",
+        "proposal_revision",
+        "binding_digest",
+        "state",
+        "decided_by",
+        "decided_at",
+        "consumed_attempt_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "consumed_attempt_id",
+          "onDelete": "NO ACTION",
+          "target": "operation_attempts",
+          "to": null
+        },
+        {
+          "from": "decided_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "artifact_blob_pins",
+      "kind": "table",
+      "columns": [
+        "holder_id",
+        "blob_digest",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "blob_digest",
+          "onDelete": "NO ACTION",
+          "target": "blobs",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "artifact_links",
+      "kind": "table",
+      "columns": [
+        "artifact_version_id",
+        "subject_kind",
+        "subject_id",
+        "purpose"
+      ],
+      "foreignKeys": [
+        {
+          "from": "artifact_version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "artifact_shares",
+      "kind": "table",
+      "columns": [
+        "artifact_id",
+        "project_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "artifact_id",
+          "onDelete": "NO ACTION",
+          "target": "artifacts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "artifact_tags",
+      "kind": "table",
+      "columns": [
+        "artifact_id",
+        "tag"
+      ],
+      "foreignKeys": [
+        {
+          "from": "artifact_id",
+          "onDelete": "NO ACTION",
+          "target": "artifacts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "artifact_versions",
+      "kind": "table",
+      "columns": [
+        "id",
+        "artifact_id",
+        "version_no",
+        "blob_digest",
+        "media_type",
+        "created_at",
+        "deleted_at",
+        "source_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "blob_digest",
+          "onDelete": "NO ACTION",
+          "target": "blobs",
+          "to": null
+        },
+        {
+          "from": "artifact_id",
+          "onDelete": "NO ACTION",
+          "target": "artifacts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "artifacts",
+      "kind": "table",
+      "columns": [
+        "id",
+        "origin_project_id",
+        "origin_work_id",
+        "title",
+        "revision",
+        "current_project_id",
+        "scope_revision",
+        "reference_revision",
+        "current_version_id",
+        "state",
+        "created_at",
+        "provenance_json",
+        "scope_kind",
+        "owner_actor_id",
+        "retention"
+      ],
+      "foreignKeys": [
+        {
+          "from": "owner_actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "current_version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        },
+        {
+          "from": "current_project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "origin_work_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "origin_project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "assignments",
+      "kind": "table",
+      "columns": [
+        "id",
+        "root_id",
+        "work_id",
+        "parent_id",
+        "session_id",
+        "execution_id",
+        "state",
+        "generation",
+        "slot_held",
+        "revision",
+        "checkpoint_json",
+        "scope_key",
+        "scope_digest",
+        "plan_revision",
+        "instruction_revision",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "execution_id",
+          "onDelete": "NO ACTION",
+          "target": "executions",
+          "to": null
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        },
+        {
+          "from": "parent_id",
+          "onDelete": "NO ACTION",
+          "target": "assignments",
+          "to": null
+        },
+        {
+          "from": "work_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "attempt_costs",
+      "kind": "table",
+      "columns": [
+        "attempt_id",
+        "classification",
+        "amount_units",
+        "currency",
+        "price_snapshot_id",
+        "completeness",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "price_snapshot_id",
+          "onDelete": "NO ACTION",
+          "target": "price_snapshots",
+          "to": null
+        },
+        {
+          "from": "attempt_id",
+          "onDelete": "NO ACTION",
+          "target": "provider_attempts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "authority_grants",
+      "kind": "table",
+      "columns": [
+        "id",
+        "actor_id",
+        "kind",
+        "issued_by",
+        "revision",
+        "state",
+        "binding_json",
+        "expires_at",
+        "uses_remaining",
+        "created_at",
+        "revoked_by"
+      ],
+      "foreignKeys": [
+        {
+          "from": "revoked_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "issued_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "blobs",
+      "kind": "table",
+      "columns": [
+        "digest",
+        "byte_count",
+        "relative_path",
+        "state",
+        "generation",
+        "claim_owner",
+        "last_error"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "blockers",
+      "kind": "table",
+      "columns": [
+        "id",
+        "root_id",
+        "assignment_id",
+        "operation_id",
+        "cause",
+        "origin_id",
+        "origin_revision",
+        "state",
+        "revision",
+        "clearance_json",
+        "reason",
+        "created_at",
+        "cleared_at",
+        "cleared_by"
+      ],
+      "foreignKeys": [
+        {
+          "from": "cleared_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "assignment_id",
+          "onDelete": "NO ACTION",
+          "target": "assignments",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "browser_observations",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "sequence",
+        "channel",
+        "artifact_id",
+        "version_id",
+        "truncated",
+        "recorded_at",
+        "tested_repository"
+      ],
+      "foreignKeys": [
+        {
+          "from": "version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        },
+        {
+          "from": "artifact_id",
+          "onDelete": "NO ACTION",
+          "target": "artifacts",
+          "to": null
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "browser_sessions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "browser_sessions",
+      "kind": "table",
+      "columns": [
+        "id",
+        "boot_id",
+        "state",
+        "owner_id",
+        "owner_kind",
+        "agent_session_id",
+        "project_id",
+        "root_id",
+        "assignment_id",
+        "asset_id",
+        "process_id",
+        "create_operation_id",
+        "uncertain_operation_id",
+        "last_action_operation_id",
+        "close_operation_id",
+        "targets",
+        "detail",
+        "observation_seq",
+        "created_at",
+        "updated_at",
+        "revision",
+        "tested_repository",
+        "source_binding"
+      ],
+      "foreignKeys": [
+        {
+          "from": "close_operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "last_action_operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "uncertain_operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "create_operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "process_id",
+          "onDelete": "NO ACTION",
+          "target": "owned_processes",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "owner_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "boot_id",
+          "onDelete": "NO ACTION",
+          "target": "app_boots",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "budget_reservations",
+      "kind": "table",
+      "columns": [
+        "id",
+        "root_id",
+        "attempt_id",
+        "state",
+        "reserved_units",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "attempt_id",
+          "onDelete": "NO ACTION",
+          "target": "provider_attempts",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "chunk_vectors",
+      "kind": "table",
+      "columns": [
+        "chunk_id",
+        "space_id",
+        "dimensions",
+        "vector"
+      ],
+      "foreignKeys": [
+        {
+          "from": "space_id",
+          "onDelete": "NO ACTION",
+          "target": "embedding_spaces",
+          "to": "id"
+        },
+        {
+          "from": "dimensions",
+          "onDelete": "NO ACTION",
+          "target": "embedding_spaces",
+          "to": "dimensions"
+        },
+        {
+          "from": "chunk_id",
+          "onDelete": "NO ACTION",
+          "target": "search_chunks",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "command_receipts",
+      "kind": "table",
+      "columns": [
+        "actor_id",
+        "scope_key",
+        "idempotency_key",
+        "command_kind",
+        "payload_digest",
+        "operation_id",
+        "result_json",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "configuration_proposals",
+      "kind": "table",
+      "columns": [
+        "id",
+        "scope_key",
+        "namespace",
+        "base_revision",
+        "revision",
+        "state",
+        "author_id",
+        "created_at",
+        "decided_by",
+        "decided_at",
+        "applied_revision",
+        "body_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "scope_key",
+          "onDelete": "NO ACTION",
+          "target": "configuration_revisions",
+          "to": "scope_key"
+        },
+        {
+          "from": "namespace",
+          "onDelete": "NO ACTION",
+          "target": "configuration_revisions",
+          "to": "namespace"
+        },
+        {
+          "from": "applied_revision",
+          "onDelete": "NO ACTION",
+          "target": "configuration_revisions",
+          "to": "revision"
+        },
+        {
+          "from": "decided_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "author_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "configuration_revisions",
+      "kind": "table",
+      "columns": [
+        "scope_key",
+        "namespace",
+        "revision",
+        "schema_version",
+        "body_json"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "consumer_progress",
+      "kind": "table",
+      "columns": [
+        "consumer",
+        "partition_key",
+        "applied_seq",
+        "revision"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_chunk_terms",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "chunk_id",
+        "term_id",
+        "frequency"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_terms",
+          "to": "generation_id"
+        },
+        {
+          "from": "term_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_terms",
+          "to": "id"
+        },
+        {
+          "from": "generation_id",
+          "onDelete": "CASCADE",
+          "target": "convention_chunks",
+          "to": "generation_id"
+        },
+        {
+          "from": "chunk_id",
+          "onDelete": "CASCADE",
+          "target": "convention_chunks",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_chunks",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "id",
+        "chunk_index",
+        "section_id",
+        "text",
+        "token_count",
+        "vector"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_sections",
+          "to": "generation_id"
+        },
+        {
+          "from": "section_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_sections",
+          "to": "id"
+        },
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_indexes",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_embedding_input_refs",
+      "kind": "table",
+      "columns": [
+        "request_id",
+        "ordinal",
+        "artifact_id",
+        "version_id",
+        "reference_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        },
+        {
+          "from": "artifact_id",
+          "onDelete": "NO ACTION",
+          "target": "artifacts",
+          "to": null
+        },
+        {
+          "from": "request_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_embedding_inputs",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_embedding_inputs",
+      "kind": "table",
+      "columns": [
+        "request_id",
+        "actor_id",
+        "project_id",
+        "context_digest",
+        "embedding_space",
+        "input_digest",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "embedding_space",
+          "onDelete": "NO ACTION",
+          "target": "convention_embedding_spaces",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_embedding_spaces",
+      "kind": "table",
+      "columns": [
+        "id",
+        "provider",
+        "model",
+        "configuration_digest",
+        "dimensions",
+        "metric",
+        "element_type"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_heads",
+      "kind": "table",
+      "columns": [
+        "id",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "id",
+          "onDelete": "NO ACTION",
+          "target": "convention_versions",
+          "to": "convention_id"
+        },
+        {
+          "from": "revision",
+          "onDelete": "NO ACTION",
+          "target": "convention_versions",
+          "to": "revision"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_import_artifacts",
+      "kind": "table",
+      "columns": [
+        "operation_id",
+        "ordinal",
+        "kind",
+        "resource_id",
+        "resource_key",
+        "resource_name",
+        "resource_lifecycle",
+        "resource_media_type",
+        "artifact_id",
+        "version_id",
+        "artifact_json",
+        "version_json",
+        "blob_digest",
+        "blob_generation",
+        "byte_count",
+        "staging_operation_id",
+        "staging_attempt",
+        "staging_generation",
+        "managed_path"
+      ],
+      "foreignKeys": [
+        {
+          "from": "staging_operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "blob_digest",
+          "onDelete": "NO ACTION",
+          "target": "blobs",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_imports",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_import_metadata",
+      "kind": "table",
+      "columns": [
+        "operation_id",
+        "convention_id",
+        "scope_key",
+        "project_id",
+        "revision",
+        "slug",
+        "title",
+        "title_folded",
+        "slug_folded",
+        "parent_id",
+        "expected_parent_revision",
+        "sort_order",
+        "lifecycle",
+        "content_ref_json",
+        "raw_content_ref_json",
+        "applicability_json",
+        "provenance_json",
+        "author_id",
+        "created_at",
+        "updated_at",
+        "legacy_approved"
+      ],
+      "foreignKeys": [
+        {
+          "from": "author_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "parent_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_heads",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_imports",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_imports",
+      "kind": "table",
+      "columns": [
+        "operation_id",
+        "convention_id",
+        "scope_key",
+        "project_id",
+        "author_id",
+        "source_ref_json",
+        "source_version_id",
+        "expected_scope_revision",
+        "revision",
+        "phase",
+        "checkpoint_json",
+        "processed_resources",
+        "total_resources",
+        "error",
+        "created_at",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "source_version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        },
+        {
+          "from": "author_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_index_heads",
+      "kind": "table",
+      "columns": [
+        "convention_id",
+        "generation_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_indexes",
+          "to": null
+        },
+        {
+          "from": "convention_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_heads",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_index_scope_revisions",
+      "kind": "table",
+      "columns": [
+        "scope_key",
+        "project_id",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_indexes",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "convention_id",
+        "convention_revision",
+        "source_ref_json",
+        "source_version_id",
+        "operation_id",
+        "state",
+        "status",
+        "error",
+        "embedding_space",
+        "source_digest",
+        "created_at",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "convention_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_versions",
+          "to": "convention_id"
+        },
+        {
+          "from": "convention_revision",
+          "onDelete": "NO ACTION",
+          "target": "convention_versions",
+          "to": "revision"
+        },
+        {
+          "from": "embedding_space",
+          "onDelete": "NO ACTION",
+          "target": "convention_embedding_spaces",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "source_version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_resource_heads",
+      "kind": "table",
+      "columns": [
+        "id",
+        "convention_id",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "id",
+          "onDelete": "NO ACTION",
+          "target": "convention_resource_versions",
+          "to": "resource_id"
+        },
+        {
+          "from": "revision",
+          "onDelete": "NO ACTION",
+          "target": "convention_resource_versions",
+          "to": "revision"
+        },
+        {
+          "from": "convention_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_heads",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_resource_versions",
+      "kind": "table",
+      "columns": [
+        "resource_id",
+        "revision",
+        "convention_id",
+        "convention_revision",
+        "name",
+        "media_type",
+        "content_ref_json",
+        "content_version_id",
+        "author_id",
+        "created_at",
+        "deleted_at",
+        "lifecycle"
+      ],
+      "foreignKeys": [
+        {
+          "from": "convention_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_versions",
+          "to": "convention_id"
+        },
+        {
+          "from": "convention_revision",
+          "onDelete": "NO ACTION",
+          "target": "convention_versions",
+          "to": "revision"
+        },
+        {
+          "from": "author_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "content_version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        },
+        {
+          "from": "resource_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_resource_heads",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_scope_revisions",
+      "kind": "table",
+      "columns": [
+        "scope_key",
+        "project_id",
+        "revision",
+        "index_source_revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_section_terms",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "section_id",
+        "term_id",
+        "frequency"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_terms",
+          "to": "generation_id"
+        },
+        {
+          "from": "term_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_terms",
+          "to": "id"
+        },
+        {
+          "from": "generation_id",
+          "onDelete": "CASCADE",
+          "target": "convention_sections",
+          "to": "generation_id"
+        },
+        {
+          "from": "section_id",
+          "onDelete": "CASCADE",
+          "target": "convention_sections",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_sections",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "id",
+        "parent_id",
+        "heading",
+        "level",
+        "source_offset",
+        "source_length",
+        "token_count"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_sections",
+          "to": "generation_id"
+        },
+        {
+          "from": "parent_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_sections",
+          "to": "id"
+        },
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_indexes",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_term_batches",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "kind",
+        "owner_id",
+        "batch_index",
+        "digest"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_indexes",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_terms",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "id",
+        "term"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_indexes",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "convention_versions",
+      "kind": "table",
+      "columns": [
+        "convention_id",
+        "revision",
+        "scope_key",
+        "project_id",
+        "slug",
+        "title",
+        "title_folded",
+        "slug_folded",
+        "parent_id",
+        "sort_order",
+        "lifecycle",
+        "content_ref_json",
+        "content_version_id",
+        "raw_content_version_id",
+        "write_boot_id",
+        "write_transaction",
+        "raw_content_ref_json",
+        "applicability_json",
+        "provenance_json",
+        "author_id",
+        "created_at",
+        "updated_at",
+        "legacy_approved"
+      ],
+      "foreignKeys": [
+        {
+          "from": "author_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "write_boot_id",
+          "onDelete": "NO ACTION",
+          "target": "app_boots",
+          "to": null
+        },
+        {
+          "from": "raw_content_version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        },
+        {
+          "from": "content_version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        },
+        {
+          "from": "parent_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_heads",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "convention_id",
+          "onDelete": "NO ACTION",
+          "target": "convention_heads",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "conversations",
+      "kind": "table",
+      "columns": [
+        "id",
+        "root_id",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "decision_approvals",
+      "kind": "table",
+      "columns": [
+        "id",
+        "scope_key",
+        "project_id",
+        "revision",
+        "state",
+        "operation_kind",
+        "target_id",
+        "target_revision",
+        "content_digest",
+        "scope_digest",
+        "summary",
+        "artifact_json",
+        "payload_json",
+        "author_id",
+        "author_kind",
+        "created_at",
+        "decided_by",
+        "decided_at",
+        "rationale",
+        "restore_epoch"
+      ],
+      "foreignKeys": [
+        {
+          "from": "decided_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "author_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "diagnostic_exports",
+      "kind": "table",
+      "columns": [
+        "actor_id",
+        "scope_key",
+        "request_key",
+        "project_id",
+        "selection_sha256",
+        "command",
+        "claim",
+        "created_at"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "diagnostic_records",
+      "kind": "table",
+      "columns": [
+        "sequence",
+        "id",
+        "recorded_at",
+        "severity",
+        "severity_rank",
+        "component",
+        "code",
+        "message",
+        "origin",
+        "actor_id",
+        "correlation_id",
+        "project_id",
+        "operation",
+        "operation_id",
+        "target_kind",
+        "target_id",
+        "stage",
+        "source_revision",
+        "attempt",
+        "started_at",
+        "finished_at",
+        "progress_completed",
+        "progress_total",
+        "outcome",
+        "error_class",
+        "output",
+        "output_omitted_bytes",
+        "redactions",
+        "evidence_json",
+        "metrics_json",
+        "recovery_json"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "diagnostic_retention",
+      "kind": "table",
+      "columns": [
+        "singleton",
+        "pruned_through"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "documents",
+      "kind": "table",
+      "columns": [
+        "artifact_id",
+        "active_version_id",
+        "revision",
+        "retrieval_enabled"
+      ],
+      "foreignKeys": [
+        {
+          "from": "active_version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        },
+        {
+          "from": "artifact_id",
+          "onDelete": "NO ACTION",
+          "target": "artifacts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "effective_configuration",
+      "kind": "table",
+      "columns": [
+        "scope_key",
+        "namespace",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "scope_key",
+          "onDelete": "NO ACTION",
+          "target": "configuration_revisions",
+          "to": "scope_key"
+        },
+        {
+          "from": "namespace",
+          "onDelete": "NO ACTION",
+          "target": "configuration_revisions",
+          "to": "namespace"
+        },
+        {
+          "from": "revision",
+          "onDelete": "NO ACTION",
+          "target": "configuration_revisions",
+          "to": "revision"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "embedding_spaces",
+      "kind": "table",
+      "columns": [
+        "id",
+        "model_digest",
+        "dimensions",
+        "metric",
+        "element_type"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "eval_runs",
+      "kind": "table",
+      "columns": [
+        "id",
+        "suite_id",
+        "suite_revision",
+        "project_id",
+        "session_id",
+        "session_revision",
+        "session_sequence",
+        "measurement_digest",
+        "created_at",
+        "source_watermark",
+        "report_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "events",
+      "kind": "table",
+      "columns": [
+        "seq",
+        "id",
+        "actor_id",
+        "project_id",
+        "root_id",
+        "operation_id",
+        "aggregate_kind",
+        "aggregate_id",
+        "aggregate_revision",
+        "kind",
+        "created_at",
+        "payload_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "executions",
+      "kind": "table",
+      "columns": [
+        "id",
+        "root_id",
+        "boot_id",
+        "generation",
+        "phase",
+        "owner_id",
+        "lease_until",
+        "revision",
+        "purpose",
+        "owner_epoch",
+        "attempts",
+        "ready_at",
+        "created_at",
+        "stop_cause",
+        "stop_requested_at",
+        "stop_acknowledged_at",
+        "stopped_at",
+        "outcome",
+        "detail",
+        "plan_revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "boot_id",
+          "onDelete": "NO ACTION",
+          "target": "app_boots",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "external_cursors",
+      "kind": "table",
+      "columns": [
+        "source_id",
+        "consumer",
+        "revision",
+        "cursor_json"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "extractions",
+      "kind": "table",
+      "columns": [
+        "id",
+        "artifact_version_id",
+        "extractor_digest",
+        "state",
+        "extracted_blob_digest",
+        "provenance_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "extracted_blob_digest",
+          "onDelete": "NO ACTION",
+          "target": "blobs",
+          "to": null
+        },
+        {
+          "from": "artifact_version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "feature_plans",
+      "kind": "table",
+      "columns": [
+        "feature_id",
+        "revision",
+        "approved_plan_json",
+        "approved_by",
+        "approved_at",
+        "pending_plan_json",
+        "pending_revision",
+        "pending_proposal_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "pending_proposal_id",
+          "onDelete": "NO ACTION",
+          "target": "approvals",
+          "to": null
+        },
+        {
+          "from": "approved_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "feature_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "feature_readiness",
+      "kind": "table",
+      "columns": [
+        "feature_id",
+        "revision",
+        "body_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "feature_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "git_owned_worktrees",
+      "kind": "table",
+      "columns": [
+        "id",
+        "repository_id",
+        "work_id",
+        "owner_id",
+        "root_id",
+        "path",
+        "branch",
+        "payload",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "owner_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "work_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "github_intake_clock",
+      "kind": "table",
+      "columns": [
+        "singleton",
+        "revision",
+        "interval_seconds",
+        "last_admitted_at",
+        "next_admission_at"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "github_issue_intake",
+      "kind": "table",
+      "columns": [
+        "repository_id",
+        "issue_number",
+        "revision",
+        "state",
+        "project_id",
+        "work_id",
+        "remote_json",
+        "operation_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "work_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "graph_edges",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "unit_key",
+        "edge_id",
+        "source_node_id",
+        "target_node_id",
+        "kind",
+        "payload_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "source_units",
+          "to": null
+        },
+        {
+          "from": "unit_key",
+          "onDelete": "NO ACTION",
+          "target": "source_units",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "graph_nodes",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "unit_key",
+        "node_id",
+        "kind",
+        "name",
+        "payload_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "source_units",
+          "to": null
+        },
+        {
+          "from": "unit_key",
+          "onDelete": "NO ACTION",
+          "target": "source_units",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "graph_read_pin_views",
+      "kind": "table",
+      "columns": [
+        "pin_id",
+        "repository_id",
+        "view_id",
+        "view_digest",
+        "index_pin_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "index_pin_id",
+          "onDelete": "NO ACTION",
+          "target": "index_pins",
+          "to": null
+        },
+        {
+          "from": "view_id",
+          "onDelete": "NO ACTION",
+          "target": "index_views",
+          "to": null
+        },
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        },
+        {
+          "from": "pin_id",
+          "onDelete": "CASCADE",
+          "target": "graph_read_pins",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "graph_read_pins",
+      "kind": "table",
+      "columns": [
+        "id",
+        "owner_namespace",
+        "store_id",
+        "restore_epoch",
+        "scope_digest",
+        "intent_digest",
+        "scope_json",
+        "witness_json",
+        "missing_json",
+        "revision",
+        "created_at",
+        "expires_at"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "graph_source_bindings",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "unit_key",
+        "capture_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "CASCADE",
+          "target": "source_units",
+          "to": null
+        },
+        {
+          "from": "unit_key",
+          "onDelete": "CASCADE",
+          "target": "source_units",
+          "to": null
+        },
+        {
+          "from": "capture_id",
+          "onDelete": "NO ACTION",
+          "target": "graph_source_captures",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "graph_source_captures",
+      "kind": "table",
+      "columns": [
+        "id",
+        "repository_id",
+        "unit_key",
+        "source_digest",
+        "blob_digest",
+        "blob_generation",
+        "byte_count",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "blob_digest",
+          "onDelete": "NO ACTION",
+          "target": "blobs",
+          "to": null
+        },
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "graph_trust",
+      "kind": "table",
+      "columns": [
+        "repository_id",
+        "unit_key",
+        "node_id",
+        "view_id",
+        "view_digest",
+        "content_digest",
+        "revision",
+        "trusted",
+        "updated_by",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "updated_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "view_id",
+          "onDelete": "CASCADE",
+          "target": "index_views",
+          "to": null
+        },
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "graph_trust_changes",
+      "kind": "table",
+      "columns": [
+        "sequence",
+        "repository_id",
+        "view_digest"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "help_contents",
+      "kind": "table",
+      "columns": [
+        "digest",
+        "byte_count",
+        "character_count",
+        "indexed_bytes",
+        "index_complete",
+        "search_text",
+        "offsets_json"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "help_generations",
+      "kind": "table",
+      "columns": [
+        "id",
+        "operation_id",
+        "state",
+        "app_version",
+        "registry_revision",
+        "source_digest",
+        "help_revision",
+        "published_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "help_head",
+      "kind": "table",
+      "columns": [
+        "singleton",
+        "revision",
+        "app_version",
+        "registry_revision",
+        "source_digest",
+        "generation_id",
+        "generation_operation_id",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "help_generations",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "help_topic_screens",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "topic_id",
+        "screen_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "CASCADE",
+          "target": "help_topics",
+          "to": "generation_id"
+        },
+        {
+          "from": "topic_id",
+          "onDelete": "CASCADE",
+          "target": "help_topics",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "help_topics",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "id",
+        "version",
+        "title",
+        "content_digest",
+        "content_ref_json",
+        "artifact_id",
+        "version_id",
+        "provenance_json",
+        "related_operations_json",
+        "screen_ids_json",
+        "source_kind",
+        "package_id",
+        "manifest_digest",
+        "availability",
+        "reason",
+        "character_count",
+        "topic_revision",
+        "content_key",
+        "title_search"
+      ],
+      "foreignKeys": [
+        {
+          "from": "content_key",
+          "onDelete": "NO ACTION",
+          "target": "help_contents",
+          "to": null
+        },
+        {
+          "from": "version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        },
+        {
+          "from": "artifact_id",
+          "onDelete": "NO ACTION",
+          "target": "artifacts",
+          "to": null
+        },
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "help_generations",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "history_links",
+      "kind": "table",
+      "columns": [
+        "id",
+        "project_id",
+        "root_id",
+        "kind",
+        "target_kind",
+        "target_id",
+        "parent_id",
+        "supersedes_id",
+        "actor_id",
+        "event_id",
+        "seq",
+        "repository_id",
+        "revision",
+        "summary",
+        "body_json",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        },
+        {
+          "from": "event_id",
+          "onDelete": "NO ACTION",
+          "target": "events",
+          "to": "id"
+        },
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "supersedes_id",
+          "onDelete": "NO ACTION",
+          "target": "history_links",
+          "to": null
+        },
+        {
+          "from": "parent_id",
+          "onDelete": "NO ACTION",
+          "target": "history_links",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "human_decisions",
+      "kind": "table",
+      "columns": [
+        "source",
+        "proposal_id",
+        "project_id",
+        "reviewed_revision",
+        "decision",
+        "rationale",
+        "actor_id",
+        "decided_at",
+        "content_digest",
+        "scope_digest",
+        "reviewed_snapshot_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "import_mappings",
+      "kind": "table",
+      "columns": [
+        "import_id",
+        "source_kind",
+        "source_id",
+        "local_id",
+        "source_digest"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "index_batches",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "unit_key",
+        "batch_key",
+        "payload_digest",
+        "row_count"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "source_units",
+          "to": null
+        },
+        {
+          "from": "unit_key",
+          "onDelete": "NO ACTION",
+          "target": "source_units",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "index_generations",
+      "kind": "table",
+      "columns": [
+        "id",
+        "source_key",
+        "kind",
+        "state",
+        "source_digest",
+        "watermark",
+        "manifest_json"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "index_overlays",
+      "kind": "table",
+      "columns": [
+        "id",
+        "repository_id",
+        "worktree_id",
+        "worktree_path",
+        "state",
+        "revision",
+        "base_generation_id",
+        "base_oid",
+        "head_oid",
+        "head_ref",
+        "capture_digest",
+        "branch_generation_id",
+        "worktree_generation_id",
+        "view_id",
+        "run_id",
+        "reason",
+        "created_at",
+        "updated_at",
+        "expires_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "index_pins",
+      "kind": "table",
+      "columns": [
+        "id",
+        "view_id",
+        "boot_id",
+        "lease_until"
+      ],
+      "foreignKeys": [
+        {
+          "from": "boot_id",
+          "onDelete": "NO ACTION",
+          "target": "app_boots",
+          "to": null
+        },
+        {
+          "from": "view_id",
+          "onDelete": "NO ACTION",
+          "target": "index_views",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "index_runs",
+      "kind": "table",
+      "columns": [
+        "id",
+        "batch_id",
+        "kind",
+        "repository_id",
+        "project_id",
+        "overlay_id",
+        "state",
+        "stage",
+        "revision",
+        "attempt",
+        "max_attempts",
+        "owner",
+        "lease_until",
+        "cancel_requested_at",
+        "config_revision",
+        "config_digest",
+        "source_oid",
+        "generation_id",
+        "completed_units",
+        "total_units",
+        "output_view_id",
+        "error_code",
+        "error_message",
+        "deterministic",
+        "warnings_json",
+        "requested_by",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "next_attempt_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "index_source_configs",
+      "kind": "table",
+      "columns": [
+        "scope_key",
+        "project_id",
+        "revision",
+        "config_json",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "index_views",
+      "kind": "table",
+      "columns": [
+        "id",
+        "source_key",
+        "view_digest",
+        "baseline_id",
+        "branch_id",
+        "worktree_id",
+        "coverage_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "worktree_id",
+          "onDelete": "NO ACTION",
+          "target": "index_generations",
+          "to": null
+        },
+        {
+          "from": "branch_id",
+          "onDelete": "NO ACTION",
+          "target": "index_generations",
+          "to": null
+        },
+        {
+          "from": "baseline_id",
+          "onDelete": "NO ACTION",
+          "target": "index_generations",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "inference_requests",
+      "kind": "table",
+      "columns": [
+        "id",
+        "purpose",
+        "project_id",
+        "root_id",
+        "assignment_id",
+        "session_id",
+        "context_epoch",
+        "state",
+        "revision",
+        "request_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        },
+        {
+          "from": "assignment_id",
+          "onDelete": "NO ACTION",
+          "target": "assignments",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "integration_links",
+      "kind": "table",
+      "columns": [
+        "record_id",
+        "work_id",
+        "purpose"
+      ],
+      "foreignKeys": [
+        {
+          "from": "work_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "record_id",
+          "onDelete": "NO ACTION",
+          "target": "integration_records",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "integration_records",
+      "kind": "table",
+      "columns": [
+        "id",
+        "project_id",
+        "repository_id",
+        "root_id",
+        "kind",
+        "external_key",
+        "revision",
+        "state",
+        "body_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "job_actions",
+      "kind": "table",
+      "columns": [
+        "schedule_id",
+        "action_key",
+        "run_id",
+        "state",
+        "effect_json",
+        "revision",
+        "created_at",
+        "settled_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "run_id",
+          "onDelete": "NO ACTION",
+          "target": "job_runs",
+          "to": null
+        },
+        {
+          "from": "schedule_id",
+          "onDelete": "NO ACTION",
+          "target": "schedules",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "job_checkpoints",
+      "kind": "table",
+      "columns": [
+        "schedule_id",
+        "source",
+        "cursor_json",
+        "revision",
+        "run_id",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "run_id",
+          "onDelete": "NO ACTION",
+          "target": "job_runs",
+          "to": null
+        },
+        {
+          "from": "schedule_id",
+          "onDelete": "NO ACTION",
+          "target": "schedules",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "job_run_links",
+      "kind": "table",
+      "columns": [
+        "run_id",
+        "root_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "run_id",
+          "onDelete": "NO ACTION",
+          "target": "job_runs",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "job_run_usage",
+      "kind": "table",
+      "columns": [
+        "run_id",
+        "seq",
+        "request_id",
+        "purpose",
+        "model_id",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "amount_usd",
+        "price_kind",
+        "price_origin",
+        "price_revision",
+        "incomplete",
+        "recorded_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "run_id",
+          "onDelete": "NO ACTION",
+          "target": "job_runs",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "job_runs",
+      "kind": "table",
+      "columns": [
+        "id",
+        "schedule_id",
+        "occurrence_key",
+        "state",
+        "revision",
+        "checkpoint_json",
+        "seq",
+        "project_id",
+        "job_revision",
+        "project_epoch",
+        "restore_epoch",
+        "definition_json",
+        "occurrence_at",
+        "trigger",
+        "operation_id",
+        "inner_operation_id",
+        "boot_id",
+        "started_at",
+        "finished_at",
+        "reason",
+        "hold",
+        "cancel_requested",
+        "resumptions",
+        "session_id",
+        "agent_actor",
+        "skipped_for",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "agent_actor",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "boot_id",
+          "onDelete": "NO ACTION",
+          "target": "app_boots",
+          "to": null
+        },
+        {
+          "from": "inner_operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "schedule_id",
+          "onDelete": "NO ACTION",
+          "target": "schedules",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_addresses",
+      "kind": "table",
+      "columns": [
+        "claim_id",
+        "kind",
+        "name",
+        "reference",
+        "actor_id",
+        "at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": "id"
+        },
+        {
+          "from": "claim_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_claims",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_challenges",
+      "kind": "table",
+      "columns": [
+        "id",
+        "claim_id",
+        "state",
+        "reason",
+        "evidence_json",
+        "author_id",
+        "opened_at",
+        "resolved_at",
+        "resolved_by",
+        "resolution"
+      ],
+      "foreignKeys": [
+        {
+          "from": "resolved_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": "id"
+        },
+        {
+          "from": "author_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": "id"
+        },
+        {
+          "from": "claim_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_claims",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_claim_basis",
+      "kind": "table",
+      "columns": [
+        "claim_id",
+        "source_ref",
+        "source_revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "claim_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_claims",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_claim_evidence",
+      "kind": "table",
+      "columns": [
+        "claim_id",
+        "evidence_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "evidence_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_evidence",
+          "to": "id"
+        },
+        {
+          "from": "claim_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_claims",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_claim_fts",
+      "kind": "virtual",
+      "columns": [
+        "claim_id",
+        "text",
+        "knowledge_claim_fts",
+        "rank"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_claim_fts_config",
+      "kind": "shadow",
+      "columns": [
+        "k",
+        "v"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_claim_fts_content",
+      "kind": "shadow",
+      "columns": [
+        "id",
+        "c0",
+        "c1"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_claim_fts_data",
+      "kind": "shadow",
+      "columns": [
+        "id",
+        "block"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_claim_fts_docsize",
+      "kind": "shadow",
+      "columns": [
+        "id",
+        "sz"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_claim_fts_idx",
+      "kind": "shadow",
+      "columns": [
+        "segid",
+        "term",
+        "pgno"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_claim_tags",
+      "kind": "table",
+      "columns": [
+        "claim_id",
+        "tag"
+      ],
+      "foreignKeys": [
+        {
+          "from": "claim_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_claims",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_claims",
+      "kind": "table",
+      "columns": [
+        "id",
+        "scope_key",
+        "project_id",
+        "revision",
+        "kind",
+        "entry_kind",
+        "lifecycle",
+        "subject_id",
+        "predicate",
+        "object_id",
+        "source",
+        "author_id",
+        "session_id",
+        "rule_state",
+        "lesson_source",
+        "applicability_json",
+        "effective_at",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+        "body_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "author_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": "id"
+        },
+        {
+          "from": "subject_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_entities",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_deliveries",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "claim_id",
+        "revision",
+        "delivered_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "claim_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_claims",
+          "to": "id"
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_entities",
+      "kind": "table",
+      "columns": [
+        "id",
+        "scope_key",
+        "project_id",
+        "revision",
+        "label",
+        "entity_type",
+        "aliases_json",
+        "canonical_key",
+        "canonical_name",
+        "external_id",
+        "source",
+        "author_id",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "author_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_entity_fts",
+      "kind": "virtual",
+      "columns": [
+        "entity_id",
+        "text",
+        "knowledge_entity_fts",
+        "rank"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_entity_fts_config",
+      "kind": "shadow",
+      "columns": [
+        "k",
+        "v"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_entity_fts_content",
+      "kind": "shadow",
+      "columns": [
+        "id",
+        "c0",
+        "c1"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_entity_fts_data",
+      "kind": "shadow",
+      "columns": [
+        "id",
+        "block"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_entity_fts_docsize",
+      "kind": "shadow",
+      "columns": [
+        "id",
+        "sz"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_entity_fts_idx",
+      "kind": "shadow",
+      "columns": [
+        "segid",
+        "term",
+        "pgno"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_entries",
+      "kind": "table",
+      "columns": [
+        "id",
+        "project_id",
+        "kind",
+        "scope_kind",
+        "revision",
+        "state",
+        "body_json",
+        "scope_revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_evidence",
+      "kind": "table",
+      "columns": [
+        "id",
+        "scope_key",
+        "project_id",
+        "kind",
+        "source_ref",
+        "artifact_json",
+        "locator",
+        "snippet",
+        "metadata_json",
+        "source_revision",
+        "author_id",
+        "recorded_at",
+        "deleted_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "author_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_history",
+      "kind": "table",
+      "columns": [
+        "target_id",
+        "revision",
+        "target_kind",
+        "change",
+        "author_id",
+        "at",
+        "write_id",
+        "lifecycle",
+        "snapshot_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "author_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_import_map",
+      "kind": "table",
+      "columns": [
+        "artifact_version_id",
+        "candidate",
+        "claim_id",
+        "write_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "claim_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_claims",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_lesson_events",
+      "kind": "table",
+      "columns": [
+        "claim_id",
+        "event_key",
+        "source",
+        "source_ref",
+        "session_id",
+        "actor_id",
+        "at",
+        "write_id",
+        "merge_path"
+      ],
+      "foreignKeys": [
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": "id"
+        },
+        {
+          "from": "claim_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_claims",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_links",
+      "kind": "table",
+      "columns": [
+        "from_id",
+        "to_id",
+        "kind",
+        "evidence_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "to_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_entries",
+          "to": null
+        },
+        {
+          "from": "from_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_entries",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_relations",
+      "kind": "table",
+      "columns": [
+        "id",
+        "scope_key",
+        "project_id",
+        "subject_id",
+        "predicate",
+        "object_id",
+        "evidence_json",
+        "author_id",
+        "created_at",
+        "removed_at",
+        "write_id",
+        "added_evidence_json",
+        "added_basis_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "author_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_revisions",
+      "kind": "table",
+      "columns": [
+        "entry_id",
+        "revision",
+        "actor_id",
+        "body_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "entry_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_entries",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_scopes",
+      "kind": "table",
+      "columns": [
+        "scope_key",
+        "revision"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_shares",
+      "kind": "table",
+      "columns": [
+        "entry_id",
+        "project_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "entry_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_entries",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_source_deletions",
+      "kind": "table",
+      "columns": [
+        "write_id",
+        "scope_key",
+        "project_id",
+        "source",
+        "digest",
+        "state",
+        "actor_id",
+        "principal_kind",
+        "session_id",
+        "invocation_project_id",
+        "restore_epoch",
+        "policy_revision",
+        "planned_claims",
+        "planned_entities",
+        "planned_evidence",
+        "deleted_claims",
+        "deleted_entities",
+        "purged_evidence",
+        "entity_cursor",
+        "batches",
+        "started_at",
+        "finished_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": "id"
+        },
+        {
+          "from": "write_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_writes",
+          "to": "write_id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_source_heads",
+      "kind": "table",
+      "columns": [
+        "source_ref",
+        "source_revision",
+        "observed_at"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_tags",
+      "kind": "table",
+      "columns": [
+        "entry_id",
+        "tag"
+      ],
+      "foreignKeys": [
+        {
+          "from": "entry_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_entries",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_write_targets",
+      "kind": "table",
+      "columns": [
+        "write_id",
+        "kind",
+        "seq",
+        "target_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "write_id",
+          "onDelete": "NO ACTION",
+          "target": "knowledge_writes",
+          "to": "write_id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "knowledge_writes",
+      "kind": "table",
+      "columns": [
+        "write_id",
+        "operation",
+        "scope_key",
+        "actor_id",
+        "session_id",
+        "at",
+        "scope_revision",
+        "entity_ids_json",
+        "claim_ids_json",
+        "changes_json",
+        "diagnostics_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "maintenance_operations",
+      "kind": "table",
+      "columns": [
+        "id",
+        "kind",
+        "state",
+        "checkpoint_json",
+        "created_at"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "notification_audience",
+      "kind": "table",
+      "columns": [
+        "singleton",
+        "user_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "user_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "notifications",
+      "kind": "table",
+      "columns": [
+        "id",
+        "revision",
+        "user_id",
+        "project_id",
+        "root_id",
+        "decision_id",
+        "category",
+        "priority",
+        "title",
+        "body",
+        "source_id",
+        "links_json",
+        "requires_input",
+        "is_read",
+        "acknowledged",
+        "created_at",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "project_id"
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "user_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "operation_attempts",
+      "kind": "table",
+      "columns": [
+        "id",
+        "operation_id",
+        "attempt_no",
+        "boot_id",
+        "execution_id",
+        "owner_generation",
+        "control_revision",
+        "policy_revision",
+        "state",
+        "observations_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "execution_id",
+          "onDelete": "NO ACTION",
+          "target": "executions",
+          "to": null
+        },
+        {
+          "from": "boot_id",
+          "onDelete": "NO ACTION",
+          "target": "app_boots",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "operations",
+      "kind": "table",
+      "columns": [
+        "id",
+        "root_id",
+        "assignment_id",
+        "capability",
+        "schema_version",
+        "args_digest",
+        "payload_json",
+        "state",
+        "revision",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "assignment_id",
+          "onDelete": "NO ACTION",
+          "target": "assignments",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "os_notification_deliveries",
+      "kind": "table",
+      "columns": [
+        "user_id",
+        "notification_id",
+        "revision",
+        "boot_id",
+        "attempt",
+        "state",
+        "detail",
+        "created_at",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "notification_id",
+          "onDelete": "NO ACTION",
+          "target": "notifications",
+          "to": "id"
+        },
+        {
+          "from": "user_id",
+          "onDelete": "NO ACTION",
+          "target": "notifications",
+          "to": "user_id"
+        },
+        {
+          "from": "boot_id",
+          "onDelete": "NO ACTION",
+          "target": "app_boots",
+          "to": null
+        },
+        {
+          "from": "user_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "owned_processes",
+      "kind": "table",
+      "columns": [
+        "id",
+        "boot_id",
+        "state",
+        "pid",
+        "birth",
+        "process_group",
+        "platform",
+        "program",
+        "argv_sha256",
+        "operation_id",
+        "lease_id",
+        "actor_id",
+        "session_id",
+        "project_id",
+        "root_id",
+        "assignment_id",
+        "exit_code",
+        "detail",
+        "created_at",
+        "updated_at",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "lease_id",
+          "onDelete": "NO ACTION",
+          "target": "resource_leases",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "boot_id",
+          "onDelete": "NO ACTION",
+          "target": "app_boots",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "package_handler_commits",
+      "kind": "table",
+      "columns": [
+        "package_id",
+        "subscription_id",
+        "event_id",
+        "receipt_id",
+        "payload_digest",
+        "state_generation",
+        "state_revision",
+        "checkpoint",
+        "intents_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "event_id",
+          "onDelete": "NO ACTION",
+          "target": "events",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "package_handler_state",
+      "kind": "table",
+      "columns": [
+        "package_id",
+        "generation",
+        "revision",
+        "state_json"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "package_indexes",
+      "kind": "table",
+      "columns": [
+        "source_key",
+        "location",
+        "public_key",
+        "status",
+        "index_json",
+        "error",
+        "fetched_at"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "package_observations",
+      "kind": "table",
+      "columns": [
+        "package_id",
+        "availability",
+        "version",
+        "digest",
+        "revision"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "package_proposals",
+      "kind": "table",
+      "columns": [
+        "id",
+        "revision",
+        "package_id",
+        "manifest_digest",
+        "bundle_digest",
+        "version",
+        "state",
+        "base_package_id",
+        "originator",
+        "origin_json",
+        "summary_json",
+        "decided_by",
+        "decided_at",
+        "decision_json",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "package_id",
+          "onDelete": "NO ACTION",
+          "target": "package_versions",
+          "to": "package_id"
+        },
+        {
+          "from": "manifest_digest",
+          "onDelete": "NO ACTION",
+          "target": "package_versions",
+          "to": "manifest_digest"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "package_registry",
+      "kind": "table",
+      "columns": [
+        "singleton",
+        "revision"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "package_state_generations",
+      "kind": "table",
+      "columns": [
+        "package_id",
+        "generation",
+        "manifest_digest",
+        "schema_digest",
+        "seeded_from",
+        "seed_revision",
+        "retained_revision",
+        "retained_state_json",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "package_id",
+          "onDelete": "NO ACTION",
+          "target": "package_versions",
+          "to": "package_id"
+        },
+        {
+          "from": "manifest_digest",
+          "onDelete": "NO ACTION",
+          "target": "package_versions",
+          "to": "manifest_digest"
+        },
+        {
+          "from": "package_id",
+          "onDelete": "NO ACTION",
+          "target": "packages",
+          "to": "package_id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "package_versions",
+      "kind": "table",
+      "columns": [
+        "package_id",
+        "manifest_digest",
+        "bundle_digest",
+        "version",
+        "publisher_id",
+        "signer_key",
+        "inspection_json",
+        "provenance_json",
+        "phase",
+        "waits_json",
+        "approval_json",
+        "created_at",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "package_id",
+          "onDelete": "NO ACTION",
+          "target": "packages",
+          "to": "package_id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "packages",
+      "kind": "table",
+      "columns": [
+        "package_id",
+        "revision",
+        "enabled",
+        "installed",
+        "active_digest",
+        "predecessor_digest",
+        "pending_digest",
+        "state_generation",
+        "config_json",
+        "config_revision",
+        "trust_json",
+        "failure_json",
+        "created_at",
+        "updated_at"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "plan_proposals",
+      "kind": "table",
+      "columns": [
+        "id",
+        "feature_id",
+        "revision",
+        "plan_revision",
+        "plan_digest",
+        "state",
+        "requested_by",
+        "requested_at",
+        "decided_by",
+        "decided_at",
+        "summary",
+        "reviewed_snapshot_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "decided_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "requested_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "feature_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "price_overrides",
+      "kind": "table",
+      "columns": [
+        "model_id",
+        "revision",
+        "rates_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "model_id",
+          "onDelete": "NO ACTION",
+          "target": "provider_models",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "price_snapshots",
+      "kind": "table",
+      "columns": [
+        "id",
+        "provider_key",
+        "source_kind",
+        "source_url",
+        "source_digest",
+        "parser_version",
+        "fetched_at",
+        "verified_at",
+        "rates_json"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "principal_authority",
+      "kind": "table",
+      "columns": [
+        "actor_id",
+        "role",
+        "project_id",
+        "tool_families_json",
+        "state",
+        "revision",
+        "bound_by",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "bound_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "project_details",
+      "kind": "table",
+      "columns": [
+        "project_id",
+        "description",
+        "updated_at",
+        "archived_at",
+        "deleted_at",
+        "archive_epoch",
+        "archive_stop_pending"
+      ],
+      "foreignKeys": [
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "project_repositories",
+      "kind": "table",
+      "columns": [
+        "project_id",
+        "repository_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "projects",
+      "kind": "table",
+      "columns": [
+        "id",
+        "title",
+        "lifecycle",
+        "revision",
+        "scope_revision",
+        "created_at"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "provider_attempts",
+      "kind": "table",
+      "columns": [
+        "id",
+        "request_id",
+        "session_id",
+        "turn_no",
+        "attempt_no",
+        "context_epoch",
+        "model_id",
+        "price_snapshot_id",
+        "state",
+        "envelope_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "price_snapshot_id",
+          "onDelete": "NO ACTION",
+          "target": "price_snapshots",
+          "to": null
+        },
+        {
+          "from": "model_id",
+          "onDelete": "NO ACTION",
+          "target": "provider_models",
+          "to": null
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        },
+        {
+          "from": "request_id",
+          "onDelete": "NO ACTION",
+          "target": "inference_requests",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "provider_connection_identities",
+      "kind": "table",
+      "columns": [
+        "id",
+        "account_revision"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "provider_connections",
+      "kind": "table",
+      "columns": [
+        "id",
+        "kind",
+        "access_mode",
+        "endpoint_profile",
+        "revision",
+        "credential_ref",
+        "credential_revision",
+        "state",
+        "configuration_json"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "provider_models",
+      "kind": "table",
+      "columns": [
+        "id",
+        "connection_id",
+        "upstream_id",
+        "revision",
+        "enabled",
+        "capabilities_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "connection_id",
+          "onDelete": "NO ACTION",
+          "target": "provider_connections",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "published_prices",
+      "kind": "table",
+      "columns": [
+        "provider_key",
+        "snapshot_id",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "provider_key",
+          "onDelete": "NO ACTION",
+          "target": "price_snapshots",
+          "to": "provider_key"
+        },
+        {
+          "from": "snapshot_id",
+          "onDelete": "NO ACTION",
+          "target": "price_snapshots",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "published_views",
+      "kind": "table",
+      "columns": [
+        "source_key",
+        "view_id",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "source_key",
+          "onDelete": "NO ACTION",
+          "target": "index_views",
+          "to": "source_key"
+        },
+        {
+          "from": "view_id",
+          "onDelete": "NO ACTION",
+          "target": "index_views",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "queue_entries",
+      "kind": "table",
+      "columns": [
+        "id",
+        "consumer",
+        "event_id",
+        "root_id",
+        "operation_id",
+        "priority",
+        "ready_at",
+        "state",
+        "owner_id",
+        "lease_until",
+        "generation",
+        "cancellation_epoch",
+        "attempt_count",
+        "payload_json",
+        "claim_boot_id",
+        "partition_key",
+        "event_seq",
+        "revision",
+        "last_error",
+        "cancel_requested",
+        "failed_at",
+        "awaiting_eligibility"
+      ],
+      "foreignKeys": [
+        {
+          "from": "claim_boot_id",
+          "onDelete": "NO ACTION",
+          "target": "app_boots",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "event_id",
+          "onDelete": "NO ACTION",
+          "target": "events",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "receipt_replies",
+      "kind": "table",
+      "columns": [
+        "actor_id",
+        "scope_key",
+        "idempotency_key",
+        "command_id",
+        "artifact_id",
+        "version_id",
+        "schema_json",
+        "published_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "command_receipts",
+          "to": null
+        },
+        {
+          "from": "scope_key",
+          "onDelete": "NO ACTION",
+          "target": "command_receipts",
+          "to": null
+        },
+        {
+          "from": "idempotency_key",
+          "onDelete": "NO ACTION",
+          "target": "command_receipts",
+          "to": null
+        },
+        {
+          "from": "version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        },
+        {
+          "from": "artifact_id",
+          "onDelete": "NO ACTION",
+          "target": "artifacts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "repositories",
+      "kind": "table",
+      "columns": [
+        "id",
+        "canonical_location",
+        "revision"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "repository_details",
+      "kind": "table",
+      "columns": [
+        "repository_id",
+        "name",
+        "remote_url",
+        "is_primary",
+        "lifecycle",
+        "languages_json",
+        "registered_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "repository_index_views",
+      "kind": "table",
+      "columns": [
+        "view_id",
+        "repository_id",
+        "source_revision",
+        "coverage",
+        "published_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "repository_sources",
+      "kind": "table",
+      "columns": [
+        "repository_id",
+        "section",
+        "section_root",
+        "location",
+        "state",
+        "head_oid",
+        "head_ref",
+        "object_format",
+        "remote_url",
+        "revision",
+        "observed_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "repository_texts",
+      "kind": "table",
+      "columns": [
+        "view_id",
+        "kind",
+        "repository_id",
+        "artifact_id",
+        "version_id",
+        "sha256",
+        "byte_length",
+        "media_type",
+        "coverage"
+      ],
+      "foreignKeys": [
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        },
+        {
+          "from": "view_id",
+          "onDelete": "NO ACTION",
+          "target": "repository_index_views",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "repository_worktrees",
+      "kind": "table",
+      "columns": [
+        "repository_id",
+        "worktree_id",
+        "path",
+        "head_oid",
+        "head_ref",
+        "is_main",
+        "observed_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "resource_grants",
+      "kind": "table",
+      "columns": [
+        "id",
+        "resource_id",
+        "operation_id",
+        "generation",
+        "units",
+        "state",
+        "lease_until",
+        "observation_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "resource_id",
+          "onDelete": "NO ACTION",
+          "target": "resources",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "resource_leases",
+      "kind": "table",
+      "columns": [
+        "id",
+        "resource_id",
+        "state",
+        "end_reason",
+        "owner_id",
+        "holder_key",
+        "session_id",
+        "project_id",
+        "root_id",
+        "assignment_id",
+        "boot_id",
+        "purpose",
+        "priority",
+        "units",
+        "lease_ms",
+        "queue_seq",
+        "fence",
+        "requested_at",
+        "granted_at",
+        "renewed_at",
+        "expires_at",
+        "ended_at",
+        "unreachable_since",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "boot_id",
+          "onDelete": "NO ACTION",
+          "target": "app_boots",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "owner_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "resource_id",
+          "onDelete": "NO ACTION",
+          "target": "resources",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "resources",
+      "kind": "table",
+      "columns": [
+        "id",
+        "canonical_identity",
+        "capacity",
+        "revision",
+        "name",
+        "scope",
+        "project_id",
+        "physical",
+        "labels_json",
+        "fence_seq",
+        "queue_seq",
+        "created_at",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "resume_grants",
+      "kind": "table",
+      "columns": [
+        "id",
+        "actor_id",
+        "root_id",
+        "revision",
+        "state",
+        "authority_source",
+        "binding_json",
+        "expires_at",
+        "uses_remaining"
+      ],
+      "foreignKeys": [
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "review_source_evidence",
+      "kind": "table",
+      "columns": [
+        "repository_id",
+        "pull_request_number",
+        "head",
+        "policy_revision",
+        "cycle",
+        "source_id",
+        "run_id",
+        "state",
+        "fallback_operation_id",
+        "evidence_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "fallback_operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "root_controls",
+      "kind": "table",
+      "columns": [
+        "root_id",
+        "desired_state",
+        "revision",
+        "current_generation",
+        "restart_boot_id",
+        "instruction_revision",
+        "adopted_plan_revision",
+        "stop_epoch",
+        "stop_operation_id",
+        "stop_generation",
+        "reactivate",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "stop_operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "restart_boot_id",
+          "onDelete": "NO ACTION",
+          "target": "app_boots",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_availability",
+      "kind": "table",
+      "columns": [
+        "scope_key",
+        "revision",
+        "ready_at",
+        "state",
+        "observation_json"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_connections",
+      "kind": "table",
+      "columns": [
+        "id",
+        "name",
+        "profile",
+        "endpoint",
+        "enabled",
+        "open_router_json",
+        "credential_ref",
+        "credential_revision",
+        "credential_epoch",
+        "lifecycle",
+        "state_reason",
+        "account_digest",
+        "access_expires_at",
+        "risk_notice_sha256",
+        "risk_binding",
+        "risk_restore_epoch",
+        "risk_accepted_by",
+        "risk_accepted_at",
+        "discovered_json",
+        "discovered_at",
+        "healthy",
+        "checked_at",
+        "revision",
+        "created_at",
+        "updated_at",
+        "local_free",
+        "account_revision",
+        "refresh_operation_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "refresh_operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_cooldowns",
+      "kind": "table",
+      "columns": [
+        "model_id",
+        "until_at",
+        "reason",
+        "observed_at"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_decision_models",
+      "kind": "table",
+      "columns": [
+        "id",
+        "display_name",
+        "connection_id",
+        "upstream_model_id",
+        "question_types_json",
+        "accepts_images",
+        "accepts_videos",
+        "enabled",
+        "extension_schemas_json",
+        "result_schema_json",
+        "revision",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "connection_id",
+          "onDelete": "NO ACTION",
+          "target": "router_connections",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_embedding_candidates",
+      "kind": "table",
+      "columns": [
+        "id",
+        "space_id",
+        "configuration_digest",
+        "pricing_model_id",
+        "body_json",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "pricing_model_id",
+          "onDelete": "NO ACTION",
+          "target": "router_embedding_price_subjects",
+          "to": "model_id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_embedding_inventory",
+      "kind": "table",
+      "columns": [
+        "singleton",
+        "revision"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_embedding_price_subjects",
+      "kind": "table",
+      "columns": [
+        "model_id",
+        "connection_id",
+        "upstream_model_id",
+        "created_connection_revision",
+        "created_at"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_embedding_qualifications",
+      "kind": "table",
+      "columns": [
+        "candidate_id",
+        "revision",
+        "state",
+        "operation_id",
+        "body_json",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": "id"
+        },
+        {
+          "from": "candidate_id",
+          "onDelete": "NO ACTION",
+          "target": "router_embedding_candidates",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_embedding_selection",
+      "kind": "table",
+      "columns": [
+        "revision",
+        "candidate_id",
+        "space_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "space_id",
+          "onDelete": "NO ACTION",
+          "target": "embedding_spaces",
+          "to": "id"
+        },
+        {
+          "from": "candidate_id",
+          "onDelete": "NO ACTION",
+          "target": "router_embedding_candidates",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_models",
+      "kind": "table",
+      "columns": [
+        "id",
+        "display_name",
+        "endpoint_profile",
+        "upstream_model_id",
+        "enabled",
+        "efforts_json",
+        "image_input",
+        "tools",
+        "context_tokens",
+        "position",
+        "revision",
+        "updated_at",
+        "connection_id"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_pins",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "pin_id",
+        "revision",
+        "model_id",
+        "connection_id",
+        "intent_json",
+        "requested_effort",
+        "effective_effort",
+        "capabilities_json",
+        "replaced_pin_id",
+        "reason",
+        "updated_at",
+        "upstream_model_id",
+        "endpoint_profile",
+        "identity_origin"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_requests",
+      "kind": "table",
+      "columns": [
+        "request_id",
+        "operation_id",
+        "purpose",
+        "session_id",
+        "project_id",
+        "model_id",
+        "connection_id",
+        "pin_id",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "router_tier_cursors",
+      "kind": "table",
+      "columns": [
+        "tier",
+        "next"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "routing_cursors",
+      "kind": "table",
+      "columns": [
+        "pool_id",
+        "next_ordinal",
+        "revision"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "run_instructions",
+      "kind": "table",
+      "columns": [
+        "id",
+        "root_id",
+        "seq",
+        "actor_id",
+        "message",
+        "attachments_json",
+        "control_revision",
+        "instruction_revision",
+        "stage",
+        "received_at",
+        "acknowledged_at",
+        "acknowledged_by",
+        "incorporated_at",
+        "disposition_json",
+        "session_id",
+        "transcript_entry_id",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        },
+        {
+          "from": "acknowledged_by",
+          "onDelete": "NO ACTION",
+          "target": "executions",
+          "to": null
+        },
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "schedules",
+      "kind": "table",
+      "columns": [
+        "id",
+        "project_id",
+        "enabled",
+        "revision",
+        "timezone",
+        "next_at",
+        "definition_json",
+        "title",
+        "kind",
+        "schedule_json",
+        "authorized",
+        "authorized_by",
+        "hold",
+        "activated_epoch",
+        "anchor_at",
+        "project_epoch",
+        "interrupted_run_id",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "authorized_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "schema_certificates",
+      "kind": "table",
+      "columns": [
+        "connection_id",
+        "reference_json",
+        "pem"
+      ],
+      "foreignKeys": [
+        {
+          "from": "connection_id",
+          "onDelete": "NO ACTION",
+          "target": "schema_sources",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "schema_inventory",
+      "kind": "table",
+      "columns": [
+        "singleton",
+        "revision"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "schema_migrations",
+      "kind": "table",
+      "columns": [
+        "version",
+        "checksum",
+        "applied_at",
+        "app_build"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "schema_objects",
+      "kind": "table",
+      "columns": [
+        "view_id",
+        "id",
+        "kind",
+        "parent_id",
+        "qualified_name",
+        "body_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "view_id",
+          "onDelete": "CASCADE",
+          "target": "schema_views",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "schema_publications",
+      "kind": "table",
+      "columns": [
+        "operation_id",
+        "connection_id",
+        "body_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "connection_id",
+          "onDelete": "NO ACTION",
+          "target": "schema_sources",
+          "to": "id"
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "schema_read_pins",
+      "kind": "table",
+      "columns": [
+        "id",
+        "view_id",
+        "intent_digest",
+        "expires_at",
+        "body_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "view_id",
+          "onDelete": "CASCADE",
+          "target": "schema_views",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "schema_relations",
+      "kind": "table",
+      "columns": [
+        "view_id",
+        "id",
+        "from_id",
+        "to_id",
+        "body_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "view_id",
+          "onDelete": "NO ACTION",
+          "target": "schema_objects",
+          "to": "view_id"
+        },
+        {
+          "from": "to_id",
+          "onDelete": "NO ACTION",
+          "target": "schema_objects",
+          "to": "id"
+        },
+        {
+          "from": "view_id",
+          "onDelete": "NO ACTION",
+          "target": "schema_objects",
+          "to": "view_id"
+        },
+        {
+          "from": "from_id",
+          "onDelete": "NO ACTION",
+          "target": "schema_objects",
+          "to": "id"
+        },
+        {
+          "from": "view_id",
+          "onDelete": "CASCADE",
+          "target": "schema_views",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "schema_sources",
+      "kind": "table",
+      "columns": [
+        "id",
+        "revision",
+        "configuration_revision",
+        "owner_id",
+        "deleted",
+        "body_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "owner_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "schema_views",
+      "kind": "table",
+      "columns": [
+        "id",
+        "connection_id",
+        "source_revision",
+        "configuration_revision",
+        "coverage_json",
+        "operation_id",
+        "digest",
+        "sealed",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": "id"
+        },
+        {
+          "from": "connection_id",
+          "onDelete": "NO ACTION",
+          "target": "schema_sources",
+          "to": "id"
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "search_chunks",
+      "kind": "table",
+      "columns": [
+        "id",
+        "generation_id",
+        "unit_key",
+        "source_version_id",
+        "locator_json",
+        "text",
+        "content_digest"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "source_units",
+          "to": null
+        },
+        {
+          "from": "unit_key",
+          "onDelete": "NO ACTION",
+          "target": "source_units",
+          "to": null
+        },
+        {
+          "from": "source_version_id",
+          "onDelete": "NO ACTION",
+          "target": "artifact_versions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "search_fts",
+      "kind": "virtual",
+      "columns": [
+        "chunk_id",
+        "text",
+        "search_fts",
+        "rank"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "search_fts_config",
+      "kind": "shadow",
+      "columns": [
+        "k",
+        "v"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "search_fts_content",
+      "kind": "shadow",
+      "columns": [
+        "id",
+        "c0",
+        "c1"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "search_fts_data",
+      "kind": "shadow",
+      "columns": [
+        "id",
+        "block"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "search_fts_docsize",
+      "kind": "shadow",
+      "columns": [
+        "id",
+        "sz"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "search_fts_idx",
+      "kind": "shadow",
+      "columns": [
+        "segid",
+        "term",
+        "pgno"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "session_checkpoints",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "seq",
+        "batch_id",
+        "artifact_json",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "transcript_batches",
+          "to": "session_id"
+        },
+        {
+          "from": "batch_id",
+          "onDelete": "NO ACTION",
+          "target": "transcript_batches",
+          "to": "batch_id"
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "transcript_chunks",
+          "to": "session_id"
+        },
+        {
+          "from": "seq",
+          "onDelete": "NO ACTION",
+          "target": "transcript_chunks",
+          "to": "seq"
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "session_context_epochs",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "epoch",
+        "previous_epoch",
+        "reason",
+        "context_json",
+        "identity",
+        "seq",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "transcript_chunks",
+          "to": "session_id"
+        },
+        {
+          "from": "seq",
+          "onDelete": "NO ACTION",
+          "target": "transcript_chunks",
+          "to": "seq"
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "session_context_sources",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "epoch",
+        "ordinal",
+        "source_id",
+        "kind",
+        "source_revision",
+        "artifact_json",
+        "token_estimate",
+        "disposition",
+        "seq"
+      ],
+      "foreignKeys": [
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "session_events",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "event_id",
+        "consumed_epoch"
+      ],
+      "foreignKeys": [
+        {
+          "from": "event_id",
+          "onDelete": "NO ACTION",
+          "target": "events",
+          "to": "id"
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "session_tool_calls",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "attempt_id",
+        "native_call_id",
+        "ordinal",
+        "capability_id",
+        "call_seq",
+        "response_seq",
+        "outcome",
+        "operation_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "transcript_chunks",
+          "to": "session_id"
+        },
+        {
+          "from": "response_seq",
+          "onDelete": "NO ACTION",
+          "target": "transcript_chunks",
+          "to": "seq"
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "transcript_chunks",
+          "to": "session_id"
+        },
+        {
+          "from": "call_seq",
+          "onDelete": "NO ACTION",
+          "target": "transcript_chunks",
+          "to": "seq"
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "session_turns",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "turn_id",
+        "assignment_id",
+        "execution_id",
+        "owner_epoch",
+        "boot_id",
+        "started_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "boot_id",
+          "onDelete": "NO ACTION",
+          "target": "app_boots",
+          "to": null
+        },
+        {
+          "from": "execution_id",
+          "onDelete": "NO ACTION",
+          "target": "executions",
+          "to": null
+        },
+        {
+          "from": "assignment_id",
+          "onDelete": "NO ACTION",
+          "target": "assignments",
+          "to": null
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "session_usage",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "batch_id",
+        "ordinal",
+        "project_id",
+        "root_id",
+        "committed_seq",
+        "item_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "transcript_batches",
+          "to": "session_id"
+        },
+        {
+          "from": "batch_id",
+          "onDelete": "NO ACTION",
+          "target": "transcript_batches",
+          "to": "batch_id"
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "sessions",
+      "kind": "table",
+      "columns": [
+        "id",
+        "conversation_id",
+        "agent_id",
+        "root_id",
+        "context_epoch",
+        "revision",
+        "pin_json",
+        "project_id",
+        "title",
+        "created_by",
+        "created_at",
+        "closed_at",
+        "closed_by",
+        "next_seq",
+        "checkpoint_seq"
+      ],
+      "foreignKeys": [
+        {
+          "from": "closed_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "created_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "agent_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "conversation_id",
+          "onDelete": "NO ACTION",
+          "target": "conversations",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "settings_secret_handles",
+      "kind": "table",
+      "columns": [
+        "handle",
+        "state",
+        "expires_at"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "source_units",
+      "kind": "table",
+      "columns": [
+        "generation_id",
+        "unit_key",
+        "content_digest",
+        "action",
+        "payload_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "generation_id",
+          "onDelete": "NO ACTION",
+          "target": "index_generations",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "sqlite_schema",
+      "kind": "table",
+      "columns": [
+        "type",
+        "name",
+        "tbl_name",
+        "rootpage",
+        "sql"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "sqlite_sequence",
+      "kind": "table",
+      "columns": [
+        "name",
+        "seq"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "stop_coverage",
+      "kind": "table",
+      "columns": [
+        "operation_id",
+        "root_id",
+        "generation",
+        "reactivate"
+      ],
+      "foreignKeys": [
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "store_meta",
+      "kind": "table",
+      "columns": [
+        "singleton",
+        "store_id",
+        "schema_version",
+        "minimum_reader",
+        "minimum_writer",
+        "restore_epoch"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "tool_calls",
+      "kind": "table",
+      "columns": [
+        "id",
+        "provider_attempt_id",
+        "native_call_id",
+        "ordinal",
+        "operation_id",
+        "envelope_json",
+        "response_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "provider_attempt_id",
+          "onDelete": "NO ACTION",
+          "target": "provider_attempts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "tool_invocations",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "response_seq",
+        "call_seq",
+        "committed_seq",
+        "project_id",
+        "root_id",
+        "call_entry_id",
+        "capability_id",
+        "outcome",
+        "error_code",
+        "operation_id",
+        "actor_id",
+        "called_at",
+        "responded_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "transcript_chunks",
+          "to": "session_id"
+        },
+        {
+          "from": "call_seq",
+          "onDelete": "NO ACTION",
+          "target": "transcript_chunks",
+          "to": "seq"
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "transcript_chunks",
+          "to": "session_id"
+        },
+        {
+          "from": "response_seq",
+          "onDelete": "NO ACTION",
+          "target": "transcript_chunks",
+          "to": "seq"
+        },
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "transcript_batches",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "batch_id",
+        "payload_digest",
+        "actor_id",
+        "context_epoch",
+        "first_seq",
+        "last_seq",
+        "event_id",
+        "committed_seq",
+        "accepted_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "event_id",
+          "onDelete": "NO ACTION",
+          "target": "events",
+          "to": "id"
+        },
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "transcript_chunks",
+      "kind": "table",
+      "columns": [
+        "session_id",
+        "seq",
+        "provider_attempt_id",
+        "kind",
+        "payload_json",
+        "entry_id",
+        "batch_id",
+        "context_epoch",
+        "actor_id",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "provider_attempt_id",
+          "onDelete": "NO ACTION",
+          "target": "provider_attempts",
+          "to": null
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "usage_attempt_balances",
+      "kind": "table",
+      "columns": [
+        "attempt_id",
+        "revision",
+        "priced_micro_usd",
+        "reserved_micro_usd",
+        "classification",
+        "monetary_complete",
+        "incomplete",
+        "unknown_tail",
+        "local_quiescent",
+        "summary_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "attempt_id",
+          "onDelete": "NO ACTION",
+          "target": "usage_attempts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "usage_attempts",
+      "kind": "table",
+      "columns": [
+        "attempt_id",
+        "request_id",
+        "operation_id",
+        "attempt_number",
+        "project_id",
+        "feature_id",
+        "work_id",
+        "assignment_id",
+        "execution_root_id",
+        "execution_id",
+        "session_id",
+        "job_run_id",
+        "actor_id",
+        "role",
+        "purpose",
+        "catalog_model_id",
+        "connection_id",
+        "endpoint_profile",
+        "access_mode",
+        "provider_model_id",
+        "pricing_snapshot_json",
+        "state",
+        "revision",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "actor_id",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "job_run_id",
+          "onDelete": "NO ACTION",
+          "target": "job_runs",
+          "to": null
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        },
+        {
+          "from": "execution_id",
+          "onDelete": "NO ACTION",
+          "target": "executions",
+          "to": null
+        },
+        {
+          "from": "execution_root_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "assignment_id",
+          "onDelete": "NO ACTION",
+          "target": "assignments",
+          "to": null
+        },
+        {
+          "from": "work_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "feature_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "request_id",
+          "onDelete": "NO ACTION",
+          "target": "router_requests",
+          "to": null
+        },
+        {
+          "from": "attempt_id",
+          "onDelete": "NO ACTION",
+          "target": "operation_attempts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "usage_bootstrap",
+      "kind": "table",
+      "columns": [
+        "singleton",
+        "revision",
+        "phase",
+        "session_sequence",
+        "session_source",
+        "session_id",
+        "job_run_id",
+        "job_seq",
+        "router_after",
+        "source_sequence",
+        "processed",
+        "completed_at"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "usage_changes",
+      "kind": "table",
+      "columns": [
+        "event_id",
+        "attempt_id",
+        "feature_id",
+        "kind",
+        "delta_micro_usd",
+        "payload_json",
+        "created_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "feature_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "attempt_id",
+          "onDelete": "NO ACTION",
+          "target": "usage_attempts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "usage_entries",
+      "kind": "table",
+      "columns": [
+        "id",
+        "attempt_id",
+        "observation_key",
+        "kind",
+        "cost_units",
+        "currency",
+        "quantities_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "attempt_id",
+          "onDelete": "NO ACTION",
+          "target": "provider_attempts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "usage_feature_budgets",
+      "kind": "table",
+      "columns": [
+        "feature_id",
+        "revision",
+        "limit_micro_usd",
+        "warning_revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "feature_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "usage_observations",
+      "kind": "table",
+      "columns": [
+        "attempt_id",
+        "observation_key",
+        "sequence",
+        "digest",
+        "payload_json",
+        "recorded_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "attempt_id",
+          "onDelete": "NO ACTION",
+          "target": "usage_attempts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "usage_origins",
+      "kind": "table",
+      "columns": [
+        "source_kind",
+        "source_id",
+        "attempt_id",
+        "request_id",
+        "project_id",
+        "feature_id",
+        "work_id",
+        "session_id",
+        "job_run_id",
+        "payload_json",
+        "recorded_at",
+        "priced_micro_usd",
+        "classification",
+        "monetary_complete",
+        "incomplete",
+        "unknown_tail"
+      ],
+      "foreignKeys": [
+        {
+          "from": "job_run_id",
+          "onDelete": "NO ACTION",
+          "target": "job_runs",
+          "to": null
+        },
+        {
+          "from": "session_id",
+          "onDelete": "NO ACTION",
+          "target": "sessions",
+          "to": null
+        },
+        {
+          "from": "work_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "feature_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "attempt_id",
+          "onDelete": "NO ACTION",
+          "target": "usage_attempts",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "usage_price_overrides",
+      "kind": "table",
+      "columns": [
+        "model_id",
+        "revision",
+        "mode",
+        "tariffs_json",
+        "updated_by",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "updated_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "usage_price_revision",
+      "kind": "table",
+      "columns": [
+        "singleton",
+        "revision"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "usage_price_snapshots",
+      "kind": "table",
+      "columns": [
+        "id",
+        "provider",
+        "revision",
+        "source_url",
+        "source_digest",
+        "parser_version",
+        "fetched_at",
+        "verified_at",
+        "effective_date",
+        "tariffs_json"
+      ],
+      "foreignKeys": [],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "usage_price_status",
+      "kind": "table",
+      "columns": [
+        "provider",
+        "revision",
+        "current_snapshot_id",
+        "last_attempt",
+        "last_success",
+        "refresh_pending",
+        "refresh_operation_id",
+        "last_error",
+        "next_refresh"
+      ],
+      "foreignKeys": [
+        {
+          "from": "refresh_operation_id",
+          "onDelete": "NO ACTION",
+          "target": "operations",
+          "to": null
+        },
+        {
+          "from": "current_snapshot_id",
+          "onDelete": "NO ACTION",
+          "target": "usage_price_snapshots",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "work_dependencies",
+      "kind": "table",
+      "columns": [
+        "work_id",
+        "prerequisite_id",
+        "condition_kind"
+      ],
+      "foreignKeys": [
+        {
+          "from": "prerequisite_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        },
+        {
+          "from": "work_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "work_details",
+      "kind": "table",
+      "columns": [
+        "work_id",
+        "project_id",
+        "search_key",
+        "caller_ref",
+        "completion",
+        "created_by",
+        "updated_by",
+        "updated_at"
+      ],
+      "foreignKeys": [
+        {
+          "from": "work_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "project_id"
+        },
+        {
+          "from": "updated_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "created_by",
+          "onDelete": "NO ACTION",
+          "target": "actors",
+          "to": null
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        },
+        {
+          "from": "work_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "work_items",
+      "kind": "table",
+      "columns": [
+        "id",
+        "project_id",
+        "kind",
+        "parent_feature_id",
+        "associated_feature_id",
+        "status_id",
+        "title",
+        "priority",
+        "manual_order",
+        "revision",
+        "scope_revision",
+        "created_at",
+        "brief_json"
+      ],
+      "foreignKeys": [
+        {
+          "from": "status_id",
+          "onDelete": "NO ACTION",
+          "target": "workflow_statuses",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "workflow_statuses",
+          "to": "project_id"
+        },
+        {
+          "from": "associated_feature_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "project_id"
+        },
+        {
+          "from": "parent_feature_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": "project_id"
+        },
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "work_queues",
+      "kind": "table",
+      "columns": [
+        "project_id",
+        "queue_key",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "work_repositories",
+      "kind": "table",
+      "columns": [
+        "work_id",
+        "repository_id"
+      ],
+      "foreignKeys": [
+        {
+          "from": "repository_id",
+          "onDelete": "NO ACTION",
+          "target": "repositories",
+          "to": null
+        },
+        {
+          "from": "work_id",
+          "onDelete": "NO ACTION",
+          "target": "work_items",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    },
+    {
+      "name": "workflow_statuses",
+      "kind": "table",
+      "columns": [
+        "id",
+        "project_id",
+        "name",
+        "semantic",
+        "sort_order",
+        "revision"
+      ],
+      "foreignKeys": [
+        {
+          "from": "project_id",
+          "onDelete": "NO ACTION",
+          "target": "projects",
+          "to": null
+        }
+      ],
+      "ownership": "unclassified"
+    }
+  ],
+  "triggers": [
+    {
+      "name": "allocation_claims_membership",
+      "table": "work_items"
+    },
+    {
+      "name": "allocation_replays_immutable_delete",
+      "table": "allocation_replays"
+    },
+    {
+      "name": "allocation_replays_immutable_update",
+      "table": "allocation_replays"
+    },
+    {
+      "name": "browser_source_immutable",
+      "table": "browser_sessions"
+    },
+    {
+      "name": "convention_chunk_cleanup_guard",
+      "table": "convention_chunks"
+    },
+    {
+      "name": "convention_chunks_immutable_update",
+      "table": "convention_chunks"
+    },
+    {
+      "name": "convention_import_artifacts_cleanup_guard",
+      "table": "convention_import_artifacts"
+    },
+    {
+      "name": "convention_import_artifacts_immutable_update",
+      "table": "convention_import_artifacts"
+    },
+    {
+      "name": "convention_import_binding_immutable",
+      "table": "convention_imports"
+    },
+    {
+      "name": "convention_import_metadata_immutable_delete",
+      "table": "convention_import_metadata"
+    },
+    {
+      "name": "convention_import_metadata_immutable_update",
+      "table": "convention_import_metadata"
+    },
+    {
+      "name": "convention_index_immutable_delete",
+      "table": "convention_indexes"
+    },
+    {
+      "name": "convention_index_source_immutable",
+      "table": "convention_indexes"
+    },
+    {
+      "name": "convention_input_refs_immutable_delete",
+      "table": "convention_embedding_input_refs"
+    },
+    {
+      "name": "convention_input_refs_immutable_update",
+      "table": "convention_embedding_input_refs"
+    },
+    {
+      "name": "convention_inputs_immutable_delete",
+      "table": "convention_embedding_inputs"
+    },
+    {
+      "name": "convention_inputs_immutable_update",
+      "table": "convention_embedding_inputs"
+    },
+    {
+      "name": "convention_resource_versions_immutable_delete",
+      "table": "convention_resource_versions"
+    },
+    {
+      "name": "convention_resource_versions_immutable_update",
+      "table": "convention_resource_versions"
+    },
+    {
+      "name": "convention_section_source_overlap",
+      "table": "convention_sections"
+    },
+    {
+      "name": "convention_sections_immutable_update",
+      "table": "convention_sections"
+    },
+    {
+      "name": "convention_space_immutable_delete",
+      "table": "convention_embedding_spaces"
+    },
+    {
+      "name": "convention_space_immutable_update",
+      "table": "convention_embedding_spaces"
+    },
+    {
+      "name": "convention_versions_immutable_delete",
+      "table": "convention_versions"
+    },
+    {
+      "name": "convention_versions_immutable_update",
+      "table": "convention_versions"
+    },
+    {
+      "name": "eval_runs_immutable_delete",
+      "table": "eval_runs"
+    },
+    {
+      "name": "eval_runs_immutable_update",
+      "table": "eval_runs"
+    },
+    {
+      "name": "graph_pin_release_child",
+      "table": "graph_read_pin_views"
+    },
+    {
+      "name": "graph_source_bind_after_insert",
+      "table": "source_units"
+    },
+    {
+      "name": "graph_source_bind_insert",
+      "table": "source_units"
+    },
+    {
+      "name": "graph_source_collect",
+      "table": "graph_source_captures"
+    },
+    {
+      "name": "graph_source_unbind",
+      "table": "graph_source_bindings"
+    },
+    {
+      "name": "help_content_immutable_update",
+      "table": "help_contents"
+    },
+    {
+      "name": "help_generation_published_delete",
+      "table": "help_generations"
+    },
+    {
+      "name": "help_generation_published_update",
+      "table": "help_generations"
+    },
+    {
+      "name": "help_screen_immutable_update",
+      "table": "help_topic_screens"
+    },
+    {
+      "name": "help_screen_published_delete",
+      "table": "help_topic_screens"
+    },
+    {
+      "name": "help_screen_published_insert",
+      "table": "help_topic_screens"
+    },
+    {
+      "name": "help_topic_immutable_update",
+      "table": "help_topics"
+    },
+    {
+      "name": "help_topic_published_delete",
+      "table": "help_topics"
+    },
+    {
+      "name": "help_topic_published_insert",
+      "table": "help_topics"
+    },
+    {
+      "name": "human_decisions_immutable_delete",
+      "table": "human_decisions"
+    },
+    {
+      "name": "human_decisions_immutable_update",
+      "table": "human_decisions"
+    },
+    {
+      "name": "router_embedding_artifact_versions_update",
+      "table": "artifact_versions"
+    },
+    {
+      "name": "router_embedding_artifacts_update",
+      "table": "artifacts"
+    },
+    {
+      "name": "router_embedding_blobs_update",
+      "table": "blobs"
+    },
+    {
+      "name": "router_embedding_candidates_inventory_insert",
+      "table": "router_embedding_candidates"
+    },
+    {
+      "name": "router_embedding_configuration_insert",
+      "table": "configuration_revisions"
+    },
+    {
+      "name": "router_embedding_connection_delete",
+      "table": "router_connections"
+    },
+    {
+      "name": "router_embedding_connection_insert",
+      "table": "router_connections"
+    },
+    {
+      "name": "router_embedding_connection_update",
+      "table": "router_connections"
+    },
+    {
+      "name": "router_embedding_operation_update",
+      "table": "operations"
+    },
+    {
+      "name": "router_embedding_principal_delete",
+      "table": "principal_authority"
+    },
+    {
+      "name": "router_embedding_principal_insert",
+      "table": "principal_authority"
+    },
+    {
+      "name": "router_embedding_principal_update",
+      "table": "principal_authority"
+    },
+    {
+      "name": "router_embedding_qualifications_inventory_insert",
+      "table": "router_embedding_qualifications"
+    },
+    {
+      "name": "router_embedding_selection_inventory_insert",
+      "table": "router_embedding_selection"
+    },
+    {
+      "name": "schema_sources_insert",
+      "table": "schema_sources"
+    },
+    {
+      "name": "schema_sources_update",
+      "table": "schema_sources"
+    },
+    {
+      "name": "schema_views_delete",
+      "table": "schema_views"
+    },
+    {
+      "name": "usage_attempts_immutable_binding",
+      "table": "usage_attempts"
+    },
+    {
+      "name": "usage_attempts_immutable_delete",
+      "table": "usage_attempts"
+    },
+    {
+      "name": "usage_changes_immutable_delete",
+      "table": "usage_changes"
+    },
+    {
+      "name": "usage_changes_immutable_update",
+      "table": "usage_changes"
+    },
+    {
+      "name": "usage_observations_immutable_delete",
+      "table": "usage_observations"
+    },
+    {
+      "name": "usage_observations_immutable_update",
+      "table": "usage_observations"
+    },
+    {
+      "name": "usage_origins_immutable_delete",
+      "table": "usage_origins"
+    },
+    {
+      "name": "usage_origins_immutable_update",
+      "table": "usage_origins"
+    },
+    {
+      "name": "usage_price_overrides_immutable_delete",
+      "table": "usage_price_overrides"
+    },
+    {
+      "name": "usage_price_overrides_immutable_update",
+      "table": "usage_price_overrides"
+    },
+    {
+      "name": "usage_price_snapshots_immutable_delete",
+      "table": "usage_price_snapshots"
+    },
+    {
+      "name": "usage_price_snapshots_immutable_update",
+      "table": "usage_price_snapshots"
+    }
+  ]
+}

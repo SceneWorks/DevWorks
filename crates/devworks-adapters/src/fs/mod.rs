@@ -23,6 +23,8 @@ use std::fs::Metadata;
 use std::path::{Component, Path, PathBuf};
 
 pub mod artifacts;
+pub mod client_staging;
+pub mod purge;
 pub mod sources;
 #[cfg(unix)]
 mod unix;
@@ -72,6 +74,17 @@ pub(crate) fn identity_of(m: &Metadata) -> Option<FileIdentity> {
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn identity_of(_: &Metadata) -> Option<FileIdentity> {
     None
+}
+
+pub(crate) fn identity_for_file(file: &std::fs::File) -> Option<FileIdentity> {
+    #[cfg(windows)]
+    {
+        windows::file_identity(file)
+    }
+    #[cfg(not(windows))]
+    {
+        identity_of(&file.metadata().ok()?)
+    }
 }
 
 pub(crate) fn identity_at(path: &Path, meta: &Metadata) -> Option<FileIdentity> {

@@ -1,0 +1,45 @@
+{
+  "status": "implementation_in_progress",
+  "schemaVersion": 36,
+  "readerFloor": 36,
+  "writerFloor": 36,
+  "inheritsFrozenSchema35": "schema-baseline.json",
+  "additionalTables": [
+    {
+      "table": "project_purge_manifests",
+      "selector": "project_id=P",
+      "disposition": "retain minimal purge audit and immutable review digests; supersede prior preparations and scrub private entry paths"
+    },
+    {
+      "table": "project_purge_entries",
+      "selector": "manifest_id belongs to a P purge manifest",
+      "disposition": "retain class/count/reason/digest; remove private relativePath after physical settlement or supersession"
+    },
+    {
+      "table": "project_purge_rows",
+      "selector": "manifest_id belongs to a P purge manifest",
+      "disposition": "retain exact table/key-digest/row-digest/action audit; never retain raw source keys"
+    },
+    {
+      "table": "project_purge_effects",
+      "selector": "manifest_id belongs to a P purge manifest",
+      "disposition": "retain exact recovery binding while Pending/Held; clear private recovery body after Removed/Kept"
+    },
+    {
+      "table": "project_purged_subjects",
+      "selector": "project_id=P",
+      "disposition": "retain minimal opaque deleted identity and purge reference, without private prose"
+    },
+    {
+      "table": "project_managed_files",
+      "selector": "all project_id=P metadata, including settled rows; live bytes additionally require exact managed-root/file-identity proof",
+      "disposition": "review exact owned bytes; retain recovery identity until settled, then scrub path/identity payload; settled owned metadata is removed by logical purge; never register source files or picked inputs"
+    }
+  ],
+  "guardRule": "Only exact canonical primary-key digest and Delete/Scrub action on the current writer connection; ordinary immutable UPDATE rules stay unchanged. Enabling guard remains test-only until reviewed purge execution is wired.",
+  "notes": [
+    "No purge operation is routed yet. This schema extension is not acceptance evidence.",
+    "The 15 immutable DELETE exceptions preserve each original conditional cleanup predicate.",
+    "Full native schema36 inventory and complete executable ownership classification are required before preview/confirmation is enabled."
+  ]
+}

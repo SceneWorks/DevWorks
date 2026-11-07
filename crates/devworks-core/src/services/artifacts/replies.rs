@@ -338,6 +338,11 @@ impl ReceiptReplies {
                 s.history().event(&event_id)?,
             ))
         })?;
+        if matches!(entry, Some(LedgerEntry::Purged(_))) {
+            return Ok(ReplyOutcome::Poison(
+                "receipt content was deliberately purged".into(),
+            ));
+        }
         // The delivery must name its receipt's own decision; the reply's owner scope is that
         // decision's project, never something the delivery claims.
         let Some(event) = event.filter(|e| names_decision(e, &intent)) else {
@@ -349,6 +354,11 @@ impl ReceiptReplies {
             return self.commit_existing(store, claim, fence, intent);
         }
         let stored = match entry {
+            Some(LedgerEntry::Purged(_)) => {
+                return Ok(ReplyOutcome::Poison(
+                    "receipt content was deliberately purged".into(),
+                ));
+            }
             None => return Ok(ReplyOutcome::Poison("the receipt does not exist".into())),
             Some(LedgerEntry::Incompatible { reason, .. }) => {
                 return Ok(ReplyOutcome::Hold(format!(
@@ -764,6 +774,7 @@ pub(crate) fn recorded_observation(
         reply_artifact: Some(version_ref(&version)),
         reply_schema: Some(schema),
         state: ReceiptLookupState::Recorded,
+        purged: None,
     };
     observation.check().map_err(StorageError::InvalidRecord)?;
     Ok(Ok(observation))

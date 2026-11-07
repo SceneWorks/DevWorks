@@ -838,6 +838,7 @@ impl HistoryService {
         snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         request_key: &RequestKey,
+        revision: SchemaRevision,
     ) -> Result<OperationResult, Failure> {
         let identity = ReceiptIdentity::bind(ctx, request_key.clone());
         match snapshot.receipts().lookup(&identity)? {
@@ -850,8 +851,33 @@ impl HistoryService {
                     reply_artifact: None,
                     reply_schema: None,
                     state: ReceiptLookupState::NotFound,
+                    purged: None,
                 },
             }),
+            Some(LedgerEntry::Purged(stored)) => {
+                let _viewer = Viewer::resolve(snapshot.authority(), ctx)?;
+                if revision.0 < 6 {
+                    return Err(Refusal::new(
+                        DomainErrorCode::ViewUnavailable,
+                        "receipt_content_purged",
+                        Some(stored.outcome.command_id.0),
+                    )
+                    .into());
+                }
+                let outcome = stored.outcome;
+                Ok(OperationResult::HistoryCommandReceipt {
+                    value: ReceiptObservation {
+                        request_key: request_key.clone(),
+                        command_id: Some(outcome.command_id.clone()),
+                        committed_sequence: Some(outcome.committed_sequence.clone()),
+                        operation_id: outcome.operation_id.clone(),
+                        reply_artifact: None,
+                        reply_schema: None,
+                        state: ReceiptLookupState::Recorded,
+                        purged: Some(outcome),
+                    },
+                })
+            }
             Some(LedgerEntry::Current(stored)) => {
                 let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
                 match recorded_observation(snapshot, &viewer, &identity, &stored)? {
@@ -1091,7 +1117,7 @@ impl QueryHandler for HistoryService {
             },
             ops::Input::CommandReceipt(q) => match &q.query {
                 Query::Receipt { request_key } => self
-                    .command_receipt(snapshot, ctx, request_key)
+                    .command_receipt(snapshot, ctx, request_key, revision)
                     .map(|r| (r, 1)),
                 _ => Err(unsupported()),
             },

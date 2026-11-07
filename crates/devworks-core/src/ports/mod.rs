@@ -15,6 +15,7 @@ pub mod indexing;
 pub mod os_notifications;
 pub mod packages;
 pub mod process;
+pub mod project_purge;
 pub mod provider_http;
 pub mod retrieval;
 pub mod router;
@@ -235,6 +236,16 @@ pub struct StoredReceipt {
     pub schema_revision: SchemaRevision,
     pub fingerprint: Fingerprint,
     pub receipt: Receipt<DomainDecision>,
+}
+
+/// The exact replay fence survives deliberate removal of private receipt content.
+#[derive(Clone, Debug)]
+pub struct StoredPurgedReceipt {
+    pub operation: String,
+    pub contract: String,
+    pub schema_revision: SchemaRevision,
+    pub fingerprint: Fingerprint,
+    pub outcome: crate::protocol::records::PurgedReceiptOutcome,
 }
 
 /// A bounded, scoped read result with its freshness stamp.

@@ -559,6 +559,77 @@ pub struct WorkUi {
 }
 
 impl WorkUi {
+    pub(super) fn remove_purged(
+        &mut self,
+        scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
+    ) {
+        let project = scope.project_id.0.as_str();
+        let owned = |id: &str| scope.work_ids.iter().any(|i| i.as_str() == id);
+        self.histories.retain(|id, _| !owned(id));
+        self.workflows.remove(project);
+        let claims = scope
+            .record_ids
+            .get("allocation_claims")
+            .cloned()
+            .unwrap_or_default();
+        self.allocation_claims
+            .retain(|id, _| !claims.iter().any(|c| c.as_str() == id));
+        self.allocation_recovery
+            .retain(|id, _| !claims.iter().any(|c| c.as_str() == id));
+        self.allocation_reused
+            .retain(|id| !claims.iter().any(|c| c.as_str() == id));
+        self.allocation_inspect_errors
+            .retain(|id, _| !claims.iter().any(|c| c.as_str() == id));
+
+        self.allocation_filters.remove(project);
+        self.allocation_requests.retain(|(p, _), _| p != project);
+        self.allocation_queues.retain(|(p, _), _| p != project);
+        self.allocation_busy.retain(|(p, _)| p != project);
+        self.detail.retain(|id, _| !owned(id));
+        self.git.retain(|id, _| !owned(id));
+        self.runs.retain(|id, _| !owned(id));
+        self.git_inspections.retain(|id, _| !owned(id));
+        self.features
+            .items
+            .retain(|r| r.project_id != scope.project_id);
+        self.cards
+            .items
+            .retain(|r| r.project_id != scope.project_id);
+        self.staged_features
+            .retain(|r| r.project_id != scope.project_id);
+        self.staged_cards
+            .retain(|r| r.project_id != scope.project_id);
+        self.create_saving.remove(project);
+        self.edit = self
+            .edit
+            .take()
+            .filter(|f| f.snapshot.project_id != scope.project_id);
+        self.plan = self
+            .plan
+            .take()
+            .filter(|f| f.snapshot.project_id != scope.project_id);
+        self.plan_saving.retain(|id, _| !owned(id));
+        self.edit_saving.retain(|id, _| !owned(id));
+        self.moving.retain(|id, _| !owned(id));
+        self.unlink = self
+            .unlink
+            .take()
+            .filter(|r| r.project_id != scope.project_id);
+        if self.board.as_deref().is_some_and(owned) {
+            self.board = None;
+        }
+        if self.card.as_deref().is_some_and(owned) {
+            self.card = None;
+        }
+        if self.of.as_deref() == Some(project) {
+            self.of = None;
+            self.create = None;
+            self.activity = Default::default();
+            self.message = None;
+        }
+        self.forget_archive_count(project);
+    }
+
     /// The newest known record of `id`: the one read on its own or the one in a list, whichever
     /// has the higher revision (a cached read never hides a newer change).
     pub fn freshest(&self, id: &str) -> Option<WorkRecord> {
@@ -1353,11 +1424,7 @@ impl Shell {
         let started = self.client.as_mut().is_some_and(|c| {
             c.task(slot, "Storing the plan and decisions", move |b| {
                 let dir = b.scratch_dir();
-                std::fs::create_dir_all(&dir)
-                    .map_err(|e| format!("could not write the plan text: {e}"))?;
-                let path = dir.join(format!("plan-{}.md", b.token("p")));
-                std::fs::write(&path, text.as_bytes())
-                    .map_err(|e| format!("could not write the plan text: {e}"))?;
+                let path = b.stage_project_text(Some(&project), "md", text.as_bytes())?;
                 let digest = devworks_core::fingerprint::sha256_hex(text.as_bytes());
                 let ticket = b.mint_project_upload(&project, &path)?;
                 let frame = ops::save_project_artifact(

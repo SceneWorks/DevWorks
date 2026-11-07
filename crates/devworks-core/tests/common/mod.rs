@@ -1950,6 +1950,52 @@ impl RouterRepository for Unsupported {
     }
 }
 impl ProjectRead for Unsupported {
+    fn purge_planning(&self, _: &ProjectId) -> Result<Option<ProjectPurgePlanning>, StorageError> {
+        nope()
+    }
+    fn purge_candidates(
+        &self,
+        _: &ProjectId,
+    ) -> Result<Option<ProjectPurgeCandidates>, StorageError> {
+        nope()
+    }
+    fn managed_file_recovery(
+        &self,
+        _: &str,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<ProjectManagedFileRecovery>, StorageError> {
+        nope()
+    }
+
+    fn pending_project_managed_writes(&self, _: &ProjectId) -> Result<bool, StorageError> {
+        nope()
+    }
+
+    fn project_managed_file(
+        &self,
+        _: &ProjectId,
+        _: &Id,
+    ) -> Result<Option<StoredProjectManagedFile>, StorageError> {
+        nope()
+    }
+    fn project_managed_files(
+        &self,
+        _: &ProjectId,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredProjectManagedFile>, StorageError> {
+        nope()
+    }
+
+    fn purge_manifest(
+        &self,
+        _: &ProjectId,
+        _: &Id,
+    ) -> Result<Option<StoredProjectPurge>, StorageError> {
+        nope()
+    }
+
     fn project(&self, _: &ProjectId) -> Result<Option<StoredProject>, StorageError> {
         nope()
     }
@@ -2124,6 +2170,27 @@ impl WorkRepository for Unsupported {
     }
 }
 impl ProjectRepository for Unsupported {
+    fn reserve_project_managed_file(
+        &mut self,
+        _: &ProjectManagedFileReservation,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+
+    fn register_project_managed_file(
+        &mut self,
+        _: &StoredProjectManagedFile,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn finish_project_managed_file(&mut self, _: &ProjectId, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+
+    fn insert_purge_manifest(&mut self, _: &StoredProjectPurge) -> Result<(), StorageError> {
+        nope()
+    }
+
     fn insert_project(&mut self, _: &StoredProject) -> Result<(), StorageError> {
         nope()
     }

@@ -1,6 +1,6 @@
 {
   "contract": "1.0-draft.1",
-  "date": "2026-11-06",
+  "date": "2026-11-07",
   "status": "Adopted architecture candidate; not public SDK v1, production service or platform proof",
   "schemaSource": "../../../tools/contracts-eval/src/lib.rs",
   "schemaSources": [
@@ -18,12 +18,20 @@
   ],
   "schemas": [
     {
+      "file": "addon-command-reply.r6.schema.json",
+      "sha256": "17882d8108b96072606975c2f09234d7197958aac4dd41d8159ece4bfe00958e"
+    },
+    {
       "file": "addon-command-reply.schema.json",
       "sha256": "637eee3780cc14573e10702b4aadbc09db930094e920f21e4aebf3380952085a"
     },
     {
       "file": "addon-command-request.schema.json",
       "sha256": "76bba13007c24561a3ce613e4df1f8a943f9610203e5a7d256488fc8511572b2"
+    },
+    {
+      "file": "artifact-command-reply.r6.schema.json",
+      "sha256": "14203738ddd935060d1fff4aa3b931b4a527bae47273adb299c6e805a5240f8b"
     },
     {
       "file": "artifact-command-reply.schema.json",
@@ -66,6 +74,10 @@
       "sha256": "311cff64bfa457b12d1d13671d66528e5176823e012dc3d9bf6d000516a4d649"
     },
     {
+      "file": "command-reply.r6.schema.json",
+      "sha256": "4ea4b4f9ec713401cee2410474a0e4eb990d98a453f5581840d35b27b5089f07"
+    },
+    {
       "file": "command-reply.schema.json",
       "sha256": "c718d37915e0029d7c98e1b33980e633f9d35923f98ab470be9fc9cd3ba84627"
     },
@@ -95,7 +107,11 @@
     },
     {
       "file": "domain-command-reply.r5.schema.json",
-      "sha256": "447f9f6e9971f4943eab67cf591e731c8a0e5716490043253be24b33fdd41759"
+      "sha256": "9a8f00a3f444d3cc4e3eac9e7a6d44305e210e1f3c4ad1b72b1ab4549013e121"
+    },
+    {
+      "file": "domain-command-reply.r6.schema.json",
+      "sha256": "56f24889a3212fd5331a2989e495478fabd5a525855db0d0cfaa30e421c4be66"
     },
     {
       "file": "domain-command-reply.schema.json",
@@ -115,7 +131,11 @@
     },
     {
       "file": "domain-query-reply.r5.schema.json",
-      "sha256": "74c2a9ebec2b3f2be68ccdc40990c7c891b9665f92e54fe4058be26fa9fc2ce5"
+      "sha256": "a8783d6f3e584cfd2df6cc10edba39d074822dfe168f754fe2a6e04689f935fb"
+    },
+    {
+      "file": "domain-query-reply.r6.schema.json",
+      "sha256": "35f4ac842833d1e4abc2ad07784002ee9089fc40c7678a862de61cec8c405d01"
     },
     {
       "file": "domain-query-reply.schema.json",
@@ -132,6 +152,10 @@
     {
       "file": "domain-request.r5.schema.json",
       "sha256": "7c82f0a19a1428e079a2aae4020f7e7ac0b45018ce6ba39155e5f3cb94526c93"
+    },
+    {
+      "file": "domain-request.r6.schema.json",
+      "sha256": "82f3332e02c4c91361ce8213303ba7e844f59d60b6e3fb7851481afb023b8dfe"
     },
     {
       "file": "domain-request.schema.json",
@@ -203,7 +227,11 @@
     },
     {
       "file": "operation-completion.r5.schema.json",
-      "sha256": "b2cb131be0243cc0745a5b59e0ec4d5cf67a6fe91c09135a889075e2b3cbb01d"
+      "sha256": "2176eab60dddebe5bfeac2f54f5b3bf778137ff3473b2b9e765b489da7fa760a"
+    },
+    {
+      "file": "operation-completion.r6.schema.json",
+      "sha256": "02a43ffb7d26cae01e87409086341401ea7d21a6bf7796b7fc7b3b0c0fb45f4c"
     },
     {
       "file": "operation-completion.schema.json",
@@ -223,7 +251,11 @@
     },
     {
       "file": "operation-result.r5.schema.json",
-      "sha256": "46e892a8b3acc9d7c98c6e1efdf7e5b96f3c85b6d4a659c133bc91a102f4cfc4"
+      "sha256": "289db9007bd7232f2195529734aec279321e33b82079ac771d1d158e5759fc68"
+    },
+    {
+      "file": "operation-result.r6.schema.json",
+      "sha256": "b887d9970b7f172a0a3e78dfe2fb4776977229562d57955e7c6e41f268f99374"
     },
     {
       "file": "operation-result.schema.json",
@@ -300,6 +332,10 @@
     {
       "file": "route-decision.schema.json",
       "sha256": "3cbba022c46345fc38a9e64ffdc14cafb85358dfbbefd7a60eb91a4d9e22e38f"
+    },
+    {
+      "file": "session-command-reply.r6.schema.json",
+      "sha256": "3320fc1d886951662869b6864652d4f04fe9a4b9958521b2c6556a15ea688f40"
     },
     {
       "file": "session-command-reply.schema.json",
