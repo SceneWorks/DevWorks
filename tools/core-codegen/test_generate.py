@@ -78,7 +78,12 @@ class SchemaRevisionRules(unittest.TestCase):
             'conventions.import', 'conventions.retire', 'conventions.index', 'conventions.search',
             'conventions.resources', 'conventions.version',
             'schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
-            'schemas.configure', 'database.configure_sensitive_columns'})
+            'schemas.configure', 'database.configure_sensitive_columns',
+            'projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
+            'projects.purge_status', 'history.command_receipt'})
+        for name in ('projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
+                     'projects.purge_status', 'history.command_receipt'):
+            self.assertEqual(carried[name], {6})
         for name in ('schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
                      'schemas.configure', 'database.configure_sensitive_columns'):
             self.assertEqual(carried[name], {5})
