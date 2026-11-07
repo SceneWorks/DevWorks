@@ -11,6 +11,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub mod purge;
+
 pub const FILE: &str = "ui-state.json";
 /// Version of this file's shape; another version is ignored, never misread.
 pub const VERSION: u32 = 1;
