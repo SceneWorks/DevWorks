@@ -2562,7 +2562,12 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
     {
         let output = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
-            .arg(data.join("browser/sessions/purge-session/source-link"))
+            .arg(
+                data.join("browser")
+                    .join("sessions")
+                    .join("purge-session")
+                    .join("source-link"),
+            )
             .arg(data.join("source"))
             .output()
             .unwrap();

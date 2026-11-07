@@ -184,10 +184,10 @@ impl Fx {
     /// root and source handles.
     fn open(h: Harness, sources: Arc<Sources>, n: Arc<AtomicU64>) -> Self {
         let store = Arc::new(h.store());
-        let files = Arc::new(NativeArtifactFiles::new(
-            h.root.0.clone(),
-            h.root.0.with_extension("cache"),
-        ));
+        let files = Arc::new(
+            NativeArtifactFiles::new(h.root.0.clone(), h.root.0.with_extension("cache"))
+                .with_store(store.clone()),
+        );
         let svc = Arc::new(ArtifactService::new(
             files.clone(),
             sources.clone(),
@@ -1877,6 +1877,17 @@ impl ArtifactFiles for HookFiles {
     fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
         self.inner.write_derived(k, b)
     }
+    fn write_project_derived(
+        &self,
+        project: &ProjectId,
+        key: &str,
+        bytes: &[u8],
+    ) -> Result<(), FileFault> {
+        self.inner.write_project_derived(project, key, bytes)
+    }
+    fn recover_project_derived(&self) -> Result<(), FileFault> {
+        self.inner.recover_project_derived()
+    }
     fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
         self.inner.read_derived(k, m)
     }
@@ -3332,6 +3343,17 @@ impl ArtifactFiles for Faulty {
     }
     fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
         self.inner.write_derived(k, b)
+    }
+    fn write_project_derived(
+        &self,
+        project: &ProjectId,
+        key: &str,
+        bytes: &[u8],
+    ) -> Result<(), FileFault> {
+        self.inner.write_project_derived(project, key, bytes)
+    }
+    fn recover_project_derived(&self) -> Result<(), FileFault> {
+        self.inner.recover_project_derived()
     }
     fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
         self.inner.read_derived(k, m)
