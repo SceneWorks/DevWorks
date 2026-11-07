@@ -112,11 +112,7 @@ impl HelpService {
             .registered
             .read()
             .unwrap_or_else(|lock| lock.into_inner());
-        let mut digest = crate::fingerprint::sha256_hex(bundle::CATALOG.as_bytes());
-        for (path, body) in bundle::FILES {
-            digest.push_str(path);
-            digest.push_str(&crate::fingerprint::sha256_hex(body.as_bytes()));
-        }
+        let digest = bundle::commitment();
         let source = serde_json::json!({"app":APP_VERSION,"bundle":digest,"registry":registry,"handlers":*registered,
             "contracts":*self.host_source.read().unwrap_or_else(|lock|lock.into_inner())});
         crate::fingerprint::sha256_hex(source.to_string().as_bytes())

@@ -15,6 +15,7 @@ fn attempts(app: &HelpApp, run: &Id) -> Vec<StoredInferenceAttempt> {
 }
 #[test]
 fn paid_native_job_cancel_after_send_preserves_unknown_custody_and_never_restarts_http() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);

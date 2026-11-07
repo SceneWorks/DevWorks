@@ -1,0 +1,128 @@
+{
+  "item": "DW-36",
+  "state": "Implemented locally; review/platformCI/merge/acceptance pending",
+  "sourceRevision": "afe73560215bbe7593fc59451de5cc3237e3eeca",
+  "retainedSourceEntries": 22,
+  "bindings": [
+    {
+      "sourceEntry": "http:src/CodeGraph.Api/Controllers/DatabaseSourcesController.cs:DatabaseSourcesController.List:HttpGet",
+      "native": "schemas.connections / schemas.configure + native source manager",
+      "behavior": "Create/inspect/edit/enable/expose/share/test/remove sources with owner CAS, opaque credential intake and copied publicCA custody. Removing source/index never changes target DB."
+    },
+    {
+      "sourceEntry": "http:src/CodeGraph.Api/Controllers/DatabaseSourcesController.cs:DatabaseSourcesController.Get:HttpGet(\"{id:long}\")",
+      "native": "schemas.connections / schemas.configure + native source manager",
+      "behavior": "Create/inspect/edit/enable/expose/share/test/remove sources with owner CAS, opaque credential intake and copied publicCA custody. Removing source/index never changes target DB."
+    },
+    {
+      "sourceEntry": "http:src/CodeGraph.Api/Controllers/DatabaseSourcesController.cs:DatabaseSourcesController.Create:HttpPost",
+      "native": "schemas.connections / schemas.configure + native source manager",
+      "behavior": "Create/inspect/edit/enable/expose/share/test/remove sources with owner CAS, opaque credential intake and copied publicCA custody. Removing source/index never changes target DB."
+    },
+    {
+      "sourceEntry": "http:src/CodeGraph.Api/Controllers/DatabaseSourcesController.cs:DatabaseSourcesController.Update:HttpPut(\"{id:long}\")",
+      "native": "schemas.connections / schemas.configure + native source manager",
+      "behavior": "Create/inspect/edit/enable/expose/share/test/remove sources with owner CAS, opaque credential intake and copied publicCA custody. Removing source/index never changes target DB."
+    },
+    {
+      "sourceEntry": "http:src/CodeGraph.Api/Controllers/DatabaseSourcesController.cs:DatabaseSourcesController.UpdateMcpExposure:HttpPut(\"{id:long}/mcp-exposure\")",
+      "native": "schemas.connections / schemas.configure + native source manager",
+      "behavior": "Create/inspect/edit/enable/expose/share/test/remove sources with owner CAS, opaque credential intake and copied publicCA custody. Removing source/index never changes target DB."
+    },
+    {
+      "sourceEntry": "http:src/CodeGraph.Api/Controllers/DatabaseSourcesController.cs:DatabaseSourcesController.Delete:HttpDelete(\"{id:long}\")",
+      "native": "schemas.connections / schemas.configure + native source manager",
+      "behavior": "Create/inspect/edit/enable/expose/share/test/remove sources with owner CAS, opaque credential intake and copied publicCA custody. Removing source/index never changes target DB."
+    },
+    {
+      "sourceEntry": "http:src/CodeGraph.Api/Controllers/DatabaseSourcesController.cs:DatabaseSourcesController.Sync:HttpPost(\"{id:long}/sync\")",
+      "native": "schemas.index / schemas.refresh + real native job scheduling",
+      "behavior": "Current source/scope/actor/attempt/control checks, fixed metadata reads, immutable publication and original-operation recovery; native jobs use captured human consent and exact per-run frames."
+    },
+    {
+      "sourceEntry": "http:src/CodeGraph.Api/Controllers/DatabaseSourcesController.cs:DatabaseSourcesController.SyncAll:HttpPost(\"sync-all\")",
+      "native": "Databases all-page source scan followed by shared schemas.index admissions",
+      "behavior": "Capture every visible enabled source/revision before indexing changes the inventory cursor. Each source has its own durable receipt/operation and actual status; report admission failures.101-source native proof exceeds one source page."
+    },
+    {
+      "sourceEntry": "http:src/CodeGraph.Api/Controllers/DatabaseSourcesController.cs:DatabaseSourcesController.GenerateKey:HttpPost(\"generate-key\")",
+      "native": "SchemaService.generate_encryption_key + native Databases key utility",
+      "behavior": "Human-only fresh32CSPRNGbytes, standard padded Base64; transient masked Secret with explicit clipboard/clear. No protocol/history/configuration/SecretStore value write."
+    },
+    {
+      "sourceEntry": "http:src/CodeGraph.Api/Controllers/SchemasController.cs:SchemasController.List:HttpGet",
+      "native": "schemas.connections / schemas.objects / schemas.relationships",
+      "behavior": "Current authority before materialization, immutable ten-minute owner/scope/store/restore-bound pins, keyset/wire bounds, exact object lookup and complete paged metadata composition. No source row queries."
+    },
+    {
+      "sourceEntry": "http:src/CodeGraph.Api/Controllers/SchemasController.cs:SchemasController.Catalog:HttpGet(\"{name}/catalog\")",
+      "native": "schemas.connections / schemas.objects / schemas.relationships",
+      "behavior": "Current authority before materialization, immutable ten-minute owner/scope/store/restore-bound pins, keyset/wire bounds, exact object lookup and complete paged metadata composition. No source row queries."
+    },
+    {
+      "sourceEntry": "http:src/CodeGraph.Indexer.Host/Controllers/IndexerController.cs:IndexerController.SyncSchema:HttpPost(\"schemas/{sourceId:long}/sync\")",
+      "native": "schemas.index / schemas.refresh + real native job scheduling",
+      "behavior": "Current source/scope/actor/attempt/control checks, fixed metadata reads, immutable publication and original-operation recovery; native jobs use captured human consent and exact per-run frames."
+    },
+    {
+      "sourceEntry": "http:src/CodeGraph.Indexer.Host/Controllers/IndexerController.cs:IndexerController.SyncAllSchemas:HttpPost(\"schemas/sync-all\")",
+      "native": "Databases all-page source scan followed by shared schemas.index admissions",
+      "behavior": "Capture every visible enabled source/revision before indexing changes the inventory cursor. Each source has its own durable receipt/operation and actual status; report admission failures.101-source native proof exceeds one source page."
+    },
+    {
+      "sourceEntry": "mcp:src/CodeGraph.Mcp.Hub/McpHubServer.cs:mysql_list_schemas",
+      "native": "schemas.connections / schemas.objects / schemas.relationships",
+      "behavior": "Current authority before materialization, immutable ten-minute owner/scope/store/restore-bound pins, keyset/wire bounds, exact object lookup and complete paged metadata composition. No source row queries."
+    },
+    {
+      "sourceEntry": "mcp:src/CodeGraph.Mcp.Hub/McpHubServer.cs:mysql_get_schema_catalog",
+      "native": "schemas.connections / schemas.objects / schemas.relationships",
+      "behavior": "Current authority before materialization, immutable ten-minute owner/scope/store/restore-bound pins, keyset/wire bounds, exact object lookup and complete paged metadata composition. No source row queries."
+    },
+    {
+      "sourceEntry": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:list_schemas",
+      "native": "schemas.connections / schemas.objects / schemas.relationships",
+      "behavior": "Current authority before materialization, immutable ten-minute owner/scope/store/restore-bound pins, keyset/wire bounds, exact object lookup and complete paged metadata composition. No source row queries."
+    },
+    {
+      "sourceEntry": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:get_schema_catalog",
+      "native": "schemas.connections / schemas.objects / schemas.relationships",
+      "behavior": "Current authority before materialization, immutable ten-minute owner/scope/store/restore-bound pins, keyset/wire bounds, exact object lookup and complete paged metadata composition. No source row queries."
+    },
+    {
+      "sourceEntry": "mcp:src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs:storage_table",
+      "native": "schemas.connections / schemas.objects / schemas.relationships",
+      "behavior": "Current authority before materialization, immutable ten-minute owner/scope/store/restore-bound pins, keyset/wire bounds, exact object lookup and complete paged metadata composition. No source row queries."
+    },
+    {
+      "sourceEntry": "ui:CodeGraphWeb/src/app/app.routes.ts:27",
+      "native": "Route::Databases source manager and pinned structural explorer",
+      "behavior": "Scope, source/connection CRUD, metadata sync/test, all-source admission, actual object/relationship paging, definitions/keys/constraints/routines/types where qualified, status/freshness/coverage and failures."
+    },
+    {
+      "sourceEntry": "ui:CodeGraphWeb/src/app/app.routes.ts:31",
+      "native": "Route::Databases source manager and pinned structural explorer",
+      "behavior": "Scope, source/connection CRUD, metadata sync/test, all-source admission, actual object/relationship paging, definitions/keys/constraints/routines/types where qualified, status/freshness/coverage and failures."
+    },
+    {
+      "sourceEntry": "ui:CodeGraphWeb/src/app/app.routes.ts:35",
+      "native": "Route::Databases source manager and pinned structural explorer",
+      "behavior": "Scope, source/connection CRUD, metadata sync/test, all-source admission, actual object/relationship paging, definitions/keys/constraints/routines/types where qualified, status/freshness/coverage and failures."
+    },
+    {
+      "sourceEntry": "ui:CodeGraphWeb/src/app/app.routes.ts:190",
+      "native": "Route::Databases source manager and pinned structural explorer",
+      "behavior": "Scope, source/connection CRUD, metadata sync/test, all-source admission, actual object/relationship paging, definitions/keys/constraints/routines/types where qualified, status/freshness/coverage and failures."
+    }
+  ],
+  "dataOperations": "DW-37 retains the separately permitted data execution/migration operations; these7owned operations remain metadata-only.",
+  "qualification": {
+    "sqlite": "actual read-only files",
+    "mariadb": "actual11.4.13 isolated target",
+    "mysql": "actual8.4.13 isolated target",
+    "postgres": "actual17 isolated target",
+    "sqlServer": "actual16.0.4305.5 on localx86emulation; native supported-x86CI pending",
+    "normalTests": "recorded metadata/HTTP/vector fixtures and arithmetic only; no learned execution"
+  },
+  "limits": "Report Partial for hidden/truncated metadata, and explicit unsupported profiles. Native UI supports all qualified source fields and the retained admin key utility; raw secrets never enter public frames or history."
+}

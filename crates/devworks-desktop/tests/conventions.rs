@@ -27,6 +27,7 @@ fn replace(
 }
 #[test]
 fn native_conventions_empty_listing_keeps_draft_and_separates_knowledge_navigation() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-unavailable");
     let engine = start(&root);
     let mut h = harness(shell(&engine, &root, Script::default()), 1500.0, 1050.0);
@@ -118,6 +119,7 @@ fn native_conventions_empty_listing_keeps_draft_and_separates_knowledge_navigati
 }
 #[test]
 fn native_offline_conventions_has_accessible_forms_without_changing_scope_or_chat_draft() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-offline");
     let mut s = shell_with(
         Err("Store is offline".into()),
@@ -163,6 +165,7 @@ fn native_offline_conventions_has_accessible_forms_without_changing_scope_or_cha
 
 #[test]
 fn native_large_source_editor_keeps_unshown_unicode_and_nul_bytes() {
+    let _native_case = native_runtime_case();
     use devworks_desktop::conventions_screen::{Draft, Editor};
     let root = Root::new("conventions-large-source");
     let mut shell = shell_with(Err("Offline".into()), &root, Script::default(), None);
@@ -215,9 +218,39 @@ fn native_large_source_editor_keeps_unshown_unicode_and_nul_bytes() {
 
 #[test]
 fn native_convention_context_help_returns_to_the_same_scope_and_unsaved_source() {
+    let _native_case = native_runtime_case();
     use devworks_core::protocol::records::HelpReadView;
     let root = Root::new("conventions-context-help");
     let engine = start(&root);
+    // A settled Unavailable reply is not a published catalog. Prepare the real
+    // owner before measuring context navigation and retained drafts.
+    let backend = engine.backend();
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    loop {
+        let frame =
+            devworks_desktop::help_ops::context(backend.as_ref(), "knowledge-conventions", None);
+        let page =
+            devworks_desktop::help_ops::topics(backend.query("help.topic_for_screen", &frame))
+                .expect("actual native Help response");
+        if matches!(
+            page.availability,
+            devworks_core::protocol::records::HelpAvailability::Available
+        ) && page
+            .items
+            .0
+            .iter()
+            .any(|topic| topic.id.as_str() == "conventions")
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "native conventions catalog never published: availability={:?}; snapshot={:?}",
+            page.availability,
+            page.snapshot
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     let mut h = harness(shell(&engine, &root, Script::default()), 1500.0, 1050.0);
     settle(&mut h);
     click_nav(&mut h, "Knowledge");
@@ -262,6 +295,7 @@ fn native_convention_context_help_returns_to_the_same_scope_and_unsaved_source()
 
 #[test]
 fn native_embedding_setup_is_navigation_only_and_retains_convention_scope_and_source() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-embedding-navigation");
     let engine = start(&root);
     let backend = LoseAcks::over(engine.backend(), "router.configure", 0);

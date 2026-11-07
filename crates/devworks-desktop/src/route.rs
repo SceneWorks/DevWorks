@@ -242,7 +242,7 @@ pub static SCREENS: [Screen; 20] = [
         subviews: &["Schema", "Relationships", "Access"],
         inner_sidebar: Some("Database sources"),
         summary_strip: &[],
-        pending: pending("database schema sources and access", "DW-36, DW-37"),
+        pending: None,
         link: None,
     },
     Screen {

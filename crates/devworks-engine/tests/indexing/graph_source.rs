@@ -4,6 +4,7 @@ use std::io::Read;
 
 #[test]
 fn native_index_publishes_private_exact_structural_and_plain_text_sources() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();

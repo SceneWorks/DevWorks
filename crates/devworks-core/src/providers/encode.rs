@@ -19,6 +19,7 @@ struct Encoder<'a> {
     materials: &'a dyn Materials,
     identity: &'a RequestIdentity,
     limits: &'a PreparationLimits,
+    expanded_artifact_bytes: std::cell::Cell<usize>,
 }
 
 pub fn prepare(
@@ -52,6 +53,7 @@ pub fn prepare(
         materials,
         identity: &identity,
         limits,
+        expanded_artifact_bytes: std::cell::Cell::new(0),
     };
     let mut required_betas = Vec::new();
     let (body, tools, response_mode, embedding_dimensions) = match &request.input {
@@ -63,10 +65,7 @@ pub fn prepare(
             }
             let text = inputs
                 .iter()
-                .map(|r| {
-                    String::from_utf8(materials.artifact(r, limits.artifact_bytes)?)
-                        .map_err(|_| ProviderError::InvalidInput("embedding_utf8"))
-                })
+                .map(|r| encoder.text(r, "embedding_utf8"))
                 .collect::<Result<Vec<_>, _>>()?;
             let mut body =
                 json!({"model":identity.upstream_model,"input":text,"encoding_format":"float"});
@@ -112,7 +111,9 @@ pub fn prepare(
                 *requires_images,
                 *requires_parallel_tools,
             )?;
-            let tools = materialize::tools(materials, tools)?;
+            let tools = materialize::tools(materials, tools, |tool| {
+                encoder.charge_json(&(&tool.schema, &tool.description, &tool.wire_name))
+            })?;
             let body = encoder.generation(
                 &context,
                 request,
@@ -128,11 +129,7 @@ pub fn prepare(
             (body, tools, response_mode, None)
         }
     };
-    let bytes =
-        serde_json::to_vec(&body).map_err(|_| ProviderError::InvalidInput("request_json"))?;
-    if bytes.len() > limits.request_bytes {
-        return Err(ProviderError::TooLarge);
-    }
+    let bytes = bounded_json(&body, limits.request_bytes)?;
     let path = match profile {
         EndpointProfile::AnthropicMessages | EndpointProfile::ClaudeSubscriptionMessages => {
             "/v1/messages"
@@ -383,10 +380,108 @@ fn check(
     }
     Ok(())
 }
+// Serialization stops at the bound; neither Vec growth nor the JSON writer can
+// materialize an oversized request just to discover its final size.
+fn bounded_json(body: &Value, max: usize) -> Result<Vec<u8>, ProviderError> {
+    struct Output {
+        bytes: Vec<u8>,
+        max: usize,
+        exceeded: bool,
+    }
+    impl std::io::Write for Output {
+        fn write(&mut self, value: &[u8]) -> std::io::Result<usize> {
+            let Some(end) = self
+                .bytes
+                .len()
+                .checked_add(value.len())
+                .filter(|n| *n <= self.max)
+            else {
+                self.exceeded = true;
+                return Err(std::io::Error::other("request size bound"));
+            };
+            if end > self.bytes.capacity() {
+                let capacity = self
+                    .bytes
+                    .capacity()
+                    .saturating_mul(2)
+                    .max(end)
+                    .min(self.max);
+                self.bytes.reserve_exact(capacity - self.bytes.len());
+            }
+            self.bytes.extend_from_slice(value);
+            Ok(value.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut output = Output {
+        bytes: Vec::with_capacity(max.min(64 * 1024)),
+        max,
+        exceeded: false,
+    };
+    if serde_json::to_writer(&mut output, body).is_err() {
+        return Err(if output.exceeded {
+            ProviderError::TooLarge
+        } else {
+            ProviderError::InvalidInput("request_json")
+        });
+    }
+    Ok(output.bytes)
+}
+
 impl Encoder<'_> {
+    fn charge_json<T: serde::Serialize + ?Sized>(&self, value: &T) -> Result<(), ProviderError> {
+        struct Size {
+            bytes: usize,
+            max: usize,
+        }
+        impl std::io::Write for Size {
+            fn write(&mut self, value: &[u8]) -> std::io::Result<usize> {
+                self.bytes = self
+                    .bytes
+                    .checked_add(value.len())
+                    .filter(|n| *n <= self.max)
+                    .ok_or_else(|| std::io::Error::other("expanded request bound"))?;
+                Ok(value.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut size = Size {
+            bytes: 0,
+            max: self.limits.request_bytes - self.expanded_artifact_bytes.get(),
+        };
+        serde_json::to_writer(&mut size, value).map_err(|_| ProviderError::TooLarge)?;
+        self.expanded_artifact_bytes
+            .set(self.expanded_artifact_bytes.get() + size.bytes);
+        Ok(())
+    }
+    fn text(&self, reference: &ArtifactRef, error: &'static str) -> Result<String, ProviderError> {
+        let text = String::from_utf8(
+            self.materials
+                .artifact(reference, self.limits.artifact_bytes)?,
+        )
+        .map_err(|_| ProviderError::InvalidInput(error))?;
+        self.charge_json(&text)?;
+        Ok(text)
+    }
+    fn arguments(&self, reference: &ArtifactRef) -> Result<String, ProviderError> {
+        let text = self.text(reference, "tool_arguments")?;
+        let value: Value = serde_json::from_str(&text)
+            .map_err(|_| ProviderError::InvalidInput("tool_arguments"))?;
+        if !value.is_object() {
+            return Err(ProviderError::InvalidInput("tool_arguments"));
+        }
+        Ok(text)
+    }
     fn json(&self, r: &ArtifactRef) -> Result<Value, ProviderError> {
-        serde_json::from_slice(&self.materials.artifact(r, self.limits.artifact_bytes)?)
-            .map_err(|_| ProviderError::InvalidInput("artifact_json"))
+        let value =
+            serde_json::from_slice(&self.materials.artifact(r, self.limits.artifact_bytes)?)
+                .map_err(|_| ProviderError::InvalidInput("artifact_json"))?;
+        self.charge_json(&value)?;
+        Ok(value)
     }
     fn image(&self, r: &ArtifactRef) -> Result<(String, String), ProviderError> {
         if !matches!(
@@ -395,11 +490,31 @@ impl Encoder<'_> {
         ) {
             return Err(ProviderError::Unsupported("image_media_type"));
         }
-        Ok((
-            r.media_type.clone(),
-            base64(&self.materials.artifact(r, self.limits.artifact_bytes)?),
-        ))
+        let raw = u64::try_from(r.byte_length.get()).map_err(|_| ProviderError::TooLarge)?;
+        let encoded = raw
+            .checked_add(2)
+            .and_then(|n| (n / 3).checked_mul(4))
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or(ProviderError::TooLarge)?;
+        // Charge every occurrence, even repeated refs to the same authorized blob.
+        // The final bounded writer accounts for all profile-specific JSON overhead.
+        let expanded = self
+            .expanded_artifact_bytes
+            .get()
+            .checked_add(encoded)
+            .and_then(|n| n.checked_add(r.media_type.len() + 32))
+            .filter(|n| *n <= self.limits.request_bytes)
+            .ok_or(ProviderError::TooLarge)?;
+        self.expanded_artifact_bytes.set(expanded);
+        let bytes = self
+            .materials
+            .artifact(r, self.limits.artifact_bytes.min(raw))?;
+        if bytes.len() as u64 != raw {
+            return Err(ProviderError::InvalidInput("artifact_length"));
+        }
+        Ok((r.media_type.clone(), base64(&bytes)))
     }
+
     fn native(
         &self,
         b: &crate::protocol::provider::NativeBinding,
@@ -414,6 +529,7 @@ impl Encoder<'_> {
         if !v.is_object() {
             return Err(ProviderError::InvalidInput("native_item"));
         }
+        self.charge_json(&v)?;
         Ok(v)
     }
     fn generation(
@@ -808,15 +924,8 @@ impl Encoder<'_> {
                     if !matches!(m.role, MessageRole::Assistant) {
                         return Err(ProviderError::InvalidInput("tool_call_role"));
                     }
-                    let raw = self
-                        .materials
-                        .artifact(arguments, self.limits.artifact_bytes)?;
-                    let value: Value = serde_json::from_slice(&raw)
-                        .map_err(|_| ProviderError::InvalidInput("tool_arguments"))?;
-                    if !value.is_object() {
-                        return Err(ProviderError::InvalidInput("tool_arguments"));
-                    }
-                    calls.push(json!({"id":call_id,"type":"function","function":{"name":wire_name,"arguments":String::from_utf8(raw).map_err(|_|ProviderError::InvalidInput("tool_arguments"))?}}));
+                    let raw = self.arguments(arguments)?;
+                    calls.push(json!({"id":call_id,"type":"function","function":{"name":wire_name,"arguments":raw}}));
                 }
                 ContentBlock::ToolResult {
                     call_id,
@@ -876,10 +985,8 @@ impl Encoder<'_> {
                 ContentBlock::ToolCall{call_id,wire_name,arguments}=>{
                     if !matches!(m.role,MessageRole::Assistant){return Err(ProviderError::InvalidInput("tool_call_role"));}
                     flush_responses(m,&mut parts,out);
-                    let raw=self.materials.artifact(arguments,self.limits.artifact_bytes)?;
-                    let value:Value=serde_json::from_slice(&raw).map_err(|_|ProviderError::InvalidInput("tool_arguments"))?;
-                    if !value.is_object(){return Err(ProviderError::InvalidInput("tool_arguments"));}
-                    out.push(json!({"type":"function_call","call_id":call_id,"name":wire_name,"arguments":String::from_utf8(raw).map_err(|_|ProviderError::InvalidInput("tool_arguments"))?}));
+                    let raw=self.arguments(arguments)?;
+                    out.push(json!({"type":"function_call","call_id":call_id,"name":wire_name,"arguments":raw}));
                 }
                 ContentBlock::ToolResult{call_id,content,is_error,..}=>{
                     if !matches!(m.role,MessageRole::User){return Err(ProviderError::InvalidInput("tool_result_role"));}

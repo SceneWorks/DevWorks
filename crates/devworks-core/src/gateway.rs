@@ -1737,6 +1737,9 @@ impl WriteTransaction for HandlerTx<'_> {
     fn conventions(&mut self) -> &mut dyn crate::ports::storage::ConventionRepository {
         self.inner.get_mut().conventions()
     }
+    fn schemas(&mut self) -> &mut dyn crate::ports::storage::SchemaRepository {
+        self.inner.get_mut().schemas()
+    }
     fn help(&mut self) -> &mut dyn crate::ports::storage::HelpRepository {
         self.inner.get_mut().help()
     }

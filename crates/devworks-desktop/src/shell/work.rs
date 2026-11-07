@@ -414,17 +414,21 @@ pub fn plan_body(form: &PlanForm, content: &ArtifactRef) -> Value {
         "acceptanceTests": merged_criteria(&form.acceptance_tests, &form.base.acceptance_tests),
     })
 }
-/// The project's Activity: its change feed, read page by page to its end and shown newest
-/// first. The feed pages forward only, so a read follows its pages to the end; a refresh reads
-/// on from where the last read stopped (the feed is append-only), so it adds the newest.
+/// A bounded newest-first project or card feed. Refresh re-reads only the number of
+/// pages the user requested, publishing the replacement once the bounded refresh finishes.
 #[derive(Default)]
 pub struct Activity {
-    /// Every event read, oldest first.
+    /// Loaded events, newest first.
     pub items: Vec<Event>,
     /// Where the next read starts (`None`: the beginning).
     pub resume: Option<String>,
-    /// Whether every page up to the end was read at least once.
+    /// Whether the initial page has been read.
     pub loaded: bool,
+    pub more: bool,
+    pub loading: bool,
+    pub generation: u64,
+    pub pages: usize,
+    refresh: Option<HistoryRefresh>,
     pub error: Option<String>,
     /// 0 everything, 1 features, 2 issues, 3 tasks, 4 the project itself.
     pub kind: usize,
@@ -435,8 +439,67 @@ pub struct Activity {
     pub item: Option<String>,
 }
 
+struct HistoryRefresh {
+    target: usize,
+    items: Vec<Event>,
+    pages: usize,
+}
+impl Activity {
+    fn refresh(&mut self, generation: u64) {
+        self.generation = generation;
+        self.loading = true;
+        self.error = None;
+        self.refresh = Some(HistoryRefresh {
+            target: self.pages.max(1),
+            items: Vec::new(),
+            pages: 0,
+        });
+    }
+    fn receive(&mut self, items: Vec<Event>, cursor: Option<String>, more: bool) -> Option<String> {
+        self.loading = false;
+        self.error = None;
+        let append = |target: &mut Vec<Event>, items: Vec<Event>| {
+            let mut seen: BTreeSet<_> = target
+                .iter()
+                .map(|e| e.event_id.0.as_str().to_owned())
+                .collect();
+            target.extend(
+                items
+                    .into_iter()
+                    .filter(|e| seen.insert(e.event_id.0.as_str().to_owned())),
+            );
+        };
+        if let Some(refresh) = &mut self.refresh {
+            append(&mut refresh.items, items);
+            refresh.pages += 1;
+            if more && refresh.pages < refresh.target {
+                self.loading = true;
+                return cursor;
+            }
+            let refresh = self.refresh.take().unwrap();
+            self.items = refresh.items;
+            self.pages = refresh.pages;
+        } else {
+            append(&mut self.items, items);
+            self.pages += 1;
+        }
+        self.resume = cursor;
+        self.more = more;
+        self.loaded = true;
+        None
+    }
+    fn failed(&mut self, message: String) {
+        self.loading = false;
+        self.refresh = None;
+        self.error = Some(message);
+    }
+}
+
 #[derive(Default)]
 pub struct WorkUi {
+    pub histories: BTreeMap<String, Activity>,
+    history_serial: u64,
+
     /// Workflow drafts and inspected claims survive project switches; records remain authoritative.
     pub workflows: BTreeMap<String, WorkflowUi>,
     pub allocation_claims: BTreeMap<String, AllocationClaimRecord>,
@@ -548,6 +611,9 @@ impl WorkUi {
 /// What the screens ask the shell to do.
 #[derive(Clone, Debug)]
 enum Action {
+    OlderHistory(Option<String>),
+    RefreshHistory(Option<String>),
+
     Reload,
     Workflow(WorkflowAction),
     Allocate(Option<String>, u64),
@@ -728,6 +794,7 @@ impl Shell {
         // switch keeps them, so each reply still finishes its own save.
         let Some(p) = self.selected_project.clone() else {
             self.work = WorkUi {
+                history_serial: self.work.history_serial,
                 workflows: std::mem::take(&mut self.work.workflows),
                 allocation_claims: std::mem::take(&mut self.work.allocation_claims),
                 allocation_recovery: std::mem::take(&mut self.work.allocation_recovery),
@@ -749,6 +816,7 @@ impl Shell {
         };
         if self.work.of.as_deref() != Some(p.as_str()) {
             self.work = WorkUi {
+                history_serial: self.work.history_serial,
                 of: Some(p.clone()),
                 workflows: std::mem::take(&mut self.work.workflows),
                 allocation_claims: std::mem::take(&mut self.work.allocation_claims),
@@ -824,8 +892,8 @@ impl Shell {
         if let Some(w) = selected.and_then(|id| self.record(&id)) {
             self.load_detail(&w);
         }
-        // The Activity feed keeps what it read; a refresh reads on to the newest.
-        if !self.work.activity.loaded && !self.pending(&Slot::WorkActivity(p)) {
+        // Initial activity loads one newest page.
+        if !self.work.activity.loaded && !self.work.activity.loading {
             self.load_activity();
         }
     }
@@ -836,21 +904,66 @@ impl Shell {
                 || self.pending(&Slot::WorkCards(p.clone()))
         })
     }
-    /// Reads the project's change feed on from where the last read stopped, page after page to
-    /// its end (each reply asks for the next page while more exist).
-    fn load_activity(&mut self) {
-        let Some(p) = self.work.of.clone() else {
+    fn history_feed(&mut self, root: Option<&str>) -> &mut Activity {
+        match root {
+            Some(root) => self.work.histories.entry(root.to_owned()).or_default(),
+            None => &mut self.work.activity,
+        }
+    }
+    fn request_history(&mut self, root: Option<String>, cursor: Option<String>, generation: u64) {
+        let Some(project) = self.work.of.clone() else {
             return;
         };
-        let after = self.work.activity.resume.clone();
-        self.query(
-            Slot::WorkActivity(p.clone()),
-            "Loading activity",
+        let requested = root.clone();
+        let submitted = self.query(
+            Slot::WorkActivity(project.clone(), root.clone(), generation),
+            "Loading history",
             "history.events",
-            move |be| wops::project_events(be, &p, after.as_deref()),
+            move |backend| {
+                wops::history_events(backend, &project, requested.as_deref(), cursor.as_deref())
+            },
         );
+        if !submitted {
+            self.history_feed(root.as_deref())
+                .failed("History is unavailable while closing or offline.".into());
+        }
+    }
+    fn refresh_history(&mut self, root: Option<String>) {
+        if self.work.of.is_none() {
+            return;
+        }
+        self.work.history_serial += 1;
+        let generation = self.work.history_serial;
+        self.history_feed(root.as_deref()).refresh(generation);
+        self.request_history(root, None, generation);
+    }
+    fn older_history(&mut self, root: Option<String>) {
+        let feed = self.history_feed(root.as_deref());
+        if feed.loading || !feed.more {
+            return;
+        }
+        let Some(cursor) = feed.resume.clone() else {
+            return;
+        };
+        self.work.history_serial += 1;
+        let generation = self.work.history_serial;
+        let feed = self.history_feed(root.as_deref());
+        feed.generation = generation;
+        feed.loading = true;
+        self.request_history(root, Some(cursor), generation);
+    }
+    fn load_activity(&mut self) {
+        self.refresh_history(None);
     }
     fn load_detail(&mut self, w: &WorkRecord) {
+        if !self
+            .work
+            .histories
+            .get(w.id.as_str())
+            .is_some_and(|feed| feed.loading)
+        {
+            self.refresh_history(Some(w.id.as_str().to_owned()));
+        }
         self.load_git_links(w.id.as_str(), None);
         let op = if matches!(w.kind, WorkKind::Feature) {
             "features.get"
@@ -933,6 +1046,9 @@ impl Shell {
     fn work_act(&mut self, actions: Vec<Action>) {
         for a in actions {
             match a {
+                Action::OlderHistory(root) => self.older_history(root),
+                Action::RefreshHistory(root) => self.refresh_history(root),
+
                 Action::Workflow(action) => self.workflow_action(action),
                 Action::Allocate(feature, lease) => {
                     if let Some(project) = self.work.of.clone() {
@@ -944,7 +1060,7 @@ impl Shell {
                 Action::OpenWork(id) => self.open_work(&id),
                 Action::Reload => {
                     self.load_work();
-                    self.load_activity();
+                    self.refresh_history(self.work.activity.item.clone());
                 }
                 Action::Create(form) => {
                     let Some(p) = self.work.of.clone() else {
@@ -1114,6 +1230,14 @@ impl Shell {
                 }
                 Action::SavePlan(form) => self.save_plan(form),
                 Action::ShowActivity(id) => {
+                    if !self
+                        .work
+                        .histories
+                        .get(&id)
+                        .is_some_and(|feed| feed.loaded || feed.loading)
+                    {
+                        self.refresh_history(Some(id.clone()));
+                    }
                     self.work.activity.item = Some(id);
                     // Overview's second tab is Activity.
                     self.routes.entry(Route::Overview).or_default().tab = 1;
@@ -1394,40 +1518,21 @@ impl Shell {
                     self.work.cards.error = Some(e.describe());
                 }
             },
-            (Slot::WorkActivity(p), Reply::Query(q)) => {
-                if self.work.of.as_deref() == Some(p.as_str()) {
-                    match wops::events_page(q) {
-                        Ok((items, resume, more)) => {
-                            let a = &mut self.work.activity;
-                            a.items.extend(items);
-                            if resume.is_some() {
-                                a.resume = resume;
-                            }
-                            a.error = None;
-                            if more {
-                                self.load_activity();
-                            } else {
-                                self.work.activity.loaded = true;
-                            }
-                        }
-                        Err(e) => {
-                            // A continuation can expire (its scope changed): the feed is then
-                            // read again from the beginning, once.
-                            let a = &mut self.work.activity;
-                            if a.resume.is_some() {
-                                *a = Activity {
-                                    kind: a.kind,
-                                    actor: a.actor,
-                                    text: std::mem::take(&mut a.text),
-                                    item: a.item.take(),
-                                    ..Activity::default()
-                                };
-                                self.load_activity();
-                            } else {
-                                a.error = Some(e.describe());
-                            }
+            (Slot::WorkActivity(project, root, generation), Reply::Query(reply)) => {
+                if self.work.of.as_deref() != Some(project.as_str()) {
+                    return None;
+                }
+                let feed = self.history_feed(root.as_deref());
+                if feed.generation != generation {
+                    return None;
+                }
+                match wops::events_page(reply) {
+                    Ok((items, cursor, more)) => {
+                        if let Some(next) = feed.receive(items, cursor, more) {
+                            self.request_history(root, Some(next), generation);
                         }
                     }
+                    Err(error) => feed.failed(error.describe()),
                 }
             }
             (Slot::WorkGitInspect(_, tree), Reply::Query(q)) => {
@@ -1449,7 +1554,16 @@ impl Shell {
             },
             (Slot::WorkDetail(id), Reply::Query(q)) => match wops::work_record(q) {
                 Ok(w) => {
-                    self.work.detail.insert(id, w);
+                    // A command can publish a newer approval while this read is in
+                    // flight. Slot fencing orders reads, not reads against commands.
+                    if self
+                        .work
+                        .detail
+                        .get(&id)
+                        .is_none_or(|known| w.revision.get() >= known.revision.get())
+                    {
+                        self.work.detail.insert(id, w);
+                    }
                 }
                 Err(e) => self.work.message = Some((Tone::Bad, e.describe())),
             },
@@ -2266,7 +2380,7 @@ fn activity(
     work: &mut WorkUi,
     cols: &[Column],
     user: &str,
-    _actions: &mut Vec<Action>,
+    actions: &mut Vec<Action>,
 ) {
     let a = &mut work.activity;
     ui.horizontal_wrapped(|ui| {
@@ -2303,24 +2417,41 @@ fn activity(
             a.item = None;
         }
     });
-    if let Some(e) = &a.error {
+    let root = a.item.clone();
+    if let Some(root) = &root {
+        work.histories.entry(root.clone()).or_default();
+    }
+    let feed = match &root {
+        Some(root) => &work.histories[root],
+        None => &work.activity,
+    };
+    if let Some(error) = &feed.error {
         widgets::state_block(
             ui,
             &ViewState::Failed {
-                what: "activity".into(),
-                error: e.clone(),
+                what: "history".into(),
+                error: error.clone(),
             },
         );
+        if widgets::secondary_button(ui, "Reload history").clicked() {
+            actions.push(Action::RefreshHistory(root.clone()));
+        }
     }
-    if !a.loaded {
-        widgets::state_block(
-            ui,
-            &ViewState::Loading {
-                what: "activity".into(),
-            },
-        );
+    if !feed.loaded {
+        if feed.error.is_none() {
+            widgets::state_block(
+                ui,
+                &ViewState::Loading {
+                    what: "history".into(),
+                },
+            );
+        }
         return;
     }
+    let items = &feed.items;
+    let more = feed.more;
+    let loading = feed.loading;
+    let a = &work.activity;
     let titles: BTreeMap<String, &WorkRecord> = work
         .features
         .items
@@ -2328,10 +2459,8 @@ fn activity(
         .chain(&work.cards.items)
         .map(|w| (w.id.as_str().to_owned(), w))
         .collect();
-    let rows: Vec<String> = a
-        .items
+    let rows: Vec<String> = items
         .iter()
-        .rev()
         .filter_map(|e| {
             let subject = match (&e.aggregate, &e.root_id) {
                 (EventSubject::Root(r), _) => Some(r.0.as_str().to_owned()),
@@ -2380,11 +2509,18 @@ fn activity(
     widgets::caption(
         ui,
         format!(
-            "{} of {} changes shown · newest first · full history (Refresh adds newer changes)",
+            "{} of {} loaded changes shown · newest first · older history on demand",
             rows.len(),
-            a.items.len(),
+            items.len(),
         ),
     );
+    if more
+        && ui
+            .add_enabled(!loading, egui::Button::new("Load older changes"))
+            .clicked()
+    {
+        actions.push(Action::OlderHistory(root));
+    }
     if rows.is_empty() {
         widgets::state_block(
             ui,
@@ -3843,17 +3979,24 @@ fn card_detail(
         if ui.button("Show its history").clicked() {
             actions.push(Action::ShowActivity(w.id.as_str().to_owned()));
         }
-        let history: Vec<&Event> = work
-            .activity
-            .items
-            .iter()
-            .rev()
-            .filter(|e| matches!(&e.aggregate, EventSubject::Root(r) if r.0 == w.id))
-            .take(10)
-            .collect();
-        for e in history {
-            widgets::caption(ui, format!("#{} by {}", e.sequence.as_str(), e.actor_id.0.as_str()));
+        let feed=work.histories.get(w.id.as_str());
+        let history: Vec<&Event>=feed.into_iter().flat_map(|feed|feed.items.iter()).collect();
+        if let Some(feed)=feed {
+            if let Some(error)=&feed.error {
+                widgets::caption(ui,error);
+                if ui.button("Reload card history").clicked() {
+                    actions.push(Action::RefreshHistory(Some(w.id.as_str().to_owned())));
+                }
+            }
+            if feed.more && ui.add_enabled(!feed.loading,egui::Button::new("Load older card changes")).clicked() {
+                actions.push(Action::OlderHistory(Some(w.id.as_str().to_owned())));
+            }
         }
+        egui::ScrollArea::vertical().id_salt(("card-history", w.id.as_str())).max_height(160.0).show(ui, |ui| {
+            for e in history {
+                widgets::caption(ui, format!("#{} by {}", e.sequence.as_str(), e.actor_id.0.as_str()));
+            }
+        });
     });
 }
 

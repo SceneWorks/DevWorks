@@ -1105,6 +1105,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn conventions(&self) -> &dyn ConventionRead {
         self
     }
+    fn schemas(&self) -> &dyn SchemaRead {
+        self
+    }
     fn help(&self) -> &dyn HelpRead {
         self
     }
@@ -1358,6 +1361,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn conventions(&mut self) -> &mut dyn ConventionRepository {
+        self
+    }
+    fn schemas(&mut self) -> &mut dyn SchemaRepository {
         self
     }
     fn help(&mut self) -> &mut dyn HelpRepository {

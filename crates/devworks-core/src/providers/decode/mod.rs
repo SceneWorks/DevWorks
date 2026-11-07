@@ -3,6 +3,7 @@
 mod chat;
 mod embedding;
 mod messages;
+mod reasoning_index;
 mod responses;
 mod think_tags;
 mod usage;
@@ -166,6 +167,9 @@ pub struct Decoder {
     model: Option<String>,
     generation_id: Option<String>,
     chat_reasoning: Value,
+    chat_details: reasoning_index::ReasoningIndex,
+    #[cfg(test)]
+    chat_detail_probes: usize,
     continuations: BTreeMap<(u64, String), Value>,
     stopped_blocks: std::collections::BTreeSet<u64>,
     embedding_dimensions: Option<usize>,
@@ -199,6 +203,9 @@ impl Decoder {
             model: None,
             generation_id: None,
             chat_reasoning: serde_json::json!({}),
+            chat_details: Default::default(),
+            #[cfg(test)]
+            chat_detail_probes: 0,
             continuations: BTreeMap::new(),
             stopped_blocks: Default::default(),
             embedding_dimensions: None,
@@ -429,7 +436,7 @@ impl Decoder {
         if outcome == DecodedOutcome::Completed {
             let mut ready = Vec::new();
             let mut ids = std::collections::BTreeSet::new();
-            for (ordinal, call) in &self.calls {
+            for (ordinal, call) in &mut self.calls {
                 let parsed = serde_json::from_str::<Value>(&call.arguments)
                     .ok()
                     .filter(Value::is_object);
@@ -457,6 +464,13 @@ impl Decoder {
                         },
                     });
                     break;
+                }
+                if matches!(
+                    self.profile,
+                    EndpointProfile::CompatibleChat | EndpointProfile::OpenRouterChat
+                ) {
+                    call.item["function"]["name"] = Value::String(call.name.clone().unwrap());
+                    call.item["function"]["arguments"] = Value::String(call.arguments.clone());
                 }
                 ready.push(DecodedToolCall {
                     native_call_id: call.id.clone().unwrap(),

@@ -237,7 +237,7 @@ impl ArtifactService {
         scope: &crate::ports::storage::KnowledgeScope,
         convention: &crate::protocol::Id,
         resource: bool,
-    ) -> Result<ArtifactRef, crate::ports::storage::StorageError> {
+    ) -> Result<ArtifactRef, Failure> {
         use crate::ports::{
             IdKind,
             storage::{ArtifactRetention, ArtifactScope, StoredArtifact},
@@ -262,7 +262,7 @@ impl ArtifactService {
                     && b.byte_count == source.byte_count
             })
         {
-            return Err(changed());
+            return Err(changed().into());
         }
         let host = tx.store().host_actor.clone();
         let artifact_id = tx.new_id(IdKind::Artifact);
@@ -312,6 +312,15 @@ impl ArtifactService {
         tx.artifacts().insert_artifact(&pending)?;
         tx.artifacts().insert_version(&version)?;
         tx.artifacts().update_artifact(&artifact)?;
+        // Explicit retention consumes the destination's quota, using the same distinct-blob
+        // accounting as ordinary saves. A refusal unwinds the command's entire savepoint.
+        super::check_quota(tx, &artifact.scope).map_err(|failure| match failure {
+            super::Failure::Storage(error) => Failure::Storage(error),
+            super::Failure::Refused(refusal) => Failure::Refused(
+                Refusal::new(refusal.code, refusal.target_kind, refusal.target_id)
+                    .retry(refusal.retry),
+            ),
+        })?;
         Ok(ArtifactRef {
             artifact_id,
             version_id,

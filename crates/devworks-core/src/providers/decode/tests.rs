@@ -900,3 +900,155 @@ fn chat_nested_raw_evidence_follows_escaped_and_duplicate_structural_keys() {
         }
     }
 }
+
+#[test]
+fn malformed_messages_blocks_never_panic_on_later_deltas() {
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+    ] {
+        for block in [json!(null), json!("bad"), json!(42), json!([]), json!(true)] {
+            for delta in [
+                json!({"type":"text_delta","text":"later"}),
+                json!({"type":"thinking_delta","thinking":"later"}),
+                json!({"type":"signature_delta","signature":"later"}),
+                json!({"type":"citations_delta","citation":{"text":"later"}}),
+            ] {
+                let mut decoder = Decoder::new(profile.clone());
+                let mut frames = event(
+                    &mut decoder,
+                    json!({"type":"content_block_start","index":0,"content_block":block}),
+                );
+                frames.extend(event(
+                    &mut decoder,
+                    json!({"type":"content_block_delta","index":0,"delta":delta}),
+                ));
+                frames.extend(decoder.finish());
+                assert!(
+                    frames
+                        .iter()
+                        .any(|f| matches!(f, DecodedFrame::Error { .. }))
+                );
+                assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
+                assert!(calls(&frames).is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn streamed_detail_identity_work_is_bounded_for_many_distinct_items() {
+    for profile in [
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        let mut d = Decoder::new(profile);
+        for n in 0..512 {
+            event(
+                &mut d,
+                json!({"choices":[{"index":0,"delta":{"reasoning_details":[{"index":n,"type":"reasoning.text","text":"a"}]},"finish_reason":null}]}),
+            );
+            assert!(
+                d.chat_detail_probes <= 4 * (n + 1) as usize,
+                "identity scan revisited prior distinct items: {} probes for {}",
+                d.chat_detail_probes,
+                n + 1
+            );
+        }
+        let details = (512..50_000)
+            .map(|n| json!({"index":n,"type":"reasoning.text","text":"a"}))
+            .collect::<Vec<_>>();
+        event(
+            &mut d,
+            json!({"choices":[{"index":0,"delta":{"reasoning_details":details},"finish_reason":null}]}),
+        );
+        assert_eq!(
+            d.chat_reasoning["reasoning_details"]
+                .as_array()
+                .unwrap()
+                .len(),
+            50_000
+        );
+        assert!(d.chat_detail_probes <= 200_000);
+    }
+}
+
+#[test]
+fn indexed_detail_identity_preserves_first_compatible_wildcards_and_json_identity() {
+    // Retained source semantics as a bounded differential oracle, including upgrades of missing
+    // type/ID fields and index precedence over ID. This is intentionally a small reference scan.
+    fn retain(rows: &mut Vec<Value>, fragment: &Value) {
+        let fields = fragment.as_object().unwrap();
+        let existing = rows.iter_mut().find(|entry| {
+            let same = fragment
+                .get("index")
+                .filter(|v| !v.is_null())
+                .map(|v| entry.get("index") == Some(v))
+                .unwrap_or_else(|| {
+                    fragment
+                        .get("id")
+                        .filter(|v| !v.is_null())
+                        .is_some_and(|v| entry.get("id") == Some(v))
+                });
+            same && ["type", "id"].iter().all(|k| {
+                fragment.get(k).filter(|v| !v.is_null()).is_none_or(|v| {
+                    entry
+                        .get(k)
+                        .filter(|v| !v.is_null())
+                        .is_none_or(|old| old == v)
+                })
+            })
+        });
+        if let Some(entry) = existing {
+            for (name, value) in fields {
+                if matches!(name.as_str(), "text" | "summary" | "data" | "signature")
+                    && let (Some(Value::String(old)), Some(part)) =
+                        (entry.get_mut(name), value.as_str())
+                {
+                    old.push_str(part);
+                    continue;
+                }
+                if !value.is_null() {
+                    entry[name] = value.clone();
+                }
+            }
+        } else {
+            rows.push(fragment.clone());
+        }
+    }
+    for profile in [
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        let mut d = Decoder::new(profile);
+        let mut expected = Vec::new();
+        for n in 0..1000 {
+            let mut fragment = json!({"text":"part","summary":"sum","signature":"sig","data":"data","format":format!("format-{}",n%3)});
+            match n % 4 {
+                0 => fragment["index"] = json!(n % 11),
+                1 => {}
+                2 => fragment["index"] = Value::Null,
+                _ => fragment["index"] = json!([n % 3]),
+            }
+            match n % 5 {
+                0 => {}
+                1 => fragment["id"] = Value::Null,
+                2 => fragment["id"] = json!("id-0"),
+                3 => fragment["id"] = json!("id-1"),
+                _ => fragment["id"] = json!({"a":[1,2],"k":n%3}),
+            }
+            match n % 7 {
+                0 => {}
+                1 => fragment["type"] = Value::Null,
+                2 | 3 => fragment["type"] = json!("reasoning.text"),
+                _ => fragment["type"] = json!("reasoning.encrypted"),
+            }
+            retain(&mut expected, &fragment);
+            event(
+                &mut d,
+                json!({"choices":[{"index":0,"delta":{"reasoning_details":[fragment]},"finish_reason":null}]}),
+            );
+        }
+        assert_eq!(d.chat_reasoning["reasoning_details"], json!(expected));
+    }
+}

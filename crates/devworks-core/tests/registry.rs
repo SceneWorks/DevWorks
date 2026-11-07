@@ -31,13 +31,13 @@ fn registry_matches_implementation_plan_and_family_register() {
         .map(|o| (o["operation"].as_str().unwrap(), o))
         .collect();
 
-    assert_eq!(registry::all().len(), 359);
+    assert_eq!(registry::all().len(), 360);
     assert_eq!(registry::all().len(), planned.len());
     assert_eq!(
         registry::all().len() as u64,
         register["operationCount"].as_u64().unwrap()
     );
-    assert_eq!(plan["counts"]["operations"].as_u64().unwrap(), 359);
+    assert_eq!(plan["counts"]["operations"].as_u64().unwrap(), 360);
     assert_eq!(
         registry::families().len() as u64,
         register["familyCount"].as_u64().unwrap()
@@ -159,7 +159,7 @@ fn every_binding_publishes_strict_input_and_result_schemas() {
             count += 1;
         }
     }
-    assert_eq!(count, 364);
+    assert_eq!(count, 365);
 }
 
 /// Every property name declared anywhere in a schema, sorted (the envelope's own negotiated
@@ -282,6 +282,19 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "help.read",
             "help.topic_for_screen",
             "help.package_guides",
+            "conventions.applicability",
+            "conventions.delete",
+            "conventions.delete_resource",
+            "conventions.edit",
+            "conventions.import",
+            "conventions.index",
+            "conventions.list",
+            "conventions.move",
+            "conventions.read",
+            "conventions.resources",
+            "conventions.retire",
+            "conventions.search",
+            "conventions.version",
             "repositories.nodes",
             "code.search",
             "code.architecture",
@@ -375,6 +388,14 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "router.route",
             "router.configure",
             "router.connections",
+            "schemas.configure",
+            "schemas.connections",
+            "schemas.index",
+            "schemas.objects",
+            "schemas.refresh",
+            "schemas.relationships",
+            "schemas.remove_index",
+            "database.configure_sensitive_columns",
             "sessions.append_message",
             "sessions.briefing",
             "sessions.end",

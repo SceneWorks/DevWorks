@@ -170,6 +170,7 @@ pub(super) fn edges(
     read: &dyn ReadSnapshot,
     scope: &GraphScope,
     layers: &[ViewLayers],
+    kinds: &[&str],
     budget: &mut Budget,
     mut visit: impl FnMut(Result<Edge, Unmapped>, &mut Budget) -> Result<bool, Failure>,
 ) -> Result<(), Failure> {
@@ -180,13 +181,23 @@ pub(super) fn edges(
     let mut derived_seen = std::collections::BTreeSet::new();
     let mut sessions =
         std::collections::HashMap::<String, crate::services::indexing::worker::ViewLinker>::new();
+    let mut stored_kinds = kinds
+        .iter()
+        .map(|kind| (*kind).to_owned())
+        .collect::<Vec<_>>();
+    // The package reference is the retained source of a derived dependency, not an
+    // endpoint filter. Keep it whenever that derived relationship is requested.
+    if kinds.contains(&"DEPENDS_ON") && !kinds.contains(&"REFERENCES_PACKAGE") {
+        stored_kinds.push("REFERENCES_PACKAGE".into());
+    }
+    let filter = GraphEdgeFilter {
+        kinds: stored_kinds,
+        ..Default::default()
+    };
     loop {
-        let page = read.graph().graph_edges(
-            scope,
-            &GraphEdgeFilter::default(),
-            after.as_ref(),
-            READ_PAGE,
-        )?;
+        let page = read
+            .graph()
+            .graph_edges(scope, &filter, after.as_ref(), READ_PAGE)?;
         let more = page.has_more;
         for mut raw in page.items {
             if !budget.visit() {

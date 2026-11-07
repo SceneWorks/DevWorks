@@ -40,7 +40,7 @@
     "crates/devworks-adapters/src/storage/sqlite/migrations/0027_decisions.sql": "dafafed20991660c492ef38f23448111618cecb0b5f061793f266271a75c1c8f",
     "crates/devworks-adapters/src/storage/sqlite/migrations/0007_sessions.sql": "2863f135528fc5a7c7499515872eb17a5acbddd1874fbd108d91ad2cd1253077",
     "crates/devworks-adapters/src/storage/sqlite/migrations/0022_git_worktrees.sql": "2d0815af52a522e23870f9a2af56dc2a6f2f5227fbb842d1377cd49f84e02524",
-    "crates/devworks-adapters/src/storage/sqlite/migrations/0032_conventions.sql": "ab194002d4b6970147665b23dd995e8bb4d65ce5be56be5389db50f31ceb47b7",
+    "crates/devworks-adapters/src/storage/sqlite/migrations/0032_conventions.sql": "1a860d2cb4e54abeb61cd07a3c07520de4c6fbb148c774758211ea98b14b6dbb",
     "crates/devworks-adapters/src/storage/sqlite/migrations/0033_embedding_spaces.sql": "2c1687e7ee2d039a99fbe5ddc088a8bbd275322905315b343db4ebf17c39f4bb",
     "crates/devworks-adapters/src/storage/sqlite/migrations/0020_packages.sql": "7cabf466f43dcc1677f62ad14ebb1e96ed9239f2cf505e9646c0a4e38287876a",
     "crates/devworks-adapters/src/storage/sqlite/migrations/0001_initial.sql": "c64cc140ad8de8c4c2ca7e7d3e3efac32966cea8bfc0bdf5e46e9c55206bd6a4",

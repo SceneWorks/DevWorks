@@ -545,7 +545,13 @@ fn resolve(
                 return conflict();
             }
             // The store cancels the undispatched operation with its delivery.
-            tx.queue().cancel(id)?
+            let after = tx.queue().cancel(id)?;
+            if after.consumer == super::schemas::indexing::EFFECT_CONSUMER
+                && let Some(operation) = &after.operation_id
+            {
+                super::schemas::indexing::settle_cancelled(tx, operation)?;
+            }
+            after
         }
     };
     let event_id = EventId(tx.new_id(IdKind::Event));

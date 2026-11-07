@@ -56,6 +56,7 @@ struct Snapshot {
     binding: CursorBinding,
     filter: ConventionQuery,
     revision: i64,
+    source_revision: i64,
     top_k: u16,
     configuration: EmbeddingConfiguration,
     documents: u64,
@@ -120,6 +121,9 @@ impl IndexService {
             fingerprint,
             filter,
             revision,
+            source_revision: read
+                .conventions()
+                .convention_scope_revision(&scoped.exact)?,
             top_k,
             configuration: config,
             documents,
@@ -344,7 +348,6 @@ impl IndexService {
         }
         let limit = (input.page.limit.get() as usize).min(50);
         let end = (prepared.offset + limit).min(rows.len());
-        let has_more = end < rows.len();
         let mut items = Vec::new();
         for hit in &rows[prepared.offset..end] {
             let owner = read
@@ -368,6 +371,9 @@ impl IndexService {
                 indexed_path,
             });
         }
+        crate::services::conventions::queries::page_budget(&mut items)?;
+        let end = prepared.offset + items.len();
+        let has_more = end < rows.len();
         let (gaps, more_gaps) = self.search_gaps(
             read,
             &snapshot.filter,
@@ -423,6 +429,7 @@ impl IndexService {
             next_cursor,
             has_more,
             scope_revision: rev(snapshot.revision),
+            source_scope_revision: Some(rev(snapshot.source_revision)),
             retrieval: ConventionRetrieval {
                 mode: if prepared.vector.is_some() {
                     ConventionRetrievalMode::Hybrid

@@ -117,11 +117,23 @@ fn current(
             convention_id,
             revision,
         } => {
-            if tx
+            let captured =
+                tx.conventions()
+                    .convention(convention_id, Some(*revision), &scoped.readable)?;
+            let latest = tx
                 .conventions()
-                .convention(convention_id, None, &scoped.readable)?
-                .is_none_or(|r| r.revision != *revision)
-            {
+                .convention(convention_id, None, &scoped.readable)?;
+            if !captured.zip(latest).is_some_and(|(captured, latest)| {
+                // Exact snapshots retain the existing no-op behavior for an already
+                // inactive source. Only Active sources may bridge metadata revisions.
+                latest.revision == captured.revision
+                    || (captured.lifecycle == "Active"
+                        && latest.lifecycle == captured.lifecycle
+                        && latest.scope == captured.scope
+                        && latest.title == captured.title
+                        && captured.content_ref.is_some()
+                        && latest.content_ref == captured.content_ref)
+            }) {
                 return Err(invalid("convention source changed"));
             }
         }
@@ -129,7 +141,17 @@ fn current(
             scope: _,
             scope_revision,
         } => {
-            if tx.conventions().convention_scope_revision(&scoped.exact)? != *scope_revision {
+            let source_holds = match job.index_source_revision {
+                Some(revision) => {
+                    tx.conventions()
+                        .convention_index_source_revision(&scoped.exact)?
+                        == revision
+                }
+                None => {
+                    tx.conventions().convention_scope_revision(&scoped.exact)? == *scope_revision
+                }
+            };
+            if !source_holds {
                 return Err(invalid("convention scope changed"));
             }
         }
@@ -644,13 +666,17 @@ impl IndexService {
         }
         self.index_bounded(cancel, deadline)?;
         let generation = candidate.generation_id.clone();
-        let revision = owner.revision;
+        let (owner_id, owner_scope) = (owner.id.clone(), owner.scope.clone());
         let lexical = space.is_none() || !dense;
         let operation_id = op.id.clone();
         let actual = op.clone();
         let one = matches!(job.target, IndexTarget::One { .. });
         self.index_write(run, move |tx| {
             if lexical {tx.conventions().set_convention_index_status(&generation,&operation_id,"Indexing","Indexing",Some("Compatible native vectors are unavailable; the full lexical index is published."))?;}
+            // Keep the captured generation and input identity. The repository still checks
+            // its exact immutable body/title/scope against this current owner under one UoW.
+            let revision = tx.conventions().convention(&owner_id,None,std::slice::from_ref(&owner_scope))?
+                .ok_or_else(||invalid("convention source changed"))?.revision;
             tx.conventions().publish_convention_index(&generation, revision, head.as_ref(), count)?;
             if one {let attempt=actual.latest_attempt().ok_or_else(||invalid("index attempt missing"))?;tx.operations().observe(&actual.id,attempt.attempt_no,json!({"conventionPublication":completion(&actual.id,count as u64,1)}))?;}
             Ok(())
@@ -685,10 +711,45 @@ impl IndexService {
             if owners.is_empty() {
                 break;
             }
-            let headers = owners
-                .iter()
-                .map(|owner| header(&run.op.id, run.job, owner, self.clock.now_ms().get()))
-                .collect::<Result<Vec<_>, _>>()?;
+            let headers = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+                owners
+                    .iter()
+                    .map(|owner| {
+                        // A metadata edit during partial capture must retain the original
+                        // generation/input identities already captured for this owner.
+                        if let Some(existing) = read
+                            .conventions()
+                            .convention_index_generations(
+                                Some(&owner.id),
+                                Some(&run.op.id),
+                                None,
+                                1,
+                            )?
+                            .into_iter()
+                            .next()
+                        {
+                            let captured = read.conventions().convention(
+                                &owner.id,
+                                Some(existing.convention_revision),
+                                std::slice::from_ref(&owner.scope),
+                            )?;
+                            if owner.content_ref.as_ref() != Some(&existing.source_ref)
+                                || captured.is_none_or(|old| {
+                                    old.title != owner.title
+                                        || old.scope != owner.scope
+                                        || old.content_ref.as_ref() != Some(&existing.source_ref)
+                                        || old.lifecycle != "Active"
+                                })
+                            {
+                                return Err(invalid("captured index source changed"));
+                            }
+                            Ok(existing)
+                        } else {
+                            header(&run.op.id, run.job, owner, self.clock.now_ms().get())
+                        }
+                    })
+                    .collect::<Result<Vec<_>, StorageError>>()
+            })?;
             self.index_write(run, move |tx| {
                 for header in headers {
                     if tx

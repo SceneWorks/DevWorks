@@ -25,7 +25,16 @@ const evidence=JSON.parse(fs.readFileSync(path.join(dir,'helix-embedding-validat
 const implementationPlan=JSON.parse(fs.readFileSync(path.join(dir,'implementation-plan.json'),'utf8'));
 const trace={title:'DevWorks architecture requirement traceability',status:'Proposed design coverage, not implemented or tested capability',date:'2026-11-02',requirementsInputSha256:sourceDigest,requirementsCount:mapped.length,architectureVersion:'1.1',requirements:mapped};
 fs.writeFileSync(path.join(dir,'devworks-requirements-traceability.json'),JSON.stringify(trace,null,2)+'\n');
-const catalog={status:contracts.status,date:'2026-11-02',families:contracts.capabilityFamilies};
+const catalog={status:contracts.status,date:'2026-11-02',families:contracts.capabilityFamilies.map(f=>({...f,operations:[...f.operations]}))};
+// Explicitly tracked native extensions supplement the frozen retained-source catalog.
+// Both catalog and implementation-plan generators consume the same canonical source.
+const nativeExtensions=JSON.parse(fs.readFileSync(path.join(dir,'implementation-slices.json'),'utf8')).nativeExtensions||[];
+for(const extension of nativeExtensions)for(const operation of extension.operations){
+  const match=/^([a-z_]+)\.([a-z_]+)$/.exec(operation);
+  const family=match&&catalog.families.find(f=>f.family===match[1]);
+  if(!family)throw Error('Native extension has no existing catalog family: '+operation);
+  if(!family.operations.includes(match[2]))family.operations.push(match[2]);
+}
 fs.writeFileSync(path.join(dir,'devworks-capability-catalog.json'),JSON.stringify(catalog,null,2)+'\n');
 const toc=headings.filter(h=>h.depth===2).map(h=>`<a href="#${h.id}">${esc(h.title)}</a>`).join('');
 const rows=mapped.map(r=>`<tr data-status="${esc(r.requirementStatus)}" data-find="${esc((r.requirement+' '+r.statement+' '+r.owner).toLowerCase())}"><td><details><summary><b>${esc(r.requirement)}</b><span class="tag">${esc(r.requirementStatus)}</span></summary><p>${esc(r.statement)}</p><small>${esc(r.sourceSection)}</small></details></td><td><a href="#${r.architectureSection}">${esc(r.owner)}</a><small>${esc(r.architectureSection.replaceAll('-',' '))}</small></td><td><b>${esc(r.plannedCase)}</b><small>${esc(r.validationFamily)} · ${esc(r.validationGate)}</small></td></tr>`).join('');

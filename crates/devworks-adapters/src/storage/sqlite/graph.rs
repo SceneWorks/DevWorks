@@ -9,6 +9,33 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
+/// SQLite's built-in lower/LIKE fold ASCII only. Preserve the core target predicate's
+/// Unicode lowercase and literal semantics before LIMIT/materialization consume a budget.
+pub(super) fn register_name_match(conn: &Connection) -> Result<(), StorageError> {
+    use rusqlite::functions::FunctionFlags;
+    db(conn.create_scalar_function(
+        "devworks_graph_name_matches",
+        4,
+        FunctionFlags::SQLITE_UTF8
+            | FunctionFlags::SQLITE_DETERMINISTIC
+            | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| {
+            let Some(query) = ctx.get::<Option<String>>(2)? else {
+                return Ok(true);
+            };
+            let name = ctx.get::<String>(0)?.to_lowercase();
+            let qualified = ctx.get::<Option<String>>(1)?;
+            let folded = query.to_lowercase();
+            let matches = if ctx.get::<bool>(3)? {
+                name.contains(&folded)
+            } else {
+                name == folded
+            };
+            Ok(matches || qualified.as_deref() == Some(query.as_str()))
+        },
+    ))
+}
+
 fn invalid(message: &str) -> StorageError {
     StorageError::InvalidRecord(message.into())
 }
@@ -89,6 +116,12 @@ fn node_from(
         },
     })
 }
+fn node_query(composed: &str, node_predicate: &str, cursor_predicate: &str, order: &str) -> String {
+    format!(
+        "{composed}SELECT v.repo,v.view_id,v.generation_id,v.content_digest,n.unit_key,n.node_id,n.kind,n.name,n.payload_json FROM visible v JOIN graph_nodes n ON n.generation_id=v.generation_id AND n.unit_key=v.unit_key WHERE (json_extract(?2,'$.name.query') IS NULL OR devworks_graph_name_matches(n.name,CASE WHEN json_type(n.payload_json,'$.qualifiedName')='text' THEN json_extract(n.payload_json,'$.qualifiedName') END,json_extract(?2,'$.name.query'),json_extract(?2,'$.name.contains'))) AND (json_extract(?2,'$.pattern') IS NULL OR n.name LIKE json_extract(?2,'$.pattern') OR json_extract(n.payload_json,'$.qualifiedName') LIKE json_extract(?2,'$.pattern')) AND (json_array_length(?2,'$.kinds')=0 OR n.kind IN(SELECT value FROM json_each(?2,'$.kinds'))) AND (json_extract(?2,'$.unit') IS NULL OR n.unit_key=json_extract(?2,'$.unit')) AND {node_predicate} AND (NOT json_extract(?2,'$.excludeUntrusted') OR NOT EXISTS(SELECT 1 FROM graph_trust t JOIN index_views iv ON iv.id=v.view_id WHERE t.repository_id=v.repo AND t.unit_key=n.unit_key AND t.node_id=n.node_id AND t.view_digest=iv.view_digest AND t.content_digest=v.content_digest AND t.trusted=0)) AND {cursor_predicate} ORDER BY {order} LIMIT ?4"
+    )
+}
+
 fn nodes(
     conn: &Connection,
     scope: &GraphScope,
@@ -96,11 +129,34 @@ fn nodes(
     after: Option<&GraphPosition>,
     limit: u16,
 ) -> Result<GraphPage<GraphNode>, StorageError> {
+    if filter.node_id.is_none() {
+        return scan_nodes(conn, scope, filter, after, limit);
+    }
     let scope = scope_json(conn, scope)?;
     let (limit, after) = bounded(limit, after)?;
-    let filter=json!({"pattern":filter.pattern,"kinds":filter.kinds,"unit":filter.unit_key,"node":filter.node_id,"excludeUntrusted":filter.exclude_untrusted}).to_string();
-    let sql = format!(
-        "{COMPOSED}SELECT v.repo,v.view_id,v.generation_id,v.content_digest,n.unit_key,n.node_id,n.kind,n.name,n.payload_json FROM visible v JOIN graph_nodes n ON n.generation_id=v.generation_id AND n.unit_key=v.unit_key WHERE (json_extract(?2,'$.pattern') IS NULL OR n.name LIKE json_extract(?2,'$.pattern') OR json_extract(n.payload_json,'$.qualifiedName') LIKE json_extract(?2,'$.pattern')) AND (json_array_length(?2,'$.kinds')=0 OR n.kind IN(SELECT value FROM json_each(?2,'$.kinds'))) AND (json_extract(?2,'$.unit') IS NULL OR n.unit_key=json_extract(?2,'$.unit')) AND (json_extract(?2,'$.node') IS NULL OR n.node_id=json_extract(?2,'$.node')) AND (NOT json_extract(?2,'$.excludeUntrusted') OR NOT EXISTS(SELECT 1 FROM graph_trust t JOIN index_views iv ON iv.id=v.view_id WHERE t.repository_id=v.repo AND t.unit_key=n.unit_key AND t.node_id=n.node_id AND t.view_digest=iv.view_digest AND t.content_digest=v.content_digest AND t.trusted=0)) AND (json_extract(?3,'$.repository_id') IS NULL OR (v.repo,n.unit_key,n.node_id)>(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'),json_extract(?3,'$.item_id'))) ORDER BY v.repo,n.unit_key,n.node_id LIMIT ?4"
+    // Unit selection commutes with the per-(repository,unit) layer ranking. Apply it
+    // before the window, keeping every selected layer of that unit so Delete/Replace
+    // masking is unchanged. An exact node predicate must remain indexable: an optional
+    // OR otherwise scans every node in every visible unit for each endpoint lookup.
+    let composed = if filter.unit_key.is_some() {
+        COMPOSED.replace(
+            "u.generation_id=l.generation_id)",
+            "u.generation_id=l.generation_id WHERE u.unit_key=json_extract(?2,'$.unit'))",
+        )
+    } else {
+        COMPOSED.to_owned()
+    };
+    let node_predicate = if filter.node_id.is_some() {
+        "n.node_id=json_extract(?2,'$.node')"
+    } else {
+        "1"
+    };
+    let filter=json!({"pattern":filter.pattern,"name":filter.name.as_ref().map(|n| json!({"query":n.name,"contains":n.contains})),"kinds":filter.kinds,"unit":filter.unit_key,"node":filter.node_id,"excludeUntrusted":filter.exclude_untrusted}).to_string();
+    let sql = node_query(
+        &composed,
+        node_predicate,
+        "(json_extract(?3,'$.repository_id') IS NULL OR (v.repo,n.unit_key,n.node_id)>(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'),json_extract(?3,'$.item_id')))",
+        "v.repo,n.unit_key,n.node_id",
     );
     let mut statement = db(conn.prepare_cached(&sql))?;
     let rows = db(
@@ -114,6 +170,59 @@ fn nodes(
         (limit - 1) as u16,
     ))
 }
+/// Broad keyset pages walk visible units in order, then use each unit's node primary key.
+/// No page sorts/materializes the payloads of every node in the repository. Exact-ID
+/// lookups retain the sargable composed lookup above (including ambiguity checks).
+fn scan_nodes(
+    conn: &Connection,
+    scope: &GraphScope,
+    filter: &GraphNodeFilter,
+    after: Option<&GraphPosition>,
+    limit: u16,
+) -> Result<GraphPage<GraphNode>, StorageError> {
+    let scope_json = scope_json(conn, scope)?;
+    let (count, after_json) = bounded(limit, after)?;
+    let filter_json=json!({"pattern":filter.pattern,"name":filter.name.as_ref().map(|n|json!({"query":n.name,"contains":n.contains})),"kinds":filter.kinds,"unit":filter.unit_key,"node":filter.node_id,"excludeUntrusted":filter.exclude_untrusted}).to_string();
+    let units_sql = format!(
+        "{COMPOSED}SELECT v.repo,v.view_id,v.generation_id,v.content_digest,v.unit_key FROM visible v WHERE (json_extract(?2,'$.unit') IS NULL OR v.unit_key=json_extract(?2,'$.unit')) AND (json_extract(?3,'$.repository_id') IS NULL OR (v.repo,v.unit_key)>=(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'))) ORDER BY v.repo,v.unit_key"
+    );
+    let mut units = db(conn.prepare_cached(&units_sql))?;
+    let mut units = db(units.query(params![scope_json, filter_json, after_json]))?;
+    let mut found = Vec::new();
+    while let Some(unit) = db(units.next())? {
+        let repo: String = db(unit.get(0))?;
+        let view: String = db(unit.get(1))?;
+        let generation: String = db(unit.get(2))?;
+        let content: String = db(unit.get(3))?;
+        let unit_key: String = db(unit.get(4))?;
+        let same_unit = after.is_some_and(|after| {
+            after.repository_id.as_str() == repo && after.unit_key == unit_key
+        });
+        let cursor = if same_unit {
+            "n.node_id>json_extract(?3,'$.item_id')"
+        } else {
+            "1"
+        };
+        let header = "WITH visible AS (SELECT json_extract(?1,'$.repo') repo,json_extract(?1,'$.view') view_id,json_extract(?1,'$.generation') generation_id,json_extract(?1,'$.content') content_digest,json_extract(?1,'$.unit') unit_key) ";
+        let sql = node_query(header, "1", cursor, "n.node_id");
+        let mut nodes = db(conn.prepare_cached(&sql))?;
+        let bound=json!({"repo":repo,"view":view,"generation":generation,"content":content,"unit":unit_key}).to_string();
+        let remaining =
+            count - i64::try_from(found.len()).map_err(|_| invalid("graph page length"))?;
+        let rows = db(db(
+            nodes.query_map(params![bound, filter_json, after_json, remaining], node_row)
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>())?;
+        for row in rows {
+            found.push(node_from(row)?);
+        }
+        if found.len() >= count as usize {
+            break;
+        }
+    }
+    Ok(page(found, limit))
+}
+
 fn edges(
     conn: &Connection,
     scope: &GraphScope,

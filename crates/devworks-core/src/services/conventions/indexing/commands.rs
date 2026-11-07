@@ -52,6 +52,9 @@ pub struct IndexJob {
     pub control_roots: Vec<(crate::protocol::RootId, i64)>,
     #[serde(default)]
     pub assignment_generation: Option<i64>,
+    /// Private semantic source-set witness. Old journals retain the original strict scope CAS.
+    #[serde(default)]
+    pub index_source_revision: Option<i64>,
 }
 impl IndexService {
     pub fn decide_index(
@@ -218,7 +221,14 @@ impl IndexService {
             tx.conventions().put_convention_embedding_space(space)?;
         }
         let controls = crate::services::conventions::control::capture(tx, ctx)?;
+        let index_source_revision = matches!(target, IndexTarget::All { .. })
+            .then(|| {
+                tx.conventions()
+                    .convention_index_source_revision(&model::scope_storage(&scope))
+            })
+            .transpose()?;
         let job = IndexJob {
+            index_source_revision,
             kind: JOB_KIND.into(),
             target,
             scope: scope.clone(),

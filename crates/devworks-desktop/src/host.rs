@@ -260,7 +260,7 @@ async fn compose(
         clock.clone(),
         store.clone(),
         http.clone(),
-        secrets,
+        secrets.clone(),
         Arc::new(devworks_adapters::OsEntropy),
     ));
     let directory: Arc<dyn ConnectionDirectory> = config
@@ -345,6 +345,10 @@ async fn compose(
     let use_cases = use_cases.with_web(web.clone());
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
     runtime_config.shutdown_bound = config.shutdown_bound;
+    runtime_config.schemas = Some(devworks_engine::schemas::SchemaComposition {
+        reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
+        secrets,
+    });
     runtime_config.providers = Some(match config.providers.clone() {
         Some(providers) => providers,
         None => devworks_engine::providers::driver::ProviderComposition::new(Arc::new(
@@ -551,10 +555,7 @@ impl Engine {
         let thread = std::thread::Builder::new()
             .name("devworks-engine".into())
             .spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_time()
-                    .build()
-                {
+                let rt = match desktop_runtime() {
                     Ok(rt) => rt,
                     Err(e) => {
                         let _ = booted_tx.send(Err(StartError::Thread(e.to_string())));
@@ -888,6 +889,24 @@ impl Backend for DesktopBackend {
             .stage_api_key(self.host.ctx.principal(), key)
             .map_err(|e| e.to_string())
     }
+    fn generate_database_encryption_key(&self) -> Result<Secret, String> {
+        self.host
+            .runtime
+            .schemas()
+            .ok_or_else(|| "Database metadata is unavailable".to_owned())?
+            .generate_encryption_key(&self.host.ctx, &devworks_adapters::OsEntropy)
+            .map_err(|_| "Encryption key generation is unavailable".to_owned())
+    }
+    fn stage_database_password(&self, password: Secret) -> Result<Id, String> {
+        self.host
+            .runtime
+            .schemas()
+            .ok_or_else(|| "Database metadata is unavailable".to_owned())?
+            .stage_password(&self.host.ctx, password)
+            .map_err(|_| {
+                "Database password could not be saved in the credential facility".to_owned()
+            })
+    }
     fn stage_setting_secret(&self, value: Secret) -> Result<String, String> {
         self.host
             .connections
@@ -941,3 +960,30 @@ mod usage_shutdown_tests;
 #[cfg(test)]
 #[path = "host/provider_refresh_lock_tests.rs"]
 mod provider_refresh_lock_tests;
+
+// This is the runtime used by production desktop consumers, including native metadata sockets.
+fn desktop_runtime() -> Result<tokio::runtime::Runtime, std::io::Error> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+}
+#[cfg(test)]
+mod metadata_runtime_tests {
+    #[test]
+    fn production_metadata_runtime_supports_socket_io() {
+        super::desktop_runtime().unwrap().block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                    .await
+                    .unwrap();
+                let address = listener.local_addr().unwrap();
+                let (connected, accepted) =
+                    tokio::join!(tokio::net::TcpStream::connect(address), listener.accept());
+                assert!(connected.is_ok());
+                assert!(accepted.is_ok());
+            })
+            .await
+            .expect("production metadata runtime I/O completes");
+        });
+    }
+}

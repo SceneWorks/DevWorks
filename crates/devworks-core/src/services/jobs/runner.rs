@@ -128,7 +128,7 @@ pub fn queue_run(
         }
         Occurrence::Manual { at_ms } => (format!("manual-{}", run_id.as_str()), at_ms, "Manual"),
     };
-    let base = StoredJobRun {
+    let mut base = StoredJobRun {
         id: run_id.clone(),
         job_id: job.id.clone(),
         seq: 0,
@@ -179,6 +179,8 @@ pub fn queue_run(
         )?;
         return Ok(skipped);
     }
+    base.checkpoint =
+        crate::services::schemas::scheduled::queue_checkpoint(tx, job, &base, by_person, actor)?;
     let op = OperationId(tx.new_id(IdKind::Operation));
     tx.operations()
         .record_intent(run_operation(op.clone(), job, &run_id))?;
@@ -857,7 +859,7 @@ impl JobService {
                             )
                         })?,
                     ),
-                ) && super::native_help::is_empty(&arguments.value.0)
+                ) && super::native_help::is_current(operation, &arguments.value.0)
                 {
                     let revision = arguments.schema.revision.get();
                     let schema = super::native_help::argument_schema(
@@ -880,7 +882,21 @@ impl JobService {
                         return Ok(None);
                     }
                     let (invocation, frame) =
-                        super::native_help::invocation(tx, &mut started, operation, revision)?;
+                        match super::native_help::invocation(tx, &mut started, operation, revision)
+                        {
+                            Ok(value) => value,
+                            Err(StorageError::ScopeDenied)
+                                if operation == crate::services::schemas::scheduled::OPERATION =>
+                            {
+                                fail_before(
+                                    tx,
+                                    &started,
+                                    "schema source authorization changed; nothing ran",
+                                )?;
+                                return Ok(None);
+                            }
+                            Err(error) => return Err(error),
+                        };
                     let ctx = host_ctx(
                         tx,
                         native_namespace(&run.job_id),

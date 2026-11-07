@@ -43,7 +43,7 @@ SHARED = set('Id Revision Counter HoldRef Protocol CommandRequest QueryRequest R
 PROVIDER = set('Digest ArtifactRef SchemaRef TranscriptPage Attribution'.split())
 DATA = set('DataScope ViewSelection Coverage GitOid GraphPage RetrievalPage DeliveryBarrier DeliverySnapshot '
            'ArtifactTags Citation RepositorySnapshot ResolvedViewSet'.split())
-SUPPORT = set('Check Label Text Content Cursor PlanItems PlanFeatures Items NonEmpty Rows Page HistoryPage Limit '
+SUPPORT = set('Check Label Text DefaultValueText Content Cursor PlanItems PlanFeatures Items NonEmpty Rows Page HistoryPage Limit '
               'Depth Port ByteLimit TokenBudget PathSet Url RelativePath Money SignedCounter PositiveCounter Finite Probability '
               'DynamicJson SavedCommandInput GraphText GraphUnitKey DomainErrorCode DomainFault'.split())
 # Hand-written support types that gate a member by schema revision themselves.

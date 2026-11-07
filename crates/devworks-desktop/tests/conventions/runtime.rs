@@ -168,7 +168,89 @@ fn import(h: &mut Ui, files: &Files, path: PathBuf) {
 }
 
 #[test]
+fn native_passage_continuations_keep_slug_path_and_refreshed_id_intents() {
+    let _native_case = native_runtime_case();
+    let _case = native_runtime_case();
+    let root = Root::new("conventions-cursor-intent");
+    let engine = start(&root);
+    let files = Files::default();
+    let mut h = open(engine.backend(), &root, files.clone());
+    let source = format!("{}END_NATIVE", "λ-native-source\r\n".repeat(3000));
+    import(
+        &mut h,
+        &files,
+        manifest(&root, "cursor-source", "Cursor source", &source, None),
+    );
+    for selector in ["slug", "path", "refresh"] {
+        match selector {
+            "slug" => {
+                click(
+                    &mut h,
+                    Role::DisclosureTriangle,
+                    "Open a convention by slug",
+                );
+                replace(&mut h, "Convention slug lookup", "cursor-source");
+                click(&mut h, Role::Button, "Open convention slug");
+            }
+            "path" => {
+                click(&mut h, Role::DisclosureTriangle, "Open an exact hierarchy");
+                click(&mut h, Role::Button, "Add Hierarchy component");
+                replace(&mut h, "Hierarchy component 1", "cursor-source");
+                click(&mut h, Role::Button, "Open exact convention hierarchy");
+            }
+            _ => {
+                select(&mut h, "Cursor source");
+                click(&mut h, Role::Button, "Refresh conventions");
+            }
+        }
+        let first = h
+            .state()
+            .conventions
+            .state()
+            .unwrap()
+            .reader
+            .view
+            .as_ref()
+            .unwrap();
+        assert!(
+            first.passage.as_ref().unwrap().has_more,
+            "real multi-passage {selector}"
+        );
+        click(&mut h, Role::Button, "Next convention passage");
+        let reader = &h.state().conventions.state().unwrap().reader;
+        assert!(reader.error.is_none(), "{selector}: {:?}", reader.error);
+        let passage = reader.view.as_ref().unwrap().passage.as_ref().unwrap();
+        assert!(
+            passage.offset.get() > 0,
+            "continuation advances for {selector}"
+        );
+        let expected = source
+            .chars()
+            .skip(passage.offset.get() as usize)
+            .take(passage.text.0.chars().count())
+            .collect::<String>();
+        assert_eq!(passage.text.0, expected);
+        click(&mut h, Role::Button, "Previous convention passage");
+        let reader = &h.state().conventions.state().unwrap().reader;
+        assert!(reader.error.is_none());
+        assert_eq!(
+            reader
+                .view
+                .as_ref()
+                .unwrap()
+                .passage
+                .as_ref()
+                .unwrap()
+                .offset
+                .get(),
+            0
+        );
+    }
+}
+
+#[test]
 fn native_registered_creation_edit_versions_and_source_exports_are_lossless() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-source");
     let engine = start(&root);
     let files = Files::default();
@@ -314,6 +396,7 @@ fn native_registered_creation_edit_versions_and_source_exports_are_lossless() {
 }
 #[test]
 fn native_registered_import_loads_all_source_pages_and_stale_save_keeps_opening_source() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-stale");
     let engine = start(&root);
     let backend = engine.backend();
@@ -395,6 +478,7 @@ fn native_registered_import_loads_all_source_pages_and_stale_save_keeps_opening_
 }
 #[test]
 fn native_registered_unknown_artifact_save_recovers_exact_pipeline_after_reopen() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-unknown");
     let engine = start(&root);
     let real = engine.backend();
@@ -438,6 +522,7 @@ fn native_registered_unknown_artifact_save_recovers_exact_pipeline_after_reopen(
 
 #[test]
 fn native_registered_resource_bytes_lifecycle_and_deletion_use_exact_owner_revisions() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-resources");
     let engine = start(&root);
     let files = Files::default();
@@ -566,6 +651,7 @@ fn native_registered_resource_bytes_lifecycle_and_deletion_use_exact_owner_revis
 
 #[test]
 fn native_registered_applicability_retirement_and_virtual_document_resources_remain_inspectable() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-lifecycle");
     let engine = start(&root);
     let files = Files::default();
@@ -682,6 +768,7 @@ fn native_registered_applicability_retirement_and_virtual_document_resources_rem
 
 #[test]
 fn native_registered_hierarchical_move_preserves_subtree_scope_and_independent_draft() {
+    let _native_case = native_runtime_case();
     use devworks_core::protocol::results::OperationResult;
     let root = Root::new("conventions-real-move");
     let engine = start(&root);
@@ -953,6 +1040,7 @@ impl Backend for QueryWire {
 
 #[test]
 fn native_persisted_embedding_setup_indexes_searches_and_replays_lost_query_without_new_usage() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-hybrid");
     let http = Arc::new(embedding::RecordedEmbedding::default());
     let engine = embedding::configured(&root, http.clone());
@@ -1081,6 +1169,7 @@ fn native_persisted_embedding_setup_indexes_searches_and_replays_lost_query_with
 
 #[test]
 fn native_full_legal_markdown_with_nul_is_verified_before_edit_and_never_truncated_on_save() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-max-source");
     let engine = start(&root);
     let files = Files::default();
@@ -1237,6 +1326,7 @@ impl devworks_core::ports::provider_http::StreamingHttp for ControlledEmbedding 
 #[test]
 fn native_search_cancel_reaches_owned_transport_and_keeps_unknown_custody_after_selection_changes()
 {
+    let _native_case = native_runtime_case();
     use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
     let root = Root::new("conventions-real-cancel");
     let http = Arc::new(embedding::RecordedEmbedding::default());
@@ -1376,6 +1466,7 @@ fn native_search_cancel_reaches_owned_transport_and_keeps_unknown_custody_after_
 
 #[test]
 fn native_new_conventions_use_server_order_and_preserve_an_explicit_empty_slug() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-default-order");
     let engine = start(&root);
     let mut h = open(engine.backend(), &root, Files::default());
@@ -1432,6 +1523,7 @@ fn native_new_conventions_use_server_order_and_preserve_an_explicit_empty_slug()
 
 #[test]
 fn native_owned_index_operation_can_be_inspected_cancelled_and_replaced_by_scope_index() {
+    let _native_case = native_runtime_case();
     use std::sync::atomic::Ordering::SeqCst;
     let root = Root::new("conventions-real-index-cancel");
     let http = Arc::new(embedding::RecordedEmbedding::default());
@@ -1589,4 +1681,65 @@ fn native_owned_index_operation_can_be_inspected_cancelled_and_replaced_by_scope
             .phase,
         ConventionOperationPhase::Unknown
     ));
+}
+
+#[test]
+fn native_section_path_keeps_requested_revision_after_metadata_only_edit() {
+    let _native_case = native_runtime_case();
+    let root = Root::new("conventions-path-metadata-revision");
+    let http = Arc::new(embedding::RecordedEmbedding::default());
+    let engine = embedding::configured(&root, http.clone());
+    let backend = engine.backend();
+    let files = Files::default();
+    let mut h = open(backend.clone(), &root, files.clone());
+    qualify(&mut h, &*backend, &http);
+    let path = manifest(
+        &root,
+        "path-metadata",
+        "Path metadata guide",
+        "# Practices\n## Exact section\nNative alpha guidance.\n",
+        None,
+    );
+    import(&mut h, &files, path);
+    let first = select(&mut h, "Path metadata guide");
+    indexed(&mut h);
+    let frame = cop::command(
+        &*backend,
+        "conventions.edit",
+        serde_json::json!({"scope":first.scope,"conventionId":first.id,"expectedRevision":first.revision,"content":first.content,"slug":"path-after-edit","sortOrder":"91"}),
+    );
+    let change = cop::changed(backend.command("conventions.edit", &frame))
+        .unwrap_or_else(|e| panic!("{}", e.describe()));
+    let cop::Change::Record(updated) = change else {
+        panic!("expected actual edited record")
+    };
+    assert!(updated.revision.get() > first.revision.get());
+    assert_eq!(
+        updated.index.source_revision.as_ref(),
+        Some(&first.revision),
+        "metadata edit preserves an index of the original source revision"
+    );
+    replace(&mut h, "Find convention", "alpha");
+    click(&mut h, Role::Button, "Search conventions");
+    step_until(&mut h, "metadata-edited search result", |s| {
+        s.conventions
+            .state()
+            .unwrap()
+            .hits
+            .first()
+            .is_some_and(|hit| hit.convention.revision == updated.revision)
+    });
+    click(&mut h, Role::Button, "Read section path");
+    step_until(&mut h, "requested path result", |s| {
+        !s.conventions.state().unwrap().reader.loading
+    });
+    let reader = &h.state().conventions.state().unwrap().reader;
+    assert!(
+        reader.error.is_none(),
+        "actual path reply: {:?}",
+        reader.error
+    );
+    let view = reader.view.as_ref().expect("native section path reply");
+    assert_eq!(view.convention.revision, updated.revision);
+    assert!(view.passage.as_ref().unwrap().text.0.contains("Practices"));
 }

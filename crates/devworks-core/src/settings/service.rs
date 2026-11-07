@@ -242,6 +242,45 @@ fn event(
     Ok(())
 }
 
+/// Fresh writer-time credential checks supplement pure shape validation. A retired or
+/// expired stage is a recorded validation refusal, never a retryable storage outage.
+fn plan_for_write(
+    tx: &mut dyn WriteTransaction,
+    current: &Layer,
+    entries: &[SettingAssignment],
+) -> Result<Plan, StorageError> {
+    let mut planned = plan(current, entries);
+    for (key, value) in &planned.values {
+        let Some(reference) = value
+            .get("value")
+            .and_then(|v| v.get("secretRef"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        if !super::validate::is_secret_ref(reference) {
+            continue;
+        }
+        let handle = Id::new(reference).map_err(|_| StorageError::ScopeDenied)?;
+        let unavailable = tx
+            .configuration()
+            .settings_secret(&handle)?
+            .is_some_and(|row| {
+                matches!(
+                    row.state,
+                    crate::ports::storage::SettingsSecretState::Writing
+                        | crate::ports::storage::SettingsSecretState::Deleting
+                        | crate::ports::storage::SettingsSecretState::Deleted
+                ) || row.state == crate::ports::storage::SettingsSecretState::Ready
+                    && row.expires_at_ms <= tx.now_ms()
+            });
+        if unavailable {
+            planned.issues.push(Issue::blocking(key, "credential.stageUnavailable", "This credential stage expired or was removed. Enter the credential again before saving."));
+        }
+    }
+    Ok(planned)
+}
+
 /// Appends the planned revision and its `SettingsRevisionSaved` history (with each changed
 /// key's adoption boundary, which the engine consumes at safe steps).
 fn commit(
@@ -253,6 +292,7 @@ fn commit(
 ) -> Result<ConfigRevision, StorageError> {
     let scope = &current.scope;
     let doc = body(plan, ctx.principal(), tx.now_ms(), origin.clone());
+    super::secrets::retain(tx, &doc)?;
     let saved = tx.configuration().append_revision(
         scope,
         NAMESPACE,
@@ -384,7 +424,7 @@ pub(crate) fn save_workspace_value(
             value: DynamicJson(value),
         },
     }];
-    let planned = plan(&current, &entries);
+    let planned = plan_for_write(tx, &current, &entries)?;
     if planned.blocking().next().is_some() {
         return Ok(Err((DomainErrorCode::InvalidArgument, "setting")));
     }
@@ -410,7 +450,7 @@ fn save(
     if current.revision != expected {
         return Err(stale(&scope, expected, current.revision));
     }
-    let planned = plan(&current, &input.entries.0);
+    let planned = plan_for_write(tx, &current, &input.entries.0)?;
     let blocking: Vec<&Issue> = planned.blocking().collect();
     if !blocking.is_empty() {
         return Err(plan_refusal(&blocking, &scope).into());
@@ -468,7 +508,7 @@ pub fn apply_human_assignments(
     require_human(tx, ctx)?;
     require_scope(&*tx.configuration(), scope)?;
     let current = current_layer(&*tx.configuration(), scope)?;
-    let planned = plan(&current, entries);
+    let planned = plan_for_write(tx, &current, entries)?;
     let blocking: Vec<&Issue> = planned.blocking().collect();
     if !blocking.is_empty() {
         return Err(plan_refusal(&blocking, scope).into());
@@ -512,7 +552,7 @@ pub fn stage_proposal(
     if current.revision != expected_revision {
         return Err(stale(scope, expected_revision, current.revision));
     }
-    let planned = plan(&current, entries);
+    let planned = plan_for_write(tx, &current, entries)?;
     let blocking: Vec<&Issue> = planned.blocking().collect();
     if !blocking.is_empty() {
         return Err(plan_refusal(&blocking, scope).into());
@@ -575,18 +615,20 @@ fn stage(
     planned: &Plan,
 ) -> Result<ProposalRecord, StorageError> {
     let id = tx.new_id(IdKind::Operation);
+    let doc = proposal_body(
+        entries,
+        planned,
+        provenance(ctx),
+        &[ctx.principal().0.as_str().to_owned()],
+    );
+    super::secrets::retain(tx, &doc)?;
     let record = tx.configuration().stage(NewProposal {
         id: id.clone(),
         scope: current.scope.clone(),
         namespace: NAMESPACE.into(),
         base_revision: current.revision,
         author: ctx.principal().clone(),
-        body: proposal_body(
-            entries,
-            planned,
-            provenance(ctx),
-            &[ctx.principal().0.as_str().to_owned()],
-        ),
+        body: doc,
     })?;
     event(
         tx,
@@ -675,7 +717,7 @@ pub fn approve_proposal(
         return Err(stale(&p.scope, p.base_revision, current.revision));
     }
     let entries = proposal_entries(&p)?;
-    let planned = plan(&current, &entries);
+    let planned = plan_for_write(tx, &current, &entries)?;
     let blocking: Vec<&Issue> = planned.blocking().collect();
     if !blocking.is_empty() {
         return Err(plan_refusal(&blocking, &p.scope).into());
@@ -753,7 +795,7 @@ pub fn reconcile_proposal(
         Some(e) => e,
         None => proposal_entries(&p)?,
     };
-    let planned = plan(&current, &entries);
+    let planned = plan_for_write(tx, &current, &entries)?;
     let blocking: Vec<&Issue> = planned.blocking().collect();
     if !blocking.is_empty() {
         return Err(plan_refusal(&blocking, &p.scope).into());
@@ -765,12 +807,14 @@ pub fn reconcile_proposal(
     if !authors.contains(&reconciler) {
         authors.push(reconciler);
     }
+    let doc = proposal_body(&entries, &planned, p.body["provenance"].clone(), &authors);
+    super::secrets::retain(tx, &doc)?;
     let reconciled = tx.configuration().update_proposal(
         id,
         p.revision,
         ProposalChange::Reconcile {
             base_revision: current.revision,
-            body: proposal_body(&entries, &planned, p.body["provenance"].clone(), &authors),
+            body: doc,
         },
     )?;
     event(
@@ -823,7 +867,7 @@ pub fn rollback(
         return Err(stale(scope, expected_revision, current.revision));
     }
     let entries = rollback_assignments(&*tx.configuration(), scope, target_revision)?;
-    let planned = plan(&current, &entries);
+    let planned = plan_for_write(tx, &current, &entries)?;
     let blocking: Vec<&Issue> = planned.blocking().collect();
     if !blocking.is_empty() {
         return Err(plan_refusal(&blocking, scope).into());

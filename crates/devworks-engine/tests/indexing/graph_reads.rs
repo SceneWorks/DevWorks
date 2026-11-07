@@ -29,6 +29,7 @@ fn page(
 }
 #[test]
 fn native_graph_reads_reuse_one_pin_and_stream_exact_source_after_checkout_removal() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -300,6 +301,7 @@ fn native_graph_reads_reuse_one_pin_and_stream_exact_source_after_checkout_remov
 
 #[test]
 fn native_graph_pin_keeps_selection_gaps_and_rechecks_authority_for_every_member() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -548,6 +550,7 @@ impl devworks_core::ports::files::ArtifactFiles for ControlledFiles {
 }
 #[test]
 fn native_source_verification_obeys_cancel_deadline_and_work_bounds_without_poisoning_reads() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -655,6 +658,7 @@ fn native_source_verification_obeys_cancel_deadline_and_work_bounds_without_pois
 
 #[test]
 fn native_swift_dependency_pin_does_not_duplicate_its_declared_cross_repository_link() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -745,6 +749,7 @@ fn native_swift_dependency_pin_does_not_duplicate_its_declared_cross_repository_
 
 #[test]
 fn native_current_maps_owned_git_identity_to_the_actual_indexed_worktree_without_main_fallback() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -1002,6 +1007,7 @@ fn native_current_maps_owned_git_identity_to_the_actual_indexed_worktree_without
 
 #[test]
 fn native_overlay_read_operators_expose_only_relevant_formerly_mapped_callers() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -1170,6 +1176,7 @@ impl devworks_core::ports::indexing::StructuralParser for CapturedConfidence {
 }
 #[test]
 fn native_fallback_confidence_survives_publication_and_counts_distinct_answer_nodes() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -1327,6 +1334,7 @@ impl devworks_core::ports::indexing::StructuralParser for CapturedForeignCall {
 }
 #[test]
 fn native_captured_foreign_identity_never_selects_ordinal_zero_when_the_view_is_ambiguous() {
+    let _case = native_runtime_case();
     use devworks_core::ports::indexing::StructuralParser;
     let h = Harness::new();
     let executor = runtime();
@@ -1478,4 +1486,137 @@ fn native_captured_foreign_identity_never_selects_ordinal_zero_when_the_view_is_
     assert_eq!(value.unmapped_inbound_edges.unwrap().get(), 1);
     executor.block_on(app.shutdown());
     let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn native_tied_spans_select_methods_and_complete_overlay_coverage_matches_its_manifests() {
+    let _case = native_runtime_case();
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    let repo = src.join("tied-spans");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join("Program.cs"),
+        "class Example { void Target() {} }",
+    )
+    .unwrap();
+    std::fs::write(repo.join("Example.csproj"),"<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>").unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "tied source"]);
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repository = discovered(&app, &ctx).remove(0);
+    let run = index(&app, &ctx, &repository, "tied-baseline");
+    executor.block_on(within("tied source baseline", async {
+        loop {
+            let state = run_state(&store, &run);
+            if state.state == RUN_SUCCEEDED {
+                break;
+            }
+            assert!(!run_terminal(&state.state), "{state:?}");
+            tokio::task::yield_now().await;
+        }
+    }));
+    let mut failures = Vec::new();
+    let nodes = page(
+        &app,
+        &ctx,
+        "code.nodes_by_file",
+        json!({"kind":"NodesByFile","selection":{"repositoryId":repository,"path":"Program.cs","line":"1"}}),
+        None,
+        None,
+    );
+    let GraphResult::CodeNodes { value: nodes } = nodes.result else {
+        panic!("file nodes")
+    };
+    let selected = nodes
+        .nodes
+        .0
+        .iter()
+        .find(|n| Some(&n.node_id) == nodes.selected_node_id.as_ref())
+        .unwrap();
+    if selected.node_kind.0 != "Method" {
+        failures.push(format!("tied span selected {}", selected.node_kind.0));
+    }
+    std::fs::write(
+        repo.join("Program.cs"),
+        "class Example { void Target() { return; } }",
+    )
+    .unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "overlay source"]);
+    let revision = read(&*store, |s| {
+        devworks_core::services::indexing::section_config(
+            s.indexing(),
+            &devworks_core::services::indexing::section_key(None),
+        )
+    })
+    .revision;
+    let request = json!({"protocol":"1.0-draft.1","schemaRevision":2,"requestKey":"tied-overlay","command":{"kind":"RefreshOverlay","repositoryId":repository,"ref":"refs/heads/main","expectedSourceRevision":revision.to_string()}});
+    let CommandReply::Recorded { receipt, .. } = app
+        .command(
+            &ctx,
+            "indexing.refresh_overlay",
+            request.to_string().as_bytes(),
+        )
+        .unwrap()
+    else {
+        panic!("overlay admission")
+    };
+    let DomainDecision::Applied {
+        result: OperationResult::IndexingRefreshOverlay { value },
+        ..
+    } = receipt.decision
+    else {
+        panic!("overlay result")
+    };
+    let overlay = executor.block_on(within("tied overlay publishes", async {
+        loop {
+            let state = run_state(&store, value.id.as_str());
+            if state.state == RUN_SUCCEEDED {
+                break state;
+            }
+            assert!(!run_terminal(&state.state), "{state:?}");
+            tokio::task::yield_now().await;
+        }
+    }));
+    let overview = page(
+        &app,
+        &ctx,
+        "code.overview",
+        json!({"kind":"Overview"}),
+        Some(json!({"kind":"Exact","viewIds":[overlay.output_view_id.unwrap()]})),
+        None,
+    );
+    assert!(matches!(
+        overview.scope_coverage.as_ref().unwrap().coverage.state,
+        devworks_core::protocol::data::CoverageState::Complete
+    ));
+    let GraphResult::RepositoryOverview { value } = overview.result else {
+        panic!("overview")
+    };
+    let value = serde_json::to_value(value).unwrap();
+    if value["graphCoverage"]["state"] != "Complete" {
+        failures.push("overlay overview coverage is partial".into());
+    }
+    let modules = value["internalModules"].as_array().unwrap();
+    assert!(
+        !modules.is_empty(),
+        "actual captured project supplies a module"
+    );
+    if modules
+        .iter()
+        .any(|m| m["observedCoverage"]["state"] != "Complete")
+    {
+        failures.push("overlay module coverage is partial".into());
+    }
+    executor.block_on(app.shutdown());
+    let _ = std::fs::remove_dir_all(src);
+    assert!(failures.is_empty(), "{}", failures.join("; "));
 }

@@ -345,7 +345,7 @@ fn build(
     }
     let mut links = Links::new();
     let mut direct = BTreeSet::<String>::new();
-    let mut direct_complete = true;
+    let mut direct_complete = !reader.gaps.contains(&"graph_visited_limit");
     for edge in &edges.linked {
         if !reader.budget.visit() {
             direct_complete = false;
@@ -485,6 +485,7 @@ fn build(
         return Err(StorageError::CursorExpired.into());
     }
     if reader.budget.exhausted.is_some()
+        || reader.gaps.contains(&"graph_visited_limit")
         || !edges.unmapped.is_empty()
         || !reader.selected.pin.unavailable_repositories.is_empty()
     {

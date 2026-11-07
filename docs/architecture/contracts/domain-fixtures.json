@@ -4258,7 +4258,7 @@
   {
     "id": "result-router.embedding_spaces",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"router.embedding_spaces\",\"value\":{\"items\":[],\"hasMore\":false,\"selectionRevision\":\"1\",\"qualificationAvailable\":false}}",
+    "raw": "{\"kind\":\"router.embedding_spaces\",\"value\":{\"items\":[],\"hasMore\":false,\"selectionRevision\":\"1\",\"qualificationAvailable\":false,\"availabilityReason\":\"Qualification is unavailable in this recorded fixture\"}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12075,6 +12075,20 @@
     "schemaValid": true
   },
   {
+    "id": "dw13-r3-binding-features.get",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"features.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-features.edit-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit\",\"workId\":\"id-a\",\"expectedRevision\":\"1\",\"changes\":{}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "dw13-r3-binding-features.edit",
     "entry": "operation-result.r3",
     "raw": "{\"kind\":\"features.edit\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
@@ -12092,6 +12106,13 @@
     "id": "dw13-r3-binding-features.list",
     "entry": "operation-result.r3",
     "raw": "{\"kind\":\"features.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-features.create-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.create\",\"projectId\":\"project-a\",\"creation\":{\"kind\":\"Single\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[],\"statusId\":\"id-a\",\"priority\":1}},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12180,6 +12201,13 @@
     "schemaValid": true
   },
   {
+    "id": "dw13-r3-admission-features.edit_plan-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit_plan\",\"featureId\":\"root-a\",\"expectedRevision\":\"1\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "dw13-r3-binding-features.edit_plan",
     "entry": "operation-result.r3",
     "raw": "{\"kind\":\"features.edit_plan\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
@@ -12257,6 +12285,13 @@
     "schemaValid": true
   },
   {
+    "id": "dw13-r3-admission-tasks.sync_plan-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.sync_plan\",\"featureId\":\"root-a\",\"expectedPlanRevision\":\"1\",\"expectedTaskSetRevision\":\"1\",\"tasks\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "dw13-r3-binding-tasks.sync_plan",
     "entry": "operation-result.r3",
     "raw": "{\"kind\":\"tasks.sync_plan\",\"value\":{\"items\":[],\"hasMore\":false}}",
@@ -12316,6 +12351,13 @@
     "id": "dw13-r3-admission-next_work.release_claim-Command",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"next_work.release_claim\",\"claimId\":\"id-a\",\"expectedFence\":\"0\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-projects.create-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.create\",\"name\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[]},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12441,7 +12483,7 @@
   {
     "id": "dw13-r3-binding-conventions.search",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.search\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"retrieval\":{\"mode\":\"Lexical\",\"gaps\":[],\"moreGaps\":false}}}",
+    "raw": "{\"kind\":\"conventions.search\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"retrieval\":{\"mode\":\"Lexical\",\"gaps\":[],\"moreGaps\":false,\"reason\":\"No compatible embedding space is selected\"}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12469,7 +12511,7 @@
   {
     "id": "dw13-r3-binding-conventions.read",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.read\",\"value\":{\"kind\":\"Document\",\"view\":{\"convention\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"}},\"format\":\"Markdown\",\"availability\":\"Available\",\"manifestSchema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}}",
+    "raw": "{\"kind\":\"conventions.read\",\"value\":{\"kind\":\"Document\",\"view\":{\"convention\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}},\"format\":\"Markdown\",\"availability\":\"Available\",\"manifestSchema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"passage\":{\"text\":\"fixture source\",\"offset\":\"0\",\"hasMore\":false}}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12497,7 +12539,7 @@
   {
     "id": "dw13-r3-binding-conventions.edit",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.edit\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"}}}",
+    "raw": "{\"kind\":\"conventions.edit\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12511,7 +12553,7 @@
   {
     "id": "dw13-r3-binding-conventions.applicability",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.applicability\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"}}}",
+    "raw": "{\"kind\":\"conventions.applicability\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12525,7 +12567,7 @@
   {
     "id": "dw13-r3-binding-conventions.retire",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.retire\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
+    "raw": "{\"kind\":\"conventions.retire\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false,\"convention\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12539,7 +12581,7 @@
   {
     "id": "dw13-r3-binding-conventions.index",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.index\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
+    "raw": "{\"kind\":\"conventions.index\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false,\"convention\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12553,7 +12595,7 @@
   {
     "id": "dw13-r3-binding-conventions.delete",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.delete\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
+    "raw": "{\"kind\":\"conventions.delete\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false,\"convention\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12567,7 +12609,7 @@
   {
     "id": "dw13-r3-binding-conventions.delete_resource",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.delete_resource\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
+    "raw": "{\"kind\":\"conventions.delete_resource\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false,\"convention\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12581,7 +12623,7 @@
   {
     "id": "dw13-r3-binding-conventions.import",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.import\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"}}}",
+    "raw": "{\"kind\":\"conventions.import\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12595,8 +12637,456 @@
   {
     "id": "dw13-r3-binding-conventions.move",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.move\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"}}}",
+    "raw": "{\"kind\":\"conventions.move\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}",
     "typedValid": true,
     "schemaValid": true
+  },
+  {
+    "id": "dw33-r4-admission-conventions.list",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"conventions.list\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20},\"applicability\":[]},\"schemaRevision\":4}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw33-r4-source-revision-conventions.list",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"conventions.list\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"manifestSchema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceScopeRevision\":\"2\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw33-reject-null-source-revision-conventions.list",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"conventions.list\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"manifestSchema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceScopeRevision\":null}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw33-reject-zero-source-revision-conventions.list",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"conventions.list\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"manifestSchema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceScopeRevision\":\"0\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw33-reject-source-revision-before4-conventions.list",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"conventions.list\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"manifestSchema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceScopeRevision\":\"2\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw33-r4-admission-conventions.search",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"conventions.search\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20},\"applicability\":[],\"text\":\"fixture\"},\"schemaRevision\":4}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw33-r4-source-revision-conventions.search",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"conventions.search\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"retrieval\":{\"mode\":\"Lexical\",\"gaps\":[],\"moreGaps\":false,\"reason\":\"No compatible embedding space is selected\"},\"sourceScopeRevision\":\"2\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw33-reject-null-source-revision-conventions.search",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"conventions.search\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"retrieval\":{\"mode\":\"Lexical\",\"gaps\":[],\"moreGaps\":false,\"reason\":\"No compatible embedding space is selected\"},\"sourceScopeRevision\":null}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw33-reject-zero-source-revision-conventions.search",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"conventions.search\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"retrieval\":{\"mode\":\"Lexical\",\"gaps\":[],\"moreGaps\":false,\"reason\":\"No compatible embedding space is selected\"},\"sourceScopeRevision\":\"0\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw33-reject-source-revision-before4-conventions.search",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"conventions.search\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"retrieval\":{\"mode\":\"Lexical\",\"gaps\":[],\"moreGaps\":false,\"reason\":\"No compatible embedding space is selected\"},\"sourceScopeRevision\":\"2\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw33-r4-admission-conventions.resources",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"conventions.resources\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20},\"applicability\":[]},\"schemaRevision\":4}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw33-r4-source-revision-conventions.resources",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"conventions.resources\",\"value\":{\"kind\":\"Catalog\",\"page\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"manifestSchema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw33-r4-admission-conventions.version",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"conventions.version\",\"conventionId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":4}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw33-r4-source-revision-conventions.version",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"conventions.version\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"manifestSchema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceScopeRevision\":\"2\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw89-r3-newest-root",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":true,\"rootId\":\"root-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw89-r3-newest-project",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":true,\"projectId\":\"project-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw89-r3-forward-project",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":false,\"projectId\":\"project-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw89-direction-before-r3-1",
+    "entry": "query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":1,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":true,\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw89-direction-before-r3-2",
+    "entry": "query-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":2,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":true,\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw89-invalid-direction-null",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":null,\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw89-invalid-direction-string",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":\"true\",\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-admission-schemas.connections",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"schemas.connections\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-result-schemas.connections",
+    "entry": "operation-result.r5",
+    "raw": "{\"kind\":\"schemas.connections\",\"value\":{\"items\":[{\"id\":\"schema-connection\",\"revision\":\"2\",\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"state\":\"Partial\",\"writesEnabled\":false,\"metadataOnly\":true,\"credentialRef\":\"schema-password-handle\",\"currentViewId\":\"schema-view\",\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"ownerId\":\"human-a\",\"profile\":{\"driver\":\"sqlx-mysql-0.9\",\"serverVersion\":\"8.4\",\"authentication\":\"Password\",\"tls\":\"VerifyFull\",\"readOnlyBoundary\":\"Read-only metadata transaction\",\"supportedMetadata\":[\"Catalog\",\"Schema\",\"Table\",\"Column\",\"Index\",\"Constraint\",\"View\",\"Procedure\"],\"unsupportedMetadata\":[\"Type\"],\"limitations\":[\"Recorded wire fixture only\"]},\"coverage\":{\"state\":\"Partial\",\"gaps\":[\"fixture-coverage-gap\"],\"moreGaps\":false},\"lastSyncedAtMs\":\"1000\",\"lastError\":\"Previous fixture failure\",\"activeOperationId\":\"schema-operation\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-result-schemas.connections",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"schemas.connections\",\"value\":{\"items\":[{\"id\":\"schema-connection\",\"revision\":\"2\",\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"state\":\"Partial\",\"writesEnabled\":false,\"metadataOnly\":true,\"credentialRef\":\"schema-password-handle\",\"currentViewId\":\"schema-view\",\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"ownerId\":\"human-a\",\"profile\":{\"driver\":\"sqlx-mysql-0.9\",\"serverVersion\":\"8.4\",\"authentication\":\"Password\",\"tls\":\"VerifyFull\",\"readOnlyBoundary\":\"Read-only metadata transaction\",\"supportedMetadata\":[\"Catalog\",\"Schema\",\"Table\",\"Column\",\"Index\",\"Constraint\",\"View\",\"Procedure\"],\"unsupportedMetadata\":[\"Type\"],\"limitations\":[\"Recorded wire fixture only\"]},\"coverage\":{\"state\":\"Partial\",\"gaps\":[\"fixture-coverage-gap\"],\"moreGaps\":false},\"lastSyncedAtMs\":\"1000\",\"lastError\":\"Previous fixture failure\",\"activeOperationId\":\"schema-operation\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-admission-schemas.objects",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"schemas.objects\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"SchemaPublished\",\"connectionIds\":[\"schema-connection\"]},\"connectionId\":\"schema-connection\",\"kinds\":[],\"page\":{\"limit\":20}},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-result-schemas.objects",
+    "entry": "operation-result.r5",
+    "raw": "{\"kind\":\"schemas.objects\",\"value\":{\"items\":[{\"id\":\"schema-object\",\"viewId\":\"schema-view\",\"kind\":\"Column\",\"qualifiedName\":\"catalog.public.child.parent_id\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"metadata\":{\"name\":\"parent_id\",\"catalog\":\"catalog\",\"columnNames\":[\"parent_id\"],\"referencedColumns\":[\"id\"],\"parameters\":[{\"name\":\"input_id\",\"ordinal\":\"1\",\"dataType\":\"integer\",\"mode\":\"IN\",\"nullable\":false}],\"schema\":\"public\",\"comment\":\"Retained metadata\",\"dataType\":\"integer\",\"ordinal\":\"1\",\"nullable\":false,\"primaryKey\":false,\"defaultValue\":\"0\",\"columnKey\":\"MUL\",\"extra\":\"fixture\",\"unique\":false,\"indexType\":\"BTREE\",\"constraintType\":\"FOREIGN KEY\",\"referencedTable\":\"catalog.public.parent\",\"checkClause\":\"parent_id >= 0\",\"routineType\":\"PROCEDURE\",\"definitionSql\":\"CREATE TABLE child(parent_id INTEGER)\"}}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-result-schemas.objects",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"schemas.objects\",\"value\":{\"items\":[{\"id\":\"schema-object\",\"viewId\":\"schema-view\",\"kind\":\"Column\",\"qualifiedName\":\"catalog.public.child.parent_id\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"metadata\":{\"name\":\"parent_id\",\"catalog\":\"catalog\",\"columnNames\":[\"parent_id\"],\"referencedColumns\":[\"id\"],\"parameters\":[{\"name\":\"input_id\",\"ordinal\":\"1\",\"dataType\":\"integer\",\"mode\":\"IN\",\"nullable\":false}],\"schema\":\"public\",\"comment\":\"Retained metadata\",\"dataType\":\"integer\",\"ordinal\":\"1\",\"nullable\":false,\"primaryKey\":false,\"defaultValue\":\"0\",\"columnKey\":\"MUL\",\"extra\":\"fixture\",\"unique\":false,\"indexType\":\"BTREE\",\"constraintType\":\"FOREIGN KEY\",\"referencedTable\":\"catalog.public.parent\",\"checkClause\":\"parent_id >= 0\",\"routineType\":\"PROCEDURE\",\"definitionSql\":\"CREATE TABLE child(parent_id INTEGER)\"}}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-admission-schemas.relationships",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"schemas.relationships\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"SchemaPublished\",\"connectionIds\":[\"schema-connection\"]},\"connectionId\":\"schema-connection\",\"objectIds\":[],\"page\":{\"limit\":20}},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-result-schemas.relationships",
+    "entry": "operation-result.r5",
+    "raw": "{\"kind\":\"schemas.relationships\",\"value\":{\"items\":[{\"id\":\"schema-relation\",\"viewId\":\"schema-view\",\"fromObjectId\":\"schema-object\",\"toObjectId\":\"schema-parent\",\"relation\":\"FOREIGN_KEY\",\"inferred\":false}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-admission-schemas.index",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.index\",\"connectionId\":\"schema-connection\",\"expectedRevision\":\"1\",\"testOnly\":true},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-schemas.index",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.index\",\"connectionId\":\"schema-connection\",\"expectedRevision\":\"1\",\"testOnly\":true},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-result-schemas.index",
+    "entry": "operation-result.r5",
+    "raw": "{\"kind\":\"schemas.index\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"repositoryIds\":[],\"stage\":\"fixture\",\"state\":\"ObservedComplete\",\"completedUnits\":\"0\",\"outputViews\":[],\"diagnostics\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-admission-schemas.refresh",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.refresh\",\"connectionId\":\"schema-connection\",\"expectedRevision\":\"1\",\"testOnly\":true},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-schemas.refresh",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.refresh\",\"connectionId\":\"schema-connection\",\"expectedRevision\":\"1\",\"testOnly\":true},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-result-schemas.refresh",
+    "entry": "operation-result.r5",
+    "raw": "{\"kind\":\"schemas.refresh\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"repositoryIds\":[],\"stage\":\"fixture\",\"state\":\"ObservedComplete\",\"completedUnits\":\"0\",\"outputViews\":[],\"diagnostics\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-admission-schemas.remove_index",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.remove_index\",\"connectionId\":\"schema-connection\",\"expectedRevision\":\"1\"},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-result-schemas.remove_index",
+    "entry": "operation-result.r5",
+    "raw": "{\"kind\":\"schemas.remove_index\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-admission-schemas.configure",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"action\":\"Save\"},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-schemas.configure",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"action\":\"Save\"},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-result-schemas.configure",
+    "entry": "operation-result.r5",
+    "raw": "{\"kind\":\"schemas.configure\",\"value\":{\"id\":\"schema-connection\",\"revision\":\"2\",\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"state\":\"Partial\",\"writesEnabled\":false,\"metadataOnly\":true,\"credentialRef\":\"schema-password-handle\",\"currentViewId\":\"schema-view\",\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"ownerId\":\"human-a\",\"profile\":{\"driver\":\"sqlx-mysql-0.9\",\"serverVersion\":\"8.4\",\"authentication\":\"Password\",\"tls\":\"VerifyFull\",\"readOnlyBoundary\":\"Read-only metadata transaction\",\"supportedMetadata\":[\"Catalog\",\"Schema\",\"Table\",\"Column\",\"Index\",\"Constraint\",\"View\",\"Procedure\"],\"unsupportedMetadata\":[\"Type\"],\"limitations\":[\"Recorded wire fixture only\"]},\"coverage\":{\"state\":\"Partial\",\"gaps\":[\"fixture-coverage-gap\"],\"moreGaps\":false},\"lastSyncedAtMs\":\"1000\",\"lastError\":\"Previous fixture failure\",\"activeOperationId\":\"schema-operation\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-result-schemas.configure",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"schemas.configure\",\"value\":{\"id\":\"schema-connection\",\"revision\":\"2\",\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"state\":\"Partial\",\"writesEnabled\":false,\"metadataOnly\":true,\"credentialRef\":\"schema-password-handle\",\"currentViewId\":\"schema-view\",\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"ownerId\":\"human-a\",\"profile\":{\"driver\":\"sqlx-mysql-0.9\",\"serverVersion\":\"8.4\",\"authentication\":\"Password\",\"tls\":\"VerifyFull\",\"readOnlyBoundary\":\"Read-only metadata transaction\",\"supportedMetadata\":[\"Catalog\",\"Schema\",\"Table\",\"Column\",\"Index\",\"Constraint\",\"View\",\"Procedure\"],\"unsupportedMetadata\":[\"Type\"],\"limitations\":[\"Recorded wire fixture only\"]},\"coverage\":{\"state\":\"Partial\",\"gaps\":[\"fixture-coverage-gap\"],\"moreGaps\":false},\"lastSyncedAtMs\":\"1000\",\"lastError\":\"Previous fixture failure\",\"activeOperationId\":\"schema-operation\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-admission-database.configure_sensitive_columns",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"database.configure_sensitive_columns\",\"connectionId\":\"schema-connection\",\"expectedRevision\":\"1\",\"columnIds\":[]},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-result-database.configure_sensitive_columns",
+    "entry": "operation-result.r5",
+    "raw": "{\"kind\":\"database.configure_sensitive_columns\",\"value\":{\"id\":\"schema-connection\",\"revision\":\"2\",\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"state\":\"Partial\",\"writesEnabled\":false,\"metadataOnly\":true,\"credentialRef\":\"schema-password-handle\",\"currentViewId\":\"schema-view\",\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"ownerId\":\"human-a\",\"profile\":{\"driver\":\"sqlx-mysql-0.9\",\"serverVersion\":\"8.4\",\"authentication\":\"Password\",\"tls\":\"VerifyFull\",\"readOnlyBoundary\":\"Read-only metadata transaction\",\"supportedMetadata\":[\"Catalog\",\"Schema\",\"Table\",\"Column\",\"Index\",\"Constraint\",\"View\",\"Procedure\"],\"unsupportedMetadata\":[\"Type\"],\"limitations\":[\"Recorded wire fixture only\"]},\"coverage\":{\"state\":\"Partial\",\"gaps\":[\"fixture-coverage-gap\"],\"moreGaps\":false},\"lastSyncedAtMs\":\"1000\",\"lastError\":\"Previous fixture failure\",\"activeOperationId\":\"schema-operation\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-engine-Sqlite",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"Sqlite\",\"endpoint\":\"/fixture/metadata.sqlite\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"File\",\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"action\":\"Save\"},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-engine-MariaDb",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MariaDb\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"action\":\"Save\"},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-engine-MySql",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"action\":\"Save\"},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-engine-Postgres",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"Postgres\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"action\":\"Save\"},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-engine-SqlServer",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"SqlServer\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"action\":\"Save\"},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-null-enabled",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":null,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"}},\"schemaRevision\":5}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-null-projectAccess",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":null,\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"}},\"schemaRevision\":5}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-null-authentication",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":null,\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"}},\"schemaRevision\":5}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-null-tls",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":null,\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"}},\"schemaRevision\":5}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-null-exposureMode",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":null,\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"}},\"schemaRevision\":5}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-project-admission-schemas.index",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.index\",\"connectionId\":\"id-a\",\"expectedRevision\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"}},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-project-schemas.index",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.index\",\"connectionId\":\"id-a\",\"expectedRevision\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"}},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-project-admission-schemas.refresh",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.refresh\",\"connectionId\":\"id-a\",\"expectedRevision\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"}},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-project-schemas.refresh",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.refresh\",\"connectionId\":\"id-a\",\"expectedRevision\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"}},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-exact-object",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"schemas.objects\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"connectionId\":\"id-a\",\"kinds\":[],\"page\":{\"limit\":20},\"objectId\":\"exact-schema-object\"},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-exact-object",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"schemas.objects\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"connectionId\":\"id-a\",\"kinds\":[],\"page\":{\"limit\":20},\"objectId\":\"exact-schema-object\"},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-retained-view",
+    "entry": "operation-result.r5",
+    "raw": "{\"kind\":\"schemas.connections\",\"value\":{\"items\":[{\"id\":\"schema-connection\",\"revision\":\"2\",\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"state\":\"Partial\",\"writesEnabled\":false,\"metadataOnly\":true,\"credentialRef\":\"schema-password-handle\",\"currentViewId\":\"schema-view\",\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"ownerId\":\"human-a\",\"profile\":{\"driver\":\"sqlx-mysql-0.9\",\"serverVersion\":\"8.4\",\"authentication\":\"Password\",\"tls\":\"VerifyFull\",\"readOnlyBoundary\":\"Read-only metadata transaction\",\"supportedMetadata\":[\"Catalog\",\"Schema\",\"Table\",\"Column\",\"Index\",\"Constraint\",\"View\",\"Procedure\"],\"unsupportedMetadata\":[\"Type\"],\"limitations\":[\"Recorded wire fixture only\"]},\"coverage\":{\"state\":\"Partial\",\"gaps\":[\"fixture-coverage-gap\"],\"moreGaps\":false},\"lastSyncedAtMs\":\"1000\",\"lastError\":\"Previous fixture failure\",\"activeOperationId\":\"schema-operation\",\"readView\":{\"pinId\":\"schema-pin\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"600000\",\"views\":[],\"schemaViews\":[{\"connectionId\":\"schema-connection\",\"snapshotId\":\"schema-view\",\"generationId\":\"schema-view\",\"schemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"accessRevision\":\"1\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]}}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-retained-view",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"schemas.connections\",\"value\":{\"items\":[{\"id\":\"schema-connection\",\"revision\":\"2\",\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"state\":\"Partial\",\"writesEnabled\":false,\"metadataOnly\":true,\"credentialRef\":\"schema-password-handle\",\"currentViewId\":\"schema-view\",\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":\"ReadOnly\",\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"},\"ownerId\":\"human-a\",\"profile\":{\"driver\":\"sqlx-mysql-0.9\",\"serverVersion\":\"8.4\",\"authentication\":\"Password\",\"tls\":\"VerifyFull\",\"readOnlyBoundary\":\"Read-only metadata transaction\",\"supportedMetadata\":[\"Catalog\",\"Schema\",\"Table\",\"Column\",\"Index\",\"Constraint\",\"View\",\"Procedure\"],\"unsupportedMetadata\":[\"Type\"],\"limitations\":[\"Recorded wire fixture only\"]},\"coverage\":{\"state\":\"Partial\",\"gaps\":[\"fixture-coverage-gap\"],\"moreGaps\":false},\"lastSyncedAtMs\":\"1000\",\"lastError\":\"Previous fixture failure\",\"activeOperationId\":\"schema-operation\",\"readView\":{\"pinId\":\"schema-pin\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"600000\",\"views\":[],\"schemaViews\":[{\"connectionId\":\"schema-connection\",\"snapshotId\":\"schema-view\",\"generationId\":\"schema-view\",\"schemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"accessRevision\":\"1\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]}}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-default-empty",
+    "entry": "operation-result.r5",
+    "raw": "{\"kind\":\"schemas.objects\",\"value\":{\"items\":[{\"id\":\"schema-object\",\"viewId\":\"schema-view\",\"kind\":\"Column\",\"qualifiedName\":\"catalog.public.child.parent_id\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"metadata\":{\"name\":\"parent_id\",\"catalog\":\"catalog\",\"columnNames\":[\"parent_id\"],\"referencedColumns\":[\"id\"],\"parameters\":[{\"name\":\"input_id\",\"ordinal\":\"1\",\"dataType\":\"integer\",\"mode\":\"IN\",\"nullable\":false}],\"schema\":\"public\",\"comment\":\"Retained metadata\",\"dataType\":\"integer\",\"ordinal\":\"1\",\"nullable\":false,\"primaryKey\":false,\"defaultValue\":\"\",\"columnKey\":\"MUL\",\"extra\":\"fixture\",\"unique\":false,\"indexType\":\"BTREE\",\"constraintType\":\"FOREIGN KEY\",\"referencedTable\":\"catalog.public.parent\",\"checkClause\":\"parent_id >= 0\",\"routineType\":\"PROCEDURE\",\"definitionSql\":\"CREATE TABLE child(parent_id INTEGER)\"}}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-default-maximum",
+    "entry": "operation-result.r5",
+    "raw": "{\"kind\":\"schemas.objects\",\"value\":{\"items\":[{\"id\":\"schema-object\",\"viewId\":\"schema-view\",\"kind\":\"Column\",\"qualifiedName\":\"catalog.public.child.parent_id\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"metadata\":{\"name\":\"parent_id\",\"catalog\":\"catalog\",\"columnNames\":[\"parent_id\"],\"referencedColumns\":[\"id\"],\"parameters\":[{\"name\":\"input_id\",\"ordinal\":\"1\",\"dataType\":\"integer\",\"mode\":\"IN\",\"nullable\":false}],\"schema\":\"public\",\"comment\":\"Retained metadata\",\"dataType\":\"integer\",\"ordinal\":\"1\",\"nullable\":false,\"primaryKey\":false,\"defaultValue\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"columnKey\":\"MUL\",\"extra\":\"fixture\",\"unique\":false,\"indexType\":\"BTREE\",\"constraintType\":\"FOREIGN KEY\",\"referencedTable\":\"catalog.public.parent\",\"checkClause\":\"parent_id >= 0\",\"routineType\":\"PROCEDURE\",\"definitionSql\":\"CREATE TABLE child(parent_id INTEGER)\"}}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-r5-default-over-bound",
+    "entry": "operation-result.r5",
+    "raw": "{\"kind\":\"schemas.objects\",\"value\":{\"items\":[{\"id\":\"schema-object\",\"viewId\":\"schema-view\",\"kind\":\"Column\",\"qualifiedName\":\"catalog.public.child.parent_id\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"metadata\":{\"name\":\"parent_id\",\"catalog\":\"catalog\",\"columnNames\":[\"parent_id\"],\"referencedColumns\":[\"id\"],\"parameters\":[{\"name\":\"input_id\",\"ordinal\":\"1\",\"dataType\":\"integer\",\"mode\":\"IN\",\"nullable\":false}],\"schema\":\"public\",\"comment\":\"Retained metadata\",\"dataType\":\"integer\",\"ordinal\":\"1\",\"nullable\":false,\"primaryKey\":false,\"defaultValue\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"columnKey\":\"MUL\",\"extra\":\"fixture\",\"unique\":false,\"indexType\":\"BTREE\",\"constraintType\":\"FOREIGN KEY\",\"referencedTable\":\"catalog.public.parent\",\"checkClause\":\"parent_id >= 0\",\"routineType\":\"PROCEDURE\",\"definitionSql\":\"CREATE TABLE child(parent_id INTEGER)\"}}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
   }
 ]

@@ -6,6 +6,7 @@
 //! and command use cases execute on the storage write owner's thread, so the gateway hands them
 //! across threads. Core stays runtime-agnostic (no async runtime dependency).
 pub mod browser;
+pub mod database;
 pub mod diagnostics;
 pub mod files;
 pub mod git_transport;

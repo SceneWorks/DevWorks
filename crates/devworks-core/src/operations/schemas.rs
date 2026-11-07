@@ -49,6 +49,13 @@ pub struct ObjectsInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<Text>,
     pub page: PageRequest,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 5))]
+    pub object_id: Option<Id>,
 }
 impl Check for ObjectsInput {
     fn check(&self) -> Result<(), String> {
@@ -59,11 +66,16 @@ impl Check for ObjectsInput {
         self.parent_id.check()?;
         self.text.check()?;
         self.page.check()?;
+        self.object_id.check()?;
         Ok(())
     }
 }
 impl Revisioned for ObjectsInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 5 {
+            self.object_id = None;
+        }
+    }
 }
 
 /// `schemas.relationships` Query input.
@@ -96,16 +108,39 @@ impl Revisioned for RelationshipsInput {
 pub struct IndexInput {
     pub connection_id: Id,
     pub expected_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 5))]
+    pub test_only: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 5))]
+    pub scope: Option<DataScope>,
 }
 impl Check for IndexInput {
     fn check(&self) -> Result<(), String> {
         self.connection_id.check()?;
         self.expected_revision.check()?;
+        self.test_only.check()?;
+        self.scope.check()?;
         Ok(())
     }
 }
 impl Revisioned for IndexInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 5 {
+            self.test_only = None;
+        }
+        if revision < 5 {
+            self.scope = None;
+        }
+    }
 }
 
 /// `schemas.refresh` Command input.
@@ -114,16 +149,39 @@ impl Revisioned for IndexInput {
 pub struct RefreshInput {
     pub connection_id: Id,
     pub expected_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 5))]
+    pub test_only: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 5))]
+    pub scope: Option<DataScope>,
 }
 impl Check for RefreshInput {
     fn check(&self) -> Result<(), String> {
         self.connection_id.check()?;
         self.expected_revision.check()?;
+        self.test_only.check()?;
+        self.scope.check()?;
         Ok(())
     }
 }
 impl Revisioned for RefreshInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 5 {
+            self.test_only = None;
+        }
+        if revision < 5 {
+            self.scope = None;
+        }
+    }
 }
 
 /// `schemas.remove_index` Command input.
@@ -154,6 +212,13 @@ pub struct ConfigureInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_revision: Option<Revision>,
     pub config: ConnectionConfig,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SchemaSourceAction", extend("x-since" = 5))]
+    pub action: Option<SchemaSourceAction>,
 }
 impl Check for ConfigureInput {
     fn check(&self) -> Result<(), String> {
@@ -161,11 +226,17 @@ impl Check for ConfigureInput {
         self.connection_id.check()?;
         self.expected_revision.check()?;
         self.config.check()?;
+        self.action.check()?;
         Ok(())
     }
 }
 impl Revisioned for ConfigureInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 5 {
+            self.action = None;
+        }
+        self.config.retain_revision(revision);
+    }
 }
 
 /// An admitted input of the `schemas` family, built only for the selected operation and mode.

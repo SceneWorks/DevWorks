@@ -23,8 +23,17 @@ fn boot_help_with_files(
     h: &Harness,
     files: Arc<dyn devworks_core::ports::files::ArtifactFiles>,
 ) -> HelpApp {
+    boot_help_with_metadata(rt, h, files, None)
+}
+fn boot_help_with_metadata(
+    rt: &tokio::runtime::Runtime,
+    h: &Harness,
+    files: Arc<dyn devworks_core::ports::files::ArtifactFiles>,
+    schemas: Option<devworks_engine::schemas::SchemaComposition>,
+) -> HelpApp {
     let store = h.open();
     let mut config = RuntimeConfig::new(id("help-job-dispatcher"));
+    config.schemas = schemas;
     config.scheduler_interval = Duration::from_secs(3600);
     config.collect_interval = Duration::from_secs(3600);
     config.housekeeping_interval = Duration::from_secs(3600);
@@ -77,6 +86,7 @@ fn boot_help_with_files(
             .scheduler()
             .drain(tokio::time::Instant::now() + Duration::from_secs(10))
             .await;
+        let _diagnostics = crate::common::help_startup_diagnostics(&*store, runtime.dispatcher());
         within("native Help startup generation", async {
             loop {
                 runtime.dispatcher().run_until_idle().await.unwrap();
@@ -188,6 +198,7 @@ impl HelpApp {
     }
 }
 struct Native {
+    operation: &'static str,
     runtime: Arc<Runtime>,
     store: Arc<dyn ApplicationStore>,
     unknown: AtomicUsize,
@@ -202,7 +213,7 @@ impl NativeJobDispatch for Native {
         operation: &str,
         raw: &[u8],
     ) -> devworks_core::gateway::CommandOutcome {
-        assert_eq!(operation, DOCS);
+        assert_eq!(operation, self.operation);
         let frame: Value = serde_json::from_slice(raw).unwrap();
         let run_id = id(frame["requestKey"].as_str().unwrap());
         let run = read(&*self.store, |s| s.jobs().job_run(&run_id)).unwrap();
@@ -245,7 +256,15 @@ impl NativeJobDispatch for Native {
     }
 }
 fn scheduler(app: &HelpApp, unknown: usize) -> (Arc<devworks_engine::Scheduler>, Arc<Native>) {
+    scheduler_for(app, unknown, DOCS)
+}
+fn scheduler_for(
+    app: &HelpApp,
+    unknown: usize,
+    operation: &'static str,
+) -> (Arc<devworks_engine::Scheduler>, Arc<Native>) {
     let native = Arc::new(Native {
+        operation,
         runtime: app.runtime.clone(),
         store: app.store.clone(),
         unknown: AtomicUsize::new(unknown),
@@ -271,6 +290,7 @@ fn captured(run: &StoredJobRun) -> Value {
 #[test]
 fn empty_scheduled_help_jobs_capture_current_revisions_for_each_run_and_explicit_stale_stays_stale()
 {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);
@@ -405,6 +425,7 @@ fn empty_scheduled_help_jobs_capture_current_revisions_for_each_run_and_explicit
 
 #[test]
 fn unknown_ack_requeue_reuses_persisted_help_frame_and_invocation_after_metadata_changes() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);
@@ -453,6 +474,7 @@ fn unknown_ack_requeue_reuses_persisted_help_frame_and_invocation_after_metadata
 
 #[test]
 fn empty_help_adapter_keeps_disabled_cancelled_held_and_stopped_runs_undispatched() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);
@@ -536,6 +558,7 @@ fn empty_help_adapter_keeps_disabled_cancelled_held_and_stopped_runs_undispatche
 
 #[test]
 fn a_lost_committed_help_ack_replays_one_exact_generation_operation() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);
@@ -582,3 +605,6 @@ mod conventions;
 
 #[path = "conventions_paid.rs"]
 mod paid_conventions;
+
+#[path = "schemas.rs"]
+mod schema_jobs;

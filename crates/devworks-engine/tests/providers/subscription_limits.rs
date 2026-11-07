@@ -411,3 +411,41 @@ fn actual_http_oauth_401_refreshes_once_but_genuine_403_requires_reauthenticatio
         }
     });
 }
+
+#[test]
+fn payment_required_preserves_api_access_and_next_native_request_succeeds() {
+    runtime().block_on(async {
+        for profile in ["OpenRouterChat", "OpenAiResponses", "AnthropicMessages"] {
+            let mut f = Fx::new(profile, Script::aggregate(""), false);
+            let success = if profile == "OpenRouterChat" {
+                json!({"id":"paid-again","model":"entitled-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}).to_string()
+            } else if profile == "OpenAiResponses" {
+                json!({"id":"paid-again","model":"entitled-model","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}).to_string()
+            } else {
+                json!({"id":"paid-again","type":"message","role":"assistant","model":"entitled-model","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}).to_string()
+            };
+            let server = LocalHttp::sequence(vec![
+                response(402,"application/json",&[],r#"{"error":{"code":402,"message":"Insufficient credits"}}"#),
+                response(200,"application/json",&[],&success),
+            ]);
+            native(&mut f,&server.endpoint);
+            other_model(&f);
+            let before=read(f.store.as_ref(),|s|s.router().connection(&id("connection"))).unwrap();
+            let first=f.produce(f.generation(vec![])).await.unwrap();
+            assert_eq!(first.result.outcome,Some(AttemptEnd::Failed));
+            assert!(first.result.faults.iter().any(|f|f.starts_with("Provider:")),"{:?}",first.result.faults);
+            let after=read(f.store.as_ref(),|s|s.router().connection(&id("connection"))).unwrap();
+            assert_eq!(after.lifecycle,"Connected","HTTP402 must not invalidate {profile} access");
+            assert_eq!(after.credential_revision,before.credential_revision);
+            assert_eq!(after.account_revision,before.account_revision);
+            assert_eq!(after.healthy,before.healthy);
+            assert!(f.connections.access(&id("connection"),None).is_ok());
+            assert!(read(f.store.as_ref(),|s|s.router().cooldowns()).is_empty());
+            assert_eq!(server.requests.lock().unwrap().len(),1,"failed inference is not automatically replayed");
+            let second=produce_model(&f,"entitled-model","entitled-model","payment-recovered").await.unwrap();
+            assert_eq!(second.result.outcome,Some(AttemptEnd::Completed));
+            assert_eq!(server.requests.lock().unwrap().len(),2);
+            server.finish();
+        }
+    });
+}

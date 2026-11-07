@@ -121,9 +121,15 @@ pub trait Backend: Send + Sync {
     fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
         Vec::new()
     }
-    /// Writes an API key the user typed into the OS secret store and returns its opaque handle
-    /// for the user's `router.configure` `Connection` action (user ingress only; DW-18). The
-    /// key never passes through a frame, receipt or log.
+    /// Human-only retained AES key utility. The returned value is transient and redacted.
+    fn generate_database_encryption_key(&self) -> Result<Secret, String> {
+        Err("Encryption key generation is unavailable".into())
+    }
+    /// Human-only purpose-bound database password intake; only its opaque handle enters commands.
+    fn stage_database_password(&self, _password: Secret) -> Result<Id, String> {
+        Err("Database credential intake is unavailable".into())
+    }
+    /// Stages the user's provider API key without putting raw bytes in a frame or receipt.
     fn stage_api_key(&self, _key: Secret) -> Result<Id, String> {
         Err("credential entry is not available".into())
     }
@@ -168,6 +174,13 @@ pub struct SecretStoreStatus {
 /// Who is waiting for a reply. Equal slots supersede each other.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Slot {
+    DatabaseList(u64, bool),
+    DatabaseObjects(u64, bool),
+    DatabaseRelations(u64, bool),
+    DatabasePrepare,
+    DatabaseCaPrepare,
+    DatabaseCa,
+    DatabaseCommand(String),
     GraphRead(u64),
     GraphTrust(String),
     Usage(u64, bool),
@@ -198,6 +211,8 @@ pub enum Slot {
     SettingsValidate,
     SettingsHealth,
     SettingsSave,
+    /// Transient native credential intake; no raw value is serialized with this slot.
+    SettingsSecret(String),
     SettingsExplain(String),
     SessionsList,
     SessionStart,
@@ -324,8 +339,8 @@ pub enum Slot {
     /// The job's active run, inspected by its ID (job ID): the latest occurrence may be a
     /// skipped one while the active run continues.
     JobActiveRun(String),
-    /// A project's artifacts, as prompt candidates of a job form (project ID).
-    JobPrompts(String),
+    /// A scoped prompt page of one form generation (None is workspace).
+    JobPrompts(u64, Option<String>),
     JobCreate,
     /// A command of one job or its run (one at a time per job).
     JobCommand(String),
@@ -342,7 +357,7 @@ pub enum Slot {
     /// Every card (feature task or standalone issue) of a project.
     WorkCards(String),
     /// The project change feed (Activity) of a project.
-    WorkActivity(String),
+    WorkActivity(String, Option<String>, u64),
     /// One work item's current record (readiness included).
     WorkDetail(String),
     WorkGit(String),
@@ -390,6 +405,12 @@ pub enum Reply {
 
 /// The output of a multi-step task.
 pub enum TaskOutput {
+    /// The credential is already in SecretStore. Value is an opaque reference or null.
+    SettingSecret {
+        frame: Vec<u8>,
+        key: String,
+        value: serde_json::Value,
+    },
     /// A prepared command frame (attachment, provider or package), not admitted yet.
     Prepared { frame: Vec<u8> },
     /// A downloaded bundle stays owned until its artifact-save command is confirmed.

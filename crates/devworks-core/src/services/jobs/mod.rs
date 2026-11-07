@@ -106,9 +106,10 @@ pub const RUN_AGGREGATE: &str = "job_run";
 /// Journal capability of a run's operation.
 pub const RUN_CAPABILITY: &str = "jobs.run";
 /// The catalog commands a native job may run: the operation the frozen inventory maps each
-/// retained CodeGraph job type to (`job:src/CodeGraph.Jobs/Jobs/*`). Only those with a registered
+/// retained CodeGraph job type to (`job:src/CodeGraph.Jobs/Jobs/*`), plus approved native schema sync.
+/// Only those with a registered
 /// use case are offered and accepted ([`NativeCatalog::qualified`]).
-pub const MAINTENANCE_OPERATIONS: [&str; 13] = [
+pub const MAINTENANCE_OPERATIONS: [&str; 14] = [
     "maintenance.prune_diagnostics",
     "analysis.community_analysis",
     "indexing.discover",
@@ -122,6 +123,7 @@ pub const MAINTENANCE_OPERATIONS: [&str; 13] = [
     "indexing.reindex",
     "help.generate_capability_docs",
     "imports.apply",
+    "schemas.index",
 ];
 /// Namespace of a native capability's argument schema (`<namespace>/<operation>`).
 pub const ARGUMENT_SCHEMA_NAMESPACE: &str = "devworks.job-arguments";
@@ -661,7 +663,15 @@ impl JobService {
                 {
                     return Err(refuse(DomainErrorCode::SchemaMismatch, "arguments", None));
                 }
-                if adapter && native_help::is_empty(&arguments.value.0) {
+                if adapter && native_help::is_current(op, &arguments.value.0) {
+                    if op == crate::services::schemas::scheduled::OPERATION {
+                        let source =
+                            crate::services::schemas::scheduled::current(&arguments.value.0)
+                                .ok_or_else(|| invalid("arguments"))?;
+                        crate::services::schemas::scheduled::validate_definition(
+                            tx, ctx, project, &source,
+                        )?;
+                    }
                     return Ok("Native");
                 }
                 // The arguments are the operation's input body: decoded strictly by its own

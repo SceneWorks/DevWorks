@@ -51,6 +51,8 @@ pub struct Target {
 #[derive(Default)]
 pub struct Reader {
     pub target: Option<Target>,
+    /// Cursor-free first-page request, independent of the returned canonical identity.
+    pub intent: Option<serde_json::Value>,
     pub view: Option<ConventionReadView>,
     pub cursors: Vec<Option<String>>,
     pub loading: bool,
@@ -204,6 +206,7 @@ pub struct ScopeState {
     pub list_error: Option<String>,
     pub next: Option<String>,
     pub scope_revision: Option<i64>,
+    pub source_scope_revision: Option<i64>,
     pub list_generation: u64,
     pub query_snapshot: Option<serde_json::Value>,
     pub pending_listing: Option<(u64, serde_json::Value)>,
@@ -499,7 +502,7 @@ impl ConventionsScreen {
                     }
                     if ui
                         .add_enabled(
-                            online && s.available && !s.busy && s.scope_revision.is_some(),
+                            online && s.available && !s.busy && s.source_scope_revision.is_some(),
                             egui::Button::new("Index this scope"),
                         )
                         .clicked()

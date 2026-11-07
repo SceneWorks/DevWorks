@@ -18,6 +18,7 @@
 //! service functions.
 pub mod catalog;
 pub mod model;
+pub(crate) mod secrets;
 pub mod service;
 pub mod validate;
 pub mod view;

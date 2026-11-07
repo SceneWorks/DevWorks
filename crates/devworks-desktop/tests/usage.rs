@@ -77,6 +77,7 @@ fn open_features(engine: &devworks_desktop::host::Engine, root: &Root, p: &str) 
 
 #[test]
 fn native_feature_zero_limit_latches_and_turning_it_off_does_not_continue_work() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-feature-cap");
     let engine = start(&root);
     let b = engine.backend();
@@ -125,6 +126,7 @@ fn native_feature_zero_limit_latches_and_turning_it_off_does_not_continue_work()
 }
 #[test]
 fn pending_plan_cap_reopens_and_is_approved_from_the_captured_backend_token() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-pending-cap");
     let engine = start(&root);
     let b = engine.backend();
@@ -196,6 +198,7 @@ fn pending_plan_cap_reopens_and_is_approved_from_the_captured_backend_token() {
 }
 #[test]
 fn withdrawing_a_reopened_pending_cap_preserves_active_budget_and_off_remains_explicit() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-withdraw-cap");
     let engine = start(&root);
     let b = engine.backend();
@@ -321,6 +324,7 @@ fn approve_pending_cap(h: &mut Ui, b: &dyn Backend, id: &str) {
 }
 #[test]
 fn local_free_connection_policy_is_explicit_and_unrelated_edits_preserve_it() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-local-policy");
     let mut config = config(&root.0);
     config.connection_tick = None;
@@ -386,6 +390,7 @@ fn price_catalog(b: &dyn Backend, model: &str) -> PriceCatalogView {
 }
 #[test]
 fn native_tariff_editor_preserves_all_dimensions_and_recovers_from_authoritative_cas_conflict() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-tariff-cas");
     let engine = start(&root);
     let b = engine.backend();
@@ -571,16 +576,19 @@ impl devworks_core::ports::http::HttpTransport for PublicPriceHttp {
         Ok(HttpResponse { status: 200, body: format!("# Pricing\nPrices per 1M tokens.\n| Model | Input | Output |\n| --- | --- | --- |\n| gpt-test | ${rate} | $2 |\n").into_bytes() })
     }
 }
-fn start_native_price_refresh(h: &mut Ui) {
-    // A provider publication precedes the operation's terminal journal write. A quiet GUI
-    // can still display that legitimate earlier status, so confirm it before a new gesture.
+fn finish_native_price_refresh(h: &mut Ui) {
     h.state_mut().usage.last_refresh = None;
     step_until(
         h,
-        "previous price refresh reaches its recorded terminal state",
-        |shell| shell.usage.refresh.is_none(),
+        "the native refresh consumes its real terminal operation",
+        |s| s.usage.refresh.is_none(),
     );
     settle(h);
+}
+fn start_native_price_refresh(h: &mut Ui) {
+    // A provider publication precedes the operation's terminal journal write. A quiet GUI
+    // can still display that legitimate earlier status, so confirm it before a new gesture.
+    finish_native_price_refresh(h);
     h.get_by_role_and_label(Role::Button, "Refresh official price sources")
         .scroll_to_me();
     settle(h);
@@ -621,6 +629,7 @@ fn wait_for_price_publication(b: &dyn Backend, snapshots: usize) -> PriceCatalog
 }
 #[test]
 fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_without_credentials() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-official-refresh");
     let http = std::sync::Arc::new(PublicPriceHttp::default());
     let mut c = config(&root.0);
@@ -674,8 +683,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
         first_catalog.snapshots.0[0].source_url.0,
         "https://developers.openai.com/api/docs/pricing"
     );
-    h.state_mut().usage.last_refresh = None;
-    settle(&mut h);
+    finish_native_price_refresh(&mut h);
     assert!(h.state().usage.refresh.is_none());
     assert!(has_text(&h, "ObservedComplete"));
     let snapshot = first_catalog.snapshots.0[0].id.clone();
@@ -713,8 +721,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
         .unwrap()
         .snapshot_id
         .clone();
-    h.state_mut().usage.last_refresh = None;
-    settle(&mut h);
+    finish_native_price_refresh(&mut h);
     click(&mut h, Role::CheckBox, "Include historical price sources");
     press(&mut h, "Apply price catalog filters");
     assert_eq!(
@@ -788,8 +795,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    h.state_mut().usage.last_refresh = None;
-    settle(&mut h);
+    finish_native_price_refresh(&mut h);
     assert!(h.state().usage.refresh.is_none());
     assert!(has_text(&h, "HTTP 503"));
     assert!(has_text(&h, "Failed"));
@@ -806,8 +812,10 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
 
 #[test]
 fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-price-paging");
     let engine = start(&root);
+    startup::settled(&engine);
     let b = engine.backend();
     let model = "paged-price-model";
     ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Paged price model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/paged-price","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
@@ -818,6 +826,9 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
     h.state_mut().navigate(Route::Usage);
     settle(&mut h);
     press(&mut h, "Prices");
+    // This positive continuation needs one unchanged real event snapshot.
+    let writer = paging::WriterHold::new(engine.host().runtime().store().clone());
+    press(&mut h, "Apply price catalog filters");
     assert!(h.state().usage.prices.as_ref().unwrap().has_more);
     assert!(
         h.get_by_role_and_label(Role::Button, &format!("Edit tariff override for {model}"))
@@ -831,6 +842,7 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
     press(&mut h, &format!("Edit tariff override for {model}"));
     let draft = h.state().usage.price_draft.clone().unwrap();
     assert_eq!(draft.tariffs.len(), 105);
+    drop(writer);
     let replacement = json!({"upstreamModelId":"fixture/paged-price","serviceTier":"changed-source","modality":"Text","chargeKind":"Input","unit":"Token","units":"1000000","amountUsd":"2"});
     uops::overridden(b.command("router.price_override",&uops::command(&*b,"router.price_override",json!({"modelId":model,"expectedRevision":"2","change":{"kind":"Set","tariffs":[replacement]}})))).unwrap();
     settle(&mut h);
@@ -865,6 +877,7 @@ fn configured_connection(b: &dyn Backend) -> ConnectionRecord {
 }
 #[test]
 fn native_connection_billing_edit_preserves_refused_and_stale_draft_until_explicit_review() {
+    let _case = native_runtime_case();
     let root = Root::new("connection-billing-stale");
     let mut c = config(&root.0);
     c.connection_tick = None;
@@ -940,6 +953,7 @@ fn native_connection_billing_edit_preserves_refused_and_stale_draft_until_explic
 }
 #[test]
 fn native_unknown_connection_billing_edit_survives_restart_with_exact_frame_and_command_identity() {
+    let _case = native_runtime_case();
     let root = Root::new("connection-billing-unknown");
     let mut c = config(&root.0);
     c.connection_tick = None;
@@ -1040,6 +1054,7 @@ fn report_total(h: &Ui, key: &str) -> Option<String> {
 }
 #[test]
 fn native_usage_six_reports_share_authoritative_filters_utc_buckets_and_partial_legacy_truth() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-six-native-reports");
     let engine = start(&root);
     let b = engine.backend();
@@ -1165,6 +1180,7 @@ fn native_usage_six_reports_share_authoritative_filters_utc_buckets_and_partial_
 
 #[test]
 fn native_unknown_tariff_override_restores_exact_typed_draft_and_replays_one_original_change() {
+    let _case = native_runtime_case();
     let root = Root::new("price-native-unknown-restart");
     let engine = start(&root);
     let real = engine.backend();
@@ -1235,6 +1251,7 @@ fn native_unknown_tariff_override_restores_exact_typed_draft_and_replays_one_ori
 
 #[test]
 fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_draft() {
+    let _case = native_runtime_case();
     use devworks_core::ports::storage::{StoredUsageOrigin, WriteOptions, run_write};
     use devworks_core::protocol::{Id, ProjectId};
     let root = Root::new("usage-native-paging");
@@ -1257,6 +1274,7 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
             tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:"SessionUsage".into(),source_id:format!("page-{i:03}"),attempt_id:None,request_id:Some(Id::new(format!("recorded-page-{i:03}")).unwrap()),project_id:Some(project_id.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload:json!({"actorId":format!("recorded-user-{i:03}"),"providerId":"openrouter","reportCategory":"Assistant","item":{"purpose":"Conversation","modelId":format!("recorded-model-{i:03}"),"inputTokens":"1","outputTokens":"1"}}),recorded_at_ms:1000,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:true,unknown_tail:false})?;
         }Ok(())
     }).unwrap();
+    startup::settled(&engine);
     let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1800.0);
     settle(&mut h);
     h.state_mut().navigate(Route::Usage);
@@ -1308,10 +1326,35 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
     assert_eq!(page.items.0.len(), 120);
     assert_eq!(page.totals.legacy_usage_facts.get(), 120);
     assert_eq!(serde_json::to_value(&page.context).unwrap(), context);
+    // A genuinely new event must still expire this full-snapshot cursor. The UI keeps the
+    // loaded result and unsent input instead of silently retrying against a different view.
+    press(&mut h, "Apply usage filters");
+    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+        panic!("actual first attempt page")
+    };
+    assert_eq!(page.items.0.len(), 100);
+    let first_context = serde_json::to_value(&page.context).unwrap();
+    replace(&mut h, "Usage user", "retained after refusal");
+    project(&*b, "A real event expires the existing report cursor");
+    press(&mut h, "Load more usage rows");
+    assert!(
+        h.state()
+            .usage
+            .error
+            .as_ref()
+            .is_some_and(|e| e.contains("CursorExpired"))
+    );
+    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+        panic!("retained attempt page")
+    };
+    assert_eq!(page.items.0.len(), 100);
+    assert_eq!(serde_json::to_value(&page.context).unwrap(), first_context);
+    assert_eq!(h.state().usage.draft.user, "retained after refusal");
 }
 
 #[test]
 fn native_connection_state_change_preserves_an_unsaved_billing_editor() {
+    let _case = native_runtime_case();
     let root = Root::new("connection-billing-independent-state");
     let mut c = config(&root.0);
     c.connection_tick = None;
@@ -1366,6 +1409,7 @@ fn native_connection_state_change_preserves_an_unsaved_billing_editor() {
 
 #[test]
 fn settling_applies_requests_started_in_the_last_successful_repaint_frame() {
+    let _case = native_runtime_case();
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -1427,6 +1471,7 @@ fn settling_applies_requests_started_in_the_last_successful_repaint_frame() {
 
 #[test]
 fn native_blank_tariff_editor_prices_default_requests_and_preserves_exact_custom_tiers() {
+    let _case = native_runtime_case();
     use devworks_core::ports::{
         storage::{ReadOptions, read_snapshot},
         usage::{CostClassification, PriceQuery, PriceResolver},
@@ -1524,3 +1569,9 @@ fn native_blank_tariff_editor_prices_default_requests_and_preserves_exact_custom
 mod official;
 #[path = "usage/refresh.rs"]
 mod refresh;
+
+#[path = "usage/paging.rs"]
+mod paging;
+
+#[path = "usage/startup.rs"]
+mod startup;

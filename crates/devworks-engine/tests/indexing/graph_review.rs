@@ -81,6 +81,7 @@ fn gaps(page: &GraphPage) -> Value {
 
 #[test]
 fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is_exhausted() {
+    let _case = exclusive_native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -92,7 +93,11 @@ fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is
         let mut source = String::new();
         for item in 0..100 {
             let i = unit * 100 + item;
-            source.push_str(&format!("pub fn matched_{i:05}() {{}}\n"));
+            if i == 0 {
+                source.push_str("pub fn matched_K() { matched_00001(); }\n");
+            } else {
+                source.push_str(&format!("pub fn matched_{i:05}() {{}}\n"));
+            }
         }
         std::fs::write(repo.join(format!("src/unit_{unit:03}.rs")), source).unwrap();
     }
@@ -110,6 +115,10 @@ fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is
     assert!(
         counts.nodes > 20000,
         "fixture actually exceeds the desktop work budget: {counts:?}"
+    );
+    assert!(
+        counts.edges > 20000,
+        "real containment edges also exceed the budget: {counts:?}"
     );
     let kind = read(&*store, |r| {
         r.graph().graph_nodes(
@@ -170,6 +179,19 @@ fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is
             // budget-exhausted continuation is exercised through the caller-bounded API.
             continue;
         }
+        // Budget-dependent candidate prefixes cannot share an offset cursor after a work
+        // limit changes. Keep page size and exact published scope unchanged in both refusals.
+        for (field, value) in [("maxVisited", 20001), ("deadlineMs", 30001)] {
+            let mut frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"review-limits","scope":{"kind":"Workspace"},"query":query,"current":true,"cursor":cursor,"limits":{"maxResults":100,"maxVisited":20000,"deadlineMs":30000}});
+            frame["limits"][field] = json!(value);
+            let refused = app
+                .query(&ctx, operation, frame.to_string().as_bytes())
+                .unwrap();
+            assert!(
+                matches!(refused,DomainQueryReply::Rejected{ref fault,..} if fault.code==devworks_core::protocol::DomainErrorCode::CursorExpired),
+                "changed {field}: {refused:?}"
+            );
+        }
         let second = graph(&app, &ctx, operation, query, Some(cursor), None);
         assert_eq!(
             first.view.as_ref().unwrap().pin_id,
@@ -198,12 +220,37 @@ fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is
             "stable pages do not repeat matches"
         );
     }
+    // Literal-name resolution must leave the fixed native visit budget available for
+    // relationships, including Rust's Unicode lowercase match (Kelvin sign → k).
+    for target in [
+        json!({"kind":"Name","name":"MATCHED_k","repositoryId":repositories[0]}),
+        json!({"kind":"Name","name":"HED_k"}),
+    ] {
+        let answer = graph(
+            &app,
+            &ctx,
+            "code.call_path",
+            json!({"kind":"Path","selection":{"target":target,"direction":"Outbound","depth":1}}),
+            None,
+            None,
+        );
+        let GraphResult::CallTrace { value } = &answer.result else {
+            panic!("native name trace: {answer:?}")
+        };
+        assert_eq!(
+            value.entries.0.len(),
+            1,
+            "named target retains its actual call: {answer:?}"
+        );
+        assert!(!gaps(&answer).to_string().contains("graph_visited_limit"));
+    }
     executor.block_on(app.shutdown());
     let _ = std::fs::remove_dir_all(src);
 }
 
 #[test]
 fn native_swift_scope_linking_reads_each_visible_units_edges_without_repository_rescans() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -334,6 +381,7 @@ fn native_swift_scope_linking_reads_each_visible_units_edges_without_repository_
 
 #[test]
 fn native_overview_keeps_unindexed_repository_metadata_when_another_scope_member_is_indexed() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -387,4 +435,264 @@ fn native_overview_keeps_unindexed_repository_metadata_when_another_scope_member
     assert!(value["dependencies"].as_array().unwrap().is_empty());
     executor.block_on(app.shutdown());
     let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn native_direct_id_traversal_retains_useful_relationships_when_edge_scan_is_partial() {
+    let _case = exclusive_native_runtime_case();
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    let repo = src.join("large-calls");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    // Preserve 21,000 real CALLS edges while keeping each native Git/parser unit below
+    // its file/node caps and avoiding 210 Windows Git subprocess round trips.
+    for unit in 0..7 {
+        let mut source = format!("pub fn leaf_{unit:03}() {{}}\n");
+        for item in 0..3000 {
+            source.push_str(&format!(
+                "pub fn caller_{unit:03}_{item:03}() {{ leaf_{unit:03}(); }}\n"
+            ));
+        }
+        std::fs::write(repo.join(format!("src/unit_{unit:03}.rs")), source).unwrap();
+    }
+    commit(&repo);
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repository = discovered(&app, &ctx).remove(0);
+    let run = index(&app, &ctx, &repository, "large-calls-index");
+    wait(&executor, &store, &run);
+    let selected = scope(&*store, &repository);
+    let mut position = None;
+    let mut first = None;
+    let mut count = 0;
+    loop {
+        let page = read(&*store, |r| {
+            r.graph().graph_edges(
+                &selected,
+                &GraphEdgeFilter {
+                    kinds: vec!["CALLS".into()],
+                    ..Default::default()
+                },
+                position.as_ref(),
+                500,
+            )
+        });
+        if first.is_none() {
+            first = page.items.first().cloned();
+        }
+        count += page.items.len();
+        position = page.items.last().map(|edge| GraphPosition {
+            repository_id: edge.repository_id.clone(),
+            unit_key: edge.edge.unit_key.clone(),
+            item_id: edge.edge.edge_id.clone(),
+        });
+        if !page.has_more {
+            break;
+        }
+    }
+    assert_eq!(
+        count, 21_000,
+        "actual selected edges exceed the unchanged visit budget"
+    );
+    let edge = first.unwrap();
+    let result = graph(
+        &app,
+        &ctx,
+        "code.traverse",
+        json!({"kind":"Traverse","startIds":[edge.edge.source_node_id],"direction":"Forward","edgeKinds":["CALLS"],"maxDepth":1}),
+        None,
+        None,
+    );
+    assert!(matches!(
+        result.scope_coverage.as_ref().unwrap().coverage.state,
+        devworks_core::protocol::data::CoverageState::Partial
+    ));
+    let GraphResult::CodeGraph { value } = result.result else {
+        panic!("traversal graph")
+    };
+    let value = serde_json::to_value(value).unwrap();
+    assert!(
+        value["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|found| found["edgeId"] == edge.edge.edge_id),
+        "a retained actual relationship must be useful: {value}"
+    );
+    let target = value["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["edgeId"] == edge.edge.edge_id)
+        .unwrap()["targetId"]
+        .clone();
+    let mut frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"large-call-path","scope":{"kind":"Workspace"},"current":true,
+        "query":{"kind":"Path","selection":{"target":{"kind":"Node","nodeId":target},"direction":"Inbound","depth":1}},
+        "limits":{"maxResults":1,"maxVisited":20000,"deadlineMs":30000}});
+    let query = |frame: &Value| {
+        let DomainQueryReply::Result { result, .. } = app
+            .query(&ctx, "code.call_path", frame.to_string().as_bytes())
+            .unwrap()
+        else {
+            panic!("bounded call path")
+        };
+        serde_json::from_value::<GraphPage>(serde_json::to_value(result).unwrap()["value"].clone())
+            .unwrap()
+    };
+    let first = query(&frame);
+    let GraphResult::CallTrace { value: first_trace } = &first.result else {
+        panic!("call trace")
+    };
+    assert_eq!(first_trace.entries.0.len(), 1);
+    assert!(matches!(
+        first.scope_coverage.as_ref().unwrap().coverage.state,
+        devworks_core::protocol::data::CoverageState::Partial
+    ));
+    assert!(
+        first_trace.unmapped_inbound_edges.is_none(),
+        "a partial scan cannot claim an exact unmapped count"
+    );
+    frame.as_object_mut().unwrap().remove("current");
+    frame["view"] =
+        json!({"kind":"Pinned","pinId":serde_json::to_value(&first.view).unwrap()["pinId"]});
+    frame["cursor"] = json!(
+        first
+            .next_cursor
+            .expect("retained callers have continuation")
+    );
+    let next = query(&frame);
+    let GraphResult::CallTrace { value: next_trace } = next.result else {
+        panic!("continued trace")
+    };
+    assert_eq!(next_trace.entries.0.len(), 1);
+    assert_ne!(
+        first_trace.entries.0[0].edge_id,
+        next_trace.entries.0[0].edge_id
+    );
+    executor.block_on(app.shutdown());
+    let _ = std::fs::remove_dir_all(src);
+}
+
+fn with_native_call_pair(work: impl FnOnce(&Runtime, &InvocationContext, &str, &str)) {
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    struct SourceCleanup(std::path::PathBuf);
+    impl Drop for SourceCleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _source = SourceCleanup(src.clone());
+    let repo = src.join("traversal-pair");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/pair.rs"),
+        "pub fn leaf() {}\npub fn caller() { leaf(); }\n",
+    )
+    .unwrap();
+    commit(&repo);
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repository = discovered(&app, &ctx).remove(0);
+    let run = index(&app, &ctx, &repository, "traversal-pair-index");
+    wait(&executor, &store, &run);
+    let selected = scope(&*store, &repository);
+    let edges = read(&*store, |r| {
+        r.graph().graph_edges(
+            &selected,
+            &GraphEdgeFilter {
+                kinds: vec!["CALLS".into()],
+                ..Default::default()
+            },
+            None,
+            10,
+        )
+    });
+    assert_eq!(edges.items.len(), 1);
+    let caller = &edges.items[0].edge.source_node_id;
+    work(&app, &ctx, &repository, caller);
+    executor.block_on(app.shutdown()).into_result().unwrap();
+}
+
+#[test]
+fn native_traversal_continuations_deduplicate_the_complete_edge_sequence() {
+    let _case = native_runtime_case();
+    with_native_call_pair(|app, ctx, repository, caller| {
+        for limit in [1, 16] {
+            let mut frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"unique-traversal","scope":{"kind":"Workspace"},"view":{"kind":"Published","repositoryIds":[repository]},"query":{"kind":"Traverse","startIds":[caller],"direction":"Both","edgeKinds":["CALLS"],"maxDepth":3},"limits":{"maxResults":limit,"maxVisited":100000,"deadlineMs":30000}});
+            let mut edge_ids = Vec::new();
+            let mut pages = 0;
+            loop {
+                let DomainQueryReply::Result { result, .. } = app
+                    .query(ctx, "code.traverse", frame.to_string().as_bytes())
+                    .unwrap()
+                else {
+                    panic!("native traversal refused")
+                };
+                let page: GraphPage =
+                    serde_json::from_value(serde_json::to_value(result).unwrap()["value"].clone())
+                        .unwrap();
+                let GraphResult::CodeGraph { value } = page.result else {
+                    panic!("qualified graph expected")
+                };
+                edge_ids.extend(value.edges.0.iter().map(|e| e.edge_id.clone()));
+                pages += 1;
+                assert!(pages <= 4, "traversal never reached its unique tail");
+                let Some(cursor) = page.next_cursor else {
+                    break;
+                };
+                frame["view"] = json!({"kind":"Pinned","pinId":page.view.unwrap().pin_id});
+                frame["cursor"] = json!(cursor);
+            }
+            assert_eq!(
+                edge_ids.len(),
+                1,
+                "page limit {limit} repeated a logical edge: {edge_ids:?}"
+            );
+        }
+    });
+}
+
+#[test]
+fn native_revision_one_traversal_and_dependency_project_representable_graphs() {
+    let _case = native_runtime_case();
+    with_native_call_pair(|app, ctx, repository, caller| {
+        for operation in ["code.traverse", "code.dependency"] {
+            for start in ["missing-node", caller] {
+                let frame = json!({"protocol":"1.0-draft.1","schemaRevision":1,"queryId":"legacy-traversal","scope":{"kind":"Workspace"},"view":{"kind":"Published","repositoryIds":[repository]},"query":{"kind":"Traverse","startIds":[start],"direction":"Both","edgeKinds":["CALLS"],"maxDepth":3},"limits":{"maxResults":16,"maxVisited":100000,"deadlineMs":30000}});
+                let reply = app
+                    .query(ctx, operation, frame.to_string().as_bytes())
+                    .unwrap();
+                if start == caller {
+                    // Legacy unit keys are opaque IDs. Actual src/pair.rs nodes cannot be
+                    // flattened into that type; preserve their explicit refusal.
+                    assert!(matches!(reply, DomainQueryReply::Rejected { fault, .. }
+                        if fault.code == devworks_core::protocol::DomainErrorCode::ViewUnavailable));
+                    continue;
+                }
+                let DomainQueryReply::Result { result, .. } = reply else {
+                    panic!("representable empty legacy {operation}: {reply:?}")
+                };
+                let page: GraphPage =
+                    serde_json::from_value(serde_json::to_value(result).unwrap()["value"].clone())
+                        .unwrap();
+                let GraphResult::Graph { nodes, edges } = page.result else {
+                    panic!("legacy graph expected")
+                };
+                assert!(edges.is_empty() && nodes.is_empty());
+                assert!(page.view.is_some());
+                assert!(page.scope_coverage.is_none());
+            }
+        }
+    });
 }

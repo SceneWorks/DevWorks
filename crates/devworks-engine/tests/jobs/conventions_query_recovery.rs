@@ -41,6 +41,7 @@ fn attempts(app: &HelpApp) -> Vec<StoredInferenceAttempt> {
 }
 #[test]
 fn exact_paid_query_reuses_custody_with_new_invocations_and_real_app_restart() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);

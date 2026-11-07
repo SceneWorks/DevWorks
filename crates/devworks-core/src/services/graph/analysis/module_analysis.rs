@@ -77,13 +77,7 @@ pub(super) fn query(reader: &mut Reader<'_>, scope: &GraphScope) -> Result<Vec<V
         reader.gaps.push("ambiguous_internal_module");
     }
     let complete = reader.budget.exhausted.is_none() && !ambiguous_membership;
-    let indexed_complete = complete
-        && reader
-            .selected
-            .layers
-            .iter()
-            .filter(|layer| scope.views.iter().any(|v| v.view_id == layer.view.view_id))
-            .all(|layer| layer.view.coverage["state"] == "Complete");
+    let indexed_complete = complete && reader.indexes_complete(scope)?;
     let mut out = Vec::new();
     for ((repo, name), group) in modules {
         let mut module = json!({"repositoryId":repo,"moduleName":name});

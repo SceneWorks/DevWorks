@@ -434,6 +434,7 @@ struct App {
     artifact_files: Option<Arc<dyn devworks_core::ports::files::ArtifactFiles>>,
     /// The host's restart budget per instance key (`config()` otherwise).
     restart_limit: Option<u32>,
+    healthy_after: Option<Duration>,
     host_tick: Option<Duration>,
     probe_timeout: Option<Duration>,
     process_host: Option<Arc<dyn devworks_core::ports::process::ProcessHost>>,
@@ -532,6 +533,7 @@ impl App {
             files,
             artifact_files: None,
             restart_limit: None,
+            healthy_after: None,
             host_tick: None,
             probe_timeout: None,
             process_host: None,
@@ -640,6 +642,7 @@ impl App {
                 config: HostConfig {
                     runtime_timeout: self.probe_timeout.unwrap_or(config().runtime_timeout),
                     restart_limit: self.restart_limit.unwrap_or(config().restart_limit),
+                    healthy_after: self.healthy_after.unwrap_or(config().healthy_after),
                     tick: self.host_tick.unwrap_or(config().tick),
                     restart_backoff: self.retry_backoff.unwrap_or(config().restart_backoff),
                     ..config()
@@ -2555,8 +2558,11 @@ fn a_helper_that_dies_after_every_activation_exhausts_its_restart_budget() {
         },
     ));
     let announced = host.publications();
-    let rec = a.until("dying-pack", "the failure is recorded", |r| {
+    // The committed failure is visible before the host announces its publication.
+    // Observe both within the existing durable-state wait before asserting the epoch.
+    let rec = a.until("dying-pack", "the failure is recorded and published", |r| {
         matches!(r.availability, Some(PackageAvailability::Failed))
+            && host.publications() > announced
     });
     assert_eq!(rec.failure_code.unwrap().0, "HelperExited");
     // Recording the failure is a registry change admissions re-read.
@@ -2800,7 +2806,11 @@ fn big_invoke(
 #[test]
 fn a_helper_that_stops_reading_is_restarted_through_its_budget_and_then_recorded_failed() {
     let _s = serial();
-    let a = App::new();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    // This case measures consecutive failures, independent of platform pipe capacity and
+    // scheduling. Merely staying ready must not reset the budget while the helper is deaf.
+    a.healthy_after = Some(Duration::MAX);
+    a.boot();
     package(a.install(
         &a.user,
         &Spec {

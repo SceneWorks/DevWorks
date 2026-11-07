@@ -851,6 +851,7 @@ fn composition(
 }
 #[test]
 fn runtime_boot_and_lost_wake_catch_up_once_then_shutdown_fences_further_maintenance() {
+    let _native_case = native_runtime_case();
     runtime().block_on(async {
         let h = Harness::new();
         let store = h.open();
@@ -910,6 +911,7 @@ fn runtime_boot_and_lost_wake_catch_up_once_then_shutdown_fences_further_mainten
 
 #[test]
 fn periodic_runtime_pass_repairs_a_lost_wakeup_without_replaying_missed_weeks() {
+    let _native_case = native_runtime_case();
     runtime().block_on(async {
         let h = Harness::new();
         let store = h.open();
@@ -1397,6 +1399,7 @@ fn configured_history_preserves_set_a_set_b_clear_authorship_and_original_quotes
 
 #[test]
 fn runtime_shutdown_bounds_stalled_price_fetches_and_fences_every_late_write() {
+    let _native_case = native_runtime_case();
     runtime().block_on(within("bounded price-source shutdown", async {
         for recovering in [false, true] {
             price_shutdown_case(recovering, false).await;
@@ -1406,6 +1409,7 @@ fn runtime_shutdown_bounds_stalled_price_fetches_and_fences_every_late_write() {
 
 #[test]
 fn gated_setup_receipts_explain_the_shutdown_history_race_without_any_late_price_write() {
+    let _native_case = native_runtime_case();
     runtime().block_on(within(
         "receipt publication shutdown control",
         price_shutdown_case(false, true),
@@ -1430,6 +1434,32 @@ async fn wait_for_receipts(store: &dyn ApplicationStore, ids: &[devworks_core::p
 }
 
 async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
+    struct Phase {
+        started: std::time::Instant,
+        last_note: std::time::Instant,
+        phase: &'static str,
+        note: String,
+        done: bool,
+    }
+    impl Drop for Phase {
+        fn drop(&mut self) {
+            if !self.done {
+                eprintln!(
+                    "price shutdown interrupted at {} after {:?}: {}",
+                    self.phase,
+                    self.started.elapsed(),
+                    self.note
+                );
+            }
+        }
+    }
+    let mut phase = Phase {
+        started: std::time::Instant::now(),
+        last_note: std::time::Instant::now(),
+        phase: "first_price_publication",
+        note: format!("recovering={recovering}, receipt_race_control={receipt_race_control}"),
+        done: false,
+    };
     struct Release(Arc<Gate>);
     impl Drop for Release {
         fn drop(&mut self) {
@@ -1447,6 +1477,7 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
     drop(first_worker);
 
     let (_, operation) = fx.refresh(&["openai"]);
+    phase.phase = "prior_attempt_recovery";
     if recovering {
         let gate = Gate::new();
         let _release = Release(gate.clone());
@@ -1477,34 +1508,10 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
         calls: AtomicUsize::new(0),
         gate: Some(gate.clone()),
     });
-    let setup_receipts = read(&*fx.store, |s| {
-        Ok(s.queue()
-            .deliveries(
-                &DeliveryFilter {
-                    consumer: Some("receipt_replies".into()),
-                    operation_id: None,
-                },
-                None,
-                64,
-            )?
-            .entries)
-    });
-    assert_eq!(
-        setup_receipts.len(),
-        2,
-        "the fixture created two refresh command receipts"
-    );
-    let receipt_ids = setup_receipts
-        .iter()
-        .map(|entry| entry.id.clone())
-        .collect::<Vec<_>>();
-    let command_ids = setup_receipts
-        .iter()
-        .map(|entry| entry.payload["commandId"].as_str().unwrap().to_owned())
-        .collect::<Vec<_>>();
     let mut composed = composition(&fx.h, fx.store.clone(), source.clone());
     let receipt_starts = Arc::new(AtomicUsize::new(0));
     let receipt_gate = Gate::new();
+    receipt_gate.release();
     let _release_receipts = Release(receipt_gate.clone());
     composed.artifacts = Arc::new(devworks_core::services::artifacts::ArtifactService::new(
         Arc::new(GatedFiles {
@@ -1521,18 +1528,124 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
         fx.h.ids.clone(),
     ));
     composed.config.shutdown_bound = std::time::Duration::from_millis(100);
+    phase.phase = "boot";
     let app = devworks_engine::boot(composed).await.unwrap();
+    phase.phase = "target_fetch_started";
     let _release = Release(gate.clone());
     gate.started.notified().await;
+    // Settle the real independent boot producers before controlling receipt publication.
+    // Blocking every artifact at boot also blocks Help, so that would test its shutdown tail.
+    phase.phase = "startup_owners";
+    let accounting = app.accounting().watch();
+    let help_registered = app
+        .jobs()
+        .catalog()
+        .capabilities()
+        .iter()
+        .any(|c| c.operation == "help.generate_capability_docs");
+    loop {
+        let ready = read(&*fx.store, |s| {
+            let help = s.queue().status("help_docs")?;
+            let receipts = s.queue().status("receipt_replies")?;
+            if phase.last_note.elapsed() >= std::time::Duration::from_millis(250) {
+                phase.note = format!(
+                    "Help={help:?}; receipts={receipts:?}; bootstrap={:?}",
+                    s.usage().usage_bootstrap()?
+                );
+                phase.last_note = std::time::Instant::now();
+            }
+            assert_eq!(help.failed, 0, "startup Help failed: {help:?}");
+            Ok(s.usage().usage_bootstrap()?.phase == "Complete"
+                && (!help_registered
+                    || (help.completed > 0
+                        && help.ready == 0
+                        && help.claimed == 0
+                        && help.reconciling == 0))
+                && receipts.ready == 0
+                && receipts.claimed == 0
+                && receipts.reconciling == 0)
+        });
+        let accounted = accounting.borrow().as_ref().is_some_and(|pass| {
+            pass.as_ref()
+                .is_ok_and(|p| p.indexing_complete && p.recovery_complete && !p.recovery_more)
+        });
+        if ready && accounted {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    phase.phase = "capture_setup_receipts";
+    let existing = read(&*fx.store, |s| {
+        Ok(s.queue()
+            .deliveries(
+                &DeliveryFilter {
+                    consumer: Some("receipt_replies".into()),
+                    operation_id: None,
+                },
+                None,
+                64,
+            )?
+            .entries)
+    })
+    .into_iter()
+    .map(|e| e.id)
+    .collect::<Vec<_>>();
+    *receipt_gate.open.lock().unwrap() = false;
+    receipt_starts.store(0, Ordering::SeqCst);
+    for _ in 0..2 {
+        let revision = read(&*fx.store, |s| {
+            s.usage().price_override_revision(&id("priced-model"))
+        });
+        let raw = fx.frame("router.price_override", 3, "Command",
+            json!({"modelId":"priced-model","expectedRevision":revision.to_string(),"change":{"kind":"Clear"}}));
+        applied(fx.command(
+            &fx.user,
+            "router.price_override",
+            &raw,
+            WriteOptions::default(),
+        ));
+    }
+    let setup_receipts = read(&*fx.store, |s| {
+        Ok(s.queue()
+            .deliveries(
+                &DeliveryFilter {
+                    consumer: Some("receipt_replies".into()),
+                    operation_id: None,
+                },
+                None,
+                64,
+            )?
+            .entries)
+    })
+    .into_iter()
+    .filter(|e| !existing.contains(&e.id))
+    .collect::<Vec<_>>();
+    assert_eq!(setup_receipts.len(), 2, "two controlled command receipts");
+    let receipt_ids = setup_receipts
+        .iter()
+        .map(|e| e.id.clone())
+        .collect::<Vec<_>>();
+    let command_ids = setup_receipts
+        .iter()
+        .map(|e| e.payload["commandId"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    phase.phase = "controlled_receipt_materialization";
     while receipt_starts.load(Ordering::SeqCst) < receipt_ids.len() {
+        phase.note = format!(
+            "started={}; expected={}",
+            receipt_starts.load(Ordering::SeqCst),
+            receipt_ids.len()
+        );
         receipt_gate.started.notified().await;
     }
     if !receipt_race_control {
         // These are independent setup receipts, not part of the stalled HTTP callback. Observe
         // their actual publication before shutdown so the whole-store baseline remains exact.
+        phase.phase = "setup_receipts_settled";
         receipt_gate.release();
         wait_for_receipts(&*fx.store, &receipt_ids).await;
     }
+    phase.phase = "bounded_app_shutdown";
     let began = std::time::Instant::now();
     tokio::time::timeout(std::time::Duration::from_secs(2), app.shutdown())
         .await
@@ -1564,6 +1677,7 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
             ))
         })
     };
+    phase.phase = "capture_shutdown_baseline";
     let mut before = snapshot();
     assert_eq!(before.2, Some(last_good));
     assert_eq!(
@@ -1576,6 +1690,7 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
         // them finish while the price callback is still physically blocked. This reproduces the
         // exact +2 CI history delta without a price publication, journal or delivery change.
         assert!(!*gate.open.lock().unwrap());
+        phase.phase = "receipt_control_tail";
         receipt_gate.release();
         wait_for_receipts(&*fx.store, &receipt_ids).await;
         assert!(!*gate.open.lock().unwrap());
@@ -1584,7 +1699,16 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
             s.history()
                 .page(&EventFilter::All, before.0.committed_sequence, 500)
         });
-        assert_eq!(events.events.len(), command_ids.len());
+        assert_eq!(
+            events.events.len(),
+            command_ids.len(),
+            "observed event identities: {:?}",
+            events
+                .events
+                .iter()
+                .map(|e| (&e.kind, &e.aggregate_kind, &e.aggregate_id))
+                .collect::<Vec<_>>()
+        );
         assert!(!events.has_more);
         assert!(
             events
@@ -1615,22 +1739,39 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
         );
         before = receipts_finished;
     }
+    phase.phase = "detached_price_callback_return";
     gate.release();
     // This graceful wait acknowledges the actual detached callback returning; it is
     // deliberately outside Runtime.shutdown's shared deadline.
     app.price_refreshes().unwrap().drain().await;
     app.dispatcher().idle().await;
     let after = snapshot();
+    if after != before {
+        let events = read(&*fx.store, |s| {
+            s.history()
+                .page(&EventFilter::All, before.0.committed_sequence, 32)
+        });
+        eprintln!(
+            "shutdown delta event identities: {:?}",
+            events
+                .events
+                .iter()
+                .map(|e| (&e.kind, &e.aggregate_kind, &e.aggregate_id))
+                .collect::<Vec<_>>()
+        );
+    }
     assert_eq!(
         after, before,
         "late source changed catalog, operation or delivery after shutdown"
     );
     assert_eq!(app.price_refreshes().unwrap().tick().await.unwrap(), 0);
     assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+    phase.done = true;
 }
 
 #[test]
 fn a_stalled_price_source_does_not_keep_the_tokio_runtime_alive_after_app_shutdown() {
+    let _native_case = native_runtime_case();
     let h = Harness::new();
     let store = h.open();
     principal(&*store, "user", PrincipalKind::Human);

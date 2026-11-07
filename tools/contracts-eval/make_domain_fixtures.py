@@ -8,7 +8,7 @@ def valid(entry):return json.loads(next(c['raw'] for c in ALL if c['entry']==ent
 ART={'artifactId':'artifact-a','versionId':'version-a','sha256':'a'*64,'byteLength':'8','mediaType':'text/plain'}
 STAMP={'storeId':'store-a','restoreEpoch':'0','sequence':'1','policyRevision':'1','scopeRevision':'1'}
 BASE={'Id':'id-a','Revision':'1','Counter':'0','ProjectId':'project-a','RootId':'root-a','ActorId':'actor-a','AssignmentId':'assignment-a','OperationId':'operation-a','QueryId':'query-a','RequestKey':'request-a','CommandId':'command-a','EventId':'event-a','StoreId':'store-a','ResourceId':'resource-a','CorrelationId':'correlation-a',
- 'Label':'fixture','Text':'fixture','GraphUnitKey':'src/main.rs','GraphText':'fixture source','Content':'Fixture content','Cursor':'cursor-a','RelativePath':'src/main.rs','Url':'https://fixture.invalid/path','Money':'0','SignedCounter':'-1','PositiveCounter':'1','Finite':0.5,'Probability':0.5,'bool':False,'i32':1,'Limit':20,'Depth':2,'Port':8765,'ByteLimit':4096,'TokenBudget':1500,'ArtifactTags':['evidence'],'PathSet':['src/lib.rs'],'DynamicJson':{'input':'fixture'},'SavedCommandInput':{'input':'fixture'},
+ 'Label':'fixture','Text':'fixture','DefaultValueText':'fixture','GraphUnitKey':'src/main.rs','GraphText':'fixture source','Content':'Fixture content','Cursor':'cursor-a','RelativePath':'src/main.rs','Url':'https://fixture.invalid/path','Money':'0','SignedCounter':'-1','PositiveCounter':'1','Finite':0.5,'Probability':0.5,'bool':False,'i32':1,'Limit':20,'Depth':2,'Port':8765,'ByteLimit':4096,'TokenBudget':1500,'ArtifactTags':['evidence'],'PathSet':['src/lib.rs'],'DynamicJson':{'input':'fixture'},'SavedCommandInput':{'input':'fixture'},
  'DataScope':{'kind':'Workspace'},'ViewSelection':{'kind':'Published','repositoryIds':['repo-a']},'Coverage':{'state':'Complete','gaps':[],'moreGaps':False},'Digest':'a'*64,'ArtifactRef':ART,'SchemaRef':{'schemaId':'fixture/object','revision':'1','sha256':'a'*64},'Attribution':{'kind':'Workspace','sessionId':'session-a'},'GitOid':{'format':'Sha1','hex':'a'*40},'ReadStamp':STAMP,'OperationState':'ObservedComplete',
  'RootControl':{'rootId':'root-a','revision':'1','desiredState':'Enabled'},'Blockers':{'items':[],'hasMore':False},'EligibilityTarget':{'kind':'root','id':'root-a'},'Purpose':'Planning',
  'DeliveryBarrier':valid('delivery-barrier'),'DeliverySnapshot':valid('delivery-snapshot'),'GraphPage':valid('graph-page'),'RetrievalPage':valid('retrieval-page'),'TranscriptPage':valid('transcript-page'),'Event':valid('event')}
@@ -41,6 +41,11 @@ def sample(t):
  if t=='HelpSnapshot':v['canGenerate']=True
  if t=='HelpCapabilityMetadata':v['available']=True
  if t=='ProcessOutput':v['nextByte']=str(len(v['content'].encode()))
+ if t=='EmbeddingSpacePage':v['availabilityReason']='Qualification is unavailable in this recorded fixture'
+ if t=='ConventionRecord':v['content']=copy.deepcopy(ART)
+ if t=='ConventionRetrieval':v['reason']='No compatible embedding space is selected'
+ if t=='ConventionReadView':v['passage']=sample('ConventionPassage')
+ if t=='ConventionMutation':v['convention']=sample('ConventionRecord')
  return v
 
 def request(name,mode):
@@ -1148,13 +1153,45 @@ for name,revisions in REVISIONS.items():
  if 3 not in revisions or name not in OPS:continue
  definition=OPS[name]
  for mode in ([definition['mode']]if definition['mode']!='Hybrid'else['Query','Command']):
-  if not any(c['typedValid']and c['entry']=='domain-request.r3'and (v:=json.loads(c['raw'])).get('schemaRevision')==3 and v.get('mode')==mode and v.get('body',{}).get('kind')==name for c in CASES):
+  # Keep the pre-Usage generic forms alongside newer budget-specific coverage.
+  if name in ['features.edit','features.create','features.edit_plan','tasks.sync_plan','projects.create'] or not any(c['typedValid']and c['entry']=='domain-request.r3'and (v:=json.loads(c['raw'])).get('schemaRevision')==3 and v.get('mode')==mode and v.get('body',{}).get('kind')==name for c in CASES):
    frame=request(name,mode);frame['schemaRevision']=3;case('dw13-r3-admission-'+name+'-'+mode,'domain-request.r3',frame)
- if not any(c['typedValid']and c['entry']=='operation-result.r3'and json.loads(c['raw']).get('kind')==name for c in CASES):
+ if name=='features.get' or not any(c['typedValid']and c['entry']=='operation-result.r3'and json.loads(c['raw']).get('kind')==name for c in CASES):
   output=result(name,definition['result'])
   if TYPES.get(definition['result'],{}).get('kind')=='versioned':
    output['value']=selection3 if definition['result']=='AllocationSelection' else sample(TYPES[definition['result']]['current'])
   case('dw13-r3-binding-'+name,'operation-result.r3',output)
+
+# DW33: exact source-scope revisions are distinct from listing/search pagination witnesses.
+for name in ['conventions.list','conventions.search','conventions.resources','conventions.version']:
+ source=next(json.loads(c['raw']) for c in CASES if c['typedValid'] and c['entry']=='domain-request.r3' and json.loads(c['raw']).get('body',{}).get('kind')==name)
+ source['schemaRevision']=4
+ case('dw33-r4-admission-'+name,'domain-request.r3',source)
+ output=next(copy.deepcopy(json.loads(c['raw'])) for c in CASES if c['typedValid'] and c['entry']=='operation-result.r3' and json.loads(c['raw']).get('kind')==name)
+ if name in ['conventions.list','conventions.search','conventions.version']:output['value']['sourceScopeRevision']='2'
+ case('dw33-r4-source-revision-'+name,'operation-result.r4',output)
+ if name in ['conventions.list','conventions.search']:
+  bad=copy.deepcopy(output);bad['value']['sourceScopeRevision']=None
+  case('dw33-reject-null-source-revision-'+name,'operation-result.r4',bad,False,False)
+  bad=copy.deepcopy(output);bad['value']['sourceScopeRevision']='0'
+  case('dw33-reject-zero-source-revision-'+name,'operation-result.r4',bad,False,False)
+  case('dw33-reject-source-revision-before4-'+name,'operation-result.r3',output,False,False)
+
+# DW89's additive history direction has its own recorded revision-3 admission.
+for scope in [{'rootId':'root-a'},{'projectId':'project-a'}]:
+ newest={'protocol':'1.0-draft.1','queryId':'newest-events','schemaRevision':3,'query':{'kind':'history.events','limit':200,'newestFirst':True,**scope}}
+ case('dw89-r3-newest-'+('root'if 'rootId'in scope else'project'),'query-request.r3',newest)
+forward=copy.deepcopy(newest);forward['query']['newestFirst']=False
+case('dw89-r3-forward-project','query-request.r3',forward)
+for revision in [1,2]:
+ old=copy.deepcopy(newest);old['schemaRevision']=revision
+ case('dw89-direction-before-r3-'+str(revision),'query-request'+('.r2'if revision==2 else''),old,False,False)
+for invalid in [None,'true']:
+ bad=copy.deepcopy(newest);bad['query']['newestFirst']=invalid
+ case('dw89-invalid-direction-'+('null'if invalid is None else'string'),'query-request.r3',bad,False,False)
+# DW36: source metadata revision5, all native engine declarations and strict field gates.
+from metadata_fixtures import append_metadata_cases
+append_metadata_cases(case,sample,request,ART)
 
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

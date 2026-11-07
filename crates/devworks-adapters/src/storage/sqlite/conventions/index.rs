@@ -268,6 +268,11 @@ fn ranked(
         validate_vector(vector, space.dimensions)?;
     }
     let q = query(q)?;
+    let excerpt_query = weighted
+        .iter()
+        .map(|term| term.term.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
     let weighted = json!(
         weighted
             .iter()
@@ -316,7 +321,7 @@ fn ranked(
             let index = generation(conn, &id)?.ok_or_else(|| invalid("index disappeared"))?;
             let id = Id::new(r.1).map_err(|_| invalid("invalid chunk"))?;
             Ok(ConventionRankedChunk {
-                chunk: compact_chunk(conn, &index, &id)?,
+                chunk: compact_chunk(conn, &index, &id, &excerpt_query)?,
                 lexical_score: r.2,
                 dense_score: r.3,
                 score: r.4,
@@ -328,8 +333,9 @@ fn compact_chunk(
     conn: &Connection,
     index: &StoredConventionIndex,
     id: &Id,
+    query: &str,
 ) -> Result<ConventionChunkMatch, StorageError> {
-    db(conn.query_row("SELECT chunk_index,section_id,text FROM convention_chunks WHERE generation_id=?1 AND id=?2",params![index.generation_id.as_str(),id.as_str()],|r|{let text=r.get_ref(2)?.as_str()?;Ok(ConventionChunkMatch{generation_id:index.generation_id.clone(),id:id.clone(),convention_id:index.convention_id.clone(),convention_revision:index.convention_revision,index:r.get(0)?,section_id:identifier(r,1)?,source_digest:index.source_digest.clone(),excerpt:text.chars().take(360).collect()})}))
+    db(conn.query_row("SELECT chunk_index,section_id,text FROM convention_chunks WHERE generation_id=?1 AND id=?2",params![index.generation_id.as_str(),id.as_str()],|r|{let text=r.get_ref(2)?.as_str()?;Ok(ConventionChunkMatch{generation_id:index.generation_id.clone(),id:id.clone(),convention_id:index.convention_id.clone(),convention_revision:index.convention_revision,index:r.get(0)?,section_id:identifier(r,1)?,source_digest:index.source_digest.clone(),excerpt:devworks_core::services::conventions::indexing::rank::excerpt(text,query)})}))
 }
 fn validate_vector(vector: &[f32], dimensions: u32) -> Result<(), StorageError> {
     if vector.len() != dimensions as usize
@@ -503,7 +509,10 @@ impl ConventionIndexRepository for Unit<'_> {
             };
         }
         active_operation(self.conn, &r.operation_id)?;
-        let reference = source(self.conn, r, r.convention_revision)?;
+        let revision = current(self.conn, &r.convention_id)?
+            .ok_or_else(|| invalid("convention owner missing"))?
+            .revision;
+        let reference = source(self.conn, r, revision)?;
         if let Some(id) = &r.embedding_space {
             space(self.conn, id)?.ok_or_else(|| invalid("embedding space missing"))?;
         }

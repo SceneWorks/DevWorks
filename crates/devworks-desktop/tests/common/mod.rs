@@ -14,6 +14,36 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Heavy native cases share a process budget. Acquire once at case entry, before any boot,
+/// and retain the guard through every runtime, harness and temporary-root cleanup. A case
+/// may deliberately own multiple apps; acquiring per Engine would deadlock those scenarios.
+#[must_use = "retain the native-case guard through case cleanup"]
+pub struct NativeRuntimeCase {
+    _owned: (),
+}
+static NATIVE_CASES: (Mutex<usize>, std::sync::Condvar) =
+    (Mutex::new(0), std::sync::Condvar::new());
+const NATIVE_CASE_LIMIT: usize = 2;
+
+pub fn native_runtime_case() -> NativeRuntimeCase {
+    let mut active = NATIVE_CASES.0.lock().unwrap_or_else(|p| p.into_inner());
+    while *active >= NATIVE_CASE_LIMIT {
+        active = NATIVE_CASES
+            .1
+            .wait(active)
+            .unwrap_or_else(|p| p.into_inner());
+    }
+    *active += 1;
+    NativeRuntimeCase { _owned: () }
+}
+impl Drop for NativeRuntimeCase {
+    fn drop(&mut self) {
+        let mut active = NATIVE_CASES.0.lock().unwrap_or_else(|p| p.into_inner());
+        *active -= 1;
+        NATIVE_CASES.1.notify_one();
+    }
+}
+
 /// A temporary data root, removed when dropped.
 pub struct Root(pub PathBuf);
 impl Root {
@@ -235,6 +265,8 @@ pub struct Gate {
     /// Forward the runtime's change hints (off: every hint is missed, so only the shell's own
     /// bookkeeping can repair a stale reply).
     hints: bool,
+    fail_query: Arc<std::sync::atomic::AtomicBool>,
+    waiters: Arc<std::sync::atomic::AtomicUsize>,
 }
 impl Gate {
     pub fn new(operation: &'static str) -> Self {
@@ -244,6 +276,8 @@ impl Gate {
             open: Arc::new((Mutex::new(true), std::sync::Condvar::new())),
             after: false,
             hints: true,
+            fail_query: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            waiters: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
     /// A gate that lets the request run and holds only its reply (a slow response).
@@ -267,8 +301,15 @@ impl Gate {
             ..self
         }
     }
+    /// Refuse the next matching query while preserving the real backend for other work.
+    pub fn fail_next_query(&self) {
+        self.fail_query.store(true, Ordering::SeqCst);
+    }
     pub fn close(&self) {
         *self.open.0.lock().unwrap() = false;
+    }
+    pub fn has_waiter(&self) -> bool {
+        self.waiters.load(Ordering::SeqCst) > 0
     }
     pub fn open(&self) {
         *self.open.0.lock().unwrap() = true;
@@ -287,9 +328,11 @@ impl Gate {
         });
         if operation == self.operation && matches_frame {
             let mut open = self.open.0.lock().unwrap();
+            self.waiters.fetch_add(1, Ordering::SeqCst);
             while !*open {
                 open = self.open.1.wait(open).unwrap();
             }
+            self.waiters.fetch_sub(1, Ordering::SeqCst);
         }
     }
 }
@@ -300,6 +343,11 @@ struct Gated {
 }
 impl Backend for Gated {
     fn query(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
+        if operation == self.gate.operation && self.gate.fail_query.swap(false, Ordering::SeqCst) {
+            return Err(devworks_core::gateway::GatewayFailure::NoUseCase(
+                "controlled query fault".into(),
+            ));
+        }
         if !self.gate.after {
             self.gate.wait(operation, frame);
         }
@@ -526,7 +574,21 @@ pub fn step_until(h: &mut Harness<'_, Shell>, what: &str, done: impl Fn(&Shell) 
     while !done(h.state()) {
         assert!(
             std::time::Instant::now() < deadline,
-            "{what} never happened"
+            "{what} never happened; route={:?}; help_scope={:?}; help_selected={:?}; help_loading={}; help_reading={}; help_error={:?}; help_read_error={:?}; help_notice={:?}; database_selected={:?}; database_busy={}; database_loading={}; database_error={:?}; database_notice={:?}; database_sources={:?}",
+            h.state().route(),
+            h.state().help.scope,
+            h.state().help.selected,
+            h.state().help.loading,
+            h.state().help.reading,
+            h.state().help.error,
+            h.state().help.read_error,
+            h.state().help.notice,
+            h.state().databases.selected,
+            h.state().databases.busy,
+            h.state().databases.loading,
+            h.state().databases.error,
+            h.state().databases.notice,
+            h.state().databases.connections
         );
         h.step();
         std::thread::sleep(Duration::from_millis(2));

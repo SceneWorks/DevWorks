@@ -184,11 +184,8 @@ impl Decoder {
                                             }
                                         }
                                     }
-                                    if let Some(name) = &call.name {
-                                        call.item["function"]["name"] = Value::String(name.clone());
-                                    }
-                                    call.item["function"]["arguments"] =
-                                        Value::String(call.arguments.clone());
+                                    // The assembled name/arguments already have owned buffers.
+                                    // Populate the final native item once at completion.
                                 }
                                 call.complete = aggregate;
                             }
@@ -263,12 +260,10 @@ impl Decoder {
                 if aggregate {
                     self.chat_reasoning[field] = Value::String(part.into());
                 } else {
-                    let old = self
-                        .chat_reasoning
-                        .get(field)
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    self.chat_reasoning[field] = Value::String(format!("{old}{part}"));
+                    match &mut self.chat_reasoning[field] {
+                        Value::String(text) => text.push_str(part),
+                        value => *value = Value::String(part.into()),
+                    }
                 }
             }
         }
@@ -286,6 +281,10 @@ impl Decoder {
         self.chat_native_slot();
         self.explicit_reasoning |= !details.is_empty();
         if aggregate {
+            self.chat_details.clear();
+            for (position, entry) in details.iter().enumerate() {
+                self.chat_details.insert(position, entry);
+            }
             self.chat_reasoning["reasoning_details"] = Value::Array(details.clone());
             return;
         }
@@ -304,38 +303,29 @@ impl Decoder {
             let collected = self.chat_reasoning["reasoning_details"]
                 .as_array_mut()
                 .unwrap();
-            let existing = collected.iter_mut().find(|entry| {
-                let identity = fragment
-                    .get("index")
-                    .filter(|v| !v.is_null())
-                    .map(|v| entry.get("index") == Some(v))
-                    .unwrap_or_else(|| {
-                        fragment
-                            .get("id")
-                            .filter(|v| !v.is_null())
-                            .is_some_and(|v| entry.get("id") == Some(v))
-                    });
-                identity
-                    && ["type", "id"].iter().all(|k| {
-                        fragment.get(k).filter(|v| !v.is_null()).is_none_or(|v| {
-                            entry.get(k).filter(|e| !e.is_null()).is_none_or(|e| e == v)
-                        })
-                    })
-            });
-            if let Some(entry) = existing {
+            let (position, _probes) = self.chat_details.find(fragment);
+            #[cfg(test)]
+            {
+                self.chat_detail_probes += _probes;
+            }
+            if let Some(position) = position {
+                let entry = &mut collected[position];
+                self.chat_details.remove(position, entry);
                 for (name, value) in fields {
                     if matches!(name.as_str(), "text" | "summary" | "data" | "signature")
-                        && let (Some(old), Some(part)) =
-                            (entry.get(name).and_then(Value::as_str), value.as_str())
+                        && let (Some(Value::String(old)), Some(part)) =
+                            (entry.get_mut(name), value.as_str())
                     {
-                        entry[name] = Value::String(format!("{old}{part}"));
+                        old.push_str(part);
                         continue;
                     }
                     if !value.is_null() {
                         entry[name] = value.clone();
                     }
                 }
+                self.chat_details.insert(position, entry);
             } else {
+                self.chat_details.insert(collected.len(), fragment);
                 collected.push(fragment.clone());
             }
         }

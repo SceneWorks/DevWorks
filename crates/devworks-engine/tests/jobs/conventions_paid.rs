@@ -214,15 +214,19 @@ fn boot_paid(rt: &tokio::runtime::Runtime, h: &Harness, wire: Arc<Wire>) -> Help
         runtime,
         n: AtomicUsize::new(0),
     };
-    rt.block_on(within("paid runtime Help startup", async {
-        loop {
-            app.runtime.dispatcher().run_until_idle().await.unwrap();
-            if app.head().generation_id.is_some() {
-                break;
+    {
+        let _diagnostics =
+            crate::common::help_startup_diagnostics(&*app.store, app.runtime.dispatcher());
+        rt.block_on(within("paid runtime Help startup", async {
+            loop {
+                app.runtime.dispatcher().run_until_idle().await.unwrap();
+                if app.head().generation_id.is_some() {
+                    break;
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
-    }));
+        }));
+    }
     app
 }
 fn configure(app: &HelpApp, rt: &tokio::runtime::Runtime) -> Id {
@@ -310,6 +314,7 @@ impl NativeJobDispatch for AckGate {
 }
 #[test]
 fn paid_native_index_waits_for_actual_accepted_job_link_and_accounts_seven_tokens_once() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);

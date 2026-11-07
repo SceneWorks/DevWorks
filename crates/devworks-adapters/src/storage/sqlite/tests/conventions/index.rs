@@ -607,3 +607,68 @@ fn pending_index_status_and_scoped_revision_track_actual_publication_without_cat
     })
     .unwrap();
 }
+
+#[test]
+fn ranked_excerpts_center_late_lexical_matches_and_keep_source_immutable() {
+    let h = Harness::new();
+    let store = h.store();
+    let text = format!(
+        "{}idempotent consumers {}",
+        "filler ".repeat(200),
+        "tail ".repeat(40)
+    );
+    let source = text.clone();
+    let generation = run_write(&store, WriteOptions::default(), move |tx| {
+        let row = record(
+            "long-rules",
+            KnowledgeScope::Workspace,
+            Some(artifact(
+                tx,
+                "long-body",
+                &KnowledgeScope::Workspace,
+                &text,
+            )?),
+        );
+        tx.conventions().create_convention(&row)?;
+        let generation = index(tx, &row, "long-index", None)?;
+        tx.conventions().stage_convention_index(&generation)?;
+        let mut c = chunk(&generation, 0, "", 1, None);
+        c.text = text;
+        c.token_count = c.text.split_whitespace().count() as i64;
+        stage_chunks(tx, &generation.generation_id, &[c])?;
+        tx.conventions()
+            .publish_convention_index(&generation.generation_id, 1, None, 1)?;
+        Ok(generation)
+    })
+    .unwrap();
+    let q = query(vec![KnowledgeScope::Workspace]);
+    let hits = read(&store, |r| {
+        r.conventions().convention_ranked_chunks(
+            &q,
+            &[ConventionWeightedTerm {
+                term: "idempotent".into(),
+                idf: 1.0,
+            }],
+            400.0,
+            None,
+            None,
+            1,
+        )
+    });
+    assert_eq!(hits.len(), 1);
+    let excerpt = &hits[0].chunk.excerpt;
+    assert!(
+        excerpt.contains("idempotent consumers"),
+        "matching text must be visible: {excerpt}"
+    );
+    assert!(excerpt.chars().count() <= 360);
+    assert!(!excerpt.contains('\n'));
+    let original = read(&store, |r| {
+        r.conventions()
+            .convention_chunks(&generation.generation_id, None, 500)
+    });
+    assert_eq!(
+        original[0].text, source,
+        "excerpting never rewrites indexed source"
+    );
+}

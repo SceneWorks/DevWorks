@@ -76,6 +76,8 @@ impl<const MIN: usize, const MAX: usize> Check for BoundedText<MIN, MAX> {
 }
 pub type Label = BoundedText<1, 256>;
 pub type Text = BoundedText<1, 4096>;
+/// A present default may be empty; absence remains None.
+pub type DefaultValueText = BoundedText<0, 4096>;
 pub type Content = BoundedText<0, 65536>;
 
 /// A bounded verbatim source fragment, including legal NUL characters; not executable input.
@@ -607,10 +609,9 @@ validated_leaf!(
 /// Schema revision 2 adds the project scope of `history.events`.
 impl Revisioned for QueryRequest {
     fn retain_revision(&mut self, revision: u32) {
-        if let Query::Events { project_id, .. } = &mut self.query {
-            if revision < 2 {
-                *project_id = None;
-            }
+        if let Query::Events { project_id, newest_first, .. } = &mut self.query {
+            if revision < 2 { *project_id = None; }
+            if revision < 3 { *newest_first = None; }
         }
     }
 }

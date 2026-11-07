@@ -240,3 +240,5 @@ pub mod prices;
 pub mod providers;
 
 pub mod conventions_import;
+
+pub mod schemas;

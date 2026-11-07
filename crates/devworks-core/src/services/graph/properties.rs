@@ -40,7 +40,7 @@ pub(super) fn page(value: &Value, after: Option<&Position>) -> Result<Properties
             return Err("invalid property cursor".into());
         }
         while offset < json.len() {
-            if used >= PAGE_BYTES {
+            if used >= PAGE_BYTES || output.len() >= 500 {
                 return Ok(Properties {
                     items: BoundedList(output),
                     next: Some(Position { index, offset }),
@@ -106,5 +106,37 @@ mod tests {
             value["large"]
         );
         assert!(seen_next);
+    }
+}
+
+#[cfg(test)]
+mod count_boundary_tests {
+    use super::*;
+    use crate::protocol::support::Check;
+    #[test]
+    fn hundreds_of_small_properties_continue_at_the_wire_fragment_limit() {
+        let value = Value::Object(
+            (0..1003)
+                .map(|i| (format!("p{i:04}"), Value::Bool(true)))
+                .collect(),
+        );
+        let mut position = None;
+        let mut names = Vec::new();
+        loop {
+            let page = page(&value, position.as_ref()).unwrap();
+            page.items.check().unwrap();
+            assert!(page.items.0.len() <= 500);
+            for property in page.items.0 {
+                names.push(property.name.0);
+            }
+            position = page.next;
+            if position.is_none() {
+                break;
+            }
+        }
+        assert_eq!(
+            names,
+            (0..1003).map(|i| format!("p{i:04}")).collect::<Vec<_>>()
+        );
     }
 }

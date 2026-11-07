@@ -3698,6 +3698,10 @@
         },
         "scopeRevision": {
           "$ref": "#/$defs/Revision"
+        },
+        "sourceScopeRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 4
         }
       },
       "required": [
@@ -4292,6 +4296,10 @@
         },
         "scopeRevision": {
           "$ref": "#/$defs/Revision"
+        },
+        "sourceScopeRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 4
         }
       },
       "required": [
@@ -17910,7 +17918,7 @@
         "originalAmount": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Money"
+              "$ref": "#/$defs/Text1To256"
             },
             {
               "type": "null"

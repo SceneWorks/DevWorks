@@ -194,6 +194,24 @@ fn scope_revision(conn: &Connection, scope: &KnowledgeScope) -> Result<i64, Stor
         .optional())?
     .unwrap_or(1))
 }
+fn index_source_revision(conn: &Connection, scope: &KnowledgeScope) -> Result<i64, StorageError> {
+    Ok(db(conn
+        .query_row(
+            "SELECT index_source_revision FROM convention_scope_revisions WHERE scope_key=?1",
+            [scope.key()],
+            |r| r.get(0),
+        )
+        .optional())?
+    .unwrap_or(1))
+}
+fn bump_index_source(conn: &Connection, scope: &KnowledgeScope) -> Result<(), StorageError> {
+    let next = index_source_revision(conn, scope)?
+        .checked_add(1)
+        .ok_or_else(|| invalid("convention index source revision overflow"))?;
+    db(conn.execute("INSERT INTO convention_scope_revisions(scope_key,project_id,revision,index_source_revision) VALUES(?1,?2,1,?3) ON CONFLICT(scope_key) DO UPDATE SET index_source_revision=excluded.index_source_revision",
+        params![scope.key(),scope.project().map(|p|p.0.as_str()),next]))?;
+    Ok(())
+}
 fn states(states: &[String]) -> Result<(), StorageError> {
     if states
         .iter()
@@ -397,6 +415,9 @@ macro_rules! reads {
             ) -> Result<i64, StorageError> {
                 scope_revision(self.conn, scope)
             }
+            fn convention_index_source_revision(&self, scope:&KnowledgeScope)->Result<i64,StorageError>{
+                index_source_revision(self.conn,scope)
+            }
         }
     };
 }
@@ -418,7 +439,11 @@ impl ConventionRepository for Unit<'_> {
                 "INSERT INTO convention_heads(id,revision) VALUES(?1,1)",
                 [r.id.as_str()],
             ))?;
-            insert_snapshot(self.conn, r, &self.info.boot_id, self.serial)
+            insert_snapshot(self.conn, r, &self.info.boot_id, self.serial)?;
+            if r.lifecycle == "Active" {
+                bump_index_source(self.conn, &r.scope)?;
+            }
+            Ok(())
         })
     }
     fn revise_convention(
@@ -461,6 +486,18 @@ impl ConventionRepository for Unit<'_> {
                 "UPDATE convention_heads SET revision=?2 WHERE id=?1 AND revision=?3",
                 params![r.id.as_str(), r.revision, expected],
             ))?;
+            if r.content_ref != old.content_ref
+                || r.scope != old.scope
+                || r.title != old.title
+                || (r.lifecycle == "Active") != (old.lifecycle == "Active")
+            {
+                if old.lifecycle == "Active" {
+                    bump_index_source(self.conn, &old.scope)?;
+                }
+                if r.lifecycle == "Active" && (old.lifecycle != "Active" || r.scope != old.scope) {
+                    bump_index_source(self.conn, &r.scope)?;
+                }
+            }
             Ok(())
         })
     }

@@ -469,7 +469,7 @@ impl OwnedInferenceSource for NativeProviderSource {
                     self.frames(frames)?;
                     if self.status >= 300 {
                         let kind = match self.status {
-                            401..=403 => {
+                            401 | 403 => {
                                 devworks_core::providers::decode::DecodeErrorKind::Authentication
                             }
                             404 => {

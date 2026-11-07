@@ -3620,6 +3620,14 @@
               "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "query-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",
@@ -6210,11 +6218,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 5,
+              "inputSchema": "domain-request.r5.schema.json",
+              "resultSchema": "operation-result.r5.schema.json",
+              "queryReplySchema": "domain-query-reply.r5.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": " Revision5 publishes source access/profile/freshness and typed metadata details; scope and current authority precede pagination. No source row values are retained.",
           "familyRules": "Metadata-only structural persistence; native engine profile and credential capabilities explicit. No source row values retained.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6256,11 +6272,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 5,
+              "inputSchema": "domain-request.r5.schema.json",
+              "resultSchema": "operation-result.r5.schema.json",
+              "queryReplySchema": "domain-query-reply.r5.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": " Revision5 publishes source access/profile/freshness and typed metadata details; scope and current authority precede pagination. No source row values are retained.",
           "familyRules": "Metadata-only structural persistence; native engine profile and credential capabilities explicit. No source row values retained.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6302,11 +6326,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 5,
+              "inputSchema": "domain-request.r5.schema.json",
+              "resultSchema": "operation-result.r5.schema.json",
+              "queryReplySchema": "domain-query-reply.r5.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": " Revision5 publishes source access/profile/freshness and typed metadata details; scope and current authority precede pagination. No source row values are retained.",
           "familyRules": "Metadata-only structural persistence; native engine profile and credential capabilities explicit. No source row values retained.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6348,11 +6380,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 5,
+              "inputSchema": "domain-request.r5.schema.json",
+              "resultSchema": "operation-result.r5.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r5.schema.json",
+              "completionSchema": "operation-completion.r5.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "External",
-          "semanticRules": "Metadata-only credential/profile; never persist source row values. Qualify actual read-only metadata enforcement for engine.",
+          "semanticRules": "Metadata-only credential/profile; never persist source row values. Qualify actual read-only metadata enforcement for engine. Revision5 testOnly validates the actual metadata connection/profile without publishing a schema view; normal indexing atomically publishes an immutable scoped metadata snapshot, preserving last-good data on failure.",
           "familyRules": "Metadata-only structural persistence; native engine profile and credential capabilities explicit. No source row values retained.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6394,11 +6434,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 5,
+              "inputSchema": "domain-request.r5.schema.json",
+              "resultSchema": "operation-result.r5.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r5.schema.json",
+              "completionSchema": "operation-completion.r5.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "External",
-          "semanticRules": "Metadata-only credential/profile; never persist source row values. Qualify actual read-only metadata enforcement for engine.",
+          "semanticRules": "Metadata-only credential/profile; never persist source row values. Qualify actual read-only metadata enforcement for engine. Revision5 testOnly uses the same bounded native metadata probe. Native sync-all independently admits every eligible source through this operation and reports each outcome.",
           "familyRules": "Metadata-only structural persistence; native engine profile and credential capabilities explicit. No source row values retained.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6440,6 +6488,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 5,
+              "inputSchema": "domain-request.r5.schema.json",
+              "resultSchema": "operation-result.r5.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r5.schema.json",
+              "completionSchema": "operation-completion.r5.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6486,11 +6542,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 5,
+              "inputSchema": "domain-request.r5.schema.json",
+              "resultSchema": "operation-result.r5.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r5.schema.json",
+              "completionSchema": "operation-completion.r5.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Create or compare-and-edit; credential references are host-issued. HelixDB source reading is excluded; reject unsupported engines. App persistence uses SQLite/FTS5/sqlite-vec.",
+          "semanticRules": "Create or compare-and-edit; credential references are host-issued. HelixDB source reading is excluded; reject unsupported engines. App persistence uses SQLite/FTS5/sqlite-vec. Revision5 Save configures enablement, explicit project access, exposure and qualified auth/TLS; Remove retires the definition and indexed metadata without altering the source database. Only native Human configuration may change connection/global/project write policy; no policy grants implicit target execution.",
           "familyRules": "Metadata-only structural persistence; native engine profile and credential capabilities explicit. No source row values retained.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -6723,6 +6787,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 5,
+              "inputSchema": "domain-request.r5.schema.json",
+              "resultSchema": "operation-result.r5.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r5.schema.json",
+              "completionSchema": "operation-completion.r5.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -9438,6 +9510,14 @@
               "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 4,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r4.schema.json",
+              "queryReplySchema": "domain-query-reply.r4.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -9598,6 +9678,14 @@
               "inputSchema": "domain-request.r3.schema.json",
               "resultSchema": "operation-result.r3.schema.json",
               "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 4,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r4.schema.json",
+              "queryReplySchema": "domain-query-reply.r4.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -9978,6 +10066,14 @@
               "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 4,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r4.schema.json",
+              "queryReplySchema": "domain-query-reply.r4.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -10084,6 +10180,14 @@
               "inputSchema": "domain-request.r3.schema.json",
               "resultSchema": "operation-result.r3.schema.json",
               "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 4,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r4.schema.json",
+              "queryReplySchema": "domain-query-reply.r4.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }

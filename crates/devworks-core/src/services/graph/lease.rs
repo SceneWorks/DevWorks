@@ -17,12 +17,12 @@ pub(super) struct Selected {
     pub layers: Vec<ViewLayers>,
 }
 
-pub(super) fn owner(ctx: &InvocationContext) -> String {
+pub(crate) fn owner(ctx: &InvocationContext) -> String {
     let worktree=ctx.worktree().map(|tree|json!({"id":tree.id(),"workId":tree.work_id(),"repositoryId":tree.repository_id(),"ownershipRevision":tree.ownership_revision()}));
     sha256_hex(json!({"actor":ctx.principal(),"kind":format!("{:?}",ctx.principal_kind()),"project":ctx.project_id(),"root":ctx.root_id(),"assignment":ctx.assignment_id(),"session":ctx.session_id(),"ingress":ctx.ingress_namespace(),"worktree":worktree}).to_string().as_bytes())
 }
 
-pub(super) fn scope_digest(scope: &DataScope) -> String {
+pub(crate) fn scope_digest(scope: &DataScope) -> String {
     sha256_hex(
         serde_json::to_string(scope)
             .expect("typed scope")

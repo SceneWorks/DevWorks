@@ -118,7 +118,7 @@ pub(super) fn detail(
     }
     Ok(GraphResult::NodeDetail {
         value: model::wire(
-            json!({"node":node,"neighbors":neighbors.into_values().collect::<Vec<_>>(),"incoming":incoming,"outgoing":outgoing,"crossRepository":cross,"relationshipsComplete":reader.next.is_none()&&reader.budget.exhausted.is_none()&&reader.selected.pin.unavailable_repositories.is_empty()&&unmapped.is_none_or(|count|count==0)}),
+            json!({"node":node,"neighbors":neighbors.into_values().collect::<Vec<_>>(),"incoming":incoming,"outgoing":outgoing,"crossRepository":cross,"relationshipsComplete":reader.next.is_none()&&reader.budget.exhausted.is_none()&&!reader.gaps.contains(&"graph_visited_limit")&&reader.selected.pin.unavailable_repositories.is_empty()&&unmapped.is_none_or(|count|count==0)}),
         )?,
     })
 }
@@ -141,11 +141,11 @@ pub(super) fn by_file(
             let end = n.node.payload["span"]["endLine"].as_u64().unwrap_or(start);
             (
                 end.saturating_sub(start),
-                std::cmp::Reverse(match n.node.kind.as_str() {
+                match n.node.kind.as_str() {
                     "Method" => 0,
                     "Class" => 1,
                     _ => 2,
-                }),
+                },
                 n.node.node_id.clone(),
             )
         };
@@ -201,7 +201,7 @@ struct Step {
     edge: scan::Edge,
 }
 fn walk(reader: &mut Reader<'_>, config: Walk<'_>) -> Result<(Vec<Step>, dataset::Edges), Failure> {
-    let edges = reader.raw_edges()?;
+    let edges = reader.filtered_edges(config.kinds)?;
     let mut queue = VecDeque::new();
     let mut visited = BTreeSet::new();
     let mut steps = Vec::new();
@@ -323,20 +323,28 @@ fn graph_steps(
     let mut nodes = BTreeMap::<Key, CodeNode>::new();
     let mut edges = Vec::new();
     let mut seen = BTreeSet::new();
-    for (index, step) in steps.iter().enumerate().skip(reader.position.offset) {
+    for (index, step) in steps.iter().enumerate() {
+        // Prefix identity is part of the logical traversal, including rows before this page.
+        // Borrow stable step strings; page boundaries never reset edge deduplication.
+        if !seen.insert((
+            step.edge.raw.repository_id.as_str(),
+            step.edge.raw.edge.unit_key.as_str(),
+            step.edge.raw.edge.edge_id.as_str(),
+        )) {
+            continue;
+        }
+        if !reader.budget.retain(96) {
+            break;
+        }
+        if index < reader.position.offset {
+            continue;
+        }
         if edges.len() >= reader.limit.min(250) {
             reader.next = Some(Position {
                 offset: index,
                 ..Default::default()
             });
             break;
-        }
-        if !seen.insert((
-            step.edge.raw.repository_id.as_str().to_owned(),
-            step.edge.raw.edge.unit_key.clone(),
-            step.edge.raw.edge.edge_id.clone(),
-        )) {
-            continue;
         }
         let (edge, edge_next) = model::edge_page(
             &step.edge,
@@ -489,12 +497,12 @@ pub(super) fn related(
 ) -> Result<GraphResult, Failure> {
     let starts = reader.targets(selection)?;
     let keys: BTreeSet<_> = starts.iter().map(dataset::node_key).collect();
-    let edges = reader.raw_edges()?;
     let kinds = if publishers {
         &["PUBLISHES", "CALLS"][..]
     } else {
         &["CONSUMES", "CALLS", "HTTP_CALLS", "USES_TYPE", "HANDLES"][..]
     };
+    let edges = reader.filtered_edges(kinds)?;
     let unmapped = super::unmapped::count(
         reader,
         &edges.unmapped,
@@ -502,19 +510,31 @@ pub(super) fn related(
         Some(selection),
         kinds,
     )?;
-    let mut rows = Vec::new();
+    let mut result = Vec::new();
     let mut seen = BTreeSet::new();
     for edge in &edges.linked {
-        if keys.contains(&dataset::key(&edge.target))
-            && kinds.contains(&edge.raw.edge.kind.as_str())
-            && seen.insert(dataset::key(&edge.source))
+        if !keys.contains(&dataset::key(&edge.target))
+            || !kinds.contains(&edge.raw.edge.kind.as_str())
         {
-            let node = raw(reader, &edge.source)?;
-            rows.push((node, edge));
+            continue;
         }
-    }
-    let mut result = Vec::new();
-    for (index, (node, edge)) in rows.iter().enumerate().skip(reader.position.offset) {
+        let identity = dataset::key(&edge.source);
+        if seen.contains(&identity) {
+            continue;
+        }
+        // Endpoint identities are bounded, unlike source payloads. Retain only this
+        // deduplication prefix and hydrate a node after it enters the requested page.
+        if !reader
+            .budget
+            .retain(identity.0.len() + identity.1.len() + identity.2.len() + 96)
+        {
+            break;
+        }
+        seen.insert(identity);
+        let index = seen.len() - 1;
+        if index < reader.position.offset {
+            continue;
+        }
         if result.len() >= reader.limit {
             reader.next = Some(Position {
                 offset: index,
@@ -522,8 +542,9 @@ pub(super) fn related(
             });
             break;
         }
+        let node = raw(reader, &edge.source)?;
         let item = model::wire(
-            json!({"node":reader.node(node,None)?.0,"edgeKind":edge.raw.edge.kind,"lowConfidence":dataset::low_node(node)}),
+            json!({"node":reader.node(&node,None)?.0,"edgeKind":edge.raw.edge.kind,"lowConfidence":dataset::low_node(&node)}),
         )?;
         if !reader.retain_wire(&item)? {
             reader.next = Some(Position {

@@ -4,6 +4,10 @@ use super::{budget::Budget, scan};
 use crate::ports::storage::*;
 use crate::services::sessions::Failure;
 
+fn captured_directory(unit: &str) -> &str {
+    unit.rsplit_once('/').map_or("", |(parent, _)| parent)
+}
+
 pub(super) struct Module {
     repository: String,
     directory: String,
@@ -34,12 +38,7 @@ impl Modules {
                 let name = node.node.payload["properties"]["dotnet_project"]
                     .as_str()
                     .unwrap_or(&node.node.name);
-                let directory = node
-                    .node
-                    .unit_key
-                    .rsplit_once('/')
-                    .map_or("", |(parent, _)| parent)
-                    .to_lowercase();
+                let directory = captured_directory(&node.node.unit_key).to_owned();
                 if !budget.retain(node.repository_id.as_str().len() + directory.len() + name.len())
                 {
                     return Ok(false);
@@ -70,7 +69,7 @@ impl Modules {
         if !self.complete {
             return (None, true);
         }
-        let path = node.node.unit_key.trim_start_matches('/').to_lowercase();
+        let path = node.node.unit_key.trim_start_matches('/');
         let mut best: Option<&Module> = None;
         let mut ambiguous = false;
         for module in &self.entries {
@@ -109,5 +108,55 @@ impl Modules {
             },
             ambiguous,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::Id;
+    use serde_json::json;
+    fn symbol(path: &str) -> GraphNode {
+        GraphNode {
+            repository_id: Id::new("repo").unwrap(),
+            view_id: Id::new("view").unwrap(),
+            generation_id: Id::new("generation").unwrap(),
+            content_digest: "a".repeat(64),
+            node: StoredNode {
+                unit_key: path.into(),
+                node_id: "symbol".into(),
+                kind: "Class".into(),
+                name: "Example".into(),
+                payload: json!({"properties":{}}),
+            },
+        }
+    }
+    #[test]
+    fn captured_git_directory_spelling_distinguishes_project_owners() {
+        let modules = Modules {
+            entries: [
+                ("Foo/Upper.csproj", "Upper"),
+                ("foo/Lower.csproj", "Lower"),
+                ("Foo/Nested/Deep.csproj", "Deep"),
+            ]
+            .into_iter()
+            .map(|(path, name)| Module {
+                repository: "repo".into(),
+                directory: captured_directory(path).into(),
+                name: name.into(),
+            })
+            .collect(),
+            complete: true,
+        };
+        for (path, name) in [
+            ("Foo/Example.cs", Some("Upper")),
+            ("foo/Example.cs", Some("Lower")),
+            ("Foo/Nested/Example.cs", Some("Deep")),
+            ("FOO/Example.cs", None),
+            ("Foobar/Example.cs", None),
+        ] {
+            let node = symbol(path);
+            assert_eq!(modules.owner(&node), (name, false), "{path}");
+        }
     }
 }

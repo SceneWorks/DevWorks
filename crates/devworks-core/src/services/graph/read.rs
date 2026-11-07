@@ -180,6 +180,29 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// Composed views carry provenance; their selected generation manifests carry coverage.
+    pub fn indexes_complete(&self, scope: &GraphScope) -> Result<bool, Failure> {
+        for layer in self.selected.layers.iter().filter(|layer| {
+            scope
+                .views
+                .iter()
+                .any(|view| view.view_id == layer.view.view_id)
+        }) {
+            for id in &layer.layers {
+                let generation = self
+                    .read
+                    .indexing()
+                    .generation(id)?
+                    .ok_or_else(|| super::scope::unavailable(Some(id.clone())))?;
+                let (state, _) =
+                    crate::services::indexing::status::manifest_coverage(&generation.manifest);
+                if !matches!(state, crate::protocol::data::CoverageState::Complete) {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
     pub fn with_indexing(
         mut self,
         indexing: Option<&'a crate::services::indexing::IndexEnv>,
@@ -287,12 +310,23 @@ impl<'a> Reader<'a> {
     }
 
     pub fn raw_edges(&mut self) -> Result<dataset::Edges, Failure> {
-        dataset::edges(
-            self.read,
-            &self.selected.pin.scope,
-            &self.selected.layers,
-            &mut self.budget,
-        )
+        self.filtered_edges(&[])
+    }
+
+    pub fn filtered_edges(&mut self, kinds: &[&str]) -> Result<dataset::Edges, Failure> {
+        let (edges, partial) = self.budget.reserve_visits(|budget| {
+            dataset::edges(
+                self.read,
+                &self.selected.pin.scope,
+                &self.selected.layers,
+                kinds,
+                budget,
+            )
+        });
+        if partial && !self.gaps.contains(&"graph_visited_limit") {
+            self.gaps.push("graph_visited_limit");
+        }
+        edges
     }
 
     pub fn node(
@@ -371,16 +405,16 @@ impl<'a> Reader<'a> {
                     Some(id) => self.scoped_repository(id)?,
                     None => self.selected.pin.scope.clone(),
                 };
-                let mut rows = self.raw_nodes(&scope, &GraphNodeFilter::default())?;
-                rows.retain(|n| {
-                    if repository_id.is_some() {
-                        n.node.name.to_lowercase() == name.0.to_lowercase()
-                            || n.node.payload["qualifiedName"].as_str() == Some(&name.0)
-                    } else {
-                        n.node.name.to_lowercase().contains(&name.0.to_lowercase())
-                            || n.node.payload["qualifiedName"].as_str() == Some(&name.0)
-                    }
-                });
+                let mut rows = self.raw_nodes(
+                    &scope,
+                    &GraphNodeFilter {
+                        name: Some(GraphNameFilter {
+                            name: name.0.clone(),
+                            contains: repository_id.is_none(),
+                        }),
+                        ..Default::default()
+                    },
+                )?;
                 rows.sort_by(|a, b| {
                     a.node
                         .name

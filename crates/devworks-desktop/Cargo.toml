@@ -29,7 +29,7 @@ rfd = "=0.17.2"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-tokio = { version = "=1.54.1", default-features = false, features = ["rt", "sync", "time"] }
+tokio = { version = "=1.54.1", default-features = false, features = ["net", "rt", "sync", "time"] }
 
 # Attachments open picked files without blocking on, or following into, special files
 # (O_NONBLOCK | O_NOFOLLOW). Already in the lockfile through the adapters.

@@ -393,6 +393,9 @@ impl ReadSnapshot for MemSnapshot {
     fn conventions(&self) -> &dyn ConventionRead {
         &self.unsupported
     }
+    fn schemas(&self) -> &dyn SchemaRead {
+        &self.unsupported
+    }
     fn help(&self) -> &dyn HelpRead {
         &self.unsupported
     }
@@ -509,6 +512,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn conventions(&mut self) -> &mut dyn ConventionRepository {
+        &mut self.unsupported
+    }
+    fn schemas(&mut self) -> &mut dyn SchemaRepository {
         &mut self.unsupported
     }
     fn help(&mut self) -> &mut dyn HelpRepository {
@@ -1061,6 +1067,13 @@ impl GrantLedger for Unsupported {
 }
 
 impl ConfigurationRead for Unsupported {
+    fn settings_secret(&self, _: &Id) -> Result<Option<StoredSettingsSecret>, StorageError> {
+        nope()
+    }
+    fn settings_secret_referenced(&self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+
     fn scope_exists(&self, _: &ConfigScope) -> Result<bool, StorageError> {
         nope()
     }
@@ -1099,6 +1112,22 @@ impl ConfigurationRead for Unsupported {
     }
 }
 impl ConfigurationRepository for Unsupported {
+    fn reserve_settings_secret(&mut self, _: &Id, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn publish_settings_secret(&mut self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn retain_settings_secret(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn retire_settings_secret(&mut self, _: &Id, _: i64, _: bool) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn finish_settings_secret_deletion(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+
     fn append_revision(
         &mut self,
         _: &ConfigScope,
@@ -1510,6 +1539,14 @@ impl SessionRead for Unsupported {
         _: Option<&SequenceKey>,
         _: u16,
     ) -> Result<Vec<UsageFact>, StorageError> {
+        nope()
+    }
+    fn decisions_before(
+        &self,
+        _: &HistoryScope,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<EventRecord>, StorageError> {
         nope()
     }
 }
@@ -3748,6 +3785,9 @@ impl ConventionRead for Unsupported {
     fn convention_scope_revision(&self, _: &KnowledgeScope) -> Result<i64, StorageError> {
         nope()
     }
+    fn convention_index_source_revision(&self, _: &KnowledgeScope) -> Result<i64, StorageError> {
+        nope()
+    }
 }
 
 impl ConventionRepository for Unsupported {
@@ -4030,6 +4070,116 @@ impl ConventionImportRepository for Unsupported {
         _: &devworks_core::protocol::OperationId,
         _: u16,
     ) -> Result<bool, StorageError> {
+        nope()
+    }
+}
+
+impl SchemaRead for Unsupported {
+    fn schema_certificate(&self, _: &Id) -> Result<Option<StoredSchemaCertificate>, StorageError> {
+        nope()
+    }
+    fn schema_pin(&self, _: &Id) -> Result<Option<StoredSchemaReadPin>, StorageError> {
+        nope()
+    }
+    fn schema_active_pin(
+        &self,
+        _: &str,
+        _: i64,
+    ) -> Result<Option<StoredSchemaReadPin>, StorageError> {
+        nope()
+    }
+    fn schema_credential_in_use(&self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn schema_inventory_revision(&self) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn schema_source(&self, _: &Id) -> Result<Option<StoredSchemaSource>, StorageError> {
+        nope()
+    }
+    fn schema_sources(
+        &self,
+        _: &SchemaVisibility,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredSchemaSource>, StorageError> {
+        nope()
+    }
+    fn schema_view(&self, _: &Id) -> Result<Option<StoredSchemaView>, StorageError> {
+        nope()
+    }
+    fn schema_objects(
+        &self,
+        _: &Id,
+        _: &SchemaObjectFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<devworks_core::protocol::records::SchemaObject>, StorageError> {
+        nope()
+    }
+    fn schema_relations(
+        &self,
+        _: &Id,
+        _: &[Id],
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<devworks_core::protocol::records::SchemaRelation>, StorageError> {
+        nope()
+    }
+    fn schema_publication(
+        &self,
+        _: &OperationId,
+    ) -> Result<Option<StoredSchemaPublication>, StorageError> {
+        nope()
+    }
+}
+impl SchemaRepository for Unsupported {
+    fn prune_schema_views(&mut self, _: u16) -> Result<usize, StorageError> {
+        nope()
+    }
+    fn set_schema_certificate(
+        &mut self,
+        _: &Id,
+        _: Option<&StoredSchemaCertificate>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn create_schema_pin(&mut self, _: &StoredSchemaReadPin) -> Result<(), StorageError> {
+        nope()
+    }
+    fn expire_schema_pins(&mut self, _: i64, _: u16) -> Result<usize, StorageError> {
+        nope()
+    }
+    fn create_schema_source(&mut self, _: &StoredSchemaSource) -> Result<(), StorageError> {
+        nope()
+    }
+    fn revise_schema_source(&mut self, _: &StoredSchemaSource, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn discard_schema_staging(&mut self, _: &Id, _: u16) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn create_schema_view(&mut self, _: &StoredSchemaView) -> Result<(), StorageError> {
+        nope()
+    }
+    fn append_schema_rows(
+        &mut self,
+        _: &Id,
+        _: &[devworks_core::protocol::records::SchemaObject],
+        _: &[devworks_core::protocol::records::SchemaRelation],
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn seal_schema_view(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn remove_schema_views(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn record_schema_publication(
+        &mut self,
+        _: &StoredSchemaPublication,
+    ) -> Result<(), StorageError> {
         nope()
     }
 }

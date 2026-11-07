@@ -944,6 +944,9 @@ fn legacy(result: GraphResult) -> Result<GraphResult, Failure> {
             }
             Ok(GraphResult::Nodes { nodes })
         }
+        GraphResult::CodeGraph { value } => {
+            crate::protocol::data::legacy_graph(&value).ok_or_else(|| scope::unavailable(None))
+        }
         GraphResult::SourceText { value } => Ok(GraphResult::Source {
             citation: value
                 .source
@@ -1240,7 +1243,7 @@ fn bound_cursors(
         read.stamp().committed_sequence.max(1)
     };
     let mut canonical =
-        json!({"scope":request.scope,"query":request.query,"limit":request.limits.max_results});
+        json!({"scope":request.scope,"query":request.query,"limits":request.limits});
     if let Some(selected) = selected {
         canonical["selection"] = json!(selected.pin.intent_digest);
         let mut registrations = Vec::new();
