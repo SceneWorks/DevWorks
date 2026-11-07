@@ -22,13 +22,21 @@ mod tests {
         let schema_before: i64 = c
             .query_row("PRAGMA schema_version", [], |r| r.get(0))
             .unwrap();
+        let scope = devworks_core::protocol::data::DataScope::Project {
+            project_id: devworks_core::protocol::ProjectId(
+                devworks_core::protocol::Id::new("no-project-owned-rows").unwrap(),
+            ),
+        };
+        let digest = devworks_core::fingerprint::sha256_hex(
+            serde_json::to_string(&scope).unwrap().as_bytes(),
+        );
         for (table, predicate) in policy["candidatePredicates"].as_object().unwrap() {
             let sql = format!(
                 "WITH {anchors} SELECT count(*) FROM \"{table}\" WHERE ({})",
                 predicate.as_str().unwrap()
             );
             let count: i64 = c
-                .query_row(&sql, ["no-project-owned-rows"], |r| r.get(0))
+                .query_row(&sql, ["no-project-owned-rows", &digest], |r| r.get(0))
                 .unwrap_or_else(|e| panic!("{table}: {e}"));
             assert_eq!(count, 0, "{table}");
         }

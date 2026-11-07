@@ -1404,6 +1404,29 @@ impl Runtime {
         self.command(ctx, OPERATION, frame)
     }
 
+    /// Dedicated native confirmation. Generic command/MCP dispatch never mints
+    /// this proof; current authority and manifest freshness remain required.
+    pub fn confirm_project_purge(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
+        const OPERATION: &str = "projects.purge";
+        let decoded = devworks_core::admission::decode(
+            devworks_core::admission::Selection {
+                operation: OPERATION,
+                mode: devworks_core::registry::Mode::Command,
+            },
+            frame,
+        );
+        if let Ok(decoded) = decoded
+            && let devworks_core::operations::OperationInput::Projects(
+                devworks_core::operations::projects::Input::Purge(input),
+            ) = decoded.input
+            && let Some(bound) = devworks_core::context::HostIngress::new(&*self.store)
+                .project_purge_context(ctx, &input)
+        {
+            return self.command(&bound, OPERATION, frame);
+        }
+        self.command(ctx, OPERATION, frame)
+    }
+
     pub fn approvals(&self) -> &Arc<ApprovalService> {
         &self.approvals
     }

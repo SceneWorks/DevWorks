@@ -755,6 +755,11 @@ impl Backend for DesktopBackend {
             .runtime
             .record_human_decision(&self.host.ctx, frame)
     }
+    fn confirm_project_purge(&self, frame: &[u8]) -> CommandOutcome {
+        self.host
+            .runtime
+            .confirm_project_purge(&self.host.ctx, frame)
+    }
     fn text_preview(
         &self,
         session: &Id,

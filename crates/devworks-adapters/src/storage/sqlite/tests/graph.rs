@@ -550,6 +550,71 @@ fn pin(f: &Fx, name: &str) -> StoredGraphReadPin {
     }
 }
 #[test]
+fn graph31_project_purge_candidates_select_only_the_typed_project_digest_and_its_child_leases() {
+    use devworks_core::protocol::{ProjectId, data::DataScope};
+    let f = Fx::new();
+    let mut selected_digest = String::new();
+    for (name, scope) in [
+        (
+            "purge-project",
+            DataScope::Project {
+                project_id: ProjectId(id("purge-a")),
+            },
+        ),
+        (
+            "other-project",
+            DataScope::Project {
+                project_id: ProjectId(id("purge-b")),
+            },
+        ),
+        ("workspace", DataScope::Workspace),
+    ] {
+        let mut p = pin(&f, name);
+        p.scope_digest = sha256_hex(serde_json::to_string(&scope).unwrap().as_bytes());
+        if name == "purge-project" {
+            selected_digest = p.scope_digest.clone();
+        }
+        write(&f.s, move |tx| tx.graph().acquire_graph_pin(&p));
+    }
+    // All three pins have the same exact view set and owner namespace; neither
+    // can substitute for the independently bound project scope digest.
+    let policy: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/architecture/validation/project-purge/native-row-selectors.json"
+    )))
+    .unwrap();
+    let anchors = policy["anchors"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(name, sql)| format!("{name} AS ({})", sql.as_str().unwrap()))
+        .collect::<Vec<_>>()
+        .join(",");
+    let raw = f.h.raw();
+    for (table, expected) in [
+        ("graph_read_pins", 1),
+        ("graph_read_pin_views", 2),
+        ("index_pins", 2),
+    ] {
+        let sql = format!(
+            "WITH {anchors} SELECT count(*) FROM {table} WHERE ({})",
+            policy["candidatePredicates"][table].as_str().unwrap()
+        );
+        assert_eq!(
+            raw.query_row(&sql, ["purge-a", &selected_digest], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            expected,
+            "{table}"
+        );
+    }
+    for name in ["purge-project", "other-project", "workspace"] {
+        assert!(
+            read(&f.s, |r| r.graph().graph_pin(&id(name))).is_some(),
+            "selection must not mutate {name}"
+        );
+    }
+}
+#[test]
 fn graph31_pin_renewal_ownership_expiry_reopen_and_gc_are_atomic() {
     let f = Fx::new();
     let p = pin(&f, "lease");

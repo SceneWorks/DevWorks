@@ -50,6 +50,11 @@ pub trait Backend: Send + Sync {
             "trusted native human decision ingress".into(),
         ))
     }
+    fn confirm_project_purge(&self, _frame: &[u8]) -> CommandOutcome {
+        Err(devworks_core::gateway::GatewayFailure::NoUseCase(
+            "trusted native project purge confirmation ingress".into(),
+        ))
+    }
     /// Volatile host-owned response text, authorized against the current session on each read.
     /// This is not a transcript entry or a generic tool operation.
     fn text_preview(
@@ -462,6 +467,7 @@ fn resolve_dispatched(
     let invoke = || match dispatch {
         CommandDispatch::Generic => backend.command(operation, frame),
         CommandDispatch::HumanDecision => backend.human_decision(frame),
+        CommandDispatch::ProjectPurge => backend.confirm_project_purge(frame),
     };
     let mut outcome = invoke();
     for _ in 0..UNKNOWN_RESUBMISSIONS {
@@ -514,6 +520,7 @@ pub enum CommandDispatch {
     #[default]
     Generic,
     HumanDecision,
+    ProjectPurge,
 }
 
 struct Pending {
@@ -527,6 +534,7 @@ struct Pending {
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
 pub const COMMANDS: &[&str] = &[
+    "projects.purge",
     "code.set_trust",
     "help.generate_capability_docs",
     "router.price_refresh",
@@ -641,6 +649,17 @@ impl Unresolved {
         {
             return None;
         }
+        if dispatch == CommandDispatch::ProjectPurge && operation != "projects.purge" {
+            return None;
+        }
+        // Restored disk state can resolve an existing receipt, but cannot create
+        // a new native Human confirmation. A missing original receipt requires
+        // another explicit review; a dispatch flag is never consent.
+        let dispatch = if dispatch == CommandDispatch::ProjectPurge {
+            CommandDispatch::Generic
+        } else {
+            dispatch
+        };
         Some(Self {
             slot,
             label,
@@ -892,6 +911,17 @@ impl Client {
             "approvals.record_human_decision",
             frame,
             CommandDispatch::HumanDecision,
+        )
+    }
+
+    /// Called only after the user reviews and confirms the exact purge manifest.
+    pub fn confirm_project_purge(&mut self, slot: Slot, label: &str, frame: Vec<u8>) -> bool {
+        self.dispatched_command(
+            slot,
+            label,
+            "projects.purge",
+            frame,
+            CommandDispatch::ProjectPurge,
         )
     }
 
@@ -1240,6 +1270,56 @@ mod human_dispatch_tests {
             Err(GatewayFailure::NoUseCase(_))
         ));
         assert_eq!(b.generic.load(Ordering::SeqCst), 0);
+    }
+    #[test]
+    fn unsupported_purge_confirmation_never_falls_back_to_generic_commands() {
+        let b = NoHuman::default();
+        assert!(matches!(
+            resolve_dispatched(
+                &b,
+                CommandDispatch::ProjectPurge,
+                "projects.purge",
+                b"exact"
+            ),
+            Err(GatewayFailure::NoUseCase(_))
+        ));
+        assert_eq!(b.generic.load(Ordering::SeqCst), 0);
+    }
+    #[test]
+    fn restored_purge_frames_preserve_the_original_frame_without_minting_human_consent() {
+        let restored = Unresolved::restored_dispatch(
+            Slot::ProjectCommand("project-a".into()),
+            "purge".into(),
+            "projects.purge",
+            b"original exact frame".to_vec(),
+            CommandDispatch::ProjectPurge,
+        )
+        .unwrap();
+        assert_eq!(restored.dispatch, CommandDispatch::Generic);
+        assert_eq!(restored.operation(), "projects.purge");
+        assert_eq!(restored.frame(), b"original exact frame");
+        assert!(
+            Unresolved::restored_dispatch(
+                Slot::SettingsSave,
+                "wrong purpose".into(),
+                "settings.save_revision",
+                vec![],
+                CommandDispatch::ProjectPurge
+            )
+            .is_none()
+        );
+        let backend = NoHuman::default();
+        let _ = resolve_dispatched(
+            &backend,
+            restored.dispatch,
+            restored.operation(),
+            restored.frame(),
+        );
+        assert_eq!(backend.generic.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            backend.frames.lock().unwrap().as_slice(),
+            &[b"original exact frame".to_vec()]
+        );
     }
     #[test]
     fn restart_keeps_the_explicit_dispatch_and_never_upgrades_old_generic_frames() {

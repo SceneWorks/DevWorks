@@ -41,6 +41,28 @@ restarted host could publish a previous boot's Writing reservation. The test now
 asserts that refusal, retains the restart and pending-write checks, and separately
 validates current-boot publication, wrong-root refusal and retirement.
 
+The next checkpoint adds a sealed Human purge proof bound to the complete typed
+input and current actor/store/restore/ingress/lineage/authority context, with a
+dedicated Engine and desktop ingress. Two core proof cases and six native client
+dispatch/restart cases pass. Restored purge frames preserve their exact bytes/key
+but use generic receipt resolution: a stored dispatch flag cannot mint a fresh
+Human confirmation. Unsupported native ingress never falls back to a generic
+command. These checks qualify the proof plumbing; they do not establish the
+unimplemented service's authorization, execution or Human UI acceptance.
+
+Draft CI caught a missing generator-test expected-set update for the four new
+project operations and revision 6 receipt observation. The explicit set now names
+all five and checks their exact introduction revision. All 13 generator
+assertion tests pass, regeneration produces no source drift, and workspace/all-target
+strict Clippy passes (39.26 seconds).
+
+All 44 desktop unit cases pass (5.38 seconds). A native graph case (0.83 seconds)
+uses identical owners/view sets for Project P, another project and the workspace;
+the candidate selector finds only P's lease and its two child index pins, leaving
+all leases intact. All 116 candidate SQL predicates resolve without mutation
+(0.74 seconds); final assembled strict checks pass (42.07 seconds). These candidates
+still require the complete ownership/keeper classifier before deletion authority.
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view
