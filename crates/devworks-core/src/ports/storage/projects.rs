@@ -185,6 +185,19 @@ pub struct ProjectPurgeCandidates {
     pub policy_digest: String,
     pub digest: String,
     pub rows: Vec<ProjectPurgeCandidate>,
+    pub references: Vec<ProjectPurgeReference>,
+}
+
+/// A real reference to a scoped candidate. This identifies a possible keeper;
+/// it never establishes ownership of the referring record.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub struct ProjectPurgeReference {
+    pub from_table: String,
+    pub from_key_digest: String,
+    pub from_columns: Vec<String>,
+    pub to_table: String,
+    pub to_key_digest: String,
+    pub to_columns: Vec<String>,
 }
 
 #[derive(Clone, Debug)]

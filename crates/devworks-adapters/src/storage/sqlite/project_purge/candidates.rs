@@ -14,7 +14,7 @@ const POLICY: &str = include_str!(concat!(
 fn invalid(message: &str) -> StorageError {
     StorageError::InvalidRecord(message.into())
 }
-fn quote(name: &str) -> String {
+pub(super) fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 fn feed(hash: &mut Sha256, tag: u8, bytes: &[u8]) {
@@ -22,7 +22,7 @@ fn feed(hash: &mut Sha256, tag: u8, bytes: &[u8]) {
     hash.update((bytes.len() as u64).to_be_bytes());
     hash.update(bytes);
 }
-fn key_value(value: ValueRef<'_>) -> Result<Value, StorageError> {
+pub(super) fn key_value(value: ValueRef<'_>) -> Result<Value, StorageError> {
     Ok(match value {
         ValueRef::Null => Value::Null,
         ValueRef::Integer(value) => Value::from(value),
@@ -38,6 +38,14 @@ fn key_value(value: ValueRef<'_>) -> Result<Value, StorageError> {
     })
 }
 
+pub(super) fn primary_keys(conn: &Connection, table: &str) -> Result<Vec<String>, StorageError> {
+    let mut primary =
+        db(conn.prepare("SELECT name FROM pragma_table_info(?1) WHERE pk>0 ORDER BY pk"))?;
+    db(primary.query_map([table], |r| r.get::<_, String>(0)))?
+        .map(db)
+        .collect()
+}
+
 fn table_rows(
     conn: &Connection,
     table: &str,
@@ -46,11 +54,7 @@ fn table_rows(
     project: &ProjectId,
     scope_digest: &str,
 ) -> Result<Vec<ProjectPurgeCandidate>, StorageError> {
-    let mut primary =
-        db(conn.prepare("SELECT name FROM pragma_table_info(?1) WHERE pk>0 ORDER BY pk"))?;
-    let keys = db(primary.query_map([table], |r| r.get::<_, String>(0)))?
-        .map(db)
-        .collect::<Result<Vec<_>, _>>()?;
+    let keys = primary_keys(conn, table)?;
     let projection = if keys.is_empty() {
         "rowid AS __purge_rowid,*"
     } else {
@@ -163,10 +167,10 @@ pub(in crate::storage::sqlite) fn snapshot(
         Value::String("project_id=?1 AND state<>'Removed'".into()),
     );
     let mut rows = Vec::new();
-    for (table, predicate) in predicates {
+    for (table, predicate) in &predicates {
         rows.extend(table_rows(
             conn,
-            &table,
+            table,
             predicate
                 .as_str()
                 .ok_or_else(|| invalid("purge candidate predicate SQL"))?,
@@ -175,6 +179,8 @@ pub(in crate::storage::sqlite) fn snapshot(
             &scope_digest,
         )?);
     }
+    let references =
+        super::references::snapshot(conn, project, &scope_digest, &anchors, &predicates)?;
     rows.sort_by(|a, b| (&a.table, &a.key_digest).cmp(&(&b.table, &b.key_digest)));
     if rows
         .windows(2)
@@ -185,7 +191,7 @@ pub(in crate::storage::sqlite) fn snapshot(
     let policy_digest = sha256_hex(POLICY.as_bytes());
     let digest = sha256_hex(
         serde_json::to_string(
-            &serde_json::json!({"project":project,"policy":policy_digest,"rows":rows}),
+            &serde_json::json!({"project":project,"policy":policy_digest,"rows":rows,"references":references}),
         )
         .map_err(|_| invalid("purge candidate digest"))?
         .as_bytes(),
@@ -195,6 +201,7 @@ pub(in crate::storage::sqlite) fn snapshot(
         policy_digest,
         digest,
         rows,
+        references,
     }))
 }
 

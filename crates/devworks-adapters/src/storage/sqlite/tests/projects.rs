@@ -2133,6 +2133,26 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
     let count = |table: &str| before.rows.iter().filter(|r| r.table == table).count();
     assert_eq!(count("artifacts"), 4);
     assert_eq!(count("artifact_shares"), 2);
+    for edge in before
+        .references
+        .iter()
+        .filter(|e| e.from_table == "artifact_shares" && e.to_table == "artifacts")
+    {
+        assert!(
+            before
+                .rows
+                .iter()
+                .any(|r| r.table == "artifact_shares" && r.key_digest == edge.from_key_digest),
+            "composite source keys use the native guard encoding"
+        );
+        assert!(
+            before
+                .rows
+                .iter()
+                .any(|r| r.table == "artifacts" && r.key_digest == edge.to_key_digest)
+        );
+    }
+
     assert_eq!(count("knowledge_entries"), 2);
     assert_eq!(count("knowledge_shares"), 1);
     assert!(
@@ -2213,6 +2233,59 @@ fn purge_candidate_receipt_attribution_uses_the_actual_command_event_not_the_sco
     // follows its actual CommandDecided target, and selection mutates nothing.
     assert_eq!(fx.h.raw().query_row("SELECT count(DISTINCT scope_key) FROM command_receipts WHERE command_kind IN('projects.create','projects.edit')",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     assert_eq!(count(&p.id), 2);
+}
+
+#[test]
+fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_ownership() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    store.with_writer_connection(|c| super::super::conn::db(c.execute_batch(
+        "INSERT INTO operations(id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES('owned-operation','schemas.index',5,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}','Completed',1,0);
+         INSERT INTO events(id,actor_id,project_id,operation_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('owned-command-event','purge-human','purge-a','owned-operation','command','owned-command',1,'CommandDecided',0,'{}');"
+    ))).unwrap();
+    let snapshot = || {
+        read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(&project("purge-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let before = snapshot();
+    let operation = before
+        .rows
+        .iter()
+        .find(|r| r.table == "operations")
+        .unwrap();
+    store.with_writer_connection(|c| super::super::conn::db(c.execute(
+        "INSERT INTO usage_price_status(provider,revision,refresh_pending,refresh_operation_id) VALUES('independent-provider',1,0,'owned-operation')",[]
+    )).map(|_|())).unwrap();
+    let after = snapshot();
+    assert_eq!(
+        before.rows, after.rows,
+        "a reference does not establish ownership of its source row"
+    );
+    assert_ne!(
+        before.digest, after.digest,
+        "a new surviving reference invalidates the reviewed identity closure"
+    );
+    let edge = after
+        .references
+        .iter()
+        .find(|edge| edge.from_table == "usage_price_status")
+        .unwrap();
+    assert_eq!(edge.to_table, "operations");
+    assert_eq!(edge.to_key_digest, operation.key_digest);
+    assert_eq!(edge.from_columns, ["refresh_operation_id"]);
+    assert_eq!(
+        edge.to_columns,
+        ["id"],
+        "implicit REFERENCES resolves the actual parent primary key"
+    );
+    let audit = serde_json::to_string(&after.references).unwrap();
+    assert!(!audit.contains("independent-provider"));
+    assert!(!audit.contains("owned-operation"));
+    assert_eq!(h.raw().query_row("SELECT refresh_operation_id FROM usage_price_status WHERE provider='independent-provider'",[],|r|r.get::<_,String>(0)).unwrap(),"owned-operation");
 }
 
 #[test]

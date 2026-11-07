@@ -82,6 +82,30 @@ the candidate key hash and still refuses ordinary deletion after rollback
 Candidate types deliberately carry no action or permit; mixed-owner classification
 and the guarded logical executor remain required.
 
+The read-only snapshot now covers 145 SQL predicates and 27 typed lineage anchors,
+including shared/moved artifact content, legacy knowledge, actual event-attributed
+receipts and reply lineage. Four native cases pass (3.35 seconds), every predicate
+resolves against the actual schema (0.80 seconds), and strict checks pass (17.10
+seconds). Project creation receipts are workspace-attributed; their typed project
+snapshot still requires explicit redaction in the complete classifier.
+
+Scoped native foreign-key witnesses now include hashed referring/referenced keys
+and exact schema column names. They do not expand deletion ownership. Five native
+cases pass (5.57 seconds), including a new independent global publication reference
+that changes the snapshot while leaving the owned row set unchanged, implicit parent
+keys and composite source key encoding. Strict checks pass (39.87 seconds). The
+finite keeper closure and typed non-FK references still require classification.
+
+Draft platform CI found missing fixture forwarding for project preview custody.
+The native fixture now supplies its ApplicationStore and forwards the project cache
+methods through fault wrappers. The original cache assertion fails before correction
+(0.92 seconds); all 49 artifact cases pass after it (39.73 seconds). All 32 project
+cases pass (26.73 seconds). Windows junction arguments now use native path components;
+its runtime acceptance remains pending. DW-143's duplicate runtime-slot fix is also
+composed: all six native convention scope cases pass (26.66 seconds). A separate
+schema pin writer-clock race is tracked and repaired in DW-144; the full purge branch
+must qualify that composition before publishing the next checkpoint.
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view
