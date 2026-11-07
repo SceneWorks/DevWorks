@@ -460,3 +460,23 @@ cases48.31s, all5 actual production Engine cases20.04s, and final strict workspa
 checks16.60s. Fresh isolated SQLServer runs9adapter+1Engine cases and cleans up its container;
 local report remains arm64/nativeX86=false. Fresh completed exact-head review, platform CI,
 supported-x86, merge-tree verification and final acceptance still gate delivery.
+
+## MySQL routine identity and expression-index review correction
+
+Exact10be review identified same-name function/procedure identity collisions and
+fabricated functional-index column labels. Three actual MySQL/MariaDB regression
+cases fail on the prior reader (0.06s). The fixed catalog wire carries routine type
+as an identity discriminator without changing the displayed name; its parameter
+subquery matches schema, name and type. Functional key parts no longer fabricate
+column names: known named columns remain in ordinal order, and omitted expression
+semantics mark both index and snapshot Partial with the existing expression gap.
+Mixed named/functional and expression-only indexes are both qualified.
+
+All45 actual-server adapter cases pass0.80s; all5 production Engine cases pass19.90s
+(including publication with the two distinct same-name routines). Strict workspace
+all-target Clippy passes16.79s. One extra assertion was initially placed in the wrong
+test function and caused a compile error; it was moved before this successful run.
+That setup error is not reproduction evidence. Fixture DDL is retained in the shared
+MySQL/Maria edge file and the MySQL-only functional-index file. There are no source
+row reads, OS credential/trust changes or learned inference. Fresh exact-head review
+and platform CI remain required before merge and acceptance.
