@@ -389,3 +389,13 @@ Final local qualification on the second review tree:10 native DB UI cases pass39
 fixture passes7 adapter cases plus1 production Engine case, then is removed. The local
 report is arm64/nativeX86=false; fresh actual-x86 CI is still required. A first scheduled
 job command used a plural filter and ran zero cases; it is excluded from evidence.
+
+Third-review PostgreSQL multibyte boundary: an actual view containing50,000 three-byte
+characters reproduces the missing-parent assertion0.09s on3f9417f7. The server-side
+byte-bound fallback now strips only definition/metadata payload while retaining bounded
+structural identities and reference fields, marked Partial. All30 actual adapter cases
+pass0.48s. Two PostgreSQL production Engine cases pass7.12s, including actual durable
+publication and Partial coverage for that same multibyte view, plus the original normal
+network workflow. Workspace/all-target strict checks pass44.57s and0.49s after the new
+native case. The fixture changes only disposable DDL; no source rows, real credentials,
+OS trust or learned inference are used. Fresh exact-head review and CI are required.
