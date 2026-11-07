@@ -235,7 +235,9 @@ fn native_database_sync_all_includes_sources_after_the_first_catalog_page() {
     assert_eq!(
         h.state().databases.batch_submitted,
         101,
-        "all enabled sources were captured before admissions changed inventory cursors"
+        "all enabled sources were captured before admissions changed inventory cursors; error={:?}; notice={:?}",
+        h.state().databases.error,
+        h.state().databases.notice
     );
     assert_eq!(
         h.state().databases.batch_failures,
@@ -391,4 +393,158 @@ fn native_database_key_utility_generates_32_bytes_without_persisting_or_reconfig
     h.state_mut().navigate(Route::Chat);
     settle(&mut h);
     assert!(h.state().databases.generated_key.is_none());
+}
+
+#[test]
+fn native_database_background_inventory_failure_cannot_abort_an_admitted_sync_all_batch() {
+    use devworks_core::protocol::{CommandReply, results::DomainDecision};
+    let _native_case = native_runtime_case();
+    let root = Root::new("database-sync-all-inventory-fault");
+    let path = root.file("batch-source.sqlite", b"");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE original(id INT);")
+        .unwrap();
+    let engine = start(&root);
+    let backend = engine.backend();
+    for n in 0..3 {
+        let frame = serde_json::json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":backend.token("fault-batch-source"),"body":{"kind":"schemas.configure","scope":{"kind":"Workspace"},"config":{"name":format!("FaultSource{n}"),"engine":"Sqlite","endpoint":path,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"projectAccess":[],"workspaceExposed":false,"exposureMode":"SchemaOnly","authentication":"File"}}}).to_string().into_bytes();
+        assert!(
+            matches!(backend.command("schemas.configure", &frame).unwrap(),CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..}))
+        );
+    }
+    let held = Gate::holding_replies("schemas.refresh");
+    let inventory = Gate::new("schemas.connections");
+    let mut h = harness(
+        shell_with(
+            Ok(inventory.over(held.over(backend))),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1600.0,
+        1200.0,
+    );
+    h.state_mut().navigate(Route::Databases);
+    settle(&mut h);
+    step_until(&mut h, "fault batch sources loaded", |s| {
+        s.databases.connections.len() == 3 && !s.databases.loading
+    });
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let release = Release(held.clone());
+    held.close();
+    h.get_by_role_and_label(Role::Button, "Sync all enabled sources")
+        .click_accesskit();
+    step_until(
+        &mut h,
+        "first batch command awaiting acknowledgement",
+        |s| s.databases.batch_submitted == 1 && s.databases.busy && !s.databases.batch_scanning,
+    );
+    step_until(&mut h, "inventory idle before fault", |s| {
+        !s.databases.loading
+    });
+    inventory.fail_next_query();
+    h.get_by_role_and_label(Role::Button, "Refresh databases")
+        .click_accesskit();
+    step_until(&mut h, "ordinary inventory read refused", |s| {
+        !s.databases.loading && s.databases.error.is_some()
+    });
+    assert!(
+        h.state().databases.batch_active,
+        "inventory refresh cannot cancel the captured batch"
+    );
+    assert!(
+        h.state().databases.busy,
+        "the admitted command still awaits its receipt"
+    );
+    assert_eq!(h.state().databases.batch_remaining.len(), 2);
+    drop(release);
+    step_until(
+        &mut h,
+        "all captured batch commands admitted after read failure",
+        |s| !s.databases.batch_active && !s.databases.busy,
+    );
+    assert_eq!(h.state().databases.batch_submitted, 3);
+    assert_eq!(h.state().databases.batch_failures, 0);
+    settle(&mut h);
+}
+
+#[test]
+fn native_database_search_refreshes_a_missing_prepared_capture_before_reading_objects() {
+    use devworks_core::protocol::{CommandReply, results::DomainDecision};
+    let _native_case = native_runtime_case();
+    let root = Root::new("database-search-fresh-capture");
+    let path = root.file("capture-source.sqlite", b"");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE captured(id INT);")
+        .unwrap();
+    let engine = start(&root);
+    let backend = engine.backend();
+    let frame = serde_json::json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":backend.token("capture-source"),"body":{"kind":"schemas.configure","scope":{"kind":"Workspace"},"config":{"name":"Capture source","engine":"Sqlite","endpoint":path,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"projectAccess":[],"workspaceExposed":false,"exposureMode":"SchemaOnly","authentication":"File"}}}).to_string().into_bytes();
+    assert!(
+        matches!(backend.command("schemas.configure", &frame).unwrap(),CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..}))
+    );
+    let inventory = Gate::holding_replies("schemas.connections");
+    let mut h = harness(
+        shell_with(Ok(inventory.over(backend)), &root, Script::default(), None),
+        1600.0,
+        1200.0,
+    );
+    h.state_mut().navigate(Route::Databases);
+    settle(&mut h);
+    h.get_by_label("Capture source").click_accesskit();
+    settle(&mut h);
+    click(&mut h, Role::Button, "Sync database metadata");
+    step_until(&mut h, "capture source published", |s| {
+        s.databases
+            .connections
+            .first()
+            .is_some_and(|c| c.read_view.is_some() && c.active_operation_id.is_none())
+    });
+    settle(&mut h);
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let release = Release(inventory.clone());
+    inventory.close();
+    // Legal source projection when publication changes between lease preparation and read:
+    // status sees the new head while no earlier capture can be attached to that head.
+    h.state_mut().databases.connections[0].read_view = None;
+    h.state_mut().databases.view = None;
+    h.state_mut().databases.read_pin = None;
+    h.get_by_role_and_label(Role::Button, "Search schema objects")
+        .click_accesskit();
+    h.step();
+    assert!(
+        h.state().databases.read_loading,
+        "the explicit read intent waits for a fresh owner capture"
+    );
+    assert!(
+        h.state().databases.error.is_none(),
+        "a publication transition is not confirmed absence"
+    );
+    drop(release);
+    step_until(&mut h, "fresh-capture object read", |s| {
+        !s.databases.read_loading
+            && s.databases
+                .objects
+                .iter()
+                .any(|o| o.qualified_name.0 == "main.captured")
+    });
+    assert!(h.state().databases.read_pin.is_some());
+    assert!(
+        h.state().databases.error.is_none(),
+        "{:?}",
+        h.state().databases.error
+    );
+    settle(&mut h);
 }

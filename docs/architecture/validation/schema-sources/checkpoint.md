@@ -318,3 +318,27 @@ still pending; the initial platform result is not reused as final changed-head p
 Final restored-tree integration: all5 native Databases UI cases pass21.10s and all23
 actual-server cases pass0.44s. The7 review findings each have a native failing
 regression with their correction removed; temporary faults are fully restored.
+
+
+CI integration corrections after f204101e: generator revision-set expectations now
+explicitly include the6 revision5 operations (13 generator tests10.82s, zero drift).
+The migration33 test still asserts the exact1–33 prefix/checksum while permitting
+additive migrations (native0.75s).
+
+A controlled native background-inventory refusal while a sync-all command awaits its
+actual receipt reproduces unintended batch cancellation6.89s. Only the inventory
+scan can now cancel its own batch; an ordinary refresh failure preserves the admitted
+command and remaining captured sources. A second controlled native case reproduces
+abandonment of an explicit object search when source status sees a publication that
+changed during lease preparation (6.80s). The UI refreshes the same source capture
+once, including later inventory pages, then resumes the read or reports unavailability.
+Source changes invalidate earlier read replies. The full7-case native Databases suite
+passes27.27s; final workspace/all-target strict checks5.97s pass. These concrete bugs
+are qualified by their regressions; the earlier uninstrumented Ubuntu wrong-object
+click and macOS70/101 event are not retroactively assigned a sole cause.
+
+The earlier main Windows convention context-Help timeout is separately tracked as
+DW139. Failure-only route/topic/loading/error diagnostics preserve all assertions
+and timeouts; the unchanged instrumented case passes13.55s locally. Its original
+cause is still unknown, so that pass is not claimed as a repair. Review/CI/merge and
+final acceptance remain pending on the next published head.
