@@ -730,6 +730,19 @@ impl Backend for DesktopBackend {
     fn query(&self, operation: &str, frame: &[u8]) -> QueryOutcome {
         self.host.runtime.query(&self.host.ctx, operation, frame)
     }
+    fn supports_query_cancellation(&self) -> bool {
+        true
+    }
+    fn query_cancellable(
+        &self,
+        operation: &str,
+        frame: &[u8],
+        options: &devworks_core::ports::storage::ReadOptions,
+    ) -> QueryOutcome {
+        self.host
+            .runtime
+            .query_with(&self.host.ctx, operation, frame, options)
+    }
     fn command(&self, operation: &str, frame: &[u8]) -> CommandOutcome {
         self.host.runtime.command(&self.host.ctx, operation, frame)
     }

@@ -3,17 +3,17 @@
 </style></head><body><header class="top"><strong>DevWorks / Implementation</strong><span class="version">Baseline 1.1 · 2 November 2026</span><a href="devworks-architecture.html">Architecture</a><a href="implementation-plan.md">Markdown source</a></header><main class="paper document" style="max-width:1200px;margin:auto"><h1 id="local-implementation-plan">Local implementation plan</h1>
 <p>Status: architecture baseline 1.1. This is the complete ownership and dependency breakdown of the captured scope, not implementation authorization or a frozen public API. Requirements remain 230 Confirmed and 147 Proposed; a planned slice does not approve a Proposed requirement. CodeGraph remains the operational source of truth.</p>
 <h2 id="success-and-remaining-commitments">Success and remaining commitments</h2>
-<p>The register assigns all 377 requirements, 359 operations across 49 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 78 local slices and no unowned operations, requirements or retained entries.</p>
+<p>The register assigns all 377 requirements, 360 operations across 49 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 79 local slices and no unowned operations, requirements or retained entries.</p>
 <p>All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.</p>
 <p><a href="implementation-plan.json">Machine-readable register</a> preserves each requirement statement/status, every frozen source span/digest, resolved operation binding, acceptance text and workload specification. <a href="implementation-slices.json">Editable slice source</a> owns sequencing and concrete outcomes. <a href="architecture-handoff.md">Handoff gates</a> distinguish interface decisions from later production acceptance.</p>
 <h2 id="execution-and-dependency-rules">Execution and dependency rules</h2>
 <p>Complete concrete contracts before exposing their operations. Build vertical UI/service/tool behavior in its owning slice, using the shared shell and authority boundary. Foundation slices do not create a second UI-only data model. Language/semantic packs and all eight SDK contribution types remain retained scope. The native baseline and EVAL feature each retain their approved terminal acceptance dependencies. Optional dependencies must fail visibly and locally without making a server, VM or preinstalled general-purpose runtime a core requirement.</p>
 <p>The dependency order is a valid topological order, not a timeline or resource estimate. It allows independent work once prerequisites are satisfied. Integration qualification may hold a particular capability without falsely declaring the product ready. Routine engineering decisions remain delegated; no further product question arose from the native probes.</p>
 <p>Unit and integration suites use deterministic fixtures without inference compute. Real inference compatibility and end-to-end runs retain their separate, later authorized entry point. Workload IDs describe unexecuted production measurements.</p>
-<p>DW-038 (conditional external HelixDB reader) was removed by explicit user decision on 2 November 2026. Its ID is retired, not reassigned; 78 planned slices are now represented, including the separately approved EVAL feature. No HelixDB source adapter or engine is an app dependency.</p>
+<p>DW-038 (conditional external HelixDB reader) was removed by explicit user decision on 2 November 2026. Its ID is retired, not reassigned; 79 planned slices are now represented, including the separately approved EVAL feature. No HelixDB source adapter or engine is an app dependency.</p>
 <p><img src="architecture-diagrams/41-implementation-coverage.svg" alt="Coverage and qualification gates"></p>
 <h2 id="dependency-order">Dependency order</h2>
-<p>DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-008 → DW-009 → DW-010 → DW-011 → DW-012 → DW-109 → DW-013 → DW-014 → DW-015 → DW-017 → DW-016 → DW-018 → DW-019 → DW-020 → DW-021 → DW-022 → DW-023 → DW-044 → DW-045 → DW-024 → DW-025 → DW-026 → DW-027 → DW-028 → DW-029 → DW-030 → DW-031 → DW-032 → DW-033 → DW-034 → DW-035 → DW-036 → DW-037 → DW-039 → DW-041 → DW-042 → DW-040 → DW-043 → DW-046 → DW-047 → DW-048 → DW-049 → DW-050 → DW-051 → DW-052 → DW-053 → DW-054 → DW-055 → DW-056 → DW-057 → DW-058 → DW-059 → DW-060 → DW-061 → DW-064 → DW-063 → DW-108 → DW-107 → DW-062 → DW-071 → DW-072 → DW-073 → DW-074 → DW-075 → DW-076 → DW-077 → DW-078 → DW-079 → DW-080 → DW-081 → DW-082</p>
+<p>DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-008 → DW-009 → DW-010 → DW-011 → DW-012 → DW-109 → DW-013 → DW-014 → DW-015 → DW-017 → DW-016 → DW-018 → DW-019 → DW-020 → DW-021 → DW-022 → DW-023 → DW-044 → DW-045 → DW-024 → DW-025 → DW-026 → DW-027 → DW-028 → DW-029 → DW-030 → DW-031 → DW-032 → DW-033 → DW-034 → DW-035 → DW-036 → DW-037 → DW-039 → DW-041 → DW-042 → DW-040 → DW-043 → DW-046 → DW-047 → DW-048 → DW-049 → DW-050 → DW-051 → DW-052 → DW-053 → DW-054 → DW-055 → DW-056 → DW-057 → DW-058 → DW-059 → DW-060 → DW-061 → DW-064 → DW-063 → DW-108 → DW-107 → DW-119 → DW-062 → DW-071 → DW-072 → DW-073 → DW-074 → DW-075 → DW-076 → DW-077 → DW-078 → DW-079 → DW-080 → DW-081 → DW-082</p>
 <h2 id="slice-register">Slice register</h2>
 <table>
 <thead>
@@ -387,7 +387,7 @@
 <tr>
 <td><a href="#dw-062">DW-062</a></td>
 <td>Reconcile full retained behavior and release readiness</td>
-<td>DW-001, DW-002, DW-003, DW-004, DW-005, DW-006, DW-007, DW-008, DW-009, DW-010, DW-011, DW-012, DW-013, DW-014, DW-015, DW-016, DW-017, DW-018, DW-019, DW-020, DW-021, DW-022, DW-023, DW-024, DW-025, DW-026, DW-027, DW-028, DW-029, DW-030, DW-031, DW-032, DW-033, DW-034, DW-035, DW-036, DW-037, DW-039, DW-040, DW-041, DW-042, DW-043, DW-044, DW-045, DW-046, DW-047, DW-048, DW-049, DW-050, DW-051, DW-052, DW-053, DW-054, DW-055, DW-056, DW-057, DW-058, DW-059, DW-060, DW-061, DW-063, DW-064, DW-107, DW-108, DW-109</td>
+<td>DW-001, DW-002, DW-003, DW-004, DW-005, DW-006, DW-007, DW-008, DW-009, DW-010, DW-011, DW-012, DW-013, DW-014, DW-015, DW-016, DW-017, DW-018, DW-019, DW-020, DW-021, DW-022, DW-023, DW-024, DW-025, DW-026, DW-027, DW-028, DW-029, DW-030, DW-031, DW-032, DW-033, DW-034, DW-035, DW-036, DW-037, DW-039, DW-040, DW-041, DW-042, DW-043, DW-044, DW-045, DW-046, DW-047, DW-048, DW-049, DW-050, DW-051, DW-052, DW-053, DW-054, DW-055, DW-056, DW-057, DW-058, DW-059, DW-060, DW-061, DW-063, DW-064, DW-107, DW-108, DW-109, DW-119</td>
 <td>G11</td>
 </tr>
 <tr>
@@ -491,6 +491,12 @@
 <td>Restore task type and labels for retained work allocation filters</td>
 <td>DW-012</td>
 <td>G01, G11</td>
+</tr>
+<tr>
+<td><a href="#dw-119">DW-119</a></td>
+<td>Configure and qualify persistent native embedding spaces</td>
+<td>DW-007, DW-018, DW-019, DW-021</td>
+<td>G03, G06, G11</td>
 </tr>
 </tbody></table>
 <h2 id="concrete-outcomes-and-acceptance">Concrete outcomes and acceptance</h2>
@@ -1139,6 +1145,14 @@
 <p><strong>Primary requirement cases:</strong> See supporting and integration obligations.</p>
 <p><strong>Supporting requirements:</strong> WORK-02, WORK-03, WORK-04, WORK-10, WORK-11, WORK-12</p>
 <p><strong>Behavior/workload obligations:</strong> Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.</p>
+<h3 id="dw-119">DW-119</h3>
+<p><strong>Configure and qualify persistent native embedding spaces</strong> · Feature · Native extension in progress; no acceptance claimed.</p>
+<p>Explicit persistent candidate setup, accounted native positive qualification and separately revisioned selection; no automatic paid/first-conversation route. Current connection/account/model/config identity fences use without rewriting historical spaces. Scoped status, cancellation/replay and native UI/SQLite/transport evidence remain required.</p>
+<p>Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.</p>
+<p><strong>Operations:</strong> <code>router.embedding_spaces</code></p>
+<p><strong>Primary requirement cases:</strong> AT-ROUTE-09, AT-ROUTE-10, AT-RAG-04, AT-RAG-07, AT-RAG-08</p>
+<p><strong>Supporting requirements:</strong> None assigned.</p>
+<p><strong>Behavior/workload obligations:</strong> CAP-ROUTER. Frozen source entries bound: 0. Pending input schemas: 0.</p>
 <h2 id="acceptance-group-ownership">Acceptance group ownership</h2>
 <table>
 <thead>

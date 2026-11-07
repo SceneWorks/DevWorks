@@ -74,8 +74,10 @@ mod artifacts;
 mod authority;
 mod browser;
 mod configuration;
+mod conventions;
 mod decisions;
 mod diagnostics;
+mod embedding;
 mod evals;
 mod git;
 mod graph;
@@ -95,8 +97,10 @@ pub use artifacts::*;
 pub use authority::*;
 pub use browser::*;
 pub use configuration::*;
+pub use conventions::*;
 pub use decisions::*;
 pub use diagnostics::*;
+pub use embedding::*;
 pub use evals::*;
 pub use git::*;
 pub use graph::*;
@@ -505,6 +509,7 @@ pub trait WriteTransaction {
     fn browser(&mut self) -> &mut dyn BrowserRepository;
     fn evals(&mut self) -> &mut dyn EvalRepository;
     fn help(&mut self) -> &mut dyn HelpRepository;
+    fn conventions(&mut self) -> &mut dyn ConventionRepository;
     fn decisions(&mut self) -> &mut dyn DecisionRepository;
     fn git(&mut self) -> &mut dyn GitRepository;
     fn router(&mut self) -> &mut dyn RouterRepository;
@@ -558,6 +563,7 @@ pub trait ReadSnapshot {
     fn browser(&self) -> &dyn BrowserRead;
     fn evals(&self) -> &dyn EvalRead;
     fn help(&self) -> &dyn HelpRead;
+    fn conventions(&self) -> &dyn ConventionRead;
     fn decisions(&self) -> &dyn DecisionRead;
     fn git(&self) -> &dyn GitRead;
     fn router(&self) -> &dyn RouterRead;
@@ -838,6 +844,16 @@ pub trait OperationRead {
     fn operation(&self, id: &OperationId) -> Result<Option<OperationRecord>, StorageError>;
     /// Non-terminal operations in stable ID order, at most `limit` (1..=500).
     fn unresolved(&self, limit: u16) -> Result<Vec<OperationRecord>, StorageError>;
+    /// Trusted recovery fact over the actual journal. Exact capability and current states are
+    /// filtered before the 1..=500 keyset page. Empty states match nothing. This read grants
+    /// no invocation authority; owners still recheck scope, lineage and effects before acting.
+    fn operations_for_capability(
+        &self,
+        capability: &str,
+        states: &[OperationState],
+        after: Option<&OperationId>,
+        limit: u16,
+    ) -> Result<Vec<OperationRecord>, StorageError>;
 }
 pub trait OperationJournal: OperationRead {
     /// Records durable intent (`IntentRecorded`, revision 1) before any effect.

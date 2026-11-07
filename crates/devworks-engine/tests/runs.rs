@@ -5270,3 +5270,6 @@ fn a_reactivation_armed_before_a_card_is_linked_is_withdrawn_when_its_activation
 
 #[path = "runs/usage.rs"]
 mod usage_tests;
+
+#[path = "runs/auxiliary.rs"]
+mod auxiliary_tests;

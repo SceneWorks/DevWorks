@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+mod conventions;
 pub mod decisions;
 pub mod graph;
 pub mod help;
@@ -45,6 +46,13 @@ pub mod work;
 pub trait Dialogs {
     fn pick_files(&mut self) -> Vec<PathBuf>;
     fn pick_folder(&mut self, start: Option<&str>) -> Option<PathBuf>;
+    fn save_file(&mut self, _name: &str) -> Option<PathBuf> {
+        None
+    }
+    /// One portable convention manifest selected by a human.
+    fn pick_convention(&mut self) -> Option<PathBuf> {
+        self.pick_files().into_iter().next()
+    }
     /// A package bundle to install (the first picked file by default).
     fn pick_package(&mut self) -> Option<PathBuf> {
         self.pick_files().into_iter().next()
@@ -54,11 +62,23 @@ pub trait Dialogs {
 /// The platform dialogs.
 pub struct NativeDialogs;
 impl Dialogs for NativeDialogs {
+    fn save_file(&mut self, name: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Save convention source")
+            .set_file_name(name)
+            .save_file()
+    }
     fn pick_files(&mut self) -> Vec<PathBuf> {
         rfd::FileDialog::new()
             .set_title("Attach images or files")
             .pick_files()
             .unwrap_or_default()
+    }
+    fn pick_convention(&mut self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Import a convention manifest")
+            .add_filter("Convention manifest", &["json"])
+            .pick_file()
     }
     fn pick_package(&mut self) -> Option<PathBuf> {
         rfd::FileDialog::new()
@@ -165,6 +185,7 @@ pub struct Shell {
     pub settings: SettingsScreen,
     pub help: crate::help_screen::HelpScreen,
     pub knowledge: KnowledgeScreen,
+    pub conventions: crate::conventions_screen::ConventionsScreen,
     pub artifacts: ListState<ArtifactRecord>,
     pub resources: ListState<ResourceRecord>,
     /// Every listed browser session: the workspace's, then each listed project's.
@@ -319,6 +340,7 @@ impl Shell {
             settings,
             help: Default::default(),
             knowledge: KnowledgeScreen::new(),
+            conventions: crate::conventions_screen::ConventionsScreen::default(),
             artifacts: ListState::default(),
             resources: ListState::default(),
             browser: ListState::default(),
@@ -505,7 +527,13 @@ impl Shell {
                 if !self.projects.list.loaded && !self.pending(&Slot::ProjectsList) {
                     self.load_projects();
                 }
-                if !self.knowledge.loaded && self.knowledge.listing.is_none() {
+                if self
+                    .routes
+                    .get(&Route::Knowledge)
+                    .is_none_or(|r| r.tab != 2)
+                    && !self.knowledge.loaded
+                    && self.knowledge.listing.is_none()
+                {
                     self.load_knowledge();
                 }
             }
@@ -1722,6 +1750,9 @@ impl Shell {
     }
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
+        let Some((slot, reply)) = self.apply_conventions(slot, reply) else {
+            return;
+        };
         let Some((slot, reply)) = self.apply_graph(slot, reply) else {
             return;
         };
@@ -2037,7 +2068,8 @@ impl Shell {
                         | TaskOutput::SettingSecret { .. }
                         | TaskOutput::PackagePrepared { .. }
                         | TaskOutput::Refreshed
-                        | TaskOutput::TextPreview(_),
+                        | TaskOutput::TextPreview(_)
+                        | TaskOutput::Convention(_),
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
                 };
@@ -2100,7 +2132,8 @@ impl Shell {
                             | TaskOutput::SettingSecret { .. }
                             | TaskOutput::PackagePrepared { .. }
                             | TaskOutput::Refreshed
-                            | TaskOutput::TextPreview(_),
+                            | TaskOutput::TextPreview(_)
+                            | TaskOutput::Convention(_),
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }
@@ -2536,6 +2569,17 @@ impl Shell {
                 }
                 Err(e) => self.resources.error = Some(e.describe()),
             },
+            (Slot::EmbeddingSpaces(g), Reply::Query(q)) => {
+                let panel = &mut self.settings.connections.embedding_spaces;
+                if g != panel.generation {
+                    return;
+                }
+                panel.loading = false;
+                match ops::embedding_space_page(q) {
+                    Ok(page) => panel.loaded(page),
+                    Err(error) => panel.error = Some(error.describe()),
+                }
+            }
             (Slot::Connections(g), Reply::Query(q)) => {
                 if g != self.settings.connections.generation {
                     return;
@@ -2823,7 +2867,11 @@ impl Shell {
             // Only an unpaged listing is re-read in place: a re-read of a list the user paged
             // through would drop the pages they loaded.
             Route::Knowledge
-                if self.knowledge.loaded
+                if self
+                    .routes
+                    .get(&Route::Knowledge)
+                    .is_none_or(|r| r.tab != 2)
+                    && self.knowledge.loaded
                     && self.knowledge.listing.is_none()
                     && self.knowledge.items.len() <= knowledge_screen::PAGE as usize =>
             {
@@ -3033,6 +3081,29 @@ impl Shell {
             "router.catalog",
             |b| ops::router_catalog_all(b, None),
         );
+        self.load_embedding_spaces(None);
+    }
+
+    pub(crate) fn open_embedding_setup(&mut self) {
+        self.navigate(Route::Settings);
+        self.settings.show_connections = true;
+        self.settings.connections.embedding_spaces.open = true;
+        self.load_connections();
+    }
+    fn load_embedding_spaces(&mut self, cursor: Option<String>) {
+        let panel = &mut self.settings.connections.embedding_spaces;
+        panel.generation += 1;
+        panel.loading = true;
+        panel.last_load = Some(Instant::now());
+        let generation = panel.generation;
+        if !self.query(
+            Slot::EmbeddingSpaces(generation),
+            "Loading embedding spaces",
+            "router.embedding_spaces",
+            move |b| ops::router_embedding_spaces(b, cursor.as_deref()),
+        ) {
+            self.settings.connections.embedding_spaces.loading = false;
+        }
     }
 
     fn connection_action(&mut self, action: crate::connections_screen::ConnectionAction) {
@@ -3040,6 +3111,16 @@ impl Shell {
         let saving_editor = matches!(&action, A::ConfigureEdit { .. });
         match action {
             A::Reload => self.load_connections(),
+            A::EmbeddingSetup => self.open_embedding_setup(),
+            A::EmbeddingPrice(model) => {
+                self.usage.price_models = model;
+                self.usage.price_providers.clear();
+                self.usage.price_snapshots.clear();
+                self.usage.history = false;
+                self.routes.entry(Route::Usage).or_default().tab = 2;
+                self.navigate(Route::Usage);
+            }
+            A::EmbeddingSpaces { cursor } => self.load_embedding_spaces(cursor),
             A::UseSessionOnly => {
                 if let Some(b) = self.backend() {
                     match b.use_session_only_secrets() {
@@ -3121,7 +3202,8 @@ impl Shell {
                 )
             })
         });
-        if !self.settings.show_connections || !signing_in {
+        let qualifying = p.embedding_spaces.qualifying();
+        if !self.settings.show_connections || (!signing_in && !qualifying) {
             return;
         }
         let due = !p.loading && p.last_load.is_none_or(|t| t.elapsed() >= CONNECTION_POLL);
@@ -3137,6 +3219,7 @@ impl Shell {
     /// Begins the close lifecycle (the window's close button lands here).
     pub fn request_close(&mut self) {
         if self.lifecycle == Lifecycle::Open {
+            self.cancel_convention_queries();
             if let Some(c) = &mut self.client {
                 c.close();
             }
@@ -3204,6 +3287,7 @@ impl Shell {
     /// Called when the window is gone without the lifecycle (process exit paths): saves view
     /// state; the engine's own drop still performs its bounded shutdown.
     pub fn on_exit(&mut self) {
+        self.cancel_convention_queries();
         self.persist(true);
         if let Some(c) = &mut self.client {
             c.close();
@@ -3299,6 +3383,7 @@ impl Shell {
             _ => None,
         };
         PendingMemory {
+            conventions: self.conventions_pending_memory(),
             starting: self
                 .chat
                 .starting
@@ -3342,6 +3427,7 @@ impl Shell {
 
     /// Puts back what [`Self::pending_memory`] kept; the first frame confirms it.
     fn restore_pending(&mut self, pending: crate::memory::PendingMemory) {
+        self.restore_conventions_pending(&pending.conventions);
         if let Some(i) = &pending.knowledge_import {
             self.knowledge.import = Some(knowledge_screen::ImportStage::Unconfirmed {
                 name: i.name.clone(),
@@ -3357,6 +3443,17 @@ impl Shell {
                 continue;
             };
             match &slot {
+                Slot::ConventionArtifact(key, _) | Slot::ConventionCommand(key, _) => {
+                    if let Some(scope) = self
+                        .conventions
+                        .states
+                        .keys()
+                        .find(|s| s.key() == *key)
+                        .cloned()
+                    {
+                        self.conventions.states.get_mut(&scope).expect("scope").busy = true;
+                    }
+                }
                 Slot::GraphTrust(_) => {
                     self.graph.trust_busy = true;
                     self.graph.trust_unknown = true;
@@ -3633,8 +3730,11 @@ impl Shell {
         if !dropped.is_empty() {
             if conversation_visible {
                 self.attach(dropped);
+            } else if self.route == Route::Knowledge && self.route_memory(Route::Knowledge).tab == 2
+            {
+                self.import_dropped_convention(dropped);
             } else if self.route == Route::Knowledge {
-                // A file dropped on the Knowledge screen is imported (previewed first).
+                // A file dropped on an entry view is previewed before import.
                 self.knowledge_actions(vec![KnowledgeAction::ImportFiles(dropped)]);
             } else {
                 self.announce("Open the workspace coordinator to attach dropped files.");
@@ -3713,6 +3813,13 @@ impl Shell {
                                 "code-exploration"
                             } else if self.route == Route::Settings {
                                 self.settings.help_topic()
+                            } else if self.route == Route::Knowledge
+                                && self
+                                    .routes
+                                    .get(&Route::Knowledge)
+                                    .is_some_and(|r| r.tab == 2)
+                            {
+                                "knowledge-conventions"
                             } else {
                                 self.route.screen().id
                             };
@@ -4158,6 +4265,9 @@ impl Shell {
             }
             Route::Portfolio => self.portfolio_screen(ui),
             Route::Repositories => self.repositories_screen(ui),
+            Route::Knowledge if self.routes.entry(Route::Knowledge).or_default().tab == 2 => {
+                self.conventions_screen(ui)
+            }
             Route::Knowledge => {
                 let online = self.online();
                 let mut actions = Vec::new();

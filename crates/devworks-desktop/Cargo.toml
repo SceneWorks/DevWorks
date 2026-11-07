@@ -22,6 +22,7 @@ devworks-adapters = { path = "../devworks-adapters" }
 devworks-core = { path = "../devworks-core" }
 devworks-engine = { path = "../devworks-engine" }
 eframe = { version = "=0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "links", "wayland", "wgpu", "x11"] }
+base64 = "=0.22.1"
 jiff = "=0.2.39"
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 rfd = "=0.17.2"

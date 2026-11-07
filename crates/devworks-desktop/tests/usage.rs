@@ -826,6 +826,9 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
     h.state_mut().navigate(Route::Usage);
     settle(&mut h);
     press(&mut h, "Prices");
+    // This positive continuation needs one unchanged real event snapshot.
+    let writer = paging::WriterHold::new(engine.host().runtime().store().clone());
+    press(&mut h, "Apply price catalog filters");
     assert!(h.state().usage.prices.as_ref().unwrap().has_more);
     assert!(
         h.get_by_role_and_label(Role::Button, &format!("Edit tariff override for {model}"))
@@ -839,6 +842,7 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
     press(&mut h, &format!("Edit tariff override for {model}"));
     let draft = h.state().usage.price_draft.clone().unwrap();
     assert_eq!(draft.tariffs.len(), 105);
+    drop(writer);
     let replacement = json!({"upstreamModelId":"fixture/paged-price","serviceTier":"changed-source","modality":"Text","chargeKind":"Input","unit":"Token","units":"1000000","amountUsd":"2"});
     uops::overridden(b.command("router.price_override",&uops::command(&*b,"router.price_override",json!({"modelId":model,"expectedRevision":"2","change":{"kind":"Set","tariffs":[replacement]}})))).unwrap();
     settle(&mut h);

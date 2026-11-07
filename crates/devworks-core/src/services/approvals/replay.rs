@@ -21,7 +21,7 @@ pub enum ResumePreparation {
     Ready(ApprovedCommand),
 }
 pub(crate) fn save_context(c: &InvocationContext) -> Value {
-    json!({"principal":c.principal(),"kind":format!("{:?}",c.principal_kind()),"invocation":c.invocation_id(),"session":c.session_id(),"namespace":c.ingress_namespace(),"project":c.project_id(),"root":c.root_id(),"assignment":c.assignment_id(),"capability":c.capability_registration(),"policyRevision":c.policy_revision(),"worktree":c.worktree().map(|w|json!({"id":w.id(),"repository":w.repository_id(),"work":w.work_id(),"revision":w.ownership_revision()}))})
+    json!({"principal":c.principal(),"kind":format!("{:?}",c.principal_kind()),"invocation":c.invocation_id(),"session":c.session_id(),"jobRun":c.job_run_id(),"namespace":c.ingress_namespace(),"project":c.project_id(),"root":c.root_id(),"assignment":c.assignment_id(),"capability":c.capability_registration(),"policyRevision":c.policy_revision(),"worktree":c.worktree().map(|w|json!({"id":w.id(),"repository":w.repository_id(),"work":w.work_id(),"revision":w.ownership_revision()}))})
 }
 fn parse<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, StorageError> {
     serde_json::from_value(v).map_err(|e| StorageError::InvalidRecord(e.to_string()))
@@ -85,6 +85,10 @@ fn invocation_context(
     );
     if let Some(session) = parse::<Option<Id>>(v["session"].clone())? {
         c = c.with_session(session);
+    }
+    // Legacy captures omit this field. Never infer a run from an invocation or namespace.
+    if let Some(run) = parse::<Option<Id>>(v["jobRun"].clone())? {
+        c = c.with_job_run(run);
     }
     if let Some(capability) = parse::<Option<Id>>(v["capability"].clone())? {
         c = c.with_capability_registration(capability);
@@ -488,6 +492,7 @@ mod source_context_tests {
             Some(AssignmentId(id("assignment"))),
         )
         .with_session(id("actual-session"))
+        .with_job_run(id("actual-run"))
         .with_capability_registration(id("actual-tool"))
         .with_authority_source(id("old-grant"))
         .bind_worktree(crate::context::BoundWorktree::resolved(
@@ -512,6 +517,23 @@ mod source_context_tests {
         assert_eq!(restored.principal_kind(), PrincipalKind::Agent);
         assert!(restored.reviewed_operation().is_none());
         assert!(restored.authority_sources().is_empty());
+        assert_eq!(restored.job_run_id(), Some(&id("actual-run")));
+        let mut legacy = captured.clone();
+        legacy["invocationContext"]
+            .as_object_mut()
+            .unwrap()
+            .remove("jobRun");
+        assert!(
+            restore_source_context(
+                &store(),
+                original.principal(),
+                PrincipalKind::Agent,
+                &legacy
+            )
+            .unwrap()
+            .job_run_id()
+            .is_none()
+        );
         assert!(
             restore_source_context(
                 &store(),

@@ -1406,6 +1406,8 @@ impl UsageRepository for Unit<'_> {
         }
         if RouterRead::route_model(self, &r.model_id)?.is_none()
             && RouterRead::decision_model(self, &r.model_id)?.is_none()
+            && EmbeddingRead::embedding_price_subject(self, &r.model_id)?
+                .is_none_or(|subject| subject.current_candidate_id.is_none())
         {
             return Err(missing("model", &r.model_id));
         }

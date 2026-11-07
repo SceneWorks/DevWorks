@@ -523,6 +523,11 @@ pub(super) fn put_decision_model(
     m: &StoredDecisionModel,
     expected: Option<i64>,
 ) -> Result<StoredDecisionModel, StorageError> {
+    if super::embedding::has_price_subject(conn, &m.id)? {
+        return Err(invalid(
+            "an embedding price subject cannot become a decision model",
+        ));
+    }
     if m.question_types.is_empty()
         || m.question_types
             .iter()

@@ -257,6 +257,9 @@ impl<T: Revisioned> Revisioned for Option<T> {
             x.retain_revision(revision)
         }
     }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.as_ref().map_or(Ok(()), |x| x.check_revision(revision))
+    }
 }
 impl<T: Revisioned> Revisioned for Vec<T> {
     fn retain_revision(&mut self, revision: u32) {
@@ -264,15 +267,24 @@ impl<T: Revisioned> Revisioned for Vec<T> {
             x.retain_revision(revision)
         }
     }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.iter().try_for_each(|x| x.check_revision(revision))
+    }
 }
 impl<T: Revisioned, const MIN: usize, const MAX: usize> Revisioned for BoundedList<T, MIN, MAX> {
     fn retain_revision(&mut self, revision: u32) {
         self.0.retain_revision(revision)
     }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.0.check_revision(revision)
+    }
 }
 impl<T: Revisioned> Revisioned for Page<T> {
     fn retain_revision(&mut self, revision: u32) {
         self.items.retain_revision(revision)
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.items.check_revision(revision)
     }
 }
 impl<T: Revisioned> Revisioned for HistoryPage<T> {
@@ -281,6 +293,9 @@ impl<T: Revisioned> Revisioned for HistoryPage<T> {
             self.checkpoint = None;
         }
         self.items.retain_revision(revision)
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.items.check_revision(revision)
     }
 }
 /// Events gate a union alternative (the command aggregate), which cannot be cleared from a

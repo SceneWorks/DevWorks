@@ -1,0 +1,125 @@
+//! Actual current source-bound index metadata; a draft or absent head is never a ready index.
+use super::IndexService;
+use crate::{
+    ports::storage::*,
+    protocol::{
+        Counter, Revision,
+        records::{ConventionIndexStatus, OperationRef},
+    },
+    services::conventions::model,
+};
+use serde::de::DeserializeOwned;
+fn parse<T: DeserializeOwned>(value: serde_json::Value) -> Result<T, StorageError> {
+    serde_json::from_value(value)
+        .map_err(|e| StorageError::InvalidRecord(format!("convention index metadata: {e}")))
+}
+fn project(
+    index: StoredConventionIndex,
+    count: u64,
+    operation: OperationRecord,
+) -> Result<ConventionIndexStatus, StorageError> {
+    Ok(ConventionIndexStatus {
+        status: parse(serde_json::json!(index.status))?,
+        generation_id: Some(index.generation_id),
+        source_revision: Some(
+            Revision::new(index.convention_revision)
+                .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+        ),
+        source_digest: Some(parse(serde_json::json!(index.source_digest))?),
+        embedding_space: index
+            .embedding_space
+            .map(|s| parse(serde_json::json!(s)))
+            .transpose()?,
+        indexed_chunks: Some(
+            Counter::new(
+                i64::try_from(count)
+                    .map_err(|_| StorageError::InvalidRecord("index count overflow".into()))?,
+            )
+            .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+        ),
+        operation: Some(OperationRef {
+            operation_id: operation.id,
+            state: operation.state,
+        }),
+        reason: index
+            .error
+            .map(|e| parse(serde_json::json!(e)))
+            .transpose()?,
+    })
+}
+fn matches_source(
+    read: &dyn ConventionRead,
+    owner: &StoredConvention,
+    index: &StoredConventionIndex,
+) -> Result<bool, StorageError> {
+    let captured = read.convention(
+        &owner.id,
+        Some(index.convention_revision),
+        std::slice::from_ref(&owner.scope),
+    )?;
+    Ok(owner.content_ref.as_ref() == Some(&index.source_ref)
+        && captured
+            .as_ref()
+            .is_some_and(|source| source.title == owner.title && source.scope == owner.scope))
+}
+fn historical_unindexed() -> ConventionIndexStatus {
+    let mut status = model::unindexed();
+    status.reason = Some(crate::protocol::support::BoundedText(
+        "HistoricalSnapshotNotCurrentIndex".into(),
+    ));
+    status
+}
+impl IndexService {
+    pub fn status(
+        &self,
+        read: &dyn ReadSnapshot,
+        owner: &StoredConvention,
+    ) -> Result<ConventionIndexStatus, StorageError> {
+        let Some(index) = read.conventions().convention_index_status(&owner.id)? else {
+            return Ok(model::unindexed());
+        };
+        if !matches_source(read.conventions(), owner, &index)? {
+            let current = read.conventions().convention(
+                &owner.id,
+                None,
+                std::slice::from_ref(&owner.scope),
+            )?;
+            if index.status != "Stale" || current.as_ref() != Some(owner) {
+                return Ok(historical_unindexed());
+            }
+        }
+        let count = read
+            .conventions()
+            .convention_chunk_count(&index.generation_id)?;
+        let operation = read
+            .operations()
+            .operation(&index.operation_id)?
+            .ok_or_else(|| StorageError::InvalidRecord("index operation missing".into()))?;
+        project(index, count, operation)
+    }
+    pub fn status_in(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        owner: &StoredConvention,
+    ) -> Result<ConventionIndexStatus, StorageError> {
+        let Some(index) = tx.conventions().convention_index_status(&owner.id)? else {
+            return Ok(model::unindexed());
+        };
+        if !matches_source(tx.conventions(), owner, &index)? {
+            let current =
+                tx.conventions()
+                    .convention(&owner.id, None, std::slice::from_ref(&owner.scope))?;
+            if index.status != "Stale" || current.as_ref() != Some(owner) {
+                return Ok(historical_unindexed());
+            }
+        }
+        let count = tx
+            .conventions()
+            .convention_chunk_count(&index.generation_id)?;
+        let operation = tx
+            .operations()
+            .operation(&index.operation_id)?
+            .ok_or_else(|| StorageError::InvalidRecord("index operation missing".into()))?;
+        project(index, count, operation)
+    }
+}

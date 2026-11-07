@@ -8,6 +8,7 @@
 pub mod approvals;
 pub mod artifacts;
 pub mod browser;
+pub mod conventions;
 pub mod cursor;
 pub mod diagnostics;
 pub mod evals;
@@ -165,6 +166,14 @@ impl UseCases {
     }
 
     /// The same offline Help owner serves every gateway entry path.
+    /// Authored guidance shares one owner across native UI, tools and durable jobs.
+    pub fn with_conventions(mut self, service: Arc<conventions::ConventionService>) -> Self {
+        for operation in conventions::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
     pub fn with_help(mut self, service: Arc<help::HelpService>) -> Self {
         for operation in help::OPERATIONS {
             self.register(operation, Some(service.clone()), Some(service.clone()));
@@ -242,6 +251,21 @@ impl UseCases {
         self.connection_service = Some(service.clone());
         for op in router::connections::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Installs the persistent embedding configuration owner beside its actual connection owner.
+    pub fn with_embedding_spaces(
+        mut self,
+        service: Arc<router::embedding_spaces::EmbeddingSpaceService>,
+    ) -> Self {
+        if let Some(connections) = self.connection_service.as_ref() {
+            assert!(
+                connections.install_embedding_spaces(service.clone()),
+                "embedding configuration owner already installed"
+            );
+            self.register("router.embedding_spaces", Some(service), None);
         }
         self
     }

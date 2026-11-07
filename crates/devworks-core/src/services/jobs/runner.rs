@@ -848,8 +848,16 @@ impl JobService {
                     )?;
                     return Ok(None);
                 };
-                if operation == super::native_help::OPERATION
-                    && super::native_help::is_empty(&arguments.value.0)
+                if super::native_help::supports(
+                    operation,
+                    crate::registry::SchemaRevision(
+                        u32::try_from(arguments.schema.revision.get()).map_err(|_| {
+                            StorageError::InvalidRecord(
+                                "invalid current job schema revision".into(),
+                            )
+                        })?,
+                    ),
+                ) && super::native_help::is_empty(&arguments.value.0)
                 {
                     let revision = arguments.schema.revision.get();
                     let schema = super::native_help::argument_schema(
@@ -867,18 +875,19 @@ impl JobService {
                         fail_before(
                             tx,
                             &started,
-                            "Help job arguments do not match the current-generation adapter; nothing ran",
+                            "Native job arguments do not match the current-generation adapter; nothing ran",
                         )?;
                         return Ok(None);
                     }
                     let (invocation, frame) =
-                        super::native_help::invocation(tx, &mut started, revision)?;
+                        super::native_help::invocation(tx, &mut started, operation, revision)?;
                     let ctx = host_ctx(
                         tx,
                         native_namespace(&run.job_id),
                         invocation,
                         run.project_id.as_ref(),
-                    );
+                    )
+                    .with_job_run(run.id.clone());
                     return Ok(Some(Begun {
                         run: started,
                         operation: op_id,
@@ -908,7 +917,8 @@ impl JobService {
                         native_namespace(&run.job_id),
                         invocation,
                         run.project_id.as_ref(),
-                    ),
+                    )
+                    .with_job_run(run.id.clone()),
                     operation,
                     frame: frame.to_string().into_bytes(),
                 }
@@ -950,7 +960,8 @@ impl JobService {
                     counter(info.restore_epoch),
                     Revision::new(1).expect("positive"),
                 )
-                .with_lineage(scope.clone(), None, None);
+                .with_lineage(scope.clone(), None, None)
+                .with_job_run(run.id.clone());
                 let started = tx.jobs().update_run(
                     &StoredJobRun {
                         agent_actor: Some(agent.clone()),

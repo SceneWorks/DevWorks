@@ -117,9 +117,12 @@
 //! filename); an unknown attachment and a stored file that cannot be read are both `NotFound`
 //! (the source's quirk: I/O failures were reported as not found), and an unavailable store is
 //! `StorageUnavailable`.
+pub(crate) mod convention_import;
+mod convention_source;
 pub mod evidence;
 pub mod host;
 mod index_source;
+pub(crate) use convention_source::{ConventionSourceLease, ConventionSourceSelection};
 pub mod lifecycle;
 pub mod observed;
 pub mod preview;
@@ -476,6 +479,7 @@ pub(crate) fn share_named_in(
     if artifact.state != ArtifactState::Live
         || artifact.retention != ArtifactRetention::Explicit
         || retained_help(&artifact, &tx.store().host_actor)
+        || retained_convention(&artifact, &tx.store().host_actor)
         || artifact.scope.project() == Some(project)
         || !visible_in(tx.artifacts(), &viewer, &artifact, None)?
         || !tx.artifacts().add_share(&artifact.id, project)?
@@ -560,10 +564,60 @@ fn retained_help(artifact: &StoredArtifact, host: &crate::protocol::ActorId) -> 
         && artifact.provenance["derived"]["kind"] == "HelpTopic"
 }
 
+/// Only actual trusted-Host convention derivatives are immutable through public artifact
+/// mutations. Original uploads named by conventions retain their ordinary caller ownership.
+pub(crate) fn retained_convention(
+    artifact: &StoredArtifact,
+    host: &crate::protocol::ActorId,
+) -> bool {
+    if artifact.provenance["principalKind"] != "Host"
+        || artifact.provenance["producedBy"].as_str() != Some(host.0.as_str())
+    {
+        return false;
+    }
+    let derived = &artifact.provenance["derived"];
+    let id = |key: &str| {
+        derived[key]
+            .as_str()
+            .is_some_and(|s| crate::protocol::Id::new(s).is_ok())
+    };
+    let digest = |key: &str| {
+        derived[key]
+            .as_str()
+            .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+    };
+    match derived["kind"].as_str() {
+        Some("ConventionContent") => id("conventionId") && digest("sourceDigest"),
+        Some("ConventionResource") => {
+            id("conventionId") && id("resourceId") && digest("sourceDigest")
+        }
+        Some("EmbeddingProbeInput") => {
+            id("candidateId") && id("operationId") && id("requestId") && id("admissionKey")
+        }
+        Some("ConventionEmbeddingInput") => {
+            id("requestId")
+                && digest("contextDigest")
+                && digest("inputDigest")
+                && derived["embeddingSpace"]
+                    .as_str()
+                    .is_some_and(|s| !s.is_empty())
+                && derived["inputIndex"].as_u64().is_some_and(|n| n < 32)
+        }
+        _ => false,
+    }
+}
+
 fn require_explicit(
     artifact: &StoredArtifact,
     host: &crate::protocol::ActorId,
 ) -> Result<(), Refusal> {
+    if retained_convention(artifact, host) {
+        return Err(Refusal::new(
+            DomainErrorCode::Conflict,
+            "convention_retained",
+            Some(artifact.id.clone()),
+        ));
+    }
     if retained_help(artifact, host) {
         return Err(Refusal::new(
             DomainErrorCode::Conflict,
@@ -736,9 +790,22 @@ pub(crate) fn reference_from_transcript(
     session: &Id,
     root: Option<RootId>,
 ) -> Result<(), StorageError> {
+    reference_from_host_owner(tx, ctx, reference, &SubjectKey::session(session), root)
+}
+
+/// Records an already validated host-owned reference in its producing unit of work. The caller
+/// must establish the exact immutable version and owning subject before invoking this helper.
+/// This is not a public reference operation or an authority grant.
+pub(crate) fn reference_from_host_owner(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    reference: &ArtifactRef,
+    subject: &SubjectKey,
+    root: Option<RootId>,
+) -> Result<(), StorageError> {
     let added = tx.artifacts().add_link(&ArtifactLink {
         version_id: reference.version_id.clone(),
-        subject: SubjectKey::session(session),
+        subject: subject.clone(),
         purpose: LinkPurpose::Reference,
     })?;
     if !added {
@@ -758,11 +825,11 @@ pub(crate) fn reference_from_transcript(
         ctx,
         &artifact,
         root,
-        None,
+        (subject.kind == "operation").then(|| OperationId(subject.id.clone())),
         "ArtifactReferenced",
         json!({
-            "versionId": reference.version_id.as_str(), "subjectKind": "session",
-            "subjectId": session.as_str(), "referenceRevision": artifact.reference_revision,
+            "versionId": reference.version_id.as_str(), "subjectKind": subject.kind,
+            "subjectId": subject.id.as_str(), "referenceRevision": artifact.reference_revision,
         }),
     )?;
     Ok(())
@@ -1935,7 +2002,10 @@ impl ArtifactService {
 
 /// After a tombstone: a blob no live version names any more becomes `UnlinkPending` (returns
 /// `true`); bytes another surviving version needs stay `Present`.
-fn release_blob(tx: &mut dyn WriteTransaction, digest: &str) -> Result<bool, StorageError> {
+pub(crate) fn release_blob(
+    tx: &mut dyn WriteTransaction,
+    digest: &str,
+) -> Result<bool, StorageError> {
     if tx.artifacts().live_references(digest)? > 0 {
         return Ok(false);
     }

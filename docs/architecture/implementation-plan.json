@@ -10,26 +10,26 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "5a7cfc073edc201069cc2f70db1742c7e6f4fe9c7c17ddf8e9231564002bfc3f",
-    "devworks-capability-catalog.json": "605c2b629d94df4257fe563b03b8fe80d440a5492c03ae7fbba902570d4fbe2a",
+    "implementation-slices.json": "f0f40f1cc6db56465b4e73590a16d5b0744dc9a04346f41093c08f2c87b236bb",
+    "devworks-capability-catalog.json": "085730605dacb2ce7d0168a3e1c9b95fd8d61d3c2771e53157a8bd8455512c9c",
     "devworks-requirements-traceability.json": "23d4eaab9420af10bd850fcafd2025cd99498cd371aec8554aac4db09c4de407",
     "codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "080a0bb119670c34f467b57244390f05c5e637fe136a94a17b2b9d938dd4342a",
+    "contracts/family-coverage.json": "bb3e6077544760f1d666d5db718764141c057dccad7e6c7eccc77242b5f417ea",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4"
   },
   "counts": {
-    "slices": 78,
+    "slices": 79,
     "operationFamilies": 49,
-    "operations": 359,
+    "operations": 360,
     "requirements": 377,
     "requirementsByStatus": {
       "Confirmed": 230,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 359,
+    "inputSchemaCandidates": 360,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -106,6 +106,7 @@
     "DW-063",
     "DW-108",
     "DW-107",
+    "DW-119",
     "DW-062",
     "DW-071",
     "DW-072",
@@ -4690,7 +4691,8 @@
         "mcp_server_access",
         "session_auto_routing",
         "model_latest",
-        "work_item_metadata"
+        "work_item_metadata",
+        "embedding_spaces"
       ],
       "acceptance": "A1: Run every AT requirement and all 33 CAP groups through actual services, reconcile frozen-source drift and verify each retained operation plus import quirks. Separately dispatch authorized live inference E2E later; schema/probe counts cannot satisfy product acceptance. A2: Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests. Satisfy every primary and supporting source requirement listed on this item, preserving its Confirmed/Proposed status. A3: Integrated Auto/latest acceptance reuses the latest-model story, DW-22 and DW-107 evidence: all eight aliases and explicit/custom choices work across native/host/job entry points; hourly complete inventories promote/fall back and remove/restore availability across providers including SystemOne without deleting configuration or reacting to failed/partial lists. New/replacement tier and pinless Low-classifier allocations use latest/custom pools with independent durable cursors; eligible concrete pins, the chosen Auto tier and known receipt resolutions survive alias promotion and restart. No extra inference/benchmark campaign is implied, and normal CI executes no inference.",
       "gates": [
@@ -4763,7 +4765,8 @@
         "DW-064",
         "DW-107",
         "DW-108",
-        "DW-109"
+        "DW-109",
+        "DW-119"
       ],
       "ownedOperations": [],
       "primaryRequirements": [
@@ -5520,6 +5523,72 @@
         "WORK-12"
       ],
       "capabilityCases": [],
+      "sourceEntryIds": [],
+      "workloads": [],
+      "pendingInputSchemas": [],
+      "commonAcceptance": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests."
+    },
+    {
+      "key": "embedding_spaces",
+      "id": "DW-119",
+      "type": "Feature",
+      "title": "Configure and qualify persistent native embedding spaces",
+      "operations": [
+        "router.embedding_spaces"
+      ],
+      "dependsOnKeys": [
+        "files",
+        "credentials",
+        "transports",
+        "usage"
+      ],
+      "acceptance": "Explicit persistent candidate setup, accounted native positive qualification and separately revisioned selection; no automatic paid/first-conversation route. Current connection/account/model/config identity fences use without rewriting historical spaces. Scoped status, cancellation/replay and native UI/SQLite/transport evidence remain required.",
+      "gates": [
+        "G03",
+        "G06",
+        "G11"
+      ],
+      "status": "Native extension in progress; no acceptance claimed",
+      "supportingOperations": [
+        "router.configure"
+      ],
+      "configurationActions": [
+        "CreateEmbeddingSpace",
+        "QualifyEmbeddingSpace",
+        "SelectEmbeddingSpace",
+        "ClearEmbeddingSpace"
+      ],
+      "sourceKind": "Explicit native extension tracked in DW-119; not a fabricated retained source entry",
+      "additionalPrimaryRequirements": [
+        "ROUTE-09",
+        "ROUTE-10",
+        "RAG-04",
+        "RAG-07",
+        "RAG-08"
+      ],
+      "additionalCapabilityCases": [
+        "CAP-ROUTER"
+      ],
+      "dependsOn": [
+        "DW-007",
+        "DW-018",
+        "DW-019",
+        "DW-021"
+      ],
+      "ownedOperations": [
+        "router.embedding_spaces"
+      ],
+      "primaryRequirements": [
+        "ROUTE-09",
+        "ROUTE-10",
+        "RAG-04",
+        "RAG-07",
+        "RAG-08"
+      ],
+      "supportingRequirements": [],
+      "capabilityCases": [
+        "CAP-ROUTER"
+      ],
       "sourceEntryIds": [],
       "workloads": [],
       "pendingInputSchemas": [],
@@ -14984,7 +15053,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<InstructionRecord>",
+      "resultValueType": "ConventionPageResult",
       "requestModes": [
         "Query"
       ],
@@ -14998,7 +15067,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "InstructionRecord",
+      "resultValueType": "ConventionReadResult",
       "requestModes": [
         "Query"
       ],
@@ -15012,7 +15081,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "InstructionRecord",
+      "resultValueType": "ConventionRecordResult",
       "requestModes": [
         "Command"
       ],
@@ -15026,7 +15095,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<InstructionRecord>",
+      "resultValueType": "ConventionPageResult",
       "requestModes": [
         "Query"
       ],
@@ -15040,7 +15109,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "InstructionRecord",
+      "resultValueType": "ConventionRecordResult",
       "requestModes": [
         "Command"
       ],
@@ -15054,7 +15123,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "MutationSummary",
+      "resultValueType": "ConventionMutationResult",
       "requestModes": [
         "Command"
       ],
@@ -15068,7 +15137,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "MutationSummary",
+      "resultValueType": "ConventionMutationResult",
       "requestModes": [
         "Command"
       ],
@@ -15082,7 +15151,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "InstructionRecord",
+      "resultValueType": "ConventionRecordResult",
       "requestModes": [
         "Command"
       ],
@@ -15096,7 +15165,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "MutationSummary",
+      "resultValueType": "ConventionMutationResult",
       "requestModes": [
         "Command"
       ],
@@ -15110,7 +15179,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "InstructionRecord",
+      "resultValueType": "ConventionRecordResult",
       "requestModes": [
         "Command"
       ],
@@ -15124,7 +15193,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<InstructionRecord>",
+      "resultValueType": "ConventionResourcePageResult",
       "requestModes": [
         "Query"
       ],
@@ -15138,7 +15207,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "MutationSummary",
+      "resultValueType": "ConventionMutationResult",
       "requestModes": [
         "Command"
       ],
@@ -15152,7 +15221,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<InstructionRecord>",
+      "resultValueType": "ConventionSearchPageResult",
       "requestModes": [
         "Query"
       ],
@@ -16670,6 +16739,20 @@
       "resultValueType": "DecisionResult",
       "requestModes": [
         "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "router.embedding_spaces",
+      "family": "router",
+      "serviceOwner": "InferenceRouter",
+      "primarySlice": "embedding_spaces",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "EmbeddingSpacePage",
+      "requestModes": [
+        "Query"
       ],
       "acceptanceStatus": "Planned; no production operation acceptance claimed"
     },
