@@ -103,8 +103,10 @@ methods through fault wrappers. The original cache assertion fails before correc
 cases pass (26.73 seconds). Windows junction arguments now use native path components;
 its runtime acceptance remains pending. DW-143's duplicate runtime-slot fix is also
 composed: all six native convention scope cases pass (26.66 seconds). A separate
-schema pin writer-clock race is tracked and repaired in DW-144; the full purge branch
-must qualify that composition before publishing the next checkpoint.
+schema pin writer-clock race is repaired in DW-144 and composed here. The combined
+branch passes all 15 native schema cases (12.58 seconds), all 14 database UI cases
+(48.28 seconds), and workspace/all-target strict checks (42.35 seconds). These local
+checks do not establish the pending Windows filesystem runtime qualification.
 
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
