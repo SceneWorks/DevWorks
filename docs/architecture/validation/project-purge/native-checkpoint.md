@@ -1,13 +1,15 @@
 # DW-83 native implementation checkpoint
 
-This is unfinished implementation evidence. No purge operation is routed, no purge
-executor or Human confirmation UI is enabled, and none of DW-83's acceptance
-criteria is complete.
+This is unfinished implementation evidence. The native storage executor and leased
+effect worker exist, but no purge operation is routed in production and no Human
+confirmation UI is enabled. None of DW-83's acceptance criteria is complete.
 
 The current support layer includes revision 6 contracts and terminal purged receipt
 replay, migration 36 manifest storage and exact-row immutable-delete guards, durable
 managed-file Writing/Live/Removing/Removed attribution, and native file inventory
-and reviewed-entry removal for all seven frozen managed classes.
+and reviewed-entry removal for all eight current managed classes. Schema37 extends
+client staging custody; schema38 adds current-boot effect leases. Historical
+checkpoints below describe the evidence available at each step.
 
 Diagnostic exports reserve exact project/root/name attribution before writing and
 publish a verified file witness before issuing a ticket. Normal diagnostic owner
@@ -308,3 +310,36 @@ a hold for the coordinator. The combined real artifact/share/session/Workspace
 keeper case passes (1.65 seconds); strict workspace/all-target checks pass (18.21
 seconds). The inventory performs no filesystem or logical deletion and does not
 yet include live/persisted client state or legacy file-attribution completeness.
+
+The schema38 checkpoint adds native preparation, scoped manifest pagination and an
+opaque, non-deserializable permit minted only after the exact native Human proof
+and fresh store/project/row/file/client witnesses. A surviving client ArtifactRef
+retains only its exact native version and a sanitized Live artifact header; other
+private versions remain removable. Control publication does not stale the prepared
+business assessment. Only the revision6 manifest request changes to carry a cursor;
+revision1–5 schema bytes remain unchanged.
+
+The purpose-only SQLite executor materializes exact keys transiently, keeps foreign
+keys enabled, defers cycles inside its writer transaction, enters the exact-row
+immutable guard and atomically compacts selected receipts, substitutes finite
+minimal headers and records original physical/client intents. Native rollback leaves
+records and effects unchanged. Durable effects have bounded current-boot leases,
+reject stale owners, survive restart and retain their original body on failure.
+Settlement forgets that body; Complete requires zero unsettled effects. The ordinary
+artifact collector cannot adopt an active purge blob claim. Project source handles
+are fenced without changing picked inputs; shared repository registrations remain.
+
+Native qualification:36 purge cases pass in56.33 seconds, including logical rollback/
+commit, exact client-version retention, any unsettled owned operation, source handles,
+shared registrations, picked bytes and worker/lease recovery. Seven desktop memory
+partition cases pass, including independent database drafts and client witnesses
+that change with owned text/keepers but ignore unrelated Home text. Workspace/all-
+target strict checks pass in43.36 seconds. These isolated native cases do not establish
+production enablement or complete class-by-class privacy acceptance. Live client
+flush/freeze/cache/autosave/restart coordination, client file keepers, active-reader
+integration, production routing and the Human UI remain to be completed in DW-83.
+
+PR51 is merged as dc0386eff3cb8774d3374662cbdf2dd964447adc with all20 checks and
+exact-head reviews complete; its related repairs DW139/146/147/148 are accepted.
+That ancestry is composed into this branch. The stop boundary remains full DW-83
+acceptance, followed by a detailed handoff before another feature.
