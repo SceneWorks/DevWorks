@@ -19,7 +19,7 @@ const EXTENSION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/architecture/validation/project-purge/schema36-extension.json"
 ));
-type Key = (String, String);
+pub(super) type Key = (String, String);
 fn invalid() -> StorageError {
     StorageError::IncompatibleSchema("unmapped project purge ownership policy".into())
 }
@@ -174,7 +174,7 @@ fn unresolved_keys(
     Ok(())
 }
 
-fn assign(
+pub(super) fn assign(
     candidate: &ProjectPurgeCandidate,
     action: Action,
     reason: Reason,
@@ -421,6 +421,8 @@ pub(in crate::storage::sqlite) fn planning(
     for key in unresolved.keys() {
         rows.remove(key);
     }
+    super::receipts::partition(conn, project, &snapshot, &mut rows, &mut unresolved)?;
+    super::leases::partition(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     // Only retention decisions propagate. A reference can never add a deletion.
     loop {
         let mut changed = false;
@@ -490,9 +492,42 @@ pub(in crate::storage::sqlite) fn planning(
             break;
         }
     }
+    let rows = rows.into_values().collect::<Vec<_>>();
+    let unresolved = unresolved.into_values().collect::<Vec<_>>();
+    let control_keys = rows
+        .iter()
+        .filter(|row| row.reason == Reason::PurgeControlAudit)
+        .map(|row| (row.table.as_str(), row.key_digest.as_str()))
+        .collect::<BTreeSet<_>>();
+    let business_rows = rows
+        .iter()
+        .filter(|row| row.reason != Reason::PurgeControlAudit)
+        .collect::<Vec<_>>();
+    let references = snapshot
+        .references
+        .iter()
+        .filter(|edge| {
+            !control_keys.contains(&(edge.from_table.as_str(), edge.from_key_digest.as_str()))
+                && !matches!(
+                    edge.from_table.as_str(),
+                    "project_purge_manifests"
+                        | "project_purge_entries"
+                        | "project_purge_rows"
+                        | "project_purge_effects"
+                        | "project_purged_subjects"
+                )
+        })
+        .collect::<Vec<_>>();
+    let digest=devworks_core::fingerprint::sha256_hex(serde_json::to_string(&serde_json::json!({
+        "format":"dw83-ownership-assessment-v1","project":project,
+        "policy":devworks_core::fingerprint::sha256_hex(POLICIES.as_bytes()),
+        "extension":devworks_core::fingerprint::sha256_hex(EXTENSION.as_bytes()),
+        "selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
+    })).map_err(|_|invalid())?.as_bytes());
     Ok(Some(ProjectPurgePlanning {
         snapshot,
-        rows: rows.into_values().collect(),
-        unresolved: unresolved.into_values().collect(),
+        digest,
+        rows,
+        unresolved,
     }))
 }

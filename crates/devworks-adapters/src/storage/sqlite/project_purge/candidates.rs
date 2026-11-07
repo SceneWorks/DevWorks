@@ -124,6 +124,26 @@ pub(super) struct Selection {
     predicates: serde_json::Map<String, Value>,
 }
 impl Selection {
+    pub(super) fn sql(
+        &self,
+        table: &str,
+        columns: &str,
+        condition: &str,
+    ) -> Result<String, StorageError> {
+        let predicate = self
+            .predicates
+            .get(table)
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("unmapped purge partition table"))?;
+        Ok(format!(
+            "WITH {} SELECT {columns} FROM {} WHERE ({predicate}) AND ({condition})",
+            self.anchors,
+            quote(table)
+        ))
+    }
+    pub(super) fn parameters(&self) -> [&str; 2] {
+        [self.project.0.as_str(), &self.scope_digest]
+    }
     pub(super) fn rows_where(
         &self,
         conn: &Connection,

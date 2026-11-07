@@ -2309,7 +2309,7 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
 }
 
 #[test]
-fn purge_candidate_receipt_attribution_uses_the_actual_command_event_not_the_scope_key() {
+fn purge_candidate_receipts_include_actual_events_and_explicit_creation_snapshots() {
     let fx = Fx::new();
     let p = fx.create("Receipt project", &[]);
     let other = fx.create("Other receipt project", &[]);
@@ -2339,12 +2339,12 @@ fn purge_candidate_receipt_attribution_uses_the_actual_command_event_not_the_sco
             .filter(|r| r.table == "command_receipts")
             .count()
     };
-    assert_eq!(count(&p.id), 2);
-    assert_eq!(count(&other.id), 1);
+    assert_eq!(count(&p.id), 3);
+    assert_eq!(count(&other.id), 2);
     // Every command used the same current Human/store scope. Attribution still
-    // follows its actual CommandDecided target, and selection mutates nothing.
+    // follows actual CommandDecided targets plus explicit typed creation snapshots.
     assert_eq!(fx.h.raw().query_row("SELECT count(DISTINCT scope_key) FROM command_receipts WHERE command_kind IN('projects.create','projects.edit')",[],|r|r.get::<_,i64>(0)).unwrap(),1);
-    assert_eq!(count(&p.id), 2);
+    assert_eq!(count(&p.id), 3);
 }
 
 #[test]
@@ -2540,7 +2540,7 @@ fn purge_planning_classifies_records_read_only_and_never_enables_ordinary_delete
 }
 
 #[test]
-fn purge_planning_holds_workspace_creation_snapshots_and_unmapped_legacy_mappings() {
+fn purge_planning_compacts_typed_creation_snapshots_and_holds_unmapped_legacy_mappings() {
     let fx = Fx::new();
     let p = fx.create("Private copied project name", &[]);
     let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
@@ -2548,15 +2548,44 @@ fn purge_planning_holds_workspace_creation_snapshots_and_unmapped_legacy_mapping
     })
     .unwrap()
     .unwrap();
-    assert!(!plan.is_resolved());
-    assert!(plan.unresolved.iter().any(|r| r.table == "command_receipts"
-        && r.reason == ProjectPurgeUnresolvedReason::AutomaticSnapshot));
+    assert!(plan.rows.iter().any(|r| r.table == "command_receipts"
+        && r.action == ProjectPurgeRowAction::Scrub
+        && r.reason == ProjectPurgeRowReason::ReceiptReplayFence));
+    assert!(
+        !plan
+            .unresolved
+            .iter()
+            .any(|r| r.table == "command_receipts"),
+        "{:?}",
+        plan.unresolved
+    );
     let audit = serde_json::to_string(&plan.unresolved).unwrap();
     assert!(!audit.contains("Private copied project name"));
     assert_eq!(
         fx.get(&fx.user(), &p.id).unwrap().name.0,
         "Private copied project name"
     );
+    let original=fx.h.raw().query_row("SELECT result_json FROM command_receipts WHERE command_kind='projects.create' AND json_extract(result_json,'$.receipt.decision.result.value.id')=?1",[p.id.0.as_str()],|r|r.get::<_,String>(0)).unwrap();
+    let mut malformed: Value = serde_json::from_str(&original).unwrap();
+    malformed["unmappedPrivateBody"] = json!("unrecognized receipt body");
+    fx.h.raw().execute("UPDATE command_receipts SET result_json=?1 WHERE command_kind='projects.create' AND json_extract(result_json,'$.receipt.decision.result.value.id')=?2",rusqlite::params![malformed.to_string(),p.id.0.as_str()]).unwrap();
+    let refused = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        refused
+            .unresolved
+            .iter()
+            .any(|r| r.table == "command_receipts")
+    );
+    assert!(
+        !serde_json::to_string(&refused.unresolved)
+            .unwrap()
+            .contains("unrecognized receipt body")
+    );
+    fx.h.raw().execute("UPDATE command_receipts SET result_json=?1 WHERE command_kind='projects.create' AND json_extract(result_json,'$.receipt.decision.result.value.id')=?2",rusqlite::params![original,p.id.0.as_str()]).unwrap();
     fx.h.raw().execute("INSERT INTO import_mappings VALUES('legacy-import','unknown-kind','private-source-key','opaque-local-id','digest')",[]).unwrap();
     let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
         r.projects().purge_planning(&p.id)
@@ -2571,6 +2600,104 @@ fn purge_planning_holds_workspace_creation_snapshots_and_unmapped_legacy_mapping
         !serde_json::to_string(&plan.unresolved)
             .unwrap()
             .contains("private-source-key")
+    );
+}
+
+#[test]
+fn purge_planning_business_digest_excludes_only_validated_minimal_control_audit() {
+    struct PrepareProbe(devworks_core::protocol::records::ProjectPurgeManifest);
+    impl devworks_core::ports::CommandHandler for PrepareProbe {
+        fn decide(
+            &self,
+            _: &InvocationContext,
+            _: &devworks_core::gateway::AdmittedCommand,
+            _: &mut dyn WriteTransaction,
+        ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
+            Ok(devworks_core::ports::Decided {
+                decision: DomainDecision::Applied {
+                    result: OperationResult::ProjectsPreparePurge {
+                        value: self.0.clone(),
+                    },
+                },
+                operation_id: None,
+            })
+        }
+    }
+    let fx = Fx::new();
+    let p = fx.create("private control digest project", &[]);
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&p.id)
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let before = assess();
+    let manifest=serde_json::from_value(json!({"id":"control-manifest","projectId":p.id,"revision":"1","projectRevision":p.revision,"digest":"a".repeat(64),"phase":"Prepared","recordCount":"2","managedByteCount":"0","keptRecordCount":"1","keptByteCount":"0","pendingEffects":"0","createdAtMs":T0.to_string()})).unwrap();
+    let mut frame: Value = serde_json::from_str(&Fx::frame(
+        "projects.prepare_purge",
+        "control-digest-preview",
+        json!({"projectId":p.id,"expectedRevision":p.revision}),
+    ))
+    .unwrap();
+    frame["schemaRevision"] = json!(6);
+    let authority = fx.authority();
+    let gateway = Gateway {
+        authority: &authority,
+        store: fx.store.as_ref(),
+        ids: fx.h.ids.as_ref(),
+    };
+    let reply = gateway
+        .command(
+            &fx.user(),
+            "projects.prepare_purge",
+            frame.to_string().as_bytes(),
+            Arc::new(PrepareProbe(manifest)),
+        )
+        .unwrap();
+    assert!(
+        matches!(reply,CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..}))
+    );
+    let after = assess();
+    assert_ne!(
+        before.snapshot.digest, after.snapshot.digest,
+        "the gateway really appended its control audit"
+    );
+    assert_eq!(
+        before.digest, after.digest,
+        "minimal validated control publication cannot stale its own business review"
+    );
+    assert_eq!(
+        after
+            .rows
+            .iter()
+            .filter(|r| r.reason == ProjectPurgeRowReason::PurgeControlAudit)
+            .count(),
+        3
+    );
+    let event=fx.h.raw().query_row("SELECT seq,payload_json FROM events WHERE kind='CommandDecided' AND json_extract(payload_json,'$.operation')='projects.prepare_purge'",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?))).unwrap();
+    let mut payload: Value = serde_json::from_str(&event.1).unwrap();
+    payload["subject"] = json!({"privateBody":"unexpected copied content"});
+    fx.h.raw()
+        .execute(
+            "UPDATE events SET payload_json=?1 WHERE seq=?2",
+            rusqlite::params![payload.to_string(), event.0],
+        )
+        .unwrap();
+    let changed = assess();
+    assert_ne!(
+        before.digest, changed.digest,
+        "unknown control content remains business content"
+    );
+    assert!(
+        !changed
+            .rows
+            .iter()
+            .any(|r| r.reason == ProjectPurgeRowReason::PurgeControlAudit)
+    );
+    assert_eq!(
+        fx.get(&fx.user(), &p.id).unwrap().name.0,
+        "private control digest project"
     );
 }
 

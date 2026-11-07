@@ -234,6 +234,7 @@ pub struct ProjectPurgeUnresolved {
 #[derive(Clone, Debug)]
 pub struct ProjectPurgePlanning {
     pub snapshot: ProjectPurgeCandidates,
+    pub digest: String,
     pub rows: Vec<ProjectPurgeRowWitness>,
     pub unresolved: Vec<ProjectPurgeUnresolved>,
 }

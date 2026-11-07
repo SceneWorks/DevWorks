@@ -370,7 +370,7 @@ type PinRaw = (
     i64,
     i64,
 );
-fn pin(conn: &Connection, key: &Id) -> Result<Option<StoredGraphReadPin>, StorageError> {
+pub(super) fn pin(conn: &Connection, key: &Id) -> Result<Option<StoredGraphReadPin>, StorageError> {
     let raw:Option<PinRaw>=db(conn.query_row("SELECT owner_namespace,store_id,restore_epoch,scope_digest,intent_digest,scope_json,witness_json,missing_json,revision,created_at,expires_at FROM graph_read_pins WHERE id=?1",[key.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?,r.get(10)?))).optional())?;
     raw.map(|r|{
         let scope:GraphScope=serde_json::from_str(&r.5).map_err(|_|corrupt("invalid stored graph pin scope"))?;

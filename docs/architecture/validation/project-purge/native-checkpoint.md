@@ -154,6 +154,21 @@ workspace/all-target strict checks (5.92 seconds). The controlled real-runtime h
 regression retains the original native pointer gesture and verifies that the current
 history-enabled response supersedes older retained-catalog replies.
 
+Typed receipt partitioning now recognizes actual project-owned command decisions
+and the explicit workspace-created ProjectRecord snapshot, preserving replay-fence
+identities without copying private keys/results into audit rows. Strict envelopes
+and validated minimal revision-6 purge control receipts/events/publication intents
+separate control bookkeeping from the business snapshot digest. Unexpected nested
+control content remains fenced. Typed project graph/schema leases require closed
+stored shapes, matching columns and exact graph/index child pairs; owner namespace
+text does not grant ownership. Five native planning cases pass (6.74 seconds),
+four candidate/reference cases pass (5.72 seconds), and strict workspace checks pass
+(7.43 seconds). The assessment remains read-only and grants no execution permit.
+The deterministic implementation register now includes all four revision-6 purge
+operations; all five native registry/schema cases pass (0.57 seconds). Published
+reply artifacts, independent version keepers and byte eligibility remain explicit
+holds until their complete typed partitions are implemented.
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view
