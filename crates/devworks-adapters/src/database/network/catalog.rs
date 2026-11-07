@@ -103,6 +103,9 @@ impl Catalog {
             .unwrap_or(schema_id);
         let id = if let Some(parent) = parent {
             key(&[&self.catalog, schema, parent_kind, parent, kind, name])
+        } else if let Some(identity) = row.get("identity").and_then(Value::as_str) {
+            // Native routine namespaces may distinguish type even when display names match.
+            key(&[&self.catalog, schema, kind, name, identity])
         } else {
             key(&[&self.catalog, schema, kind, name])
         };

@@ -1028,6 +1028,94 @@ fn native_sql_server_many_parameters_publish_bounded_partial() {
     many_parameters("SqlServer", "DEVWORKS_METADATA_SQLSERVER");
 }
 
+fn distinct_routine_types(engine: &str, variable: &str) {
+    let snapshot = boundary_snapshot(engine, variable, "meta_same_routine");
+    let routines = snapshot
+        .objects
+        .iter()
+        .filter(|o| o.kind == "Procedure")
+        .collect::<Vec<_>>();
+    assert_eq!(routines.len(), 2);
+    assert_ne!(
+        routines[0].key, routines[1].key,
+        "routine type is part of identity"
+    );
+    for (kind, names) in [
+        ("FUNCTION", vec!["return", "function_argument"]),
+        ("PROCEDURE", vec!["procedure_argument", "procedure_result"]),
+    ] {
+        let routine = routines
+            .iter()
+            .find(|o| {
+                o.metadata
+                    .routine_type
+                    .as_ref()
+                    .is_some_and(|t| t.0 == kind)
+            })
+            .unwrap();
+        assert_eq!(routine.metadata.name.0, "meta_same_routine");
+        assert_eq!(
+            routine
+                .metadata
+                .parameters
+                .0
+                .iter()
+                .map(|p| p.name.0.as_str())
+                .collect::<Vec<_>>(),
+            names
+        );
+    }
+}
+#[test]
+#[ignore = "explicit isolated MySQL same-name function and procedure"]
+fn native_review6_mysql_distinct_routine_types() {
+    distinct_routine_types("MySql", "DEVWORKS_METADATA_MYSQL");
+}
+#[test]
+#[ignore = "explicit isolated MariaDB same-name function and procedure"]
+fn native_review6_mariadb_distinct_routine_types() {
+    distinct_routine_types("MariaDb", "DEVWORKS_METADATA_MARIADB");
+}
+#[test]
+#[ignore = "explicit isolated MySQL functional index"]
+fn native_review6_mysql_functional_index_is_partial_without_fabricated_columns() {
+    let snapshot = boundary_snapshot("MySql", "DEVWORKS_METADATA_MYSQL", "meta_expression_parent");
+    let index = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Index" && o.metadata.name.0 == "meta_functional_index")
+        .unwrap();
+    assert_eq!(
+        index
+            .metadata
+            .column_names
+            .0
+            .iter()
+            .map(|c| c.0.as_str())
+            .collect::<Vec<_>>(),
+        ["suffix"]
+    );
+    assert!(matches!(index.coverage.state, CoverageState::Partial));
+    assert!(matches!(snapshot.coverage.state, CoverageState::Partial));
+    assert!(
+        index
+            .coverage
+            .gaps
+            .iter()
+            .any(|g| g.as_str() == "metadata_expression_index_columns")
+    );
+    let expression_only = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Index" && o.metadata.name.0 == "meta_only_functional_index")
+        .unwrap();
+    assert!(expression_only.metadata.column_names.0.is_empty());
+    assert!(matches!(
+        expression_only.coverage.state,
+        CoverageState::Partial
+    ));
+}
+
 fn selected_catalog_probe(engine: &str, variable: &str) {
     let endpoint = std::env::var(variable).unwrap();
     let server = endpoint.rsplit_once('/').unwrap().0;
