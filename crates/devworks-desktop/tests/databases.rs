@@ -739,6 +739,7 @@ fn native_database_accessible_editor_control_survives_a_late_layout_change() {
     );
     h.state_mut().navigate(Route::Databases);
     h.state_mut().databases.draft = Some(devworks_desktop::databases_screen::Draft::new(None));
+    h.state_mut().databases.tab = 2;
     settle(&mut h);
     h.get_by_role_and_label(Role::Button, "Cancel database edit")
         .scroll_to_me();
@@ -762,4 +763,87 @@ fn native_database_accessible_editor_control_survives_a_late_layout_change() {
         h.state().databases.draft.is_none(),
         "native accessible activation retains editor/control identity across late replies"
     );
+}
+
+#[test]
+fn native_database_relationships_refreshes_a_missing_prepared_capture_before_reading_edges() {
+    use devworks_core::protocol::{CommandReply, results::DomainDecision};
+    let _native_case = native_runtime_case();
+    let root = Root::new("database-relations-fresh-capture");
+    let path = root.file("capture-source.sqlite", b"");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE captured(id INT);")
+        .unwrap();
+    let engine = start(&root);
+    let backend = engine.backend();
+    let frame = serde_json::json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":backend.token("capture-source"),"body":{"kind":"schemas.configure","scope":{"kind":"Workspace"},"config":{"name":"Capture source","engine":"Sqlite","endpoint":path,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"projectAccess":[],"workspaceExposed":false,"exposureMode":"SchemaOnly","authentication":"File"}}}).to_string().into_bytes();
+    assert!(
+        matches!(backend.command("schemas.configure", &frame).unwrap(),CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..}))
+    );
+    let inventory = Gate::holding_replies("schemas.connections");
+    let mut h = harness(
+        shell_with(Ok(inventory.over(backend)), &root, Script::default(), None),
+        1600.0,
+        1200.0,
+    );
+    h.state_mut().navigate(Route::Databases);
+    settle(&mut h);
+    h.get_by_label("Capture source").click_accesskit();
+    settle(&mut h);
+    // A late source-status reply can reflow the selected-source controls.
+    // Activate the native control by identity, as an accessibility client does.
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Sync database metadata")
+        .click_accesskit();
+    settle(&mut h);
+    step_until(&mut h, "capture source published", |s| {
+        s.databases
+            .connections
+            .first()
+            .is_some_and(|c| c.read_view.is_some() && c.active_operation_id.is_none())
+    });
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Relationships")
+        .click_accesskit();
+    settle(&mut h);
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let release = Release(inventory.clone());
+    inventory.close();
+    // Legal source projection when publication changes between lease preparation and read:
+    // status sees the new head while no earlier capture can be attached to that head.
+    h.state_mut().databases.connections[0].read_view = None;
+    h.state_mut().databases.view = None;
+    h.state_mut().databases.read_pin = None;
+    h.get_by_role_and_label(Role::Button, "Load database relationships")
+        .click_accesskit();
+    h.step();
+    assert!(
+        h.state().databases.read_loading,
+        "the explicit read intent waits for a fresh owner capture"
+    );
+    assert!(
+        h.state().databases.error.is_none(),
+        "a publication transition is not confirmed absence"
+    );
+    drop(release);
+    step_until(&mut h, "fresh-capture relationship read", |s| {
+        !s.databases.read_loading
+            && s.databases
+                .relations
+                .iter()
+                .any(|r| r.relation.0 == "HAS_COLUMN")
+    });
+    assert!(h.state().databases.read_pin.is_some());
+    assert!(
+        h.state().databases.error.is_none(),
+        "{:?}",
+        h.state().databases.error
+    );
+    settle(&mut h);
 }

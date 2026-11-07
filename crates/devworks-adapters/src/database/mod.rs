@@ -39,7 +39,7 @@ fn metadata(
     catalog: &str,
     schema: Option<&str>,
     extra: Value,
-) -> Result<SchemaObjectMetadata, MetadataFailure> {
+) -> Result<(SchemaObjectMetadata, Coverage), MetadataFailure> {
     let mut value = json!({"name":name,"catalog":catalog,"columnNames":[],"referencedColumns":[],"parameters":[]});
     if let Some(schema) = schema {
         value["schema"] = json!(schema);
@@ -48,7 +48,73 @@ fn metadata(
         return Err(MetadataFailure::InvalidMetadata);
     };
     value.as_object_mut().unwrap().extend(extra);
-    typed(value)
+    let coverage = bound_metadata_fields(&mut value);
+    Ok((typed(value)?, coverage))
+}
+// Text and collections are display metadata. Stable object/parent keys are computed from
+// original source identities, independently of this bounded projection. Every loss is Partial.
+fn bound_metadata_fields(details: &mut Value) -> Coverage {
+    fn bound(value: &mut Value, max: usize) -> bool {
+        let Some(text) = value.as_str() else {
+            return false;
+        };
+        let Some((end, _)) = text.char_indices().nth(max) else {
+            return false;
+        };
+        *value = Value::String(text[..end].to_owned());
+        true
+    }
+    let (mut fields_limited, mut items_limited) = (false, false);
+    for (name, max) in [
+        ("name", 256),
+        ("catalog", 256),
+        ("schema", 256),
+        ("columnKey", 256),
+        ("indexType", 256),
+        ("constraintType", 256),
+        ("routineType", 256),
+        ("comment", 65536),
+        ("definitionSql", 65536),
+        ("checkClause", 65536),
+        ("dataType", 4096),
+        ("defaultValue", 4096),
+        ("extra", 4096),
+        ("referencedTable", 4096),
+    ] {
+        if let Some(value) = details.get_mut(name) {
+            fields_limited |= bound(value, max);
+        }
+    }
+    for name in ["columnNames", "referencedColumns", "parameters"] {
+        if let Some(items) = details.get_mut(name).and_then(Value::as_array_mut) {
+            if items.len() > 128 {
+                items.truncate(128);
+                items_limited = true;
+            }
+            for item in items {
+                if name == "parameters" {
+                    for (field, max) in [("name", 256), ("mode", 256), ("dataType", 4096)] {
+                        if let Some(value) = item.get_mut(field) {
+                            fields_limited |= bound(value, max);
+                        }
+                    }
+                } else {
+                    fields_limited |= bound(item, 256);
+                }
+            }
+        }
+    }
+    let mut coverage = coverage();
+    for (limited, reason) in [
+        (fields_limited, "metadata_field_character_limit"),
+        (items_limited, "metadata_item_limit"),
+    ] {
+        if limited {
+            coverage.state = CoverageState::Partial;
+            coverage.gaps.push(Id::new(reason).expect("static gap"));
+        }
+    }
+    coverage
 }
 struct Collector {
     request: MetadataRequest,
@@ -140,7 +206,7 @@ impl Collector {
             true
         }
     }
-    fn object(&mut self, object: MetadataObject) -> Result<bool, MetadataFailure> {
+    fn object(&mut self, mut object: MetadataObject) -> Result<bool, MetadataFailure> {
         self.check()?;
         if self.exhausted {
             return Ok(false);
@@ -150,6 +216,18 @@ impl Collector {
             self.exhausted = true;
             return Ok(false);
         }
+        if let Some((end, _)) = object.qualified_name.char_indices().nth(4096) {
+            object.qualified_name.truncate(end);
+            object.coverage.state = CoverageState::Partial;
+            let gap = Id::new("metadata_field_character_limit").expect("static gap");
+            if !object.coverage.gaps.contains(&gap) {
+                object.coverage.gaps.push(gap);
+            }
+        }
+        for gap in &object.coverage.gaps {
+            self.gap(gap.as_str());
+        }
+        self.coverage.more_gaps |= object.coverage.more_gaps;
         let bytes = std::mem::size_of::<MetadataObject>()
             + object.key.len()
             + object.qualified_name.len()

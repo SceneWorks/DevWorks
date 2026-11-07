@@ -2,7 +2,7 @@
 use super::Shell;
 use crate::{
     backend::{Reply, Slot, TaskOutput},
-    databases_screen::{Action, Draft},
+    databases_screen::{Action, Draft, ReadIntent},
     ops::{self, Failure},
 };
 use devworks_core::{
@@ -62,14 +62,11 @@ impl Shell {
             self.databases.loading = false;
         }
     }
-    fn load_database_objects(&mut self, append: bool) {
-        let Some(source) = self.databases.source().cloned() else {
-            return;
-        };
-        // Invalidate any earlier object/relationship reply when a new read intent starts,
-        // including one that first needs a fresh source capture.
-        self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
-        let n = self.databases.read_sequence;
+    fn database_read_pin(
+        &mut self,
+        source: &devworks_core::protocol::records::SchemaConnection,
+        intent: ReadIntent,
+    ) -> Option<String> {
         if self.databases.view.is_none()
             && let Some(captured) = &source.read_view
         {
@@ -80,27 +77,40 @@ impl Shell {
             self.databases.read_pin = Some(captured.pin_id.as_str().into());
         }
         let Some(pin) = self.databases.read_pin.clone() else {
-            if self.databases.pending_object_read.is_some() {
-                self.databases.pending_object_read = None;
+            if self.databases.pending_read.is_some() {
+                self.databases.pending_read = None;
                 self.databases.read_loading = false;
-                self.databases.error = Some("No retained schema view is available. Sync this source before reading its objects.".into());
-                return;
+                self.databases.error = Some("No retained schema view is available. Sync this source before reading its metadata.".into());
+                return None;
             }
             // A fresh status can see a publication that changed during preparation. Ask
             // the owner once for a matching lease, then resume this same source's intent.
-            self.databases.pending_object_read = Some((source.id.as_str().into(), append));
+            self.databases.pending_read = Some((source.id.as_str().into(), intent));
             self.databases.read_loading = true;
             self.databases.error = None;
             self.load_databases(false);
             if !self.databases.loading {
-                self.databases.pending_object_read = None;
+                self.databases.pending_read = None;
                 self.databases.read_loading = false;
                 self.databases.error =
                     Some("Could not refresh the source's retained schema view.".into());
             }
+            return None;
+        };
+        self.databases.pending_read = None;
+        Some(pin)
+    }
+    fn load_database_objects(&mut self, append: bool) {
+        let Some(source) = self.databases.source().cloned() else {
             return;
         };
-        self.databases.pending_object_read = None;
+        // Invalidate any earlier object/relationship reply when a new read intent starts,
+        // including one that first needs a fresh source capture.
+        self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
+        let n = self.databases.read_sequence;
+        let Some(pin) = self.database_read_pin(&source, ReadIntent::Objects(append)) else {
+            return;
+        };
         if !append {
             self.databases.objects.clear();
             self.databases.object_next = None;
@@ -128,15 +138,15 @@ impl Shell {
             self.databases.read_loading = false;
         }
     }
-    fn resume_database_object_read(&mut self) {
+    fn resume_database_read(&mut self) {
         if self.databases.batch_scanning {
             return;
         }
-        let Some((id, append)) = self.databases.pending_object_read.clone() else {
+        let Some((id, intent)) = self.databases.pending_read.clone() else {
             return;
         };
         if self.databases.selected.as_deref() != Some(id.as_str()) {
-            self.databases.pending_object_read = None;
+            self.databases.pending_read = None;
             self.databases.read_loading = false;
         } else if self
             .databases
@@ -144,22 +154,35 @@ impl Shell {
             .iter()
             .any(|source| source.id.as_str() == id)
         {
-            self.load_database_objects(append);
+            match intent {
+                ReadIntent::Objects(append) => self.load_database_objects(append),
+                ReadIntent::Relationships { ids, append } => {
+                    self.load_database_relations(ids, append)
+                }
+            }
         } else if self.databases.next.is_some() {
             // The selected source can be on a later inventory page. Never substitute the
             // first source just because a fresh first page does not contain its identity.
             self.load_databases(true);
         } else {
-            self.databases.pending_object_read = None;
+            self.databases.pending_read = None;
             self.databases.read_loading = false;
             self.databases.error =
                 Some("The selected database source is no longer visible in this scope.".into());
         }
     }
     fn load_database_relations(&mut self, ids: Vec<String>, append: bool) {
-        let (Some(source), Some(pin)) = (
-            self.databases.source().cloned(),
-            self.databases.read_pin.clone(),
+        let Some(source) = self.databases.source().cloned() else {
+            return;
+        };
+        self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
+        let n = self.databases.read_sequence;
+        let Some(pin) = self.database_read_pin(
+            &source,
+            ReadIntent::Relationships {
+                ids: ids.clone(),
+                append,
+            },
         ) else {
             return;
         };
@@ -168,8 +191,6 @@ impl Shell {
             self.databases.relation_next = None;
             self.databases.relation_ids = ids.clone();
         }
-        self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
-        let n = self.databases.read_sequence;
         let mut body = json!({"scope":self.databases.scope(),"views":{"kind":"Pinned","pinId":pin},"connectionId":source.id,"objectIds":ids,"page":{"limit":100}});
         if let Some(cursor) = self.databases.relation_next.clone().filter(|_| append) {
             body["page"]["cursor"] = json!(cursor);
@@ -274,21 +295,12 @@ impl Shell {
             .collect::<Vec<_>>();
         let mut actions = Vec::new();
         let availability = self.online();
-        let online = availability.is_ok();
-        eframe::egui::ScrollArea::vertical()
-            .id_salt(("database-screen", self.databases.project.clone()))
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if let Err(reason) = &availability {
-                    crate::widgets::state_block(
-                        ui,
-                        &crate::widgets::ViewState::Offline {
-                            reason: reason.clone(),
-                        },
-                    );
-                }
-                self.databases.ui(ui, online, &projects, &mut actions)
-            });
+        self.databases.ui(
+            ui,
+            availability.as_ref().map(|_| ()).map_err(String::as_str),
+            &projects,
+            &mut actions,
+        );
         for action in actions {
             self.database_action(action);
         }
@@ -308,7 +320,7 @@ impl Shell {
             },
             Action::ClearKey => self.databases.generated_key = None,
             Action::Refresh => {
-                self.databases.pending_object_read = None;
+                self.databases.pending_read = None;
                 self.databases.read_loading = false;
                 self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
                 self.databases.view = None;
@@ -319,8 +331,13 @@ impl Shell {
                 self.load_databases(false);
             }
             Action::More => self.load_databases(true),
-            Action::New => self.databases.draft = Some(Draft::new(self.databases.project.clone())),
+            Action::New => {
+                self.databases.draft = Some(Draft::new(self.databases.project.clone()));
+                self.databases.tab = 2;
+            }
             Action::Edit(id) => {
+                self.database_action(Action::Select(id.clone()));
+                self.databases.tab = 2;
                 self.databases.draft = self
                     .databases
                     .connections
@@ -329,7 +346,8 @@ impl Shell {
                     .and_then(|s| Draft::edit(s, self.databases.project.clone()))
             }
             Action::Select(id) => {
-                self.databases.pending_object_read = None;
+                self.databases.tab = 0;
+                self.databases.pending_read = None;
                 self.databases.read_loading = false;
                 self.databases.selected = Some(id);
                 self.databases.view = None;
@@ -342,7 +360,10 @@ impl Shell {
                 self.load_database_objects(false);
             }
             Action::Save => self.save_database(),
-            Action::CancelDraft => self.databases.draft = None,
+            Action::CancelDraft => {
+                self.databases.draft = None;
+                self.databases.tab = 0;
+            }
             Action::PickDatabase => {
                 if let Some(path) = self.dialogs.pick_files().first()
                     && let Some(d) = self.databases.draft.as_mut()
@@ -387,10 +408,12 @@ impl Shell {
                 }
             }
             Action::Objects(append) => {
+                self.databases.tab = 0;
                 self.databases.object_id = None;
                 self.load_database_objects(append);
             }
             Action::Endpoint(id) => {
+                self.databases.tab = 0;
                 self.databases.object_id = Some(id);
                 self.databases.parent = None;
                 self.databases.kind.clear();
@@ -402,11 +425,15 @@ impl Shell {
                 self.databases.focus_object = true;
             }
             Action::Children(id) => {
+                self.databases.tab = 0;
                 self.databases.object_id = None;
                 self.databases.parent = Some(id);
                 self.load_database_objects(false);
             }
-            Action::Relations(ids, append) => self.load_database_relations(ids, append),
+            Action::Relations(ids, append) => {
+                self.databases.tab = 1;
+                self.load_database_relations(ids, append);
+            }
             Action::ConfirmOutcome => self.confirm_outcomes(),
         }
     }
@@ -419,7 +446,7 @@ impl Shell {
                     Ok((OperationResult::SchemasConnections { value }, _)) => {
                         if self.databases.batch_scanning {
                             self.scan_database_batch(value);
-                            self.resume_database_object_read();
+                            self.resume_database_read();
                             return None;
                         }
                         if !append {
@@ -429,7 +456,7 @@ impl Shell {
                         self.databases.next =
                             value.next_cursor.filter(|_| value.has_more).map(|s| s.0);
                         self.databases.loaded = true;
-                        self.resume_database_object_read();
+                        self.resume_database_read();
                     }
                     Ok((other, _)) => {
                         self.databases.error =
@@ -437,7 +464,7 @@ impl Shell {
                     }
                     Err(e) => {
                         self.databases.error = Some(e.describe());
-                        if self.databases.pending_object_read.take().is_some() {
+                        if self.databases.pending_read.take().is_some() {
                             self.databases.read_loading = false;
                         }
                         // Only the inventory scan owns batch cancellation. An unrelated
@@ -567,6 +594,16 @@ impl Shell {
                                 ))
                                 .then(|| value.id.as_str().into());
                                 self.databases.draft = None;
+                                self.databases.tab = 0;
+                                self.databases.view = None;
+                                self.databases.read_pin = None;
+                                self.databases.objects.clear();
+                                self.databases.relations.clear();
+                                self.databases.selected_object = None;
+                                self.databases.pending_read = None;
+                                self.databases.read_loading = false;
+                                self.databases.read_sequence =
+                                    self.databases.read_sequence.wrapping_add(1);
                             }
                             self.databases.notice = Some("Database source change recorded.".into());
                             self.databases.error = None;

@@ -7,7 +7,7 @@ use devworks_core::protocol::data::CoverageState;
 use serde_json::json;
 
 fn request(engine: &str, endpoint: &str) -> MetadataRequest {
-    MetadataRequest {connection_id:Id::new("metadata-fixture").unwrap(),config:serde_json::from_value(json!({"name":"Isolated metadata fixture","engine":engine,"endpoint":endpoint,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":["meta_large_default","meta_oversized_definition"],"writesEnabled":false,"enabled":true,"authentication":"Password","username":"metadata_reader","tls":"LoopbackPlaintext"})).unwrap(),password:Some(Secret::new("devworks_metadata_reader")),ca_certificate:None,test_only:false,limits:MetadataLimits::default(),cancellation:Default::default()}
+    MetadataRequest {connection_id:Id::new("metadata-fixture").unwrap(),config:serde_json::from_value(json!({"name":"Isolated metadata fixture","engine":engine,"endpoint":endpoint,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":["meta_large_default","meta_oversized_definition","meta_large_enum","meta_long_comment","meta_expression_parent","meta_many_parameters"],"writesEnabled":false,"enabled":true,"authentication":"Password","username":"metadata_reader","tls":"LoopbackPlaintext"})).unwrap(),password:Some(Secret::new("devworks_metadata_reader")),ca_certificate:None,test_only:false,limits:MetadataLimits::default(),cancellation:Default::default()}
 }
 fn qualify(engine: &str, var: &str) {
     let endpoint = std::env::var(var).expect("explicit isolated fixture endpoint is required");
@@ -866,4 +866,164 @@ fn native_postgres_oversized_multibyte_view_retains_parent_and_partial_coverage(
             .as_ref()
             .is_none_or(|p| snapshot.objects.iter().any(|parent| &parent.key == p))
     }));
+}
+
+fn boundary_snapshot(engine: &str, variable: &str, pattern: &str) -> MetadataSnapshot {
+    let endpoint = std::env::var(variable).unwrap();
+    let mut req = request(engine, &endpoint);
+    req.config.include_patterns = serde_json::from_value(json!([pattern])).unwrap();
+    req.config.exclude_patterns = serde_json::from_value(json!([])).unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(NetworkMetadataReader.read(req))
+        .unwrap()
+}
+fn oversized_mysql_view(engine: &str, variable: &str) {
+    let snapshot = boundary_snapshot(engine, variable, "meta_oversized_definition");
+    let view = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "View")
+        .expect("bounded view parent retained");
+    let column = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Column")
+        .unwrap();
+    assert_eq!(column.parent_key.as_ref(), Some(&view.key));
+    assert!(view.metadata.definition_sql.is_none());
+    assert!(matches!(view.coverage.state, CoverageState::Partial));
+    assert!(matches!(snapshot.coverage.state, CoverageState::Partial));
+}
+#[test]
+#[ignore = "explicit isolated MySQL multibyte view"]
+fn native_metadata_boundary_mysql_view_parent() {
+    oversized_mysql_view("MySql", "DEVWORKS_METADATA_MYSQL");
+}
+#[test]
+#[ignore = "explicit isolated MariaDB multibyte view"]
+fn native_metadata_boundary_mariadb_view_parent() {
+    oversized_mysql_view("MariaDb", "DEVWORKS_METADATA_MARIADB");
+}
+#[test]
+#[ignore = "explicit isolated PostgreSQL expression index"]
+fn native_metadata_boundary_postgres_expression_index() {
+    let snapshot = boundary_snapshot(
+        "Postgres",
+        "DEVWORKS_METADATA_POSTGRES",
+        "meta_expression_parent",
+    );
+    let index = snapshot.objects.iter().find(|o| o.kind == "Index").unwrap();
+    assert!(
+        index.metadata.column_names.0.is_empty(),
+        "expressions are not column names"
+    );
+    assert!(index.metadata.definition_sql.as_ref().unwrap().0.len() > 256);
+    assert!(matches!(index.coverage.state, CoverageState::Partial));
+    assert!(
+        index
+            .coverage
+            .gaps
+            .iter()
+            .any(|g| g.as_str() == "metadata_expression_index_columns")
+    );
+}
+#[test]
+#[ignore = "explicit isolated PostgreSQL long catalog comment"]
+fn native_metadata_boundary_postgres_comment() {
+    let snapshot = boundary_snapshot(
+        "Postgres",
+        "DEVWORKS_METADATA_POSTGRES",
+        "meta_long_comment",
+    );
+    let table = snapshot.objects.iter().find(|o| o.kind == "Table").unwrap();
+    assert_eq!(
+        table.metadata.comment.as_ref().unwrap().0.chars().count(),
+        65536
+    );
+    assert!(matches!(table.coverage.state, CoverageState::Partial));
+}
+#[test]
+#[ignore = "explicit isolated PostgreSQL large enum definition"]
+fn native_metadata_boundary_postgres_enum_definition() {
+    let snapshot = boundary_snapshot("Postgres", "DEVWORKS_METADATA_POSTGRES", "meta_large_enum");
+    let kind = snapshot.objects.iter().find(|o| o.kind == "Type").unwrap();
+    assert_eq!(
+        kind.metadata
+            .definition_sql
+            .as_ref()
+            .unwrap()
+            .0
+            .chars()
+            .count(),
+        65536
+    );
+    assert!(matches!(kind.coverage.state, CoverageState::Partial));
+}
+fn large_mysql_enum(engine: &str, variable: &str) {
+    let snapshot = boundary_snapshot(engine, variable, "meta_large_enum");
+    let column = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Column")
+        .unwrap();
+    assert_eq!(
+        column
+            .metadata
+            .data_type
+            .as_ref()
+            .unwrap()
+            .0
+            .chars()
+            .count(),
+        4096
+    );
+    assert!(matches!(column.coverage.state, CoverageState::Partial));
+}
+#[test]
+#[ignore = "explicit isolated MySQL large enum type"]
+fn native_metadata_boundary_mysql_enum_type() {
+    large_mysql_enum("MySql", "DEVWORKS_METADATA_MYSQL");
+}
+#[test]
+#[ignore = "explicit isolated MariaDB large enum type"]
+fn native_metadata_boundary_mariadb_enum_type() {
+    large_mysql_enum("MariaDb", "DEVWORKS_METADATA_MARIADB");
+}
+
+fn many_parameters(engine: &str, variable: &str) {
+    let snapshot = boundary_snapshot(engine, variable, "meta_many_parameters");
+    let routine = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Procedure")
+        .unwrap();
+    assert_eq!(routine.metadata.parameters.0.len(), 128);
+    assert_eq!(routine.metadata.parameters.0[0].ordinal.get(), 1);
+    assert_eq!(routine.metadata.parameters.0[127].ordinal.get(), 128);
+    assert!(matches!(routine.coverage.state, CoverageState::Partial));
+    assert!(
+        routine
+            .coverage
+            .gaps
+            .iter()
+            .any(|g| g.as_str() == "metadata_item_limit")
+    );
+}
+#[test]
+#[ignore = "explicit isolated MySQL129-parameter routine"]
+fn native_metadata_boundary_mysql_many_parameters() {
+    many_parameters("MySql", "DEVWORKS_METADATA_MYSQL");
+}
+#[test]
+#[ignore = "explicit isolated MariaDB129-parameter routine"]
+fn native_metadata_boundary_mariadb_many_parameters() {
+    many_parameters("MariaDb", "DEVWORKS_METADATA_MARIADB");
+}
+#[test]
+#[ignore = "explicit isolated SQLServer129-parameter routine"]
+fn native_sql_server_many_parameters_publish_bounded_partial() {
+    many_parameters("SqlServer", "DEVWORKS_METADATA_SQLSERVER");
 }

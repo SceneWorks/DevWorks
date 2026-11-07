@@ -399,3 +399,43 @@ publication and Partial coverage for that same multibyte view, plus the original
 network workflow. Workspace/all-target strict checks pass44.57s and0.49s after the new
 native case. The fixture changes only disposable DDL; no source rows, real credentials,
 OS trust or learned inference are used. Fresh exact-head review and CI are required.
+
+## Fourth review and approved native layout (acceptance pending)
+
+Actual MySQL/MariaDB multibyte views reproduce the same missing-parent boundary;
+PostgreSQL expression indexes also reproduce invalid bounded column labels. Expressions
+now remain in definitionSql; columnNames contains actual column identities and explicitly
+reports partial expression-column coverage. MySQL/MariaDB retain bounded identity-only
+parents when oversized payload is removed. Seven actual regressions also cover long
+PostgreSQL comments/enum definitions and long MySQL/MariaDB enum type text: all fail on
+the prior implementation0.09s. An initial2000-label MariaDB setup exceeds that server's
+table-definition capacity; it is excluded and replaced with a valid200-label fixture.
+
+Further actual129-parameter procedures fail on MySQL/MariaDB/SQLServer0.09s, and three
+native SQLite cases fail for long identifiers/types and129-column index metadata0.05s.
+One shared adapter metadata builder now applies the existing character/item contracts
+before decoding, with explicit Partial gaps. Original object/parent identities remain
+exact even when their display text is bounded. Every SQLite column remains retained;
+index/parameter collections expose their bounded prefix and coverage gap. Definition
+fragments remain metadata and are never executed. All40 real-server cases pass0.67s,
+all10 SQLite cases0.03s, and all5 real production Engine cases20.04s. A fresh isolated
+SQLServer fixture passes8 adapter cases plus1 production Engine case, then is removed;
+its local arm64/nativeX86=false result still requires fresh supported-x86 CI. The MySQL
+routine fixture uses static DDL: that server refuses CREATE PROCEDURE via PREPARE.
+
+The earlier registry-only sidebar removal was incorrect: the approved design requires
+Database sources on the right. The declaration is restored and the real source manager
+now uses the standard native sidebar, with Schema/Relationships/Access subviews. Schema
+owns object exploration, Relationships owns retained-edge exploration, Access owns the
+editor and saved permission projection. Source edits clear revoked read state, and an
+unsaved editor restores its Access tab. The original approved-design invariant and all
+shell geometry/offline checks stay intact.
+
+Direct Relationships navigation now shares the object's bounded capture-refresh owner.
+A controlled missing-lease relationship read fails before correction6.83s, then resumes
+its same source/intent after one fresh capture. This uses the same gateway and authority
+checks, without requiring a preliminary object search. All11 native database UI cases
+pass39.13s, all40 desktop unit cases5.50s, and all25 shell cases37.95s. Final strict
+workspace/all-target checks pass16.61s. Fresh exact-head review, platform CI, actual-x86,
+merge and full retained-source acceptance remain gates. DW139's older Windows Help event
+is still unattributed and is not declared fixed by these database changes.
