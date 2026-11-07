@@ -1,4 +1,5 @@
 //! Durable immutable preparation. Execution and its physical effects share this owner.
+pub(super) mod candidates;
 pub(super) mod guard;
 mod schema;
 #[cfg(test)]

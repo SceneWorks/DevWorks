@@ -71,6 +71,17 @@ All 31 project-storage cases pass (26.52 seconds), with strict workspace/all-tar
 checks (42.28 seconds). This persists review evidence; it does not enable the row
 guard or execute the unimplemented logical purge.
 
+The native repository now exposes a read-only candidate snapshot to the classifier.
+Primary-key tuples use the exact guard encoding; full row content uses typed,
+length-delimited hashing, including binary cells. Only table names and digests
+leave the reader. Two scoped selection cases pass (1.43 seconds): changing another
+project leaves P's snapshot unchanged, while changing P's private title without a
+revision bump changes the snapshot. A real immutable allocation replay guard accepts
+the candidate key hash and still refuses ordinary deletion after rollback
+(0.99 seconds). Strict workspace/all-target checks pass (17.56 seconds).
+Candidate types deliberately carry no action or permit; mixed-owner classification
+and the guarded logical executor remain required.
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view

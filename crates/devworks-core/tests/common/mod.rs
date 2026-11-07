@@ -1944,6 +1944,12 @@ impl RouterRepository for Unsupported {
     }
 }
 impl ProjectRead for Unsupported {
+    fn purge_candidates(
+        &self,
+        _: &ProjectId,
+    ) -> Result<Option<ProjectPurgeCandidates>, StorageError> {
+        nope()
+    }
     fn managed_file_recovery(
         &self,
         _: &str,

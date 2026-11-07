@@ -2058,6 +2058,50 @@ fn purge_row_witnesses_survive_restart_bind_the_review_and_refuse_duplicates_ato
 }
 
 #[test]
+fn purge_candidate_reader_hashes_full_scoped_rows_without_copying_keys_or_other_project_changes() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    let snapshot = || {
+        read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(&project("purge-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let original = snapshot();
+    assert!(original.rows.iter().any(|row| row.table == "projects"));
+    let encoded = serde_json::to_string(&original.rows).unwrap();
+    assert!(!encoded.contains("private project title"));
+    assert!(!encoded.contains("purge-a"));
+    h.raw()
+        .execute(
+            "UPDATE projects SET title='another project changed' WHERE id='purge-b'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(snapshot().digest, original.digest);
+    // Detect a full-row change even when no revision counter was advanced.
+    h.raw()
+        .execute(
+            "UPDATE projects SET title='new private project title' WHERE id='purge-a'",
+            [],
+        )
+        .unwrap();
+    let changed = snapshot();
+    assert_ne!(changed.digest, original.digest);
+    assert_eq!(changed.rows.len(), original.rows.len());
+    assert_eq!(changed.policy_digest, original.policy_digest);
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .purge_candidates(&project("missing-project")))
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
 fn purge_manifest_storage_refuses_stale_store_project_and_entry_fences_atomically() {
     let h = Harness::new();
     let store = h.store();

@@ -172,6 +172,21 @@ pub struct ProjectPurgeRowWitness {
     pub reason: ProjectPurgeRowReason,
 }
 
+/// A scoped planning candidate, deliberately without a deletion action or permit.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ProjectPurgeCandidate {
+    pub table: String,
+    pub key_digest: String,
+    pub row_digest: String,
+}
+#[derive(Clone, Debug)]
+pub struct ProjectPurgeCandidates {
+    pub project_id: ProjectId,
+    pub policy_digest: String,
+    pub digest: String,
+    pub rows: Vec<ProjectPurgeCandidate>,
+}
+
 #[derive(Clone, Debug)]
 /// Durable reviewed purge intent. Private source keys are never copied here.
 pub struct StoredProjectPurge {
@@ -244,6 +259,12 @@ pub struct ProjectManagedFileRecovery {
 }
 
 pub trait ProjectRead {
+    /// Snapshot exact candidate rows for the ownership classifier. This neither
+    /// classifies mixed owners/keepers nor grants permission to delete any row.
+    fn purge_candidates(
+        &self,
+        project: &ProjectId,
+    ) -> Result<Option<ProjectPurgeCandidates>, StorageError>;
     fn managed_file_recovery(
         &self,
         kind: &str,
