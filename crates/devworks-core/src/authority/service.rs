@@ -267,7 +267,7 @@ fn bound(
     }
 }
 
-fn decide_in(
+pub(crate) fn decide_in(
     s: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     request: &AuthorityRequest<'_>,

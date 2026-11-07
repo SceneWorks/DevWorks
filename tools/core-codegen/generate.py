@@ -41,12 +41,12 @@ SHARED = set('Id Revision Counter HoldRef Protocol CommandRequest QueryRequest R
              'QueryId RequestKey CorrelationId'.split())
 PROVIDER = set('Digest ArtifactRef SchemaRef TranscriptPage Attribution'.split())
 DATA = set('DataScope ViewSelection Coverage GitOid GraphPage RetrievalPage DeliveryBarrier DeliverySnapshot '
-           'ArtifactTags'.split())
+           'ArtifactTags Citation RepositorySnapshot ResolvedViewSet'.split())
 SUPPORT = set('Check Label Text Content Cursor PlanItems PlanFeatures Items NonEmpty Rows Page HistoryPage Limit '
               'Depth Port ByteLimit TokenBudget PathSet Url RelativePath Money SignedCounter PositiveCounter Finite Probability '
-              'DynamicJson SavedCommandInput DomainErrorCode DomainFault'.split())
+              'DynamicJson SavedCommandInput GraphText GraphUnitKey DomainErrorCode DomainFault'.split())
 # Hand-written support types that gate a member by schema revision themselves.
-GATED_SUPPORT = {'HistoryPage'}
+GATED_SUPPORT = {'HistoryPage', 'GraphPage'}
 PRIMITIVE = {'bool', 'i32', 'Option'}
 
 SPECIALIZED = {
@@ -118,7 +118,7 @@ def camel(s):
     return re.sub(r'_([a-z])', lambda m: m[1].upper(), s)
 
 
-def fields(fs, indent='    ', pub=True, since=None, one=(), schema=None):
+def fields(fs, indent='    ', pub=True, since=None, one=(), schema=None, strict=()):
     """`one`: members of an exactly-one choice (rendered without null); `schema`: extra keywords."""
     since = since or {}
     schema = schema or {}
@@ -131,14 +131,14 @@ def fields(fs, indent='    ', pub=True, since=None, one=(), schema=None):
                          'deserialize_with = "gated_member")]')
             lines.append(indent + f'#[schemars(with = "{rust(t[1:])}", extend("x-since" = {since[n]}{extra}))]')
         elif t.startswith('?'):
-            lines.append(indent + '#[serde(default, skip_serializing_if = "Option::is_none")]')
+            lines.append(indent + ('#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "gated_member")]' if n in strict or n in one else '#[serde(default, skip_serializing_if = "Option::is_none")]'))
             if n in one:
                 lines.append(indent + f'#[schemars(with = "{rust(t[1:])}")]')
         lines.append(indent + ('pub ' if pub else '') + f'{n}: {rust(t)},')
     return '\n'.join(lines)
 
 
-def choice(fs, one, since):
+def choice(fs, one, since, required_since=None):
     """`oneOf` of an exactly-one member choice: each alternative lists the full required set (in
     field order) with that member; one introduced later carries its `x-since`, so an earlier
     revision's document folds back to the plain required list."""
@@ -146,6 +146,14 @@ def choice(fs, one, since):
     for m in one:
         req = [camel(n) for n, t in fs.items() if not t.startswith('?') or n == m]
         alts.append({'required': req, **({'x-since': since[m]} if m in since else {})})
+    if required_since:
+        expanded=[]
+        for alt in alts:
+            boundary=min(required_since.values())
+            if alt.get('x-since',1)<boundary:expanded.append({**alt,'x-until':boundary})
+            req=alt['required']+[camel(n) for n in required_since if camel(n) not in alt['required']]
+            expanded.append({**alt,'required':req,'x-since':max(boundary,alt.get('x-since',1))})
+        alts=expanded
     return f'#[schemars(extend("oneOf" = {json.dumps(alts)}))]\n'
 
 
@@ -217,6 +225,10 @@ def revisioned(name, fs, since, rc, union_variants=None, variant_since=None):
         if len(arms) == 1 and len(union_variants) > 1:
             # One revisioned alternative among several: an `if let`, not a single-arm match.
             pattern, calls = arms[0].strip().split(' => ', 1)
+            single_gate = re.fullmatch(r'\{ if revision < (\d+) \{ (\*\w+ = None;) \} \}', calls)
+            if single_gate:
+                revision, clear = single_gate.groups()
+                return '\n'.join([head, f'        if let {pattern} = self && revision < {revision} {{ {clear} }}', '    }', '}'])
             return '\n'.join([head, f'        if let {pattern} = self {calls}', '    }', '}'])
         if len(arms) < len(union_variants):
             arms.append('            _ => {}')
@@ -228,6 +240,12 @@ def revisioned(name, fs, since, rc, union_variants=None, variant_since=None):
     if not body:
         return f'impl Revisioned for {name} {{\n    fn retain_revision(&mut self, _: u32) {{}}\n}}'
     return '\n'.join([head, *body, '    }', '}'])
+
+
+def required_input_revision(implementation, required):
+    if not required:return implementation
+    rules=''.join(f'if revision>={rev} && self.{name}.is_none(){{return Err("required current input member is absent: {name}".into());}}' for name,rev in required.items())
+    return implementation[:-1]+f'    fn check_revision(&self,revision:u32)->Result<(),String>{{{rules}Ok(())}}\n}}'
 
 
 def checks(fs, base='self.', indent='        '):
@@ -314,6 +332,11 @@ def operations():
                     fail('domain envelope selector must be /body/kind for ' + n)
                 every = {**d.get('fields', {}), **d.get('queryFields', {}), **d.get('commandFields', {})}
                 check_since(n, every, d.get('since', {}))
+                required = d.get('requiredSince', {})
+                if required:
+                    check_since(n, every, required)
+                    if not d.get('exactlyOne') or len(set(required.values())) != 1 or any(d.get('since', {}).get(member) != revision for member, revision in required.items()):
+                        fail(n + ': requiredSince must use its declared introduction revision in one choice boundary')
             else:
                 if o['inputSchema'] not in SPECIALIZED:
                     fail('unknown specialized envelope ' + o['inputSchema'])
@@ -514,10 +537,10 @@ def gen_family(fam, ops):
             since = {k: r for k, r in d.get('since', {}).items() if k in fs}
             one = d.get('exactlyOne', [])
             out += [f'/// `{o["operation"]}` {mode} input.',
-                    RECORD + (choice(fs, one, since) if one else '') + f'pub struct {ty} {{',
-                    fields(fs, since=since, one=one, schema=d.get('fieldSchema')), '}',
+                    RECORD + (choice(fs, one, since, d.get('requiredSince')) if one else '') + f'pub struct {ty} {{',
+                    fields(fs, since=since, one=one, schema=d.get('fieldSchema'), strict=d.get('strictOptional',())), '}',
                     f'impl Check for {ty} {{', '    fn check(&self) -> Result<(), String> {', checks(fs),
-                    '        Ok(())', '    }', '}', revisioned(ty, fs, since, RC), '']
+                    '        Ok(())', '    }', '}', required_input_revision(revisioned(ty, fs, since, RC), d.get('requiredSince',{})), '']
     out += [f'/// An admitted input of the `{fam["family"]}` family, built only for the selected operation and mode.',
             '#[derive(Clone, Debug)]', 'pub enum Input {']
     for o in ops:
@@ -583,7 +606,7 @@ def gen_results(ops):
             '    fn check_revision(&self, revision: u32) -> Result<(), String> {',
             '        match self {',
             *[f'            Self::{pascal(n)} {{ .. }} if revision < {DOMAIN_OPS[n]["introducedRevision"]} => Err("operation result predates its introduction".into()),' for n, _ in results if DOMAIN_OPS.get(n, {}).get('introducedRevision', 1) > 1],
-            *[f'            Self::{pascal(n)} {{ value }} => value.check_revision(revision),' for n, t in results if TYPES.get(t, {}).get('kind') == 'versioned'],
+            *[f'            Self::{pascal(n)} {{ value }} => value.check_revision(revision),' for n, t in results if TYPES.get(t, {}).get('kind') == 'versioned' or t == 'GraphPage'],
             '            _ => Ok(()),', '        }', '    }', '}', '',
             '/// Generic recorded decision. Outcome variants cannot mint human authority or turn an external',
             '/// uncertainty into success.',

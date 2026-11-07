@@ -82,6 +82,7 @@ pub mod helper;
 pub(crate) mod linking;
 pub mod overlay;
 pub mod paths;
+pub(crate) mod source;
 pub mod status;
 pub mod views;
 pub mod worker;
@@ -1072,6 +1073,7 @@ impl IndexCoordinator {
                     rev(1),
                 )));
             }
+            tx.graph().invalidate_graph_pins_for_view(&v.view_id)?;
             worker::retire_view(tx, &v)?;
             return Ok(DomainDecision::Applied {
                 result: OperationResult::IndexingRetireView {

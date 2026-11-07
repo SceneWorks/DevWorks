@@ -27,7 +27,197 @@ fn ordered(v: &Value, a: &str, b: &str) -> bool {
         _ => true,
     }
 }
+
+fn code_record(name: &str, v: &Value) -> Result<(), String> {
+    let number = |key: &str| v[key].as_str().and_then(|n| n.parse::<u64>().ok());
+    if name == "CodeSearchSelection" && v["mode"] != "Unified" {
+        require(
+            v["text"].as_str().is_some_and(|s| !s.trim().is_empty()),
+            "node search requires a name pattern",
+        )?;
+    }
+    if name == "CodeProperty" {
+        let (Some(offset), Some(total), Some(text)) = (
+            number("offset"),
+            number("totalBytes"),
+            v["jsonText"].as_str(),
+        ) else {
+            return Err("invalid property fragment".into());
+        };
+        let end = offset
+            .checked_add(text.len() as u64)
+            .ok_or("property offset overflow")?;
+        require(end <= total, "property fragment exceeds its value")?;
+        let next = v["nextOffset"].as_str().and_then(|n| n.parse::<u64>().ok());
+        require(
+            if end < total {
+                !text.is_empty() && next == Some(end)
+            } else {
+                next.is_none()
+            },
+            "property continuation mismatch",
+        )?;
+        if offset == 0 && end == total {
+            serde_json::from_str::<Value>(text).map_err(|_| "invalid complete property JSON")?;
+        }
+    }
+    if name == "CodeSourceText" {
+        let (Some(start), Some(end), Some(total), Some(text)) = (
+            number("startByte"),
+            number("endByte"),
+            number("totalBytes"),
+            v["text"].as_str(),
+        ) else {
+            return Err("invalid source fragment".into());
+        };
+        require(
+            start <= end && end <= total && end - start == text.len() as u64,
+            "source byte range mismatch",
+        )?;
+        require(
+            if total == 0 {
+                number("firstLine") == Some(0) && number("lastLine") == Some(0)
+            } else {
+                number("firstLine").is_some_and(|n| n > 0) && ordered(v, "firstLine", "lastLine")
+            },
+            "invalid source lines",
+        )?;
+        require(
+            present(v, "nodeStartLine") == present(v, "nodeEndLine")
+                && ordered(v, "nodeStartLine", "nodeEndLine"),
+            "invalid highlighted node range",
+        )?;
+    }
+    if name == "CodeSourceLocation" {
+        require(
+            ordered(v, "startLine", "endLine")
+                && present(v, "startByte") == present(v, "endByte")
+                && ordered(v, "startByte", "endByte"),
+            "invalid code location",
+        )?;
+    }
+    if name == "CodeImpactSummary" {
+        let total = ["criticalCount", "highCount", "mediumCount", "lowCount"]
+            .iter()
+            .try_fold(0u64, |sum, key| {
+                number(key).and_then(|n| sum.checked_add(n))
+            });
+        require(
+            total == number("totalAffected"),
+            "impact risk counts disagree",
+        )?;
+    }
+    if name == "CodeNode" {
+        require(unique(v, "properties"), "duplicate property fragment")?;
+    }
+    if matches!(name, "CodeSearchResult" | "CodeNodesResult")
+        && let Some(total) = number("total")
+    {
+        let rows = if name == "CodeSearchResult" {
+            "items"
+        } else {
+            "nodes"
+        };
+        require(
+            v[rows].as_array().is_some_and(|a| a.len() as u64 <= total),
+            "graph page exceeds total",
+        )?;
+    }
+    if matches!(name, "CodeNode" | "CodeSourceLocation" | "CodeEdge") {
+        for key in ["unitKey", "sourceUnitKey", "targetUnitKey", "producingUnit"] {
+            if let Some(unit) = v[key].as_str() {
+                require(
+                    !unit.contains('\\'),
+                    "graph unit keys use canonical separators",
+                )?;
+            }
+        }
+    }
+
+    if name == "CodeReadCoverage" {
+        let missing = v["unavailableRepositories"]
+            .as_array()
+            .ok_or("missing repository coverage rows")?;
+        let gaps = v["coverage"]["gaps"]
+            .as_array()
+            .ok_or("missing graph coverage gaps")?;
+        let mut ids = std::collections::HashSet::new();
+        require(
+            missing
+                .iter()
+                .all(|r| ids.insert(r["repositoryId"].as_str())),
+            "duplicate unavailable repository",
+        )?;
+        if v["coverage"]["state"] == "Complete" {
+            require(
+                missing.is_empty() && gaps.is_empty() && v["coverage"]["moreGaps"] == false,
+                "complete graph scope cannot hide missing repositories",
+            )?;
+        }
+        if v["coverage"]["state"] == "Partial" {
+            require(
+                !missing.is_empty() || !gaps.is_empty() || v["coverage"]["moreGaps"] == true,
+                "partial graph scope needs explicit omissions",
+            )?;
+        }
+    }
+    if name == "CodeModuleIdentity" {
+        require(
+            v["moduleName"]
+                .as_str()
+                .is_some_and(|s| !s.trim().is_empty()),
+            "module identity requires its actual name",
+        )?;
+    }
+    if name == "CodeModuleDrilldown" {
+        require(
+            v["hasMore"] == present(v, "nextCursor"),
+            "module drilldown continuation mismatch",
+        )?;
+        if let Some(total) = number("count") {
+            require(
+                v["nodes"]
+                    .as_array()
+                    .is_some_and(|rows| rows.len() as u64 <= total),
+                "module rows exceed observed count",
+            )?;
+        }
+    }
+    if name == "CodeModuleAnalysis" {
+        require(
+            (v["state"] == "Recorded") == present(v, "recorded"),
+            "only an actual recorded module analysis supplies summary or semantic results",
+        )?;
+        if v["state"] != "Recorded" {
+            require(
+                present(v, "reason"),
+                "unrecorded module analysis needs its actual reason",
+            )?;
+        }
+        if v["observedCoverage"]["state"] == "Unavailable" {
+            require(
+                v["observedNodeCounts"]
+                    .as_array()
+                    .is_some_and(|r| r.is_empty()),
+                "unavailable observed module counts are unknown",
+            )?;
+            for key in ["endpoints", "services", "tables"] {
+                require(
+                    !present(&v[key], "count")
+                        && v[key]["nodes"].as_array().is_some_and(|r| r.is_empty())
+                        && v[key]["hasMore"] == false,
+                    "unavailable module drilldown cannot invent zero totals or node references",
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
 pub fn record(name: &str, v: &Value) -> Result<(), String> {
+    if name.starts_with("Code") {
+        code_record(name, v)?;
+    }
+
     if name == "WorkRecord" {
         require(
             v["kind"] == "Feature" || !present(v, "budget"),
@@ -212,6 +402,40 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
             v["input"].is_object() && v["input"].get("kind").is_none(),
             "saved operation input is the closed argument object without operation kind",
         )?;
+    }
+    if name == "HelpSnapshot" {
+        require(
+            v["canGenerate"] == !present(v, "cannotGenerateReason"),
+            "Help generation permission needs an exact refusal reason",
+        )?;
+    }
+    if name == "HelpCapabilityMetadata" {
+        require(
+            v["available"] == !present(v, "unavailableReason"),
+            "Help capability availability needs an exact reason",
+        )?;
+    }
+    if matches!(name, "HelpPassage" | "HelpTopicPage") {
+        require(
+            v["hasMore"] == present(v, "nextCursor"),
+            "Help continuation mismatch",
+        )?;
+    }
+    if matches!(name, "HelpTopicSummary" | "HelpTopicPage") && v["availability"] != "Available" {
+        require(present(v, "reason"), "unavailable Help needs a reason")?;
+    }
+    if name == "HelpReadView" {
+        match v["kind"].as_str() {
+            Some("Available") => require(
+                v["topic"]["availability"] == "Available",
+                "available Help read needs an available topic",
+            )?,
+            Some("Unavailable") => require(
+                v["availability"] != "Available",
+                "unavailable Help cannot claim availability",
+            )?,
+            _ => {}
+        }
     }
     eval_record(name, v)?;
     match name {
@@ -399,6 +623,33 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
     Ok(())
 }
 pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
+    if op == "repositories.nodes" {
+        require(
+            present(v, "views") != present(v, "current")
+                && v.get("current").is_none_or(|v| v == true),
+            "repository nodes requires explicit or current views",
+        )?;
+    }
+
+    if op == "help.read" && present(v, "maxChars") {
+        require(
+            v["maxChars"]
+                .as_str()
+                .and_then(|n| n.parse::<u32>().ok())
+                .is_some_and(|n| (1..=65536).contains(&n)),
+            "Help passage limit is 1..65536 characters",
+        )?;
+    }
+    if op == "help.topic_for_screen" {
+        require(
+            present(v, "capabilityRevision") != present(v, "current"),
+            "Help screen query needs exactly one revision selector",
+        )?;
+    }
+    if op == "help.topic_for_screen" && present(v, "current") {
+        require(v["current"] == true, "Help current selector must be true")?;
+    }
+
     if op == "features.edit_plan" && present(v, "clearBudgetProposal") {
         require(
             v["clearBudgetProposal"] == true && !present(v, "budget"),
@@ -698,10 +949,22 @@ pub fn result(op: &str, v: &Value) -> Result<(), String> {
     if op.starts_with("code.") && op != "code.set_trust" || op == "repositories.nodes" {
         let kind = value["result"]["kind"].as_str().unwrap_or("");
         let allowed = match op {
-            "code.source" | "code.snippet" => kind == "Source",
-            "code.graph_schema" => kind == "Schema",
-            "code.graph_scope_status" => kind == "ScopeStatus",
-            _ => kind == "Nodes" || kind == "Graph",
+            "code.source" | "code.snippet" => matches!(kind, "Source" | "SourceText"),
+            "code.graph_schema" => matches!(kind, "Schema" | "SchemaDetails"),
+            "code.graph_scope_status" => matches!(kind, "ScopeStatus" | "ScopeDetails"),
+            "code.search" => matches!(kind, "Nodes" | "Graph" | "CodeSearch"),
+            "code.architecture" => matches!(kind, "Nodes" | "Graph" | "Architecture"),
+            "code.overview" => matches!(kind, "Nodes" | "Graph" | "RepositoryOverview"),
+            "code.nodes_by_file" | "repositories.nodes" => {
+                matches!(kind, "Nodes" | "Graph" | "CodeNodes")
+            }
+            "code.node_detail" => matches!(kind, "Nodes" | "Graph" | "NodeDetail"),
+            "code.impact" | "code.file_impact" => matches!(kind, "Nodes" | "Graph" | "Impact"),
+            "code.call_path" => matches!(kind, "Nodes" | "Graph" | "CallTrace"),
+            "code.data_lineage" => matches!(kind, "Nodes" | "Graph" | "Lineage"),
+            "code.consumers" | "code.publishers" => matches!(kind, "Nodes" | "Graph" | "Related"),
+            "code.repository_dependencies" => matches!(kind, "Nodes" | "Graph" | "Dependencies"),
+            _ => matches!(kind, "Nodes" | "Graph" | "CodeGraph"),
         };
         require(
             allowed,

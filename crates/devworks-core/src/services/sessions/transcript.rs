@@ -880,29 +880,36 @@ impl SessionWriter<'_> {
     ) -> Result<BatchOutcome, StorageError> {
         let ctx = ctx.clone();
         run_write(self.store, options, move |tx| {
-            let store = tx.store();
-            if &store.store_id != ctx.store_id() || store.restore_epoch != ctx.restore_epoch().get()
-            {
-                return Ok(BatchOutcome::Refused(BatchRefusal::Unauthorized(
-                    "StaleInvocation",
-                )));
-            }
-            // A writer may always recover the receipt of its own identical committed batch,
-            // even after its session closed or its authority was revoked.
-            if let Some(prior) = tx
-                .sessions()
-                .batch(&batch.batch.session_id, &batch.batch.batch_id)?
-                && prior.actor == *ctx.principal()
-                && prior.payload_digest == batch_digest(ctx.principal(), &batch)?
-            {
-                return Ok(BatchOutcome::Replayed(BatchReceipt::of(&prior)));
-            }
-            if let Some(refusal) = writer_refusal(tx, &ctx, &batch)? {
-                return Ok(BatchOutcome::Refused(refusal));
-            }
-            let actor = ctx.principal().clone();
-            append_session_batch(tx, &ctx, &actor, &batch, AppendPath::Runtime)
+            Self::append_in(tx, &ctx, &batch)
         })
+    }
+    /// Same host authorization and atomic batch append inside an existing fenced unit of work.
+    pub fn append_in(
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        batch: &SessionBatch,
+    ) -> Result<BatchOutcome, StorageError> {
+        let store = tx.store();
+        if &store.store_id != ctx.store_id() || store.restore_epoch != ctx.restore_epoch().get() {
+            return Ok(BatchOutcome::Refused(BatchRefusal::Unauthorized(
+                "StaleInvocation",
+            )));
+        }
+        // A writer may always recover the receipt of its own identical committed batch,
+        // even after its session closed or its authority was revoked.
+        if let Some(prior) = tx
+            .sessions()
+            .batch(&batch.batch.session_id, &batch.batch.batch_id)?
+            && prior.actor == *ctx.principal()
+            && prior.payload_digest == batch_digest(ctx.principal(), batch)?
+        {
+            return Ok(BatchOutcome::Replayed(BatchReceipt::of(&prior)));
+        }
+        if let Some(refusal) = writer_refusal(tx, ctx, batch)? {
+            return Ok(BatchOutcome::Refused(refusal));
+        }
+        let actor = ctx.principal().clone();
+        append_session_batch(tx, ctx, &actor, batch, AppendPath::Runtime)
     }
 }
 

@@ -1,0 +1,40 @@
+{
+  "scope": "DW52 changed domain readers; document QA only",
+  "readers": [
+    {
+      "stem": "domain-operation-contracts",
+      "layouts": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": 0
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": 0
+        }
+      ],
+      "localLinksChecked": 15
+    },
+    {
+      "stem": "domain-operation-reference",
+      "layouts": [
+        {
+          "width": 1440,
+          "overflow": false,
+          "brokenImages": 0
+        },
+        {
+          "width": 800,
+          "overflow": false,
+          "brokenImages": 0
+        }
+      ],
+      "qualifiedOperationRows": 359,
+      "localLinksChecked": 28
+    }
+  ],
+  "pageErrors": [],
+  "passed": true
+}

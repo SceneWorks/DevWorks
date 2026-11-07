@@ -315,7 +315,15 @@ impl Gateway<'_> {
                 return Ok(reply);
             }
         }
-        let answered = read_snapshot(self.store, &options, |snapshot| {
+        let mut read_options = options.clone();
+        if let Some(deadline) = handler.read_deadline_ms(&admitted) {
+            read_options.deadline_ms = Some(
+                read_options
+                    .deadline_ms
+                    .map_or(deadline, |host| host.min(deadline)),
+            );
+        }
+        let answered = read_snapshot(self.store, &read_options, |snapshot| {
             let stamp = snapshot.stamp().clone();
             if &stamp.store_id != ctx.store_id() || stamp.restore_epoch != ctx.restore_epoch().get()
             {
@@ -1726,6 +1734,9 @@ impl WriteTransaction for HandlerTx<'_> {
     fn evals(&mut self) -> &mut dyn crate::ports::storage::EvalRepository {
         self.inner.get_mut().evals()
     }
+    fn help(&mut self) -> &mut dyn crate::ports::storage::HelpRepository {
+        self.inner.get_mut().help()
+    }
     fn router(&mut self) -> &mut dyn crate::ports::storage::RouterRepository {
         self.inner.get_mut().router()
     }
@@ -1734,6 +1745,9 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn indexing(&mut self) -> &mut dyn crate::ports::storage::IndexRepository {
         self.inner.get_mut().indexing()
+    }
+    fn graph(&mut self) -> &mut dyn crate::ports::storage::GraphRepository {
+        self.inner.get_mut().graph()
     }
     fn knowledge(&mut self) -> &mut dyn crate::ports::storage::KnowledgeRepository {
         self.inner.get_mut().knowledge()

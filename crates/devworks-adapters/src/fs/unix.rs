@@ -5,7 +5,8 @@ use devworks_core::authority::destructive::{
     ResolveError,
 };
 use devworks_core::authority::reads::{
-    ReadRefusal, ReadRequest, VerifiedBytes, VerifiedFile, VerifiedReader,
+    ReadRefusal, ReadRequest, RewindRead, VerifiedBytes, VerifiedFile, VerifiedReader,
+    VerifiedRewindFile,
 };
 use std::ffi::{CStr, CString, OsStr};
 use std::fs::{File, OpenOptions};
@@ -112,6 +113,23 @@ fn refusal(e: &io::Error, dir: RawFd, name: &CStr) -> ReadRefusal {
     }
 }
 
+struct RewindFile {
+    file: io::Take<File>,
+    limit: u64,
+}
+impl Read for RewindFile {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.file.read(bytes)
+    }
+}
+impl RewindRead for RewindFile {
+    fn rewind(&mut self) -> io::Result<()> {
+        std::io::Seek::rewind(self.file.get_mut())?;
+        self.file.set_limit(self.limit);
+        Ok(())
+    }
+}
+
 impl VerifiedReader for NativeFilesystem {
     fn read(&self, req: &ReadRequest<'_>) -> Result<VerifiedBytes, ReadRefusal> {
         let (file, identity) = self.open_verified(req)?;
@@ -130,6 +148,17 @@ impl VerifiedReader for NativeFilesystem {
         })
     }
 
+    fn open_rewindable(&self, req: &ReadRequest<'_>) -> Result<VerifiedRewindFile, ReadRefusal> {
+        let (file, identity) = self.open_verified(req)?;
+        let limit = req.max_bytes.saturating_add(1);
+        Ok(VerifiedRewindFile {
+            reader: Box::new(RewindFile {
+                file: file.take(limit),
+                limit,
+            }),
+            identity: Some(identity),
+        })
+    }
     fn open(&self, req: &ReadRequest<'_>) -> Result<VerifiedFile, ReadRefusal> {
         let (file, identity) = self.open_verified(req)?;
         Ok(VerifiedFile {

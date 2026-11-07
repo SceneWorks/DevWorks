@@ -31,6 +31,12 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertIn('artifacts.save', names)
         carried = {o['operation']: generate.introduced_in(o) for _, o in generate.operations()}
         self.assertEqual({n for n, s in carried.items() if s}, {
+            'help.search', 'help.read', 'help.topic_for_screen', 'help.package_guides',
+            'repositories.nodes', 'code.search', 'code.architecture', 'code.dependency',
+            'code.impact', 'code.source', 'code.traverse', 'code.graph_scope_status', 'code.overview',
+            'code.nodes_by_file', 'code.node_detail', 'code.set_trust', 'code.file_impact',
+            'code.graph_schema', 'code.call_path', 'code.data_lineage', 'code.consumers',
+            'code.publishers', 'code.snippet', 'code.repository_dependencies',
             'artifacts.save', 'artifacts.list', 'history.events', 'history.work_lineage',
             'approvals.list', 'approvals.inspect', 'approvals.propose', 'approvals.record_human_decision',
             'approvals.review_queue', 'notifications.list', 'notifications.read',
@@ -65,7 +71,8 @@ class SchemaRevisionRules(unittest.TestCase):
             'features.prioritize', 'issues.prioritize', 'tasks.prioritize',
             'indexing.status', 'indexing.runs', 'indexing.refresh_overlay',
             'artifacts.read', 'git.pull_request', 'browser.sessions', 'browser.input',
-            'browser.upload', 'browser.console', 'browser.network'})
+            'browser.upload', 'browser.console', 'browser.network',
+            'help.search', 'help.read', 'help.topic_for_screen', 'help.package_guides'})
         self.assertEqual(carried['features.edit'], {2, 3})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2, 3})

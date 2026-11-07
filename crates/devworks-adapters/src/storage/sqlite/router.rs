@@ -339,6 +339,9 @@ macro_rules! router_reads {
             fn route_model(&self, id: &Id) -> Result<Option<StoredRouteModel>, StorageError> {
                 model(self.conn, id)
             }
+            fn connection_account_revision(&self, id: &Id) -> Result<Option<i64>, StorageError> {
+                super::connections::connection_account_revision(self.conn, id)
+            }
             fn connection(&self, id: &Id) -> Result<Option<StoredConnection>, StorageError> {
                 connection(self.conn, id)
             }

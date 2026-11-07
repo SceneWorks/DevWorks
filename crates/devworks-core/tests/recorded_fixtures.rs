@@ -296,7 +296,10 @@ fn check(case: &Fixture) -> Result<(), String> {
         "artifact-command-reply" => {
             dto::<ArtifactCommandReply>(raw, |v| s(validate_domain_reply(v)))
         }
-        "graph-page" => dto::<GraphPage>(raw, |v| s(v.validate())),
+        "graph-page" => dto::<GraphPage>(raw, |v| {
+            at_revision(v, revision)?;
+            s(v.validate())
+        }),
         "resolved-view-set" => dto::<ResolvedViewSet>(raw, |v| s(v.validate())),
         "retrieval-page" => dto::<RetrievalPage>(raw, |v| s(v.validate())),
         "delivery-barrier" => dto::<DeliveryBarrier>(raw, |v| s(v.validate())),
@@ -345,7 +348,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1605), 1605);
+    assert_eq!(run("domain-fixtures.json", 1785), 1785);
 }
 
 #[test]
@@ -425,8 +428,10 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // Git grouped coverage, retained Git links, browser provenance and artifact source reads
     // add 23 operation/mode/revision admissions. Two new eval operations bring the
     // revision-1 bindings to 361 and the complete revision/mode coverage to 498. Router catalog revision 3 adds one admission; route/pin/availability revision 3 add three more. DW13 adds eight result revisions and inspect_queue at3; DW109 adds21 related metadata revisions, for532 total. DW14 adds seven existing revision3 surfaces and two new revision3-only operations, for541. DW21 adds usage/status/override revision3 for544. Explicit connection billing authoring/query adds two revision3 admissions for546.
+    // Help adds four revision-3 queries; all twenty graph operations add revision 3.
+    // These add24 to546; fixture admission independently verifies the actual570 bindings.
     // Accepted DW89 adds history.events revision3.
-    assert_eq!(admitted.len(), 547);
+    assert_eq!(admitted.len(), 571);
 }
 
 #[test]
@@ -471,7 +476,7 @@ fn has_member(v: &Value, member: &str) -> bool {
 }
 
 /// Fail-closed revision readers: every `x-since` member of every specialized envelope schema is
-/// refused at the revision before the one that introduced it. Each conforming revision-N fixture
+/// refused at the latest registered revision before its introduction. Each conforming revision-N fixture
 /// carrying the member is replayed with its `schemaRevision` lowered (stripped, for revision 1).
 #[test]
 fn every_gated_envelope_member_is_refused_before_its_revision() {
@@ -523,11 +528,18 @@ fn every_gated_envelope_member_is_refused_before_its_revision() {
                     if admission::decode(selection, case.raw.as_bytes()).is_err() {
                         continue; // selected by another operation sharing the envelope
                     }
+                    let before = d
+                        .revisions
+                        .iter()
+                        .map(|r| u64::from(r.0))
+                        .filter(|r| *r < since)
+                        .max()
+                        .expect("a gated envelope has an earlier registered revision");
                     let mut earlier = value.clone();
                     let envelope = earlier.as_object_mut().unwrap();
                     envelope.remove("schemaRevision");
-                    if since - 1 > 1 {
-                        envelope.insert("schemaRevision".into(), (since - 1).into());
+                    if before > 1 {
+                        envelope.insert("schemaRevision".into(), before.into());
                     }
                     let refusal = admission::decode(selection, earlier.to_string().as_bytes())
                         .expect_err("an earlier revision must refuse the member");
@@ -535,7 +547,7 @@ fn every_gated_envelope_member_is_refused_before_its_revision() {
                         matches!(refusal.error, admission::AdmissionError::Decode(_)),
                         "{}: {member} at revision {} refused for the wrong reason: {}",
                         case.id,
-                        since - 1,
+                        before,
                         refusal.error
                     );
                     exercised += 1;
@@ -556,7 +568,19 @@ fn every_gated_envelope_member_is_refused_before_its_revision() {
             "artifact-query-request/tags",
             "artifact-query-request/workspace",
             "git-command-request/coveredWorkIds",
+            "graph-read-request/current",
+            "graph-read-request/depth",
+            "graph-read-request/internalModule",
+            "graph-read-request/line",
+            "graph-read-request/nodeKind",
+            "graph-read-request/repositoryId",
+            "graph-read-request/selection",
+            "index-command-request/expectedContentIdentity",
+            "index-command-request/expectedViewDigest",
+            "index-command-request/pinId",
             "index-command-request/ref",
+            "index-command-request/scope",
+            "index-command-request/unitKey",
             "query-request/newestFirst",
             "query-request/projectId"
         ]

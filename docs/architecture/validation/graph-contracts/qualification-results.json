@@ -1,0 +1,81 @@
+{
+  "base": "06ff92ac2e77472e38c185525fd8b4671893cff8",
+  "sourceCheckpoints": [
+    "719add63",
+    "c0bbc441",
+    "2b818a79",
+    "55937e46",
+    "6f2312a7",
+    "ff1ed43d"
+  ],
+  "helpComposition": [
+    "0b66b866",
+    "2181ea89",
+    "d1c08700"
+  ],
+  "sourceSha256": {
+    "tools/contracts-eval/domain-spec.json": "b9f06d0896132625710049f7aa1c52b182b074a089951127f91afc3253f4547b",
+    "tools/contracts-eval/build_domain_contracts.py": "1867c14d3833493e30dc8e8a063acf45789c9f91059a9db62a3207b79389cafb",
+    "tools/contracts-eval/src/data_delivery.rs": "df00eb9d6f18704c665232f6d9499cce634c1198e439fd7db8132696439ac169",
+    "tools/contracts-eval/src/domain_rules.rs": "46e22ed64be3e6141c7678e95a8103d907a419885578811ff8df0cfc1498f7f0",
+    "tools/contracts-eval/src/domain_support.rs": "95c1cbdaf20e90e50a6cd22f5c85b56ca6d88fbd5958d357ec9ef1975353f746",
+    "tools/contracts-eval/src/main.rs": "f48c477b3779141d2b46e37ab3e8159c3d0c09317b3f320d0123a25c2da42af5",
+    "tools/contracts-eval/graph_fixtures.py": "2556ee2e52cead972eba8edb4d2c967c5dad2d7b010dd3d6fabdb965912873b9",
+    "tools/contracts-eval/versioned_result.py": "534a4c6541e290b68231fc211939b9eb4cb0fd709c5a8ded24f1d3fee4c67417",
+    "tools/core-codegen/generate.py": "625710c9bc0aab9f0fbe2fef26254fb60993d56db075403882b7d704df38155a",
+    "crates/devworks-core/src/protocol/data.rs": "528f2518ca1b2ec33d27a84f457022f91d301ef9347859c685bbc97c6f69ce5b",
+    "crates/devworks-core/src/protocol/records.rs": "0f336426ddfeef8c63f596fb7b1b2afb3c0c338c5f3abcdaa64fc6c11a1a9804",
+    "crates/devworks-core/src/registry/mod.rs": "be2caee746c46e0c213816752ac83810f9aeb9d5eb9c5857c2c3feacdaf93951"
+  },
+  "nativeCore": {
+    "command": "cargo test --locked -p devworks-core --test graph_contracts --test help_projection --test recorded_fixtures --test registry --test schema_revisions",
+    "suites": {
+      "graph_contracts": 12,
+      "help_projection": 5,
+      "recorded_fixtures": 7,
+      "registry": 5,
+      "schema_revisions": 8
+    },
+    "passed": 37,
+    "failed": 0
+  },
+  "strictClippy": "passed: core lib and the five affected integration-test targets, -D warnings",
+  "generatorTests": 11,
+  "generatedZeroDriftFiles": 125,
+  "schemaFiles": 70,
+  "messageFixtures": 2084,
+  "domainMessageFixtures": 1755,
+  "domainNegativeFixtures": 468,
+  "scenarios": 12,
+  "scenarioSteps": 26,
+  "nativeRevisionModeAdmissions": 570,
+  "typedDomainRecords": 419,
+  "legacySchemaBytesUnchanged": 56,
+  "planCounts": {
+    "slices": 78,
+    "operationFamilies": 49,
+    "operations": 359,
+    "requirements": 377,
+    "requirementsByStatus": {
+      "Confirmed": 230,
+      "Proposed": 147
+    },
+    "inputSchemaCandidates": 359,
+    "inputSchemasPending": 0,
+    "sourceEntries": 558,
+    "retainedSourceEntries": 494,
+    "excludedSourceEntries": 64,
+    "capabilityAcceptanceGroups": 33,
+    "workloadSpecifications": 12,
+    "unownedOperations": 0,
+    "unownedRequirements": 0,
+    "unownedRetainedEntries": 0
+  },
+  "metadataOnlyBootstrap": "Declared schema and scope-filtered registered-repository metadata require real read stamp/reason; no fake view, observed/private facts, dependency fallback or invented graph totals. Actual current/exact data queries still need authorized resolved views.",
+  "noInference": true,
+  "allPassed": true,
+  "confidence": "High for current typed contract/projection/source traceability. Native GraphService/storage/UI/platform acceptance is separate.",
+  "moduleAnalysis": "Actual module identity, observed index counts/drill-downs and recorded semantic descriptions/provenance remain distinct. Missing producer/record is NotAnalyzed or Unavailable; no invented summaries or program totals.",
+  "scopeCoverage": "Graph-only Partial completion with required current coverage and per-repository omissions; retrieval enum unchanged. Repository Nodes scope mandatory at3, legacy1 resolved through actual host context.",
+  "trustScope": "Revision3 requires selected DataScope with optional retained caller pin; invalid provided pins never fall back. Legacy/current lifecycle witness checks belong to the native owner."
+}

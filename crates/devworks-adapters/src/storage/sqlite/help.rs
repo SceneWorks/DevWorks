@@ -1,0 +1,679 @@
+//! Offline Help: metadata-only pages, bounded Unicode passages and atomic generation publication.
+use super::conn::db;
+use super::repos::{Snapshot, Unit};
+use devworks_core::ports::packages::MAX_BUNDLE_BYTES;
+use devworks_core::ports::storage::*;
+use devworks_core::protocol::provider::ArtifactRef;
+use devworks_core::protocol::records::HelpProvenance;
+use devworks_core::protocol::{Check, Id, OperationId, Revision, RevisionDimension};
+use rusqlite::{Connection, OptionalExtension, Row, params};
+use serde_json::Value;
+use std::collections::HashSet;
+
+fn invalid(message: &str) -> StorageError {
+    StorageError::InvalidRecord(message.into())
+}
+fn corrupt(message: &str) -> StorageError {
+    StorageError::unavailable(Unavailable::Corrupt, message)
+}
+fn id(value: String) -> Result<Id, StorageError> {
+    Id::new(value).map_err(|_| corrupt("invalid Help identifier"))
+}
+fn json(value: &str) -> Result<Value, StorageError> {
+    serde_json::from_str(value).map_err(|_| corrupt("invalid Help JSON"))
+}
+fn digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+fn text(value: &str, min: usize, max: usize) -> bool {
+    !value.contains('\0') && (min..=max).contains(&value.chars().count())
+}
+fn page(limit: u16) -> Result<(), StorageError> {
+    if limit == 0 || limit > MAX_PAGE {
+        Err(invalid("Help page limit out of bounds"))
+    } else {
+        Ok(())
+    }
+}
+fn conflict(
+    kind: &'static str,
+    expected: i64,
+    current: i64,
+    dimension: RevisionDimension,
+) -> StorageError {
+    StorageError::conflict(
+        dimension,
+        kind,
+        Id::new("help").expect("static"),
+        Revision::new(expected.max(1)).expect("positive"),
+        Revision::new(current.max(1)).expect("positive"),
+    )
+}
+fn head(conn: &Connection) -> Result<StoredHelpHead, StorageError> {
+    let row = db(conn.query_row("SELECT revision,app_version,registry_revision,source_digest,generation_id,generation_operation_id,updated_at FROM help_head WHERE singleton=1",[],|r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get(6)?))))?;
+    Ok(StoredHelpHead {
+        revision: row.0,
+        app_version: row.1,
+        registry_revision: row.2,
+        source_digest: row.3,
+        generation_id: row.4.map(id).transpose()?,
+        generation_operation_id: row.5.map(id).transpose()?.map(OperationId),
+        updated_at_ms: row.6,
+    })
+}
+fn check_heads(
+    conn: &Connection,
+    help: i64,
+    registry: i64,
+) -> Result<StoredHelpHead, StorageError> {
+    if help < 1 || registry < 1 {
+        return Err(invalid("Help revisions must be positive"));
+    }
+    let current = head(conn)?;
+    if current.revision != help {
+        return Err(conflict(
+            "help",
+            help,
+            current.revision,
+            RevisionDimension::Source,
+        ));
+    }
+    let actual: i64 = db(conn.query_row(
+        "SELECT revision FROM package_registry WHERE singleton=1",
+        [],
+        |r| r.get(0),
+    ))?;
+    if actual != registry {
+        return Err(conflict(
+            "package_registry",
+            registry,
+            actual,
+            RevisionDimension::Registry,
+        ));
+    }
+    Ok(current)
+}
+fn operation(conn: &Connection, operation: &OperationId) -> Result<String, StorageError> {
+    let value: Option<(String, String)> = db(conn
+        .query_row(
+            "SELECT capability,state FROM operations WHERE id=?1",
+            [operation.0.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional())?;
+    match value {
+        Some((cap, state)) if cap == "help.generate_capability_docs" => Ok(state),
+        Some(_) => Err(invalid(
+            "Help generation requires a real help.generate_capability_docs operation",
+        )),
+        None => Err(StorageError::NotFound {
+            kind: "operation",
+            id: operation.0.as_str().into(),
+        }),
+    }
+}
+const TOPIC_COLUMNS: &str = "t.generation_id,t.id,t.version,t.title,t.content_digest,t.content_ref_json,t.provenance_json,t.related_operations_json,t.screen_ids_json,t.source_kind,t.package_id,t.manifest_digest,t.character_count,t.topic_revision,t.availability,t.reason";
+struct RawTopic {
+    generation_id: String,
+    id: String,
+    version: String,
+    title: String,
+    content_digest: String,
+    content_ref: Option<String>,
+    provenance: String,
+    related_operations: String,
+    screen_ids: String,
+    source_kind: String,
+    package_id: Option<String>,
+    manifest_digest: Option<String>,
+    character_count: i64,
+    topic_revision: i64,
+    availability: String,
+    reason: Option<String>,
+}
+fn topic_row(r: &Row<'_>) -> rusqlite::Result<RawTopic> {
+    Ok(RawTopic {
+        generation_id: r.get(0)?,
+        id: r.get(1)?,
+        version: r.get(2)?,
+        title: r.get(3)?,
+        content_digest: r.get(4)?,
+        content_ref: r.get(5)?,
+        provenance: r.get(6)?,
+        related_operations: r.get(7)?,
+        screen_ids: r.get(8)?,
+        source_kind: r.get(9)?,
+        package_id: r.get(10)?,
+        manifest_digest: r.get(11)?,
+        character_count: r.get(12)?,
+        topic_revision: r.get(13)?,
+        availability: r.get(14)?,
+        reason: r.get(15)?,
+    })
+}
+fn topics<P: rusqlite::Params>(
+    conn: &Connection,
+    tail: &str,
+    p: P,
+) -> Result<Vec<StoredHelpTopic>, StorageError> {
+    let mut stmt=db(conn.prepare_cached(&format!("SELECT {TOPIC_COLUMNS} FROM help_topics t JOIN help_generations g ON g.id=t.generation_id WHERE {tail}")))?;
+    let rows = db(db(stmt.query_map(p, topic_row))?.collect::<rusqlite::Result<Vec<_>>>())?;
+    rows.into_iter()
+        .map(|r| {
+            Ok(StoredHelpTopic {
+                generation_id: id(r.generation_id)?,
+                id: id(r.id)?,
+                version: r.version,
+                title: r.title,
+                content_digest: r.content_digest,
+                content_ref: r.content_ref.as_deref().map(json).transpose()?,
+                provenance: json(&r.provenance)?,
+                related_operations: serde_json::from_str(&r.related_operations)
+                    .map_err(|_| corrupt("invalid Help operation list"))?,
+                screen_ids: serde_json::from_str(&r.screen_ids)
+                    .map_err(|_| corrupt("invalid Help screen list"))?,
+                source_kind: r.source_kind,
+                package_id: r.package_id.map(id).transpose()?,
+                manifest_digest: r.manifest_digest,
+                character_count: r.character_count,
+                topic_revision: r.topic_revision,
+                availability: r.availability,
+                reason: r.reason,
+            })
+        })
+        .collect()
+}
+fn staged_topics(
+    conn: &Connection,
+    generation: &Id,
+    after: Option<&Id>,
+    limit: u16,
+) -> Result<Vec<StoredHelpTopic>, StorageError> {
+    page(limit)?;
+    topics(
+        conn,
+        "t.generation_id=?1 AND t.id>?2 ORDER BY t.id LIMIT ?3",
+        params![
+            generation.as_str(),
+            after.map_or("", Id::as_str),
+            i64::from(limit)
+        ],
+    )
+}
+fn validate_content(c: &StoredHelpContent) -> Result<(), StorageError> {
+    if !digest(&c.digest)
+        || c.byte_count > MAX_BUNDLE_BYTES
+        || c.character_count < 0
+        || c.character_count as u64 > c.byte_count
+        || c.byte_count > (c.character_count as u64).saturating_mul(4)
+        || c.indexed_bytes > c.byte_count
+        || c.indexed_bytes > MAX_HELP_INDEX_BYTES as u64
+        || (c.index_complete && c.indexed_bytes != c.byte_count)
+        || c.search_text.len() > MAX_HELP_INDEX_BYTES
+        || c.search_text.contains('\0')
+        || c.search_text != c.search_text.to_lowercase()
+        || c.offsets.is_empty()
+        || c.offsets.len() > MAX_HELP_CHECKPOINTS
+        || c.offsets.first()
+            != Some(&HelpOffset {
+                byte_offset: 0,
+                character_offset: 0,
+            })
+        || c.offsets.last()
+            != Some(&HelpOffset {
+                byte_offset: c.byte_count,
+                character_offset: c.character_count,
+            })
+    {
+        return Err(invalid("invalid bounded Help content projection"));
+    }
+    for pair in c.offsets.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        if b.byte_offset <= a.byte_offset
+            || b.character_offset <= a.character_offset
+            || b.byte_offset - a.byte_offset > HELP_CHECKPOINT_BYTES + 4
+            || (b.character_offset - a.character_offset) as u64 > b.byte_offset - a.byte_offset
+            || b.byte_offset - a.byte_offset
+                > ((b.character_offset - a.character_offset) as u64).saturating_mul(4)
+        {
+            return Err(invalid("invalid Help Unicode checkpoint"));
+        }
+    }
+    if serde_json::to_vec(&c.offsets)
+        .map_err(|_| invalid("invalid Help offsets"))?
+        .len()
+        > 32768
+    {
+        return Err(invalid("Help checkpoint map exceeds bound"));
+    }
+    Ok(())
+}
+fn load_content(
+    conn: &Connection,
+    digest: &str,
+) -> Result<Option<StoredHelpContent>, StorageError> {
+    let row=db(conn.query_row("SELECT byte_count,character_count,indexed_bytes,index_complete,search_text,offsets_json FROM help_contents WHERE digest=?1",[digest],|r|Ok((r.get::<_,i64>(0)?,r.get(1)?,r.get::<_,i64>(2)?,r.get(3)?,r.get(4)?,r.get::<_,String>(5)?))).optional())?;
+    row.map(|r| {
+        let c = StoredHelpContent {
+            digest: digest.into(),
+            byte_count: u64::try_from(r.0).map_err(|_| corrupt("negative Help content size"))?,
+            character_count: r.1,
+            indexed_bytes: u64::try_from(r.2).map_err(|_| corrupt("negative Help indexed size"))?,
+            index_complete: r.3,
+            search_text: r.4,
+            offsets: serde_json::from_str(&r.5).map_err(|_| corrupt("invalid Help offsets"))?,
+        };
+        validate_content(&c)?;
+        Ok(c)
+    })
+    .transpose()
+}
+macro_rules! help_reads {
+    ($ty:ty) => {
+        impl HelpRead for $ty {
+            fn help_head(&self) -> Result<StoredHelpHead, StorageError> {
+                head(self.conn)
+            }
+            fn help_generation_operation(&self, generation: &Id) -> Result<Option<OperationId>, StorageError> {
+                let operation: Option<String> = db(self.conn.query_row(
+                    "SELECT operation_id FROM help_generations WHERE id=?1 AND state='Published'",
+                    [generation.as_str()], |r| r.get(0)
+                ).optional())?;
+                operation.map(id).transpose().map(|value| value.map(OperationId))
+            }
+            fn help_drafts(&self, after: Option<&Id>, limit: u16) -> Result<Vec<StoredHelpDraft>, StorageError> {
+                page(limit)?;
+                let mut stmt = db(self.conn.prepare_cached(
+                    "SELECT id,operation_id FROM help_generations WHERE state='Draft' AND id>?1 ORDER BY id LIMIT ?2"
+                ))?;
+                let rows = db(db(stmt.query_map(
+                    params![after.map_or("", Id::as_str), i64::from(limit)],
+                    |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?))
+                ))?.collect::<rusqlite::Result<Vec<_>>>())?;
+                rows.into_iter().map(|(g,o)| Ok(StoredHelpDraft {
+                    generation_id: id(g)?, operation_id: OperationId(id(o)?)
+                })).collect()
+            }
+            fn help_topic(&self, generation: &Id, id: &Id) -> Result<Option<StoredHelpTopic>, StorageError> {
+                Ok(topics(self.conn, "g.state='Published' AND t.generation_id=?1 AND t.id=?2",
+                    params![generation.as_str(), id.as_str()])?.into_iter().next())
+            }
+            fn help_topics(&self, generation: &Id, filter: &HelpFilter, after: Option<&Id>, limit: u16) -> Result<Vec<StoredHelpTopic>, StorageError> {
+                page(limit)?;
+                if filter.query.as_ref().is_some_and(|q| !text(q,1,4096) || *q != q.to_lowercase())
+                    || filter.screen_id.as_ref().is_some_and(|s| !text(s,1,256))
+                {
+                    return Err(invalid("invalid Help filter"));
+                }
+                let mut tail = String::from("g.state='Published' AND t.generation_id=?1 AND t.id>?2");
+                if filter.query.is_some() { tail.push_str(" AND instr(t.title_search||char(10)||coalesce((SELECT c.search_text FROM help_contents c WHERE c.digest=t.content_key),''),?3)>0"); }
+                if filter.screen_id.is_some() { tail.push_str(" AND EXISTS(SELECT 1 FROM help_topic_screens s WHERE s.generation_id=t.generation_id AND s.topic_id=t.id AND s.screen_id=?4)"); }
+                if filter.package_id.is_some() { tail.push_str(" AND t.package_id=?5"); }
+                tail.push_str(" ORDER BY t.id LIMIT ?6");
+                topics(self.conn, &tail, params![generation.as_str(), after.map_or("",Id::as_str), filter.query, filter.screen_id, filter.package_id.as_ref().map(Id::as_str), i64::from(limit)])
+            }
+            fn help_content(&self,digest:&str)->Result<Option<StoredHelpContent>,StorageError>{load_content(self.conn,digest)}
+            fn help_content_reference(&self,digest:&str)->Result<Option<Value>,StorageError>{
+                let reference:Option<String>=db(self.conn.query_row("SELECT t.content_ref_json FROM help_topics t JOIN help_generations g ON g.id=t.generation_id JOIN artifact_versions v ON v.id=t.version_id JOIN artifacts a ON a.id=t.artifact_id JOIN blobs b ON b.digest=t.content_digest WHERE t.content_digest=?1 AND t.availability='Available' AND g.state='Published' AND a.state='Live' AND v.deleted_at IS NULL AND b.state='Present' ORDER BY t.generation_id,t.id LIMIT 1",[digest],|r|r.get(0)).optional())?;
+                reference.as_deref().map(json).transpose()
+            }
+            fn help_passage_source(&self,generation:&Id,id:&Id,offset:i64,chars:u32)->Result<Option<StoredHelpPassage>,StorageError>{
+                if offset<0||chars==0||chars>MAX_HELP_PASSAGE_CHARS {return Err(invalid("Help passage bounds invalid"));}
+                let Some(topic)=self.help_topic(generation,id)?.filter(|t|t.availability=="Available") else{return Ok(None);};
+                let c=load_content(self.conn,&topic.content_digest)?.ok_or_else(||corrupt("Help content projection missing"))?;
+                if offset>c.character_count {return Err(invalid("Help passage offset exceeds content"));}
+                let checkpoint=c.offsets.iter().rev().find(|p|p.character_offset<=offset).expect("initial offset").clone();
+                Ok(Some(StoredHelpPassage {content_ref:topic.content_ref.ok_or_else(||corrupt("Help reference missing"))?,content_digest:c.digest,byte_count:c.byte_count,character_count:c.character_count,checkpoint}))
+            }
+        }
+    };
+}
+help_reads!(Snapshot<'_>);
+help_reads!(Unit<'_>);
+
+struct DocumentRecords {
+    reference: Option<ArtifactRef>,
+    content: Option<String>,
+    provenance: String,
+    operations: String,
+    screens: String,
+}
+fn validate_document(
+    conn: &Connection,
+    document: &StoredHelpDocument,
+) -> Result<DocumentRecords, StorageError> {
+    let t = &document.topic;
+    if !text(&t.version, 1, 256)
+        || !text(&t.title, 1, 256)
+        || t.topic_revision < 1
+        || t.character_count < 0
+        || t.reason.as_ref().is_some_and(|r| !text(r, 0, 65536))
+    {
+        return Err(invalid("invalid Help document bounds"));
+    }
+    if !["Bundled", "Package", "Generated"].contains(&t.source_kind.as_str())
+        || !["Available", "Missing", "Stale", "Unavailable"].contains(&t.availability.as_str())
+        || (t.source_kind == "Package") != t.package_id.is_some()
+        || (t.source_kind == "Package") != t.manifest_digest.is_some()
+        || t.manifest_digest.as_ref().is_some_and(|d| !digest(d))
+    {
+        return Err(invalid("invalid Help source metadata"));
+    }
+    for values in [&t.related_operations, &t.screen_ids] {
+        let mut seen = HashSet::new();
+        for value in values {
+            if !text(value, 1, 256) || !seen.insert(value) {
+                return Err(invalid("invalid or duplicate Help association"));
+            }
+        }
+    }
+    let reference = if t.availability == "Available" {
+        let c = document
+            .content
+            .as_ref()
+            .ok_or_else(|| invalid("available Help requires content metadata"))?;
+        validate_content(c)?;
+        if c.digest != t.content_digest || c.character_count != t.character_count {
+            return Err(invalid("Help projection differs from captured source"));
+        }
+        let reference: ArtifactRef = serde_json::from_value(
+            t.content_ref
+                .clone()
+                .ok_or_else(|| invalid("available Help requires a real artifact"))?,
+        )
+        .map_err(|_| invalid("invalid Help artifact reference"))?;
+        reference.validate().map_err(invalid)?;
+        if reference.sha256.as_str() != t.content_digest
+            || reference.byte_length.get() != c.byte_count as i64
+        {
+            return Err(invalid("Help artifact reference differs from its body"));
+        }
+        let real:bool=db(conn.query_row("SELECT EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id JOIN blobs b ON b.digest=v.blob_digest WHERE v.id=?1 AND v.artifact_id=?2 AND v.blob_digest=?3 AND v.media_type=?4 AND v.deleted_at IS NULL AND a.state='Live' AND b.byte_count=?5 AND b.state='Present' AND json_extract(v.source_json,'$.source.helpIndexDigest')=?6)",params![reference.version_id.as_str(),reference.artifact_id.as_str(),reference.sha256.as_str(),reference.media_type,reference.byte_length.get(),c.commitment().map_err(|_|invalid("Help index commitment"))?],|r|r.get(0)))?;
+        if !real {
+            return Err(invalid(
+                "Help artifact reference is not a committed live version",
+            ));
+        }
+        let provenance: HelpProvenance = serde_json::from_value(t.provenance.clone())
+            .map_err(|_| invalid("invalid Help provenance"))?;
+        provenance
+            .check()
+            .map_err(|_| invalid("invalid Help provenance"))?;
+        if t.provenance["kind"].as_str() != Some(t.source_kind.as_str())
+            || t.provenance["contentDigest"].as_str() != Some(t.content_digest.as_str())
+            || (t.source_kind == "Package"
+                && (t.provenance["packageId"].as_str() != t.package_id.as_ref().map(Id::as_str)
+                    || t.provenance["manifestDigest"].as_str() != t.manifest_digest.as_deref()))
+        {
+            return Err(invalid("Help provenance differs from its source"));
+        }
+        Some(reference)
+    } else {
+        if t.content_ref.is_some()
+            || !t.provenance.is_null()
+            || document.content.is_some()
+            || t.character_count != 0
+            || (!t.content_digest.is_empty() && !digest(&t.content_digest))
+        {
+            return Err(invalid("unavailable Help must not claim verified content"));
+        }
+        None
+    };
+    Ok(DocumentRecords {
+        reference,
+        content: t
+            .content_ref
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|_| invalid("invalid Help reference JSON"))?,
+        provenance: t.provenance.to_string(),
+        operations: serde_json::to_string(&t.related_operations)
+            .map_err(|_| invalid("invalid Help operation list"))?,
+        screens: serde_json::to_string(&t.screen_ids)
+            .map_err(|_| invalid("invalid Help screen list"))?,
+    })
+}
+fn generation(conn: &Connection, id: &Id) -> Result<Option<(String, String)>, StorageError> {
+    db(conn
+        .query_row(
+            "SELECT state,operation_id FROM help_generations WHERE id=?1",
+            [id.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional())
+}
+// Verify backing at the head flip too: a staged artifact can have changed lifecycle since
+// its document was prepared. This reads indexed metadata, never guide bodies or files.
+fn references_live(conn: &Connection, generation: &Id) -> Result<bool, StorageError> {
+    db(conn.query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM help_topics t WHERE t.generation_id=?1 AND t.availability='Available' AND NOT EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id JOIN blobs b ON b.digest=v.blob_digest WHERE v.id=t.version_id AND v.artifact_id=t.artifact_id AND v.id=json_extract(t.content_ref_json,'$.versionId') AND a.id=json_extract(t.content_ref_json,'$.artifactId') AND v.blob_digest=t.content_digest AND v.blob_digest=json_extract(t.content_ref_json,'$.sha256') AND v.media_type=json_extract(t.content_ref_json,'$.mediaType') AND v.deleted_at IS NULL AND a.state='Live' AND b.byte_count=CAST(json_extract(t.content_ref_json,'$.byteLength') AS INTEGER) AND b.state='Present'))",
+        [generation.as_str()], |r| r.get(0)
+    ))
+}
+// Staging handles and output revisions are not source identity. Each digest was checked
+// against actual guide bytes before staging; a no-op preserves the published references.
+fn equal_topics(conn: &Connection, a: &Id, b: &Id) -> Result<bool, StorageError> {
+    let fields = "id,version,title,content_digest,provenance_json,related_operations_json,screen_ids_json,source_kind,package_id,manifest_digest,availability,reason,character_count";
+    db(conn.query_row(&format!("SELECT NOT EXISTS(SELECT {fields} FROM help_topics WHERE generation_id=?1 EXCEPT SELECT {fields} FROM help_topics WHERE generation_id=?2) AND NOT EXISTS(SELECT {fields} FROM help_topics WHERE generation_id=?2 EXCEPT SELECT {fields} FROM help_topics WHERE generation_id=?1)"),params![a.as_str(),b.as_str()],|r|r.get(0)))
+}
+impl HelpRepository for Unit<'_> {
+    fn set_help_generation_operation(
+        &mut self,
+        expected_help_revision: i64,
+        expected_registry_revision: i64,
+        op: &OperationId,
+    ) -> Result<StoredHelpHead, StorageError> {
+        check_heads(
+            self.conn,
+            expected_help_revision,
+            expected_registry_revision,
+        )?;
+        operation(self.conn, op)?;
+        db(self.conn.execute(
+            "UPDATE help_head SET generation_operation_id=?1,updated_at=?2 WHERE singleton=1",
+            params![op.0.as_str(), self.now],
+        ))?;
+        head(self.conn)
+    }
+    fn staged_help_topic(
+        &self,
+        generation: &Id,
+        id: &Id,
+    ) -> Result<Option<StoredHelpTopic>, StorageError> {
+        Ok(topics(
+            self.conn,
+            "t.generation_id=?1 AND t.id=?2",
+            params![generation.as_str(), id.as_str()],
+        )?
+        .into_iter()
+        .next())
+    }
+    fn staged_help_topics(
+        &self,
+        generation: &Id,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredHelpTopic>, StorageError> {
+        staged_topics(self.conn, generation, after, limit)
+    }
+    fn stage_help_document(
+        &mut self,
+        document: &StoredHelpDocument,
+    ) -> Result<StoredHelpTopic, StorageError> {
+        let DocumentRecords {
+            reference,
+            content,
+            provenance,
+            operations,
+            screens,
+        } = validate_document(self.conn, document)?;
+        let t = &document.topic;
+        let current = head(self.conn)?;
+        let op = current
+            .generation_operation_id
+            .ok_or_else(|| invalid("Help staging requires a generation operation claim"))?;
+        operation(self.conn, &op)?;
+        if let Some((state, owner)) = generation(self.conn, &t.generation_id)?
+            && (state != "Draft" || owner != op.0.as_str())
+        {
+            return Err(invalid(
+                "Help generation is published or belongs to another operation",
+            ));
+        }
+        if let Some(old) = self.staged_help_topic(&t.generation_id, &t.id)? {
+            let same_content = match &document.content {
+                Some(c) => load_content(self.conn, &c.digest)?.as_ref() == Some(c),
+                None => true,
+            };
+            return if old == *t && same_content {
+                Ok(old)
+            } else {
+                Err(StorageError::Duplicate {
+                    kind: "help_topic",
+                    id: t.id.as_str().into(),
+                })
+            };
+        }
+        db(self.conn.execute("INSERT INTO help_generations(id,operation_id,state) VALUES(?1,?2,'Draft') ON CONFLICT(id) DO NOTHING",params![t.generation_id.as_str(),op.0.as_str()]))?;
+        if let Some(c) = &document.content {
+            if let Some(old) = load_content(self.conn, &c.digest)? {
+                if old != *c {
+                    return Err(invalid("same Help content digest has different projection"));
+                }
+            } else {
+                db(self.conn.execute("INSERT INTO help_contents(digest,byte_count,character_count,indexed_bytes,index_complete,search_text,offsets_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![c.digest,c.byte_count as i64,c.character_count,c.indexed_bytes as i64,c.index_complete,c.search_text,serde_json::to_string(&c.offsets).map_err(|_|invalid("Help offsets JSON"))?]))?;
+            }
+        }
+        db(self.conn.execute("INSERT INTO help_topics(generation_id,id,version,title,content_digest,content_ref_json,artifact_id,version_id,provenance_json,related_operations_json,screen_ids_json,source_kind,package_id,manifest_digest,availability,reason,character_count,topic_revision,content_key,title_search) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",params![t.generation_id.as_str(),t.id.as_str(),t.version,t.title,t.content_digest,content,reference.as_ref().map(|r|r.artifact_id.as_str()),reference.as_ref().map(|r|r.version_id.as_str()),provenance,operations,screens,t.source_kind,t.package_id.as_ref().map(Id::as_str),t.manifest_digest,t.availability,t.reason,t.character_count,t.topic_revision,document.content.as_ref().map(|c|c.digest.as_str()),t.title.to_lowercase()]))?;
+        for screen in &t.screen_ids {
+            db(self.conn.execute(
+                "INSERT INTO help_topic_screens(generation_id,topic_id,screen_id) VALUES(?1,?2,?3)",
+                params![t.generation_id.as_str(), t.id.as_str(), screen],
+            ))?;
+        }
+        Ok(t.clone())
+    }
+    fn publish_help_generation(
+        &mut self,
+        expected_help_revision: i64,
+        expected_registry_revision: i64,
+        expected_operation: Option<&OperationId>,
+        new: &StoredHelpHead,
+        expected_topic_count: i64,
+    ) -> Result<StoredHelpHead, StorageError> {
+        let current = check_heads(
+            self.conn,
+            expected_help_revision,
+            expected_registry_revision,
+        )?;
+        if expected_operation.is_none()
+            || current.generation_operation_id.as_ref() != expected_operation
+            || new.generation_operation_id.as_ref() != expected_operation
+        {
+            return Err(invalid("Help generation operation claim changed"));
+        }
+        let op = expected_operation.expect("checked");
+        operation(self.conn, op)?;
+        if new.revision < 1
+            || !text(&new.app_version, 1, 256)
+            || !digest(&new.source_digest)
+            || new.registry_revision != expected_registry_revision
+            || new.updated_at_ms < 0
+            || expected_topic_count < 0
+        {
+            return Err(invalid("invalid Help publication head"));
+        }
+        let gen_id = new
+            .generation_id
+            .as_ref()
+            .ok_or_else(|| invalid("Help publication requires a generation"))?;
+        if let Some((_, owner)) = generation(self.conn, gen_id)?
+            && owner != op.0.as_str()
+            && current.generation_id.as_ref() != Some(gen_id)
+        {
+            return Err(invalid("Help draft belongs to another operation"));
+        }
+        let count: i64 = db(self.conn.query_row(
+            "SELECT count(*) FROM help_topics WHERE generation_id=?1",
+            [gen_id.as_str()],
+            |r| r.get(0),
+        ))?;
+        if count != expected_topic_count {
+            return Err(invalid("Help generation is incomplete"));
+        }
+        if !references_live(self.conn, gen_id)? {
+            return Err(invalid("Help generation artifact backing is unavailable"));
+        }
+        if let Some(published) = current.generation_id.as_ref()
+            && current.app_version == new.app_version
+            && current.registry_revision == new.registry_revision
+            && current.source_digest == new.source_digest
+        {
+            if !equal_topics(self.conn, published, gen_id)? {
+                return Err(invalid(
+                    "unchanged Help source identity has different content",
+                ));
+            }
+            if references_live(self.conn, published)? {
+                return Ok(current);
+            }
+            // Identical semantic content may still require fresh backing. Keep the topic's
+            // semantic revision, but publish the newly verified generation and its real refs.
+        }
+        if expected_help_revision.checked_add(1) != Some(new.revision) {
+            return Err(invalid("Help content revision must advance by one"));
+        }
+        if generation(self.conn, gen_id)?.is_some_and(|(state, _)| state != "Draft") {
+            return Err(invalid("published Help generations cannot be replaced"));
+        }
+        db(self.conn.execute("INSERT INTO help_generations(id,operation_id,state) VALUES(?1,?2,'Draft') ON CONFLICT(id) DO NOTHING",params![gen_id.as_str(),op.0.as_str()]))?;
+        db(self.conn.execute("UPDATE help_generations SET state='Published',app_version=?2,registry_revision=?3,source_digest=?4,help_revision=?5,published_at=?6 WHERE id=?1",params![gen_id.as_str(),new.app_version,new.registry_revision,new.source_digest,new.revision,new.updated_at_ms]))?;
+        db(self.conn.execute("UPDATE help_head SET revision=?1,app_version=?2,registry_revision=?3,source_digest=?4,generation_id=?5,generation_operation_id=?6,updated_at=?7 WHERE singleton=1",params![new.revision,new.app_version,new.registry_revision,new.source_digest,gen_id.as_str(),op.0.as_str(),new.updated_at_ms]))?;
+        head(self.conn)
+    }
+    fn discard_help_draft(
+        &mut self,
+        gen_id: &Id,
+        op: &OperationId,
+        limit: u16,
+    ) -> Result<bool, StorageError> {
+        page(limit)?;
+        let Some((state, owner)) = generation(self.conn, gen_id)? else {
+            return Ok(true);
+        };
+        if state != "Draft" || owner != op.0.as_str() {
+            return Err(invalid(
+                "only the owning operation's Help draft can be discarded",
+            ));
+        }
+        if !["ObservedComplete", "Failed", "CancelledBeforeDispatch"]
+            .contains(&operation(self.conn, op)?.as_str())
+        {
+            return Err(StorageError::Busy);
+        }
+        let retired = staged_topics(self.conn, gen_id, None, limit)?
+            .into_iter()
+            .map(|t| t.content_digest)
+            .collect::<Vec<_>>();
+        db(self.conn.execute("DELETE FROM help_topics WHERE generation_id=?1 AND id IN (SELECT id FROM help_topics WHERE generation_id=?1 ORDER BY id LIMIT ?2)",params![gen_id.as_str(),i64::from(limit)]))?;
+        for digest in retired {
+            db(self.conn.execute("DELETE FROM help_contents WHERE digest=?1 AND NOT EXISTS(SELECT 1 FROM help_topics WHERE content_key=?1)",[digest]))?;
+        }
+        let remains: bool = db(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM help_topics WHERE generation_id=?1)",
+            [gen_id.as_str()],
+            |r| r.get(0),
+        ))?;
+        if !remains {
+            db(self.conn.execute(
+                "DELETE FROM help_generations WHERE id=?1",
+                [gen_id.as_str()],
+            ))?;
+        }
+        Ok(!remains)
+    }
+}

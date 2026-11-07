@@ -3997,6 +3997,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",
@@ -4041,6 +4049,14 @@
               "inputSchema": "graph-read-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -4089,6 +4105,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",
@@ -4133,6 +4157,14 @@
               "inputSchema": "graph-read-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -4181,6 +4213,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",
@@ -4225,6 +4265,14 @@
               "inputSchema": "graph-read-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -4273,6 +4321,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",
@@ -4317,6 +4373,14 @@
               "inputSchema": "graph-read-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -4365,6 +4429,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",
@@ -4409,6 +4481,14 @@
               "inputSchema": "graph-read-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -4457,6 +4537,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "index-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -4501,6 +4589,14 @@
               "inputSchema": "graph-read-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -4549,6 +4645,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",
@@ -4593,6 +4697,14 @@
               "inputSchema": "graph-read-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -4641,6 +4753,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",
@@ -4685,6 +4805,14 @@
               "inputSchema": "graph-read-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -4733,6 +4861,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",
@@ -4779,6 +4915,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",
@@ -4823,6 +4967,14 @@
               "inputSchema": "graph-read-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "graph-read-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -16388,7 +16540,7 @@
             "pointer": "/kind",
             "equals": "help.search"
           },
-          "resultValueType": "Page<HelpTopic>",
+          "resultValueType": "HelpTopicPageResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -16400,11 +16552,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Entirely offline local search of version-matched authorized documentation; * browses visible topics. Cursor is bound to query, Help/registry/source revisions and visibility. Compact summaries do not read remote embeddings or mutate state.",
           "familyRules": "Version-matched searchable offline human/agent content. Deterministic capability docs do not require inference.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -16434,7 +16594,7 @@
             "pointer": "/kind",
             "equals": "help.read"
           },
-          "resultValueType": "HelpTopic",
+          "resultValueType": "HelpReadResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -16446,11 +16606,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Read a version-matched bounded Unicode-scalar passage (default 16384, maximum 65536 characters) under Help permission alone; no artifact-tool permission is required. Cursor binds topic/version/source digest and current visibility. Missing, stale or unavailable source is explicit. Legacy reads use actual published artifact references.",
           "familyRules": "Version-matched searchable offline human/agent content. Deterministic capability docs do not require inference.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -16480,7 +16648,7 @@
             "pointer": "/kind",
             "equals": "help.topic_for_screen"
           },
-          "resultValueType": "Page<HelpTopic>",
+          "resultValueType": "HelpTopicPageResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -16492,11 +16660,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Exactly one explicit capability revision or current:true; resolve current metadata in the same authorized snapshot, without requiring add-on tools. A stale explicit revision is visible, not silently replaced. Screen mappings are server-owned and paged.",
           "familyRules": "Version-matched searchable offline human/agent content. Deterministic capability docs do not require inference.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -16526,7 +16702,7 @@
             "pointer": "/kind",
             "equals": "help.package_guides"
           },
-          "resultValueType": "Page<HelpTopic>",
+          "resultValueType": "HelpTopicPageResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -16538,11 +16714,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Read verified local Help for the exact installed package version and manifest. Expose package/version/manifest provenance and explicit missing/stale/unavailable outcomes. No add-on or artifact-tool permission is required for authorized Help retrieval.",
           "familyRules": "Version-matched searchable offline human/agent content. Deterministic capability docs do not require inference.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -17128,11 +17312,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Exactly one of explicit views or current:true. Current resolves only the actual host context; unavailable own views never fall back to Published. Kind and internal module filters apply before counts/pagination; cursor binds authority and exact view set.",
           "familyRules": "Registered source identity and scope; removing index does not remove primary source or work history.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

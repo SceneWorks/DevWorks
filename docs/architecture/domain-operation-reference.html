@@ -82,7 +82,7 @@
 </tr>
 <tr>
 <td><code>features.edit_plan</code></td>
-<td><strong>Command</strong><br><code>featureId</code>: <code>RootId</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>plan</code>: <code>PlanDraft</code><br><code>budget</code>: <code>?FeatureBudgetInput</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><strong>Command</strong><br><code>featureId</code>: <code>RootId</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>plan</code>: <code>PlanDraft</code><br><code>budget</code>: <code>?FeatureBudgetInput</code><br><code>clearBudgetProposal</code>: <code>?bool</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
@@ -502,97 +502,97 @@
 </thead>
 <tbody><tr>
 <td><code>code.search</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Search&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Search&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.architecture</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Overview&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Overview&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.dependency</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Traverse&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Traverse&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.impact</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;NodeImpact&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;NodeImpact&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.source</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Source&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Source&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.traverse</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Traverse&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Traverse&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.graph_scope_status</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;ScopeStatus&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;ScopeStatus&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.overview</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Overview&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Overview&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.nodes_by_file</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;NodesByFile&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;NodesByFile&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.node_detail</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Node&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Node&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.set_trust</code></td>
-<td><strong>Command</strong><br><a href="contracts/index-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;SetTrust&#39;}</td>
+<td><strong>Command</strong><br><a href="contracts/index-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;SetTrust&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/index-command-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>MutationSummary</code></td>
 </tr>
 <tr>
 <td><code>code.file_impact</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;FileImpact&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;FileImpact&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.graph_schema</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Schema&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Schema&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.call_path</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Path&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Path&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.data_lineage</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;DataLineage&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;DataLineage&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.consumers</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Consumers&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Consumers&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.publishers</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Publishers&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Publishers&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.snippet</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Source&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;Source&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
 <td><code>code.repository_dependencies</code></td>
-<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;RepositoryDependencies&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/graph-read-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;RepositoryDependencies&#39;}<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/graph-read-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 </tbody></table>
@@ -2046,23 +2046,23 @@
 </thead>
 <tbody><tr>
 <td><code>help.search</code></td>
-<td><strong>Query</strong><br><code>query</code>: <code>Text</code><br><code>page</code>: <code>PageRequest</code></td>
-<td><code>Page&lt;HelpTopic&gt;</code></td>
+<td><strong>Query</strong><br><code>query</code>: <code>Text</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><code>HelpTopicPageResult</code></td>
 </tr>
 <tr>
 <td><code>help.read</code></td>
-<td><strong>Query</strong><br><code>topicId</code>: <code>Id</code><br><code>version</code>: <code>Label</code></td>
-<td><code>HelpTopic</code></td>
+<td><strong>Query</strong><br><code>topicId</code>: <code>Id</code><br><code>version</code>: <code>Label</code><br><code>cursor</code>: <code>?Cursor</code><br><code>maxChars</code>: <code>?PositiveCounter</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><code>HelpReadResult</code></td>
 </tr>
 <tr>
 <td><code>help.topic_for_screen</code></td>
-<td><strong>Query</strong><br><code>screenId</code>: <code>Id</code><br><code>capabilityRevision</code>: <code>Revision</code></td>
-<td><code>Page&lt;HelpTopic&gt;</code></td>
+<td><strong>Query</strong><br><code>screenId</code>: <code>Id</code><br><code>capabilityRevision</code>: <code>?Revision</code><br><code>current</code>: <code>?bool</code><br><code>page</code>: <code>?PageRequest</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><code>HelpTopicPageResult</code></td>
 </tr>
 <tr>
 <td><code>help.package_guides</code></td>
-<td><strong>Query</strong><br><code>packageId</code>: <code>Id</code><br><code>version</code>: <code>Label</code><br><code>page</code>: <code>PageRequest</code></td>
-<td><code>Page&lt;HelpTopic&gt;</code></td>
+<td><strong>Query</strong><br><code>packageId</code>: <code>Id</code><br><code>version</code>: <code>Label</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><code>HelpTopicPageResult</code></td>
 </tr>
 <tr>
 <td><code>help.generate_capability_docs</code></td>
@@ -2143,7 +2143,7 @@
 </tr>
 <tr>
 <td><code>repositories.nodes</code></td>
-<td><strong>Query</strong><br><code>repositoryId</code>: <code>Id</code><br><code>views</code>: <code>ViewSelection</code><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>repositoryId</code>: <code>Id</code><br><code>views</code>: <code>?ViewSelection</code><br><code>current</code>: <code>?bool</code><br><code>page</code>: <code>PageRequest</code><br><code>nodeKind</code>: <code>?Label</code><br><code>internalModule</code>: <code>?Content</code><br><code>scope</code>: <code>?DataScope</code><br><br><strong>Required when negotiated:</strong> <code>scope</code> at revision 3+<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
@@ -11709,6 +11709,1866 @@
 <tr>
 <td><code>quantity</code></td>
 <td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="codesearchmode">CodeSearchMode</h3>
+<p><code>RankedNodes</code>, <code>NodeList</code>, <code>Unified</code>.</p>
+<h3 id="codesearchselection">CodeSearchSelection</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>mode</code></td>
+<td><code>CodeSearchMode</code></td>
+</tr>
+<tr>
+<td><code>text</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>repositoryId</code></td>
+<td><code>?Id</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>nodeKind</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>internalModule</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codenodeselection">CodeNodeSelection</h3>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Node</code></td>
+<td><code>nodeId</code>: <code>Id</code></td>
+</tr>
+<tr>
+<td><code>Name</code></td>
+<td><code>name</code>: <code>Content</code><br><code>repositoryId</code>: <code>?Id</code></td>
+</tr>
+</tbody></table>
+<h3 id="codetracedirection">CodeTraceDirection</h3>
+<p><code>Inbound</code>, <code>Outbound</code>, <code>Both</code>.</p>
+<h3 id="codecallselection">CodeCallSelection</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>target</code></td>
+<td><code>CodeNodeSelection</code></td>
+</tr>
+<tr>
+<td><code>direction</code></td>
+<td><code>CodeTraceDirection</code></td>
+</tr>
+<tr>
+<td><code>depth</code></td>
+<td><code>Depth</code></td>
+</tr>
+</tbody></table>
+<h3 id="codeimpactselection">CodeImpactSelection</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>target</code></td>
+<td><code>CodeNodeSelection</code></td>
+</tr>
+<tr>
+<td><code>depth</code></td>
+<td><code>Depth</code></td>
+</tr>
+</tbody></table>
+<h3 id="codesourcemode">CodeSourceMode</h3>
+<p><code>NodeWindow</code>, <code>WholeFile</code>.</p>
+<h3 id="codesourceselection">CodeSourceSelection</h3>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Node</code></td>
+<td><code>nodeId</code>: <code>Id</code><br><code>mode</code>: <code>CodeSourceMode</code></td>
+</tr>
+<tr>
+<td><code>File</code></td>
+<td><code>repositoryId</code>: <code>Id</code><br><code>path</code>: <code>RelativePath</code><br><code>startLine</code>: <code>Counter</code><br><code>endLine</code>: <code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="codefileselection">CodeFileSelection</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>path</code></td>
+<td><code>RelativePath</code></td>
+</tr>
+<tr>
+<td><code>line</code></td>
+<td><code>?PositiveCounter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>depth</code></td>
+<td><code>?Depth</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codesourcelocation">CodeSourceLocation</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>snapshot</code></td>
+<td><code>RepositorySnapshot</code></td>
+</tr>
+<tr>
+<td><code>unitKey</code></td>
+<td><code>RelativePath</code></td>
+</tr>
+<tr>
+<td><code>sourceDigest</code></td>
+<td><code>Digest</code></td>
+</tr>
+<tr>
+<td><code>path</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>startLine</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>endLine</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>startByte</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>endByte</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>language</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>legacyCitation</code></td>
+<td><code>?Citation</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codeproperty">CodeProperty</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>name</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>jsonText</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>offset</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>totalBytes</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>nextOffset</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codenode">CodeNode</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nodeId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>viewId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>unitKey</code></td>
+<td><code>GraphUnitKey</code></td>
+</tr>
+<tr>
+<td><code>nodeKind</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>qualifiedName</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>internalModule</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>parentId</code></td>
+<td><code>?Id</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td><code>?CodeSourceLocation</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>properties</code></td>
+<td><code>Rows&lt;CodeProperty&gt;</code></td>
+</tr>
+<tr>
+<td><code>propertiesComplete</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>doNotTrust</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>trustScore</code></td>
+<td><code>?Probability</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>analysisConfidence</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>confidence</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>extractionSource</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>fallbackReason</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>trustRevision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>contentDigest</code></td>
+<td><code>?Digest</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>viewDigest</code></td>
+<td><code>Digest</code></td>
+</tr>
+<tr>
+<td><code>contentIdentity</code></td>
+<td><code>Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="codeedge">CodeEdge</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>edgeId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>sourceId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>targetId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>sourceRepositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>targetRepositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>producingUnit</code></td>
+<td><code>?GraphUnitKey</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>edgeKind</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>resolution</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>confidence</code></td>
+<td><code>?Probability</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>confidenceBand</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>properties</code></td>
+<td><code>Rows&lt;CodeProperty&gt;</code></td>
+</tr>
+<tr>
+<td><code>propertiesComplete</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>sourceUnitKey</code></td>
+<td><code>GraphUnitKey</code></td>
+</tr>
+<tr>
+<td><code>targetUnitKey</code></td>
+<td><code>GraphUnitKey</code></td>
+</tr>
+</tbody></table>
+<h3 id="codesearchrepository">CodeSearchRepository</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>language</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>framework</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>foundational</code></td>
+<td><code>?bool</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codesearchhit">CodeSearchHit</h3>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Node</code></td>
+<td><code>node</code>: <code>CodeNode</code></td>
+</tr>
+<tr>
+<td><code>Repository</code></td>
+<td><code>repository</code>: <code>CodeSearchRepository</code></td>
+</tr>
+</tbody></table>
+<h3 id="codesearchresult">CodeSearchResult</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>mode</code></td>
+<td><code>CodeSearchMode</code></td>
+</tr>
+<tr>
+<td><code>items</code></td>
+<td><code>Rows&lt;CodeSearchHit&gt;</code></td>
+</tr>
+<tr>
+<td><code>total</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>lowConfidenceCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="codenodesresult">CodeNodesResult</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nodes</code></td>
+<td><code>Rows&lt;CodeNode&gt;</code></td>
+</tr>
+<tr>
+<td><code>total</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>lowConfidenceCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>selectedNodeId</code></td>
+<td><code>?Id</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codegraphresult">CodeGraphResult</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nodes</code></td>
+<td><code>Rows&lt;CodeNode&gt;</code></td>
+</tr>
+<tr>
+<td><code>edges</code></td>
+<td><code>Rows&lt;CodeEdge&gt;</code></td>
+</tr>
+<tr>
+<td><code>lowConfidenceCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>unmappedInboundEdges</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codenodedetail">CodeNodeDetail</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>node</code></td>
+<td><code>CodeNode</code></td>
+</tr>
+<tr>
+<td><code>neighbors</code></td>
+<td><code>Rows&lt;CodeNode&gt;</code></td>
+</tr>
+<tr>
+<td><code>incoming</code></td>
+<td><code>Rows&lt;CodeEdge&gt;</code></td>
+</tr>
+<tr>
+<td><code>outgoing</code></td>
+<td><code>Rows&lt;CodeEdge&gt;</code></td>
+</tr>
+<tr>
+<td><code>crossRepository</code></td>
+<td><code>Rows&lt;CodeEdge&gt;</code></td>
+</tr>
+<tr>
+<td><code>relationshipsComplete</code></td>
+<td><code>bool</code></td>
+</tr>
+</tbody></table>
+<h3 id="codesourcetext">CodeSourceText</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>source</code></td>
+<td><code>CodeSourceLocation</code></td>
+</tr>
+<tr>
+<td><code>nodeId</code></td>
+<td><code>?Id</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>text</code></td>
+<td><code>GraphText</code></td>
+</tr>
+<tr>
+<td><code>startByte</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>endByte</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>totalBytes</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>firstLine</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>lastLine</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>nodeStartLine</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>nodeEndLine</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codecount">CodeCount</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>name</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>count</code></td>
+<td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="coderepositorylink">CodeRepositoryLink</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>sourceRepositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>targetRepositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>edgeKind</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>count</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>confidenceBand</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codeoverviewrepository">CodeOverviewRepository</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>sourceGroup</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>language</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>framework</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>foundational</code></td>
+<td><code>?bool</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>readmeSource</code></td>
+<td><code>?CodeSourceLocation</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codeoverview">CodeOverview</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositories</code></td>
+<td><code>Rows&lt;CodeOverviewRepository&gt;</code></td>
+</tr>
+<tr>
+<td><code>dependencies</code></td>
+<td><code>Rows&lt;CodeRepositoryLink&gt;</code></td>
+</tr>
+<tr>
+<td><code>stamp</code></td>
+<td><code>ReadStamp</code></td>
+</tr>
+<tr>
+<td><code>graphCoverage</code></td>
+<td><code>Coverage</code></td>
+</tr>
+<tr>
+<td><code>unavailableReason</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>graphTotals</code></td>
+<td><code>?CodeOverviewTotals</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>internalModules</code></td>
+<td><code>Rows&lt;CodeModuleAnalysis&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="codehotspot">CodeHotspot</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>name</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>qualifiedName</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>fanIn</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="codesupertype">CodeSupertype</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>name</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>qualifiedName</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>nodeKind</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>subtypeCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>external</code></td>
+<td><code>bool</code></td>
+</tr>
+</tbody></table>
+<h3 id="codepackagedependency">CodePackageDependency</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>name</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>ecosystem</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>dependentCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="codearchitecture">CodeArchitecture</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>confidence</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>nodeCounts</code></td>
+<td><code>Rows&lt;CodeCount&gt;</code></td>
+</tr>
+<tr>
+<td><code>hotspots</code></td>
+<td><code>Rows&lt;CodeHotspot&gt;</code></td>
+</tr>
+<tr>
+<td><code>inbound</code></td>
+<td><code>Rows&lt;CodeRepositoryLink&gt;</code></td>
+</tr>
+<tr>
+<td><code>outbound</code></td>
+<td><code>Rows&lt;CodeRepositoryLink&gt;</code></td>
+</tr>
+<tr>
+<td><code>packages</code></td>
+<td><code>Rows&lt;CodePackageDependency&gt;</code></td>
+</tr>
+<tr>
+<td><code>packageCount</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>packageCountsByEcosystem</code></td>
+<td><code>Rows&lt;CodeCount&gt;</code></td>
+</tr>
+<tr>
+<td><code>supertypes</code></td>
+<td><code>Rows&lt;CodeSupertype&gt;</code></td>
+</tr>
+<tr>
+<td><code>internalModules</code></td>
+<td><code>Rows&lt;CodeModuleAnalysis&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="coderisk">CodeRisk</h3>
+<p><code>Critical</code>, <code>High</code>, <code>Medium</code>, <code>Low</code>, <code>None</code>.</p>
+<h3 id="codeaffectednode">CodeAffectedNode</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>node</code></td>
+<td><code>CodeNode</code></td>
+</tr>
+<tr>
+<td><code>depth</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>edgeKind</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>risk</code></td>
+<td><code>CodeRisk</code></td>
+</tr>
+<tr>
+<td><code>riskFactors</code></td>
+<td><code>Rows&lt;Content&gt;</code></td>
+</tr>
+<tr>
+<td><code>lowConfidence</code></td>
+<td><code>bool</code></td>
+</tr>
+</tbody></table>
+<h3 id="codeimpactsummary">CodeImpactSummary</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>totalAffected</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>crossRepositoryCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>criticalCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>highCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>mediumCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>lowCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>affectedRepositoryIds</code></td>
+<td><code>Rows&lt;Id&gt;</code></td>
+</tr>
+<tr>
+<td><code>lowConfidenceCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="codeimpact">CodeImpact</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>found</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>path</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>language</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>languageIndexed</code></td>
+<td><code>?bool</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>blastRadius</code></td>
+<td><code>CodeRisk</code></td>
+</tr>
+<tr>
+<td><code>changed</code></td>
+<td><code>Rows&lt;CodeAffectedNode&gt;</code></td>
+</tr>
+<tr>
+<td><code>affected</code></td>
+<td><code>Rows&lt;CodeAffectedNode&gt;</code></td>
+</tr>
+<tr>
+<td><code>crossRepository</code></td>
+<td><code>Rows&lt;CodeRepositoryLink&gt;</code></td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td><code>CodeImpactSummary</code></td>
+</tr>
+<tr>
+<td><code>unmappedInboundEdges</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codetraversalentry">CodeTraversalEntry</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>node</code></td>
+<td><code>CodeNode</code></td>
+</tr>
+<tr>
+<td><code>depth</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>parentId</code></td>
+<td><code>?Id</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>edgeKind</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>edgeId</code></td>
+<td><code>?Id</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codecalltrace">CodeCallTrace</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>start</code></td>
+<td><code>?CodeNode</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>entries</code></td>
+<td><code>Rows&lt;CodeTraversalEntry&gt;</code></td>
+</tr>
+<tr>
+<td><code>lowConfidenceCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>unmappedInboundEdges</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codelineage">CodeLineage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>modelName</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>model</code></td>
+<td><code>?CodeNode</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>producers</code></td>
+<td><code>Rows&lt;CodeTraversalEntry&gt;</code></td>
+</tr>
+<tr>
+<td><code>consumers</code></td>
+<td><code>Rows&lt;CodeTraversalEntry&gt;</code></td>
+</tr>
+<tr>
+<td><code>crossRepository</code></td>
+<td><code>Rows&lt;CodeEdge&gt;</code></td>
+</tr>
+<tr>
+<td><code>relatedNodes</code></td>
+<td><code>Rows&lt;CodeNode&gt;</code></td>
+</tr>
+<tr>
+<td><code>lowConfidenceCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>unmappedInboundEdges</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="coderelatednode">CodeRelatedNode</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>node</code></td>
+<td><code>CodeNode</code></td>
+</tr>
+<tr>
+<td><code>edgeKind</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>lowConfidence</code></td>
+<td><code>bool</code></td>
+</tr>
+</tbody></table>
+<h3 id="coderelated">CodeRelated</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nodes</code></td>
+<td><code>Rows&lt;CodeRelatedNode&gt;</code></td>
+</tr>
+<tr>
+<td><code>lowConfidenceCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>unmappedInboundEdges</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codesemanticgroup">CodeSemanticGroup</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>index</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>crates</code></td>
+<td><code>Rows&lt;Content&gt;</code></td>
+</tr>
+<tr>
+<td><code>outcome</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>failureCode</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>detailCode</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="coderustsemantic">CodeRustSemantic</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>status</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>manifest</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>groupCount</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>semanticGroups</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>fallbackGroups</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>skippedGroups</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>treeSitterGroups</code></td>
+<td><code>Rows&lt;CodeSemanticGroup&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="codedependencies">CodeDependencies</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>inbound</code></td>
+<td><code>Rows&lt;CodeRepositoryLink&gt;</code></td>
+</tr>
+<tr>
+<td><code>outbound</code></td>
+<td><code>Rows&lt;CodeRepositoryLink&gt;</code></td>
+</tr>
+<tr>
+<td><code>rustSemantic</code></td>
+<td><code>CodeRustSemantic</code></td>
+</tr>
+</tbody></table>
+<h3 id="codeschemaproperty">CodeSchemaProperty</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ownerKind</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td><code>Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="codeschema">CodeSchema</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nodeKinds</code></td>
+<td><code>Rows&lt;Label&gt;</code></td>
+</tr>
+<tr>
+<td><code>edgeKinds</code></td>
+<td><code>Rows&lt;Label&gt;</code></td>
+</tr>
+<tr>
+<td><code>properties</code></td>
+<td><code>Rows&lt;CodeSchemaProperty&gt;</code></td>
+</tr>
+<tr>
+<td><code>notes</code></td>
+<td><code>Rows&lt;Content&gt;</code></td>
+</tr>
+<tr>
+<td><code>artifact</code></td>
+<td><code>?ArtifactRef</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>origin</code></td>
+<td><code>CodeSchemaOrigin</code></td>
+</tr>
+<tr>
+<td><code>stamp</code></td>
+<td><code>ReadStamp</code></td>
+</tr>
+<tr>
+<td><code>unavailableReason</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="coderepositorystatus">CodeRepositoryStatus</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>freshness</code></td>
+<td><code>IndexFreshness</code></td>
+</tr>
+<tr>
+<td><code>languages</code></td>
+<td><code>Rows&lt;LanguageCoverage&gt;</code></td>
+</tr>
+<tr>
+<td><code>semanticPacks</code></td>
+<td><code>Rows&lt;SemanticPackStatus&gt;</code></td>
+</tr>
+<tr>
+<td><code>overlays</code></td>
+<td><code>Rows&lt;OverlayStatus&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="codescopestatus">CodeScopeStatus</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>stamp</code></td>
+<td><code>ReadStamp</code></td>
+</tr>
+<tr>
+<td><code>coverage</code></td>
+<td><code>Coverage</code></td>
+</tr>
+<tr>
+<td><code>current</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>unavailableReason</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>repositories</code></td>
+<td><code>Rows&lt;CodeRepositoryStatus&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="helpavailability">HelpAvailability</h3>
+<p><code>Available</code>, <code>Missing</code>, <code>Stale</code>, <code>Unavailable</code>.</p>
+<h3 id="helpsnapshot">HelpSnapshot</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>appVersion</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>helpRevision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>registryRevision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>canGenerate</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>cannotGenerateReason</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>generationOperation</code></td>
+<td><code>?OperationRef</code></td>
+</tr>
+</tbody></table>
+<h3 id="helpprovenance">HelpProvenance</h3>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Bundled</code></td>
+<td><code>appVersion</code>: <code>Label</code><br><code>contentDigest</code>: <code>Digest</code></td>
+</tr>
+<tr>
+<td><code>Package</code></td>
+<td><code>packageId</code>: <code>Id</code><br><code>packageVersion</code>: <code>Label</code><br><code>manifestDigest</code>: <code>Digest</code><br><code>contentDigest</code>: <code>Digest</code></td>
+</tr>
+<tr>
+<td><code>Generated</code></td>
+<td><code>appVersion</code>: <code>Label</code><br><code>registryRevision</code>: <code>Revision</code><br><code>contentDigest</code>: <code>Digest</code></td>
+</tr>
+</tbody></table>
+<h3 id="helpcapabilitymetadata">HelpCapabilityMetadata</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>operation</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>mode</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>owner</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>authority</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>effect</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>schemaRevision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>inputType</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>resultType</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>inputSchemaDigest</code></td>
+<td><code>Digest</code></td>
+</tr>
+<tr>
+<td><code>resultSchemaDigest</code></td>
+<td><code>Digest</code></td>
+</tr>
+<tr>
+<td><code>available</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>unavailableReason</code></td>
+<td><code>?Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="helptopicsummary">HelpTopicSummary</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>content</code></td>
+<td><code>?ArtifactRef</code></td>
+</tr>
+<tr>
+<td><code>relatedCapabilityIds</code></td>
+<td><code>Items&lt;Id&gt;</code></td>
+</tr>
+<tr>
+<td><code>availability</code></td>
+<td><code>HelpAvailability</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>provenance</code></td>
+<td><code>?HelpProvenance</code></td>
+</tr>
+<tr>
+<td><code>capabilities</code></td>
+<td><code>Rows&lt;HelpCapabilityMetadata&gt;</code></td>
+</tr>
+<tr>
+<td><code>relatedCapabilities</code></td>
+<td><code>Rows&lt;Label&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="helppassage">HelpPassage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>text</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>offset</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>nextCursor</code></td>
+<td><code>?Cursor</code></td>
+</tr>
+<tr>
+<td><code>hasMore</code></td>
+<td><code>bool</code></td>
+</tr>
+</tbody></table>
+<h3 id="helpreadview">HelpReadView</h3>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Available</code></td>
+<td><code>topic</code>: <code>HelpTopicSummary</code><br><code>passage</code>: <code>HelpPassage</code><br><code>snapshot</code>: <code>HelpSnapshot</code></td>
+</tr>
+<tr>
+<td><code>Unavailable</code></td>
+<td><code>topicId</code>: <code>Id</code><br><code>requestedVersion</code>: <code>Label</code><br><code>availability</code>: <code>HelpAvailability</code><br><code>reason</code>: <code>Content</code><br><code>currentVersion</code>: <code>?Label</code><br><code>snapshot</code>: <code>HelpSnapshot</code></td>
+</tr>
+</tbody></table>
+<h3 id="helptopicpage">HelpTopicPage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>items</code></td>
+<td><code>Rows&lt;HelpTopicSummary&gt;</code></td>
+</tr>
+<tr>
+<td><code>nextCursor</code></td>
+<td><code>?Cursor</code></td>
+</tr>
+<tr>
+<td><code>hasMore</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>availability</code></td>
+<td><code>HelpAvailability</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>snapshot</code></td>
+<td><code>HelpSnapshot</code></td>
+</tr>
+</tbody></table>
+<h3 id="helpreadresult">HelpReadResult</h3>
+<p>Before revision 3: exact legacy <code>HelpTopic</code>. Revision 3 and later: <code>HelpReadView</code>. Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.</p>
+<h3 id="helptopicpageresult">HelpTopicPageResult</h3>
+<p>Before revision 3: exact legacy <code>Page&lt;HelpTopic&gt;</code>. Revision 3 and later: <code>HelpTopicPage</code>. Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.</p>
+<h3 id="codeschemaorigin">CodeSchemaOrigin</h3>
+<p><code>Declared</code>, <code>Observed</code>.</p>
+<h3 id="codeoverviewtotals">CodeOverviewTotals</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nodeCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>edgeCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="codeunavailablerepository">CodeUnavailableRepository</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>Label</code></td>
+</tr>
+</tbody></table>
+<h3 id="codereadcoverage">CodeReadCoverage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>coverage</code></td>
+<td><code>Coverage</code></td>
+</tr>
+<tr>
+<td><code>unavailableRepositories</code></td>
+<td><code>Rows&lt;CodeUnavailableRepository&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="codenodereference">CodeNodeReference</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>viewId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>unitKey</code></td>
+<td><code>GraphUnitKey</code></td>
+</tr>
+<tr>
+<td><code>nodeId</code></td>
+<td><code>Id</code></td>
+</tr>
+</tbody></table>
+<h3 id="codemoduleidentity">CodeModuleIdentity</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>moduleName</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>indexedNode</code></td>
+<td><code>?CodeNodeReference</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codemoduleanalysisstate">CodeModuleAnalysisState</h3>
+<p><code>Recorded</code>, <code>NotAnalyzed</code>, <code>Unavailable</code>.</p>
+<h3 id="codemoduledrilldown">CodeModuleDrilldown</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nodeKind</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>count</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>nodes</code></td>
+<td><code>Rows&lt;CodeNodeReference&gt;</code></td>
+</tr>
+<tr>
+<td><code>hasMore</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>nextCursor</code></td>
+<td><code>?Cursor</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codemoduleendpoint">CodeModuleEndpoint</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>route</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>httpMethod</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>requestModel</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>responseModel</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codemoduleservice">CodeModuleService</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>name</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>interfaceName</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>lifetime</code></td>
+<td><code>Label</code></td>
+</tr>
+</tbody></table>
+<h3 id="codemoduleprogramtotals">CodeModuleProgramTotals</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>endpointCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>serviceCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>tableCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="coderecordedmoduleanalysis">CodeRecordedModuleAnalysis</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>summary</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>confidence</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>endpoints</code></td>
+<td><code>Rows&lt;CodeModuleEndpoint&gt;</code></td>
+</tr>
+<tr>
+<td><code>services</code></td>
+<td><code>Rows&lt;CodeModuleService&gt;</code></td>
+</tr>
+<tr>
+<td><code>externalDependencies</code></td>
+<td><code>Rows&lt;Content&gt;</code></td>
+</tr>
+<tr>
+<td><code>databaseTables</code></td>
+<td><code>Rows&lt;Content&gt;</code></td>
+</tr>
+<tr>
+<td><code>modelUsed</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>updatedAtMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>sourceHash</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>sourceRevision</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>sourceViewId</code></td>
+<td><code>?Id</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>programTotals</code></td>
+<td><code>?CodeModuleProgramTotals</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codemoduleanalysis">CodeModuleAnalysis</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>module</code></td>
+<td><code>CodeModuleIdentity</code></td>
+</tr>
+<tr>
+<td><code>state</code></td>
+<td><code>CodeModuleAnalysisState</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>observedNodeCounts</code></td>
+<td><code>Rows&lt;CodeCount&gt;</code></td>
+</tr>
+<tr>
+<td><code>observedCoverage</code></td>
+<td><code>Coverage</code></td>
+</tr>
+<tr>
+<td><code>endpoints</code></td>
+<td><code>CodeModuleDrilldown</code></td>
+</tr>
+<tr>
+<td><code>services</code></td>
+<td><code>CodeModuleDrilldown</code></td>
+</tr>
+<tr>
+<td><code>tables</code></td>
+<td><code>CodeModuleDrilldown</code></td>
+</tr>
+<tr>
+<td><code>recorded</code></td>
+<td><code>?CodeRecordedModuleAnalysis</code> · <em>revision 3+</em></td>
 </tr>
 </tbody></table>
 <h2 id="machine-sources">Machine sources</h2>

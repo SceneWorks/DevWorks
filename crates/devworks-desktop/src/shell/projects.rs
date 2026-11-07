@@ -144,6 +144,7 @@ enum Action {
     Membership(MembershipForm),
     Lifecycle(&'static str, ProjectRecord),
     Open(String),
+    OpenGraph(String, String),
     LoadBase(String),
     ChooseBase(String),
     SaveBase(String),
@@ -288,6 +289,9 @@ impl Shell {
             return;
         }
         self.selected_project = project;
+        self.graph.opened = false;
+        self.graph.sequence = self.graph.sequence.wrapping_add(1);
+        self.graph.loading = false;
         self.projects.members = ListState::default();
         self.projects.members_of = None;
         if self.route == Route::Repositories {
@@ -380,6 +384,7 @@ impl Shell {
                     };
                     self.command(slot, label, op, move |b| ops::project_lifecycle(b, op, &p));
                 }
+                Action::OpenGraph(id, name) => self.open_repository_graph(&id, &name),
                 Action::Open(id) => {
                     self.select_project(Some(id));
                     self.navigate(Route::Overview);
@@ -1240,6 +1245,10 @@ impl Shell {
     // Repositories
 
     pub(super) fn repositories_screen(&mut self, ui: &mut Ui) {
+        if self.graph.opened {
+            self.graph_screen(ui);
+            return;
+        }
         let screen = Route::Repositories.screen();
         let online = self.online();
         let mut actions: Vec<Action> = Vec::new();
@@ -2016,6 +2025,15 @@ fn repository_detail(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(RichText::new(&r.name.0).strong());
+            if ui
+                .add_enabled(enabled, egui::Button::new("Open repository"))
+                .clicked()
+            {
+                actions.push(Action::OpenGraph(
+                    r.id.as_str().to_owned(),
+                    r.name.0.clone(),
+                ));
+            }
             if ui.small_button("Inspect source control").clicked() {
                 actions.push(Action::InspectGit(r.id.as_str().to_owned()));
             }

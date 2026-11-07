@@ -123,6 +123,12 @@ pub struct BalanceSummary {
     pub finished_at_ms: Option<i64>,
     pub cancellation_requested: bool,
     #[serde(default)]
+    pub reported_service_tier: Option<String>,
+    #[serde(default)]
+    pub reported_processing_region: Option<String>,
+    #[serde(default)]
+    pub pricing_dimension_mismatches: Vec<String>,
+    #[serde(default)]
     pub custody_recovery_reason: Option<String>,
     pub outcome: Option<String>,
 }
@@ -687,7 +693,7 @@ pub(crate) fn admit_attempt(
     })
 }
 
-fn log(
+pub(super) fn log(
     tx: &mut dyn WriteTransaction,
     attempt: &StoredInferenceAttempt,
     kind: &str,
@@ -1028,6 +1034,14 @@ pub fn observe(
             vec!["provider-resolved model has no exact admitted tariff".into()];
         effective = CostClassification::Untracked;
     }
+    if bound.quote.classification != CostClassification::LocalFree
+        && !state.pricing_dimension_mismatches.is_empty()
+    {
+        priced.tracked_micro_usd = None;
+        priced.monetary_complete = false;
+        priced.unknown_components = state.pricing_dimension_mismatches.clone();
+        effective = CostClassification::Untracked;
+    }
     // Billing access is an admitted transport fact, independent of whether a matching
     // API-equivalent tariff happened to be available when this attempt was quoted.
     let subscription = attempt.access_mode == "Subscription"
@@ -1309,6 +1323,44 @@ pub(super) fn settle(
     Ok(balance)
 }
 
+/// Records the host's local cancellation request without asserting a provider outcome.
+pub(crate) fn note_cancellation_requested(
+    tx: &mut dyn WriteTransaction,
+    attempt: &StoredInferenceAttempt,
+) -> Result<(), StorageError> {
+    let current = tx
+        .usage()
+        .inference_attempt(&attempt.attempt_id)?
+        .ok_or_else(|| invalid("missing cancellation attempt"))?;
+    if current.pricing_snapshot != attempt.pricing_snapshot || current.state != "Dispatched" {
+        return Ok(());
+    }
+    let before = tx
+        .usage()
+        .attempt_balance(&attempt.attempt_id)?
+        .ok_or_else(|| invalid("missing cancellation balance"))?;
+    let mut state = summary(&before)?;
+    if state.cancellation_requested {
+        return Ok(());
+    }
+    state.cancellation_requested = true;
+    let balance = StoredAttemptBalance {
+        revision: before.revision + 1,
+        summary: encoded(&state)?,
+        ..before.clone()
+    };
+    tx.usage()
+        .put_attempt_balance(&balance, Some(before.revision))?;
+    log(
+        tx,
+        attempt,
+        "InferenceCancellationRequested",
+        None,
+        json!({"localCancellationRequested":true}),
+    )?;
+    Ok(())
+}
+
 /// A preflight fenced by membership, policy or budget never opened a transport. Retiring that
 /// reservation cannot cancel a newer journal attempt or fabricate a provider cancellation.
 pub fn cancel_admitted(
@@ -1376,42 +1428,4 @@ pub fn cancel_admitted(
         json!({"reason":reason,"releasedReservationMicroUsd":before.reserved_micro_usd}),
     )?;
     Ok(balance)
-}
-
-/// Records the host's local cancellation request without asserting a provider outcome.
-pub(crate) fn note_cancellation_requested(
-    tx: &mut dyn WriteTransaction,
-    attempt: &StoredInferenceAttempt,
-) -> Result<(), StorageError> {
-    let current = tx
-        .usage()
-        .inference_attempt(&attempt.attempt_id)?
-        .ok_or_else(|| invalid("missing cancellation attempt"))?;
-    if current.pricing_snapshot != attempt.pricing_snapshot || current.state != "Dispatched" {
-        return Ok(());
-    }
-    let before = tx
-        .usage()
-        .attempt_balance(&attempt.attempt_id)?
-        .ok_or_else(|| invalid("missing cancellation balance"))?;
-    let mut state = summary(&before)?;
-    if state.cancellation_requested {
-        return Ok(());
-    }
-    state.cancellation_requested = true;
-    let balance = StoredAttemptBalance {
-        revision: before.revision + 1,
-        summary: encoded(&state)?,
-        ..before.clone()
-    };
-    tx.usage()
-        .put_attempt_balance(&balance, Some(before.revision))?;
-    log(
-        tx,
-        attempt,
-        "InferenceCancellationRequested",
-        None,
-        json!({"localCancellationRequested":true}),
-    )?;
-    Ok(())
 }

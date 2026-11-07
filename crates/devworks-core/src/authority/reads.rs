@@ -63,9 +63,31 @@ pub struct VerifiedFile {
     pub identity: Option<FileIdentity>,
 }
 
+/// A stream that can restart only at its beginning, retaining the original open object and
+/// the original read bound. Rewind does not reopen a pathname or acquire new authority.
+pub trait RewindRead: std::io::Read + Send {
+    fn rewind(&mut self) -> std::io::Result<()>;
+}
+
+pub struct VerifiedRewindFile {
+    pub reader: Box<dyn RewindRead>,
+    pub identity: Option<FileIdentity>,
+}
+
 /// The native read adapter.
 pub trait VerifiedReader: Send + Sync {
     fn read(&self, request: &ReadRequest<'_>) -> Result<VerifiedBytes, ReadRefusal>;
+    /// Opens with the same no-follow/identity rules as `open`, permitting restart of that
+    /// same bounded handle. Unsupported implementations never buffer or reopen as a fallback.
+    fn open_rewindable(
+        &self,
+        _request: &ReadRequest<'_>,
+    ) -> Result<VerifiedRewindFile, ReadRefusal> {
+        Err(ReadRefusal::Unsupported(
+            "verified rewindable reads are unavailable".into(),
+        ))
+    }
+
     /// Opens the file with exactly the checks of [`Self::read`] and returns it for bounded
     /// streaming instead of buffering it. The default buffers through [`Self::read`].
     fn open(&self, request: &ReadRequest<'_>) -> Result<VerifiedFile, ReadRefusal> {

@@ -162,25 +162,25 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `code.search` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Search'} | `GraphPage` |
-| `code.architecture` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Overview'} | `GraphPage` |
-| `code.dependency` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Traverse'} | `GraphPage` |
-| `code.impact` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'NodeImpact'} | `GraphPage` |
-| `code.source` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Source'} | `GraphPage` |
-| `code.traverse` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Traverse'} | `GraphPage` |
-| `code.graph_scope_status` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'ScopeStatus'} | `GraphPage` |
-| `code.overview` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Overview'} | `GraphPage` |
-| `code.nodes_by_file` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'NodesByFile'} | `GraphPage` |
-| `code.node_detail` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Node'} | `GraphPage` |
-| `code.set_trust` | **Command**<br>[Existing input schema](contracts/index-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'SetTrust'} | `MutationSummary` |
-| `code.file_impact` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'FileImpact'} | `GraphPage` |
-| `code.graph_schema` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Schema'} | `GraphPage` |
-| `code.call_path` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Path'} | `GraphPage` |
-| `code.data_lineage` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'DataLineage'} | `GraphPage` |
-| `code.consumers` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Consumers'} | `GraphPage` |
-| `code.publishers` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Publishers'} | `GraphPage` |
-| `code.snippet` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Source'} | `GraphPage` |
-| `code.repository_dependencies` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'RepositoryDependencies'} | `GraphPage` |
+| `code.search` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Search'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.architecture` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Overview'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.dependency` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Traverse'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.impact` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'NodeImpact'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.source` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Source'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.traverse` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Traverse'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.graph_scope_status` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'ScopeStatus'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.overview` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Overview'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.nodes_by_file` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'NodesByFile'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.node_detail` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Node'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.set_trust` | **Command**<br>[Existing input schema](contracts/index-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'SetTrust'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/index-command-request.r3.schema.json)) | `MutationSummary` |
+| `code.file_impact` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'FileImpact'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.graph_schema` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Schema'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.call_path` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Path'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.data_lineage` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'DataLineage'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.consumers` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Consumers'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.publishers` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Publishers'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.snippet` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Source'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
+| `code.repository_dependencies` | **Query**<br>[Existing input schema](contracts/graph-read-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'RepositoryDependencies'}<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/graph-read-request.r3.schema.json)) | `GraphPage` |
 
 ### Indexing
 
@@ -610,10 +610,10 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `help.search` | **Query**<br>`query`: `Text`<br>`page`: `PageRequest` | `Page<HelpTopic>` |
-| `help.read` | **Query**<br>`topicId`: `Id`<br>`version`: `Label` | `HelpTopic` |
-| `help.topic_for_screen` | **Query**<br>`screenId`: `Id`<br>`capabilityRevision`: `Revision` | `Page<HelpTopic>` |
-| `help.package_guides` | **Query**<br>`packageId`: `Id`<br>`version`: `Label`<br>`page`: `PageRequest` | `Page<HelpTopic>` |
+| `help.search` | **Query**<br>`query`: `Text`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `HelpTopicPageResult` |
+| `help.read` | **Query**<br>`topicId`: `Id`<br>`version`: `Label`<br>`cursor`: `?Cursor`<br>`maxChars`: `?PositiveCounter`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `HelpReadResult` |
+| `help.topic_for_screen` | **Query**<br>`screenId`: `Id`<br>`capabilityRevision`: `?Revision`<br>`current`: `?bool`<br>`page`: `?PageRequest`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `HelpTopicPageResult` |
+| `help.package_guides` | **Query**<br>`packageId`: `Id`<br>`version`: `Label`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `HelpTopicPageResult` |
 | `help.generate_capability_docs` | **Command**<br>`registryRevision`: `Revision`<br>`expectedHelpRevision`: `Revision` | `OperationRef` |
 
 ### Workspace
@@ -639,7 +639,7 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 | --- | --- | --- |
 | `repositories.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`text`: `?Text` | `Page<RepositoryRecord>` |
 | `repositories.get` | **Query**<br>`repositoryId`: `Id` | `RepositoryRecord` |
-| `repositories.nodes` | **Query**<br>`repositoryId`: `Id`<br>`views`: `ViewSelection`<br>`page`: `PageRequest` | `GraphPage` |
+| `repositories.nodes` | **Query**<br>`repositoryId`: `Id`<br>`views`: `?ViewSelection`<br>`current`: `?bool`<br>`page`: `PageRequest`<br>`nodeKind`: `?Label`<br>`internalModule`: `?Content`<br>`scope`: `?DataScope`<br><br>**Required when negotiated:** `scope` at revision 3+<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `GraphPage` |
 | `repositories.remove_index` | **Command**<br>`repositoryId`: `Id`<br>`expectedRevision`: `Revision` | `MutationSummary` |
 | `repositories.readme` | **Query**<br>`repositoryId`: `Id`<br>`views`: `ViewSelection` | `RepositoryText` |
 | `repositories.summary` | **Query**<br>`repositoryId`: `Id`<br>`views`: `ViewSelection` | `RepositoryText` |
@@ -4099,6 +4099,662 @@ Before revision 3: exact legacy `UsageReport`. Revision 3 and later: `UsageQuery
 | `unit` | `Label` |
 | `cacheWriteTtlMs` | `?Counter` |
 | `quantity` | `Counter` |
+
+### CodeSearchMode
+
+`RankedNodes`, `NodeList`, `Unified`.
+
+### CodeSearchSelection
+
+| Field | Type |
+| --- | --- |
+| `mode` | `CodeSearchMode` |
+| `text` | `Content` |
+| `repositoryId` | `?Id` · *revision 3+* |
+| `nodeKind` | `?Label` · *revision 3+* |
+| `internalModule` | `?Content` · *revision 3+* |
+
+### CodeNodeSelection
+
+| Kind | Fields |
+| --- | --- |
+| `Node` | `nodeId`: `Id` |
+| `Name` | `name`: `Content`<br>`repositoryId`: `?Id` |
+
+### CodeTraceDirection
+
+`Inbound`, `Outbound`, `Both`.
+
+### CodeCallSelection
+
+| Field | Type |
+| --- | --- |
+| `target` | `CodeNodeSelection` |
+| `direction` | `CodeTraceDirection` |
+| `depth` | `Depth` |
+
+### CodeImpactSelection
+
+| Field | Type |
+| --- | --- |
+| `target` | `CodeNodeSelection` |
+| `depth` | `Depth` |
+
+### CodeSourceMode
+
+`NodeWindow`, `WholeFile`.
+
+### CodeSourceSelection
+
+| Kind | Fields |
+| --- | --- |
+| `Node` | `nodeId`: `Id`<br>`mode`: `CodeSourceMode` |
+| `File` | `repositoryId`: `Id`<br>`path`: `RelativePath`<br>`startLine`: `Counter`<br>`endLine`: `Counter` |
+
+### CodeFileSelection
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `path` | `RelativePath` |
+| `line` | `?PositiveCounter` · *revision 3+* |
+| `depth` | `?Depth` · *revision 3+* |
+
+### CodeSourceLocation
+
+| Field | Type |
+| --- | --- |
+| `snapshot` | `RepositorySnapshot` |
+| `unitKey` | `RelativePath` |
+| `sourceDigest` | `Digest` |
+| `path` | `Content` |
+| `startLine` | `Counter` |
+| `endLine` | `Counter` |
+| `startByte` | `?Counter` · *revision 3+* |
+| `endByte` | `?Counter` · *revision 3+* |
+| `language` | `?Label` · *revision 3+* |
+| `legacyCitation` | `?Citation` · *revision 3+* |
+
+### CodeProperty
+
+| Field | Type |
+| --- | --- |
+| `name` | `Content` |
+| `jsonText` | `Content` |
+| `offset` | `Counter` |
+| `totalBytes` | `Counter` |
+| `nextOffset` | `?Counter` · *revision 3+* |
+
+### CodeNode
+
+| Field | Type |
+| --- | --- |
+| `nodeId` | `Id` |
+| `repositoryId` | `Id` |
+| `viewId` | `Id` |
+| `unitKey` | `GraphUnitKey` |
+| `nodeKind` | `Label` |
+| `name` | `Content` |
+| `qualifiedName` | `Content` |
+| `internalModule` | `?Content` · *revision 3+* |
+| `parentId` | `?Id` · *revision 3+* |
+| `source` | `?CodeSourceLocation` · *revision 3+* |
+| `properties` | `Rows<CodeProperty>` |
+| `propertiesComplete` | `bool` |
+| `doNotTrust` | `bool` |
+| `trustScore` | `?Probability` · *revision 3+* |
+| `description` | `?Content` · *revision 3+* |
+| `analysisConfidence` | `?Label` · *revision 3+* |
+| `confidence` | `?Label` · *revision 3+* |
+| `extractionSource` | `?Label` · *revision 3+* |
+| `fallbackReason` | `?Content` · *revision 3+* |
+| `trustRevision` | `Revision` |
+| `contentDigest` | `?Digest` · *revision 3+* |
+| `viewDigest` | `Digest` |
+| `contentIdentity` | `Content` |
+
+### CodeEdge
+
+| Field | Type |
+| --- | --- |
+| `edgeId` | `Id` |
+| `sourceId` | `Id` |
+| `targetId` | `Id` |
+| `sourceRepositoryId` | `Id` |
+| `targetRepositoryId` | `Id` |
+| `producingUnit` | `?GraphUnitKey` · *revision 3+* |
+| `edgeKind` | `Label` |
+| `resolution` | `?Label` · *revision 3+* |
+| `confidence` | `?Probability` · *revision 3+* |
+| `confidenceBand` | `?Label` · *revision 3+* |
+| `properties` | `Rows<CodeProperty>` |
+| `propertiesComplete` | `bool` |
+| `sourceUnitKey` | `GraphUnitKey` |
+| `targetUnitKey` | `GraphUnitKey` |
+
+### CodeSearchRepository
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `name` | `Content` |
+| `description` | `?Content` · *revision 3+* |
+| `language` | `?Label` · *revision 3+* |
+| `framework` | `?Label` · *revision 3+* |
+| `foundational` | `?bool` · *revision 3+* |
+
+### CodeSearchHit
+
+| Kind | Fields |
+| --- | --- |
+| `Node` | `node`: `CodeNode` |
+| `Repository` | `repository`: `CodeSearchRepository` |
+
+### CodeSearchResult
+
+| Field | Type |
+| --- | --- |
+| `mode` | `CodeSearchMode` |
+| `items` | `Rows<CodeSearchHit>` |
+| `total` | `?Counter` · *revision 3+* |
+| `lowConfidenceCount` | `Counter` |
+
+### CodeNodesResult
+
+| Field | Type |
+| --- | --- |
+| `nodes` | `Rows<CodeNode>` |
+| `total` | `?Counter` · *revision 3+* |
+| `lowConfidenceCount` | `Counter` |
+| `selectedNodeId` | `?Id` · *revision 3+* |
+
+### CodeGraphResult
+
+| Field | Type |
+| --- | --- |
+| `nodes` | `Rows<CodeNode>` |
+| `edges` | `Rows<CodeEdge>` |
+| `lowConfidenceCount` | `Counter` |
+| `unmappedInboundEdges` | `?Counter` · *revision 3+* |
+
+### CodeNodeDetail
+
+| Field | Type |
+| --- | --- |
+| `node` | `CodeNode` |
+| `neighbors` | `Rows<CodeNode>` |
+| `incoming` | `Rows<CodeEdge>` |
+| `outgoing` | `Rows<CodeEdge>` |
+| `crossRepository` | `Rows<CodeEdge>` |
+| `relationshipsComplete` | `bool` |
+
+### CodeSourceText
+
+| Field | Type |
+| --- | --- |
+| `source` | `CodeSourceLocation` |
+| `nodeId` | `?Id` · *revision 3+* |
+| `text` | `GraphText` |
+| `startByte` | `Counter` |
+| `endByte` | `Counter` |
+| `totalBytes` | `Counter` |
+| `firstLine` | `Counter` |
+| `lastLine` | `Counter` |
+| `nodeStartLine` | `?Counter` · *revision 3+* |
+| `nodeEndLine` | `?Counter` · *revision 3+* |
+
+### CodeCount
+
+| Field | Type |
+| --- | --- |
+| `name` | `Content` |
+| `count` | `Counter` |
+
+### CodeRepositoryLink
+
+| Field | Type |
+| --- | --- |
+| `sourceRepositoryId` | `Id` |
+| `targetRepositoryId` | `Id` |
+| `edgeKind` | `Label` |
+| `count` | `Counter` |
+| `confidenceBand` | `?Label` · *revision 3+* |
+
+### CodeOverviewRepository
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `name` | `Content` |
+| `sourceGroup` | `?Content` · *revision 3+* |
+| `language` | `?Label` · *revision 3+* |
+| `framework` | `?Label` · *revision 3+* |
+| `foundational` | `?bool` · *revision 3+* |
+| `readmeSource` | `?CodeSourceLocation` · *revision 3+* |
+
+### CodeOverview
+
+| Field | Type |
+| --- | --- |
+| `repositories` | `Rows<CodeOverviewRepository>` |
+| `dependencies` | `Rows<CodeRepositoryLink>` |
+| `stamp` | `ReadStamp` |
+| `graphCoverage` | `Coverage` |
+| `unavailableReason` | `?Label` · *revision 3+* |
+| `graphTotals` | `?CodeOverviewTotals` · *revision 3+* |
+| `internalModules` | `Rows<CodeModuleAnalysis>` |
+
+### CodeHotspot
+
+| Field | Type |
+| --- | --- |
+| `name` | `Content` |
+| `qualifiedName` | `Content` |
+| `fanIn` | `Counter` |
+| `reason` | `Content` |
+
+### CodeSupertype
+
+| Field | Type |
+| --- | --- |
+| `name` | `Content` |
+| `qualifiedName` | `Content` |
+| `nodeKind` | `Label` |
+| `subtypeCount` | `Counter` |
+| `external` | `bool` |
+
+### CodePackageDependency
+
+| Field | Type |
+| --- | --- |
+| `name` | `Content` |
+| `ecosystem` | `Label` |
+| `version` | `?Content` · *revision 3+* |
+| `dependentCount` | `Counter` |
+
+### CodeArchitecture
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `summary` | `?Content` · *revision 3+* |
+| `confidence` | `?Label` · *revision 3+* |
+| `nodeCounts` | `Rows<CodeCount>` |
+| `hotspots` | `Rows<CodeHotspot>` |
+| `inbound` | `Rows<CodeRepositoryLink>` |
+| `outbound` | `Rows<CodeRepositoryLink>` |
+| `packages` | `Rows<CodePackageDependency>` |
+| `packageCount` | `?Counter` · *revision 3+* |
+| `packageCountsByEcosystem` | `Rows<CodeCount>` |
+| `supertypes` | `Rows<CodeSupertype>` |
+| `internalModules` | `Rows<CodeModuleAnalysis>` |
+
+### CodeRisk
+
+`Critical`, `High`, `Medium`, `Low`, `None`.
+
+### CodeAffectedNode
+
+| Field | Type |
+| --- | --- |
+| `node` | `CodeNode` |
+| `depth` | `Counter` |
+| `edgeKind` | `Label` |
+| `risk` | `CodeRisk` |
+| `riskFactors` | `Rows<Content>` |
+| `lowConfidence` | `bool` |
+
+### CodeImpactSummary
+
+| Field | Type |
+| --- | --- |
+| `totalAffected` | `Counter` |
+| `crossRepositoryCount` | `Counter` |
+| `criticalCount` | `Counter` |
+| `highCount` | `Counter` |
+| `mediumCount` | `Counter` |
+| `lowCount` | `Counter` |
+| `affectedRepositoryIds` | `Rows<Id>` |
+| `lowConfidenceCount` | `Counter` |
+
+### CodeImpact
+
+| Field | Type |
+| --- | --- |
+| `found` | `bool` |
+| `path` | `?Content` · *revision 3+* |
+| `language` | `?Label` · *revision 3+* |
+| `languageIndexed` | `?bool` · *revision 3+* |
+| `blastRadius` | `CodeRisk` |
+| `changed` | `Rows<CodeAffectedNode>` |
+| `affected` | `Rows<CodeAffectedNode>` |
+| `crossRepository` | `Rows<CodeRepositoryLink>` |
+| `summary` | `CodeImpactSummary` |
+| `unmappedInboundEdges` | `?Counter` · *revision 3+* |
+
+### CodeTraversalEntry
+
+| Field | Type |
+| --- | --- |
+| `node` | `CodeNode` |
+| `depth` | `Counter` |
+| `parentId` | `?Id` · *revision 3+* |
+| `edgeKind` | `?Label` · *revision 3+* |
+| `edgeId` | `?Id` · *revision 3+* |
+
+### CodeCallTrace
+
+| Field | Type |
+| --- | --- |
+| `start` | `?CodeNode` · *revision 3+* |
+| `entries` | `Rows<CodeTraversalEntry>` |
+| `lowConfidenceCount` | `Counter` |
+| `unmappedInboundEdges` | `?Counter` · *revision 3+* |
+
+### CodeLineage
+
+| Field | Type |
+| --- | --- |
+| `modelName` | `Content` |
+| `model` | `?CodeNode` · *revision 3+* |
+| `producers` | `Rows<CodeTraversalEntry>` |
+| `consumers` | `Rows<CodeTraversalEntry>` |
+| `crossRepository` | `Rows<CodeEdge>` |
+| `relatedNodes` | `Rows<CodeNode>` |
+| `lowConfidenceCount` | `Counter` |
+| `unmappedInboundEdges` | `?Counter` · *revision 3+* |
+
+### CodeRelatedNode
+
+| Field | Type |
+| --- | --- |
+| `node` | `CodeNode` |
+| `edgeKind` | `Label` |
+| `lowConfidence` | `bool` |
+
+### CodeRelated
+
+| Field | Type |
+| --- | --- |
+| `nodes` | `Rows<CodeRelatedNode>` |
+| `lowConfidenceCount` | `Counter` |
+| `unmappedInboundEdges` | `?Counter` · *revision 3+* |
+
+### CodeSemanticGroup
+
+| Field | Type |
+| --- | --- |
+| `index` | `Counter` |
+| `crates` | `Rows<Content>` |
+| `outcome` | `Label` |
+| `failureCode` | `?Label` · *revision 3+* |
+| `detailCode` | `?Label` · *revision 3+* |
+
+### CodeRustSemantic
+
+| Field | Type |
+| --- | --- |
+| `status` | `Label` |
+| `manifest` | `?Content` · *revision 3+* |
+| `groupCount` | `?Counter` · *revision 3+* |
+| `semanticGroups` | `?Counter` · *revision 3+* |
+| `fallbackGroups` | `?Counter` · *revision 3+* |
+| `skippedGroups` | `?Counter` · *revision 3+* |
+| `treeSitterGroups` | `Rows<CodeSemanticGroup>` |
+
+### CodeDependencies
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `inbound` | `Rows<CodeRepositoryLink>` |
+| `outbound` | `Rows<CodeRepositoryLink>` |
+| `rustSemantic` | `CodeRustSemantic` |
+
+### CodeSchemaProperty
+
+| Field | Type |
+| --- | --- |
+| `ownerKind` | `Label` |
+| `name` | `Content` |
+| `description` | `Content` |
+
+### CodeSchema
+
+| Field | Type |
+| --- | --- |
+| `nodeKinds` | `Rows<Label>` |
+| `edgeKinds` | `Rows<Label>` |
+| `properties` | `Rows<CodeSchemaProperty>` |
+| `notes` | `Rows<Content>` |
+| `artifact` | `?ArtifactRef` · *revision 3+* |
+| `origin` | `CodeSchemaOrigin` |
+| `stamp` | `ReadStamp` |
+| `unavailableReason` | `?Label` · *revision 3+* |
+
+### CodeRepositoryStatus
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `freshness` | `IndexFreshness` |
+| `languages` | `Rows<LanguageCoverage>` |
+| `semanticPacks` | `Rows<SemanticPackStatus>` |
+| `overlays` | `Rows<OverlayStatus>` |
+
+### CodeScopeStatus
+
+| Field | Type |
+| --- | --- |
+| `stamp` | `ReadStamp` |
+| `coverage` | `Coverage` |
+| `current` | `bool` |
+| `unavailableReason` | `?Label` · *revision 3+* |
+| `repositories` | `Rows<CodeRepositoryStatus>` |
+
+### HelpAvailability
+
+`Available`, `Missing`, `Stale`, `Unavailable`.
+
+### HelpSnapshot
+
+| Field | Type |
+| --- | --- |
+| `appVersion` | `Label` |
+| `helpRevision` | `Revision` |
+| `registryRevision` | `Revision` |
+| `canGenerate` | `bool` |
+| `cannotGenerateReason` | `?Content` |
+| `generationOperation` | `?OperationRef` |
+
+### HelpProvenance
+
+| Kind | Fields |
+| --- | --- |
+| `Bundled` | `appVersion`: `Label`<br>`contentDigest`: `Digest` |
+| `Package` | `packageId`: `Id`<br>`packageVersion`: `Label`<br>`manifestDigest`: `Digest`<br>`contentDigest`: `Digest` |
+| `Generated` | `appVersion`: `Label`<br>`registryRevision`: `Revision`<br>`contentDigest`: `Digest` |
+
+### HelpCapabilityMetadata
+
+| Field | Type |
+| --- | --- |
+| `operation` | `Label` |
+| `mode` | `Label` |
+| `owner` | `Label` |
+| `authority` | `Label` |
+| `effect` | `Label` |
+| `schemaRevision` | `Revision` |
+| `inputType` | `Label` |
+| `resultType` | `Label` |
+| `inputSchemaDigest` | `Digest` |
+| `resultSchemaDigest` | `Digest` |
+| `available` | `bool` |
+| `unavailableReason` | `?Content` |
+
+### HelpTopicSummary
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `version` | `Label` |
+| `title` | `Label` |
+| `content` | `?ArtifactRef` |
+| `relatedCapabilityIds` | `Items<Id>` |
+| `availability` | `HelpAvailability` |
+| `reason` | `?Content` |
+| `provenance` | `?HelpProvenance` |
+| `capabilities` | `Rows<HelpCapabilityMetadata>` |
+| `relatedCapabilities` | `Rows<Label>` |
+
+### HelpPassage
+
+| Field | Type |
+| --- | --- |
+| `text` | `Content` |
+| `offset` | `Counter` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+
+### HelpReadView
+
+| Kind | Fields |
+| --- | --- |
+| `Available` | `topic`: `HelpTopicSummary`<br>`passage`: `HelpPassage`<br>`snapshot`: `HelpSnapshot` |
+| `Unavailable` | `topicId`: `Id`<br>`requestedVersion`: `Label`<br>`availability`: `HelpAvailability`<br>`reason`: `Content`<br>`currentVersion`: `?Label`<br>`snapshot`: `HelpSnapshot` |
+
+### HelpTopicPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<HelpTopicSummary>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `availability` | `HelpAvailability` |
+| `reason` | `?Content` |
+| `snapshot` | `HelpSnapshot` |
+
+### HelpReadResult
+
+Before revision 3: exact legacy `HelpTopic`. Revision 3 and later: `HelpReadView`. Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.
+
+### HelpTopicPageResult
+
+Before revision 3: exact legacy `Page<HelpTopic>`. Revision 3 and later: `HelpTopicPage`. Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.
+
+### CodeSchemaOrigin
+
+`Declared`, `Observed`.
+
+### CodeOverviewTotals
+
+| Field | Type |
+| --- | --- |
+| `nodeCount` | `Counter` |
+| `edgeCount` | `Counter` |
+
+### CodeUnavailableRepository
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `reason` | `Label` |
+
+### CodeReadCoverage
+
+| Field | Type |
+| --- | --- |
+| `coverage` | `Coverage` |
+| `unavailableRepositories` | `Rows<CodeUnavailableRepository>` |
+
+### CodeNodeReference
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `viewId` | `Id` |
+| `unitKey` | `GraphUnitKey` |
+| `nodeId` | `Id` |
+
+### CodeModuleIdentity
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `moduleName` | `Content` |
+| `indexedNode` | `?CodeNodeReference` · *revision 3+* |
+
+### CodeModuleAnalysisState
+
+`Recorded`, `NotAnalyzed`, `Unavailable`.
+
+### CodeModuleDrilldown
+
+| Field | Type |
+| --- | --- |
+| `nodeKind` | `Label` |
+| `count` | `?Counter` · *revision 3+* |
+| `nodes` | `Rows<CodeNodeReference>` |
+| `hasMore` | `bool` |
+| `nextCursor` | `?Cursor` · *revision 3+* |
+
+### CodeModuleEndpoint
+
+| Field | Type |
+| --- | --- |
+| `route` | `Content` |
+| `httpMethod` | `Label` |
+| `description` | `Content` |
+| `requestModel` | `?Content` · *revision 3+* |
+| `responseModel` | `?Content` · *revision 3+* |
+
+### CodeModuleService
+
+| Field | Type |
+| --- | --- |
+| `name` | `Content` |
+| `description` | `Content` |
+| `interfaceName` | `?Content` · *revision 3+* |
+| `lifetime` | `Label` |
+
+### CodeModuleProgramTotals
+
+| Field | Type |
+| --- | --- |
+| `endpointCount` | `Counter` |
+| `serviceCount` | `Counter` |
+| `tableCount` | `Counter` |
+
+### CodeRecordedModuleAnalysis
+
+| Field | Type |
+| --- | --- |
+| `summary` | `Content` |
+| `confidence` | `Label` |
+| `endpoints` | `Rows<CodeModuleEndpoint>` |
+| `services` | `Rows<CodeModuleService>` |
+| `externalDependencies` | `Rows<Content>` |
+| `databaseTables` | `Rows<Content>` |
+| `modelUsed` | `?Content` · *revision 3+* |
+| `updatedAtMs` | `Counter` |
+| `sourceHash` | `?Content` · *revision 3+* |
+| `sourceRevision` | `?Content` · *revision 3+* |
+| `sourceViewId` | `?Id` · *revision 3+* |
+| `programTotals` | `?CodeModuleProgramTotals` · *revision 3+* |
+
+### CodeModuleAnalysis
+
+| Field | Type |
+| --- | --- |
+| `module` | `CodeModuleIdentity` |
+| `state` | `CodeModuleAnalysisState` |
+| `reason` | `?Label` · *revision 3+* |
+| `observedNodeCounts` | `Rows<CodeCount>` |
+| `observedCoverage` | `Coverage` |
+| `endpoints` | `CodeModuleDrilldown` |
+| `services` | `CodeModuleDrilldown` |
+| `tables` | `CodeModuleDrilldown` |
+| `recorded` | `?CodeRecordedModuleAnalysis` · *revision 3+* |
 
 ## Machine sources
 

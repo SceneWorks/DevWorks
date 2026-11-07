@@ -136,7 +136,11 @@ impl Revisioned for EditPlanInput {
 pub struct PrioritizeInput {
     pub project_id: ProjectId,
     pub expected_queue_revision: Revision,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
     #[schemars(with = "NonEmpty<Id>")]
     pub ordered_work_ids: Option<NonEmpty<Id>>,
     #[serde(

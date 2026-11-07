@@ -17,6 +17,7 @@ for family in reg['families']:
     fs=d[mode.lower()+'Fields'] if d['mode']=='Hybrid' else d['fields']
     parts.append('**'+mode+'**<br>'+fields(fs))
    payload='<br><br>'.join(parts)
+   if d.get('requiredSince'):payload+='<br><br>**Required when negotiated:** '+', '.join('`'+re.sub(r'_([a-z])',lambda m:m[1].upper(),field)+'` at revision '+str(revision)+'+' for field,revision in d['requiredSince'].items())
   else:payload='**'+o['requestModes'][0]+'**<br>[Existing input schema](contracts/'+o['inputSchema']+')<br>'+str(o['selectionConstraint'])
   revs=[r['revision'] for r in o['schemaRevisions']]
   if len(revs)>1 or revs[0]!=1:payload+='<br><br>**Schema revisions** '+', '.join(map(str,revs))+' ([revision '+str(revs[-1])+' input](contracts/'+o['schemaRevisions'][-1]['inputSchema']+'))'
@@ -27,7 +28,9 @@ for name,d in TYPES.items():
  lines += ['### '+name,'']
  if d['kind']=='record':lines += ['| Field | Type |','| --- | --- |',*['| `'+re.sub(r'_([a-z])',lambda m:m[1].upper(),n)+'` | `'+t+'`'+(f" · *revision {d['since'][n]}+*" if n in d.get('since',{}) else '')+' |' for n,t in d['fields'].items()]]
  elif d['kind']=='enum':lines += [', '.join('`'+x+'`' for x in d['values'])+'.']
- elif d['kind']=='versioned':lines += [f'Before revision {d["revision"]}: exact legacy `{d["legacy"]}`. Revision {d["revision"]} and later: `{d["current"]}`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.']
+ elif d['kind']=='versioned':
+  projection='Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.' if d.get('projection','').startswith('help_') else 'Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.'
+  lines += [f'Before revision {d["revision"]}: exact legacy `{d["legacy"]}`. Revision {d["revision"]} and later: `{d["current"]}`. '+projection]
  else:
   lines += ['| Kind | Fields |','| --- | --- |',*['| `'+kind+'` | '+fields(fs)+' |' for kind,fs in d['variants'].items()]]
  lines += ['']

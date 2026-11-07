@@ -686,6 +686,7 @@ fn end_overlay(
             .is_some_and(|p| &p.view_id == v);
         if !named && let Some(view) = tx.indexing().view(v)? {
             layers.extend(view_layers(&view));
+            tx.graph().invalidate_graph_pins_for_view(v)?;
             tx.indexing().remove_view(v)?;
         }
     }
@@ -1222,6 +1223,9 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
                 "base": snap2.base_oid, "head": snap2.head_oid, "headRef": snap2.head_ref,
                 "worktreeId": o.worktree_id.as_ref().map(Id::as_str), "captureDigest": snap2.capture_digest,
                 "configDigest": cfg.digest,
+                "sourceRevision": o.revision + 1,
+                "overlayId": o.id,
+                "expiresAtMs": tx.now_ms().saturating_add(ttl),
             }),
         };
         tx.indexing().insert_view(&view)?;
@@ -1233,7 +1237,12 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             && let Some(old) = tx.indexing().view(v)?
         {
             old_layers.extend(view_layers(&old));
-            tx.indexing().remove_view(v)?;
+            // A browsing lease retains the prior immutable composition, never the mutable
+            // overlay pointer. It must not prevent publication of the next composition.
+            let at = tx.now_ms();
+            if tx.indexing().live_pins(v, at)? == 0 {
+                tx.indexing().remove_view(v)?;
+            }
         }
         let now = tx.now_ms();
         let expected = o.revision;
@@ -1591,6 +1600,7 @@ fn stage_layer(
             return Err(Stop::Cancelled);
         }
         let mut rows = Vec::new();
+        let mut sources = super::source::Sources::new(env.clone(), exec.run.repository_id.clone());
         let mut bytes = 0usize;
         while i < from_worktree.len()
             && rows.len() < env.settings.batch_units
@@ -1599,7 +1609,7 @@ fn stage_layer(
             let u = from_worktree[i];
             i += 1;
             let captured = expected.and_then(|e| e.get(&u.key));
-            let content = if u.mode == super::worker::MODE_STRUCTURAL {
+            let content = if u.oid.is_some() {
                 match env.source.read_file(root, &u.key, u.size.max(1)) {
                     Ok(b) => {
                         let d = format!("sha256:{}", sha256_hex(&b));
@@ -1623,7 +1633,7 @@ fn stage_layer(
                 None
             };
             let share = exec.shares.get(&u.key).cloned();
-            rows.push(build_unit(
+            let mut row = build_unit(
                 &env,
                 &exec.run.repository_id,
                 name,
@@ -1633,16 +1643,23 @@ fn stage_layer(
                 share.as_ref(),
                 stop,
                 &mut exec.warnings,
-            )?);
+            )?;
+            sources.stage(&mut row.0, content.as_deref())?;
+            rows.push(row);
         }
         let n = rows.len() as i64;
+        let staged = sources.records();
+        let capture_env = env.clone();
+        let repository = exec.run.repository_id.clone();
         exec.fenced(WritePriority::Bulk, move |tx, r| {
             for (unit, nodes, edges) in &rows {
+                super::source::Sources::commit(&capture_env, &repository, &staged, tx, unit)?;
                 tx.indexing().put_unit(unit, nodes, edges)?;
             }
             r.completed_units += n;
             Ok(())
         })?;
+        sources.committed();
         done += n;
         exec.log(
             "worktree",

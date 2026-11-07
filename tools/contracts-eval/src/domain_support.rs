@@ -77,6 +77,41 @@ impl<const MIN: usize, const MAX: usize> Check for BoundedText<MIN, MAX> {
 pub type Label = BoundedText<1, 256>;
 pub type Text = BoundedText<1, 4096>;
 pub type Content = BoundedText<0, 65536>;
+
+/// A bounded verbatim source fragment, including legal NUL characters; not executable input.
+#[derive(Clone, Debug, Serialize)]
+#[serde(transparent)]
+pub struct GraphText(pub String);
+impl<'de> Deserialize<'de> for GraphText {
+    fn deserialize<D:Deserializer<'de>>(d:D)->Result<Self,D::Error>{
+        let value=Self(String::deserialize(d)?);value.check().map_err(D::Error::custom)?;Ok(value)
+    }
+}
+impl JsonSchema for GraphText {
+    fn schema_name()->Cow<'static,str>{"GraphSourceTextFragment".into()}
+    fn json_schema(_: &mut SchemaGenerator)->Schema{json_schema!({"type":"string","maxLength":65536})}
+}
+impl Check for GraphText {
+    fn check(&self)->Result<(),String>{if self.0.chars().count()>65536{Err("source fragment exceeds page character bound".into())}else{Ok(())}}
+}
+
+/// Exact indexed unit identity: a relative file key or the indexer's canonical /directory key.
+#[derive(Clone, Debug, Serialize)]
+#[serde(transparent)]
+pub struct GraphUnitKey(pub String);
+impl<'de> Deserialize<'de> for GraphUnitKey {
+    fn deserialize<D:Deserializer<'de>>(d:D)->Result<Self,D::Error>{let value=Self(String::deserialize(d)?);value.check().map_err(D::Error::custom)?;Ok(value)}
+}
+impl JsonSchema for GraphUnitKey {
+    fn schema_name()->Cow<'static,str>{"GraphUnitKey".into()}
+    fn json_schema(_: &mut SchemaGenerator)->Schema{json_schema!({"type":"string","minLength":1,"maxLength":4096,"description":"Exact canonical indexed unit: / for root, /path for a directory, or a relative file path; no backslashes, drive prefixes, empty/dot/dot-dot segments or NUL."})}
+}
+impl Check for GraphUnitKey {
+    fn check(&self)->Result<(),String>{
+        let value=&self.0;let rest=value.strip_prefix('/').unwrap_or(value);
+        if value.len()>4096||value.is_empty()||value.contains(['\\','\0'])||rest.as_bytes().get(1)==Some(&b':')||(!rest.is_empty()&&rest.split('/').any(|s|s.is_empty()||matches!(s,"."|".."))){return Err("invalid canonical graph unit key".into());}Ok(())
+    }
+}
 pub type Cursor = BoundedText<1, 4096>;
 #[derive(Clone, Debug, Serialize)]
 #[serde(transparent)]
@@ -545,6 +580,9 @@ macro_rules! validated_leaf {($($t:ty),*)=>{$(impl Check for $t{fn check(&self)-
 validated_leaf!(
     crate::provider::ArtifactRef,
     crate::provider::TranscriptPage,
+    crate::data_delivery::Citation,
+    crate::data_delivery::RepositorySnapshot,
+    crate::data_delivery::ResolvedViewSet,
     crate::data_delivery::GitOid,
     crate::data_delivery::GraphPage,
     crate::data_delivery::RetrievalPage,

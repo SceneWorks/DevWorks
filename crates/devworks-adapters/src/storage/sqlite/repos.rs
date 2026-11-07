@@ -1002,6 +1002,7 @@ macro_rules! read_impls {
 pub(crate) struct Snapshot<'c> {
     pub conn: &'c Connection,
     pub stamp: SnapshotStamp,
+    pub host_actor: &'c ActorId,
 }
 read_impls!(Snapshot<'_>);
 impl ReadSnapshot for Snapshot<'_> {
@@ -1065,6 +1066,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn evals(&self) -> &dyn EvalRead {
         self
     }
+    fn help(&self) -> &dyn HelpRead {
+        self
+    }
     fn router(&self) -> &dyn RouterRead {
         self
     }
@@ -1072,6 +1076,9 @@ impl ReadSnapshot for Snapshot<'_> {
         self
     }
     fn indexing(&self) -> &dyn IndexRead {
+        self
+    }
+    fn graph(&self) -> &dyn GraphRead {
         self
     }
     fn knowledge(&self) -> &dyn KnowledgeRead {
@@ -1308,6 +1315,9 @@ impl WriteTransaction for Unit<'_> {
     fn evals(&mut self) -> &mut dyn EvalRepository {
         self
     }
+    fn help(&mut self) -> &mut dyn HelpRepository {
+        self
+    }
     fn router(&mut self) -> &mut dyn RouterRepository {
         self
     }
@@ -1315,6 +1325,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn indexing(&mut self) -> &mut dyn IndexRepository {
+        self
+    }
+    fn graph(&mut self) -> &mut dyn GraphRepository {
         self
     }
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository {

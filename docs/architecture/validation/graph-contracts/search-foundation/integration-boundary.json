@@ -1,0 +1,28 @@
+{
+  "base": "2c7bf94c",
+  "boundary": "Unrecorded repository classification remains unknown in Unified search; captured metadata is read once from the selected view.",
+  "changedSchemas": [
+    "domain-command-reply.r3.schema.json",
+    "domain-command-reply.r4.schema.json",
+    "domain-query-reply.r3.schema.json",
+    "domain-query-reply.r4.schema.json",
+    "graph-page.r3.schema.json",
+    "operation-completion.r3.schema.json",
+    "operation-completion.r4.schema.json",
+    "operation-result.r3.schema.json",
+    "operation-result.r4.schema.json"
+  ],
+  "qualified": {
+    "types": 419,
+    "schemas": 70,
+    "domainFixtures": 1772,
+    "combinedFixtures": 2101,
+    "scenarios": 12,
+    "steps": 26,
+    "coreContracts": 16,
+    "registeredNativeRegression": 1,
+    "coreEngineAllTargetClippy": true,
+    "noInference": true
+  },
+  "remaining": "Full final Graph UI and platform review/CI acceptance are separate."
+}

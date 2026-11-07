@@ -58,21 +58,79 @@ impl Revisioned for GetInput {
 /// `repositories.nodes` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["repositoryId", "views", "page"], "x-until": 3}, {"required": ["repositoryId", "views", "page", "scope"], "x-since": 3}, {"required": ["repositoryId", "current", "page", "scope"], "x-since": 3}]))]
 pub struct NodesInput {
     pub repository_id: Id,
-    pub views: ViewSelection,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ViewSelection")]
+    pub views: Option<ViewSelection>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3, "const" = true))]
+    pub current: Option<bool>,
     pub page: PageRequest,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub node_kind: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub internal_module: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 3))]
+    pub scope: Option<DataScope>,
 }
 impl Check for NodesInput {
     fn check(&self) -> Result<(), String> {
         self.repository_id.check()?;
         self.views.check()?;
+        self.current.check()?;
         self.page.check()?;
+        self.node_kind.check()?;
+        self.internal_module.check()?;
+        self.scope.check()?;
         Ok(())
     }
 }
 impl Revisioned for NodesInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.current = None;
+        }
+        if revision < 3 {
+            self.node_kind = None;
+        }
+        if revision < 3 {
+            self.internal_module = None;
+        }
+        if revision < 3 {
+            self.scope = None;
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        if revision >= 3 && self.scope.is_none() {
+            return Err("required current input member is absent: scope".into());
+        }
+        Ok(())
+    }
 }
 
 /// `repositories.remove_index` Command input.

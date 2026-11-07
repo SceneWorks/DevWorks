@@ -1,0 +1,55 @@
+{
+  "scope": "DW52 pure contracts, legacy adapters, source audit and document readers; native Help service/storage/runtime/UI acceptance is separate",
+  "sourceBase": "0b51f021a1d78da153747cbcf8ecae9727dd6367",
+  "sourceCheckpoint": "345a5ed0d8c0343bd6885061203efe06332c5037",
+  "confidence": "high",
+  "nativeCore": {
+    "helpProjectionTests": 4,
+    "recordedFixtureTests": 7,
+    "registryTests": 5,
+    "schemaRevisionTests": 8,
+    "passed": 24,
+    "failed": 0,
+    "notes": "Real production DTO/registry/admission code, with no services or constructors stubbed; separate commands after own selector fix and exact revisioned catalog expectation update."
+  },
+  "probeProjectionTests": {
+    "help": 4,
+    "allocation": 3,
+    "passed": 7,
+    "failed": 0
+  },
+  "generatorTests": 11,
+  "strictCoreClippy": true,
+  "catalog": {
+    "operations": 359,
+    "families": 49,
+    "modeBindings": 364,
+    "modeRevisionAdmissions": 550,
+    "domainTypes": 362
+  },
+  "fixtures": {
+    "allMessages": 1938,
+    "domainMessages": 1609,
+    "domainNegative": 385,
+    "explicitHelpCases": 20,
+    "generatedHelpQueryAdmissions": 2
+  },
+  "legacySchemaHashesIdentical": 56,
+  "readerQaPassed": true,
+  "requirementsWordSha256": "9a5df098265d9e977b01cc2aa5d62f2d467ee2f28caed6bd918eee6760401d19",
+  "sourceSha256": {
+    "tools/contracts-eval/domain-spec.json": "ed674ac2f3762934b68512d0b3ef345259e8717989da3d4eae2b0a9dcc1a5dd0",
+    "tools/contracts-eval/versioned_result.py": "534a4c6541e290b68231fc211939b9eb4cb0fd709c5a8ded24f1d3fee4c67417",
+    "tools/contracts-eval/src/domain_generated.rs": "b355d3b6a3969d2259eb82d7b270640dafb1804442772db9633cd2bcece315ae",
+    "tools/contracts-eval/src/domain_rules.rs": "38562c37aef1b7ce7460a77f71ed6f8d150ef32593bbcb723f7a85b157197cb2",
+    "tools/contracts-eval/make_domain_fixtures.py": "0685788db529c146ccd10a868ffba7bd167e90a2d5d8570e2a06560a5ab3ed9d",
+    "crates/devworks-core/src/protocol/records.rs": "7bde1986c340d254e9528a3a22b387ef2ec2fbffa49d599d63416c70835d788e",
+    "crates/devworks-core/src/protocol/rules.rs": "d7b35935cbdffa444aeeef9df940bd0e6c947c7c5224bbda70616c988a89bbc9",
+    "crates/devworks-core/src/operations/help.rs": "664a23ece6e556c0c9eaf1aa497cb1a3f3a6fe8a1bdbbca57b30af5dd300f9c1",
+    "crates/devworks-core/tests/help_projection.rs": "d8b72ff172b27403386e003f2e63e83a4cd7e7cc6c24c0632010e4f5a3a7d5dd",
+    "crates/devworks-core/tests/recorded_fixtures.rs": "69829f32278be8349fb36d430e3269e472257aedcb167bcd5922dab1eb0ba612",
+    "crates/devworks-core/tests/registry.rs": "213073ea3902eb6a0ad389dd7516eaefdf86fb07a4a268af2cf909c2cad09f0c",
+    "docs/architecture/contracts/domain-fixtures.json": "0c1d2a649867c728e4cd452bb4eb38aeb08c065ef12c22418660df5b0b348e6a",
+    "docs/architecture/contracts/manifest.json": "80e77b50f8d8b08f7d9fddd6c3afa547d2bea0e48f24c2966930a5d9788c7b08"
+  }
+}

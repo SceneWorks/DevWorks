@@ -226,6 +226,9 @@ pub fn estimate(
     let mut known = false;
     let mut unknown = Vec::new();
     let mut input = quantities.clone();
+    if context.input_semantics == InputSemantics::Unknown {
+        unknown.push("input_semantics".into());
+    }
     let ambiguous_audio_cache = quantities.additional.iter().any(|q| {
         q.modality == "Audio" && q.charge_kind == "Input" && q.unit == "Token" && q.quantity > 0
     }) && ((context.cache_read_possible

@@ -102,6 +102,8 @@ fn actual_engine_and_tokio_drop_finish_while_owned_start_or_close_is_stalled() {
                     open_router: None,
                     credential_ref: None,
                     credential_revision: 0,
+                    account_revision: 1,
+                    refresh_operation_id: None,
                     credential_epoch: None,
                     lifecycle: "Connected".into(),
                     state_reason: None,

@@ -180,3 +180,42 @@ Edit [domain-spec.json](../../tools/contracts-eval/domain-spec.json), regenerate
 AD72 retains both `AnthropicMessages` and `ClaudeSubscriptionMessages`. `RouterConfigAction::SubscriptionRisk` requests acceptance/revocation for the current connection revision and exact notice digest. Host-authenticated human interaction, the current notice/profile/account binding and fresh eligibility remain mandatory; setting `accepted=true` in agent JSON cannot enable the connection. The host derives `ConnectionRecord.subscriptionRiskAccepted` and `riskNoticeSha256`. API-key access is separately configured and priced. Both remain routed through the shared native authority/accounting boundary. No public operation is added and the catalog remains 347.
 
 The baseline review rechecks 1,036 combined messages, including 714 domain fixtures and 49 negative cases, after the Anthropic profile/risk action and Helix engine removal. [Current evidence](validation/architecture-gates/schema-model-results.json) supersedes the original checkpoint counts for the current schema bytes; actual host human-authority enforcement remains implementation acceptance.
+
+
+## Exact graph revision 3
+
+The existing twenty graph/repository-node operations retain their revision-1 envelopes and
+byte-exact schemas. Revision 3 adds closed typed name/file/line selectors, graph-specific
+`current:true` view selection, and rich result alternatives for search, nodes, relationships,
+architecture, overview, impact, lineage, source, dependencies, schema and scope lifecycle.
+Current means the actual host worktree mapping; missing views never select Published implicitly.
+Every returned endpoint carries repository/unit/node identity and belongs to the exact resolved
+view set. Source-less nodes remain inspectable without invented citations. Canonical unit keys
+include directory `/`/`/src` identities; source locations use relative files. Trust compares the
+actual opaque unit content identity or a known captured SHA-256 plus exact view and trust revisions.
+Bounded verbatim source and property fragments preserve offsets, including long lines, empty
+files and NUL source characters; continuation never silently truncates the logical request.
+The native reader and schemas reject partial mixed selector groups and present-null choices.
+Legacy projection uses actual representable source/artifact references, otherwise refuses.
+[Field table and qualification](validation/graph-contracts/README.md) distinguish contract proof
+from GraphService, storage, UI and platform acceptance.
+
+Current graph output also carries required scope coverage with explicit unavailable
+repository rows and graph-specific Partial completion; retrieval completion stays
+unchanged. Repository-node revision3 input requires explicit selected DataScope.
+Architecture/overview internal-module analysis records distinguish observed index
+counts/drill-downs from recorded semantic descriptions/program totals, preserving
+NotAnalyzed/Unavailable and historical provenance rather than inventing analysis.
+
+Trust revision3 requires the selected scope and accepts an optional retained pin ID;
+invalid explicit pins never fall back. Legacy/current lifecycle witnesses are
+validated by the owner against current membership, without deriving a project from
+arbitrary repository membership.
+
+## Offline Help passages at revision 3
+
+The four Help queries expose a current `HelpSnapshot` with installed app, registry and Help revisions, authenticated generation availability and the actual pending/latest generation operation. Reading or searching Help never mutates its catalog. `help.topic_for_screen` accepts one explicit capability revision or `current:true`; it resolves current state in the same authorized snapshot, without requiring add-on or history tools. A stale explicit revision is visible rather than replaced silently.
+
+`help.read` returns source/version-matched Unicode passages under Help permission alone. The default is 16,384 characters, with an explicit maximum of 65,536; offsets count Unicode scalar characters. Continuation binds the topic, version, source digest and current visibility. Missing, stale and unavailable sources are explicit. `HelpProvenance` distinguishes bundled app content, exact installed package version/manifest, and registry-generated capability content. Compact pages preserve current availability and exact related operation/package capability names as labels; the legacy ID list contains only real registered IDs.
+
+Legacy basic topic/page reads retain actual published artifact references. A current available result can project to the exact original shape when every needed real artifact exists. An unavailable or inline-only view cannot fabricate a reference. The unchanged `help.generate_capability_docs` command checks its existing registry/Help compare-and-set revisions and returns its real durable operation lifecycle. Help-only readers observe that lifecycle through the snapshot; Accepted is not completion. Regeneration replaces generated content while preserving authored guides, reconciles removed capabilities and leaves unchanged content unchanged. These contracts do not establish native storage, package publication, search, runtime or UI acceptance; see the separate [Help qualification evidence](validation/help-contracts/README.md).

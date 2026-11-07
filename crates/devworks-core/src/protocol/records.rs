@@ -3,14 +3,16 @@
 
 //! Domain records, enums and tagged unions shared by catalog operations (AD69-AD71).
 //! `Check` applies nested bounds and the recorded pure cross-field rules in `protocol::rules`.
-use crate::protocol::data::{ArtifactTags, Coverage, DataScope, GitOid, ViewSelection};
+use crate::protocol::data::{
+    ArtifactTags, Citation, Coverage, DataScope, GitOid, RepositorySnapshot, ViewSelection,
+};
 use crate::protocol::provider::{ArtifactRef, Digest, SchemaRef};
 #[allow(unused_imports)]
 use crate::protocol::support::*;
 use crate::protocol::{
     Activation, ActorId, AssignmentId, Blockers, CommandId, CorrelationId, Counter,
-    EligibilityTarget, EventId, Id, OperationId, OperationState, ProjectId, Purpose, RequestKey,
-    ResourceId, Revision, RootControl, RootId,
+    EligibilityTarget, EventId, Id, OperationId, OperationState, ProjectId, Purpose, ReadStamp,
+    RequestKey, ResourceId, Revision, RootControl, RootId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -12127,5 +12129,2794 @@ impl Check for UsageMeasuredQuantity {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeSearchMode {
+    RankedNodes,
+    NodeList,
+    Unified,
+}
+impl Check for CodeSearchMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSearchSelection {
+    pub mode: CodeSearchMode,
+    pub text: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub repository_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub node_kind: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub internal_module: Option<Content>,
+}
+impl Check for CodeSearchSelection {
+    fn check(&self) -> Result<(), String> {
+        self.mode.check()?;
+        self.text.check()?;
+        self.repository_id.check()?;
+        self.node_kind.check()?;
+        self.internal_module.check()?;
+        crate::protocol::rules::record(
+            "CodeSearchSelection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeSearchSelection {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.repository_id = None;
+        }
+        if revision < 3 {
+            self.node_kind = None;
+        }
+        if revision < 3 {
+            self.internal_module = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum CodeNodeSelection {
+    Node {
+        node_id: Id,
+    },
+    Name {
+        name: Content,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 3))]
+        repository_id: Option<Id>,
+    },
+}
+impl Check for CodeNodeSelection {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Node { node_id } => {
+                node_id.check()?;
+            }
+            Self::Name {
+                name,
+                repository_id,
+            } => {
+                name.check()?;
+                repository_id.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeNodeSelection {
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Name { repository_id, .. } = self
+            && revision < 3
+        {
+            *repository_id = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeTraceDirection {
+    Inbound,
+    Outbound,
+    Both,
+}
+impl Check for CodeTraceDirection {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeCallSelection {
+    pub target: CodeNodeSelection,
+    pub direction: CodeTraceDirection,
+    pub depth: Depth,
+}
+impl Check for CodeCallSelection {
+    fn check(&self) -> Result<(), String> {
+        self.target.check()?;
+        self.direction.check()?;
+        self.depth.check()?;
+        crate::protocol::rules::record(
+            "CodeCallSelection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeCallSelection {
+    fn retain_revision(&mut self, revision: u32) {
+        self.target.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeImpactSelection {
+    pub target: CodeNodeSelection,
+    pub depth: Depth,
+}
+impl Check for CodeImpactSelection {
+    fn check(&self) -> Result<(), String> {
+        self.target.check()?;
+        self.depth.check()?;
+        crate::protocol::rules::record(
+            "CodeImpactSelection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeImpactSelection {
+    fn retain_revision(&mut self, revision: u32) {
+        self.target.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeSourceMode {
+    NodeWindow,
+    WholeFile,
+}
+impl Check for CodeSourceMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum CodeSourceSelection {
+    Node {
+        node_id: Id,
+        mode: CodeSourceMode,
+    },
+    File {
+        repository_id: Id,
+        path: RelativePath,
+        start_line: Counter,
+        end_line: Counter,
+    },
+}
+impl Check for CodeSourceSelection {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Node { node_id, mode } => {
+                node_id.check()?;
+                mode.check()?;
+            }
+            Self::File {
+                repository_id,
+                path,
+                start_line,
+                end_line,
+            } => {
+                repository_id.check()?;
+                path.check()?;
+                start_line.check()?;
+                end_line.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeFileSelection {
+    pub repository_id: Id,
+    pub path: RelativePath,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PositiveCounter", extend("x-since" = 3))]
+    pub line: Option<PositiveCounter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Depth", extend("x-since" = 3))]
+    pub depth: Option<Depth>,
+}
+impl Check for CodeFileSelection {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.path.check()?;
+        self.line.check()?;
+        self.depth.check()?;
+        crate::protocol::rules::record(
+            "CodeFileSelection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeFileSelection {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.line = None;
+        }
+        if revision < 3 {
+            self.depth = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSourceLocation {
+    pub snapshot: RepositorySnapshot,
+    pub unit_key: RelativePath,
+    pub source_digest: Digest,
+    pub path: Content,
+    pub start_line: Counter,
+    pub end_line: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub start_byte: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub end_byte: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub language: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Citation", extend("x-since" = 3))]
+    pub legacy_citation: Option<Citation>,
+}
+impl Check for CodeSourceLocation {
+    fn check(&self) -> Result<(), String> {
+        self.snapshot.check()?;
+        self.unit_key.check()?;
+        self.source_digest.check()?;
+        self.path.check()?;
+        self.start_line.check()?;
+        self.end_line.check()?;
+        self.start_byte.check()?;
+        self.end_byte.check()?;
+        self.language.check()?;
+        self.legacy_citation.check()?;
+        crate::protocol::rules::record(
+            "CodeSourceLocation",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeSourceLocation {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.start_byte = None;
+        }
+        if revision < 3 {
+            self.end_byte = None;
+        }
+        if revision < 3 {
+            self.language = None;
+        }
+        if revision < 3 {
+            self.legacy_citation = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeProperty {
+    pub name: Content,
+    pub json_text: Content,
+    pub offset: Counter,
+    pub total_bytes: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub next_offset: Option<Counter>,
+}
+impl Check for CodeProperty {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.json_text.check()?;
+        self.offset.check()?;
+        self.total_bytes.check()?;
+        self.next_offset.check()?;
+        crate::protocol::rules::record(
+            "CodeProperty",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeProperty {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.next_offset = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeNode {
+    pub node_id: Id,
+    pub repository_id: Id,
+    pub view_id: Id,
+    pub unit_key: GraphUnitKey,
+    pub node_kind: Label,
+    pub name: Content,
+    pub qualified_name: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub internal_module: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub parent_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeSourceLocation", extend("x-since" = 3))]
+    pub source: Option<CodeSourceLocation>,
+    pub properties: Rows<CodeProperty>,
+    pub properties_complete: bool,
+    pub do_not_trust: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Probability", extend("x-since" = 3))]
+    pub trust_score: Option<Probability>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub description: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub analysis_confidence: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub confidence: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub extraction_source: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub fallback_reason: Option<Content>,
+    pub trust_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 3))]
+    pub content_digest: Option<Digest>,
+    pub view_digest: Digest,
+    pub content_identity: Content,
+}
+impl Check for CodeNode {
+    fn check(&self) -> Result<(), String> {
+        self.node_id.check()?;
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.unit_key.check()?;
+        self.node_kind.check()?;
+        self.name.check()?;
+        self.qualified_name.check()?;
+        self.internal_module.check()?;
+        self.parent_id.check()?;
+        self.source.check()?;
+        self.properties.check()?;
+        self.properties_complete.check()?;
+        self.do_not_trust.check()?;
+        self.trust_score.check()?;
+        self.description.check()?;
+        self.analysis_confidence.check()?;
+        self.confidence.check()?;
+        self.extraction_source.check()?;
+        self.fallback_reason.check()?;
+        self.trust_revision.check()?;
+        self.content_digest.check()?;
+        self.view_digest.check()?;
+        self.content_identity.check()?;
+        crate::protocol::rules::record(
+            "CodeNode",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeNode {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.internal_module = None;
+        }
+        if revision < 3 {
+            self.parent_id = None;
+        }
+        if revision < 3 {
+            self.source = None;
+        } else {
+            self.source.retain_revision(revision);
+        }
+        if revision < 3 {
+            self.trust_score = None;
+        }
+        if revision < 3 {
+            self.description = None;
+        }
+        if revision < 3 {
+            self.analysis_confidence = None;
+        }
+        if revision < 3 {
+            self.confidence = None;
+        }
+        if revision < 3 {
+            self.extraction_source = None;
+        }
+        if revision < 3 {
+            self.fallback_reason = None;
+        }
+        if revision < 3 {
+            self.content_digest = None;
+        }
+        self.properties.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeEdge {
+    pub edge_id: Id,
+    pub source_id: Id,
+    pub target_id: Id,
+    pub source_repository_id: Id,
+    pub target_repository_id: Id,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "GraphUnitKey", extend("x-since" = 3))]
+    pub producing_unit: Option<GraphUnitKey>,
+    pub edge_kind: Label,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub resolution: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Probability", extend("x-since" = 3))]
+    pub confidence: Option<Probability>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub confidence_band: Option<Label>,
+    pub properties: Rows<CodeProperty>,
+    pub properties_complete: bool,
+    pub source_unit_key: GraphUnitKey,
+    pub target_unit_key: GraphUnitKey,
+}
+impl Check for CodeEdge {
+    fn check(&self) -> Result<(), String> {
+        self.edge_id.check()?;
+        self.source_id.check()?;
+        self.target_id.check()?;
+        self.source_repository_id.check()?;
+        self.target_repository_id.check()?;
+        self.producing_unit.check()?;
+        self.edge_kind.check()?;
+        self.resolution.check()?;
+        self.confidence.check()?;
+        self.confidence_band.check()?;
+        self.properties.check()?;
+        self.properties_complete.check()?;
+        self.source_unit_key.check()?;
+        self.target_unit_key.check()?;
+        crate::protocol::rules::record(
+            "CodeEdge",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeEdge {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.producing_unit = None;
+        }
+        if revision < 3 {
+            self.resolution = None;
+        }
+        if revision < 3 {
+            self.confidence = None;
+        }
+        if revision < 3 {
+            self.confidence_band = None;
+        }
+        self.properties.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSearchRepository {
+    pub repository_id: Id,
+    pub name: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub description: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub language: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub framework: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub foundational: Option<bool>,
+}
+impl Check for CodeSearchRepository {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.name.check()?;
+        self.description.check()?;
+        self.language.check()?;
+        self.framework.check()?;
+        self.foundational.check()?;
+        crate::protocol::rules::record(
+            "CodeSearchRepository",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeSearchRepository {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.description = None;
+        }
+        if revision < 3 {
+            self.language = None;
+        }
+        if revision < 3 {
+            self.framework = None;
+        }
+        if revision < 3 {
+            self.foundational = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum CodeSearchHit {
+    Node { node: CodeNode },
+    Repository { repository: CodeSearchRepository },
+}
+impl Check for CodeSearchHit {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Node { node } => {
+                node.check()?;
+            }
+            Self::Repository { repository } => {
+                repository.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeSearchHit {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::Node { node, .. } => {
+                node.retain_revision(revision);
+            }
+            Self::Repository { repository, .. } => {
+                repository.retain_revision(revision);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSearchResult {
+    pub mode: CodeSearchMode,
+    pub items: Rows<CodeSearchHit>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub total: Option<Counter>,
+    pub low_confidence_count: Counter,
+}
+impl Check for CodeSearchResult {
+    fn check(&self) -> Result<(), String> {
+        self.mode.check()?;
+        self.items.check()?;
+        self.total.check()?;
+        self.low_confidence_count.check()?;
+        crate::protocol::rules::record(
+            "CodeSearchResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeSearchResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.total = None;
+        }
+        self.items.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeNodesResult {
+    pub nodes: Rows<CodeNode>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub total: Option<Counter>,
+    pub low_confidence_count: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub selected_node_id: Option<Id>,
+}
+impl Check for CodeNodesResult {
+    fn check(&self) -> Result<(), String> {
+        self.nodes.check()?;
+        self.total.check()?;
+        self.low_confidence_count.check()?;
+        self.selected_node_id.check()?;
+        crate::protocol::rules::record(
+            "CodeNodesResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeNodesResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.total = None;
+        }
+        if revision < 3 {
+            self.selected_node_id = None;
+        }
+        self.nodes.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeGraphResult {
+    pub nodes: Rows<CodeNode>,
+    pub edges: Rows<CodeEdge>,
+    pub low_confidence_count: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub unmapped_inbound_edges: Option<Counter>,
+}
+impl Check for CodeGraphResult {
+    fn check(&self) -> Result<(), String> {
+        self.nodes.check()?;
+        self.edges.check()?;
+        self.low_confidence_count.check()?;
+        self.unmapped_inbound_edges.check()?;
+        crate::protocol::rules::record(
+            "CodeGraphResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeGraphResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.unmapped_inbound_edges = None;
+        }
+        self.nodes.retain_revision(revision);
+        self.edges.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeNodeDetail {
+    pub node: CodeNode,
+    pub neighbors: Rows<CodeNode>,
+    pub incoming: Rows<CodeEdge>,
+    pub outgoing: Rows<CodeEdge>,
+    pub cross_repository: Rows<CodeEdge>,
+    pub relationships_complete: bool,
+}
+impl Check for CodeNodeDetail {
+    fn check(&self) -> Result<(), String> {
+        self.node.check()?;
+        self.neighbors.check()?;
+        self.incoming.check()?;
+        self.outgoing.check()?;
+        self.cross_repository.check()?;
+        self.relationships_complete.check()?;
+        crate::protocol::rules::record(
+            "CodeNodeDetail",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeNodeDetail {
+    fn retain_revision(&mut self, revision: u32) {
+        self.node.retain_revision(revision);
+        self.neighbors.retain_revision(revision);
+        self.incoming.retain_revision(revision);
+        self.outgoing.retain_revision(revision);
+        self.cross_repository.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSourceText {
+    pub source: CodeSourceLocation,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub node_id: Option<Id>,
+    pub text: GraphText,
+    pub start_byte: Counter,
+    pub end_byte: Counter,
+    pub total_bytes: Counter,
+    pub first_line: Counter,
+    pub last_line: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub node_start_line: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub node_end_line: Option<Counter>,
+}
+impl Check for CodeSourceText {
+    fn check(&self) -> Result<(), String> {
+        self.source.check()?;
+        self.node_id.check()?;
+        self.text.check()?;
+        self.start_byte.check()?;
+        self.end_byte.check()?;
+        self.total_bytes.check()?;
+        self.first_line.check()?;
+        self.last_line.check()?;
+        self.node_start_line.check()?;
+        self.node_end_line.check()?;
+        crate::protocol::rules::record(
+            "CodeSourceText",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeSourceText {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.node_id = None;
+        }
+        if revision < 3 {
+            self.node_start_line = None;
+        }
+        if revision < 3 {
+            self.node_end_line = None;
+        }
+        self.source.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeCount {
+    pub name: Content,
+    pub count: Counter,
+}
+impl Check for CodeCount {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.count.check()?;
+        crate::protocol::rules::record(
+            "CodeCount",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRepositoryLink {
+    pub source_repository_id: Id,
+    pub target_repository_id: Id,
+    pub edge_kind: Label,
+    pub count: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub confidence_band: Option<Label>,
+}
+impl Check for CodeRepositoryLink {
+    fn check(&self) -> Result<(), String> {
+        self.source_repository_id.check()?;
+        self.target_repository_id.check()?;
+        self.edge_kind.check()?;
+        self.count.check()?;
+        self.confidence_band.check()?;
+        crate::protocol::rules::record(
+            "CodeRepositoryLink",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeRepositoryLink {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.confidence_band = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeOverviewRepository {
+    pub repository_id: Id,
+    pub name: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub source_group: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub language: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub framework: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub foundational: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeSourceLocation", extend("x-since" = 3))]
+    pub readme_source: Option<CodeSourceLocation>,
+}
+impl Check for CodeOverviewRepository {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.name.check()?;
+        self.source_group.check()?;
+        self.language.check()?;
+        self.framework.check()?;
+        self.foundational.check()?;
+        self.readme_source.check()?;
+        crate::protocol::rules::record(
+            "CodeOverviewRepository",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeOverviewRepository {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.source_group = None;
+        }
+        if revision < 3 {
+            self.language = None;
+        }
+        if revision < 3 {
+            self.framework = None;
+        }
+        if revision < 3 {
+            self.foundational = None;
+        }
+        if revision < 3 {
+            self.readme_source = None;
+        } else {
+            self.readme_source.retain_revision(revision);
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeOverview {
+    pub repositories: Rows<CodeOverviewRepository>,
+    pub dependencies: Rows<CodeRepositoryLink>,
+    pub stamp: ReadStamp,
+    pub graph_coverage: Coverage,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub unavailable_reason: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeOverviewTotals", extend("x-since" = 3))]
+    pub graph_totals: Option<CodeOverviewTotals>,
+    pub internal_modules: Rows<CodeModuleAnalysis>,
+}
+impl Check for CodeOverview {
+    fn check(&self) -> Result<(), String> {
+        self.repositories.check()?;
+        self.dependencies.check()?;
+        self.stamp.check()?;
+        self.graph_coverage.check()?;
+        self.unavailable_reason.check()?;
+        self.graph_totals.check()?;
+        self.internal_modules.check()?;
+        crate::protocol::rules::record(
+            "CodeOverview",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeOverview {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.unavailable_reason = None;
+        }
+        if revision < 3 {
+            self.graph_totals = None;
+        }
+        self.repositories.retain_revision(revision);
+        self.dependencies.retain_revision(revision);
+        self.internal_modules.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeHotspot {
+    pub name: Content,
+    pub qualified_name: Content,
+    pub fan_in: Counter,
+    pub reason: Content,
+}
+impl Check for CodeHotspot {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.qualified_name.check()?;
+        self.fan_in.check()?;
+        self.reason.check()?;
+        crate::protocol::rules::record(
+            "CodeHotspot",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSupertype {
+    pub name: Content,
+    pub qualified_name: Content,
+    pub node_kind: Label,
+    pub subtype_count: Counter,
+    pub external: bool,
+}
+impl Check for CodeSupertype {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.qualified_name.check()?;
+        self.node_kind.check()?;
+        self.subtype_count.check()?;
+        self.external.check()?;
+        crate::protocol::rules::record(
+            "CodeSupertype",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodePackageDependency {
+    pub name: Content,
+    pub ecosystem: Label,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub version: Option<Content>,
+    pub dependent_count: Counter,
+}
+impl Check for CodePackageDependency {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.ecosystem.check()?;
+        self.version.check()?;
+        self.dependent_count.check()?;
+        crate::protocol::rules::record(
+            "CodePackageDependency",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodePackageDependency {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.version = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeArchitecture {
+    pub repository_id: Id,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub summary: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub confidence: Option<Label>,
+    pub node_counts: Rows<CodeCount>,
+    pub hotspots: Rows<CodeHotspot>,
+    pub inbound: Rows<CodeRepositoryLink>,
+    pub outbound: Rows<CodeRepositoryLink>,
+    pub packages: Rows<CodePackageDependency>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub package_count: Option<Counter>,
+    pub package_counts_by_ecosystem: Rows<CodeCount>,
+    pub supertypes: Rows<CodeSupertype>,
+    pub internal_modules: Rows<CodeModuleAnalysis>,
+}
+impl Check for CodeArchitecture {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.summary.check()?;
+        self.confidence.check()?;
+        self.node_counts.check()?;
+        self.hotspots.check()?;
+        self.inbound.check()?;
+        self.outbound.check()?;
+        self.packages.check()?;
+        self.package_count.check()?;
+        self.package_counts_by_ecosystem.check()?;
+        self.supertypes.check()?;
+        self.internal_modules.check()?;
+        crate::protocol::rules::record(
+            "CodeArchitecture",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeArchitecture {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.summary = None;
+        }
+        if revision < 3 {
+            self.confidence = None;
+        }
+        if revision < 3 {
+            self.package_count = None;
+        }
+        self.inbound.retain_revision(revision);
+        self.outbound.retain_revision(revision);
+        self.packages.retain_revision(revision);
+        self.internal_modules.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeRisk {
+    Critical,
+    High,
+    Medium,
+    Low,
+    None,
+}
+impl Check for CodeRisk {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeAffectedNode {
+    pub node: CodeNode,
+    pub depth: Counter,
+    pub edge_kind: Label,
+    pub risk: CodeRisk,
+    pub risk_factors: Rows<Content>,
+    pub low_confidence: bool,
+}
+impl Check for CodeAffectedNode {
+    fn check(&self) -> Result<(), String> {
+        self.node.check()?;
+        self.depth.check()?;
+        self.edge_kind.check()?;
+        self.risk.check()?;
+        self.risk_factors.check()?;
+        self.low_confidence.check()?;
+        crate::protocol::rules::record(
+            "CodeAffectedNode",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeAffectedNode {
+    fn retain_revision(&mut self, revision: u32) {
+        self.node.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeImpactSummary {
+    pub total_affected: Counter,
+    pub cross_repository_count: Counter,
+    pub critical_count: Counter,
+    pub high_count: Counter,
+    pub medium_count: Counter,
+    pub low_count: Counter,
+    pub affected_repository_ids: Rows<Id>,
+    pub low_confidence_count: Counter,
+}
+impl Check for CodeImpactSummary {
+    fn check(&self) -> Result<(), String> {
+        self.total_affected.check()?;
+        self.cross_repository_count.check()?;
+        self.critical_count.check()?;
+        self.high_count.check()?;
+        self.medium_count.check()?;
+        self.low_count.check()?;
+        self.affected_repository_ids.check()?;
+        self.low_confidence_count.check()?;
+        crate::protocol::rules::record(
+            "CodeImpactSummary",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeImpact {
+    pub found: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub path: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub language: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub language_indexed: Option<bool>,
+    pub blast_radius: CodeRisk,
+    pub changed: Rows<CodeAffectedNode>,
+    pub affected: Rows<CodeAffectedNode>,
+    pub cross_repository: Rows<CodeRepositoryLink>,
+    pub summary: CodeImpactSummary,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub unmapped_inbound_edges: Option<Counter>,
+}
+impl Check for CodeImpact {
+    fn check(&self) -> Result<(), String> {
+        self.found.check()?;
+        self.path.check()?;
+        self.language.check()?;
+        self.language_indexed.check()?;
+        self.blast_radius.check()?;
+        self.changed.check()?;
+        self.affected.check()?;
+        self.cross_repository.check()?;
+        self.summary.check()?;
+        self.unmapped_inbound_edges.check()?;
+        crate::protocol::rules::record(
+            "CodeImpact",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeImpact {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.path = None;
+        }
+        if revision < 3 {
+            self.language = None;
+        }
+        if revision < 3 {
+            self.language_indexed = None;
+        }
+        if revision < 3 {
+            self.unmapped_inbound_edges = None;
+        }
+        self.changed.retain_revision(revision);
+        self.affected.retain_revision(revision);
+        self.cross_repository.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeTraversalEntry {
+    pub node: CodeNode,
+    pub depth: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub parent_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub edge_kind: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub edge_id: Option<Id>,
+}
+impl Check for CodeTraversalEntry {
+    fn check(&self) -> Result<(), String> {
+        self.node.check()?;
+        self.depth.check()?;
+        self.parent_id.check()?;
+        self.edge_kind.check()?;
+        self.edge_id.check()?;
+        crate::protocol::rules::record(
+            "CodeTraversalEntry",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeTraversalEntry {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.parent_id = None;
+        }
+        if revision < 3 {
+            self.edge_kind = None;
+        }
+        if revision < 3 {
+            self.edge_id = None;
+        }
+        self.node.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeCallTrace {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeNode", extend("x-since" = 3))]
+    pub start: Option<CodeNode>,
+    pub entries: Rows<CodeTraversalEntry>,
+    pub low_confidence_count: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub unmapped_inbound_edges: Option<Counter>,
+}
+impl Check for CodeCallTrace {
+    fn check(&self) -> Result<(), String> {
+        self.start.check()?;
+        self.entries.check()?;
+        self.low_confidence_count.check()?;
+        self.unmapped_inbound_edges.check()?;
+        crate::protocol::rules::record(
+            "CodeCallTrace",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeCallTrace {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.start = None;
+        } else {
+            self.start.retain_revision(revision);
+        }
+        if revision < 3 {
+            self.unmapped_inbound_edges = None;
+        }
+        self.entries.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeLineage {
+    pub model_name: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeNode", extend("x-since" = 3))]
+    pub model: Option<CodeNode>,
+    pub producers: Rows<CodeTraversalEntry>,
+    pub consumers: Rows<CodeTraversalEntry>,
+    pub cross_repository: Rows<CodeEdge>,
+    pub related_nodes: Rows<CodeNode>,
+    pub low_confidence_count: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub unmapped_inbound_edges: Option<Counter>,
+}
+impl Check for CodeLineage {
+    fn check(&self) -> Result<(), String> {
+        self.model_name.check()?;
+        self.model.check()?;
+        self.producers.check()?;
+        self.consumers.check()?;
+        self.cross_repository.check()?;
+        self.related_nodes.check()?;
+        self.low_confidence_count.check()?;
+        self.unmapped_inbound_edges.check()?;
+        crate::protocol::rules::record(
+            "CodeLineage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeLineage {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.model = None;
+        } else {
+            self.model.retain_revision(revision);
+        }
+        if revision < 3 {
+            self.unmapped_inbound_edges = None;
+        }
+        self.producers.retain_revision(revision);
+        self.consumers.retain_revision(revision);
+        self.cross_repository.retain_revision(revision);
+        self.related_nodes.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRelatedNode {
+    pub node: CodeNode,
+    pub edge_kind: Label,
+    pub low_confidence: bool,
+}
+impl Check for CodeRelatedNode {
+    fn check(&self) -> Result<(), String> {
+        self.node.check()?;
+        self.edge_kind.check()?;
+        self.low_confidence.check()?;
+        crate::protocol::rules::record(
+            "CodeRelatedNode",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeRelatedNode {
+    fn retain_revision(&mut self, revision: u32) {
+        self.node.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRelated {
+    pub nodes: Rows<CodeRelatedNode>,
+    pub low_confidence_count: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub unmapped_inbound_edges: Option<Counter>,
+}
+impl Check for CodeRelated {
+    fn check(&self) -> Result<(), String> {
+        self.nodes.check()?;
+        self.low_confidence_count.check()?;
+        self.unmapped_inbound_edges.check()?;
+        crate::protocol::rules::record(
+            "CodeRelated",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeRelated {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.unmapped_inbound_edges = None;
+        }
+        self.nodes.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSemanticGroup {
+    pub index: Counter,
+    pub crates: Rows<Content>,
+    pub outcome: Label,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub failure_code: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub detail_code: Option<Label>,
+}
+impl Check for CodeSemanticGroup {
+    fn check(&self) -> Result<(), String> {
+        self.index.check()?;
+        self.crates.check()?;
+        self.outcome.check()?;
+        self.failure_code.check()?;
+        self.detail_code.check()?;
+        crate::protocol::rules::record(
+            "CodeSemanticGroup",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeSemanticGroup {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.failure_code = None;
+        }
+        if revision < 3 {
+            self.detail_code = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRustSemantic {
+    pub status: Label,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub manifest: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub group_count: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub semantic_groups: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub fallback_groups: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub skipped_groups: Option<Counter>,
+    pub tree_sitter_groups: Rows<CodeSemanticGroup>,
+}
+impl Check for CodeRustSemantic {
+    fn check(&self) -> Result<(), String> {
+        self.status.check()?;
+        self.manifest.check()?;
+        self.group_count.check()?;
+        self.semantic_groups.check()?;
+        self.fallback_groups.check()?;
+        self.skipped_groups.check()?;
+        self.tree_sitter_groups.check()?;
+        crate::protocol::rules::record(
+            "CodeRustSemantic",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeRustSemantic {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.manifest = None;
+        }
+        if revision < 3 {
+            self.group_count = None;
+        }
+        if revision < 3 {
+            self.semantic_groups = None;
+        }
+        if revision < 3 {
+            self.fallback_groups = None;
+        }
+        if revision < 3 {
+            self.skipped_groups = None;
+        }
+        self.tree_sitter_groups.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeDependencies {
+    pub repository_id: Id,
+    pub inbound: Rows<CodeRepositoryLink>,
+    pub outbound: Rows<CodeRepositoryLink>,
+    pub rust_semantic: CodeRustSemantic,
+}
+impl Check for CodeDependencies {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.inbound.check()?;
+        self.outbound.check()?;
+        self.rust_semantic.check()?;
+        crate::protocol::rules::record(
+            "CodeDependencies",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeDependencies {
+    fn retain_revision(&mut self, revision: u32) {
+        self.inbound.retain_revision(revision);
+        self.outbound.retain_revision(revision);
+        self.rust_semantic.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSchemaProperty {
+    pub owner_kind: Label,
+    pub name: Content,
+    pub description: Content,
+}
+impl Check for CodeSchemaProperty {
+    fn check(&self) -> Result<(), String> {
+        self.owner_kind.check()?;
+        self.name.check()?;
+        self.description.check()?;
+        crate::protocol::rules::record(
+            "CodeSchemaProperty",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSchema {
+    pub node_kinds: Rows<Label>,
+    pub edge_kinds: Rows<Label>,
+    pub properties: Rows<CodeSchemaProperty>,
+    pub notes: Rows<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ArtifactRef", extend("x-since" = 3))]
+    pub artifact: Option<ArtifactRef>,
+    pub origin: CodeSchemaOrigin,
+    pub stamp: ReadStamp,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub unavailable_reason: Option<Label>,
+}
+impl Check for CodeSchema {
+    fn check(&self) -> Result<(), String> {
+        self.node_kinds.check()?;
+        self.edge_kinds.check()?;
+        self.properties.check()?;
+        self.notes.check()?;
+        self.artifact.check()?;
+        self.origin.check()?;
+        self.stamp.check()?;
+        self.unavailable_reason.check()?;
+        crate::protocol::rules::record(
+            "CodeSchema",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeSchema {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.artifact = None;
+        }
+        if revision < 3 {
+            self.unavailable_reason = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRepositoryStatus {
+    pub repository_id: Id,
+    pub freshness: IndexFreshness,
+    pub languages: Rows<LanguageCoverage>,
+    pub semantic_packs: Rows<SemanticPackStatus>,
+    pub overlays: Rows<OverlayStatus>,
+}
+impl Check for CodeRepositoryStatus {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.freshness.check()?;
+        self.languages.check()?;
+        self.semantic_packs.check()?;
+        self.overlays.check()?;
+        crate::protocol::rules::record(
+            "CodeRepositoryStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeScopeStatus {
+    pub stamp: ReadStamp,
+    pub coverage: Coverage,
+    pub current: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub unavailable_reason: Option<Label>,
+    pub repositories: Rows<CodeRepositoryStatus>,
+}
+impl Check for CodeScopeStatus {
+    fn check(&self) -> Result<(), String> {
+        self.stamp.check()?;
+        self.coverage.check()?;
+        self.current.check()?;
+        self.unavailable_reason.check()?;
+        self.repositories.check()?;
+        crate::protocol::rules::record(
+            "CodeScopeStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeScopeStatus {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.unavailable_reason = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum HelpAvailability {
+    Available,
+    Missing,
+    Stale,
+    Unavailable,
+}
+impl Check for HelpAvailability {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpSnapshot {
+    pub app_version: Label,
+    pub help_revision: Revision,
+    pub registry_revision: Revision,
+    pub can_generate: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cannot_generate_reason: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_operation: Option<OperationRef>,
+}
+impl Check for HelpSnapshot {
+    fn check(&self) -> Result<(), String> {
+        self.app_version.check()?;
+        self.help_revision.check()?;
+        self.registry_revision.check()?;
+        self.can_generate.check()?;
+        self.cannot_generate_reason.check()?;
+        self.generation_operation.check()?;
+        crate::protocol::rules::record(
+            "HelpSnapshot",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum HelpProvenance {
+    Bundled {
+        app_version: Label,
+        content_digest: Digest,
+    },
+    Package {
+        package_id: Id,
+        package_version: Label,
+        manifest_digest: Digest,
+        content_digest: Digest,
+    },
+    Generated {
+        app_version: Label,
+        registry_revision: Revision,
+        content_digest: Digest,
+    },
+}
+impl Check for HelpProvenance {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Bundled {
+                app_version,
+                content_digest,
+            } => {
+                app_version.check()?;
+                content_digest.check()?;
+            }
+            Self::Package {
+                package_id,
+                package_version,
+                manifest_digest,
+                content_digest,
+            } => {
+                package_id.check()?;
+                package_version.check()?;
+                manifest_digest.check()?;
+                content_digest.check()?;
+            }
+            Self::Generated {
+                app_version,
+                registry_revision,
+                content_digest,
+            } => {
+                app_version.check()?;
+                registry_revision.check()?;
+                content_digest.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpCapabilityMetadata {
+    pub operation: Label,
+    pub mode: Label,
+    pub owner: Label,
+    pub authority: Label,
+    pub effect: Label,
+    pub schema_revision: Revision,
+    pub input_type: Label,
+    pub result_type: Label,
+    pub input_schema_digest: Digest,
+    pub result_schema_digest: Digest,
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<Content>,
+}
+impl Check for HelpCapabilityMetadata {
+    fn check(&self) -> Result<(), String> {
+        self.operation.check()?;
+        self.mode.check()?;
+        self.owner.check()?;
+        self.authority.check()?;
+        self.effect.check()?;
+        self.schema_revision.check()?;
+        self.input_type.check()?;
+        self.result_type.check()?;
+        self.input_schema_digest.check()?;
+        self.result_schema_digest.check()?;
+        self.available.check()?;
+        self.unavailable_reason.check()?;
+        crate::protocol::rules::record(
+            "HelpCapabilityMetadata",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpTopicSummary {
+    pub id: Id,
+    pub version: Label,
+    pub title: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<ArtifactRef>,
+    pub related_capability_ids: Items<Id>,
+    pub availability: HelpAvailability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<HelpProvenance>,
+    pub capabilities: Rows<HelpCapabilityMetadata>,
+    pub related_capabilities: Rows<Label>,
+}
+impl Check for HelpTopicSummary {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.version.check()?;
+        self.title.check()?;
+        self.content.check()?;
+        self.related_capability_ids.check()?;
+        self.availability.check()?;
+        self.reason.check()?;
+        self.provenance.check()?;
+        self.capabilities.check()?;
+        self.related_capabilities.check()?;
+        crate::protocol::rules::record(
+            "HelpTopicSummary",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpPassage {
+    pub text: Content,
+    pub offset: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for HelpPassage {
+    fn check(&self) -> Result<(), String> {
+        self.text.check()?;
+        self.offset.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        crate::protocol::rules::record(
+            "HelpPassage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum HelpReadView {
+    Available {
+        topic: HelpTopicSummary,
+        passage: HelpPassage,
+        snapshot: HelpSnapshot,
+    },
+    Unavailable {
+        topic_id: Id,
+        requested_version: Label,
+        availability: HelpAvailability,
+        reason: Content,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_version: Option<Label>,
+        snapshot: HelpSnapshot,
+    },
+}
+impl Check for HelpReadView {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Available {
+                topic,
+                passage,
+                snapshot,
+            } => {
+                topic.check()?;
+                passage.check()?;
+                snapshot.check()?;
+            }
+            Self::Unavailable {
+                topic_id,
+                requested_version,
+                availability,
+                reason,
+                current_version,
+                snapshot,
+            } => {
+                topic_id.check()?;
+                requested_version.check()?;
+                availability.check()?;
+                reason.check()?;
+                current_version.check()?;
+                snapshot.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpTopicPage {
+    pub items: Rows<HelpTopicSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub availability: HelpAvailability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+    pub snapshot: HelpSnapshot,
+}
+impl Check for HelpTopicPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.availability.check()?;
+        self.reason.check()?;
+        self.snapshot.check()?;
+        crate::protocol::rules::record(
+            "HelpTopicPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "HelpTopic", "before": 3}))]
+pub enum HelpReadResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(HelpTopic),
+    #[schemars(extend("x-since" = 3))]
+    Current(HelpReadView),
+}
+impl Check for HelpReadResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for HelpReadResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let legacy: Option<HelpTopic> = match self {
+                Self::Current(HelpReadView::Available { topic, .. }) => {
+                    topic.content.clone().map(|content| HelpTopic {
+                        id: topic.id.clone(),
+                        version: topic.version.clone(),
+                        title: topic.title.clone(),
+                        related_capability_ids: topic.related_capability_ids.clone(),
+                        content,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
+pub enum HelpTopicPageResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(Page<HelpTopic>),
+    #[schemars(extend("x-since" = 3))]
+    Current(HelpTopicPage),
+}
+impl Check for HelpTopicPageResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for HelpTopicPageResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let legacy: Option<Page<HelpTopic>> = match self {
+                Self::Current(value)
+                    if matches!(value.availability, HelpAvailability::Available)
+                        && value.items.0.iter().all(|topic| {
+                            matches!(topic.availability, HelpAvailability::Available)
+                                && topic.content.is_some()
+                        }) =>
+                {
+                    Some(Page {
+                        items: BoundedList(
+                            value
+                                .items
+                                .0
+                                .iter()
+                                .map(|topic| HelpTopic {
+                                    id: topic.id.clone(),
+                                    version: topic.version.clone(),
+                                    title: topic.title.clone(),
+                                    related_capability_ids: topic.related_capability_ids.clone(),
+                                    content: topic
+                                        .content
+                                        .clone()
+                                        .expect("checked published artifact"),
+                                })
+                                .collect(),
+                        ),
+                        next_cursor: value.next_cursor.clone(),
+                        has_more: value.has_more,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeSchemaOrigin {
+    Declared,
+    Observed,
+}
+impl Check for CodeSchemaOrigin {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeOverviewTotals {
+    pub node_count: Counter,
+    pub edge_count: Counter,
+}
+impl Check for CodeOverviewTotals {
+    fn check(&self) -> Result<(), String> {
+        self.node_count.check()?;
+        self.edge_count.check()?;
+        crate::protocol::rules::record(
+            "CodeOverviewTotals",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeUnavailableRepository {
+    pub repository_id: Id,
+    pub reason: Label,
+}
+impl Check for CodeUnavailableRepository {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.reason.check()?;
+        crate::protocol::rules::record(
+            "CodeUnavailableRepository",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeReadCoverage {
+    pub coverage: Coverage,
+    pub unavailable_repositories: Rows<CodeUnavailableRepository>,
+}
+impl Check for CodeReadCoverage {
+    fn check(&self) -> Result<(), String> {
+        self.coverage.check()?;
+        self.unavailable_repositories.check()?;
+        crate::protocol::rules::record(
+            "CodeReadCoverage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeNodeReference {
+    pub repository_id: Id,
+    pub view_id: Id,
+    pub unit_key: GraphUnitKey,
+    pub node_id: Id,
+}
+impl Check for CodeNodeReference {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.unit_key.check()?;
+        self.node_id.check()?;
+        crate::protocol::rules::record(
+            "CodeNodeReference",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModuleIdentity {
+    pub repository_id: Id,
+    pub module_name: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeNodeReference", extend("x-since" = 3))]
+    pub indexed_node: Option<CodeNodeReference>,
+}
+impl Check for CodeModuleIdentity {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.module_name.check()?;
+        self.indexed_node.check()?;
+        crate::protocol::rules::record(
+            "CodeModuleIdentity",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeModuleIdentity {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.indexed_node = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeModuleAnalysisState {
+    Recorded,
+    NotAnalyzed,
+    Unavailable,
+}
+impl Check for CodeModuleAnalysisState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModuleDrilldown {
+    pub node_kind: Label,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub count: Option<Counter>,
+    pub nodes: Rows<CodeNodeReference>,
+    pub has_more: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Cursor", extend("x-since" = 3))]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for CodeModuleDrilldown {
+    fn check(&self) -> Result<(), String> {
+        self.node_kind.check()?;
+        self.count.check()?;
+        self.nodes.check()?;
+        self.has_more.check()?;
+        self.next_cursor.check()?;
+        crate::protocol::rules::record(
+            "CodeModuleDrilldown",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeModuleDrilldown {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.count = None;
+        }
+        if revision < 3 {
+            self.next_cursor = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModuleEndpoint {
+    pub route: Content,
+    pub http_method: Label,
+    pub description: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub request_model: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub response_model: Option<Content>,
+}
+impl Check for CodeModuleEndpoint {
+    fn check(&self) -> Result<(), String> {
+        self.route.check()?;
+        self.http_method.check()?;
+        self.description.check()?;
+        self.request_model.check()?;
+        self.response_model.check()?;
+        crate::protocol::rules::record(
+            "CodeModuleEndpoint",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeModuleEndpoint {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.request_model = None;
+        }
+        if revision < 3 {
+            self.response_model = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModuleService {
+    pub name: Content,
+    pub description: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub interface_name: Option<Content>,
+    pub lifetime: Label,
+}
+impl Check for CodeModuleService {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.description.check()?;
+        self.interface_name.check()?;
+        self.lifetime.check()?;
+        crate::protocol::rules::record(
+            "CodeModuleService",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeModuleService {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.interface_name = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModuleProgramTotals {
+    pub endpoint_count: Counter,
+    pub service_count: Counter,
+    pub table_count: Counter,
+}
+impl Check for CodeModuleProgramTotals {
+    fn check(&self) -> Result<(), String> {
+        self.endpoint_count.check()?;
+        self.service_count.check()?;
+        self.table_count.check()?;
+        crate::protocol::rules::record(
+            "CodeModuleProgramTotals",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRecordedModuleAnalysis {
+    pub summary: Content,
+    pub confidence: Label,
+    pub endpoints: Rows<CodeModuleEndpoint>,
+    pub services: Rows<CodeModuleService>,
+    pub external_dependencies: Rows<Content>,
+    pub database_tables: Rows<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub model_used: Option<Content>,
+    pub updated_at_ms: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub source_hash: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub source_revision: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub source_view_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeModuleProgramTotals", extend("x-since" = 3))]
+    pub program_totals: Option<CodeModuleProgramTotals>,
+}
+impl Check for CodeRecordedModuleAnalysis {
+    fn check(&self) -> Result<(), String> {
+        self.summary.check()?;
+        self.confidence.check()?;
+        self.endpoints.check()?;
+        self.services.check()?;
+        self.external_dependencies.check()?;
+        self.database_tables.check()?;
+        self.model_used.check()?;
+        self.updated_at_ms.check()?;
+        self.source_hash.check()?;
+        self.source_revision.check()?;
+        self.source_view_id.check()?;
+        self.program_totals.check()?;
+        crate::protocol::rules::record(
+            "CodeRecordedModuleAnalysis",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeRecordedModuleAnalysis {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.model_used = None;
+        }
+        if revision < 3 {
+            self.source_hash = None;
+        }
+        if revision < 3 {
+            self.source_revision = None;
+        }
+        if revision < 3 {
+            self.source_view_id = None;
+        }
+        if revision < 3 {
+            self.program_totals = None;
+        }
+        self.endpoints.retain_revision(revision);
+        self.services.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModuleAnalysis {
+    pub module: CodeModuleIdentity,
+    pub state: CodeModuleAnalysisState,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub reason: Option<Label>,
+    pub observed_node_counts: Rows<CodeCount>,
+    pub observed_coverage: Coverage,
+    pub endpoints: CodeModuleDrilldown,
+    pub services: CodeModuleDrilldown,
+    pub tables: CodeModuleDrilldown,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeRecordedModuleAnalysis", extend("x-since" = 3))]
+    pub recorded: Option<CodeRecordedModuleAnalysis>,
+}
+impl Check for CodeModuleAnalysis {
+    fn check(&self) -> Result<(), String> {
+        self.module.check()?;
+        self.state.check()?;
+        self.reason.check()?;
+        self.observed_node_counts.check()?;
+        self.observed_coverage.check()?;
+        self.endpoints.check()?;
+        self.services.check()?;
+        self.tables.check()?;
+        self.recorded.check()?;
+        crate::protocol::rules::record(
+            "CodeModuleAnalysis",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeModuleAnalysis {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.reason = None;
+        }
+        if revision < 3 {
+            self.recorded = None;
+        } else {
+            self.recorded.retain_revision(revision);
+        }
+        self.module.retain_revision(revision);
+        self.endpoints.retain_revision(revision);
+        self.services.retain_revision(revision);
+        self.tables.retain_revision(revision);
     }
 }

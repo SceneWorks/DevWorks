@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "date": "2026-11-06",
+  "baseCommit": "ab3c4c4e26884211c2abc2589a6edb3360c711e7",
+  "confidence": "High that concurrent cold runtime/rendering workloads caused this integration-test readiness failure; CPU versus disk contribution was not separately profiled.",
+  "observations": [
+    {
+      "kind": "Default test command before guard",
+      "command": "cargo test -p devworks-desktop --test help",
+      "passed": 2,
+      "failed": 11,
+      "ignored": 0,
+      "seconds": 48.82,
+      "evidence": "Parent-run /tmp/devworks-help-integrated-ui.log, inspected directly",
+      "failure": "Ten initial-catalog readiness waits and one contextual published-passage readiness wait expired at the unchanged common bound."
+    },
+    {
+      "kind": "Same-head isolated control",
+      "test": "native_missing_context_is_explicit_and_never_becomes_an_empty_success",
+      "passed": 1,
+      "failed": 0,
+      "seconds": 12.33,
+      "evidence": "Parent-run /tmp/devworks-help-isolated-startup.log, inspected directly"
+    },
+    {
+      "kind": "Source/resource inspection",
+      "facts": [
+        "Every runtime-backed case uses a unique temporary data root and real SQLite/native runtime; the explicit unavailable-runtime case remains a negative UI test.",
+        "Native Help publication stages and syncs durable managed files.",
+        "The headless harness renders while polling real completion; the shared readiness bound remains 30 seconds.",
+        "Tests use SessionSecrets and NoNetwork; no GPU or model inference executes."
+      ]
+    },
+    {
+      "kind": "One default test campaign with file-local scheduling guard",
+      "command": "cargo test -p devworks-desktop --test help --locked",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0,
+      "seconds": 174.84,
+      "testThreadsOverride": null,
+      "retries": 0
+    }
+  ],
+  "change": {
+    "rustFiles": [
+      "crates/devworks-desktop/tests/help.rs"
+    ],
+    "scope": "A poison-recovering file-local Mutex is acquired as the first statement in all 13 integration cases, before their temporary root and any native Engine start. It remains held through fixture cleanup.",
+    "productCodeChanged": false,
+    "commonHelpersChanged": false,
+    "boundsChanged": false,
+    "assertionsChanged": false,
+    "preseedOrFakeCatalog": false
+  },
+  "originalByteProof": {
+    "normalization": "Remove only the helper/import/acquisition additions from the patched file. Every remaining original byte equals the base file.",
+    "originalSha256": "05be84295c5646bc9c177a093febf0f5a2560c3f70dc059966b1d7fcf1db13c1",
+    "normalizedPatchedSha256": "05be84295c5646bc9c177a093febf0f5a2560c3f70dc059966b1d7fcf1db13c1",
+    "passed": true
+  },
+  "qualificationBoundary": "This establishes the default native Help test gate under one runtime/rendering resource budget. It does not claim a latency bound for 13 simultaneous application instances or platform CI qualification.",
+  "preexistingDiagnostic": "The linker emitted the same __eh_frame section-size warning seen in the failing and isolated baseline logs; no warning was suppressed.",
+  "checks": [
+    {
+      "name": "cargo clippy -p devworks-desktop --test help --locked -- -D warnings",
+      "passed": true,
+      "seconds": 25.37
+    },
+    {
+      "name": "cargo fmt --all --check",
+      "passed": true
+    },
+    {
+      "name": "git diff --check",
+      "passed": true
+    }
+  ]
+}

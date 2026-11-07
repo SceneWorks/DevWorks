@@ -97,6 +97,7 @@ enum Crash {
 struct Files {
     inner: NativeArtifactFiles,
     die: Option<(Arc<AtomicBool>, Arc<Notify>)>,
+    armed: Arc<AtomicBool>,
 }
 impl ArtifactFiles for Files {
     fn publish(
@@ -109,7 +110,9 @@ impl ArtifactFiles for Files {
         g: &str,
     ) -> Result<PublishedBlob, FileFault> {
         let published = self.inner.publish(s, src, d, n, r, g);
-        if let Some((dead, died)) = &self.die {
+        if let Some((dead, died)) = &self.die
+            && self.armed.load(Ordering::SeqCst)
+        {
             dead.store(true, Ordering::SeqCst);
             died.notify_one();
         }
@@ -287,8 +290,50 @@ fn count(h: &Harness, sql: &str) -> i64 {
     c.query_row(sql, [], |r| r.get(0)).unwrap()
 }
 
-/// The durable effects of exactly one published reply, and nothing pending.
-fn assert_published_once(h: &Harness, store: &dyn ApplicationStore) {
+/// Independent boot Help publication is settled before the crash probe is armed.
+#[derive(Clone, Copy)]
+struct PublishedBaseline {
+    completed: i64,
+    replies: i64,
+    artifacts: i64,
+    events: i64,
+    files: usize,
+}
+fn published_baseline(h: &Harness, store: &dyn ApplicationStore) -> PublishedBaseline {
+    PublishedBaseline {
+        completed: read(store, |s| s.queue().status(REPLY_CONSUMER)).completed,
+        replies: count(h, "SELECT count(*) FROM receipt_replies"),
+        artifacts: count(h, "SELECT count(*) FROM artifacts"),
+        events: count(
+            h,
+            "SELECT count(*) FROM events WHERE kind='ReceiptReplyPublished'",
+        ),
+        files: native(h).stored_files().unwrap().len(),
+    }
+}
+async fn settle_boot_publications(app: &Runtime) {
+    loop {
+        let settled = read(&**app.store(), |s| {
+            let help = s.queue().status("help_docs")?;
+            let replies = s.queue().status(REPLY_CONSUMER)?;
+            assert_eq!(help.failed, 0, "startup Help failed: {help:?}");
+            Ok(help.completed > 0
+                && help.ready == 0
+                && help.claimed == 0
+                && help.reconciling == 0
+                && replies.ready == 0
+                && replies.claimed == 0
+                && replies.reconciling == 0)
+        });
+        if settled {
+            return;
+        }
+        app.dispatcher().run_until_idle().await.unwrap();
+        tokio::task::yield_now().await;
+    }
+}
+/// The durable effects of exactly one additional published reply, and nothing pending.
+fn assert_published_once(h: &Harness, store: &dyn ApplicationStore, baseline: PublishedBaseline) {
     let status = read(store, |s| s.queue().status(REPLY_CONSUMER));
     assert_eq!(
         (
@@ -300,19 +345,29 @@ fn assert_published_once(h: &Harness, store: &dyn ApplicationStore) {
             status.cancelled,
             status.dismissed
         ),
-        (1, 0, 0, 0, 0, 0, 0),
+        (baseline.completed + 1, 0, 0, 0, 0, 0, 0),
         "{status:?}"
     );
-    assert_eq!(count(h, "SELECT count(*) FROM receipt_replies"), 1);
-    assert_eq!(count(h, "SELECT count(*) FROM artifacts"), 1);
+    assert_eq!(
+        count(h, "SELECT count(*) FROM receipt_replies"),
+        baseline.replies + 1
+    );
+    assert_eq!(
+        count(h, "SELECT count(*) FROM artifacts"),
+        baseline.artifacts + 1
+    );
     assert_eq!(
         count(
             h,
             "SELECT count(*) FROM events WHERE kind='ReceiptReplyPublished'"
         ),
-        1
+        baseline.events + 1
     );
-    assert_eq!(native(h).stored_files().unwrap().len(), 1, "no orphan");
+    assert_eq!(
+        native(h).stored_files().unwrap().len(),
+        baseline.files + 1,
+        "no orphan"
+    );
     assert_eq!(
         count(
             h,
@@ -353,7 +408,7 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
         let h = Harness::new();
         let src = sources(&h);
         // First boot: the process dies at `crash`.
-        let (receipt, user_name) = {
+        let (receipt, user_name, baseline) = {
             let rt = runtime();
             let dead = Arc::new(AtomicBool::new(false));
             let died = Arc::new(Notify::new());
@@ -361,8 +416,10 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
                 inner: h.open(),
                 dead: dead.clone(),
             });
+            let armed = Arc::new(AtomicBool::new(false));
             let files = Arc::new(Files {
                 inner: native(&h),
+                armed: armed.clone(),
                 die: (crash == Crash::AfterReplyFile).then(|| (dead.clone(), died.clone())),
             });
             let user = principal(&*store, "user-a", PrincipalKind::Human);
@@ -370,6 +427,12 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
                 .block_on(boot(composition(&h, store.clone(), files, src.clone())))
                 .unwrap();
             assert!(recovered_nothing(app.report()));
+            rt.block_on(within(
+                "boot publications before crash",
+                settle_boot_publications(&app),
+            ));
+            let baseline = published_baseline(&h, &*store);
+            armed.store(true, Ordering::SeqCst);
             let reply = start(&app, &user, "start-1");
             let CommandReply::Recorded { receipt, .. } = reply else {
                 panic!("{reply:?}")
@@ -385,7 +448,7 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
             drop(app);
             drop(rt);
             drop(store);
-            (receipt, user.principal().0.as_str().to_owned())
+            (receipt, user.principal().0.as_str().to_owned(), baseline)
         };
         let after_crash_files = native(&h).stored_files().unwrap().len();
         assert_eq!(
@@ -394,8 +457,8 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
                 after_crash_files
             ),
             match crash {
-                Crash::AfterReceipt => (0, 0),
-                Crash::AfterReplyFile => (0, 1),
+                Crash::AfterReceipt => (baseline.artifacts, baseline.files),
+                Crash::AfterReplyFile => (baseline.artifacts, baseline.files + 1),
             },
             "{crash:?}: nothing visible, at most an orphaned file"
         );
@@ -429,8 +492,11 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
                 );
             }
         }
-        rt.block_on(within("publication after restart", delivered(&app, 1)));
-        assert_published_once(&h, &*store);
+        rt.block_on(within(
+            "publication after restart",
+            delivered(&app, baseline.completed + 1),
+        ));
+        assert_published_once(&h, &*store, baseline);
         let o = observation(&app, &user, "start-1");
         o.check().unwrap();
         assert!(matches!(o.state, ReceiptLookupState::Recorded), "{o:?}");
@@ -455,7 +521,7 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
         assert!(recovered_nothing(app.report()), "{crash:?}");
         let claimed = rt.block_on(within("idle", app.dispatcher().run_until_idle()));
         assert_eq!(claimed.unwrap(), 0, "{crash:?}");
-        assert_published_once(&h, &*store);
+        assert_published_once(&h, &*store, baseline);
         rt.block_on(app.shutdown()).into_result().unwrap();
     }
 }

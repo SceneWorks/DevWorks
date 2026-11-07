@@ -1,0 +1,46 @@
+{
+  "format": 1,
+  "purpose": "Source ownership and review map, not a runtime capability registry",
+  "screens": {"owner": "crates/devworks-desktop/src/route.rs", "rule": "Each actual SCREENS id maps exactly once to its declared help_topic"},
+  "settings": {"owner": "crates/devworks-core/src/settings/catalog.rs", "rule": "Every Category::help_id plus every real setting/default/scope/adoption/policy is documented", "referenceTopic": "settings-reference"},
+  "runtimeOperations": {"owner": "crates/devworks-core/src/services/mod.rs", "registry": "crates/devworks-core/src/registry/catalog.rs", "referenceTopic": "capability-reference", "rule": "Generated references use actual registered modes/permissions/availability; descriptor existence alone is not availability"},
+  "workflowOwners": [
+    {"path":"crates/devworks-core/src/services/graph","topics":["code-exploration","repositories","indexing"]},
+    {"path":"crates/devworks-core/src/services/prices","topics":["usage","routing-context"]},
+    {"path":"crates/devworks-core/src/services/work","topics":["features","issues","workflow","work-controls"]},
+    {"path":"crates/devworks-core/src/services/runs","topics":["work-controls","agents","recovery"]},
+    {"path":"crates/devworks-core/src/services/sessions","topics":["chat","routing-context","artifacts"]},
+    {"path":"crates/devworks-core/src/services/approvals","topics":["approvals","permissions","recovery"]},
+    {"path":"crates/devworks-core/src/services/notifications","topics":["approvals","settings-Notifications"]},
+    {"path":"crates/devworks-core/src/services/projects.rs","topics":["projects","repositories","storage-lifecycle"]},
+    {"path":"crates/devworks-core/src/services/router","topics":["routing-context","settings-connections","usage"]},
+    {"path":"crates/devworks-core/src/services/jobs","topics":["jobs","work-controls"]},
+    {"path":"crates/devworks-core/src/services/indexing","topics":["indexing","code-exploration","sdk-semantic"]},
+    {"path":"crates/devworks-core/src/services/knowledge","topics":["knowledge","documents-retrieval"]},
+    {"path":"crates/devworks-core/src/services/evals","topics":["evaluations"]},
+    {"path":"crates/devworks-core/src/services/packages","topics":["addons","sdk-start","sdk-manifest"]},
+    {"path":"crates/devworks-core/src/services/browser","topics":["browser","resources"]},
+    {"path":"crates/devworks-core/src/services/web","topics":["integrations","settings-Tools"]},
+    {"path":"crates/devworks-core/src/services/diagnostics","topics":["diagnostics","recovery"]}
+  ],
+  "extensionOwners": [
+    {"path":"crates/devworks-extension-protocol/src/package.rs","topics":["sdk-manifest","sdk-tools","sdk-workflows-events","sdk-context","sdk-native-ui","sdk-semantic"]},
+    {"path":"crates/devworks-extension-protocol/src/frame.rs","topics":["sdk-protocol"]},
+    {"path":"crates/devworks-extension-protocol/src/codec.rs","topics":["sdk-provider"]},
+    {"path":"crates/devworks-adapters/src/packages.rs","topics":["sdk-start","sdk-manifest"]},
+    {"path":"crates/devworks-engine/src/package_host","topics":["sdk-protocol","sdk-workflows-events","sdk-tools"]}
+  ],
+  "retainedDocumentationGeneration": {
+    "repository":"CodeGraph",
+    "revision":"afe73560215bbe7593fc59451de5cc3237e3eeca",
+    "sources":["src/CodeGraph.Api/Controllers/SettingsController.cs:335","src/CodeGraph.Jobs/Jobs/RegenerateMcpDocsJob.cs","src/CodeGraph.Services/McpDocService.cs:17"],
+    "target":"help.generate_capability_docs",
+    "topics":["capability-reference","help"],
+    "disposition":"Retain current tool descriptions, argument/schema metadata and a repeatable regeneration action locally, bound to actual native registry/availability. Do not require the old hosted wiki/MariaDB/job server or advertise unimplemented MCP services. App/manual and installed-package provenance remain distinct."
+  },
+  "exampleQualification": {
+    "manifest":"docs/help/examples/echo/Cargo.toml",
+    "proofs":["Real SDK frame/lifecycle/session bindings and exact echo artifact result", "Actual native bundle writer/inspector checks file hashes, schemas and local help"],
+    "ordinaryTests":"No provider calls, learned inference or production installation"
+  }
+}

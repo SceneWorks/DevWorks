@@ -390,6 +390,9 @@ impl ReadSnapshot for MemSnapshot {
     fn evals(&self) -> &dyn EvalRead {
         &self.unsupported
     }
+    fn help(&self) -> &dyn HelpRead {
+        &self.unsupported
+    }
     fn router(&self) -> &dyn RouterRead {
         &self.unsupported
     }
@@ -397,6 +400,9 @@ impl ReadSnapshot for MemSnapshot {
         &self.unsupported
     }
     fn indexing(&self) -> &dyn IndexRead {
+        &self.unsupported
+    }
+    fn graph(&self) -> &dyn GraphRead {
         &self.unsupported
     }
     fn knowledge(&self) -> &dyn KnowledgeRead {
@@ -496,6 +502,9 @@ impl WriteTransaction for MemTx<'_> {
     fn evals(&mut self) -> &mut dyn EvalRepository {
         &mut self.unsupported
     }
+    fn help(&mut self) -> &mut dyn HelpRepository {
+        &mut self.unsupported
+    }
     fn router(&mut self) -> &mut dyn RouterRepository {
         &mut self.unsupported
     }
@@ -503,6 +512,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn indexing(&mut self) -> &mut dyn IndexRepository {
+        &mut self.unsupported
+    }
+    fn graph(&mut self) -> &mut dyn GraphRepository {
         &mut self.unsupported
     }
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository {
@@ -1729,6 +1741,9 @@ impl RouterRead for Unsupported {
         nope()
     }
     fn route_request(&self, _: &Id) -> Result<Option<StoredRouteRequest>, StorageError> {
+        nope()
+    }
+    fn connection_account_revision(&self, _: &Id) -> Result<Option<i64>, StorageError> {
         nope()
     }
     fn connection(&self, _: &Id) -> Result<Option<StoredConnection>, StorageError> {
@@ -3127,6 +3142,208 @@ impl UsageRepository for Unsupported {
         &mut self,
         _override_: &StoredPriceOverride,
         _expected: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+}
+
+impl HelpRead for Unsupported {
+    fn help_generation_operation(&self, _: &Id) -> Result<Option<OperationId>, StorageError> {
+        nope()
+    }
+    fn help_head(&self) -> Result<StoredHelpHead, StorageError> {
+        nope()
+    }
+    fn help_drafts(&self, _: Option<&Id>, _: u16) -> Result<Vec<StoredHelpDraft>, StorageError> {
+        nope()
+    }
+    fn help_topic(&self, _: &Id, _: &Id) -> Result<Option<StoredHelpTopic>, StorageError> {
+        nope()
+    }
+    fn help_topics(
+        &self,
+        _: &Id,
+        _: &HelpFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredHelpTopic>, StorageError> {
+        nope()
+    }
+    fn help_content(&self, _: &str) -> Result<Option<StoredHelpContent>, StorageError> {
+        nope()
+    }
+    fn help_content_reference(&self, _: &str) -> Result<Option<serde_json::Value>, StorageError> {
+        nope()
+    }
+    fn help_passage_source(
+        &self,
+        _: &Id,
+        _: &Id,
+        _: i64,
+        _: u32,
+    ) -> Result<Option<StoredHelpPassage>, StorageError> {
+        nope()
+    }
+}
+impl HelpRepository for Unsupported {
+    fn set_help_generation_operation(
+        &mut self,
+        _: i64,
+        _: i64,
+        _: &OperationId,
+    ) -> Result<StoredHelpHead, StorageError> {
+        nope()
+    }
+    fn stage_help_document(
+        &mut self,
+        _: &StoredHelpDocument,
+    ) -> Result<StoredHelpTopic, StorageError> {
+        nope()
+    }
+    fn staged_help_topic(&self, _: &Id, _: &Id) -> Result<Option<StoredHelpTopic>, StorageError> {
+        nope()
+    }
+    fn staged_help_topics(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredHelpTopic>, StorageError> {
+        nope()
+    }
+    fn publish_help_generation(
+        &mut self,
+        _: i64,
+        _: i64,
+        _: Option<&OperationId>,
+        _: &StoredHelpHead,
+        _: i64,
+    ) -> Result<StoredHelpHead, StorageError> {
+        nope()
+    }
+    fn discard_help_draft(
+        &mut self,
+        _: &Id,
+        _: &OperationId,
+        _: u16,
+    ) -> Result<bool, StorageError> {
+        nope()
+    }
+}
+
+impl GraphRead for Unsupported {
+    fn graph_units(
+        &self,
+        _: &GraphScope,
+        _: Option<&GraphPosition>,
+        _: u16,
+    ) -> Result<GraphPage<GraphUnit>, StorageError> {
+        nope()
+    }
+    fn graph_nodes(
+        &self,
+        _: &GraphScope,
+        _: &GraphNodeFilter,
+        _: Option<&GraphPosition>,
+        _: u16,
+    ) -> Result<GraphPage<GraphNode>, StorageError> {
+        nope()
+    }
+    fn graph_node(
+        &self,
+        _: &GraphScope,
+        _: &GraphNodeIdentity,
+    ) -> Result<Option<GraphNode>, StorageError> {
+        nope()
+    }
+    fn graph_edges(
+        &self,
+        _: &GraphScope,
+        _: &GraphEdgeFilter,
+        _: Option<&GraphPosition>,
+        _: u16,
+    ) -> Result<GraphPage<GraphEdge>, StorageError> {
+        nope()
+    }
+    fn graph_counts(&self, _: &GraphScope) -> Result<GraphCounts, StorageError> {
+        nope()
+    }
+    fn graph_kinds(
+        &self,
+        _: &GraphScope,
+        _: GraphElementKind,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<GraphPage<GraphKindCount>, StorageError> {
+        nope()
+    }
+    fn graph_trust(
+        &self,
+        _: &GraphScope,
+        _: &GraphNodeIdentity,
+        _: &str,
+    ) -> Result<Option<StoredGraphTrust>, StorageError> {
+        nope()
+    }
+    fn graph_trust_revision(&self, _: &GraphScope) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn graph_retirable_views(
+        &self,
+        _: i64,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<GraphPage<StoredView>, StorageError> {
+        nope()
+    }
+    fn graph_expired_pins(
+        &self,
+        _: i64,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<GraphPage<StoredGraphReadPin>, StorageError> {
+        nope()
+    }
+    fn graph_pin(&self, _: &Id) -> Result<Option<StoredGraphReadPin>, StorageError> {
+        nope()
+    }
+    fn graph_source_capture(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredGraphSourceCapture>, StorageError> {
+        nope()
+    }
+}
+impl GraphRepository for Unsupported {
+    fn put_graph_trust(
+        &mut self,
+        _: &GraphScope,
+        _: &StoredGraphTrust,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn acquire_graph_pin(&mut self, _: &StoredGraphReadPin) -> Result<(), StorageError> {
+        nope()
+    }
+    fn renew_graph_pin(
+        &mut self,
+        _: &Id,
+        _: &str,
+        _: i64,
+        _: i64,
+    ) -> Result<StoredGraphReadPin, StorageError> {
+        nope()
+    }
+    fn retire_graph_pin(&mut self, _: &Id, _: &str, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn invalidate_graph_pins_for_view(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_graph_source_capture(
+        &mut self,
+        _: &StoredGraphSourceCapture,
     ) -> Result<(), StorageError> {
         nope()
     }

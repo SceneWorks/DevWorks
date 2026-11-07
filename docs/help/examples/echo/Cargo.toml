@@ -1,0 +1,23 @@
+[package]
+name = "devworks-help-echo-example"
+version = "1.0.0"
+edition = "2024"
+publish = false
+
+# A standalone developer example, not another application/runtime workspace member.
+[workspace]
+
+[dependencies]
+devworks-extension-protocol = { path = "../../../../crates/devworks-extension-protocol" }
+devworks-core = { path = "../../../../crates/devworks-core" }
+devworks-adapters = { path = "../../../../crates/devworks-adapters" }
+serde_json = "=1.0.154"
+sha2 = "=0.11.1"
+
+[[bin]]
+name = "demo-echo"
+path = "src/main.rs"
+
+[[bin]]
+name = "build-bundle"
+path = "src/bin/build_bundle.rs"

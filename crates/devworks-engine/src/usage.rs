@@ -8,7 +8,10 @@ use devworks_core::services::{
     router::InferenceRouter,
     runs::ControlService,
     usage::{
-        host::{self, AccountingWriteFence, AttemptHost, DriveOutcome, OwnedInferenceSource},
+        host::{
+            self, AccountingWriteFence, AttemptHost, DriveOutcome, OwnedInferenceSink,
+            OwnedInferenceSource,
+        },
         ingest,
     },
 };
@@ -37,6 +40,15 @@ pub struct UsageDrain {
     pub pending_preparations: usize,
 }
 
+struct Production {
+    context: devworks_core::context::InvocationContext,
+    logical: devworks_core::services::router::RequestAdmission,
+    category: devworks_core::services::router::accounting::ReportCategory,
+    request: devworks_core::services::usage::accounting::AttemptRequest,
+    source: Box<dyn OwnedInferenceSource>,
+    sink: Option<Box<dyn OwnedInferenceSink>>,
+    preparation: Option<crate::providers::driver::NativePreparation>,
+}
 struct Recovery {
     after: Option<Id>,
     complete: bool,
@@ -110,6 +122,9 @@ impl UsageRuntime {
             status,
         })
     }
+    pub(crate) fn accounting_fence(&self) -> Arc<AccountingWriteFence> {
+        self.fence.clone()
+    }
     pub fn watch(&self) -> watch::Receiver<Option<Result<UsagePass, StorageError>>> {
         self.status.subscribe()
     }
@@ -173,6 +188,66 @@ impl UsageRuntime {
         request: devworks_core::services::usage::accounting::AttemptRequest,
         source: Box<dyn OwnedInferenceSource>,
     ) -> Result<DriveOutcome, StorageError> {
+        self.produce_with_sink(context, logical, category, request, source, None)
+            .await
+    }
+    pub async fn produce_with_sink(
+        self: &Arc<Self>,
+        context: devworks_core::context::InvocationContext,
+        logical: devworks_core::services::router::RequestAdmission,
+        category: devworks_core::services::router::accounting::ReportCategory,
+        request: devworks_core::services::usage::accounting::AttemptRequest,
+        source: Box<dyn OwnedInferenceSource>,
+        sink: Option<Box<dyn OwnedInferenceSink>>,
+    ) -> Result<DriveOutcome, StorageError> {
+        self.produce_prepared(Production {
+            context,
+            logical,
+            category,
+            request,
+            source,
+            sink,
+            preparation: None,
+        })
+        .await
+    }
+    pub(crate) async fn produce_native(
+        self: &Arc<Self>,
+        production: crate::providers::driver::NativeProduction,
+    ) -> Result<DriveOutcome, StorageError> {
+        let crate::providers::driver::NativeProduction {
+            context,
+            logical,
+            category,
+            request,
+            source,
+            sink,
+            preparation,
+        } = production;
+        self.produce_prepared(Production {
+            context,
+            logical,
+            category,
+            request,
+            source,
+            sink: Some(sink),
+            preparation: Some(preparation),
+        })
+        .await
+    }
+    async fn produce_prepared(
+        self: &Arc<Self>,
+        production: Production,
+    ) -> Result<DriveOutcome, StorageError> {
+        let Production {
+            context,
+            logical,
+            category,
+            mut request,
+            source,
+            sink,
+            preparation,
+        } = production;
         let host = self.host.clone().ok_or_else(|| {
             StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
@@ -197,6 +272,24 @@ impl UsageRuntime {
         let preparing = Preparing(runtime.clone());
         owned_thread(move || {
             let _preparing = preparing;
+            if let Some(preparation)=preparation {
+                let refreshed=preparation.prepare(&context,&logical,&request)?;
+                if let Some(refreshed)=refreshed {
+                    if let Some(selection)=refreshed.recorded_selection { request.selection=selection; }
+                    if let Some(effort)=refreshed.native_effort {
+                        use devworks_core::services::router::accounting::AttemptSelection;
+                        let route=match request.selection {AttemptSelection::NativeGeneration{route,..}=>*route,other=>other};
+                        if matches!(route, AttemptSelection::Conversation{..}) {
+                            request.selection=AttemptSelection::NativeGeneration {route:Box::new(route),requested_effort:effort.requested.map(|x|x.as_str().into()),effective_effort:effort.effective.map(|x|x.as_str().into())};
+                        }else{return Err(StorageError::ScopeDenied);}
+                    }
+                    request.quote=refreshed.quote;
+                    request.price_generation=refreshed.price_generation;
+                    request.override_revision=refreshed.override_revision;
+                    if let devworks_core::services::router::accounting::AttemptSelection::Embedding {connection_revision,..}=&mut request.selection { *connection_revision=refreshed.connection_revision; }
+                }
+            }
+            if runtime.stopping.load(Ordering::SeqCst) { return Err(StorageError::Cancelled); }
             let admission = host.admit(context, logical, category, request)?;
             let attempt = match admission {
                 devworks_core::services::usage::accounting::Admission::Admitted {
@@ -232,10 +325,10 @@ impl UsageRuntime {
                 runtime: runtime.clone(),
                 id: attempt.attempt_id.clone(),
             };
-            host.drive(attempt.attempt_id, source, cancellation)
+            host.drive_with_sink(attempt.attempt_id, source, sink, cancellation)
         })
         .await
-        .unwrap_or_else(|e| Err(e.storage()))
+        .unwrap_or_else(|e|Err(e.storage()))
     }
 
     fn retired(&self, id: &Id) {
@@ -477,9 +570,9 @@ impl UsageRuntime {
     }
 }
 
-// External provider close/start may not implement bounded cancellation. They must not occupy
-// Tokio's blocking pool, whose destructor otherwise joins them after the shutdown deadline.
-// Registry guards and the publication fence retain exact custody until actual closure.
+// Provider/network/keychain work is owned independently of Tokio's blocking pool. Dropping a
+// Tokio runtime cannot wait forever for an external operation that has no cancellation API.
+// Registry guards stay in this thread until actual close; publication fences reject late writes.
 async fn owned_thread<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, OwnedThreadFailure> {

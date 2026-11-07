@@ -4,6 +4,10 @@
 //! (killing its Git tree) while the run keeps its checkpoint for the next boot. Real SQLite, real
 //! Git repositories in temporary directories, the Tree-sitter parser; no network, no inference.
 mod common;
+#[path = "indexing/graph_impact.rs"]
+mod graph_impact;
+#[path = "indexing/graph_source.rs"]
+mod graph_source;
 
 use common::*;
 use devworks_adapters::fs::NativeFilesystem;
@@ -226,6 +230,7 @@ fn run_state(store: &Arc<dyn ApplicationStore>, run: &str) -> StoredIndexRun {
 
 #[test]
 fn discovery_scans_only_after_admission_and_only_for_people() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let rt = runtime();
     let src = sources();
@@ -276,6 +281,7 @@ fn discovery_scans_only_after_admission_and_only_for_people() {
 
 #[test]
 fn the_runtime_discovers_indexes_and_publishes_through_its_supervisor() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let rt = runtime();
     let store = h.open();
@@ -330,6 +336,7 @@ fn the_runtime_discovers_indexes_and_publishes_through_its_supervisor() {
 
 #[test]
 fn a_native_reindex_job_uses_the_registered_service_and_wakes_index_supervision() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let rt = runtime();
     let store = h.open();
@@ -425,6 +432,7 @@ fn a_native_reindex_job_uses_the_registered_service_and_wakes_index_supervision(
 #[cfg(unix)]
 #[test]
 fn shutdown_stops_a_run_within_its_deadline_and_the_next_boot_resumes_it() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let rt = runtime();
     let src = sources();
@@ -480,8 +488,11 @@ fn shutdown_stops_a_run_within_its_deadline_and_the_next_boot_resumes_it() {
         "no Git tree outlives shutdown: {unsettled:?}"
     );
     drop(runtime_);
+    // A new process boot owns a new executor; finish the old boot before reopening its root.
+    drop(rt);
     drop(store);
     // The next boot (with a working Git) resumes the run from its claim.
+    let rt = runtime();
     let store = h.open();
     let runtime_ = rt
         .block_on(boot(composition(&h, store.clone(), "git")))
@@ -496,3 +507,12 @@ fn shutdown_stops_a_run_within_its_deadline_and_the_next_boot_resumes_it() {
     rt.block_on(runtime_.shutdown());
     let _ = std::fs::remove_dir_all(&src);
 }
+
+#[path = "indexing/graph_analysis.rs"]
+mod graph_analysis;
+
+#[path = "indexing/graph_reads.rs"]
+mod graph_reads;
+
+#[path = "indexing/graph_review.rs"]
+mod graph_review;

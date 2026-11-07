@@ -1025,3 +1025,6 @@ fn a_cancellation_still_stopping_is_asked_again_never_settled_as_lost() {
     assert_eq!(pipeline.asked.load(Ordering::SeqCst), 2);
     rt.block_on(app.runtime.shutdown());
 }
+
+#[path = "jobs/help.rs"]
+mod help;

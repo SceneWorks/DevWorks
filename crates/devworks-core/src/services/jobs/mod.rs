@@ -55,6 +55,7 @@
 //! leaving a stale one; deletion keeps the run history as a tombstone and cancels the active run
 //! instead of dropping the row.
 pub mod discovery;
+mod native_help;
 pub mod occurrence;
 pub mod runner;
 
@@ -202,7 +203,8 @@ impl NativeCatalog {
                     capability_id: capability_id(op),
                     operation: op,
                     revision,
-                    schema: argument_schema(op, revision)?,
+                    schema: native_help::argument_schema(op, revision)
+                        .or_else(|| argument_schema(op, revision))?,
                 })
             })
             .collect()
@@ -649,10 +651,18 @@ impl JobService {
                     .ok_or_else(|| refuse(DomainErrorCode::SchemaMismatch, "arguments", None))?;
                 let expected =
                     argument_schema(op, revision).ok_or_else(|| invalid("capability"))?;
-                if expected.schema_id.as_str() != arguments.schema.schema_id.as_str()
-                    || expected.sha256 != arguments.schema.sha256
+                let adapter = native_help::argument_schema(op, revision).is_some_and(|schema| {
+                    schema.schema_id == arguments.schema.schema_id
+                        && schema.sha256 == arguments.schema.sha256
+                });
+                if !adapter
+                    && (expected.schema_id.as_str() != arguments.schema.schema_id.as_str()
+                        || expected.sha256 != arguments.schema.sha256)
                 {
                     return Err(refuse(DomainErrorCode::SchemaMismatch, "arguments", None));
+                }
+                if adapter && native_help::is_empty(&arguments.value.0) {
+                    return Ok("Native");
                 }
                 // The arguments are the operation's input body: decoded strictly by its own
                 // reader, so a job can never hold arguments its capability would refuse.

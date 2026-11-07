@@ -1295,6 +1295,8 @@ Publish separate pass/fail/unsupported/permission/prerequisite results for confi
 
 Help has stable versioned topic IDs and locally bundled Markdown/assets for the app and each installed package. A local FTS index serves the same search/read contracts for humans and agents. The screen/capability registry connects contextual Help to every screen, Settings topic and tool. Source documentation explains module responsibilities, invariants and hard interactions. Structural and workflow diagram sources live with the code and are maintained with changed contracts.
 
+Revision-3 Help queries return bounded inline passages and exact app/package/manifest/registry provenance through the same service used by humans. Current screen lookup can resolve its own registry snapshot; it does not require separate add-on access. Actual published artifacts preserve basic legacy topic replies. A Help snapshot exposes the real pending/latest regeneration operation, so Help-only readers never infer completion from an unrelated revision change. Regeneration retains authored content outside its generated sections and does not advance unchanged content.
+
 Self-improvement is ordinary managed project work. Its plan and acceptance include the affected Help, developer/extension docs, examples, source comments and diagrams. Missing required documentation blocks completion and delivery. Roles, skills and packages keep their separate approval rules; a reviewed merge does not install a new running app.
 
 Diagnostics separate application health from repository health. Correlate queue/projection lag, operation IDs, provider attempts, source snapshots, package versions, resource owners and indexing stages. Logs are bounded/paged/redacted with explicit retention configuration; retained work evidence is not silently discarded as a disposable log. Record process exit and stream completion separately from task acceptance. Usage distinguishes reported, estimated, subscription, local/unpriced and unknown values.
@@ -1344,6 +1346,20 @@ Each inventory entry has a source path/span, immutable span/file digest, source 
 Disposition accounting: 187 direct native bindings, 226 adapted entries, 19 replaced server mechanisms, 64 explicit exclusions, 51 retained support entries and 11 consolidated aliases. Of the exclusions, 63 are legacy Shortcut/RabbitMQ tool entries and one is a legacy-memory import candidate endpoint excluded by IMPORT-01. This mechanical partition is source accounting. Actual argument/result parity, edge semantics and native behavior must pass the assigned cases.
 
 The audit also makes formerly broad catalog owners concrete: repository management/index removal, durable queue inspection/recovery, selected CodeGraph import, controlled maintenance and repository documentation have explicit operation families. Node trust, file impact/hotspots, data-lineage and publisher/consumer traversal, claim/entity bundles/frontiers, review diagnostics and usage filters remain represented. Do not substitute a generic `search` or `health` implementation for those retained operations.
+
+The graph contract registers the retained twenty operations at revisions 1 and 3. Qualified
+revision-3 selectors/results preserve actual per-repository views, composite unit/node identity,
+source-less nodes, opaque content witnesses, trust/confidence and paged source/property content.
+A current/own-view request without an actual host worktree mapping reports unavailable. Contract
+and frozen-source evidence is in [exact graph qualification](validation/graph-contracts/README.md);
+it does not establish native GraphService or UI acceptance.
+
+Current mixed-index broad reads retain available authorized pins and disclose missing
+repositories with explicit Partial scope coverage; explicit/targeted reads do not fall
+back to another view. Internal-module reads preserve actual recorded analysis and its
+source provenance separately from observed index counts and drill-down references.
+A missing analysis producer yields NotAnalyzed/Unavailable, not a synthesized summary
+or fake semantic total. Repository-node revision3 callers supply the selected scope.
 
 The source tree distinguishes two documentation flows: `RegenerateMcpDocsJob` generates tool documentation, while `AnalysisSynthesisCompletedConsumer` writes repository CODEGRAPH.md files. Preserve capability Help generation locally and repository-document generation through the normal owned-worktree/review/delivery boundary. Project analysis, repository synthesis and document generation are separate recoverable stages. A failed synthesis retains prior/project evidence and explicit partial state; publishing a source-style completion notification cannot fabricate successful analysis.
 

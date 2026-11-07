@@ -1,0 +1,269 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "DataScope": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Workspace",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Project",
+              "type": "string"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "projectId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "GraphUnitKey": {
+      "description": "Exact canonical indexed unit: / for root, /path for a directory, or a relative file path; no backslashes, drive prefixes, empty/dot/dot-dot segments or NUL.",
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "IndexCommand": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "kind",
+                "repositoryId",
+                "worktreeId",
+                "expectedSourceRevision"
+              ]
+            },
+            {
+              "required": [
+                "kind",
+                "repositoryId",
+                "ref",
+                "expectedSourceRevision"
+              ],
+              "x-since": 2
+            }
+          ],
+          "properties": {
+            "expectedSourceRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "RefreshOverlay",
+              "type": "string"
+            },
+            "ref": {
+              "description": "Schema revision 2: a branch name, tag or full commit SHA instead of `worktreeId`.",
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string",
+              "x-since": 2
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "worktreeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "repositoryId",
+            "expectedSourceRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Cancel",
+              "type": "string"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "operationId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "expectedContentIdentity"
+                ]
+              },
+              "required": [
+                "kind",
+                "repositoryId",
+                "nodeId",
+                "expectedRevision",
+                "viewId",
+                "expectedContentDigest",
+                "trusted",
+                "unitKey",
+                "expectedViewDigest",
+                "scope"
+              ],
+              "x-since": 3
+            },
+            {
+              "not": {
+                "required": [
+                  "expectedContentDigest"
+                ]
+              },
+              "required": [
+                "kind",
+                "repositoryId",
+                "nodeId",
+                "expectedRevision",
+                "viewId",
+                "trusted",
+                "unitKey",
+                "expectedViewDigest",
+                "expectedContentIdentity",
+                "scope"
+              ],
+              "x-since": 3
+            }
+          ],
+          "properties": {
+            "expectedContentDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "expectedContentIdentity": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 3
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "expectedViewDigest": {
+              "$ref": "#/$defs/Digest",
+              "x-since": 3
+            },
+            "kind": {
+              "const": "SetTrust",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            },
+            "pinId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "scope": {
+              "$ref": "#/$defs/DataScope",
+              "x-since": 3
+            },
+            "trusted": {
+              "type": "boolean"
+            },
+            "unitKey": {
+              "$ref": "#/$defs/GraphUnitKey",
+              "x-since": 3
+            },
+            "viewId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "repositoryId",
+            "nodeId",
+            "expectedRevision",
+            "viewId",
+            "trusted"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "Text0To65536": {
+      "maxLength": 65536,
+      "minLength": 0,
+      "pattern": "^[^\\u0000]*$",
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:index-command-request.r3",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/IndexCommand"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "requestKey": {
+      "$ref": "#/$defs/Id"
+    },
+    "schemaRevision": {
+      "description": "Negotiated operation schema revision. Absent means 1. Only revisions the selected operation registers are admitted; any other is UnsupportedSchema before authority.",
+      "maximum": 65535,
+      "minimum": 3,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "protocol",
+    "requestKey",
+    "command",
+    "schemaRevision"
+  ],
+  "title": "IndexCommandRequest",
+  "type": "object"
+}

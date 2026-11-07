@@ -316,6 +316,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "graph-read-request" => serde_json::from_str::<GraphReadRequest>(&raw)
                             .map_err(|e| e.to_string())
                             .and_then(|v| {
+                                at_revision(&v, revision)?;
                                 v.validate().map_err(str::to_owned)?;
                                 serde_json::to_value(v).map_err(|e| e.to_string())
                             }),
@@ -342,7 +343,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .map_err(|e| e.to_string())
                                 .and_then(|v| {
                                     at_revision(&v, revision)?;
-                                    v.validate().map_err(str::to_owned)?;
+                                    v.validate_revision(revision).map_err(str::to_owned)?;
+                                v.validate().map_err(str::to_owned)?;
                                     serde_json::to_value(v).map_err(|e| e.to_string())
                                 })
                         }
@@ -409,6 +411,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "graph-page" => serde_json::from_str::<GraphPage>(&raw)
                             .map_err(|e| e.to_string())
                             .and_then(|v| {
+                                at_revision(&v, revision)?;
+                                v.check_revision(revision)?;
                                 v.validate().map_err(str::to_owned)?;
                                 serde_json::to_value(v).map_err(|e| e.to_string())
                             }),
@@ -672,6 +676,7 @@ mod revision {
                 if pruned {
                     m.insert(PRUNED.into(), Value::Bool(true));
                 }
+                m.remove("x-until");
                 m.values_mut().for_each(|x| strip(x, revision));
             }
             Value::Array(a) => a.iter_mut().for_each(|x| strip(x, revision)),
@@ -698,7 +703,7 @@ mod revision {
                 }
                 if alt
                     .as_object()
-                    .is_some_and(|a| a.len() == 1 && a.contains_key("required"))
+                    .is_some_and(|a| a.contains_key("required") && a.keys().all(|key| key == "required" || key == "x-until"))
                 {
                     m.remove(key);
                     m.insert("required".into(), alt["required"].clone());

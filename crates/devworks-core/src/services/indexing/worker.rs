@@ -119,7 +119,7 @@ pub(crate) struct PlanUnit {
     pub mode: &'static str,
     pub language: Option<&'static str>,
     pub size: u64,
-    /// The blob to read (structural units only).
+    /// The blob to read for extraction or private source capture (within the source limit).
     pub oid: Option<String>,
     pub previous: Option<String>,
     /// Directory units: child keys and whether each is a directory.
@@ -191,7 +191,11 @@ pub(crate) fn plan(
             mode,
             language: lang,
             size: e.size,
-            oid: (mode == MODE_STRUCTURAL).then(|| e.oid.clone()),
+            oid: (matches!(
+                mode,
+                MODE_STRUCTURAL | MODE_TEXT | MODE_TEXT_FALLBACK | MODE_NOT_SELECTED
+            ) && e.size <= cfg.max_bytes_for(&e.path) as u64)
+                .then(|| e.oid.clone()),
             previous: renamed_from.get(&e.path).cloned(),
             children: Vec::new(),
         });
@@ -389,6 +393,32 @@ pub(crate) fn rows_of(
                     json!({"resolution": e.resolution.as_str(), "targetUnit": unit}),
                 )
             }
+            EdgeTarget::RepositoryNode {
+                repository_id,
+                unit,
+                kind,
+                qualified_name,
+                target_name,
+            } => {
+                let target_repository = repository_id.as_str();
+                let id = match kind.as_str() {
+                    "File" => file_node_id(target_repository, unit),
+                    "Repository" | "Folder" => {
+                        dir_node_id(target_repository, unit.trim_start_matches('/'))
+                    }
+                    _ => node_id(target_repository, unit, kind, qualified_name, 0),
+                };
+                (id.clone(), id, {
+                    let mut payload = json!({
+                        "resolution":e.resolution.as_str(), "targetRepositoryId":repository_id,
+                        "targetUnit":unit, "targetQualifiedName":qualified_name,"targetKind":kind,
+                    });
+                    if let Some(name) = target_name {
+                        payload["targetName"] = json!(name);
+                    }
+                    payload
+                })
+            }
         };
         payload["confidence"] = json!((f64::from(e.confidence) * 100.0).round() / 100.0);
         payload["provenance"] = json!({"extractor": extractor});
@@ -529,7 +559,7 @@ pub(crate) fn group_changed(
     let before: BTreeSet<(&str, &str)> = parent
         .iter()
         .filter(|(k, _)| env.parser.group_of(k) == Some(group))
-        .map(|(k, (d, _, _))| (k.as_str(), d.as_str()))
+        .map(|(k, (d, _, _, _))| (k.as_str(), d.as_str()))
         .collect();
     now != before
 }
@@ -757,7 +787,8 @@ pub(crate) fn retire_view(
     .into_iter()
     .flatten()
     {
-        let in_use = published.as_ref().is_some_and(|p| &p.baseline_id == g)
+        let in_use = tx.indexing().generation_in_view(g)?
+            || published.as_ref().is_some_and(|p| &p.baseline_id == g)
             || overlays.iter().any(|o| {
                 !matches!(o.state.as_str(), OVERLAY_EXPIRED | OVERLAY_UNAVAILABLE)
                     && o.view_id.as_ref() != Some(&v.view_id)
@@ -798,6 +829,10 @@ pub struct Housekeeping {
     pub reclaimed_rows: u64,
     pub stale_overlays: usize,
     pub refreshes_queued: usize,
+    /// Expired graph read lease headers and all their child pins removed this pass.
+    pub expired_read_pins: usize,
+    /// Superseded overlay views retired after their last browsing lease ended.
+    pub retired_read_views: usize,
 }
 
 pub struct IndexWorker {
@@ -1036,6 +1071,75 @@ impl IndexWorker {
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<Housekeeping, StorageError> {
         let mut report = Housekeeping::default();
+        let expired = read_snapshot(&*self.env.store, &ReadOptions::default(), |s| {
+            s.graph().graph_expired_pins(self.env.now(), None, 64)
+        })?;
+        for pin in expired.items {
+            if stop() {
+                return Ok(report);
+            }
+            let removed = run_write(&*self.env.store, WriteOptions::default(), move |tx| {
+                let Some(current) = tx.graph().graph_pin(&pin.id)? else {
+                    return Ok(false);
+                };
+                if current.revision != pin.revision || current.expires_at_ms > tx.now_ms() {
+                    return Ok(false);
+                }
+                tx.graph().retire_graph_pin(
+                    &current.id,
+                    &current.owner_namespace,
+                    current.revision,
+                )?;
+                Ok(true)
+            })?;
+            report.expired_read_pins += usize::from(removed);
+        }
+        let detached = read_snapshot(&*self.env.store, &ReadOptions::default(), |s| {
+            s.graph().graph_retirable_views(self.env.now(), None, 64)
+        })?;
+        for view in detached.items {
+            if stop() {
+                return Ok(report);
+            }
+            let removed = run_write(&*self.env.store, WriteOptions::default(), move |tx| {
+                let Some(current) = tx.indexing().view(&view.view_id)? else {
+                    return Ok(false);
+                };
+                let now = tx.now_ms();
+                if current != view
+                    || tx.indexing().live_pins(&view.view_id, now)? > 0
+                    || tx
+                        .indexing()
+                        .published(&view.repository_id)?
+                        .is_some_and(|p| p.view_id == view.view_id)
+                {
+                    return Ok(false);
+                }
+                let overlay = if let Some(id) = view
+                    .coverage
+                    .get("overlayId")
+                    .and_then(|v| serde_json::from_value::<Id>(v.clone()).ok())
+                {
+                    tx.indexing().overlay(&id)?
+                } else if let Some(id) = view
+                    .coverage
+                    .get("worktreeId")
+                    .and_then(|v| serde_json::from_value::<Id>(v.clone()).ok())
+                {
+                    tx.indexing().overlay_for(&view.repository_id, &id)?
+                } else if let Some(head) = view.coverage.get("head").and_then(Value::as_str) {
+                    tx.indexing().overlay_at(&view.repository_id, head)?
+                } else {
+                    return Ok(false);
+                };
+                if overlay.is_some_and(|o| o.view_id.as_ref() == Some(&view.view_id)) {
+                    return Ok(false);
+                }
+                retire_view(tx, &view)?;
+                Ok(true)
+            })?;
+            report.retired_read_views += usize::from(removed);
+        }
         let due = read_snapshot(&*self.env.store, &ReadOptions::default(), |s| {
             s.indexing().overlays_due(self.env.now(), 64)
         })?;
@@ -1726,9 +1830,14 @@ impl Exec<'_> {
             if staged.contains(&u.key) {
                 continue;
             }
-            let same = parent_units.get(&u.key).is_some_and(|(d, mode, lang)| {
-                d == &u.digest && mode == u.mode && lang.as_deref() == u.language
-            });
+            let same = parent_units
+                .get(&u.key)
+                .is_some_and(|(d, mode, lang, captured)| {
+                    d == &u.digest
+                        && mode == u.mode
+                        && lang.as_deref() == u.language
+                        && (env.artifacts.is_none() || u.oid.is_none() || *captured)
+                });
             if same && u.previous.is_none() && !regroup.contains(u.key.as_str()) {
                 inherit.push(u.key.clone());
             } else {
@@ -1865,10 +1974,12 @@ impl Exec<'_> {
                 content.insert(o.as_str(), b.as_slice());
             }
             let mut rows = Vec::with_capacity(batch.len());
+            let mut sources =
+                super::source::Sources::new(env.clone(), self.run.repository_id.clone());
             for u in &batch {
                 let c = u.oid.as_deref().and_then(|o| content.get(o).copied());
                 let share = self.shares.get(&u.key).cloned();
-                rows.push(build_unit(
+                let mut row = build_unit(
                     &env,
                     &self.run.repository_id,
                     name,
@@ -1878,16 +1989,27 @@ impl Exec<'_> {
                     share.as_ref(),
                     stop,
                     &mut self.warnings,
-                )?);
+                )?;
+                let capture = matches!(
+                    u.mode,
+                    MODE_STRUCTURAL | MODE_TEXT | MODE_TEXT_FALLBACK | MODE_NOT_SELECTED
+                );
+                sources.stage(&mut row.0, c.filter(|_| capture))?;
+                rows.push(row);
             }
             let n = rows.len() as i64;
+            let staged = sources.records();
+            let capture_env = env.clone();
+            let repository = self.run.repository_id.clone();
             self.fenced(WritePriority::Bulk, move |tx, r| {
                 for (unit, nodes, edges) in &rows {
+                    super::source::Sources::commit(&capture_env, &repository, &staged, tx, unit)?;
                     tx.indexing().put_unit(unit, nodes, edges)?;
                 }
                 r.completed_units += n;
                 Ok(())
             })?;
+            sources.committed();
             *done += n;
             self.log(
                 "extracting",
@@ -1942,6 +2064,7 @@ impl Exec<'_> {
                 branch_id: None,
                 worktree_id: None,
                 coverage: json!({"state": coverage_name, "gaps": gaps, "commit": head,
+                    "sourceRevision": pointer + 1,
                     "configDigest": stored.manifest.get("configDigest")}),
             };
             tx.indexing().insert_view(&view)?;
@@ -2059,7 +2182,7 @@ pub(crate) fn staged_keys(
 }
 
 /// A unit's content digest, mode and language.
-pub(crate) type UnitFacts = (String, String, Option<String>);
+pub(crate) type UnitFacts = (String, String, Option<String>, bool);
 
 /// The digest, mode and language of every unit of a sealed generation.
 pub(crate) fn unit_index(
@@ -2086,6 +2209,7 @@ pub(crate) fn unit_index(
                         .get("language")
                         .and_then(Value::as_str)
                         .map(str::to_owned),
+                    u.payload.get("sourceCapture").is_some(),
                 ),
             );
         }
@@ -2437,35 +2561,53 @@ pub(crate) fn link_view_edges(
     repository: &str,
     layers: &[Id],
     unit: &str,
-    mut edges: Vec<StoredEdge>,
+    edges: Vec<StoredEdge>,
 ) -> Result<Vec<StoredEdge>, StorageError> {
-    let Some((top, lower)) = layers.split_first() else {
-        return Ok(edges);
-    };
-    let mut cache = NameCache::new();
-    let mut scopes = None;
-    for edge in &mut edges {
-        let mut payload = edge.payload.clone();
-        let source =
-            swift_extension_source(read, top, lower, repository, unit, edge, &mut payload)?;
-        let target = link_target(
-            read,
-            top,
-            lower,
-            repository,
-            unit,
-            edge,
-            &mut payload,
-            &mut cache,
-            &mut scopes,
-        )?;
-        edge.source_node_id = source;
-        if let Some(target) = target {
-            edge.target_node_id = target;
+    ViewLinker::default().link(read, repository, layers, unit, edges)
+}
+
+/// A reader's per-immutable-view cache. Reusing this across bounded pages avoids rescanning
+/// the complete Swift module/import composition for every inherited edge.
+#[derive(Default)]
+pub(crate) struct ViewLinker {
+    cache: NameCache,
+    scopes: Option<SwiftScopes>,
+}
+impl ViewLinker {
+    pub(crate) fn link(
+        &mut self,
+        read: &dyn IndexRead,
+        repository: &str,
+        layers: &[Id],
+        unit: &str,
+        mut edges: Vec<StoredEdge>,
+    ) -> Result<Vec<StoredEdge>, StorageError> {
+        let Some((top, lower)) = layers.split_first() else {
+            return Ok(edges);
+        };
+        for edge in &mut edges {
+            let mut payload = edge.payload.clone();
+            let source =
+                swift_extension_source(read, top, lower, repository, unit, edge, &mut payload)?;
+            let target = link_target(
+                read,
+                top,
+                lower,
+                repository,
+                unit,
+                edge,
+                &mut payload,
+                &mut self.cache,
+                &mut self.scopes,
+            )?;
+            edge.source_node_id = source;
+            if let Some(target) = target {
+                edge.target_node_id = target;
+            }
+            edge.payload = payload;
         }
-        edge.payload = payload;
+        Ok(edges)
     }
-    Ok(edges)
 }
 
 /// The retained `SwiftTypeReference` endpoint kinds (`IsSwiftTypeNode`).

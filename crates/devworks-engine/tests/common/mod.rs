@@ -21,11 +21,29 @@ use std::sync::{Arc, Mutex};
 
 #[path = "native_runtime_case.rs"]
 mod case_budget;
+#[path = "help_startup.rs"]
+mod help_startup;
 
-/// Acquire before a heavy case; retain the permit through every owned fixture and cleanup.
+/// Acquire first in a heavy case so its owned permit drops after every app/runtime and on panic.
+/// Multiple apps, commands and tasks within the case retain their original concurrency.
 #[must_use = "hold the case permit until runtime cleanup has finished"]
 pub fn native_runtime_case() -> impl Drop {
     case_budget::acquire()
+}
+
+/// A large indexing fixture owns the complete case budget; internal parser/runtime work
+/// remains concurrent and every original watchdog still starts after case admission.
+#[must_use = "hold the case permit until runtime cleanup has finished"]
+pub fn exclusive_native_runtime_case() -> impl Drop {
+    case_budget::acquire_exclusive()
+}
+
+/// Failure-only metadata snapshot; no source/document bodies are read or printed.
+pub fn help_startup_diagnostics<'a>(
+    store: &'a dyn ApplicationStore,
+    dispatcher: &'a Dispatcher,
+) -> impl Drop + 'a {
+    help_startup::watch(store, dispatcher)
 }
 
 pub const T0: i64 = 1_700_000_000_000;

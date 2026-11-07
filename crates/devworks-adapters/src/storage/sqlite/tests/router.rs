@@ -439,6 +439,8 @@ impl Fx {
                         open_router: None,
                         credential_ref: None,
                         credential_revision: 0,
+                        account_revision: 1,
+                        refresh_operation_id: None,
                         credential_epoch: None,
                         lifecycle: "Disconnected".into(),
                         state_reason: None,
@@ -753,6 +755,126 @@ fn open_router_auto_is_its_own_upstream_route() {
             "openrouter-auto"
         );
     }
+}
+
+#[test]
+fn open_router_auto_beta_keeps_its_exact_identity_and_provider_filter_exemptions() {
+    let fx = Fx::new();
+    let mut beta = custom("saved-beta", "OpenRouterChat", false, None);
+    beta.upstream_model_id = "openrouter/auto-beta".into();
+    fx.add_model(beta);
+    fx.dir.set(
+        "OpenRouterChat",
+        "conn-or",
+        ConnectionState::Connected,
+        Some(&[]),
+    );
+    {
+        let mut connections = fx.dir.0.lock().unwrap();
+        let connection = connections
+            .iter_mut()
+            .find(|c| c.id == id("conn-or"))
+            .unwrap();
+        connection.allowed = vec!["vendor/*".into()];
+        connection.excluded = vec!["openrouter/*".into()];
+    }
+    assert!(
+        fx.availability(named("saved-beta"), "Default", &[], None)
+            .available
+    );
+    let (choice, _) = chosen(fx.route("s1", named("saved-beta"), "Default", &[]));
+    assert_eq!(choice.model_id, id("saved-beta"));
+    assert_eq!(
+        fx.pin_row("s1").unwrap().upstream_model_id.as_deref(),
+        Some("openrouter/auto-beta")
+    );
+    let (same, wrote) = chosen(fx.route("s1", named("saved-beta"), "Default", &[]));
+    assert!(!wrote);
+    assert_eq!(same.pin_id, choice.pin_id);
+    let page = result(fx.query_at(
+        &fx.user(),
+        "router.catalog",
+        json!({"page":{"limit":50}, "includeDisabled":false}),
+        Some(3),
+    ));
+    let OperationResult::RouterCatalog { value } = page else {
+        panic!("{page:?}")
+    };
+    assert_eq!(
+        value
+            .items
+            .0
+            .iter()
+            .find(|m| m.id == id("saved-beta"))
+            .unwrap()
+            .available,
+        Some(true)
+    );
+
+    // Auto intent can use the configured Beta row, without renaming it or widening a tier.
+    fx.write(|tx| {
+        let mut ordinary = tx.router().route_model(&id("openrouter-auto"))?.unwrap();
+        let revision = ordinary.revision;
+        ordinary.enabled = false;
+        tx.router().put_route_model(&ordinary, Some(revision))
+    });
+    assert_eq!(
+        model_of(fx.route("s2", auto(), "Default", &[])),
+        "saved-beta"
+    );
+    fx.dir.set(
+        "OpenRouterChat",
+        "conn-or",
+        ConnectionState::Disconnected,
+        Some(&[]),
+    );
+    assert!(
+        !fx.availability(named("saved-beta"), "Default", &[], None)
+            .available
+    );
+}
+
+#[test]
+fn open_router_auto_identity_is_exact_and_does_not_exempt_custom_prefixes() {
+    use devworks_core::services::router::select;
+    let connection = ConnectionStatus {
+        id: id("or"),
+        profile: "OpenRouterChat".into(),
+        state: ConnectionState::Connected,
+        discovered: Some(BTreeSet::new()),
+        allowed: vec!["vendor/*".into()],
+        excluded: vec!["openrouter/*".into()],
+    };
+    for upstream in ["openrouter/auto", "openrouter/auto-beta"] {
+        assert!(connection.permits(upstream));
+        assert!(select::lists("OpenRouterChat", &BTreeSet::new(), upstream));
+    }
+    for upstream in [
+        "openrouter/auto:beta",
+        "openrouter/auto-custom",
+        "OpenRouter/Auto-Beta",
+    ] {
+        assert!(!connection.permits(upstream), "{upstream}");
+        assert!(
+            !select::lists("OpenRouterChat", &BTreeSet::new(), upstream),
+            "{upstream}"
+        );
+        assert!(select::lists(
+            "OpenRouterChat",
+            &BTreeSet::from([upstream.into()]),
+            upstream
+        ));
+    }
+    assert!(!select::lists(
+        "CompatibleChat",
+        &BTreeSet::new(),
+        "openrouter/auto-beta"
+    ));
+    let compatible = ConnectionStatus {
+        profile: "CompatibleChat".into(),
+        ..connection
+    };
+    assert!(!compatible.permits("openrouter/auto-beta"));
 }
 
 #[test]

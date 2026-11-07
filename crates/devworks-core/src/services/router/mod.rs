@@ -12,7 +12,8 @@
 //! * `Model {modelId}` names that catalog model directly. A named model is never translated to a
 //!   tier: when it is not eligible the request waits or is refused, it does not fail over.
 //! * `OpenRouterAuto` is OpenRouter's own automatic upstream route (an `OpenRouterChat` catalog
-//!   entry with upstream `openrouter/auto`), never a synonym for a DevWorks tier.
+//!   entry with upstream `openrouter/auto` or `openrouter/auto-beta`), never a synonym for a
+//!   DevWorks tier.
 //!
 //! # Eligibility (ROUTE-03, ROUTE-13, ROUTE-20)
 //!
@@ -403,7 +404,7 @@ impl Facts {
                 .filter(|id| {
                     self.models.get(id.as_str()).is_some_and(|m| {
                         m.endpoint_profile == select::OPEN_ROUTER_PROFILE
-                            && m.upstream_model_id == select::OPEN_ROUTER_AUTO_UPSTREAM
+                            && crate::ports::router::is_open_router_auto(&m.upstream_model_id)
                     })
                 })
                 .cloned()

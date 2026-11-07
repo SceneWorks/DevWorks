@@ -36,6 +36,14 @@ pub trait Backend: Send + Sync {
             "trusted native human decision ingress".into(),
         ))
     }
+    /// Volatile host-owned response text, authorized against the current session on each read.
+    /// This is not a transcript entry or a generic tool operation.
+    fn text_preview(
+        &self,
+        _session: &Id,
+    ) -> Result<Option<devworks_engine::providers::live::LiveTurn>, String> {
+        Ok(None)
+    }
     /// Native window focus is host input, not an agent-controlled command argument.
     fn set_application_focus(&self, _focused: Option<bool>) {}
     /// Cached permission only; never opens an OS prompt on the frame loop.
@@ -146,6 +154,8 @@ pub struct SecretStoreStatus {
 /// Who is waiting for a reply. Equal slots supersede each other.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Slot {
+    GraphRead(u64),
+    GraphTrust(String),
     Usage(u64, bool),
     UsageOptions(u64),
     Prices(u64, bool),
@@ -153,6 +163,10 @@ pub enum Slot {
     PriceOverride,
     PriceRefresh,
     PriceOperation,
+    HelpTopics(u64, bool),
+    HelpProbe(u64),
+    HelpRead(u64),
+    HelpGenerate,
     ApprovalsList,
     ApprovalInspect(String),
     ApprovalRefresh(String),
@@ -176,6 +190,7 @@ pub enum Slot {
     SessionsList,
     SessionStart,
     Transcript(String),
+    TextPreview(String, u64),
     Append(String),
     /// An attachment being stored for a draft (`draft`, local attachment ID).
     Attach(String, u64),
@@ -371,6 +386,8 @@ pub enum TaskOutput {
     },
     /// A decoded preview image (RGBA, unmultiplied).
     Preview { size: [usize; 2], rgba: Vec<u8> },
+    /// An authorized, volatile provider response snapshot.
+    TextPreview(Option<devworks_engine::providers::live::LiveTurn>),
     /// Package runtimes and indexes were refreshed.
     Refreshed,
 }
@@ -433,6 +450,8 @@ struct Pending {
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
 pub const COMMANDS: &[&str] = &[
+    "code.set_trust",
+    "help.generate_capability_docs",
     "router.price_refresh",
     "router.price_override",
     "approvals.record_human_decision",

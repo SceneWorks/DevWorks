@@ -5,7 +5,7 @@
 //! then a usable connection of its endpoint profile (connected, and listing the model once
 //! discovered), then cooldowns. Nothing here reads a clock, a provider or the network: the
 //! caller passes the catalog rows, the connection directory snapshot, the cooldowns and `now`.
-use crate::ports::router::{ConnectionState, ConnectionStatus};
+use crate::ports::router::{ConnectionState, ConnectionStatus, is_open_router_auto};
 use crate::ports::storage::{StoredCooldown, StoredRouteModel};
 use crate::protocol::Id;
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,7 +19,7 @@ pub const TOOLS: &str = "tools";
 pub const CONTEXT_PREFIX: &str = "context:";
 /// The provider's own default effort (never an eligibility constraint).
 pub const DEFAULT_EFFORT: &str = "Default";
-/// Upstream identity of OpenRouter's automatic route on an `OpenRouterChat` connection.
+/// Upstream identity of OpenRouter's ordinary automatic route.
 pub const OPEN_ROUTER_AUTO_UPSTREAM: &str = "openrouter/auto";
 /// The endpoint profile Open Router Auto is served by.
 pub const OPEN_ROUTER_PROFILE: &str = "OpenRouterChat";
@@ -218,7 +218,7 @@ fn capability_blocks(model: &StoredRouteModel, need: &Need) -> Vec<Block> {
 /// undated provider alias are distinct identities; neither can keep the other's pin alive.
 pub fn lists(profile: &str, discovered: &BTreeSet<String>, upstream: &str) -> bool {
     if profile == OPEN_ROUTER_PROFILE {
-        return upstream == OPEN_ROUTER_AUTO_UPSTREAM || discovered.contains(upstream);
+        return is_open_router_auto(upstream) || discovered.contains(upstream);
     }
     discovered
         .iter()
@@ -257,7 +257,7 @@ pub fn inventory(model: &StoredRouteModel, connections: &[ConnectionStatus]) -> 
         };
     }
     if model.endpoint_profile == OPEN_ROUTER_PROFILE
-        && model.upstream_model_id == OPEN_ROUTER_AUTO_UPSTREAM
+        && is_open_router_auto(&model.upstream_model_id)
         || permitted.iter().any(|c| {
             c.discovered
                 .as_ref()

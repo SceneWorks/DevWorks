@@ -281,7 +281,7 @@ pub static SCREENS: [Screen; 20] = [
         subviews: &[],
         inner_sidebar: None,
         summary_strip: &[],
-        pending: pending("version-matched offline Help", "DW-52"),
+        pending: None,
         link: None,
     },
     Screen {

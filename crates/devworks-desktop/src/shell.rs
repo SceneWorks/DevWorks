@@ -31,8 +31,11 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 pub mod decisions;
+pub mod graph;
+pub mod help;
 pub mod indexing;
 pub mod jobs;
+mod live_text;
 pub mod projects;
 mod settings_secrets;
 pub mod usage;
@@ -160,6 +163,7 @@ pub struct Shell {
     routes: BTreeMap<Route, RouteMemory>,
     pub chat: Chat,
     pub settings: SettingsScreen,
+    pub help: crate::help_screen::HelpScreen,
     pub knowledge: KnowledgeScreen,
     pub artifacts: ListState<ArtifactRecord>,
     pub resources: ListState<ResourceRecord>,
@@ -174,6 +178,7 @@ pub struct Shell {
     /// Features, the board, Issues and Overview of the selected project (DW-12).
     pub work: work::WorkUi,
     pub usage: crate::usage_screen::UsageScreen,
+    pub graph: crate::graph_screen::GraphScreen,
     /// The project the navigation selected; its screens follow it.
     selected_project: Option<String>,
     pub completions: Completions,
@@ -186,6 +191,9 @@ pub struct Shell {
     saved: Option<Memory>,
     last_save: Instant,
     last_poll: Instant,
+    last_preview_poll: Option<Instant>,
+    preview_target: Option<String>,
+    preview_generation: u64,
     restored_selection: Option<String>,
     /// Applied session mutations (start, message) and artifact mutations (save, delete). A
     /// list query started before the latest mutation may miss it: its reply is dropped and
@@ -309,6 +317,7 @@ impl Shell {
             routes: memory.routes.clone(),
             chat,
             settings,
+            help: Default::default(),
             knowledge: KnowledgeScreen::new(),
             artifacts: ListState::default(),
             resources: ListState::default(),
@@ -319,6 +328,7 @@ impl Shell {
             jobs: jobs::JobsUi::default(),
             work: work::WorkUi::default(),
             usage: crate::usage_screen::UsageScreen::default(),
+            graph: crate::graph_screen::GraphScreen::default(),
             selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
             decisions: decisions::DecisionsUi::default(),
@@ -330,6 +340,9 @@ impl Shell {
             saved: Some(memory.clone()),
             last_save: Instant::now(),
             last_poll: Instant::now(),
+            last_preview_poll: None,
+            preview_target: None,
+            preview_generation: 0,
             restored_selection: memory.selected_session,
             session_mutations: 0,
             artifact_mutations: 0,
@@ -448,6 +461,7 @@ impl Shell {
             Route::Settings if self.settings.view.is_none() && !self.settings.loading => {
                 self.load_settings();
             }
+            Route::Help if !self.help.loaded && !self.help.loading => self.refresh_help(),
             Route::Artifacts => self.load_artifacts(),
             Route::Resources => self.load_resources(),
             Route::Browser => self.load_browser(),
@@ -1708,6 +1722,9 @@ impl Shell {
     }
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
+        let Some((slot, reply)) = self.apply_graph(slot, reply) else {
+            return;
+        };
         let Some((slot, reply)) = self.apply_projects(slot, reply) else {
             return;
         };
@@ -1724,6 +1741,9 @@ impl Shell {
             return;
         };
         let Some((slot, reply)) = self.apply_decisions(slot, reply) else {
+            return;
+        };
+        let Some((slot, reply)) = self.apply_help(slot, reply) else {
             return;
         };
         match (slot, reply) {
@@ -1917,6 +1937,7 @@ impl Shell {
                         .entry(id.clone())
                         .or_default()
                         .apply(page);
+                    self.chat.reconcile_text_preview();
                     if more {
                         self.load_transcript(&id);
                     }
@@ -1927,6 +1948,9 @@ impl Shell {
                     t.error = Some(e.describe());
                 }
             },
+            (Slot::TextPreview(id, generation), Reply::Task(result)) => {
+                self.apply_live_text(&id, generation, result);
+            }
             (Slot::Append(id), Reply::Command(c)) => {
                 self.chat.sending = None;
                 let outcome = ops::appended(c);
@@ -2012,7 +2036,8 @@ impl Shell {
                         | TaskOutput::Prepared { .. }
                         | TaskOutput::SettingSecret { .. }
                         | TaskOutput::PackagePrepared { .. }
-                        | TaskOutput::Refreshed,
+                        | TaskOutput::Refreshed
+                        | TaskOutput::TextPreview(_),
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
                 };
@@ -2074,7 +2099,8 @@ impl Shell {
                             | TaskOutput::Prepared { .. }
                             | TaskOutput::SettingSecret { .. }
                             | TaskOutput::PackagePrepared { .. }
-                            | TaskOutput::Refreshed,
+                            | TaskOutput::Refreshed
+                            | TaskOutput::TextPreview(_),
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }
@@ -2785,6 +2811,7 @@ impl Shell {
             self.load_connections();
         }
         match self.route {
+            Route::Help if !self.help.loading => self.probe_help(),
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
             Route::Browser if !self.pending(&Slot::BrowserSessions) => self.load_browser(),
@@ -2939,6 +2966,7 @@ impl Shell {
                     self.notifications_open = true;
                 }
                 SettingsAction::OpenConnections => self.load_connections(),
+                SettingsAction::OpenHelp(topic) => self.open_help_context(&topic),
                 SettingsAction::Connection(a) => self.connection_action(a),
                 SettingsAction::Web(action) => self.web_action(action),
             }
@@ -3329,6 +3357,10 @@ impl Shell {
                 continue;
             };
             match &slot {
+                Slot::GraphTrust(_) => {
+                    self.graph.trust_busy = true;
+                    self.graph.trust_unknown = true;
+                }
                 Slot::PriceOverride | Slot::PriceRefresh => {
                     self.restore_price_command(&slot, u.frame())
                 }
@@ -3371,6 +3403,10 @@ impl Shell {
                     p.sequence = p.sequence.max(*n);
                     p.restore_edit(*n, u.frame());
                     p.busy.push((*n, u.label.clone()));
+                }
+                Slot::HelpGenerate => {
+                    self.help.generating = true;
+                    self.help.generation_unknown = true;
                 }
                 Slot::SettingsSave => {
                     self.settings.saving = true;
@@ -3489,6 +3525,7 @@ impl Shell {
         if self.lifecycle == Lifecycle::Open {
             self.poll_hints();
             self.input(&ctx);
+            self.poll_live_text(&ctx);
         }
         if self.lifecycle == Lifecycle::Open {
             self.route_status_due(&ctx);
@@ -3661,8 +3698,25 @@ impl Shell {
                                 "Search arrives with the work, code and Knowledge indexes \
                                  (DW-12, DW-28, DW-30).",
                             );
-                        if ui.button("Help").clicked() {
-                            self.navigate(Route::Help);
+                        let help = ui
+                            .button("Help")
+                            .on_hover_text("Open local Help for this screen");
+                        help.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::Role::Button,
+                                true,
+                                "Help for current screen",
+                            )
+                        });
+                        if help.clicked() {
+                            let screen = if self.route == Route::Repositories && self.graph.opened {
+                                "code-exploration"
+                            } else if self.route == Route::Settings {
+                                self.settings.help_topic()
+                            } else {
+                                self.route.screen().id
+                            };
+                            self.open_help_context(screen);
                         }
                         let open = self.coordinator_open;
                         let tip = if self.route == Route::Chat {
@@ -4087,6 +4141,7 @@ impl Shell {
                 let ctx = ui.ctx().clone();
                 self.poll_connections(&ctx);
             }
+            Route::Help => self.help_screen(ui),
             Route::Indexing => self.indexing_screen(ui),
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),

@@ -1565,6 +1565,48 @@ fn open_router_model(cx: &Cx, model: &str, upstream: &str) {
         "efforts": [], "imageInput": false, "tools": true, "revision": "1"});
     assert!(summary(cx.configure(json!({"kind": "Model", "model": m}))).2);
 }
+
+#[test]
+fn open_router_auto_beta_discovery_retains_configured_identity_and_dynamic_facts() {
+    let cx = Cx::new();
+    let key = cx.stage("fixture-openrouter-key");
+    cx.add("or", "OpenRouterChat", OPENROUTER, Some(&key));
+    open_router_model(&cx, "my-beta", "openrouter/auto-beta");
+    open_router_model(&cx, "my-colon-model", "openrouter/auto:beta");
+    cx.http.on(
+        Method::Get,
+        OPENROUTER,
+        200,
+        json!({"data":[
+            {"id":"openrouter/auto-beta", "context_length":1234, "supported_parameters":[],
+             "architecture":{"input_modalities":["text"], "output_modalities":["text"]}},
+            {"id":"openrouter/auto:beta", "context_length":4096, "supported_parameters":[],
+             "architecture":{"input_modalities":["text"], "output_modalities":["text"]}}
+        ]}),
+    );
+    summary(cx.configure(json!({"kind":"SignIn", "connectionId":"or", "action":"Inspect"})));
+    let beta = cx.read(|r| r.router().route_model(&id("my-beta"))).unwrap();
+    assert_eq!(beta.upstream_model_id, "openrouter/auto-beta");
+    assert_eq!(beta.context_tokens, None);
+    assert!(
+        beta.tools,
+        "dynamic route cannot acquire fixed inventory facts"
+    );
+    let custom = cx
+        .read(|r| r.router().route_model(&id("my-colon-model")))
+        .unwrap();
+    assert_eq!(custom.upstream_model_id, "openrouter/auto:beta");
+    assert_eq!(custom.context_tokens, Some(4096));
+    assert!(!custom.tools, "a custom prefix uses its own reported facts");
+
+    cx.http.on(Method::Get, OPENROUTER, 200, json!({"data":[]}));
+    summary(cx.configure(json!({"kind":"SignIn", "connectionId":"or", "action":"Inspect"})));
+    assert!(
+        cx.availability("my-beta").available,
+        "auto is not an inventory member"
+    );
+    assert!(!cx.availability("my-colon-model").available);
+}
 fn edit_connection(
     cx: &Cx,
     connection: &str,
@@ -3270,4 +3312,275 @@ fn inventory_refresh_retains_edited_discovery_rows_and_allocates_stable_alternat
             }
         }
     }
+}
+
+#[test]
+fn account_identity_generation_is_explicit_cas_guarded_and_survives_reopen() {
+    let cx = Cx::new();
+    cx.add(
+        "native-identity",
+        "CompatibleChat",
+        "https://example.test/v1",
+        None,
+    );
+    let initial = cx.row("native-identity");
+    assert_eq!(initial.account_revision, 1);
+
+    // Rotating a credential does not itself determine whether its account changed.
+    let mut refresh = initial.clone();
+    refresh.credential_revision += 1;
+    refresh.checked_at_ms = Some(T0 + 1);
+    let refreshed =
+        cx.write(move |tx| tx.router().put_connection(&refresh, Some(initial.revision)));
+    assert_eq!(refreshed.account_revision, 1);
+    assert_eq!(refreshed.credential_revision, 1);
+
+    // The owning service explicitly publishes the next identity in the same row CAS.
+    let mut replacement = refreshed.clone();
+    replacement.account_revision = 2;
+    replacement.account_digest = Some("a".repeat(64));
+    let replaced = cx.write(move |tx| {
+        tx.router()
+            .put_connection(&replacement, Some(refreshed.revision))
+    });
+    assert_eq!(replaced.account_revision, 2);
+    for account_revision in [i64::MIN, -1, 0, 1, 4, i64::MAX] {
+        let mut invalid = replaced.clone();
+        invalid.account_revision = account_revision;
+        let expected = replaced.revision;
+        assert!(matches!(
+            run_write(&*cx.store, WriteOptions::default(), move |tx| {
+                tx.router().put_connection(&invalid, Some(expected))
+            }),
+            Err(StorageError::InvalidRecord(_))
+        ));
+        assert_eq!(cx.row("native-identity"), replaced);
+    }
+    let mut stale = replaced.clone();
+    stale.account_revision = 3;
+    assert!(matches!(
+        run_write(&*cx.store, WriteOptions::default(), move |tx| {
+            tx.router().put_connection(&stale, Some(1))
+        }),
+        Err(StorageError::RevisionConflict(_))
+    ));
+    assert_eq!(cx.row("native-identity"), replaced);
+    let cx = cx.restart();
+    assert_eq!(cx.row("native-identity"), replaced);
+}
+
+#[test]
+fn account_identity_migration_initializes_existing_rows_and_fences_older_writers() {
+    let m = MIGRATIONS.iter().find(|m| m.version == 29).unwrap();
+    assert_eq!(m.checksum(), crate::storage::sqlite::MIGRATION_0029_SHA256);
+    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 29));
+    assert!(!m.rebuilds_tables);
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &super::through(28)).unwrap());
+    h.raw().execute(
+        "INSERT INTO router_connections(id,name,profile,endpoint,credential_revision,lifecycle,revision,created_at,updated_at) \
+         VALUES('old-native','Existing native','CompatibleChat','https://example.test/v1',7,'Connected',4,?1,?1)",
+        [T0],
+    ).unwrap();
+    let store = h.store();
+    let before = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.router().connection(&id("old-native"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(before.account_revision, 1);
+    assert_eq!(before.credential_revision, 7);
+    assert_eq!(before.revision, 4);
+    assert!(
+        h.raw()
+            .execute(
+                "UPDATE router_connections SET account_revision=0 WHERE id='old-native'",
+                []
+            )
+            .is_err()
+    );
+    drop(store);
+    let older = SqliteStore::open_with(h.config(), &super::through(28)).unwrap();
+    assert!(matches!(older.info().access, AccessMode::ReadOnly { .. }));
+    drop(older);
+    let store = h.store();
+    let after = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.router().connection(&id("old-native"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn account_identity_removed_generation_is_retained_and_recreation_cannot_revive_it() {
+    let cx = Cx::new();
+    cx.add(
+        "retained-identity",
+        "CompatibleChat",
+        "https://example.test/v1",
+        None,
+    );
+    let original = cx.row("retained-identity");
+    let expected = original.revision;
+    cx.write(move |tx| {
+        tx.router()
+            .delete_connection(&id("retained-identity"), expected)
+    });
+    assert_eq!(
+        cx.read(|r| r.router().connection(&id("retained-identity"))),
+        None
+    );
+    assert_eq!(
+        cx.read(|r| r
+            .router()
+            .connection_account_revision(&id("retained-identity"))),
+        Some(1)
+    );
+    let cx = cx.restart();
+    let same_identity = original.clone();
+    assert!(matches!(
+        run_write(&*cx.store, WriteOptions::default(), move |tx| {
+            tx.router().put_connection(&same_identity, None)
+        }),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    assert_eq!(
+        cx.read(|r| r
+            .router()
+            .connection_account_revision(&id("retained-identity"))),
+        Some(1)
+    );
+    let mut recreated = original;
+    recreated.account_revision = 2;
+    let fresh = cx.write(move |tx| tx.router().put_connection(&recreated, None));
+    assert_eq!(fresh.account_revision, 2);
+    assert_eq!(fresh.revision, 1);
+    assert_eq!(
+        cx.read(|r| r
+            .router()
+            .connection_account_revision(&id("retained-identity"))),
+        Some(2)
+    );
+    let mut racing_recreation = fresh.clone();
+    racing_recreation.account_revision = 3;
+    assert!(matches!(
+        run_write(&*cx.store, WriteOptions::default(), move |tx| {
+            tx.router().put_connection(&racing_recreation, None)
+        }),
+        Err(StorageError::Duplicate { .. })
+    ));
+    assert_eq!(cx.row("retained-identity"), fresh);
+
+    // The high-water mark cannot wrap into a usable identity after removal.
+    let expected = fresh.revision;
+    cx.write(move |tx| {
+        tx.router()
+            .delete_connection(&id("retained-identity"), expected)
+    });
+    cx.h.raw().execute("UPDATE provider_connection_identities SET account_revision=?1 WHERE id='retained-identity'", [i64::MAX]).unwrap();
+    let mut overflow = fresh;
+    overflow.account_revision = i64::MAX;
+    assert!(matches!(
+        run_write(&*cx.store, WriteOptions::default(), move |tx| {
+            tx.router().put_connection(&overflow, None)
+        }),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    assert_eq!(
+        cx.read(|r| r.router().connection(&id("retained-identity"))),
+        None
+    );
+    let cx = cx.restart();
+    assert_eq!(
+        cx.read(|r| r
+            .router()
+            .connection_account_revision(&id("retained-identity"))),
+        Some(i64::MAX)
+    );
+}
+
+#[test]
+fn native_account_identity_service_changes_do_not_alias_rotation_or_removed_connections() {
+    use devworks_core::protocol::provider::{EndpointProfile, NativeBinding};
+    let cx = Cx::new();
+    cx.add(
+        "native-identity",
+        "CompatibleChat",
+        "http://localhost:11434/v1",
+        None,
+    );
+    let before = cx.row("native-identity");
+    let old_binding = NativeBinding {
+        connection_id: before.id.clone(),
+        account_revision: Revision::new(before.account_revision).unwrap(),
+        endpoint_profile: EndpointProfile::CompatibleChat,
+        model_id: id("native-model"),
+        context_epoch: Counter::new(0).unwrap(),
+    };
+    summary(cx.configure(json!({"kind":"Connection","connectionId":"native-identity","expectedRevision":before.revision.to_string(),"name":"Renamed","profile":"CompatibleChat","endpoint":"http://localhost:11434/v1"})));
+    assert_eq!(
+        cx.row("native-identity").account_revision,
+        before.account_revision
+    );
+    for endpoint in ["http://localhost:11434/v2", "http://localhost:11434/v1"] {
+        let current = cx.row("native-identity");
+        summary(cx.configure(json!({"kind":"Connection","connectionId":"native-identity","expectedRevision":current.revision.to_string(),"name":"Renamed","profile":"CompatibleChat","endpoint":endpoint})));
+        assert_eq!(
+            cx.row("native-identity").account_revision,
+            current.account_revision + 1
+        );
+    }
+    let current = cx.row("native-identity");
+    let key = cx.stage("native-new-key");
+    summary(cx.configure(json!({"kind":"Connection","connectionId":"native-identity","expectedRevision":current.revision.to_string(),"name":"Renamed","profile":"CompatibleChat","endpoint":"http://localhost:11434/v1","credentialRef":key.as_str()})));
+    assert_eq!(
+        cx.row("native-identity").account_revision,
+        current.account_revision + 1
+    );
+    let current = cx.row("native-identity");
+    summary(cx.configure(
+        json!({"kind":"SignIn","connectionId":"native-identity","action":"Disconnect"}),
+    ));
+    assert_eq!(
+        cx.row("native-identity").account_revision,
+        current.account_revision + 1
+    );
+    let removed = cx.row("native-identity");
+    summary(cx.configure(json!({"kind":"RemoveConnection","connectionId":"native-identity","expectedRevision":removed.revision.to_string()})));
+    cx.add(
+        "native-identity",
+        "CompatibleChat",
+        "http://localhost:11434/v1",
+        None,
+    );
+    let current = cx.row("native-identity");
+    assert_eq!(current.account_revision, removed.account_revision + 1);
+    assert_ne!(current.account_revision, old_binding.account_revision.get());
+    let cx = cx.restart();
+    assert_eq!(
+        cx.row("native-identity").account_revision,
+        current.account_revision
+    );
+}
+
+#[test]
+fn native_same_account_oauth_refresh_preserves_continuation_but_new_account_fences_it() {
+    let cx = Cx::new();
+    let before = claude_due_for_refresh(&cx);
+    cx.svc.access(&id("claude"), None).unwrap();
+    let rotated = cx.row("claude");
+    assert_eq!(rotated.credential_revision, before.credential_revision + 1);
+    assert_eq!(
+        rotated.account_revision, before.account_revision,
+        "ordinary refresh must preserve native replay identity"
+    );
+    cx.http.reset(Method::Post,CLAUDE_TOKEN,200,json!({"access_token":"new-account-access","refresh_token":"new-account-refresh","expires_in":3600,"account":{"uuid":"different-account"}}));
+    assert!(matches!(
+        cx.svc.refresh(&id("claude")),
+        Err(AccessError::Disabled)
+    ));
+    let changed = cx.row("claude");
+    assert_eq!(changed.account_revision, rotated.account_revision + 1);
+    assert!(changed.risk.is_none());
 }

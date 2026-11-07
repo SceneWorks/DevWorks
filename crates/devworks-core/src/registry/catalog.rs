@@ -1715,7 +1715,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.architecture",
@@ -1739,7 +1739,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.dependency",
@@ -1763,7 +1763,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.impact",
@@ -1787,7 +1787,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.source",
@@ -1811,7 +1811,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.traverse",
@@ -1835,7 +1835,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.graph_scope_status",
@@ -1859,7 +1859,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.overview",
@@ -1883,7 +1883,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.nodes_by_file",
@@ -1907,7 +1907,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.node_detail",
@@ -1931,7 +1931,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.set_trust",
@@ -1955,7 +1955,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.file_impact",
@@ -1979,7 +1979,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.graph_schema",
@@ -2003,7 +2003,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.call_path",
@@ -2027,7 +2027,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.data_lineage",
@@ -2051,7 +2051,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.consumers",
@@ -2075,7 +2075,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.publishers",
@@ -2099,7 +2099,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.snippet",
@@ -2123,7 +2123,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "code.repository_dependencies",
@@ -2147,7 +2147,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "indexing.discover",
@@ -7250,10 +7250,10 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
             decode: decode_help_search_query,
             input_schema: schema_of::<ops::help::SearchInput>,
         }],
-        result_type: "Page<HelpTopic>",
-        result_schema: schema_of::<Page<HelpTopic>>,
+        result_type: "HelpTopicPageResult",
+        result_schema: schema_of::<HelpTopicPageResult>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "help.read",
@@ -7272,10 +7272,10 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
             decode: decode_help_read_query,
             input_schema: schema_of::<ops::help::ReadInput>,
         }],
-        result_type: "HelpTopic",
-        result_schema: schema_of::<HelpTopic>,
+        result_type: "HelpReadResult",
+        result_schema: schema_of::<HelpReadResult>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "help.topic_for_screen",
@@ -7294,10 +7294,10 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
             decode: decode_help_topic_for_screen_query,
             input_schema: schema_of::<ops::help::TopicForScreenInput>,
         }],
-        result_type: "Page<HelpTopic>",
-        result_schema: schema_of::<Page<HelpTopic>>,
+        result_type: "HelpTopicPageResult",
+        result_schema: schema_of::<HelpTopicPageResult>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "help.package_guides",
@@ -7316,10 +7316,10 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
             decode: decode_help_package_guides_query,
             input_schema: schema_of::<ops::help::PackageGuidesInput>,
         }],
-        result_type: "Page<HelpTopic>",
-        result_schema: schema_of::<Page<HelpTopic>>,
+        result_type: "HelpTopicPageResult",
+        result_schema: schema_of::<HelpTopicPageResult>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "help.generate_capability_docs",
@@ -7583,7 +7583,7 @@ pub(super) static CATALOG: [OperationDescriptor; 359] = [
         result_type: "GraphPage",
         result_schema: schema_of::<GraphPage>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "repositories.remove_index",

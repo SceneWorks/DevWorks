@@ -75,12 +75,21 @@ pub enum SettingsAction {
     OpenNotifications,
     /// The provider-connections topic was opened (load connections and the catalog).
     OpenConnections,
+    OpenHelp(String),
     Connection(ConnectionAction),
     /// A web search, fetch or activity load from the Agent tools section.
     Web(WebAction),
 }
 
 impl SettingsScreen {
+    /// Uses the same category IDs the shared settings catalog exposes to Help.
+    pub fn help_topic(&self) -> &'static str {
+        if self.show_connections {
+            "settings-connections"
+        } else {
+            self.category.map_or("settings", Category::help_id)
+        }
+    }
     pub fn restore(&mut self, m: &SettingsMemory) {
         self.category = m
             .category
@@ -212,7 +221,12 @@ impl SettingsScreen {
                         tab: 0,
                     },
                     &mut st,
-                    |_, _| {},
+                    |ui, st| {
+                        if widgets::secondary_button(ui, "Help for Provider connections").clicked()
+                        {
+                            st.1.push(SettingsAction::OpenHelp(st.0.help_topic().into()));
+                        }
+                    },
                     |ui, st, _| {
                         if let Err(reason) = online {
                             widgets::state_block(
@@ -249,6 +263,10 @@ impl SettingsScreen {
                 },
                 &mut st,
                 |ui, st| {
+                    let label = format!("Help for {}", st.0.category.map_or("All settings", Category::label));
+                    if widgets::secondary_button(ui, &label).clicked() {
+                        st.1.push(SettingsAction::OpenHelp(st.0.help_topic().into()));
+                    }
                     if widgets::secondary_button(ui, "Add-ons").clicked() {
                         st.1.push(SettingsAction::OpenAddOns);
                     }

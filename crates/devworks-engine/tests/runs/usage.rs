@@ -87,6 +87,8 @@ fn router(f: &Fx) -> Arc<InferenceRouter> {
                 open_router: None,
                 credential_ref: None,
                 credential_revision: 0,
+                account_revision: 1,
+                refresh_operation_id: None,
                 credential_epoch: None,
                 lifecycle: "Connected".into(),
                 state_reason: None,
@@ -1420,3 +1422,6 @@ let owned=UsageRuntime::new(f.store.clone(),f.service.clone(),Some(selected_rout
  }
 });
 }
+
+#[path = "../providers/managed.rs"]
+mod native_provider_fences;

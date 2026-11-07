@@ -114,6 +114,8 @@ mod decisions;
 mod diagnostics;
 mod evals;
 mod git;
+mod graph;
+mod help;
 mod indexing;
 mod jobs;
 mod knowledge;

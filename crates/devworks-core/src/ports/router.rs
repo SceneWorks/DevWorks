@@ -12,6 +12,12 @@ use crate::ports::storage::{RouterRead, StorageError};
 use crate::protocol::Id;
 use std::collections::BTreeSet;
 
+/// The exact dynamic upstream identities served by OpenRouter, as distinct from a concrete
+/// configured model (including custom IDs with a similar prefix).
+pub fn is_open_router_auto(upstream: &str) -> bool {
+    matches!(upstream, "openrouter/auto" | "openrouter/auto-beta")
+}
+
 /// A connection's usability as the router sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -66,7 +72,7 @@ impl ConnectionStatus {
     /// automatic route is constrained by the same lists inside OpenRouter (they are sent with
     /// its requests), so it is always served.
     pub fn permits(&self, upstream: &str) -> bool {
-        if upstream == "openrouter/auto" {
+        if self.profile == "OpenRouterChat" && is_open_router_auto(upstream) {
             return true;
         }
         (self.allowed.is_empty() || self.allowed.iter().any(|p| glob(p, upstream)))

@@ -181,6 +181,11 @@ pub struct StoredConnection {
     pub lifecycle: String,
     /// A safe, secret-free reason for the lifecycle or the last failure.
     pub state_reason: Option<String>,
+    /// Positive native account identity generation, independent of credential refreshes.
+    /// The owning service preserves it or advances it by one with the connection CAS.
+    pub account_revision: i64,
+    /// Exact durable OAuth refresh operation, retained after its outcome.
+    pub refresh_operation_id: Option<OperationId>,
     /// Digest of the provider account the credential acts for.
     pub account_digest: Option<String>,
     pub access_expires_at_ms: Option<i64>,
@@ -221,6 +226,8 @@ pub struct StoredDecisionModel {
 pub trait RouterRead {
     fn route_model(&self, id: &Id) -> Result<Option<StoredRouteModel>, StorageError>;
     fn connection(&self, id: &Id) -> Result<Option<StoredConnection>, StorageError>;
+    /// Last native account identity generation, retained even after a connection is removed.
+    fn connection_account_revision(&self, id: &Id) -> Result<Option<i64>, StorageError>;
     /// Connections in ID order strictly after `after`, at most `limit` (1..=500).
     fn connections(
         &self,
@@ -290,7 +297,8 @@ pub trait RouterRepository: RouterRead {
     /// Inserts a connection at revision 1 (`expected_revision` `None`; an existing ID is
     /// [`StorageError::Duplicate`]) or replaces it at `expected_revision`, storing
     /// `expected_revision + 1`. A stale revision is [`StorageError::RevisionConflict`]. Two
-    /// connections never share a credential handle.
+    /// connections never share a credential handle. Account identity stays unchanged or advances
+    /// by one; insertion uses the retained account generation plus one (one for a new ID).
     fn put_connection(
         &mut self,
         connection: &StoredConnection,
@@ -299,6 +307,7 @@ pub trait RouterRepository: RouterRead {
     /// Removes a connection at `expected_revision` (a stale revision is
     /// [`StorageError::RevisionConflict`]). A catalog or decision model still bound to it is
     /// [`StorageError::InvalidRecord`]: it must be unbound first, never silently orphaned.
+    /// The account identity generation is retained after removal.
     fn delete_connection(&mut self, id: &Id, expected_revision: i64) -> Result<(), StorageError>;
     /// Inserts or replaces (compare-and-set, as [`Self::put_connection`]) a decision model. Its ID
     /// is never a conversational catalog model's, and its connection is a `SystemOne` one.
