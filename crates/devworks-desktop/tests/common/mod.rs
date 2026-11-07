@@ -266,6 +266,7 @@ pub struct Gate {
     /// bookkeeping can repair a stale reply).
     hints: bool,
     fail_query: Arc<std::sync::atomic::AtomicBool>,
+    waiters: Arc<std::sync::atomic::AtomicUsize>,
 }
 impl Gate {
     pub fn new(operation: &'static str) -> Self {
@@ -276,6 +277,7 @@ impl Gate {
             after: false,
             hints: true,
             fail_query: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            waiters: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
     /// A gate that lets the request run and holds only its reply (a slow response).
@@ -306,6 +308,9 @@ impl Gate {
     pub fn close(&self) {
         *self.open.0.lock().unwrap() = false;
     }
+    pub fn has_waiter(&self) -> bool {
+        self.waiters.load(Ordering::SeqCst) > 0
+    }
     pub fn open(&self) {
         *self.open.0.lock().unwrap() = true;
         self.open.1.notify_all();
@@ -323,9 +328,11 @@ impl Gate {
         });
         if operation == self.operation && matches_frame {
             let mut open = self.open.0.lock().unwrap();
+            self.waiters.fetch_add(1, Ordering::SeqCst);
             while !*open {
                 open = self.open.1.wait(open).unwrap();
             }
+            self.waiters.fetch_sub(1, Ordering::SeqCst);
         }
     }
 }

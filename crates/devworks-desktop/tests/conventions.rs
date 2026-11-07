@@ -222,6 +222,35 @@ fn native_convention_context_help_returns_to_the_same_scope_and_unsaved_source()
     use devworks_core::protocol::records::HelpReadView;
     let root = Root::new("conventions-context-help");
     let engine = start(&root);
+    // A settled Unavailable reply is not a published catalog. Prepare the real
+    // owner before measuring context navigation and retained drafts.
+    let backend = engine.backend();
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    loop {
+        let frame =
+            devworks_desktop::help_ops::context(backend.as_ref(), "knowledge-conventions", None);
+        let page =
+            devworks_desktop::help_ops::topics(backend.query("help.topic_for_screen", &frame))
+                .expect("actual native Help response");
+        if matches!(
+            page.availability,
+            devworks_core::protocol::records::HelpAvailability::Available
+        ) && page
+            .items
+            .0
+            .iter()
+            .any(|topic| topic.id.as_str() == "conventions")
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "native conventions catalog never published: availability={:?}; snapshot={:?}",
+            page.availability,
+            page.snapshot
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     let mut h = harness(shell(&engine, &root, Script::default()), 1500.0, 1050.0);
     settle(&mut h);
     click_nav(&mut h, "Knowledge");

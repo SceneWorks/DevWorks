@@ -1550,7 +1550,16 @@ impl Shell {
             },
             (Slot::WorkDetail(id), Reply::Query(q)) => match wops::work_record(q) {
                 Ok(w) => {
-                    self.work.detail.insert(id, w);
+                    // A command can publish a newer approval while this read is in
+                    // flight. Slot fencing orders reads, not reads against commands.
+                    if self
+                        .work
+                        .detail
+                        .get(&id)
+                        .is_none_or(|known| w.revision.get() >= known.revision.get())
+                    {
+                        self.work.detail.insert(id, w);
+                    }
                 }
                 Err(e) => self.work.message = Some((Tone::Bad, e.describe())),
             },

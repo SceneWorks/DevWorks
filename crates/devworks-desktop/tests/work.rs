@@ -1330,12 +1330,32 @@ fn refreshing_a_cached_prerequisite_shows_new_dependents_at_the_same_work_revisi
 
 #[test]
 fn an_approved_requirement_is_dropped_with_a_project_decision_and_can_be_restored() {
+    restored_requirement_case(false);
+}
+
+#[test]
+fn a_delayed_native_detail_reply_preserves_the_newer_plan_and_restore_gesture() {
+    restored_requirement_case(true);
+}
+
+fn restored_requirement_case(delayed_detail: bool) {
     use devworks_core::ports::storage::{ArtifactScope, read_snapshot};
     use devworks_core::protocol::records::RequirementStatus;
     let root = Root::new("plan-drop-decision");
     let engine = start(&root);
     let backend = engine.backend();
-    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1100.0);
+    let gate = Gate::holding_replies("features.get").missing_hints();
+    let shell = if delayed_detail {
+        shell_with(
+            Ok(gate.over(backend.clone())),
+            &root,
+            Script::default(),
+            None,
+        )
+    } else {
+        shell(&engine, &root, Script::default())
+    };
+    let mut h = harness(shell, 1600.0, 1100.0);
     settle(&mut h);
     let feature = initial_approved_plan(&engine, &*backend, &mut h);
     h.state_mut().work.plan.as_mut().unwrap().text = "Revised checkout plan".into();
@@ -1385,15 +1405,77 @@ fn an_approved_requirement_is_dropped_with_a_project_decision_and_can_be_restore
         artifact.scope,
         ArtifactScope::Project(feature.project_id.clone())
     );
+    if delayed_detail {
+        gate.close();
+        h.get_by_role_and_label(Role::Button, "Refresh").click();
+        let deadline = std::time::Instant::now() + SETTLE_BOUND;
+        while !gate.has_waiter() {
+            h.step();
+            if std::time::Instant::now() >= deadline {
+                gate.open();
+                panic!("the real pre-approval detail reply did not reach the gate");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
     let approved_drop = approve_plan(&engine, &*backend, &saved);
+    let approved_revision = approved_drop.revision.clone();
     h.state_mut()
         .work
         .detail
         .insert(feature.id.as_str().to_owned(), approved_drop);
-    click(&mut h, Role::Button, "Edit plan");
-    h.get_by_label("Dropped requirements").click();
+    if delayed_detail {
+        h.step();
+        h.get_by_role_and_label(Role::Button, "Edit plan").click();
+        h.step();
+        h.step();
+        h.get_by_label("Dropped requirements").click();
+        h.step();
+        h.step();
+        gate.open();
+    } else {
+        click(&mut h, Role::Button, "Edit plan");
+        h.get_by_label("Dropped requirements").click();
+    }
     settle(&mut h);
-    click(&mut h, Role::Button, "Restore requirement E1");
+    if delayed_detail {
+        assert_eq!(
+            h.state()
+                .work
+                .freshest(feature.id.as_str())
+                .unwrap()
+                .revision,
+            approved_revision,
+            "an older native read must not replace a known approval"
+        );
+    }
+    h.get_by_role_and_label(Role::Button, "Restore requirement E1")
+        .scroll_to_me();
+    settle(&mut h);
+    let restore_rect = h
+        .get_by_role_and_label(Role::Button, "Restore requirement E1")
+        .rect();
+    h.get_by_role_and_label(Role::Button, "Restore requirement E1")
+        .click();
+    settle(&mut h);
+    assert!(
+        h.state()
+            .work
+            .plan
+            .as_ref()
+            .unwrap()
+            .requirements
+            .iter()
+            .any(|r| r.id == "E1"),
+        "Restore gesture was not applied; rect={restore_rect:?}, current={:?}, detail_revision={:?}, message={:?}",
+        h.query_by_role_and_label(Role::Button, "Restore requirement E1")
+            .map(|n| n.rect()),
+        h.state()
+            .work
+            .freshest(feature.id.as_str())
+            .map(|f| f.revision),
+        h.state().work.message,
+    );
     click(&mut h, Role::ComboBox, "Status of requirement E1");
     h.get_by_label("Confirmed").click();
     settle(&mut h);
