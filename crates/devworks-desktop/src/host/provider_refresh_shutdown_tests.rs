@@ -149,6 +149,43 @@ pub(super) fn run_case(writer_race: bool) {
         let app = engine.host.runtime.clone();
         let store = app.store().clone();
         let info = store.info();
+        // This fixture measures the provider tail against an exact whole-store stamp.
+        // Settle the independent real startup owners before applying its 30 ms shutdown
+        // budget; an already-admitted queue settlement may otherwise outlive that budget.
+        let startup_deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let accounting = app.accounting().watch();
+        loop {
+            let (help, receipts, bootstrap) =
+                read_snapshot(store.as_ref(), &ReadOptions::default(), |s| {
+                    Ok((
+                        s.queue().status("help_docs")?,
+                        s.queue().status("receipt_replies")?,
+                        s.usage().usage_bootstrap()?,
+                    ))
+                })
+                .unwrap();
+            let accounted = accounting.borrow().as_ref().is_some_and(|pass| {
+                pass.as_ref()
+                    .is_ok_and(|p| p.indexing_complete && p.recovery_complete && !p.recovery_more)
+            });
+            if help.completed > 0
+                && help.ready == 0
+                && help.claimed == 0
+                && help.reconciling == 0
+                && receipts.ready == 0
+                && receipts.claimed == 0
+                && receipts.reconciling == 0
+                && bootstrap.phase == "Complete"
+                && accounted
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < startup_deadline,
+                "independent startup owners did not settle: Help={help:?}; receipts={receipts:?}; bootstrap={bootstrap:?}; accounted={accounted}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         secrets
             .put(
                 &SecretKey::new(info.store_id.0.as_str(), id("shutdown-auth")),
