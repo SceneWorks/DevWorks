@@ -4007,7 +4007,10 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
         );
     }
     let files = crate::fs::purge::NativeProjectPurgeFiles::new(data.clone(), cache, store)
-        .with_paste_root(paste);
+        .with_paste_root(paste)
+        .with_read_fence(Arc::new(
+            devworks_core::services::artifacts::lifecycle::Readers::default(),
+        ));
     let mut snapshot = files.inventory(&selection, &mut || false).unwrap();
     for owner in &selection.owners {
         assert!(

@@ -2169,6 +2169,7 @@ impl ArtifactService {
     /// Reads a range of a version's blob; any managed-file failure is `NotFound` (retained
     /// GetAttachment behavior: an unreadable stored file is reported as not found).
     fn blob_range(&self, v: &StoredVersion, offset: u64, max: usize) -> Result<Vec<u8>, Failure> {
+        let _reader = self.readers.acquire(&v.blob_digest);
         self.files
             .read_range(
                 &v.blob_digest,

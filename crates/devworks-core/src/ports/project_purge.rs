@@ -66,6 +66,18 @@ pub enum PurgeFileFault {
     Io,
 }
 
+/// The artifact service's actual reader registry, shared with its ordinary collector.
+/// Physical removal holds the registry lock through the effect so a new reader cannot
+/// enter between the last in-use check and unlink.
+pub trait ProjectPurgeReadFence: Send + Sync {
+    fn busy(&self, owner: &PurgeFileOwner) -> bool;
+    fn remove_if_idle(
+        &self,
+        owner: &PurgeFileOwner,
+        work: &mut dyn FnMut() -> Result<(), PurgeFileFault>,
+    ) -> Result<(), PurgeFileFault>;
+}
+
 pub trait ProjectPurgeFiles: Send + Sync {
     /// Enumerate every file/directory of exactly the supplied native owners. A class
     /// that cannot be completely attributed refuses the whole preview.

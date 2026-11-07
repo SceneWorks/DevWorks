@@ -127,6 +127,7 @@ pub struct NativeProjectPurgeFiles {
     cache_root: PathBuf,
     paste_root: Option<PathBuf>,
     store: Arc<dyn ApplicationStore>,
+    read_fence: Option<Arc<dyn devworks_core::ports::project_purge::ProjectPurgeReadFence>>,
 }
 impl NativeProjectPurgeFiles {
     pub fn new(data_root: PathBuf, cache_root: PathBuf, store: Arc<dyn ApplicationStore>) -> Self {
@@ -135,7 +136,15 @@ impl NativeProjectPurgeFiles {
             cache_root,
             paste_root: None,
             store,
+            read_fence: None,
         }
+    }
+    pub fn with_read_fence(
+        mut self,
+        fence: Arc<dyn devworks_core::ports::project_purge::ProjectPurgeReadFence>,
+    ) -> Self {
+        self.read_fence = Some(fence);
+        self
     }
     pub fn with_paste_root(mut self, root: PathBuf) -> Self {
         self.paste_root = Some(root);
@@ -496,6 +505,18 @@ impl ProjectPurgeFiles for NativeProjectPurgeFiles {
         let mut files = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
         for owner in &selection.owners {
+            if matches!(
+                owner,
+                PurgeFileOwner::Blob { .. } | PurgeFileOwner::Quarantine { .. }
+            ) {
+                let fence = self
+                    .read_fence
+                    .as_ref()
+                    .ok_or(PurgeFileFault::Unsupported)?;
+                if fence.busy(owner) {
+                    return Err(PurgeFileFault::InUse);
+                }
+            }
             let Some(root) = self.root(owner)? else {
                 continue;
             };
@@ -558,6 +579,27 @@ impl ProjectPurgeFiles for NativeProjectPurgeFiles {
         })
     }
     fn remove_reviewed(
+        &self,
+        witness: &PurgeFileWitness,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<(), PurgeFileFault> {
+        let mut work = || self.remove_bound(witness, stopped);
+        if matches!(
+            witness.owner,
+            PurgeFileOwner::Blob { .. } | PurgeFileOwner::Quarantine { .. }
+        ) {
+            self.read_fence
+                .as_ref()
+                .ok_or(PurgeFileFault::Unsupported)?
+                .remove_if_idle(&witness.owner, &mut work)
+        } else {
+            work()
+        }
+    }
+}
+
+impl NativeProjectPurgeFiles {
+    fn remove_bound(
         &self,
         witness: &PurgeFileWitness,
         stopped: &mut dyn FnMut() -> bool,

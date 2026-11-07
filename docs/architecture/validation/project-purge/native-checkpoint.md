@@ -343,3 +343,11 @@ PR51 is merged as dc0386eff3cb8774d3374662cbdf2dd964447adc with all20 checks and
 exact-head reviews complete; its related repairs DW139/146/147/148 are accepted.
 That ancestry is composed into this branch. The stop boundary remains full DW-83
 acceptance, followed by a detailed handoff before another feature.
+
+Reader support now shares the artifact service's actual digest reader registry.
+Blob/quarantine inventory refuses active readers or a missing gate; exact physical
+removal holds the same registry through verification/unlink. New readers therefore
+cannot enter that gap. Exact/range/stream reads use the registry. The in-use and
+error-release core case passes; all three native filesystem cases pass in2.05
+seconds; workspace/all-target strict checks pass in42.57 seconds. Production
+composition must supply this gate when the remaining client/runtime wiring is enabled.
