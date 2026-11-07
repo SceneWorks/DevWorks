@@ -27,3 +27,8 @@ CREATE PROCEDURE meta_many_parameters(IN p001 INT,IN p002 INT,IN p003 INT,IN p00
 USE metadata_fixture;
 CREATE FUNCTION meta_same_routine(function_argument INT) RETURNS INT DETERMINISTIC NO SQL RETURN function_argument;
 CREATE PROCEDURE meta_same_routine(IN procedure_argument INT,OUT procedure_result INT) SET procedure_result=procedure_argument;
+
+-- Native constraint names must not collide with synthetic FK column identities.
+USE metadata_fixture;
+CREATE TABLE meta_identity_parent(id INT PRIMARY KEY);
+CREATE TABLE meta_identity_child(parent_id INT,other_key INT,CONSTRAINT fk FOREIGN KEY(parent_id) REFERENCES meta_identity_parent(id),CONSTRAINT `fk:1` UNIQUE(other_key));

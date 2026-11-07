@@ -101,14 +101,16 @@ impl Catalog {
         let parent_id = parent
             .map(|p| key(&[&self.catalog, schema, parent_kind, p]))
             .unwrap_or(schema_id);
-        let id = if let Some(parent) = parent {
-            key(&[&self.catalog, schema, parent_kind, parent, kind, name])
-        } else if let Some(identity) = row.get("identity").and_then(Value::as_str) {
-            // Native routine namespaces may distinguish type even when display names match.
-            key(&[&self.catalog, schema, kind, name, identity])
-        } else {
-            key(&[&self.catalog, schema, kind, name])
-        };
+        let mut identity = vec![self.catalog.as_str(), schema];
+        if let Some(parent) = parent {
+            identity.extend([parent_kind, parent]);
+        }
+        identity.extend([kind, name]);
+        // Display names do not own synthetic or routine-type namespaces.
+        if let Some(discriminator) = row.get("identity").and_then(Value::as_str) {
+            identity.push(discriminator);
+        }
+        let id = key(&identity);
         let mut details = row.get("metadata").cloned().unwrap_or_else(|| json!({}));
         // Catalog SQL emits native JSON arrays/bools on all qualified engines. Reject a
         // malformed row rather than coercing a metadata result or reading source table data.
