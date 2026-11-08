@@ -1570,19 +1570,30 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         .read_exact(&*fx.store, &context, &value, 1_048_576)
         .unwrap();
     assert!(String::from_utf8_lossy(&bytes).contains("booted"));
-    let later_logs = result(fx.query_at(
-        &context,
-        "containers.logs",
-        json!({"containerId":row.id.as_str(),"afterBytes":"1048576","maxBytes":1024}),
-        Some(1),
-    ));
-    let OperationResult::ContainersLogs { value } = later_logs else {
-        panic!("wrong later logs result")
-    };
-    let (later, _) = artifacts
-        .read_exact(&*fx.store, &context, &value, 1_048_576)
-        .unwrap();
-    assert_eq!(later.len(), 1024);
+    let logs_deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let later_logs = result(fx.query_at(
+            &context,
+            "containers.logs",
+            json!({"containerId":row.id.as_str(),"afterBytes":"1048576","maxBytes":1024}),
+            Some(1),
+        ));
+        let OperationResult::ContainersLogs { value } = later_logs else {
+            panic!("wrong later logs result")
+        };
+        let (later, _) = artifacts
+            .read_exact(&*fx.store, &context, &value, 1_048_576)
+            .unwrap();
+        if later.len() == 1024 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < logs_deadline,
+            "late log page stayed at {} bytes",
+            later.len()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let stop = fx.command_keyed(
         &context,
         "containers.stop",
