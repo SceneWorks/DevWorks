@@ -790,10 +790,11 @@ fn container_cli_runner_uses_owned_process_and_redacts_bounded_native_output() {
     assert_eq!(result.exit_code, Some(0));
     assert!(
         !result
-            .output
+            .stdout
             .windows(b"private-token".len())
             .any(|x| x == b"private-token")
     );
+    assert!(result.stderr.is_empty());
     assert!(!result.truncated);
     assert_eq!(fx.events("ProcessReaped").len(), 1);
 }

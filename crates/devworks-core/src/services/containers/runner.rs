@@ -19,7 +19,8 @@ pub enum CliError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CliResult {
     pub exit_code: Option<i32>,
-    pub output: Vec<u8>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
     pub truncated: bool,
 }
 
@@ -83,10 +84,15 @@ impl ContainerRunner {
                 .cancel(&process, Duration::ZERO, Duration::from_secs(5));
             return Err(CliError::Unknown("container CLI output unavailable".into()));
         };
-        let output = Arc::new(Mutex::new(BoundedOutput::new(max_output)));
+        // Keep the streams separate: successful engine JSON on stdout must remain parseable
+        // even when the CLI writes a warning to stderr.
+        let stdout_bytes = Arc::new(Mutex::new(BoundedOutput::new(max_output)));
+        let stderr_bytes = Arc::new(Mutex::new(BoundedOutput::new(max_output)));
         let (drained_tx, drained_rx) = mpsc::channel();
-        for mut pipe in [stdout, stderr] {
-            let output = output.clone();
+        for (mut pipe, output) in [
+            (stdout, stdout_bytes.clone()),
+            (stderr, stderr_bytes.clone()),
+        ] {
             let drained_tx = drained_tx.clone();
             std::thread::spawn(move || {
                 use std::io::Read;
@@ -137,11 +143,13 @@ impl ContainerRunner {
                 ));
             }
         }
-        let output = output.lock().unwrap_or_else(|p| p.into_inner());
-        let truncated = output.truncated();
+        let stdout_bytes = stdout_bytes.lock().unwrap_or_else(|p| p.into_inner());
+        let stderr_bytes = stderr_bytes.lock().unwrap_or_else(|p| p.into_inner());
+        let truncated = stdout_bytes.truncated() || stderr_bytes.truncated();
         Ok(CliResult {
             exit_code,
-            output: redacted_output(output.retained(), secrets, truncated),
+            stdout: redacted_output(stdout_bytes.retained(), secrets, truncated),
+            stderr: redacted_output(stderr_bytes.retained(), secrets, truncated),
             truncated: truncated
                 || secrets
                     .iter()
