@@ -25,7 +25,7 @@ use crate::services::sessions::{Refusal, query_fault, rev};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Clone)]
 struct PreparedInspect {
@@ -396,63 +396,31 @@ impl QueryHandler for ContainerService {
                 let args = backend.logs(&target).map_err(|_| {
                     self.fault(DomainErrorCode::InvalidArgument, Some(row.id.clone()))
                 })?;
-                let spec = bound_spec(&self.bindings, backend, args, None).map_err(|_| {
+                let mut spec = bound_spec(&self.bindings, backend, args, None).map_err(|_| {
                     self.fault(DomainErrorCode::UnsupportedCapability, Some(row.id.clone()))
                 })?;
+                spec.merge_output = true;
                 let after = input.after_bytes.get() as u64;
                 let max = input.max_bytes.get() as usize;
-                let deadline = Instant::now() + Duration::from_secs(10);
-                let (first, stdout_total, stderr_total) = self
+                let (result, total_bytes, _) = self
                     .runner
                     .run_window(
                         ctx,
                         None,
-                        spec.clone(),
-                        deadline.saturating_duration_since(Instant::now()),
+                        spec,
+                        Duration::from_secs(10),
                         (after, 0, max),
                         &[],
                     )
                     .map_err(|_| {
                         self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone()))
                     })?;
-                if first.exit_code != Some(0) {
+                if result.exit_code != Some(0) {
                     return Err(self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone())));
                 }
-                // Define one byte cursor over stdout followed by stderr. A deep stderr page
-                // needs a second bounded read once the stdout boundary is known.
-                let total_bytes = stdout_total.saturating_add(stderr_total);
-                let mut bytes = if after < stdout_total {
-                    first.stdout
-                } else if after == stdout_total {
-                    first.stderr.clone()
-                } else if after >= total_bytes {
-                    Vec::new()
-                } else {
-                    let (second, _, _) = self
-                        .runner
-                        .run_window(
-                            ctx,
-                            None,
-                            spec,
-                            deadline.saturating_duration_since(Instant::now()),
-                            (u64::MAX, after - stdout_total, max),
-                            &[],
-                        )
-                        .map_err(|_| {
-                            self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone()))
-                        })?;
-                    if second.exit_code != Some(0) {
-                        return Err(
-                            self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone()))
-                        );
-                    }
-                    second.stderr
-                };
-                if after < stdout_total && bytes.len() < max {
-                    bytes.extend_from_slice(
-                        &first.stderr[..(max - bytes.len()).min(first.stderr.len())],
-                    );
-                }
+                // Both CLI streams share one OS pipe, preserving the daemon's frame order
+                // as stdout and stderr grow between successive log queries.
+                let bytes = result.stdout;
                 let Some(artifacts) = &self.artifacts else {
                     return Err(
                         self.fault(DomainErrorCode::UnsupportedCapability, Some(row.id.clone()))

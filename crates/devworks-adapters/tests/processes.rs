@@ -722,6 +722,30 @@ fn captured_output_is_readable() {
 }
 
 #[test]
+fn native_merged_capture_preserves_stdout_stderr_write_order() {
+    let _serial = serial();
+    let mut spec = shell(if cfg!(windows) {
+        "echo first & echo second 1>&2 & echo third"
+    } else {
+        "printf 'first\\n'; printf 'second\\n' >&2; printf 'third\\n'"
+    });
+    spec.capture_output = true;
+    spec.merge_output = true;
+    let mut tree = NativeProcessHost.spawn(&spec).unwrap();
+    let (mut output, mut empty) = tree.take_output().expect("merged output pipe");
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut output, &mut bytes).unwrap();
+    let mut stderr = Vec::new();
+    std::io::Read::read_to_end(&mut empty, &mut stderr).unwrap();
+    let status = until_empty(&mut *tree, Duration::from_secs(10)).expect("finished");
+    assert_eq!(status.exit_code, Some(0));
+    assert!(stderr.is_empty());
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.find("first").unwrap() < text.find("second").unwrap());
+    assert!(text.find("second").unwrap() < text.find("third").unwrap());
+}
+
+#[test]
 fn keep_awake_holds_a_native_request_and_releases_it() {
     let _serial = serial();
     use devworks_core::ports::process::{PowerPort, PowerRequest};
@@ -1238,6 +1262,64 @@ fn actor_scoped_project_artifact_is_hidden_from_same_project_peer() {
             .iter()
             .any(|artifact| artifact.id == ordinary.artifact_id)
     );
+}
+
+#[test]
+fn native_merged_output_uses_one_page_cursor() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let runner = ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    );
+    let mut spec = shell(if cfg!(windows) {
+        "echo first & echo second & echo third"
+    } else {
+        "echo first; echo second; echo third"
+    });
+    spec.capture_output = true;
+    let ctx = fx.agent("agent-a", "project-a", "s-a");
+    spec.merge_output = true;
+    let (whole, total, stderr_total) = runner
+        .run_window(
+            &ctx,
+            None,
+            spec.clone(),
+            Duration::from_secs(5),
+            (0, 0, 4096),
+            &[],
+        )
+        .unwrap();
+    assert_eq!(whole.exit_code, Some(0));
+    assert!(whole.stderr.is_empty());
+    assert_eq!(stderr_total, 0);
+    assert_eq!(whole.stdout.len() as u64, total);
+    let text = String::from_utf8_lossy(&whole.stdout);
+    assert!(text.find("first").unwrap() < text.find("second").unwrap());
+    assert!(text.find("second").unwrap() < text.find("third").unwrap());
+    let split = 7;
+    let (first, _, _) = runner
+        .run_window(
+            &ctx,
+            None,
+            spec.clone(),
+            Duration::from_secs(5),
+            (0, 0, split),
+            &[],
+        )
+        .unwrap();
+    let (second, _, _) = runner
+        .run_window(
+            &ctx,
+            None,
+            spec,
+            Duration::from_secs(5),
+            (split as u64, 0, 4096),
+            &[],
+        )
+        .unwrap();
+    assert_eq!([first.stdout, second.stdout].concat(), whole.stdout);
 }
 
 #[test]

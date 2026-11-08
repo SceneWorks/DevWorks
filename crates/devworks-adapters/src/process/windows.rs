@@ -181,12 +181,27 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
             Stdio::null()
         }
     };
-    cmd.stdout(out()).stderr(out());
+    // Hold the spawn lock while inheritable output and control handles exist.
+    let serial = SPAWN.lock().unwrap_or_else(|p| p.into_inner());
+    let merged_output: Option<Box<dyn Read + Send>> = if spec.merge_output {
+        if !spec.capture_output {
+            return Err(ProcessError::Spawn("merged output requires capture".into()));
+        }
+        let (reader, writer) = pipe(false).map_err(ProcessError::Spawn)?;
+        let writer = writer.into_file();
+        let stderr = writer
+            .try_clone()
+            .map_err(|error| ProcessError::Spawn(error.to_string()))?;
+        cmd.stdout(Stdio::from(writer)).stderr(Stdio::from(stderr));
+        Some(Box::new(reader.into_file()))
+    } else {
+        cmd.stdout(out()).stderr(out());
+        None
+    };
     cmd.creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP);
     // A private control channel: two anonymous pipes whose child ends are inherited (and named
     // on the command line); the host ends are not inheritable. The spawn lock keeps the
     // inheritable ends from reaching another owned child launched at the same moment.
-    let serial = SPAWN.lock().unwrap_or_else(|p| p.into_inner());
     let mut pipes = None;
     if let Some(c) = &spec.control_pipe {
         let (child_read, host_write) = pipe(true).map_err(ProcessError::Spawn)?;
@@ -244,13 +259,15 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
         .stdin
         .take()
         .map(|i| Box::new(i) as Box<dyn Write + Send>);
-    let output = match (child.stdout.take(), child.stderr.take()) {
-        (Some(o), Some(e)) => Some((
-            Box::new(o) as Box<dyn Read + Send>,
-            Box::new(e) as Box<dyn Read + Send>,
-        )),
-        _ => None,
-    };
+    let output = merged_output
+        .map(|read| (read, Box::new(std::io::empty()) as Box<dyn Read + Send>))
+        .or_else(|| match (child.stdout.take(), child.stderr.take()) {
+            (Some(o), Some(e)) => Some((
+                Box::new(o) as Box<dyn Read + Send>,
+                Box::new(e) as Box<dyn Read + Send>,
+            )),
+            _ => None,
+        });
     Ok(Box::new(JobTree {
         job,
         child,

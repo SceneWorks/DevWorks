@@ -18,6 +18,7 @@ pub fn bound_spec(
         env: Vec::new(),
         clear_env: false,
         capture_output: true,
+        merge_output: false,
         no_child_processes: false,
         control_pipe: None,
         pipe_stdin: false,

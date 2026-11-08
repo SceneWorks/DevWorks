@@ -179,7 +179,21 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
             Stdio::null()
         }
     };
-    cmd.stdout(out()).stderr(out());
+    let merged_output: Option<Box<dyn Read + Send>> = if spec.merge_output {
+        if !spec.capture_output {
+            return Err(ProcessError::Spawn("merged output requires capture".into()));
+        }
+        let (reader, writer) = pipe().map_err(ProcessError::Spawn)?;
+        let writer = std::fs::File::from(writer);
+        let stderr = writer
+            .try_clone()
+            .map_err(|error| ProcessError::Spawn(error.to_string()))?;
+        cmd.stdout(Stdio::from(writer)).stderr(Stdio::from(stderr));
+        Some(Box::new(std::fs::File::from(reader)))
+    } else {
+        cmd.stdout(out()).stderr(out());
+        None
+    };
     // The child leads a new process group, so the whole tree is addressable as one.
     cmd.process_group(0);
     // A private control channel: the child's ends become its fds 3 (read) and 4 (write); the
@@ -227,13 +241,15 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
         .stdin
         .take()
         .map(|i| Box::new(i) as Box<dyn Write + Send>);
-    let output = match (child.stdout.take(), child.stderr.take()) {
-        (Some(o), Some(e)) => Some((
-            Box::new(o) as Box<dyn Read + Send>,
-            Box::new(e) as Box<dyn Read + Send>,
-        )),
-        _ => None,
-    };
+    let output = merged_output
+        .map(|read| (read, Box::new(std::io::empty()) as Box<dyn Read + Send>))
+        .or_else(|| match (child.stdout.take(), child.stderr.take()) {
+            (Some(o), Some(e)) => Some((
+                Box::new(o) as Box<dyn Read + Send>,
+                Box::new(e) as Box<dyn Read + Send>,
+            )),
+            _ => None,
+        });
     Ok(Box::new(UnixTree {
         child,
         identity: NativeIdentity {
