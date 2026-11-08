@@ -1874,10 +1874,37 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
     }
     let stderr_deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
+        // The selected CLI may order its two native log streams differently. Locate the
+        // marker in that backend's merged stream before testing a deep page around it.
+        let mut spec =
+            ProcessSpec::new(&[executable.clone(), "logs".into(), row.id.as_str().into()]).unwrap();
+        spec.capture_output = true;
+        spec.merge_output = true;
+        let mut tree = NativeProcessHost.spawn(&spec).unwrap();
+        let (mut merged, _) = tree.take_output().unwrap();
+        let mut full_logs = Vec::new();
+        std::io::Read::read_to_end(&mut merged, &mut full_logs).unwrap();
+        assert_eq!(
+            until_empty(&mut *tree, Duration::from_secs(10))
+                .expect("logs process finished")
+                .exit_code,
+            Some(0)
+        );
+        let Some(marker_at) = full_logs
+            .windows(b"stderr-marker".len())
+            .position(|window| window == b"stderr-marker")
+        else {
+            assert!(
+                std::time::Instant::now() < stderr_deadline,
+                "stderr log marker never arrived"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        };
         let stderr_logs = result(fx.query_at(
             &context,
             "containers.logs",
-            json!({"containerId":row.id.as_str(),"afterBytes":"1127507","maxBytes":1024}),
+            json!({"containerId":row.id.as_str(),"afterBytes":marker_at.saturating_sub(32).to_string(),"maxBytes":1024}),
             Some(1),
         ));
         let OperationResult::ContainersLogs { value } = stderr_logs else {
