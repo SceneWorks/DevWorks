@@ -322,6 +322,81 @@ pub enum ProcessFilter {
     Unsettled,
 }
 
+/// Durable ownership and observed lifecycle of a container created for agent work. The public
+/// ID is also the exact engine name; the backend label and this record must agree before any
+/// stop, so a pre-existing or reused name cannot acquire app ownership by accident.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredContainer {
+    pub id: Id,
+    pub engine: String,
+    pub phase: ContainerPhase,
+    pub image: String,
+    pub actor: ActorId,
+    pub owner_kind: String,
+    pub session_id: Option<Id>,
+    pub project_id: ProjectId,
+    pub root_id: Option<RootId>,
+    pub assignment_id: Option<AssignmentId>,
+    pub create_operation_id: OperationId,
+    pub last_operation_id: OperationId,
+    pub detail: Option<String>,
+    pub revision: i64,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContainerPhase {
+    Creating,
+    Created,
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Failed,
+    Uncertain,
+}
+impl ContainerPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Creating => "Creating",
+            Self::Created => "Created",
+            Self::Starting => "Starting",
+            Self::Running => "Running",
+            Self::Stopping => "Stopping",
+            Self::Stopped => "Stopped",
+            Self::Failed => "Failed",
+            Self::Uncertain => "Uncertain",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "Creating" => Self::Creating,
+            "Created" => Self::Created,
+            "Starting" => Self::Starting,
+            "Running" => Self::Running,
+            "Stopping" => Self::Stopping,
+            "Stopped" => Self::Stopped,
+            "Failed" => Self::Failed,
+            "Uncertain" => Self::Uncertain,
+            _ => return None,
+        })
+    }
+    pub fn may_run(self) -> bool {
+        matches!(
+            self,
+            Self::Creating | Self::Starting | Self::Running | Self::Stopping | Self::Uncertain
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ContainerFilter {
+    /// All agent-work records whose engine process may still be running, including uncertain.
+    AgentWorkMayRun,
+    Project(ProjectId),
+}
+
 pub trait ResourceRead {
     fn resource(&self, id: &Id) -> Result<Option<StoredResource>, StorageError>;
     fn resource_by_key(&self, canonical_key: &str) -> Result<Option<StoredResource>, StorageError>;
@@ -370,6 +445,14 @@ pub trait ResourceRead {
         after: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<StoredProcess>, StorageError>;
+    fn container(&self, id: &Id) -> Result<Option<StoredContainer>, StorageError>;
+    /// Container records in ID order strictly after `after`, at most `limit`.
+    fn containers(
+        &self,
+        filter: &ContainerFilter,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredContainer>, StorageError>;
 }
 
 pub trait ResourceRepository: ResourceRead {
@@ -403,6 +486,14 @@ pub trait ResourceRepository: ResourceRead {
     fn update_process(
         &mut self,
         process: &StoredProcess,
+        expected: i64,
+    ) -> Result<(), StorageError>;
+    /// Record the ownership intent before invoking a backend create command.
+    fn insert_container(&mut self, container: &StoredContainer) -> Result<(), StorageError>;
+    /// Compare-and-set a lifecycle transition; its revision must be `expected + 1`.
+    fn update_container(
+        &mut self,
+        container: &StoredContainer,
         expected: i64,
     ) -> Result<(), StorageError>;
 }

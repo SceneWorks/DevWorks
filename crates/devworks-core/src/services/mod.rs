@@ -8,6 +8,7 @@
 pub mod approvals;
 pub mod artifacts;
 pub mod browser;
+pub mod containers;
 pub mod conventions;
 pub mod cursor;
 pub mod desktop;

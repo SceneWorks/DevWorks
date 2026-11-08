@@ -1639,6 +1639,17 @@ impl ResourceRead for Unsupported {
     ) -> Result<Vec<StoredProcess>, StorageError> {
         nope()
     }
+    fn container(&self, _: &Id) -> Result<Option<StoredContainer>, StorageError> {
+        nope()
+    }
+    fn containers(
+        &self,
+        _: &ContainerFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredContainer>, StorageError> {
+        nope()
+    }
 }
 impl JobRead for Unsupported {
     fn usage_history(
@@ -2501,6 +2512,12 @@ impl ResourceRepository for Unsupported {
         nope()
     }
     fn update_process(&mut self, _: &StoredProcess, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_container(&mut self, _: &StoredContainer) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_container(&mut self, _: &StoredContainer, _: i64) -> Result<(), StorageError> {
         nope()
     }
 }

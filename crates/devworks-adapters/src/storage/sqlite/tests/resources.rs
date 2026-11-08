@@ -51,6 +51,93 @@ fn root(s: &str) -> RootId {
     RootId(id(s))
 }
 
+#[test]
+fn owned_container_intent_survives_restart_and_stop_listing_is_agent_scoped() {
+    let fx = Fx::new();
+    let intent = StoredContainer {
+        id: id("dw-container-1"),
+        engine: "docker".into(),
+        phase: ContainerPhase::Creating,
+        image: "alpine:latest".into(),
+        actor: actor("agent-a"),
+        owner_kind: "Agent".into(),
+        session_id: Some(id("session-a")),
+        project_id: project("project-a"),
+        root_id: Some(root("root-a")),
+        assignment_id: None,
+        create_operation_id: devworks_core::protocol::OperationId(id("op-create")),
+        last_operation_id: devworks_core::protocol::OperationId(id("op-create")),
+        detail: None,
+        revision: 1,
+        created_at_ms: T0,
+        updated_at_ms: T0,
+    };
+    fx.write({
+        let intent = intent.clone();
+        move |tx| tx.resources().insert_container(&intent)
+    });
+    let fx = fx.restart();
+    let stored = fx
+        .read(|r| r.resources().container(&id("dw-container-1")))
+        .unwrap();
+    assert_eq!(stored.phase, ContainerPhase::Creating);
+    assert_eq!(
+        fx.read(|r| r
+            .resources()
+            .containers(&ContainerFilter::AgentWorkMayRun, None, 10))
+            .len(),
+        1,
+        "shutdown must see an in-flight create intent"
+    );
+    let mut running = stored.clone();
+    running.revision += 1;
+    running.phase = ContainerPhase::Running;
+    fx.write({
+        let running = running.clone();
+        move |tx| tx.resources().update_container(&running, 1)
+    });
+    let listing = fx.read(|r| {
+        r.resources()
+            .containers(&ContainerFilter::AgentWorkMayRun, None, 10)
+    });
+    assert_eq!(listing.len(), 1);
+    assert_eq!(listing[0].id, intent.id);
+    let purge = fx
+        .read(|r| r.projects().purge_planning(&project("project-a")))
+        .unwrap();
+    assert!(
+        purge
+            .unresolved
+            .iter()
+            .any(|row| row.table == "owned_containers"
+                && row.reason == ProjectPurgeUnresolvedReason::ActiveContainer)
+    );
+    let stale = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+        tx.resources().update_container(&running, 1)
+    });
+    assert!(matches!(stale, Err(StorageError::LeaseLost { .. })));
+    let mut stopped = listing[0].clone();
+    stopped.phase = ContainerPhase::Stopped;
+    stopped.revision += 1;
+    fx.write(move |tx| tx.resources().update_container(&stopped, 2));
+    let purge = fx
+        .read(|r| r.projects().purge_planning(&project("project-a")))
+        .unwrap();
+    assert!(
+        !purge
+            .unresolved
+            .iter()
+            .any(|row| row.table == "owned_containers")
+    );
+    assert!(
+        purge
+            .rows
+            .iter()
+            .any(|row| row.table == "owned_containers"
+                && row.action == ProjectPurgeRowAction::Delete)
+    );
+}
+
 struct Fx {
     h: Harness,
     store: Arc<SqliteStore>,
