@@ -546,16 +546,17 @@ fn force_push_of_main_is_refused_for_everyone_and_feature_force_push_needs_exact
         )),
         Some(DenialReason::ProtectedBranch)
     );
-    // System-wide installation needs explicit approval under Full access too.
-    assert_eq!(
-        reason(decide(
+    // This operation only stages the exact system-install proposal. Its separate trusted
+    // Human decision records approval; staging must remain available to the requesting agent.
+    assert!(
+        decide(
             &fx,
             &agent,
             "process.request_system_install",
             Mode::Command,
             SYSTEM_INSTALL
-        )),
-        Some(DenialReason::ApprovalRequired)
+        )
+        .is_ok()
     );
     // Protected refs compare case-insensitively, and a known remote default branch is
     // protected the same way.

@@ -51,7 +51,7 @@ pub struct ApprovalSourceFilter {
     pub state: Option<String>,
 }
 
-/// Only the core's FindingRisk and SavedOperation registry creates generic proposals.
+/// The core approval registry and the process system-install request create generic proposals.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredApproval {
     pub id: Id,

@@ -471,6 +471,11 @@ macro_rules! resource_reads {
                 let n = limit(n)?;
                 let after = after.map_or("", Id::as_str);
                 match filter {
+                    ProcessFilter::Operation(operation) => processes(
+                        self.conn,
+                        "operation_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
+                        params![operation.0.as_str(), after, n],
+                    ),
                     ProcessFilter::Lease(lease) => processes(
                         self.conn,
                         "lease_id=?1 AND id>?2 ORDER BY id LIMIT ?3",

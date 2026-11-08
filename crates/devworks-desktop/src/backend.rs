@@ -44,6 +44,16 @@ pub trait Backend: Send + Sync {
     }
     /// Admits a command frame for `operation` with the host-bound user context.
     fn command(&self, operation: &str, frame: &[u8]) -> CommandOutcome;
+    /// Resolve an accepted process operation to its scoped typed result once it settles.
+    fn process_completion(
+        &self,
+        _operation: &devworks_core::protocol::OperationId,
+    ) -> Result<
+        Option<devworks_core::protocol::results::OperationCompletion>,
+        devworks_core::protocol::DomainFault,
+    > {
+        Ok(None)
+    }
     /// Scoped completion of a journaled desktop input; injection alone is not a test assertion.
     fn desktop_completion(
         &self,
