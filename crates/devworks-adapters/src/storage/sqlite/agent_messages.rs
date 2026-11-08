@@ -87,13 +87,19 @@ fn work_project(conn: &Connection, work: &RootId) -> Result<Option<String>, Stor
         .optional())
 }
 fn session_project(conn: &Connection, session: &Id) -> Result<Option<String>, StorageError> {
-    db(conn
+    let scope: Option<(Option<String>, Option<String>)> = db(conn
         .query_row(
-            "SELECT w.project_id FROM sessions s JOIN work_items w ON w.id=s.root_id WHERE s.id=?1",
+            "SELECT s.project_id,w.project_id FROM sessions s LEFT JOIN work_items w ON w.id=s.root_id WHERE s.id=?1",
             [session.as_str()],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .optional())
+        .optional())?;
+    Ok(match scope {
+        Some((Some(explicit), Some(root))) if explicit != root => None,
+        Some((Some(explicit), _)) => Some(explicit),
+        Some((None, root)) => root,
+        None => None,
+    })
 }
 fn message_row(row: &Row<'_>) -> Result<StoredAgentMessage, StorageError> {
     let attachments: String = db(row.get(8))?;

@@ -34,7 +34,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                  ('session-child','conv-a','agent-a','root-a',0,1),
                  ('session-b','conv-b','agent-a','root-b',0,1),
                  ('session-home','conv-home','agent-a',NULL,0,1);
-         UPDATE sessions SET title='Home coordinator' WHERE id='session-home';
+         UPDATE sessions SET title='Home coordinator',project_id='project-a' WHERE id='session-home';
          INSERT INTO assignments(id,root_id,work_id,parent_id,session_id,state,generation,slot_held,revision,created_at,purpose)
            VALUES('sender','root-a','root-a',NULL,'session-a','Ready',0,0,1,0,'Primary'),
                  ('recipient','root-a','root-a','sender','session-child','Ready',0,0,1,0,'Child'),
@@ -155,6 +155,31 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             resolved_at_ms: None,
             handed_over: false,
         })?;
+        let mut rootless = m.clone();
+        rootless.id = id("message-rootless");
+        rootless.channel = "Session".into();
+        rootless.to_assignment_id = None;
+        rootless.target_session_id = Some(id("session-home"));
+        rootless.message_class = "Info".into();
+        rootless.state = None;
+        rootless.body = "Rootless project session".into();
+        rootless.idempotency_key = Some("request-3".into());
+        tx.runs().insert_agent_message(&rootless)?;
+        let rootless_sequence = tx.runs().agent_delivery_head()? + 1;
+        tx.runs().insert_agent_delivery(&StoredAgentDelivery {
+            sequence: rootless_sequence,
+            message_id: rootless.id,
+            project_id: rootless.project_id,
+            recipient_assignment_id: None,
+            recipient_session_id: Some(id("session-home")),
+            recipient_human: false,
+            state: "Pending".into(),
+            revision: 1,
+            delivered_at_ms: None,
+            read_at_ms: None,
+            resolved_at_ms: None,
+            handed_over: false,
+        })?;
         Ok(())
     })
     .unwrap();
@@ -186,6 +211,15 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         )?;
         assert_eq!(direct.len(), 1);
         assert_eq!(direct[0].1.body, "Direct session notice");
+        let rootless = snap.runs().agent_session_inbox(
+            &project("project-a"),
+            &id("session-home"),
+            0,
+            false,
+            10,
+        )?;
+        assert_eq!(rootless.len(), 1);
+        assert_eq!(rootless[0].1.body, "Rootless project session");
         assert_eq!(
             snap.runs()
                 .agent_session_delivery(&id("message-direct"), &id("session-child"))?
