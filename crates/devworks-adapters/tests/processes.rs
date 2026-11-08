@@ -19,7 +19,7 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::process::{Probe, ProcessHost, ProcessSpec, ProcessTree, TreeStatus};
 use devworks_core::ports::storage::*;
-use devworks_core::ports::{Clock, IdKind, IdSource};
+use devworks_core::ports::{Authorization, Clock, IdKind, IdSource};
 use devworks_core::protocol::records::{LeaseRecord, LeaseState, SettingAssignment};
 use devworks_core::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
@@ -30,6 +30,7 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
+use devworks_core::services::artifacts::observed::Observed;
 use devworks_core::services::containers::EffectOutcome as ContainerEffectOutcome;
 use devworks_core::services::containers::runner::ContainerRunner;
 use devworks_core::services::containers::service::ContainerService;
@@ -39,7 +40,9 @@ use devworks_core::services::containers::{
     inspection::{parse as parse_container_inspect, verified_lifecycle_target},
     probe::{self as container_probe, Availability as ContainerAvailability, HostPlatform},
 };
-use devworks_core::services::process::tools::{RegisteredExecutable, ToolBindings};
+use devworks_core::services::process::tools::{
+    RegisteredExecutable, RegisteredWorkingRoot, ToolBindings,
+};
 use devworks_core::services::process::{
     ConfirmRefusal, LaunchPolicy, LaunchRefusal, LaunchRequest, LeaseClaim, OwnedProcess,
     ProcessSupervisor, StopFailure, StopOutcome, StopScope, all_recorded,
@@ -1159,12 +1162,18 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         Arc::new(NativeFilesystem::default()),
         ProtectedRoots::new(Vec::new(), Vec::new(), None),
     ));
+    let build_root = fx.h.root.join("container-build-context");
+    std::fs::create_dir_all(&build_root).unwrap();
     let bindings = ToolBindings::new(
         [RegisteredExecutable {
             id: id(engine),
             path: executable.clone().into(),
         }],
-        std::iter::empty(),
+        [RegisteredWorkingRoot {
+            id: id("container-build-root"),
+            project: Some(project("project-a")),
+            path: fx.h.root.canonicalize().unwrap(),
+        }],
     )
     .unwrap();
     let service = Arc::new(
@@ -1187,6 +1196,73 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         .with_containers(service.clone())
         .with_artifacts(artifacts.clone());
     let context = fx.agent("agent-a", "project-a", "s-a");
+    let pull = fx.command_keyed(
+        &context,
+        "containers.pull",
+        "native-effect-pull",
+        json!({"engineId":engine,"image":"docker.io/library/alpine:latest"}),
+        Some(1),
+    );
+    let pull_id = match recorded(pull).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted pull: {other:?}"),
+    };
+    let pull_op = fx
+        .read(|snapshot| snapshot.operations().operation(&pull_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&pull_op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    let (definition, ()) = artifacts
+        .publish_observed(
+            &*fx.store,
+            &context,
+            &Authorization::direct(),
+            Observed {
+                project: Some(project("project-a")),
+                title: "Container build definition".into(),
+                media_type: "text/plain".into(),
+                tags: vec!["container".into(), "build".into()],
+                source: json!({"kind":"NativeQualification"}),
+            },
+            b"FROM docker.io/library/alpine:latest\nRUN echo qualified > /qualified\n",
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    let tag = format!("dw49-build-{}:qualified", std::process::id());
+    struct ImageCleanup(String, String);
+    impl Drop for ImageCleanup {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new(&self.0)
+                .args(["image", "rm", &self.1])
+                .output();
+        }
+    }
+    let _image_cleanup = ImageCleanup(executable.clone(), tag.clone());
+    let build = fx.command_keyed(
+        &context,
+        "containers.build",
+        "native-effect-build",
+        json!({"engineId":engine,"projectId":"project-a",
+            "context":{"rootId":"container-build-root","relative":"container-build-context"},
+            "definition":definition,"tag":tag}),
+        Some(1),
+    );
+    let build_id = match recorded(build).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted build: {other:?}"),
+    };
+    let build_op = fx
+        .read(|snapshot| snapshot.operations().operation(&build_id))
+        .unwrap();
+    let build_outcome = service.execute_effect(&build_op, &fx.authority());
+    match build_outcome {
+        ContainerEffectOutcome::Completed(_) => {}
+        ContainerEffectOutcome::Failed(reason) | ContainerEffectOutcome::Unknown(reason) => {
+            panic!("build outcome: {reason}")
+        }
+    }
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let host_port = socket.local_addr().unwrap().port();
     drop(socket);

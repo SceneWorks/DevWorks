@@ -37,6 +37,7 @@ struct ExecutionPlan<'a> {
     backend: Backend,
     args: Vec<String>,
     environment: &'a [(String, String)],
+    redactions: &'a [String],
     stdin: Option<Vec<u8>>,
     timeout: Duration,
 }
@@ -183,6 +184,7 @@ impl ContainerService {
             .environment
             .iter()
             .map(|(_, value)| value.clone())
+            .chain(plan.redactions.iter().cloned())
             .collect();
         self.runner
             .run(
@@ -360,6 +362,7 @@ impl ContainerService {
                 backend,
                 args,
                 environment: &environment,
+                redactions: &[],
                 stdin: None,
                 timeout: Duration::from_secs(60),
             },
@@ -435,6 +438,7 @@ impl ContainerService {
                 backend,
                 args,
                 environment: &[],
+                redactions: &[],
                 stdin: Some(definition),
                 timeout: Duration::from_secs(600),
             },
@@ -462,9 +466,43 @@ impl ContainerService {
             Ok(backend) => backend,
             Err(outcome) => return outcome,
         };
-        if input.credential_ref.is_some() {
-            return EffectOutcome::Failed("container registry credential is not resolved".into());
-        }
+        let auth = if let Some(reference) = &input.credential_ref {
+            let Some(secrets) = &self.secrets else {
+                return EffectOutcome::Failed(
+                    "container registry credential store unavailable".into(),
+                );
+            };
+            let credential = match self.bindings.resolve_container_credential(
+                reference,
+                context.project_id(),
+                &**secrets,
+                self.store.info().store_id.0.as_str(),
+            ) {
+                Ok(credential) => credential,
+                Err(_) => {
+                    return EffectOutcome::Failed(
+                        "container registry credential unavailable".into(),
+                    );
+                }
+            };
+            let Some(auth) = &self.registry_auth else {
+                return EffectOutcome::Failed(
+                    "container registry authentication unavailable".into(),
+                );
+            };
+            match auth.prepare(backend, &input.image.0, &credential) {
+                Ok(session) => Some(session),
+                Err(reason) => return EffectOutcome::Failed(reason.into()),
+            }
+        } else {
+            None
+        };
+        let environment = auth
+            .as_ref()
+            .map_or_else(Vec::new, |session| session.environment());
+        let redactions = auth
+            .as_ref()
+            .map_or_else(Vec::new, |session| session.redactions());
         let args = match backend.pull(&input.image.0) {
             Ok(args) => args,
             Err(_) => return EffectOutcome::Failed("container image reference invalid".into()),
@@ -475,7 +513,8 @@ impl ContainerService {
             ExecutionPlan {
                 backend,
                 args,
-                environment: &[],
+                environment: &environment,
+                redactions: &redactions,
                 stdin: None,
                 timeout: Duration::from_secs(600),
             },
@@ -483,7 +522,7 @@ impl ContainerService {
             Ok(result) => result,
             Err(outcome) => return outcome,
         };
-        if result.exit_code != Some(0) || result.truncated {
+        if result.exit_code != Some(0) {
             return EffectOutcome::Unknown(
                 "container pull outcome needs image reconciliation".into(),
             );
@@ -571,6 +610,7 @@ impl ContainerService {
                 backend,
                 args,
                 environment: &environment,
+                redactions: &[],
                 stdin: None,
                 timeout: Duration::from_millis(timeout_ms),
             },
@@ -715,6 +755,7 @@ impl ContainerService {
                     backend,
                     args,
                     environment: &[],
+                    redactions: &[],
                     stdin: None,
                     timeout: Duration::from_secs(60),
                 },

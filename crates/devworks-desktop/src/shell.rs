@@ -686,6 +686,15 @@ impl Shell {
             "settings.read_effective",
             ops::settings_read,
         );
+        self.refresh_container_capabilities();
+    }
+    fn refresh_container_capabilities(&mut self) {
+        self.query(
+            Slot::ContainerCapabilities,
+            "Checking container runtimes",
+            "containers.capabilities",
+            ops::container_capabilities,
+        );
     }
     fn load_artifacts(&mut self) {
         self.artifacts_list_at = self.artifact_mutations;
@@ -2166,6 +2175,15 @@ impl Shell {
                     }
                 }
             }
+            (Slot::ContainerCapabilities, Reply::Query(q)) => {
+                match ops::container_capability_entries(q) {
+                    Ok(entries) => {
+                        self.settings.container_capabilities = Some(entries);
+                        self.settings.container_error = None;
+                    }
+                    Err(error) => self.settings.container_error = Some(error.describe()),
+                }
+            }
             (Slot::SettingsRead, Reply::Query(q)) => match ops::settings_entries(q) {
                 Ok((revision, entries)) => {
                     self.settings.loaded(revision, &entries);
@@ -2975,6 +2993,7 @@ impl Shell {
         for a in actions {
             match a {
                 SettingsAction::Reload => self.load_settings(),
+                SettingsAction::RefreshContainers => self.refresh_container_capabilities(),
                 SettingsAction::Validate => {
                     let Some(b) = self.backend() else { continue };
                     let Some(frame) = self

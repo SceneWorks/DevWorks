@@ -265,6 +265,7 @@ pub enum Slot {
     NotificationSettingsSave,
     OsNotificationPermission,
     SettingsRead,
+    ContainerCapabilities,
     SettingsValidate,
     SettingsHealth,
     SettingsSave,

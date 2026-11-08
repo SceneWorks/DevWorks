@@ -8,6 +8,7 @@ pub mod execution;
 pub mod inspection;
 pub mod intent;
 pub mod probe;
+pub mod registry_auth;
 pub mod runner;
 pub mod selection;
 pub mod service;

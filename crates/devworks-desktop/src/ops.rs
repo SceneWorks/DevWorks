@@ -5,10 +5,11 @@ use crate::backend::Backend;
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::protocol::provider::{ArtifactRef, TranscriptPage};
 use devworks_core::protocol::records::{
-    AccessMode, ArtifactRecord, BrowserSession, ConnectionRecord, DiagnosticEntry, EffortName,
-    JobInspection, JobRecord, JobRun, MutationSummary, ProjectRecord, RepositoryRecord,
-    RepositoryText, ResourceRecord, RouteAvailability, RouteCatalogModel, RouteChoice, RouteIntent,
-    SessionRecord, SettingEntry, ValidationReport, WebDocument, WebResult,
+    AccessMode, ArtifactRecord, BrowserSession, ConnectionRecord, ContainerCapability,
+    DiagnosticEntry, EffortName, JobInspection, JobRecord, JobRun, MutationSummary, ProjectRecord,
+    RepositoryRecord, RepositoryText, ResourceRecord, RouteAvailability, RouteCatalogModel,
+    RouteChoice, RouteIntent, SessionRecord, SettingEntry, ValidationReport, WebDocument,
+    WebResult,
 };
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::{CommandReply, DomainFault};
@@ -133,6 +134,17 @@ pub fn settings_read(backend: &dyn Backend) -> Vec<u8> {
         "settings.read_effective",
         json!({"scope": {"kind": "Workspace"}, "keys": [], "page": {"limit": 500}}),
     )
+}
+pub fn container_capabilities(backend: &dyn Backend) -> Vec<u8> {
+    query_frame(backend, "containers.capabilities", json!({}))
+}
+pub fn container_capability_entries(
+    outcome: QueryOutcome,
+) -> Result<Vec<ContainerCapability>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ContainersCapabilities { value }, _) => Ok(value.items.0),
+        (other, _) => Err(unexpected("containers.capabilities", &other)),
+    }
 }
 pub fn settings_entries(outcome: QueryOutcome) -> Result<(i64, Vec<SettingEntry>), Failure> {
     match query_result(outcome)? {

@@ -98,6 +98,28 @@ pub enum BindingRefusal {
 }
 
 impl ToolBindings {
+    pub fn resolve_container_credential(
+        &self,
+        reference: &Id,
+        project: Option<&ProjectId>,
+        secrets: &dyn SecretStore,
+        namespace: &str,
+    ) -> Result<String, BindingRefusal> {
+        let registered = self
+            .credentials
+            .get(reference.as_str())
+            .ok_or(BindingRefusal::UnknownCredential)?;
+        if registered.project.as_ref() != project {
+            return Err(BindingRefusal::OutOfProject);
+        }
+        secrets
+            .get(&SecretKey::new(namespace, registered.handle.clone()))
+            .ok()
+            .flatten()
+            .map(|secret| secret.expose().to_owned())
+            .ok_or(BindingRefusal::UnknownCredential)
+    }
+
     /// Resolve container environment entries only after its command intent has committed.
     /// Registered handles stay project-bound and values never enter the receipt or CLI argv.
     pub fn resolve_container_environment(

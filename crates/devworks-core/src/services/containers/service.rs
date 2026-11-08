@@ -43,6 +43,7 @@ pub struct ContainerService {
     pub(super) artifacts: Option<Arc<crate::services::artifacts::ArtifactService>>,
     pub(super) secrets: Option<Arc<dyn crate::ports::secrets::SecretStore>>,
     pub(super) resources: Option<Arc<crate::services::resources::ResourceService>>,
+    pub(super) registry_auth: Option<Arc<dyn super::registry_auth::RegistryAuth>>,
     host: HostPlatform<'static>,
     pub(super) ids: Arc<dyn IdSource>,
 }
@@ -62,6 +63,7 @@ impl ContainerService {
             artifacts: None,
             secrets: None,
             resources: None,
+            registry_auth: None,
             host,
             ids,
         }
@@ -88,6 +90,11 @@ impl ContainerService {
         self
     }
 
+    pub fn with_registry_auth(mut self, auth: Arc<dyn super::registry_auth::RegistryAuth>) -> Self {
+        self.registry_auth = Some(auth);
+        self
+    }
+
     fn correlation(&self) -> CorrelationId {
         CorrelationId(self.ids.next_id(IdKind::Correlation))
     }
@@ -100,6 +107,7 @@ impl ContainerService {
         let id = Id::new(probe.backend.id()).expect("static backend ID");
         let state = match probe.availability {
             Availability::Unsupported | Availability::Unavailable => ItemState::Unavailable,
+            Availability::Healthy if probe.backend == Backend::Apple => ItemState::Unavailable,
             Availability::Healthy => ItemState::Healthy,
         };
         let mut detail = format!(
@@ -118,9 +126,12 @@ impl ContainerService {
         if let Some(version) = &probe.version {
             detail.push_str(&format!("; version={version}"));
         }
+        if probe.backend == Backend::Apple {
+            detail.push_str("; lifecycle unavailable: exact owned-only stop is unqualified");
+        }
         let diagnostic = Diagnostic {
             id: self.ids.next_id(IdKind::Diagnostic),
-            severity: if probe.availability == Availability::Healthy {
+            severity: if matches!(state, ItemState::Healthy) {
                 Severity::Info
             } else {
                 Severity::Warning
@@ -131,11 +142,27 @@ impl ContainerService {
             correlation_id: None,
             evidence: None,
         };
+        let operational = matches!(state, ItemState::Healthy);
         ContainerCapability {
             engine_id: id,
             state,
-            // A healthy CLI connection is not evidence that the operation matrix has passed.
-            capabilities: BoundedList(Vec::new()),
+            capabilities: BoundedList(if operational {
+                [
+                    "containers.build",
+                    "containers.pull",
+                    "containers.create",
+                    "containers.start",
+                    "containers.exec",
+                    "containers.inspect",
+                    "containers.logs",
+                    "containers.stop",
+                ]
+                .into_iter()
+                .map(|name| BoundedText(name.into()))
+                .collect()
+            } else {
+                Vec::new()
+            }),
             diagnostics: BoundedList(vec![diagnostic]),
         }
     }

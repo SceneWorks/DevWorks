@@ -207,6 +207,7 @@ pub struct ContainerComposition {
     pub filesystem: Arc<dyn devworks_core::authority::destructive::FilesystemResolver>,
     pub protected_roots: devworks_core::authority::destructive::ProtectedRoots,
     pub secrets: Arc<dyn devworks_core::ports::secrets::SecretStore>,
+    pub registry_auth: Arc<dyn devworks_core::services::containers::registry_auth::RegistryAuth>,
     pub host: devworks_core::services::containers::probe::HostPlatform<'static>,
 }
 impl std::fmt::Debug for ContainerComposition {
@@ -551,6 +552,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             )
             .with_artifacts(artifacts.clone())
             .with_resources(resources.clone())
+            .with_registry_auth(composition.registry_auth.clone())
             .with_secrets(composition.secrets.clone()),
         )
     });

@@ -477,6 +477,12 @@ async fn compose(
                 Some(config.data_root.display().to_string()),
             ),
             secrets: secrets.clone(),
+            registry_auth: Arc::new(
+                devworks_adapters::containers::NativeRegistryAuth::new(
+                    config.data_root.join("container-auth"),
+                )
+                .map_err(|reason| StartError::Thread(reason.into()))?,
+            ),
             host: devworks_core::services::containers::probe::HostPlatform {
                 os: std::env::consts::OS,
                 arch: std::env::consts::ARCH,

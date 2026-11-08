@@ -8,7 +8,7 @@ use crate::memory::SettingsMemory;
 use crate::theme;
 use crate::web_panel::{WebAction, WebPanel, WebSettings};
 use crate::widgets::{self, Tone, ViewState, chip};
-use devworks_core::protocol::records::SettingEntry;
+use devworks_core::protocol::records::{ContainerCapability, ItemState, SettingEntry};
 use devworks_core::settings::catalog::{
     Adoption, Category, ValueKind, WEB_FETCH_MAX_REDIRECTS_KEY, WEB_FETCH_PRIVATE_KEY,
     WEB_SEARCH_CREDENTIAL_KEY, WEB_SEARCH_PROVIDER_KEY, WEB_TIMEOUT_KEY,
@@ -54,12 +54,15 @@ pub struct SettingsScreen {
     pub show_connections: bool,
     /// The web search and fetch section of Agent tools.
     pub web: WebPanel,
+    pub container_capabilities: Option<Vec<ContainerCapability>>,
+    pub container_error: Option<String>,
 }
 
 /// What the screen asks the shell to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SettingsAction {
     Reload,
+    RefreshContainers,
     Validate,
     Save,
     /// Native user input only; the worker stages it before preparing the reference-only save.
@@ -413,6 +416,9 @@ impl SettingsScreen {
             }
             for key in keys {
                 self.item_ui(ui, key, actions);
+                if key == "containers.preferredRuntime" {
+                    self.container_status_ui(ui, actions);
+                }
                 ui.add_space(8.0);
             }
             if matches!(self.category, None | Some(Category::General))
@@ -433,6 +439,65 @@ impl SettingsScreen {
         });
         scrolls.record("settings-items", out.state.clamped_offset().y);
         self.scrolls = scrolls;
+    }
+
+    fn container_status_ui(&self, ui: &mut Ui, actions: &mut Vec<SettingsAction>) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Container runtime health").strong());
+            if widgets::secondary_button(ui, "Refresh runtime status").clicked() {
+                actions.push(SettingsAction::RefreshContainers);
+            }
+        });
+        let selected = self
+            .view
+            .as_ref()
+            .and_then(|view| view.item("containers.preferredRuntime"))
+            .and_then(|item| item.effective.as_str())
+            .unwrap_or("unavailable");
+        let Some(capabilities) = &self.container_capabilities else {
+            widgets::caption(
+                ui,
+                self.container_error
+                    .as_deref()
+                    .unwrap_or("Checking runtime health…"),
+            );
+            return;
+        };
+        let effective = capabilities.iter().find(|record| {
+            record.engine_id.as_str() == selected && matches!(record.state, ItemState::Healthy)
+        });
+        widgets::caption(
+            ui,
+            format!(
+                "Selected: {selected} · Effective: {}",
+                effective.map_or("unavailable", |record| record.engine_id.as_str()),
+            ),
+        );
+        for record in capabilities {
+            let operations = record
+                .capabilities
+                .0
+                .iter()
+                .map(|name| name.0.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            widgets::caption(
+                ui,
+                format!(
+                    "{} · {:?} · Operations: {}",
+                    record.engine_id.as_str(),
+                    record.state,
+                    if operations.is_empty() {
+                        "none qualified"
+                    } else {
+                        &operations
+                    },
+                ),
+            );
+            for diagnostic in &record.diagnostics.0 {
+                widgets::caption(ui, diagnostic.message.0.clone());
+            }
+        }
     }
 
     /// The effective (saved) web settings the web section summarizes.

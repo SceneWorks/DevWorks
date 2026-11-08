@@ -46,6 +46,13 @@ fn requested_backend(
             Some(engine.clone()),
         )));
     }
+    if backend == Backend::Apple {
+        return Ok(Err(Refusal::new(
+            DomainErrorCode::UnsupportedCapability,
+            "apple_container_lifecycle_unqualified",
+            Some(engine.clone()),
+        )));
+    }
     Ok(Ok(backend))
 }
 
@@ -230,7 +237,7 @@ impl CommandHandler for ContainerService {
                                 return decided(
                                     tx,
                                     Err(Refusal::new(
-                                    DomainErrorCode::CapacityWait,
+                                        DomainErrorCode::CapacityWait,
                                         "container_resource_waiting",
                                         None,
                                     )
@@ -342,7 +349,7 @@ impl CommandHandler for ContainerService {
                                 return decided(
                                     tx,
                                     Err(Refusal::new(
-                                    DomainErrorCode::CapacityWait,
+                                        DomainErrorCode::CapacityWait,
                                         "container_resource_waiting",
                                         None,
                                     )
