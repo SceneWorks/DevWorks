@@ -1202,5 +1202,29 @@ for suffix in ['more','empty-tail']:
 from purge_fixtures import append_purge_cases
 append_purge_cases(case,sample,request)
 
+# DW150: every desktop operation negotiates revision 3 because its result reaches
+# DesktopRecord; inspect exposes the tree and input accepts a native target.
+desktop_ops=['desktop.inspect','desktop.capture','desktop.request_control','desktop.input','desktop.release_control']
+tree={'revision':'a'*64,'platform':'macos-ax','nodes':[{'targetId':'mac:42:0','parentId':None,'role':'AXButton','name':'Apply','description':None,'enabled':True,'actions':['AXPress']}],'truncated':False}
+for name in desktop_ops:
+ definition=OPS[name]
+ mode=definition['mode']
+ frame=request(name,mode);frame['schemaRevision']=3
+ case('dw150-r3-input-'+name,'domain-request.r3',frame)
+ output=result(name,definition['result'])
+ record=output['value']['desktop'] if name=='desktop.capture' else output['value']
+ record['accessibility']=copy.deepcopy(tree)
+ case('dw150-r3-result-'+name,'operation-result.r3',output)
+ if name=='desktop.inspect':
+  case('dw150-reject-r1-tree','operation-result',output,False,False)
+  case('dw150-reject-r2-tree','operation-result.r2',output,False,False)
+target=request('desktop.input','Command');target['schemaRevision']=3
+target['body']['action']={'kind':'Target','targetId':'mac:42:0','snapshotRevision':'a'*64,'action':{'kind':'Invoke','action':'AXPress'}}
+case('dw150-r3-target-input','domain-request.r3',target)
+old=copy.deepcopy(target);old.pop('schemaRevision')
+case('dw150-reject-r1-target-input','domain-request',old,False,False)
+old['schemaRevision']=2
+case('dw150-reject-r2-target-input','domain-request.r2',old,False,False)
+
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

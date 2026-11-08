@@ -2,13 +2,13 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 359 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 364 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
 ### Projects
 
-**Owner:** WorkService. Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive.
+**Owner:** WorkService. Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive. Permanent purge uses a complete revision-bound manifest; only a native Human confirms, scoped managed-byte recovery completes honestly, shared history and source resources remain.
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
@@ -20,6 +20,10 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 | `projects.archive` | **Command**<br>`projectId`: `ProjectId`<br>`expectedRevision`: `Revision`<br>`proposalId`: `?Id` | `ProjectRecord` |
 | `projects.restore` | **Command**<br>`projectId`: `ProjectId`<br>`expectedRevision`: `Revision`<br>`proposalId`: `?Id` | `ProjectRecord` |
 | `projects.delete` | **Command**<br>`projectId`: `ProjectId`<br>`expectedRevision`: `Revision`<br>`proposalId`: `?Id` | `ProjectRecord` |
+| `projects.prepare_purge` | **Command**<br>`projectId`: `ProjectId`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 6 ([revision 6 input](contracts/domain-request.r6.schema.json)) | `ProjectPurgeManifest` |
+| `projects.purge_manifest` | **Query**<br>`projectId`: `ProjectId`<br>`manifestId`: `Id`<br>`expectedRevision`: `Revision`<br>`page`: `PageRequest`<br><br>**Schema revisions** 6 ([revision 6 input](contracts/domain-request.r6.schema.json)) | `ProjectPurgeManifestPage` |
+| `projects.purge` | **Command**<br>`projectId`: `ProjectId`<br>`manifestId`: `Id`<br>`expectedRevision`: `Revision`<br>`expectedDigest`: `Digest`<br>`expectedProjectRevision`: `Revision`<br>`confirm`: `bool`<br><br>**Schema revisions** 6 ([revision 6 input](contracts/domain-request.r6.schema.json)) | `ProjectPurgeManifest` |
+| `projects.purge_status` | **Query**<br>`projectId`: `ProjectId`<br>`manifestId`: `Id`<br><br>**Schema revisions** 6 ([revision 6 input](contracts/domain-request.r6.schema.json)) | `ProjectPurgeManifest` |
 
 ### Features
 
@@ -148,13 +152,13 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `history.events` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.events'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/query-request.r2.schema.json)) | `HistoryPage<Event>` |
+| `history.events` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.events'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/query-request.r3.schema.json)) | `HistoryPage<Event>` |
 | `history.work_lineage` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `HistoryPage<LineageRecord>` |
 | `history.git_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `HistoryPage<AttributedGitLink>` |
 | `history.evidence_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `HistoryPage<EvidenceLink>` |
 | `history.operation_status` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.operation_status'} | `OperationRef` |
 | `history.tool_usage` | **Query**<br>`rootId`: `?RootId`<br>`projectId`: `?ProjectId`<br>`workspace`: `?bool`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `UsagePage` |
-| `history.command_receipt` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.command_receipt'} | `ReceiptObservation` |
+| `history.command_receipt` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.command_receipt'}<br><br>**Schema revisions** 1, 6 ([revision 6 input](contracts/query-request.r3.schema.json)) | `ReceiptObservation` |
 
 ### Code
 
@@ -227,13 +231,13 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `schemas.connections` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest` | `Page<SchemaConnection>` |
-| `schemas.objects` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`connectionId`: `Id`<br>`kinds`: `Items<MetadataObjectKind>`<br>`parentId`: `?Id`<br>`text`: `?Text`<br>`page`: `PageRequest` | `Page<SchemaObject>` |
-| `schemas.relationships` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`connectionId`: `Id`<br>`objectIds`: `Items<Id>`<br>`page`: `PageRequest` | `Page<SchemaRelation>` |
-| `schemas.index` | **Command**<br>`connectionId`: `Id`<br>`expectedRevision`: `Revision` | `IndexRunRecord` |
-| `schemas.refresh` | **Command**<br>`connectionId`: `Id`<br>`expectedRevision`: `Revision` | `IndexRunRecord` |
-| `schemas.remove_index` | **Command**<br>`connectionId`: `Id`<br>`expectedRevision`: `Revision` | `MutationSummary` |
-| `schemas.configure` | **Command**<br>`scope`: `DataScope`<br>`connectionId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`config`: `ConnectionConfig` | `SchemaConnection` |
+| `schemas.connections` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `Page<SchemaConnection>` |
+| `schemas.objects` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`connectionId`: `Id`<br>`kinds`: `Items<MetadataObjectKind>`<br>`parentId`: `?Id`<br>`text`: `?Text`<br>`page`: `PageRequest`<br>`objectId`: `?Id`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `Page<SchemaObject>` |
+| `schemas.relationships` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`connectionId`: `Id`<br>`objectIds`: `Items<Id>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `Page<SchemaRelation>` |
+| `schemas.index` | **Command**<br>`connectionId`: `Id`<br>`expectedRevision`: `Revision`<br>`testOnly`: `?bool`<br>`scope`: `?DataScope`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `IndexRunRecord` |
+| `schemas.refresh` | **Command**<br>`connectionId`: `Id`<br>`expectedRevision`: `Revision`<br>`testOnly`: `?bool`<br>`scope`: `?DataScope`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `IndexRunRecord` |
+| `schemas.remove_index` | **Command**<br>`connectionId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `MutationSummary` |
+| `schemas.configure` | **Command**<br>`scope`: `DataScope`<br>`connectionId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`config`: `ConnectionConfig`<br>`action`: `?SchemaSourceAction`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `SchemaConnection` |
 
 ### Database
 
@@ -245,7 +249,7 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 | `database.execute_write` | **Command**<br>`connectionId`: `Id`<br>`expectedConnectionRevision`: `Revision`<br>`statement`: `Content`<br>`parameters`: `Items<DbParameter>`<br>`proposalId`: `?Id`<br>`timeoutMs`: `PositiveCounter` | `DbWriteResult` |
 | `database.apply_migration` | **Command**<br>`connectionId`: `Id`<br>`expectedConnectionRevision`: `Revision`<br>`migration`: `ArtifactRef`<br>`expectedSchemaDigest`: `Digest`<br>`proposalId`: `?Id` | `DbWriteResult` |
 | `database.direct_schema_change` | **Command**<br>`connectionId`: `Id`<br>`expectedConnectionRevision`: `Revision`<br>`statement`: `Content`<br>`parameters`: `Items<DbParameter>`<br>`proposalId`: `?Id`<br>`timeoutMs`: `PositiveCounter` | `DbWriteResult` |
-| `database.configure_sensitive_columns` | **Command**<br>`connectionId`: `Id`<br>`expectedRevision`: `Revision`<br>`columnIds`: `Items<Id>` | `SchemaConnection` |
+| `database.configure_sensitive_columns` | **Command**<br>`connectionId`: `Id`<br>`expectedRevision`: `Revision`<br>`columnIds`: `Items<Id>`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `SchemaConnection` |
 
 ### Knowledge
 
@@ -331,19 +335,19 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `conventions.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`applicability`: `Items<Label>` | `Page<InstructionRecord>` |
-| `conventions.read` | **Query**<br>`conventionId`: `Id`<br>`revision`: `?Revision` | `InstructionRecord` |
-| `conventions.edit` | **Command**<br>`conventionId`: `Id`<br>`expectedRevision`: `Revision`<br>`content`: `ArtifactRef` | `InstructionRecord` |
-| `conventions.version` | **Query**<br>`conventionId`: `Id`<br>`page`: `PageRequest` | `Page<InstructionRecord>` |
-| `conventions.applicability` | **Command**<br>`conventionId`: `Id`<br>`expectedRevision`: `Revision`<br>`applicability`: `Items<Label>` | `InstructionRecord` |
-| `conventions.retire` | **Command**<br>`conventionId`: `Id`<br>`expectedRevision`: `Revision`<br>`resourceId`: `?Id` | `MutationSummary` |
-| `conventions.index` | **Command**<br>`conventionId`: `Id`<br>`expectedRevision`: `Revision`<br>`resourceId`: `?Id` | `MutationSummary` |
-| `conventions.import` | **Command**<br>`scope`: `DataScope`<br>`source`: `ArtifactRef`<br>`schema`: `SchemaRef` | `InstructionRecord` |
-| `conventions.delete` | **Command**<br>`conventionId`: `Id`<br>`expectedRevision`: `Revision`<br>`resourceId`: `?Id` | `MutationSummary` |
-| `conventions.move` | **Command**<br>`conventionId`: `Id`<br>`expectedRevision`: `Revision`<br>`destination`: `DataScope` | `InstructionRecord` |
-| `conventions.resources` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`applicability`: `Items<Label>` | `Page<InstructionRecord>` |
-| `conventions.delete_resource` | **Command**<br>`conventionId`: `Id`<br>`expectedRevision`: `Revision`<br>`resourceId`: `?Id` | `MutationSummary` |
-| `conventions.search` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`applicability`: `Items<Label>`<br>`text`: `Text` | `Page<InstructionRecord>` |
+| `conventions.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`applicability`: `Items<Label>`<br>`lifecycles`: `?Items<ConventionLifecycle>`<br>`order`: `?ConventionOrder`<br><br>**Schema revisions** 1, 3, 4 ([revision 4 input](contracts/domain-request.r3.schema.json)) | `ConventionPageResult` |
+| `conventions.read` | **Query**<br>`conventionId`: `?Id`<br>`revision`: `?Revision`<br>`slug`: `?GraphText`<br>`scope`: `?DataScope`<br>`format`: `?ConventionFormat`<br>`cursor`: `?Cursor`<br>`maxChars`: `?Counter`<br>`sectionPath`: `?ConventionIndexedPath`<br>`operationId`: `?OperationId`<br>`resourceId`: `?Id`<br>`maxBytes`: `?Counter`<br>`path`: `?Items<GraphText>`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ConventionReadResult` |
+| `conventions.edit` | **Command**<br>`conventionId`: `Id`<br>`expectedRevision`: `Revision`<br>`content`: `ArtifactRef`<br>`title`: `?GraphText`<br>`slug`: `?GraphText`<br>`parent`: `?ConventionParentChange`<br>`sortOrder`: `?SignedCounter`<br>`rawContent`: `?ConventionRawChange`<br>`resources`: `?Items<ConventionResourceChange>`<br>`scope`: `?DataScope`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ConventionRecordResult` |
+| `conventions.version` | **Query**<br>`conventionId`: `Id`<br>`page`: `PageRequest`<br>`scope`: `?DataScope`<br><br>**Schema revisions** 1, 3, 4 ([revision 4 input](contracts/domain-request.r3.schema.json)) | `ConventionPageResult` |
+| `conventions.applicability` | **Command**<br>`conventionId`: `Id`<br>`expectedRevision`: `Revision`<br>`applicability`: `Items<Label>`<br>`lifecycle`: `?ConventionLifecycle`<br>`scope`: `?DataScope`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ConventionRecordResult` |
+| `conventions.retire` | **Command**<br>`conventionId`: `?Id`<br>`expectedRevision`: `Revision`<br>`resourceId`: `?Id`<br>`scope`: `?DataScope`<br>`operationId`: `?OperationId`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ConventionMutationResult` |
+| `conventions.index` | **Command**<br>`conventionId`: `?Id`<br>`expectedRevision`: `Revision`<br>`resourceId`: `?Id`<br>`allScope`: `?DataScope`<br>`scope`: `?DataScope`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ConventionMutationResult` |
+| `conventions.import` | **Command**<br>`scope`: `DataScope`<br>`source`: `ArtifactRef`<br>`schema`: `SchemaRef`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ConventionRecordResult` |
+| `conventions.delete` | **Command**<br>`conventionId`: `Id`<br>`expectedRevision`: `Revision`<br>`resourceId`: `?Id`<br>`scope`: `?DataScope`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ConventionMutationResult` |
+| `conventions.move` | **Command**<br>`conventionId`: `Id`<br>`expectedRevision`: `Revision`<br>`destination`: `DataScope`<br>`parent`: `?ConventionParentChange`<br>`sortOrder`: `?SignedCounter`<br>`scope`: `?DataScope`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ConventionRecordResult` |
+| `conventions.resources` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`applicability`: `Items<Label>`<br>`selection`: `?ConventionResourcesSelection`<br><br>**Schema revisions** 1, 3, 4 ([revision 4 input](contracts/domain-request.r3.schema.json)) | `ConventionResourcePageResult` |
+| `conventions.delete_resource` | **Command**<br>`conventionId`: `Id`<br>`expectedRevision`: `Revision`<br>`resourceId`: `?Id`<br>`scope`: `?DataScope`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ConventionMutationResult` |
+| `conventions.search` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`applicability`: `Items<Label>`<br>`text`: `Text`<br>`topK`: `?SignedCounter`<br><br>**Schema revisions** 1, 3, 4 ([revision 4 input](contracts/domain-request.r3.schema.json)) | `ConventionSearchPageResult` |
 
 ### Skills
 
@@ -482,11 +486,11 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `desktop.inspect` | **Query**<br>No caller fields | `DesktopRecord` |
-| `desktop.capture` | **Query**<br>`desktopId`: `Id`<br>`expectedRevision`: `Revision` | `DesktopCapture` |
-| `desktop.request_control` | **Command**<br>`desktopId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`leaseMs`: `PositiveCounter` | `DesktopRecord` |
-| `desktop.input` | **Command**<br>`desktopId`: `Id`<br>`leaseId`: `Id`<br>`expectedFence`: `Counter`<br>`consentId`: `Id`<br>`expectedDesktopRevision`: `Revision`<br>`action`: `DesktopInput` | `DesktopRecord` |
-| `desktop.release_control` | **Command**<br>`desktopId`: `Id`<br>`leaseId`: `Id`<br>`expectedFence`: `Counter` | `DesktopRecord` |
+| `desktop.inspect` | **Query**<br>No caller fields<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `DesktopRecord` |
+| `desktop.capture` | **Query**<br>`desktopId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `DesktopCapture` |
+| `desktop.request_control` | **Command**<br>`desktopId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`leaseMs`: `PositiveCounter`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `DesktopRecord` |
+| `desktop.input` | **Command**<br>`desktopId`: `Id`<br>`leaseId`: `Id`<br>`expectedFence`: `Counter`<br>`consentId`: `Id`<br>`expectedDesktopRevision`: `Revision`<br>`action`: `DesktopInput`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `DesktopRecord` |
+| `desktop.release_control` | **Command**<br>`desktopId`: `Id`<br>`leaseId`: `Id`<br>`expectedFence`: `Counter`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `DesktopRecord` |
 
 ### Process
 
@@ -571,6 +575,7 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 | `router.configure` | **Command**<br>`action`: `RouterConfigAction`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `MutationSummary` |
 | `router.decision_models` | **Query**<br>`page`: `PageRequest`<br>`includeDisabled`: `bool` | `Page<DecisionModel>` |
 | `router.decide` | **Command**<br>`modelId`: `Id`<br>`expectedModelRevision`: `Revision`<br>`state`: `DynamicJson`<br>`questions`: `NonEmpty<NamedQuestion>`<br>`images`: `Items<MediaRef>`<br>`videos`: `Items<MediaRef>`<br>`timeoutMs`: `PositiveCounter` | `DecisionResult` |
+| `router.embedding_spaces` | **Query**<br>`page`: `PageRequest`<br><br>**Schema revisions** 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `EmbeddingSpacePage` |
 
 ### Mcp
 
@@ -1233,6 +1238,14 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `currentViewId` | `?Id` |
 | `writesEnabled` | `bool` |
 | `metadataOnly` | `bool` |
+| `config` | `?ConnectionConfig` · *revision 5+* |
+| `ownerId` | `?ActorId` · *revision 5+* |
+| `profile` | `?SchemaAdapterProfile` · *revision 5+* |
+| `coverage` | `?Coverage` · *revision 5+* |
+| `lastSyncedAtMs` | `?Counter` · *revision 5+* |
+| `lastError` | `?Text` · *revision 5+* |
+| `activeOperationId` | `?Id` · *revision 5+* |
+| `readView` | `?ResolvedViewSet` · *revision 5+* |
 
 ### ConnectionConfig
 
@@ -1247,6 +1260,16 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `includePatterns` | `Items<Text>` |
 | `excludePatterns` | `Items<Text>` |
 | `writesEnabled` | `bool` |
+| `enabled` | `?bool` · *revision 5+* |
+| `projectAccess` | `?Items<SchemaProjectAccess>` · *revision 5+* |
+| `workspaceExposed` | `?bool` · *revision 5+* |
+| `authentication` | `?SchemaAuthMode` · *revision 5+* |
+| `username` | `?Label` · *revision 5+* |
+| `tls` | `?SchemaTlsMode` · *revision 5+* |
+| `caCertificate` | `?ArtifactRef` · *revision 5+* |
+| `exposureMode` | `?SchemaExposureMode` · *revision 5+* |
+| `displayName` | `?Label` · *revision 5+* |
+| `environment` | `?Label` · *revision 5+* |
 
 ### SchemaObject
 
@@ -1259,6 +1282,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `definition` | `?ArtifactRef` |
 | `parentId` | `?Id` |
 | `coverage` | `Coverage` |
+| `metadata` | `?SchemaObjectMetadata` · *revision 5+* |
 
 ### SchemaRelation
 
@@ -1801,6 +1825,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `permissionState` | `Label` |
 | `leaseId` | `?Id` |
 | `consentId` | `?Id` |
+| `accessibility` | `?DesktopAccessibilitySnapshot` · *revision 3+* |
 
 ### DesktopCapture
 
@@ -1818,6 +1843,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `Text` | `text`: `Content` |
 | `Key` | `key`: `Label`<br>`modifiers`: `Items<KeyModifier>` |
 | `Scroll` | `x`: `i32`<br>`y`: `i32` |
+| `Target` | `targetId`: `Label`<br>`snapshotRevision`: `Label`<br>`action`: `DesktopTargetAction` |
 
 ### EnvironmentEntry
 
@@ -2519,6 +2545,10 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `SignIn` | `connectionId`: `Id`<br>`action`: `AccountAction`<br>`flowId`: `?Id` |
 | `RemoveConnection` | `connectionId`: `Id`<br>`expectedRevision`: `Revision` |
 | `SubscriptionRisk` | `connectionId`: `Id`<br>`expectedRevision`: `Revision`<br>`noticeSha256`: `Digest`<br>`accepted`: `bool` |
+| `CreateEmbeddingSpace` | `name`: `Label`<br>`connectionId`: `Id`<br>`expectedConnectionRevision`: `Revision`<br>`upstreamModelId`: `Text`<br>`dimensions`: `PositiveCounter`<br>`dimensionMode`: `EmbeddingDimensionMode`<br>`metric`: `EmbeddingMetric` |
+| `QualifyEmbeddingSpace` | `expectedRevision`: `Revision`<br>`candidateId`: `Id` |
+| `SelectEmbeddingSpace` | `expectedRevision`: `Revision`<br>`expectedSelectionRevision`: `Revision`<br>`candidateId`: `Id` |
+| `ClearEmbeddingSpace` | `expectedSelectionRevision`: `Revision` |
 
 ### RootSnapshot
 
@@ -2548,6 +2578,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `replyArtifact` | `?ArtifactRef` |
 | `replySchema` | `?SchemaRef` |
 | `state` | `ReceiptLookupState` |
+| `purged` | `?PurgedReceiptOutcome` · *revision 6+* |
 
 ### ReceiptLookupState
 
@@ -3911,7 +3942,7 @@ Before revision 3: exact legacy `PriceRecord`. Revision 3 and later: `PriceOverr
 | `priceOrigin` | `PriceOrigin` |
 | `amountMicroUsd` | `?Counter` |
 | `currency` | `?Label` |
-| `originalAmount` | `?Money` |
+| `originalAmount` | `?Label` |
 | `classification` | `?Label` |
 | `priceSnapshotId` | `?Id` |
 | `priceRevision` | `?Revision` |
@@ -4085,6 +4116,8 @@ Before revision 3: exact legacy `UsageReport`. Revision 3 and later: `UsageQuery
 | `snapshotId` | `?Id` |
 | `overrideRevision` | `?Revision` |
 | `untrackedReason` | `?Text` |
+| `upstreamModelId` | `?Text` · *revision 3+* |
+| `endpointProfile` | `?EndpointKind` · *revision 3+* |
 
 ### UsageCostKind
 
@@ -4755,6 +4788,540 @@ Before revision 3: exact legacy `Page<HelpTopic>`. Revision 3 and later: `HelpTo
 | `services` | `CodeModuleDrilldown` |
 | `tables` | `CodeModuleDrilldown` |
 | `recorded` | `?CodeRecordedModuleAnalysis` · *revision 3+* |
+
+### ConventionLifecycle
+
+`Active`, `Retired`, `Deleted`.
+
+### ConventionFormat
+
+`Markdown`, `Raw`, `Manifest`, `SectionPath`, `Resource`.
+
+### ConventionAvailability
+
+`Available`, `Missing`, `Unavailable`.
+
+### ConventionIndexPhase
+
+`NotIndexed`, `Queued`, `Indexing`, `Ready`, `LexicalOnly`, `Stale`, `Failed`, `Cancelled`.
+
+### ConventionRetrievalMode
+
+`Lexical`, `Hybrid`, `Unavailable`.
+
+### ConventionProvenance
+
+| Kind | Fields |
+| --- | --- |
+| `Authored` | `actorId`: `ActorId` |
+| `Imported` | `actorId`: `ActorId`<br>`source`: `ArtifactRef`<br>`schema`: `SchemaRef`<br>`importedAtMs`: `Counter` |
+
+### ConventionIndexStatus
+
+| Field | Type |
+| --- | --- |
+| `status` | `ConventionIndexPhase` |
+| `generationId` | `?Id` |
+| `sourceRevision` | `?Revision` |
+| `sourceDigest` | `?Digest` |
+| `embeddingSpace` | `?Content` |
+| `indexedChunks` | `?Counter` |
+| `operation` | `?OperationRef` |
+| `reason` | `?Content` |
+
+### ConventionRecord
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `scope` | `DataScope` |
+| `slug` | `GraphText` |
+| `title` | `GraphText` |
+| `parentId` | `?Id` |
+| `sortOrder` | `SignedCounter` |
+| `lifecycle` | `ConventionLifecycle` |
+| `content` | `?ArtifactRef` |
+| `rawContent` | `?ArtifactRef` |
+| `applicability` | `Items<Label>` |
+| `provenance` | `ConventionProvenance` |
+| `authorId` | `ActorId` |
+| `createdAtMs` | `Counter` |
+| `updatedAtMs` | `Counter` |
+| `legacyApproved` | `bool` |
+| `index` | `ConventionIndexStatus` |
+
+### ConventionResourceRecord
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `conventionId` | `Id` |
+| `conventionRevision` | `Revision` |
+| `scope` | `DataScope` |
+| `name` | `Content` |
+| `lifecycle` | `ConventionLifecycle` |
+| `content` | `ArtifactRef` |
+| `applicability` | `Items<Label>` |
+| `authorId` | `ActorId` |
+| `createdAtMs` | `Counter` |
+| `deletedAtMs` | `?Counter` |
+| `mediaType` | `GraphText` |
+
+### ConventionPassage
+
+| Field | Type |
+| --- | --- |
+| `text` | `GraphText` |
+| `offset` | `Counter` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+
+### ConventionReadView
+
+| Field | Type |
+| --- | --- |
+| `convention` | `ConventionRecord` |
+| `format` | `ConventionFormat` |
+| `passage` | `?ConventionPassage` |
+| `availability` | `ConventionAvailability` |
+| `reason` | `?Content` |
+| `manifestSchema` | `SchemaRef` |
+
+### ConventionPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<ConventionRecord>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `scopeRevision` | `Revision` |
+| `manifestSchema` | `SchemaRef` |
+| `sourceScopeRevision` | `?Revision` · *revision 4+* |
+
+### ConventionResourcePage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<ConventionResourceRecord>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `scopeRevision` | `Revision` |
+
+### ConventionRetrieval
+
+| Field | Type |
+| --- | --- |
+| `mode` | `ConventionRetrievalMode` |
+| `embeddingSpace` | `?Content` |
+| `reason` | `?Content` |
+| `gaps` | `Items<Content>` |
+| `moreGaps` | `bool` |
+| `embeddingRequestId` | `?Id` · *revision 3+* |
+| `embeddingOperation` | `?OperationRef` · *revision 3+* |
+
+### ConventionSearchHit
+
+| Field | Type |
+| --- | --- |
+| `convention` | `ConventionRecord` |
+| `chunkId` | `Id` |
+| `chunkIndex` | `Counter` |
+| `sectionPath` | `ConventionSectionPath` |
+| `excerpt` | `GraphText` |
+| `score` | `Finite` |
+| `indexedPath` | `ConventionIndexedPath` |
+
+### ConventionSearchPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<ConventionSearchHit>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `scopeRevision` | `Revision` |
+| `retrieval` | `ConventionRetrieval` |
+| `sourceScopeRevision` | `?Revision` · *revision 4+* |
+
+### ConventionMutation
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `changed` | `bool` |
+| `convention` | `?ConventionRecord` |
+| `resource` | `?ConventionResourceRecord` |
+| `operation` | `?ConventionOperationStatus` |
+
+### ConventionParentChange
+
+| Kind | Fields |
+| --- | --- |
+| `Root` | No caller fields |
+| `Child` | `parentId`: `Id` |
+
+### ConventionRawChange
+
+| Kind | Fields |
+| --- | --- |
+| `Set` | `content`: `ArtifactRef` |
+| `Remove` | No caller fields |
+
+### ConventionResourceChange
+
+| Kind | Fields |
+| --- | --- |
+| `Attach` | `name`: `Content`<br>`content`: `ArtifactRef`<br>`mediaType`: `?GraphText` |
+| `Update` | `resourceId`: `Id`<br>`expectedRevision`: `Revision`<br>`name`: `?Content`<br>`content`: `?ArtifactRef`<br>`lifecycle`: `?ConventionLifecycle`<br>`mediaType`: `?GraphText` |
+
+### ConventionRecordResult
+
+Before revision 3: exact legacy `InstructionRecord`. Revision 3 and later: `ConventionRecord`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.
+
+### ConventionReadResult
+
+Before revision 3: exact legacy `InstructionRecord`. Revision 3 and later: `ConventionReadOutcome`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.
+
+### ConventionPageResult
+
+Before revision 3: exact legacy `Page<InstructionRecord>`. Revision 3 and later: `ConventionPage`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.
+
+### ConventionResourcePageResult
+
+Before revision 3: exact legacy `Page<InstructionRecord>`. Revision 3 and later: `ConventionResourcesView`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.
+
+### ConventionSearchPageResult
+
+Before revision 3: exact legacy `Page<InstructionRecord>`. Revision 3 and later: `ConventionSearchPage`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.
+
+### ConventionMutationResult
+
+Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `ConventionMutation`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.
+
+### ConventionSectionPath
+
+| Field | Type |
+| --- | --- |
+| `text` | `?Content` |
+| `source` | `?ConventionPathSource` |
+
+### ConventionIndexedPath
+
+| Field | Type |
+| --- | --- |
+| `generationId` | `Id` |
+| `chunkId` | `Id` |
+
+### ConventionOperationKind
+
+`Import`, `Index`.
+
+### ConventionOperationPhase
+
+`Queued`, `Preparing`, `Publishing`, `Completed`, `Failed`, `Cancelled`, `Unknown`.
+
+### ConventionOperationStatus
+
+| Field | Type |
+| --- | --- |
+| `operation` | `OperationRef` |
+| `revision` | `Revision` |
+| `kind` | `ConventionOperationKind` |
+| `scope` | `DataScope` |
+| `phase` | `ConventionOperationPhase` |
+| `processedItems` | `Counter` |
+| `totalItems` | `?Counter` |
+| `conventionId` | `?Id` |
+| `canCancel` | `bool` |
+| `cancelRequested` | `bool` |
+| `reason` | `?Content` |
+
+### ConventionReadOutcome
+
+| Kind | Fields |
+| --- | --- |
+| `Document` | `view`: `ConventionReadView` |
+| `Operation` | `status`: `ConventionOperationStatus` |
+| `Resource` | `convention`: `ConventionRecord`<br>`resource`: `ConventionResourceRecord`<br>`passage`: `ConventionBinaryPassage` |
+
+### ConventionBinaryPassage
+
+| Field | Type |
+| --- | --- |
+| `base64` | `Content` |
+| `firstByte` | `Counter` |
+| `byteLength` | `Counter` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+
+### ConventionOrder
+
+`Title`, `Organization`.
+
+### EmbeddingDimensionMode
+
+`Native`, `Parameter`.
+
+### EmbeddingMetric
+
+`L2`, `Cosine`.
+
+### EmbeddingSpaceStatus
+
+`Unqualified`, `Qualifying`, `Qualified`, `Failed`, `Unknown`, `Cancelled`, `Stale`, `Unavailable`.
+
+### EmbeddingSpaceRecord
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `name` | `Label` |
+| `connectionId` | `Id` |
+| `accountRevision` | `Revision` |
+| `upstreamModelId` | `Text` |
+| `dimensions` | `PositiveCounter` |
+| `dimensionMode` | `EmbeddingDimensionMode` |
+| `metric` | `EmbeddingMetric` |
+| `modelDigest` | `Digest` |
+| `configurationDigest` | `Digest` |
+| `status` | `EmbeddingSpaceStatus` |
+| `reason` | `?Content` |
+| `qualificationOperation` | `?OperationRef` |
+| `qualificationRequestId` | `?Id` |
+| `qualificationAttemptId` | `?Id` |
+| `resultArtifact` | `?ArtifactRef` |
+| `createdAtMs` | `Counter` |
+| `updatedAtMs` | `Counter` |
+| `spaceId` | `Id` |
+| `canQualify` | `bool` |
+| `pricingModelId` | `?Id` · *revision 3+* |
+
+### EmbeddingSpacePage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<EmbeddingSpaceRecord>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `selectionRevision` | `Revision` |
+| `selectedSpaceId` | `?Id` |
+| `selectedCandidateId` | `?Id` |
+| `qualificationAvailable` | `bool` |
+| `availabilityReason` | `?Text` |
+
+### ConventionHeadingSpan
+
+| Field | Type |
+| --- | --- |
+| `level` | `Counter` |
+| `firstByte` | `Counter` |
+| `byteLength` | `Counter` |
+
+### ConventionPathSource
+
+| Field | Type |
+| --- | --- |
+| `artifact` | `ArtifactRef` |
+| `conventionRevision` | `Revision` |
+| `headings` | `Items<ConventionHeadingSpan>` |
+
+### ConventionResourcesSelection
+
+| Kind | Fields |
+| --- | --- |
+| `Catalog` | No caller fields |
+| `Document` | `rootSlug`: `GraphText`<br>`cursor`: `?Cursor`<br>`maxChars`: `?Counter` |
+| `Attachments` | `conventionId`: `Id`<br>`conventionRevision`: `?Revision`<br>`lifecycles`: `?Items<ConventionLifecycle>` |
+
+### ConventionResourcesView
+
+| Kind | Fields |
+| --- | --- |
+| `Catalog` | `page`: `ConventionPage` |
+| `Document` | `view`: `ConventionReadView` |
+| `Attachments` | `page`: `ConventionResourcePage` |
+
+### SchemaAuthMode
+
+`File`, `Password`.
+
+### SchemaTlsMode
+
+`VerifyFull`, `VerifyCa`, `LoopbackPlaintext`.
+
+### SchemaSourceAction
+
+`Save`, `Remove`.
+
+### SchemaExposureMode
+
+`Hidden`, `SchemaOnly`, `ReadOnly`, `ReadWrite`.
+
+### SchemaProjectAccess
+
+| Field | Type |
+| --- | --- |
+| `projectId` | `Id` |
+| `metadataEnabled` | `bool` |
+| `dataReadEnabled` | `bool` |
+| `dataWriteEnabled` | `bool` |
+
+### SchemaAdapterProfile
+
+| Field | Type |
+| --- | --- |
+| `driver` | `Label` |
+| `serverVersion` | `Label` |
+| `authentication` | `Label` |
+| `tls` | `Label` |
+| `readOnlyBoundary` | `Text` |
+| `supportedMetadata` | `Items<MetadataObjectKind>` |
+| `unsupportedMetadata` | `Items<MetadataObjectKind>` |
+| `limitations` | `Items<Text>` |
+
+### SchemaParameter
+
+| Field | Type |
+| --- | --- |
+| `name` | `Label` |
+| `ordinal` | `Counter` |
+| `mode` | `Label` |
+| `dataType` | `Text` |
+| `nullable` | `bool` |
+
+### SchemaObjectMetadata
+
+| Field | Type |
+| --- | --- |
+| `name` | `Label` |
+| `catalog` | `Label` |
+| `schema` | `?Label` |
+| `comment` | `?Content` |
+| `dataType` | `?Text` |
+| `ordinal` | `?Counter` |
+| `nullable` | `?bool` |
+| `primaryKey` | `?bool` |
+| `defaultValue` | `?DefaultValueText` |
+| `columnKey` | `?Label` |
+| `extra` | `?Text` |
+| `unique` | `?bool` |
+| `indexType` | `?Label` |
+| `columnNames` | `Items<Label>` |
+| `constraintType` | `?Label` |
+| `referencedTable` | `?Text` |
+| `referencedColumns` | `Items<Label>` |
+| `checkClause` | `?Content` |
+| `routineType` | `?Label` |
+| `parameters` | `Items<SchemaParameter>` |
+| `definitionSql` | `?Content` |
+
+### PurgePhase
+
+`Prepared`, `RemovingBytes`, `Held`, `Complete`, `Superseded`.
+
+### PurgeDisposition
+
+`Remove`, `Scrub`, `Keep`.
+
+### PurgeEntryKind
+
+`RecordClass`, `ManagedFile`, `SharedKeeper`.
+
+### PurgedDecisionKind
+
+`Applied`, `Accepted`, `NoChange`, `Refused`.
+
+### PurgedReceiptOutcome
+
+| Field | Type |
+| --- | --- |
+| `commandId` | `CommandId` |
+| `committedSequence` | `Revision` |
+| `acceptedAtMs` | `Counter` |
+| `requestDigest` | `Digest` |
+| `operationId` | `?OperationId` |
+| `originalDecision` | `PurgedDecisionKind` |
+| `originalFaultCode` | `?DomainErrorCode` |
+| `purgeId` | `Id` |
+
+### ProjectPurgeManifest
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `projectId` | `ProjectId` |
+| `revision` | `Revision` |
+| `projectRevision` | `Revision` |
+| `digest` | `Digest` |
+| `phase` | `PurgePhase` |
+| `recordCount` | `Counter` |
+| `managedByteCount` | `Counter` |
+| `keptRecordCount` | `Counter` |
+| `keptByteCount` | `Counter` |
+| `pendingEffects` | `Counter` |
+| `createdAtMs` | `Counter` |
+| `operationId` | `?OperationId` |
+| `errorCode` | `?Label` |
+
+### ProjectPurgeEntry
+
+| Field | Type |
+| --- | --- |
+| `id` | `Digest` |
+| `kind` | `PurgeEntryKind` |
+| `recordClass` | `Label` |
+| `disposition` | `PurgeDisposition` |
+| `recordCount` | `Counter` |
+| `byteCount` | `Counter` |
+| `reason` | `Label` |
+| `relativePath` | `?Text` |
+
+### ProjectPurgeManifestPage
+
+| Field | Type |
+| --- | --- |
+| `manifest` | `ProjectPurgeManifest` |
+| `entries` | `ProjectPurgeEntryPage` |
+
+### ProjectPurgeEntryPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Items<ProjectPurgeEntry>` |
+| `hasMore` | `bool` |
+| `nextCursor` | `?Cursor` |
+
+### DesktopTargetAction
+
+| Kind | Fields |
+| --- | --- |
+| `Invoke` | `action`: `Label` |
+| `SetValue` | `value`: `Content` |
+| `Focus` | No caller fields |
+
+### DesktopAccessibilityNode
+
+| Field | Type |
+| --- | --- |
+| `targetId` | `Label` |
+| `parentId` | `?Label` |
+| `role` | `Label` |
+| `name` | `Label` |
+| `description` | `?Text` |
+| `enabled` | `bool` |
+| `actions` | `Items<Label>` |
+
+### DesktopAccessibilitySnapshot
+
+| Field | Type |
+| --- | --- |
+| `revision` | `Label` |
+| `platform` | `Label` |
+| `nodes` | `Rows<DesktopAccessibilityNode>` |
+| `truncated` | `bool` |
 
 ## Machine sources
 

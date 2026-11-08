@@ -5,7 +5,9 @@ use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::{Fingerprint, sha256_hex};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, desktop as ops, resources as resource_ops};
-use crate::ports::desktop::{DesktopAvailability, DesktopCapabilities, DesktopPlatform};
+use crate::ports::desktop::{
+    AccessibilitySnapshot, DesktopAvailability, DesktopCapabilities, DesktopPlatform,
+};
 use crate::ports::storage::{
     ApplicationStore, ApprovalSource, ArtifactScope, ConfigScope, LeasePhase, NewEvent,
     NewOperation, NewQueueEntry, OperationRecord, ReadOptions, ReadSnapshot, ResourceRead,
@@ -17,9 +19,12 @@ use crate::ports::{
     IdSource, Preparation, Prepared, QueryAnswer, QueryHandler,
 };
 use crate::protocol::provider::ArtifactRef;
-use crate::protocol::records::{DesktopCapture, DesktopRecord, ItemState};
+use crate::protocol::records::{
+    DesktopAccessibilityNode, DesktopAccessibilitySnapshot, DesktopCapture, DesktopRecord,
+    ItemState,
+};
 use crate::protocol::results::{DomainDecision, OperationCompletion, OperationResult};
-use crate::protocol::support::{BoundedText, Check, Limit, RevisionDimension};
+use crate::protocol::support::{BoundedList, BoundedText, Check, Limit, RevisionDimension};
 use crate::protocol::{
     ActorId, AssignmentId, CommandReply, CorrelationId, DomainErrorCode, DomainFault, EventId, Id,
     OperationId, OperationState, ProjectId, Protocol, ResourceId, RetryAdvice, RootId,
@@ -43,6 +48,34 @@ pub const OPERATIONS: [&str; 5] = [
 ];
 const CONSENT_PURPOSE: &str = crate::services::resources::DESKTOP_CONSENT_PURPOSE;
 pub const INPUT_CONSUMER: &str = "desktop_input_effects";
+
+fn accessibility_record(
+    snapshot: AccessibilitySnapshot,
+) -> Result<DesktopAccessibilitySnapshot, String> {
+    let revision = BoundedText(snapshot.revision());
+    let record = DesktopAccessibilitySnapshot {
+        revision,
+        platform: BoundedText(snapshot.platform),
+        nodes: BoundedList(
+            snapshot
+                .nodes
+                .into_iter()
+                .map(|node| DesktopAccessibilityNode {
+                    target_id: BoundedText(node.target_id),
+                    parent_id: node.parent_id.map(BoundedText),
+                    role: BoundedText(node.role),
+                    name: BoundedText(node.name),
+                    description: node.description.map(BoundedText),
+                    enabled: node.enabled,
+                    actions: BoundedList(node.actions.into_iter().map(BoundedText).collect()),
+                })
+                .collect(),
+        ),
+        truncated: snapshot.truncated,
+    };
+    record.check()?;
+    Ok(record)
+}
 
 #[derive(Clone)]
 enum StagedInput {
@@ -346,6 +379,7 @@ impl DesktopService {
         let capabilities = self.platform.capabilities();
         let state = if !matches!(capabilities.input, DesktopAvailability::Available)
             && !matches!(capabilities.capture, DesktopAvailability::Available)
+            && !matches!(capabilities.accessibility, DesktopAvailability::Available)
         {
             ItemState::Unavailable
         } else if holder
@@ -365,6 +399,7 @@ impl DesktopService {
             permission_state: BoundedText(permission_label(&capabilities)),
             lease_id: holder.as_ref().map(|lease| lease.id.clone()),
             consent_id,
+            accessibility: None,
         };
         record.check().map_err(StorageError::InvalidRecord)?;
         Ok((resource, record))
@@ -448,10 +483,10 @@ impl DesktopService {
             )
             .into());
         }
-        if !matches!(
-            self.platform.capabilities().input,
-            DesktopAvailability::Available
-        ) {
+        let capabilities = self.platform.capabilities();
+        if !matches!(capabilities.input, DesktopAvailability::Available)
+            && !matches!(capabilities.accessibility, DesktopAvailability::Available)
+        {
             return Err(Refusal::new(
                 DomainErrorCode::UnsupportedCapability,
                 "desktop_input",
@@ -498,10 +533,10 @@ impl DesktopService {
             )
             .into());
         }
-        if !matches!(
-            self.platform.capabilities().input,
-            DesktopAvailability::Available
-        ) {
+        let capabilities = self.platform.capabilities();
+        if !matches!(capabilities.input, DesktopAvailability::Available)
+            && !matches!(capabilities.accessibility, DesktopAvailability::Available)
+        {
             return Err(Refusal::new(
                 DomainErrorCode::UnsupportedCapability,
                 "desktop_input",
@@ -923,6 +958,9 @@ impl DesktopService {
             Err(crate::ports::desktop::DesktopFault::Unsupported) => {
                 InputEffectOutcome::Failed("desktop input unsupported".into())
             }
+            Err(crate::ports::desktop::DesktopFault::StaleTarget) => {
+                InputEffectOutcome::Failed("desktop accessibility target changed".into())
+            }
             Err(crate::ports::desktop::DesktopFault::NativeFailure) => {
                 InputEffectOutcome::Unknown("desktop input native outcome unknown".into())
             }
@@ -941,9 +979,10 @@ fn permission_label(capabilities: &DesktopCapabilities) -> String {
         }
     }
     format!(
-        "capture:{};input:{};accessibility-targets:unsupported:no-native-selector",
+        "capture:{};input:{};accessibility:{}",
         label(&capabilities.capture),
-        label(&capabilities.input)
+        label(&capabilities.input),
+        label(&capabilities.accessibility)
     )
 }
 
@@ -976,6 +1015,49 @@ impl QueryHandler for DesktopService {
         query: &AdmittedQuery,
         env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, DomainFault> {
+        if matches!(
+            query.input(),
+            OperationInput::Desktop(ops::Input::Inspect(_))
+        ) {
+            if query.schema_revision().0 < 3 {
+                return Ok(None);
+            }
+            return match self.platform.capabilities().accessibility {
+                DesktopAvailability::Available => {
+                    let observed =
+                        self.platform
+                            .accessibility_snapshot()
+                            .map_err(|fault| match fault {
+                                crate::ports::desktop::DesktopFault::PermissionRequired => self
+                                    .fault(
+                                        DomainErrorCode::PermissionDenied,
+                                        "accessibility",
+                                        None,
+                                    ),
+                                crate::ports::desktop::DesktopFault::Unsupported => self.fault(
+                                    DomainErrorCode::UnsupportedCapability,
+                                    "accessibility",
+                                    None,
+                                ),
+                                crate::ports::desktop::DesktopFault::StaleTarget => self.fault(
+                                    DomainErrorCode::SourceChanged,
+                                    "accessibility",
+                                    None,
+                                ),
+                                crate::ports::desktop::DesktopFault::NativeFailure => self.fault(
+                                    DomainErrorCode::ExternalFailure,
+                                    "accessibility",
+                                    None,
+                                ),
+                            })?;
+                    let record = accessibility_record(observed).map_err(|_| {
+                        self.fault(DomainErrorCode::ExternalFailure, "accessibility", None)
+                    })?;
+                    Ok(Some(Prepared::new(record)))
+                }
+                _ => Ok(None),
+            };
+        }
         let OperationInput::Desktop(ops::Input::Capture(input)) = query.input() else {
             return Ok(None);
         };
@@ -1010,6 +1092,9 @@ impl QueryHandler for DesktopService {
                 "screen_capture",
                 None,
             ),
+            crate::ports::desktop::DesktopFault::StaleTarget => {
+                self.fault(DomainErrorCode::SourceChanged, "screen_capture", None)
+            }
             crate::ports::desktop::DesktopFault::NativeFailure => {
                 self.fault(DomainErrorCode::ExternalFailure, "screen_capture", None)
             }
@@ -1088,11 +1173,12 @@ impl QueryHandler for DesktopService {
         query: &AdmittedQuery,
         snapshot: &dyn ReadSnapshot,
     ) -> Result<QueryAnswer, DomainFault> {
-        let (_, record) = self
+        let (_, mut record) = self
             .record(snapshot.resources())
             .map_err(|e| query_fault(e.into(), "desktop", self.correlation()))?;
         let result = match query.input() {
             OperationInput::Desktop(ops::Input::Inspect(_)) => {
+                record.accessibility = query.prepared::<DesktopAccessibilitySnapshot>().cloned();
                 OperationResult::DesktopInspect { value: record }
             }
             OperationInput::Desktop(ops::Input::Capture(input)) => {
