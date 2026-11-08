@@ -255,6 +255,10 @@ pub fn inject_target(
     if !node.enabled {
         return Err(DesktopFault::Unsupported);
     }
+    // Reading a tree uses short timeouts; a user action needs time for the app to respond.
+    unsafe {
+        AXUIElementSetMessagingTimeout(element.as_CFTypeRef(), 1.0);
+    }
     let status = match action {
         DesktopTargetAction::Invoke { action } => {
             if !node.actions.iter().any(|listed| listed == &action.0) {
