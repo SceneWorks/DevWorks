@@ -98,6 +98,46 @@ pub enum BindingRefusal {
 }
 
 impl ToolBindings {
+    /// Resolve container environment entries only after its command intent has committed.
+    /// Registered handles stay project-bound and values never enter the receipt or CLI argv.
+    pub fn resolve_container_environment(
+        &self,
+        entries: &[crate::protocol::records::EnvironmentEntry],
+        project: Option<&ProjectId>,
+        secrets: &dyn SecretStore,
+        namespace: &str,
+    ) -> Result<Vec<(String, String)>, BindingRefusal> {
+        let mut names = HashSet::new();
+        let mut values = Vec::with_capacity(entries.len());
+        for entry in entries {
+            if !names.insert(entry.name.0.as_str()) {
+                return Err(BindingRefusal::DuplicateEnvironment);
+            }
+            let value = match (&entry.value, &entry.credential_ref) {
+                (Some(value), None) => value.0.clone(),
+                (None, Some(reference)) => {
+                    let registered = self
+                        .credentials
+                        .get(reference.as_str())
+                        .ok_or(BindingRefusal::UnknownCredential)?;
+                    if registered.project.as_ref() != project {
+                        return Err(BindingRefusal::OutOfProject);
+                    }
+                    secrets
+                        .get(&SecretKey::new(namespace, registered.handle.clone()))
+                        .ok()
+                        .flatten()
+                        .ok_or(BindingRefusal::UnknownCredential)?
+                        .expose()
+                        .to_owned()
+                }
+                _ => return Err(BindingRefusal::UnknownCredential),
+            };
+            values.push((entry.name.0.clone(), value));
+        }
+        Ok(values)
+    }
+
     /// Resolve a project path under its exact registered root, rejecting symlink escapes.
     pub fn resolve_registered_path(
         &self,

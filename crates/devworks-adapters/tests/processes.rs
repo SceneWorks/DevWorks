@@ -27,6 +27,7 @@ use devworks_core::protocol::{
     ActorId, CommandReply, Counter, DomainFault, Id, ProjectId, Revision, RootId,
 };
 use devworks_core::services::UseCases;
+use devworks_core::services::containers::EffectOutcome as ContainerEffectOutcome;
 use devworks_core::services::containers::runner::ContainerRunner;
 use devworks_core::services::containers::service::ContainerService;
 use devworks_core::services::containers::{
@@ -1087,6 +1088,122 @@ fn container_create_receipt_atomically_records_ownership_before_effect_delivery(
         )
     });
     assert_eq!(deliveries.entries.len(), 1);
+}
+
+#[test]
+#[ignore = "explicit native Docker engine lifecycle; requires DW_NATIVE_DOCKER"]
+fn native_docker_container_effects_commit_owned_create_start_and_stop() {
+    let _serial = serial();
+    let docker = std::env::var("DW_NATIVE_DOCKER").expect("registered Docker CLI path");
+    struct Cleanup(String, String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new(&self.0)
+                .args(["rm", "-f", &self.1])
+                .output();
+        }
+    }
+    let mut fx = Fx::new();
+    let runner = Arc::new(ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    ));
+    let bindings = ToolBindings::new(
+        [RegisteredExecutable {
+            id: id("docker"),
+            path: docker.clone().into(),
+        }],
+        std::iter::empty(),
+    )
+    .unwrap();
+    let service = Arc::new(ContainerService::new(
+        fx.store.clone(),
+        runner,
+        bindings,
+        HostPlatform {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            macos_major: 0,
+        },
+        fx.h.ids.clone(),
+    ));
+    fx.cases = fx.cases.with_containers(service.clone());
+    let context = fx.agent("agent-a", "project-a", "s-a");
+    let create = fx.command_keyed(
+        &context,
+        "containers.create",
+        "native-effect-create",
+        json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:latest",
+            "command":["sleep","60"],"mounts":[],"ports":[],"environment":[],"resourceIds":[]}}),
+        Some(1),
+    );
+    let create_id = match recorded(create).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted create: {other:?}"),
+    };
+    let row = fx.read(|snapshot| {
+        snapshot
+            .resources()
+            .containers(&ContainerFilter::Project(project("project-a")), None, 10)
+    })[0]
+        .clone();
+    let _cleanup = Cleanup(docker, row.id.as_str().into());
+    let op = fx
+        .read(|snapshot| snapshot.operations().operation(&create_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    let created = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    assert_eq!(created.phase, ContainerPhase::Created);
+    let start = fx.command_keyed(
+        &context,
+        "containers.start",
+        "native-effect-start",
+        json!({"containerId":row.id.as_str(),"expectedRevision":created.revision.to_string()}),
+        Some(1),
+    );
+    let start_id = match recorded(start).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted start: {other:?}"),
+    };
+    let op = fx
+        .read(|snapshot| snapshot.operations().operation(&start_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    let running = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    assert_eq!(running.phase, ContainerPhase::Running);
+    let stop = fx.command_keyed(
+        &context,
+        "containers.stop",
+        "native-effect-stop",
+        json!({"containerId":row.id.as_str(),"expectedRevision":running.revision.to_string()}),
+        Some(1),
+    );
+    let stop_id = match recorded(stop).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted stop: {other:?}"),
+    };
+    let op = fx
+        .read(|snapshot| snapshot.operations().operation(&stop_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    let stopped = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    assert_eq!(stopped.phase, ContainerPhase::Stopped);
 }
 
 #[test]

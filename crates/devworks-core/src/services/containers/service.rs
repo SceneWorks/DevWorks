@@ -2,7 +2,7 @@
 use super::backend::Backend;
 use super::backend::ownership_matches;
 use super::execution::bound_spec;
-use super::inspection::{Inspected, ObservedPhase, parse};
+use super::inspection::{Inspected, ObservedPhase, parse, verified_lifecycle_target};
 use super::probe::{Availability, HostPlatform, Probe, probe};
 use super::runner::ContainerRunner;
 use super::selection;
@@ -11,12 +11,14 @@ use crate::gateway::AdmittedQuery;
 use crate::operations::{OperationInput, containers as ops};
 use crate::ports::storage::{ApplicationStore, ReadSnapshot, StoredContainer};
 use crate::ports::{IdKind, IdSource, Preparation, Prepared, QueryAnswer, QueryHandler};
+use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
     ContainerCapability, ContainerRecord, Diagnostic, ItemState, Severity,
 };
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id};
+use crate::services::artifacts::observed::Observed;
 use crate::services::process::tools::ToolBindings;
 use crate::services::sessions::{Refusal, query_fault, rev};
 use std::sync::Arc;
@@ -28,10 +30,18 @@ struct PreparedInspect {
     observed: Inspected,
 }
 
+#[derive(Clone)]
+struct PreparedLogs {
+    revision: i64,
+    reference: ArtifactRef,
+}
+
 pub struct ContainerService {
     pub(super) store: Arc<dyn ApplicationStore>,
-    runner: Arc<ContainerRunner>,
-    bindings: ToolBindings,
+    pub(super) runner: Arc<ContainerRunner>,
+    pub(super) bindings: ToolBindings,
+    pub(super) artifacts: Option<Arc<crate::services::artifacts::ArtifactService>>,
+    pub(super) secrets: Option<Arc<dyn crate::ports::secrets::SecretStore>>,
     host: HostPlatform<'static>,
     ids: Arc<dyn IdSource>,
 }
@@ -48,9 +58,24 @@ impl ContainerService {
             store,
             runner,
             bindings,
+            artifacts: None,
+            secrets: None,
             host,
             ids,
         }
+    }
+
+    pub fn with_artifacts(
+        mut self,
+        artifacts: Arc<crate::services::artifacts::ArtifactService>,
+    ) -> Self {
+        self.artifacts = Some(artifacts);
+        self
+    }
+
+    pub fn with_secrets(mut self, secrets: Arc<dyn crate::ports::secrets::SecretStore>) -> Self {
+        self.secrets = Some(secrets);
+        self
     }
 
     fn correlation(&self) -> CorrelationId {
@@ -128,7 +153,7 @@ impl ContainerService {
         Ok(row)
     }
 
-    fn inspect_live(
+    pub(super) fn inspect_live(
         &self,
         ctx: &InvocationContext,
         row: &StoredContainer,
@@ -162,7 +187,11 @@ impl ContainerService {
         Ok(observed)
     }
 
-    fn container_record(&self, row: &StoredContainer, observed: &Inspected) -> ContainerRecord {
+    pub(super) fn container_record(
+        &self,
+        row: &StoredContainer,
+        observed: &Inspected,
+    ) -> ContainerRecord {
         ContainerRecord {
             id: row.id.clone(),
             revision: rev(row.revision),
@@ -225,6 +254,75 @@ impl QueryHandler for ContainerService {
                     observed,
                 })))
             }
+            OperationInput::Containers(ops::Input::Logs(input)) => {
+                let row = env
+                    .read(|snapshot| snapshot.resources().container(&input.container_id))
+                    .map_err(|error| query_fault(error.into(), "container", self.correlation()))?
+                    .ok_or_else(|| {
+                        self.fault(DomainErrorCode::NotFound, Some(input.container_id.clone()))
+                    })?;
+                if ctx.project_id() != Some(&row.project_id)
+                    || (row.actor != *ctx.principal()
+                        && !matches!(
+                            ctx.principal_kind(),
+                            PrincipalKind::Human | PrincipalKind::Host
+                        ))
+                {
+                    return Err(self.fault(DomainErrorCode::NotFound, Some(row.id)));
+                }
+                let backend = Backend::parse(&row.engine).ok_or_else(|| {
+                    self.fault(DomainErrorCode::UnsupportedCapability, Some(row.id.clone()))
+                })?;
+                let observed = self.inspect_live(ctx, &row)?;
+                let target = verified_lifecycle_target(
+                    backend,
+                    &observed,
+                    row.create_operation_id.0.as_str(),
+                    row.project_id.0.as_str(),
+                    &row.owner_kind,
+                )
+                .map_err(|_| self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone())))?;
+                let args = backend.logs(&target).map_err(|_| {
+                    self.fault(DomainErrorCode::InvalidArgument, Some(row.id.clone()))
+                })?;
+                let spec = bound_spec(&self.bindings, backend, args, None).map_err(|_| {
+                    self.fault(DomainErrorCode::UnsupportedCapability, Some(row.id.clone()))
+                })?;
+                let result = self
+                    .runner
+                    .run(ctx, None, spec, Duration::from_secs(10), 1_048_576, &[])
+                    .map_err(|_| {
+                        self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone()))
+                    })?;
+                if result.exit_code != Some(0) || result.truncated {
+                    return Err(self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone())));
+                }
+                let Some(artifacts) = &self.artifacts else {
+                    return Err(
+                        self.fault(DomainErrorCode::UnsupportedCapability, Some(row.id.clone()))
+                    );
+                };
+                let offset = usize::try_from(input.after_bytes.get())
+                    .unwrap_or(usize::MAX)
+                    .min(result.stdout.len());
+                let end = offset
+                    .saturating_add(input.max_bytes.get() as usize)
+                    .min(result.stdout.len());
+                let bytes = &result.stdout[offset..end];
+                let (reference, ()) = artifacts.publish_observed(&*self.store, ctx, query.authorization(),
+                    Observed {
+                        project: Some(row.project_id.clone()),
+                        title: format!("Container {} logs", row.id.as_str()),
+                        media_type: "text/plain; charset=utf-8".into(),
+                        tags: vec!["container".into(), "logs".into()],
+                        source: serde_json::json!({"kind":"ContainerLogs","containerId":row.id.as_str(),"engine":row.engine,"offset":offset,"end":end}),
+                    }, bytes, |_, _| Ok(()))
+                    .map_err(|_| self.fault(DomainErrorCode::ViewUnavailable, Some(row.id.clone())))?;
+                Ok(Some(Prepared::new(PreparedLogs {
+                    revision: row.revision,
+                    reference,
+                })))
+            }
             _ => Ok(None),
         }
     }
@@ -267,6 +365,18 @@ impl QueryHandler for ContainerService {
                 }
                 OperationResult::ContainersInspect {
                     value: self.container_record(&row, &prepared.observed),
+                }
+            }
+            OperationInput::Containers(ops::Input::Logs(input)) => {
+                let row = self.visible_container(snapshot, ctx, &input.container_id)?;
+                let prepared = query
+                    .prepared::<PreparedLogs>()
+                    .ok_or_else(|| self.fault(DomainErrorCode::Conflict, Some(row.id.clone())))?;
+                if row.revision != prepared.revision {
+                    return Err(self.fault(DomainErrorCode::SourceChanged, Some(row.id)));
+                }
+                OperationResult::ContainersLogs {
+                    value: prepared.reference.clone(),
                 }
             }
             _ => return Err(self.fault(DomainErrorCode::UnsupportedCapability, None)),
