@@ -488,6 +488,54 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
+    let human_context = ingress.context(
+        ActorId(id("human-a")),
+        PrincipalKind::Human,
+        id("human-handover-invocation"),
+        id("human-ingress"),
+        Counter::new(s.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    let direct = run_write(&s, WriteOptions::default(), move |tx| {
+        let posted = devworks_core::services::agents::retained::post_message(
+            tx,
+            &human_context,
+            &devworks_core::services::agents::retained::PostSpec {
+                project: project("project-a"),
+                body: "Open item question".into(),
+                kind: devworks_core::services::agents::retained::MessageKind::Question,
+                item: Some(RootId(id("root-a"))),
+                feature: None,
+                resource: None,
+                to_session: Some(id("session-a")),
+                to_human: false,
+                blocking: false,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )?;
+        assert_eq!(
+            devworks_core::services::agents::retained::handover_item(tx, &assignment("recipient"))?,
+            1
+        );
+        assert_eq!(
+            devworks_core::services::agents::retained::handover_item(tx, &assignment("recipient"))?,
+            0
+        );
+        Ok(posted)
+    })
+    .unwrap();
+    read_snapshot(&s, &ReadOptions::default(), |snap| {
+        let delivery = snap
+            .runs()
+            .agent_session_delivery(&direct.message.id, &id("session-child"))?
+            .unwrap();
+        assert_eq!(delivery.state, "Pending");
+        assert!(delivery.handed_over);
+        Ok(())
+    })
+    .unwrap();
     run_write(&s, WriteOptions::default(), move |tx| {
         let mut delivery = tx
             .runs()

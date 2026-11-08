@@ -52,7 +52,7 @@ pub struct PostedMessage {
     pub resolved: Option<StoredAgentMessage>,
 }
 
-fn session_project(
+pub(super) fn session_project(
     tx: &mut dyn WriteTransaction,
     session: &crate::ports::storage::StoredSession,
 ) -> Result<Option<ProjectId>, StorageError> {

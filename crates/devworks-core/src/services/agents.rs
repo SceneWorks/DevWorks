@@ -351,6 +351,7 @@ impl AgentService {
                 )?
                 .map_err(fenced)?
         };
+        retained::handover_item(tx, &assignment.id)?;
         agent_record(tx.runs(), &assignment).map_err(failure)
     }
 
@@ -576,6 +577,7 @@ impl AgentService {
             task_ids:serde_json::to_value(&input.task_ids.0).map_err(|_|StorageError::InvalidRecord("task references".into()))?,
             source_checkpoint_id:input.source_checkpoint_id.clone(),created_at_ms:now,
         })?;
+        retained::handover_item(tx, &assignment.id)?;
         agent_record(tx.runs(), &assignment).map_err(failure)
     }
 

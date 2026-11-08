@@ -5,7 +5,7 @@ use crate::ports::storage::{
     StorageError, StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
     WriteTransaction,
 };
-use crate::protocol::{Id, ProjectId, Revision, RevisionDimension};
+use crate::protocol::{AssignmentId, Id, ProjectId, Revision, RevisionDimension};
 use std::collections::HashSet;
 
 mod post;
@@ -174,6 +174,94 @@ pub fn deliver_inbox(
         next_sequence: rows.last().map_or(after, |(delivery, _)| delivery.sequence),
         items: rows,
     })
+}
+
+/// Rebinds open item questions/requests to a newly owning session without rewriting older
+/// recipients. A retry finds its existing copy and leaves the event stream unchanged.
+pub fn handover_item(
+    tx: &mut dyn WriteTransaction,
+    assignment_id: &AssignmentId,
+) -> Result<usize, StorageError> {
+    let assignment = tx
+        .runs()
+        .assignment(assignment_id)?
+        .ok_or(StorageError::ScopeDenied)?;
+    if !assignment.state.is_live() {
+        return Err(StorageError::ScopeDenied);
+    }
+    let item = &assignment.work_id;
+    let session_id = &assignment.session_id;
+    let work = tx
+        .sessions()
+        .work_root(item)?
+        .ok_or(StorageError::ScopeDenied)?;
+    let session = tx
+        .sessions()
+        .session(session_id)?
+        .ok_or(StorageError::ScopeDenied)?;
+    if session.closed() || post::session_project(tx, &session)?.as_ref() != Some(&work.project_id) {
+        return Err(StorageError::ScopeDenied);
+    }
+    let mut before: Option<Id> = None;
+    let mut handed_over = 0;
+    loop {
+        let page = tx
+            .runs()
+            .agent_messages(&work.project_id, before.as_ref(), 500)?;
+        if page.is_empty() {
+            break;
+        }
+        before = page.last().map(|message| message.id.clone());
+        let page_len = page.len();
+        for message in page {
+            if message.target_item_id.as_ref() != Some(item)
+                || message.state.as_deref() != Some("Open")
+                || !matches!(message.message_class.as_str(), "Question" | "Request")
+                || message.to_human
+                || message.sender_session_id.as_ref() == Some(session_id)
+                || tx
+                    .runs()
+                    .agent_session_delivery(&message.id, session_id)?
+                    .is_some()
+            {
+                continue;
+            }
+            let now = tx.now_ms();
+            let delivery = StoredAgentDelivery {
+                sequence: tx.runs().agent_delivery_head()? + 1,
+                message_id: message.id.clone(),
+                project_id: work.project_id.clone(),
+                recipient_assignment_id: None,
+                recipient_human: false,
+                state: "Pending".into(),
+                revision: 1,
+                delivered_at_ms: None,
+                read_at_ms: None,
+                recipient_session_id: Some(session_id.clone()),
+                handed_over: true,
+                resolved_at_ms: None,
+            };
+            tx.runs().insert_agent_delivery(&delivery)?;
+            let event_sequence = tx.runs().agent_event_head()? + 1;
+            tx.runs()
+                .insert_agent_message_event(&StoredAgentMessageEvent {
+                    sequence: event_sequence,
+                    project_id: work.project_id.clone(),
+                    message_id: message.id,
+                    kind: "HandedOver".into(),
+                    actor_id: session.agent_id.clone(),
+                    recipient_assignment_id: None,
+                    recipient_session_id: Some(session_id.clone()),
+                    recipient_human: false,
+                    created_at_ms: now,
+                })?;
+            handed_over += 1;
+        }
+        if page_len < 500 {
+            break;
+        }
+    }
+    Ok(handed_over)
 }
 
 /// Atomically marks the named or cursor-bounded inbox deliveries Read. Repeated acknowledgments
