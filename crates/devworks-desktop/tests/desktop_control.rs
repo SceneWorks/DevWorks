@@ -280,9 +280,9 @@ fn control_requires_human_ok_and_live_fenced_consent() {
     ));
     let (target_inspection, _) = ops::query_result(backend.query(
         "desktop.inspect",
-        &at_revision(ops::query_frame(&*backend, "desktop.inspect", json!({})), 2),
+        &at_revision(ops::query_frame(&*backend, "desktop.inspect", json!({})), 3),
     ))
-    .expect("revision-two accessibility inspection");
+    .expect("revision-three accessibility inspection");
     let OperationResult::DesktopInspect {
         value: target_inspection,
     } = target_inspection
@@ -305,7 +305,7 @@ fn control_requires_human_ok_and_live_fenced_consent() {
                 "desktop.input",
                 &at_revision(
                     ops::command_frame(&*backend, "desktop.input", target_action),
-                    2,
+                    3,
                 ),
             )
             .expect("target input reply"),
