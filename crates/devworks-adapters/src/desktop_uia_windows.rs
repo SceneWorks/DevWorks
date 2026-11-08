@@ -30,7 +30,13 @@ impl Drop for ComSession {
     }
 }
 
-fn automation() -> Result<(ComSession, IUIAutomation), DesktopFault> {
+struct AutomationSession {
+    // Struct fields are dropped in declaration order: the proxy precedes COM teardown.
+    automation: IUIAutomation,
+    _com: ComSession,
+}
+
+fn automation() -> Result<AutomationSession, DesktopFault> {
     // SAFETY: this thread owns one balanced COM initialization for the lifetime of its proxies.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
         .ok()
@@ -44,7 +50,10 @@ fn automation() -> Result<(ComSession, IUIAutomation), DesktopFault> {
     let automation = v2
         .cast::<IUIAutomation>()
         .map_err(|_| DesktopFault::Unsupported)?;
-    Ok((session, automation))
+    Ok(AutomationSession {
+        automation,
+        _com: session,
+    })
 }
 
 pub fn available() -> bool {
@@ -226,8 +235,8 @@ fn observe(
 }
 
 pub fn snapshot() -> Result<AccessibilitySnapshot, DesktopFault> {
-    let (_session, automation) = automation()?;
-    observe(&automation).map(|(snapshot, _)| snapshot)
+    let session = automation()?;
+    observe(&session.automation).map(|(snapshot, _)| snapshot)
 }
 
 pub fn inject_target(
@@ -235,8 +244,8 @@ pub fn inject_target(
     revision: &str,
     action: &DesktopTargetAction,
 ) -> Result<(), DesktopFault> {
-    let (_session, automation) = automation()?;
-    let (snapshot, handles) = observe(&automation)?;
+    let session = automation()?;
+    let (snapshot, handles) = observe(&session.automation)?;
     if snapshot.revision() != revision {
         return Err(DesktopFault::StaleTarget);
     }
