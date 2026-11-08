@@ -303,9 +303,29 @@ fn redacted_output(bytes: &[u8], values: &[String], incomplete: bool) -> Vec<u8>
     for value in values {
         redactor.register(value);
     }
-    redactor
-        .redact_text(&String::from_utf8_lossy(&bytes[..bytes.len() - trim]))
-        .into_bytes()
+    let mut remaining = &bytes[..bytes.len() - trim];
+    let mut redacted = Vec::with_capacity(remaining.len());
+    while !remaining.is_empty() {
+        match std::str::from_utf8(remaining) {
+            Ok(text) => {
+                redacted.extend_from_slice(redactor.redact_text(text).as_bytes());
+                break;
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                if valid > 0 {
+                    // A registered credential is valid UTF-8, so its bytes cannot straddle an
+                    // invalid byte. Redact each valid span without changing unrelated binary.
+                    let text = std::str::from_utf8(&remaining[..valid]).expect("valid prefix");
+                    redacted.extend_from_slice(redactor.redact_text(text).as_bytes());
+                }
+                let invalid = error.error_len().unwrap_or(remaining.len() - valid);
+                redacted.extend_from_slice(&remaining[valid..valid + invalid]);
+                remaining = &remaining[valid + invalid..];
+            }
+        }
+    }
+    redacted
 }
 
 /// A capture budget applies to the combined stdout and stderr stream. Readers continue draining
@@ -1273,7 +1293,9 @@ impl ProcessToolService {
             match self.processes.poll(&process) {
                 Ok(Some(outcome)) => break Ok(outcome),
                 Ok(None) => {}
-                Err(error) => break Err(format!("process observation unavailable: {error}")),
+                // A native poll or its record write can fail transiently. Keep ownership and
+                // the timeout guard active; a later poll may still verify the exit.
+                Err(_) => {}
             }
             if Instant::now() >= deadline {
                 break self
@@ -2287,6 +2309,14 @@ mod tests {
         );
         assert!(redacted_output(b"short=abc", &["abc".to_owned()], false).is_empty());
         assert_eq!(redacted_output(&[0xff], &[], true), vec![0xff]);
+        assert_eq!(
+            redacted_output(&[0xff, b'x'], &["test".into()], false),
+            vec![0xff, b'x']
+        );
+        assert_eq!(
+            redacted_output(b"\xfftest\x00", &["test".into()], false),
+            b"\xff[REDACTED]\x00"
+        );
     }
 
     #[test]

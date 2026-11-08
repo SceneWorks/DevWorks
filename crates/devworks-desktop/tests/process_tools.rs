@@ -108,7 +108,7 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
                 json!({"spec": {
                     "executableRef":"printf", "args":["\\377"],
                     "workingDirectory":{"rootId":"process-repository","relative":"work"},
-                    "environment":[], "profile":"Full", "timeoutMs":"5000", "outputLimitBytes":"64"
+                    "environment":[{"name":"MODE","value":"test"}], "profile":"Full", "timeoutMs":"5000", "outputLimitBytes":"64"
                 }}),
             ),
         )
