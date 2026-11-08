@@ -288,22 +288,11 @@ fn redacted_output(bytes: &[u8], values: &[String], incomplete: bool) -> Vec<u8>
     {
         return Vec::new();
     }
-    let mut trim = 0;
-    if incomplete {
-        for value in values {
-            let secret = value.as_bytes();
-            for length in 1..secret.len() {
-                if bytes.ends_with(&secret[..length]) {
-                    trim = trim.max(length);
-                }
-            }
-        }
-    }
     let mut redactor = Redactor::new();
     for value in values {
         redactor.register(value);
     }
-    let mut remaining = &bytes[..bytes.len() - trim];
+    let mut remaining = bytes;
     let mut redacted = Vec::with_capacity(remaining.len());
     while !remaining.is_empty() {
         match std::str::from_utf8(remaining) {
@@ -324,6 +313,20 @@ fn redacted_output(bytes: &[u8], values: &[String], incomplete: bool) -> Vec<u8>
                 remaining = &remaining[valid + invalid..];
             }
         }
+    }
+    // Redact complete matches first. Trimming a repeated secret's suffix beforehand can
+    // split its full match and expose the retained prefix.
+    if incomplete {
+        let mut trim = 0;
+        for value in values {
+            let secret = value.as_bytes();
+            for length in 1..secret.len() {
+                if redacted.ends_with(&secret[..length]) {
+                    trim = trim.max(length);
+                }
+            }
+        }
+        redacted.truncate(redacted.len() - trim);
     }
     redacted
 }
@@ -2303,6 +2306,12 @@ mod tests {
     fn truncated_secret_prefix_is_withheld_before_output_publication() {
         let secrets = vec!["hunter2".to_owned()];
         assert_eq!(redacted_output(b"hello hunt", &secrets, true), b"hello ");
+        for incomplete in [false, true] {
+            let output = redacted_output(b"abcdabcd", &["abcdabcd".into()], incomplete);
+            assert!(!String::from_utf8_lossy(&output).contains("abcd"));
+        }
+        let overlapping = redacted_output(b"abcabcabc", &["abcabc".into()], true);
+        assert!(!String::from_utf8_lossy(&overlapping).contains("abc"));
         assert_eq!(
             redacted_output(b"hello hunter2!", &secrets, false),
             b"hello [REDACTED]!"
