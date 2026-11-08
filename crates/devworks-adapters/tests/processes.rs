@@ -28,6 +28,11 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::containers::runner::ContainerRunner;
+use devworks_core::services::containers::{
+    backend::Backend as ContainerBackend,
+    probe::{self as container_probe, Availability as ContainerAvailability, HostPlatform},
+};
+use devworks_core::services::process::tools::{RegisteredExecutable, ToolBindings};
 use devworks_core::services::process::{
     ConfirmRefusal, LaunchPolicy, LaunchRefusal, LaunchRequest, LeaseClaim, OwnedProcess,
     ProcessSupervisor, StopFailure, StopOutcome, StopScope, all_recorded,
@@ -797,6 +802,47 @@ fn container_cli_runner_uses_owned_process_and_redacts_bounded_native_output() {
     assert!(result.stderr.is_empty());
     assert!(!result.truncated);
     assert_eq!(fx.events("ProcessReaped").len(), 1);
+}
+
+#[test]
+#[ignore = "requires a separately supplied running Docker engine"]
+fn native_docker_probe_uses_registered_executable_and_owned_processes() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let path = std::env::var_os("DEVWORKS_TEST_DOCKER_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/local/bin/docker"));
+    let bindings = ToolBindings::new(
+        [RegisteredExecutable {
+            id: id("docker"),
+            path,
+        }],
+        std::iter::empty(),
+    )
+    .unwrap();
+    let runner = ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    );
+    let outcome = container_probe::probe(
+        &runner,
+        &bindings,
+        &fx.agent("agent-a", "project-a", "s-a"),
+        ContainerBackend::Docker,
+        HostPlatform {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            macos_major: 0,
+        },
+    );
+    assert_eq!(
+        outcome.availability,
+        ContainerAvailability::Healthy,
+        "{outcome:?}"
+    );
+    assert!(outcome.version.unwrap().contains("Docker version"));
+    assert_eq!(fx.events("ProcessReaped").len(), 2);
 }
 
 #[test]
