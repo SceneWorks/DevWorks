@@ -1,5 +1,8 @@
 //! Native process-tool route: one host-owned executable, durable effect, typed completion and
 //! bounded paged output through the same desktop backend used by agent tool ingress.
+//! This fixture invokes the Unix `printf` and `sleep` commands; Windows compiles the service
+//! and runs its existing native process-supervisor checks in the platform CI lane.
+#![cfg(unix)]
 mod common;
 use common::*;
 use devworks_core::ports::storage::{
