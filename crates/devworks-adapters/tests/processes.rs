@@ -7,6 +7,8 @@
 //! data-root lock), so spawning tests never share a test process with concurrent store reopens.
 #![allow(dead_code, clippy::result_large_err)]
 use devworks_adapters::fs::NativeFilesystem;
+use devworks_adapters::fs::artifacts::NativeArtifactFiles;
+use devworks_adapters::fs::sources::HostArtifactSources;
 use devworks_adapters::power::NativePower;
 use devworks_adapters::process::NativeProcessHost;
 use devworks_adapters::storage::sqlite::{SqliteConfig, SqliteStore};
@@ -27,6 +29,7 @@ use devworks_core::protocol::{
     ActorId, CommandReply, Counter, DomainFault, Id, ProjectId, Revision, RootId,
 };
 use devworks_core::services::UseCases;
+use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::containers::EffectOutcome as ContainerEffectOutcome;
 use devworks_core::services::containers::runner::ContainerRunner;
 use devworks_core::services::containers::service::ContainerService;
@@ -1104,6 +1107,19 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
         }
     }
     let mut fx = Fx::new();
+    let artifacts = Arc::new(ArtifactService::new(
+        Arc::new(NativeArtifactFiles::new(
+            fx.h.root.clone(),
+            fx.h.root.join("cache"),
+        )),
+        Arc::new(HostArtifactSources::new(
+            fx.h.clock.clone(),
+            fx.h.ids.clone(),
+        )),
+        Arc::new(NativeFilesystem::default()),
+        fx.h.clock.clone(),
+        fx.h.ids.clone(),
+    ));
     let runner = Arc::new(ContainerRunner::new(
         Arc::new(fx.supervisor()),
         Arc::new(NativeFilesystem::default()),
@@ -1117,25 +1133,31 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
         std::iter::empty(),
     )
     .unwrap();
-    let service = Arc::new(ContainerService::new(
-        fx.store.clone(),
-        runner,
-        bindings,
-        HostPlatform {
-            os: std::env::consts::OS,
-            arch: std::env::consts::ARCH,
-            macos_major: 0,
-        },
-        fx.h.ids.clone(),
-    ));
-    fx.cases = fx.cases.with_containers(service.clone());
+    let service = Arc::new(
+        ContainerService::new(
+            fx.store.clone(),
+            runner,
+            bindings,
+            HostPlatform {
+                os: std::env::consts::OS,
+                arch: std::env::consts::ARCH,
+                macos_major: 0,
+            },
+            fx.h.ids.clone(),
+        )
+        .with_artifacts(artifacts.clone()),
+    );
+    fx.cases = fx
+        .cases
+        .with_containers(service.clone())
+        .with_artifacts(artifacts.clone());
     let context = fx.agent("agent-a", "project-a", "s-a");
     let create = fx.command_keyed(
         &context,
         "containers.create",
         "native-effect-create",
         json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:latest",
-            "command":["sleep","60"],"mounts":[],"ports":[],"environment":[],"resourceIds":[]}}),
+            "command":["sh","-c","echo booted; sleep 60"],"mounts":[],"ports":[],"environment":[],"resourceIds":[]}}),
         Some(1),
     );
     let create_id = match recorded(create).0 {
@@ -1182,6 +1204,54 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
         .read(|snapshot| snapshot.resources().container(&row.id))
         .unwrap();
     assert_eq!(running.phase, ContainerPhase::Running);
+    let exec = fx.command_keyed(
+        &context,
+        "containers.exec",
+        "native-effect-exec",
+        json!({"containerId":row.id.as_str(),"expectedRevision":running.revision.to_string(),
+            "command":["printf","ok"],"environment":[],"timeoutMs":"10000"}),
+        Some(1),
+    );
+    let exec_id = match recorded(exec).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted exec: {other:?}"),
+    };
+    let op = fx
+        .read(|snapshot| snapshot.operations().operation(&exec_id))
+        .unwrap();
+    let ContainerEffectOutcome::Completed(completion) =
+        service.execute_effect(&op, &fx.authority())
+    else {
+        panic!("container exec did not complete");
+    };
+    let decoded: OperationResult = serde_json::from_value(completion["result"].clone()).unwrap();
+    let OperationResult::ContainersExec { value } = decoded else {
+        panic!("wrong exec result")
+    };
+    assert_eq!(value.exit_code, Some(0));
+    let (bytes, _) = artifacts
+        .read_exact(
+            &*fx.store,
+            &context,
+            value.output.as_ref().unwrap(),
+            1_048_576,
+        )
+        .unwrap();
+    let output: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(output["stdoutBase64"], "b2s=");
+    let logs = result(fx.query_at(
+        &context,
+        "containers.logs",
+        json!({"containerId":row.id.as_str(),"afterBytes":"0","maxBytes":1024}),
+        Some(1),
+    ));
+    let OperationResult::ContainersLogs { value } = logs else {
+        panic!("wrong logs result")
+    };
+    let (bytes, _) = artifacts
+        .read_exact(&*fx.store, &context, &value, 1_048_576)
+        .unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("booted"));
     let stop = fx.command_keyed(
         &context,
         "containers.stop",
