@@ -86,13 +86,12 @@ fn native_target_action_reaches_disposable_control() {
         std::thread::sleep(Duration::from_millis(100));
     }
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !marker.exists() {
+    while std::fs::read_to_string(&marker).ok().as_deref() != Some("pressed") {
         assert!(
             Instant::now() < deadline,
             "native fixture did not observe the action"
         );
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "pressed");
     std::fs::remove_file(marker).expect("remove fixture marker");
 }
