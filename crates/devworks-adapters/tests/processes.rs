@@ -32,6 +32,7 @@ use devworks_core::services::containers::service::ContainerService;
 use devworks_core::services::containers::{
     backend::{Backend as ContainerBackend, CreatePlan, ownership_labels, ownership_matches},
     execution::bound_spec,
+    inspection::{parse as parse_container_inspect, verified_lifecycle_target},
     probe::{self as container_probe, Availability as ContainerAvailability, HostPlatform},
 };
 use devworks_core::services::process::tools::{RegisteredExecutable, ToolBindings};
@@ -918,19 +919,16 @@ fn native_docker_owned_lifecycle_uses_the_exact_planned_container() {
         .unwrap());
     assert_eq!(output.stdout, b"ok");
     let inspected = run(backend.inspect(&name).unwrap());
-    let rows: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
-    let actual = rows[0]["Config"]["Labels"]
-        .as_object()
-        .unwrap()
-        .iter()
-        .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_owned())))
-        .collect();
+    let observed = parse_container_inspect(backend, &inspected.stdout).unwrap();
     assert!(ownership_matches(
-        &actual,
+        &observed.labels,
         "operation-a",
         "project-a",
         "Agent"
     ));
+    let native_id =
+        verified_lifecycle_target(backend, &observed, "operation-a", "project-a", "Agent").unwrap();
+    assert_eq!(native_id.len(), 64);
     run(backend.logs(&name).unwrap());
     run(backend.stop(&name).unwrap());
 }

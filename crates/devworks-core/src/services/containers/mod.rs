@@ -2,6 +2,7 @@
 pub mod backend;
 mod commands;
 pub mod execution;
+pub mod inspection;
 pub mod intent;
 pub mod probe;
 pub mod runner;
