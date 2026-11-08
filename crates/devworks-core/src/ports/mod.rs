@@ -67,6 +67,7 @@ pub enum IdKind {
     Resource,
     Lease,
     Process,
+    Container,
     Diagnostic,
     /// Owned browser sessions (DW-047).
     BrowserSession,

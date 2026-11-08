@@ -1301,6 +1301,7 @@ impl ArtifactRead for Unsupported {
     fn list(
         &self,
         _: &ProjectId,
+        _: Option<&ActorId>,
         _: &[String],
         _: Option<&ListPosition>,
         _: u16,
@@ -1637,6 +1638,20 @@ impl ResourceRead for Unsupported {
         _: Option<&Id>,
         _: u16,
     ) -> Result<Vec<StoredProcess>, StorageError> {
+        nope()
+    }
+    fn container(&self, _: &Id) -> Result<Option<StoredContainer>, StorageError> {
+        nope()
+    }
+    fn container_lease_in_use(&self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn containers(
+        &self,
+        _: &ContainerFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredContainer>, StorageError> {
         nope()
     }
 }
@@ -2501,6 +2516,12 @@ impl ResourceRepository for Unsupported {
         nope()
     }
     fn update_process(&mut self, _: &StoredProcess, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_container(&mut self, _: &StoredContainer) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_container(&mut self, _: &StoredContainer, _: i64) -> Result<(), StorageError> {
         nope()
     }
 }

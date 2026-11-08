@@ -319,6 +319,7 @@ pub trait ArtifactRead {
     fn list(
         &self,
         project: &ProjectId,
+        actor: Option<&ActorId>,
         tags: &[String],
         after: Option<&ListPosition>,
         limit: u16,

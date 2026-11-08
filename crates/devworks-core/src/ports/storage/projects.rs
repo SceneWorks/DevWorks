@@ -214,6 +214,7 @@ pub struct ProjectPurgeReference {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum ProjectPurgeUnresolvedReason {
+    ActiveContainer,
     AutomaticSnapshot,
     LegacyMapping,
     MixedOwnership,

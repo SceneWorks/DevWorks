@@ -269,6 +269,7 @@ impl WebService {
                 media_type: stored_media,
                 tags: ARTIFACT_TAGS.iter().map(|t| (*t).to_owned()).collect(),
                 source: source.clone(),
+                actor_audience: false,
             },
             kept.as_bytes(),
             move |tx, reference| {

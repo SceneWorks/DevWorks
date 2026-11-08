@@ -77,7 +77,7 @@ use crate::protocol::records::{
     LeaseEnd, LeaseRecord, LeaseState, ResourcePriority, ResourceRecord, ResourceScope,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Limit, Page};
+use crate::protocol::support::{BoundedList, BoundedText, Limit, Page, PositiveCounter};
 use crate::protocol::{
     ActorId, CorrelationId, DomainErrorCode, DomainFault, EventId, Id, ResourceId, RetryAdvice,
     RevisionDimension, RootId,
@@ -357,6 +357,133 @@ impl ResourceService {
     pub fn dispatches(&self) -> Arc<Dispatches> {
         self.dispatches.clone()
     }
+
+    /// Reserve one resource for a container incarnation inside its create transaction.
+    /// A distinct holder key prevents two containers in the same agent session from
+    /// accidentally sharing a lease. The caller rolls back the transaction savepoint
+    /// if any requested resource is queued.
+    pub(crate) fn reserve_container(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        container: &Id,
+        name: &str,
+        machine: bool,
+    ) -> Result<Option<Id>, Failure> {
+        let resource = if machine {
+            let key = canonical_key(ResourceScopeKind::Machine, None, name);
+            if tx
+                .resources()
+                .resource_by_key(&key)?
+                .is_some_and(|existing| {
+                    existing.capacity != 1 || !existing.physical || !existing.labels.is_empty()
+                })
+            {
+                return Err(Refusal::new(
+                    DomainErrorCode::Conflict,
+                    "container_port_definition",
+                    None,
+                )
+                .into());
+            }
+            Some(register_machine(
+                tx,
+                &MachineResource {
+                    name: name.into(),
+                    capacity: 1,
+                    physical: true,
+                    labels: Vec::new(),
+                },
+            )?)
+        } else {
+            resolve(tx.resources(), ctx, name)?
+        };
+        let input = ops::AcquireInput {
+            resource_id: ResourceId(Id::new(name).map_err(|_| {
+                Refusal::new(DomainErrorCode::InvalidArgument, "container_resource", None)
+            })?),
+            expected_revision: crate::services::sessions::rev(
+                resource.as_ref().map_or(1, |resource| resource.revision),
+            ),
+            units: Limit::new(1).expect("one resource unit"),
+            lease_ms: PositiveCounter(MAX_LEASE_MS.to_string()),
+            purpose: Some(BoundedText(format!("container:{}", container.as_str()))),
+            priority: None,
+            capacity: None,
+            labels: None,
+        };
+        let holder = ctx.clone().with_session(container.clone());
+        let decision = self.acquire_inner(tx, &holder, &input, false)?;
+        let lease = match decision {
+            DomainDecision::Applied {
+                result: OperationResult::ResourcesAcquire { value },
+            }
+            | DomainDecision::NoChange {
+                result: OperationResult::ResourcesAcquire { value },
+            } => value,
+            _ => return Err(StorageError::InvalidRecord("container lease decision".into()).into()),
+        };
+        Ok(matches!(lease.state, LeaseState::Held).then_some(lease.id))
+    }
+
+    /// Release leases after the owned container is stopped or creation failed before dispatch.
+    /// The container row and lease transitions commit together.
+    pub(crate) fn release_container_leases(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        container: &crate::ports::storage::StoredContainer,
+    ) -> Result<(), StorageError> {
+        if !matches!(
+            container.phase,
+            crate::ports::storage::ContainerPhase::Stopped
+                | crate::ports::storage::ContainerPhase::Failed
+        ) {
+            return Err(StorageError::InvalidRecord(
+                "container is not verified stopped or failed before dispatch".into(),
+            ));
+        }
+        for id in &container.resource_lease_ids {
+            let mut lease = tx.resources().lease(id)?.ok_or_else(|| {
+                StorageError::InvalidRecord("container resource lease missing".into())
+            })?;
+            if lease.project_id.as_ref() != Some(&container.project_id)
+                || lease.holder_key != format!("session:{}", container.id.as_str())
+            {
+                return Err(StorageError::InvalidRecord(
+                    "container resource lease ownership changed".into(),
+                ));
+            }
+            if lease.phase != LeasePhase::Held {
+                continue;
+            }
+            let resource = tx
+                .resources()
+                .resource(&lease.resource_id)?
+                .ok_or_else(|| StorageError::InvalidRecord("container resource missing".into()))?;
+            if resource.physical && !quiesced(tx, Some(&self.dispatches), &lease)? {
+                transition(
+                    tx,
+                    &container.actor,
+                    &mut lease,
+                    LeasePhase::Releasing,
+                    "LeaseReleasing",
+                    json!({"reason":"container shutdown still reconciling"}),
+                )?;
+            } else {
+                end(
+                    tx,
+                    &container.actor,
+                    &mut lease,
+                    LeaseEndReason::Released,
+                    "LeaseReleased",
+                    json!({"containerId":container.id.as_str()}),
+                )?;
+            }
+            let host = tx.store().host_actor.clone();
+            promote(tx, &host, &resource, &mut ReconcileReport::default())?;
+        }
+        Ok(())
+    }
     fn correlation(&self) -> CorrelationId {
         CorrelationId(self.ids.next_id(IdKind::Correlation))
     }
@@ -433,6 +560,14 @@ impl ResourceService {
             let Some(res) = tx.resources().resource(&l.resource_id)? else {
                 continue;
             };
+            // A recorded container retains the reservation across host restarts. Boot
+            // recovery verifies its external identity before any later stop or release.
+            if cause == ReconcileCause::Boot
+                && l.phase == LeasePhase::Held
+                && tx.resources().container_lease_in_use(&l.id)?
+            {
+                continue;
+            }
             match &cause {
                 ReconcileCause::Boot => match l.phase {
                     LeasePhase::Waiting => {
@@ -1452,6 +1587,9 @@ fn quiesced(
     dispatches: Option<&Dispatches>,
     l: &StoredLease,
 ) -> Result<bool, StorageError> {
+    if tx.resources().container_lease_in_use(&l.id)? {
+        return Ok(false);
+    }
     let mut after: Option<Id> = None;
     loop {
         let page =
@@ -1488,6 +1626,12 @@ fn settle(
         for mut l in page {
             after = l.fence;
             let expired = l.expires_at_ms <= now;
+            if l.phase == LeasePhase::Held
+                && expired
+                && tx.resources().container_lease_in_use(&l.id)?
+            {
+                continue;
+            }
             if l.phase == LeasePhase::Held && expired {
                 if res.physical {
                     l.unreachable_since_ms.get_or_insert(l.expires_at_ms);
@@ -1730,6 +1874,13 @@ fn effective(
     res: &StoredResource,
     now: i64,
 ) -> (LeasePhase, Option<LeaseEndReason>) {
+    if l.phase == LeasePhase::Held
+        && l.purpose
+            .as_deref()
+            .is_some_and(|p| p.starts_with("container:"))
+    {
+        return (LeasePhase::Held, None);
+    }
     match l.phase {
         LeasePhase::Held if l.expires_at_ms <= now && res.physical => (LeasePhase::Uncertain, None),
         LeasePhase::Held | LeasePhase::Waiting if l.expires_at_ms <= now => {

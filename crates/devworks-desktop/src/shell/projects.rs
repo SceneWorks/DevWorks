@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The repository base directory setting a project may override (SET-07/08).
 pub const BASE_DIRECTORY: &str = "repositories.baseDirectory";
+pub const CONTAINER_RUNTIME: &str = "containers.preferredRuntime";
 const ARCHIVE: &str = "projects.archive";
 const RESTORE: &str = "projects.restore";
 const DELETE: &str = "projects.delete";
@@ -234,9 +235,9 @@ impl Shell {
         let p = project.to_owned();
         self.query(
             Slot::ProjectSettings(project.to_owned()),
-            "Reading the repository base directory",
+            "Reading project settings",
             "settings.read_effective",
-            move |b| ops::project_settings_read(b, &p, &[BASE_DIRECTORY]),
+            move |b| ops::project_settings_read(b, &p, &[BASE_DIRECTORY, CONTAINER_RUNTIME]),
         );
     }
     fn load_git(&mut self, repository: &str) {
@@ -432,7 +433,7 @@ impl Shell {
                     if let Some(c) = &mut self.client {
                         c.command(
                             Slot::ProjectSettingsSave(p),
-                            "Saving the repository base directory",
+                            "Saving project settings",
                             "settings.save_revision",
                             frame,
                         );
@@ -1950,7 +1951,6 @@ fn base_directory(
     );
     let effective = item.effective.as_str().unwrap_or("").to_owned();
     let health = item.health.clone();
-    let dirty = item.is_dirty();
     widgets::caption(
         ui,
         if overridden {
@@ -1990,6 +1990,58 @@ fn base_directory(
         "New clones for this project go here. Changing it never moves existing repositories or \
          changes their recorded paths.",
     );
+    if let Some(runtime) = view.item(CONTAINER_RUNTIME) {
+        let effective = runtime
+            .effective
+            .as_str()
+            .unwrap_or("unavailable")
+            .to_owned();
+        let inherited = !matches!(
+            runtime.source,
+            devworks_core::settings::view::Source::Project { .. }
+        );
+        widgets::caption(ui, format!("Container runtime · Effective: {effective}"));
+        let mut choice = match &runtime.draft {
+            Some(Value::Null) => "inherit".to_owned(),
+            Some(value) => value.as_str().unwrap_or("inherit").to_owned(),
+            None if inherited => "inherit".to_owned(),
+            None => runtime.effective.as_str().unwrap_or("inherit").to_owned(),
+        };
+        ui.add_enabled_ui(!saving && !b.saving, |ui| {
+            egui::ComboBox::from_id_salt(("project-container-runtime", project))
+                .selected_text(match choice.as_str() {
+                    "inherit" => "Inherit workspace runtime",
+                    "docker" => "Docker",
+                    "podman" => "Podman",
+                    "apple" => "Apple container",
+                    _ => "Unavailable",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut choice, "inherit".into(), "Inherit workspace runtime");
+                    ui.selectable_value(&mut choice, "docker".into(), "Docker");
+                    ui.selectable_value(&mut choice, "podman".into(), "Podman");
+                    ui.selectable_value(&mut choice, "apple".into(), "Apple container");
+                })
+                .response
+                .widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::Role::ComboBox,
+                        true,
+                        "Project container runtime",
+                    )
+                });
+        });
+        if choice == "inherit" {
+            let _ = view.inherit(CONTAINER_RUNTIME);
+        } else {
+            let _ = view.edit(CONTAINER_RUNTIME, json!(choice));
+        }
+        widgets::caption(
+            ui,
+            "An unavailable runtime stays selected until you choose another.",
+        );
+    }
+    let dirty = !view.dirty_keys().is_empty();
     ui.horizontal_wrapped(|ui| {
         if widgets::secondary_button(ui, "Choose…").clicked() {
             actions.push(Action::ChooseBase(project.to_owned()));
@@ -2006,7 +2058,7 @@ fn base_directory(
         if ui
             .add_enabled(
                 dirty && !saving && !b.saving,
-                egui::Button::new("Save directory"),
+                egui::Button::new("Save project settings"),
             )
             .clicked()
         {

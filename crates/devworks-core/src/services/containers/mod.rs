@@ -1,0 +1,16 @@
+//! Selected container backend operations and owned agent-work lifecycle (DW-49).
+pub mod backend;
+mod commands;
+mod effects;
+pub use commands::{CONSUMER as EFFECT_CONSUMER, STOP_CONSUMER};
+pub use effects::EffectOutcome;
+pub mod execution;
+pub mod inspection;
+pub mod intent;
+pub mod probe;
+pub mod registry_auth;
+pub mod runner;
+pub mod selection;
+pub mod service;
+mod shutdown;
+pub use shutdown::ShutdownReport;

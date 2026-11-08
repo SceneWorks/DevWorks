@@ -1188,6 +1188,7 @@ name = "devworks-adapters"
 version = "0.1.0"
 dependencies = [
  "atspi",
+ "base64 0.22.1",
  "core-foundation 0.9.4",
  "devworks-core",
  "devworks-extension-protocol",
@@ -1217,6 +1218,7 @@ dependencies = [
  "sha2 0.11.1",
  "sqlite-vec",
  "sqlx",
+ "tempfile",
  "tiberius",
  "tokio",
  "tokio-postgres",

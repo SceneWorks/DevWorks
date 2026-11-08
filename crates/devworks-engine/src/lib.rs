@@ -236,6 +236,7 @@ pub use runtime::{
     RunComposition, Runtime, RuntimeConfig, ShutdownStage, boot,
 };
 
+pub mod containers;
 pub mod prices;
 pub mod process_tools;
 

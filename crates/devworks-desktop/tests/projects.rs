@@ -237,7 +237,7 @@ fn the_selected_project_narrows_repositories_and_its_base_directory_inherits_or_
     click_row(&mut h, "Engine  ·");
     assert!(has_text(&h, "Inherited from"));
     click(&mut h, Role::Button, "Choose…");
-    click(&mut h, Role::Button, "Save directory");
+    click(&mut h, Role::Button, "Save project settings");
     let entries = ops::settings_entries(backend.query(
         "settings.read_effective",
         &ops::project_settings_read(
@@ -264,7 +264,7 @@ fn the_selected_project_narrows_repositories_and_its_base_directory_inherits_or_
     assert_ne!(base.value.value.0, serde_json::json!(chosen));
     // Back to inheriting.
     click(&mut h, Role::Button, "Use workspace default");
-    click(&mut h, Role::Button, "Save directory");
+    click(&mut h, Role::Button, "Save project settings");
     assert!(has_text(&h, "Inherited from"));
     // The selection survives a relaunch.
     h.state_mut().on_exit();
@@ -697,7 +697,7 @@ fn a_base_directory_typed_while_its_save_runs_stays_a_draft() {
     let pid = made.id.0.as_str().to_owned();
     click(&mut h, Role::Button, "Choose…");
     gate.close();
-    h.get_by_role_and_label(Role::Button, "Save directory")
+    h.get_by_role_and_label(Role::Button, "Save project settings")
         .click();
     h.run_steps(3);
     assert!(
@@ -1025,7 +1025,7 @@ fn a_base_directory_draft_saves_after_the_editor_changes_the_access_profile() {
         listed(&*backend, None).remove(0).access_mode,
         AccessMode::Project
     ));
-    click(&mut h, Role::Button, "Save directory");
+    click(&mut h, Role::Button, "Save project settings");
     let entries = ops::settings_entries(backend.query(
         "settings.read_effective",
         &ops::project_settings_read(&*backend, &pid, &["repositories.baseDirectory"]),

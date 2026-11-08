@@ -1,0 +1,15 @@
+{
+  "schema": 39,
+  "policy": "dw49-owned-container-v1",
+  "additionalTables": [
+    {
+      "table": "owned_containers",
+      "class": "container_ownership",
+      "disposition": "project_owner",
+      "unverifiedStates": ["Creating", "Created", "Starting", "Running", "Stopping", "Failed", "Uncertain"],
+      "purpose": "Project-owned container records are deletable only after the external agent-work container is verified stopped."
+    }
+  ],
+  "readerFloor": 38,
+  "writerFloor": 39
+}

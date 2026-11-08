@@ -43,6 +43,8 @@ pub struct Observed {
     pub tags: Vec<String>,
     /// Source description recorded with the version and its history (`{"kind": "WebFetch", ...}`).
     pub source: Value,
+    /// Restrict a project artifact to the producing actor and privileged viewers.
+    pub actor_audience: bool,
 }
 
 /// Why observed content was not published.
@@ -214,6 +216,26 @@ impl ArtifactService {
             }
         }
     }
+
+    /// Publish actor-scoped output while preserving ordinary explicit artifact retention.
+    pub fn publish_actor_observed<T, F>(
+        &self,
+        store: &dyn ApplicationStore,
+        ctx: &InvocationContext,
+        authorization: &Authorization,
+        mut observed: Observed,
+        bytes: &[u8],
+        then: F,
+    ) -> Result<(ArtifactRef, T), ObservedFailure>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut dyn WriteTransaction, &ArtifactRef) -> Result<T, StorageError>
+            + Send
+            + 'static,
+    {
+        observed.actor_audience = true;
+        self.publish_observed(store, ctx, authorization, observed, bytes, then)
+    }
 }
 
 /// Records the staged bytes as a new artifact inside the publishing write. The scope is
@@ -263,7 +285,7 @@ fn record_observed(
         revision: 1,
         owner: match &scope {
             ArtifactScope::Workspace => Some(ctx.principal().clone()),
-            ArtifactScope::Project(_) => None,
+            ArtifactScope::Project(_) => observed.actor_audience.then(|| ctx.principal().clone()),
         },
         scope,
         retention: ArtifactRetention::Explicit,

@@ -365,6 +365,7 @@ impl BrowserPlatform for NativeBrowserPlatform {
             env: Vec::new(),
             clear_env: false,
             capture_output: false,
+            merge_output: false,
             no_child_processes: false,
             control_pipe: Some(ControlPipe {
                 windows_args: vec!["--remote-debugging-io-pipes={read},{write}".into()],

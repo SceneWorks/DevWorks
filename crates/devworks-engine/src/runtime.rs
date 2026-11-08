@@ -201,6 +201,22 @@ pub struct ProcessToolComposition {
     pub protected_roots: devworks_core::authority::destructive::ProtectedRoots,
     pub secrets: Arc<dyn devworks_core::ports::secrets::SecretStore>,
 }
+#[derive(Clone)]
+pub struct ContainerComposition {
+    pub bindings: devworks_core::services::process::tools::ToolBindings,
+    pub filesystem: Arc<dyn devworks_core::authority::destructive::FilesystemResolver>,
+    pub protected_roots: devworks_core::authority::destructive::ProtectedRoots,
+    pub secrets: Arc<dyn devworks_core::ports::secrets::SecretStore>,
+    pub registry_auth: Arc<dyn devworks_core::services::containers::registry_auth::RegistryAuth>,
+    pub workload_environment:
+        Arc<dyn devworks_core::services::containers::registry_auth::WorkloadEnvironment>,
+    pub host: devworks_core::services::containers::probe::HostPlatform<'static>,
+}
+impl std::fmt::Debug for ContainerComposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ContainerComposition")
+    }
+}
 impl std::fmt::Debug for ProcessToolComposition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ProcessToolComposition")
@@ -229,6 +245,8 @@ pub struct RuntimeConfig {
     /// Process tools are offered only when a host supplies owned executable/root and secret
     /// bindings. Missing qualification leaves the family unregistered.
     pub process_tools: Option<ProcessToolComposition>,
+    /// Optional selected container backend. Without a qualified host binding the family is absent.
+    pub containers: Option<ContainerComposition>,
     pub schemas: Option<crate::schemas::SchemaComposition>,
     /// Native bounded credential-free price source and cadence; absent sources refuse refresh.
     pub price_refresh: Option<crate::prices::PriceComposition>,
@@ -279,6 +297,7 @@ impl RuntimeConfig {
             dispatcher: DispatcherConfig::new(owner),
             purge: None,
             process_tools: None,
+            containers: None,
             price_refresh: None,
             schemas: None,
             collect_interval: Duration::from_secs(15 * 60),
@@ -414,6 +433,7 @@ pub struct Runtime {
     monitor: Arc<Monitor>,
     browser: Option<Arc<BrowserService>>,
     process_tools: Option<Arc<devworks_core::services::process::tools::ProcessToolService>>,
+    containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
     desktop: Option<Arc<devworks_core::services::desktop::DesktopService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
     help: Option<Arc<devworks_core::services::help::HelpService>>,
@@ -516,6 +536,29 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             ),
         )
     });
+    let containers = config.containers.as_ref().map(|composition| {
+        let runner = Arc::new(
+            devworks_core::services::containers::runner::ContainerRunner::new(
+                supervisor.clone(),
+                composition.filesystem.clone(),
+                composition.protected_roots.clone(),
+            ),
+        );
+        Arc::new(
+            devworks_core::services::containers::service::ContainerService::new(
+                store.clone(),
+                runner,
+                composition.bindings.clone(),
+                composition.host,
+                ids.clone(),
+            )
+            .with_artifacts(artifacts.clone())
+            .with_resources(resources.clone())
+            .with_registry_auth(composition.registry_auth.clone())
+            .with_workload_environment(composition.workload_environment.clone())
+            .with_secrets(composition.secrets.clone()),
+        )
+    });
     let git = git.and_then(|composition| {
         let fs = composition.config.filesystem.clone()?;
         let helpers = Arc::new(
@@ -583,6 +626,17 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         use_cases = use_cases.with_process_tools(service.clone());
         consumers.push(crate::process_tools::consumer(service.clone()));
         consumers.push(crate::process_tools::cancel_consumer(service.clone()));
+    }
+    if let Some(service) = &containers {
+        use_cases = use_cases.with_containers(service.clone());
+        consumers.push(crate::containers::consumer(
+            service.clone(),
+            authority.clone(),
+        ));
+        consumers.push(crate::containers::stop_consumer(
+            service.clone(),
+            authority.clone(),
+        ));
     }
     if let Some(service) = &desktop {
         use_cases = use_cases.with_desktop(service.clone());
@@ -905,6 +959,30 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .await
         .map_err(BootError::Resources)
         .map_err(failed)?;
+    // After process recovery has stopped any interrupted CLI tree, reconcile external
+    // agent-work containers from the ownership ledger before new effect deliveries begin.
+    if let Some(service) = &containers {
+        let service = service.clone();
+        let bound = config.shutdown_bound;
+        let recovered = tokio::task::spawn_blocking(move || service.shutdown_agent_work(bound))
+            .await
+            .unwrap_or_else(|_| devworks_core::services::containers::ShutdownReport {
+                read_error: Some("container boot recovery worker panicked".into()),
+                ..Default::default()
+            });
+        if !recovered.uncertain.is_empty() || recovered.read_error.is_some() {
+            let _ = diagnostics.log(devworks_core::services::diagnostics::LogEntry::new(
+                "containers",
+                "boot-recovery",
+                devworks_core::protocol::records::Severity::Warning,
+                format!(
+                    "{} agent-work containers need shutdown reconciliation; {}",
+                    recovered.uncertain.len(),
+                    recovered.read_error.unwrap_or_default()
+                ),
+            ));
+        }
+    }
     // Browser sessions of earlier boots settle from what process recovery just verified.
     let recovered_browser = match &browser {
         Some(b) => {
@@ -932,6 +1010,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     if let Some(s) = Arc::get_mut(&mut run_supervisor) {
         s.stop_grace = config.shutdown_grace.min(config.shutdown_bound);
         s.stop_bound = config.shutdown_bound;
+        s.with_containers(containers.clone());
     }
     let recovered_runs = run_supervisor
         .boot()
@@ -1037,7 +1116,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let mut tasks = vec![delivery, collection, housekeeping];
     // Unknown external effects remain held, never retried. Re-observe them while the app is
     // running as well as at boot; an owner can establish a terminal fact without a restart.
-    if process_tools.is_some() {
+    if process_tools.is_some() || containers.is_some() {
         let (observing_dispatcher, observing_stop) = (dispatcher.clone(), collector.clone());
         tasks.push(tokio::spawn(async move {
             while !observing_stop.stopping.load(Ordering::Acquire) {
@@ -1179,6 +1258,20 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             }
         }));
     }
+    if let Some(service) = &containers {
+        let service = service.clone();
+        let stopping = collector.clone();
+        tasks.push(tokio::spawn(async move {
+            while !stopping.stopping.load(Ordering::Acquire) {
+                let current = service.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    current.reconcile_revoked_agent_work(Duration::from_secs(30))
+                })
+                .await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }));
+    }
     if let Some(worker) = &embedding_probes {
         let worker = worker.clone();
         tasks.push(tokio::spawn(async move {
@@ -1250,6 +1343,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         monitor,
         browser,
         process_tools,
+        containers,
         desktop,
         git,
         help,
@@ -1364,6 +1458,12 @@ impl Runtime {
         &self,
     ) -> Option<&Arc<devworks_core::services::process::tools::ProcessToolService>> {
         self.process_tools.as_ref()
+    }
+
+    pub fn containers(
+        &self,
+    ) -> Option<&Arc<devworks_core::services::containers::service::ContainerService>> {
+        self.containers.as_ref()
     }
     /// The desktop service and its scoped typed input completions.
     pub fn desktop(&self) -> Option<&Arc<devworks_core::services::desktop::DesktopService>> {
@@ -1784,11 +1884,35 @@ impl Runtime {
             }
         }
         self.scheduler.drain(deadline).await;
+        let container_shutdown = if let Some(service) = self.containers.clone() {
+            let bound = left();
+            let mut task = tokio::task::spawn_blocking(move || service.shutdown_agent_work(bound));
+            Some(
+                match dispatch::first(tokio::time::sleep_until(deadline), &mut task).await {
+                    dispatch::Either::Right(result) => result.unwrap_or_else(|_| {
+                        devworks_core::services::containers::ShutdownReport {
+                            read_error: Some("container shutdown worker panicked".into()),
+                            ..Default::default()
+                        }
+                    }),
+                    dispatch::Either::Left(()) => {
+                        task.abort();
+                        devworks_core::services::containers::ShutdownReport {
+                            read_error: Some("container shutdown deadline elapsed".into()),
+                            ..Default::default()
+                        }
+                    }
+                },
+            )
+        } else {
+            None
+        };
         let bound = left();
         let mut stopped = self
             .housekeeper
             .shutdown(self.shutdown_grace.min(bound), bound)
             .await;
+        stopped.containers = container_shutdown;
         match refresh_shutdown {
             Err(error) if stopped.reconciliation.is_ok() => stopped.reconciliation = Err(error),
             Ok(Some(report)) if !report.unknown_operations.is_empty() => {

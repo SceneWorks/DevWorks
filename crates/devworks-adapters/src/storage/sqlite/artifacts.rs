@@ -242,6 +242,7 @@ fn list(
     conn: &Connection,
     host: &ActorId,
     project: &ProjectId,
+    actor: Option<&ActorId>,
     tags: &[String],
     after: Option<&ListPosition>,
     limit: u16,
@@ -258,6 +259,7 @@ fn list(
         "SELECT {ARTIFACT_COLUMNS} FROM artifacts a
          WHERE a.state='Live' AND a.current_version_id IS NOT NULL AND a.retention='Explicit'
            AND (a.current_project_id=?1 OR EXISTS(SELECT 1 FROM artifact_shares s WHERE s.artifact_id=a.id AND s.project_id=?1))
+           AND (?8 IS NULL OR a.scope_kind='Workspace' OR a.owner_actor_id IS NULL OR a.owner_actor_id=?8)
            AND NOT (json_extract(a.provenance_json,'$.principalKind') IS 'Host'
                     AND json_extract(a.provenance_json,'$.producedBy') IS ?7
                     AND json_extract(a.provenance_json,'$.derived.kind') IS 'HelpTopic')
@@ -274,7 +276,8 @@ fn list(
             limit,
             wanted,
             tags.len() as i64,
-            host.0.as_str()
+            host.0.as_str(),
+            actor.map(|actor| actor.0.as_str())
         ],
         artifact_row,
     ))?
@@ -466,11 +469,12 @@ macro_rules! artifact_reads {
             fn list(
                 &self,
                 project: &ProjectId,
+                actor: Option<&ActorId>,
                 tags: &[String],
                 after: Option<&ListPosition>,
                 limit: u16,
             ) -> Result<Vec<StoredArtifact>, StorageError> {
-                list(self.conn, self.artifact_host_actor(), project, tags, after, limit)
+                list(self.conn, self.artifact_host_actor(), project, actor, tags, after, limit)
             }
             fn list_workspace(
                 &self,

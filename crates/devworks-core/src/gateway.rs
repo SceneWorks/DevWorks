@@ -1337,6 +1337,7 @@ impl ArtifactRead for HandlerTx<'_> {
     fn list(
         &self,
         project: &ProjectId,
+        actor: Option<&ActorId>,
         tags: &[String],
         after: Option<&ListPosition>,
         limit: u16,
@@ -1344,7 +1345,7 @@ impl ArtifactRead for HandlerTx<'_> {
         self.inner
             .borrow_mut()
             .artifacts()
-            .list(project, tags, after, limit)
+            .list(project, actor, tags, after, limit)
     }
     fn list_workspace(
         &self,

@@ -8,6 +8,7 @@
 pub mod approvals;
 pub mod artifacts;
 pub mod browser;
+pub mod containers;
 pub mod conventions;
 pub mod cursor;
 pub mod desktop;
@@ -313,6 +314,23 @@ impl UseCases {
             Some(service.clone()),
         );
         self.register("process.request_system_install", None, Some(service));
+        self
+    }
+    /// Registers the one selected-container domain owner when its effect consumer is composed.
+    pub fn with_containers(mut self, service: Arc<containers::service::ContainerService>) -> Self {
+        for op in [
+            "containers.capabilities",
+            "containers.build",
+            "containers.pull",
+            "containers.create",
+            "containers.start",
+            "containers.exec",
+            "containers.inspect",
+            "containers.logs",
+            "containers.stop",
+        ] {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
         self
     }
     /// Registers native desktop queries and consent-bound computer control.

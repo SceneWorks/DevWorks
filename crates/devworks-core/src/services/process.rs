@@ -169,6 +169,8 @@ pub type StopResult = (Id, Result<StopOutcome, StopFailure>);
 #[derive(Clone, Debug)]
 pub struct ShutdownReport {
     pub stopped: Vec<StopResult>,
+    /// Externally managed agent-work containers verified stopped before the process owner closes.
+    pub containers: Option<crate::services::containers::ShutdownReport>,
     /// The `Shutdown` reconciliation of resources.
     pub reconciliation: Result<ReconcileReport, StorageError>,
     /// Actual inference attempts whose local transport closure was not verified. The process
@@ -181,6 +183,13 @@ impl ShutdownReport {
     /// failure (the native stops ran regardless).
     pub fn into_result(self) -> Result<Vec<(Id, StopOutcome)>, StorageError> {
         let stopped = all_recorded(self.stopped)?;
+        if self
+            .containers
+            .as_ref()
+            .is_some_and(|report| report.read_error.is_some() || !report.uncertain.is_empty())
+        {
+            return Err(StorageError::Busy);
+        }
         self.reconciliation?;
         if !self.unclosed_inference_attempts.is_empty() {
             return Err(StorageError::Busy);
@@ -805,6 +814,7 @@ impl ProcessSupervisor {
         });
         ShutdownReport {
             stopped,
+            containers: None,
             reconciliation,
             unclosed_inference_attempts: Vec::new(),
         }

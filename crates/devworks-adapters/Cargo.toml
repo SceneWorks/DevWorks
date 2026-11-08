@@ -11,6 +11,8 @@ publish.workspace = true
 # again at startup together with compile options and the sqlite-vec identity.
 [dependencies]
 devworks-core = { path = "../devworks-core" }
+base64 = "=0.22.1"
+tempfile = "=3.27.0"
 # Package bundles carry the public manifest DTOs; Ed25519 verifies (and the bundle writer signs)
 # their manifests. ed25519-dalek is the RustCrypto/dalek pure-Rust implementation.
 devworks-extension-protocol = { path = "../devworks-extension-protocol" }

@@ -6,7 +6,10 @@
 //! while another test thread holds open files can transiently inherit them (observed with the
 //! data-root lock), so spawning tests never share a test process with concurrent store reopens.
 #![allow(dead_code, clippy::result_large_err)]
+use devworks_adapters::containers::NativeRegistryAuth;
 use devworks_adapters::fs::NativeFilesystem;
+use devworks_adapters::fs::artifacts::NativeArtifactFiles;
+use devworks_adapters::fs::sources::HostArtifactSources;
 use devworks_adapters::power::NativePower;
 use devworks_adapters::process::NativeProcessHost;
 use devworks_adapters::storage::sqlite::{SqliteConfig, SqliteStore};
@@ -16,9 +19,11 @@ use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::process::{Probe, ProcessHost, ProcessSpec, ProcessTree, TreeStatus};
+#[cfg(unix)]
+use devworks_core::ports::secrets::{Secret, SecretKey, SecretStore, SessionSecrets};
 use devworks_core::ports::storage::*;
-use devworks_core::ports::{Clock, IdKind, IdSource};
-use devworks_core::protocol::records::{LeaseRecord, LeaseState};
+use devworks_core::ports::{Authorization, Clock, IdKind, IdSource};
+use devworks_core::protocol::records::{LeaseRecord, LeaseState, SettingAssignment};
 use devworks_core::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
 };
@@ -27,6 +32,21 @@ use devworks_core::protocol::{
     ActorId, CommandReply, Counter, DomainFault, Id, ProjectId, Revision, RootId,
 };
 use devworks_core::services::UseCases;
+use devworks_core::services::artifacts::ArtifactService;
+use devworks_core::services::artifacts::observed::Observed;
+use devworks_core::services::containers::EffectOutcome as ContainerEffectOutcome;
+use devworks_core::services::containers::registry_auth::WorkloadEnvironment;
+use devworks_core::services::containers::runner::ContainerRunner;
+use devworks_core::services::containers::service::ContainerService;
+use devworks_core::services::containers::{
+    backend::{Backend as ContainerBackend, CreatePlan, ownership_labels, ownership_matches},
+    execution::bound_spec,
+    inspection::{parse as parse_container_inspect, verified_lifecycle_target},
+    probe::{self as container_probe, Availability as ContainerAvailability, HostPlatform},
+};
+#[cfg(unix)]
+use devworks_core::services::process::tools::RegisteredCredential;
+use devworks_core::services::process::tools::{RegisteredExecutable, ToolBindings};
 use devworks_core::services::process::{
     ConfirmRefusal, LaunchPolicy, LaunchRefusal, LaunchRequest, LeaseClaim, OwnedProcess,
     ProcessSupervisor, StopFailure, StopOutcome, StopScope, all_recorded,
@@ -35,7 +55,8 @@ use devworks_core::services::resources::{
     DispatchFailure, DispatchRefusal, MachineResource, ReconcileCause, ResourceService,
     register_machine,
 };
-use devworks_core::settings::catalog::AgentRole;
+use devworks_core::settings::catalog::{AgentRole, descriptor};
+use devworks_core::settings::model;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -701,6 +722,30 @@ fn captured_output_is_readable() {
 }
 
 #[test]
+fn native_merged_capture_preserves_stdout_stderr_write_order() {
+    let _serial = serial();
+    let mut spec = shell(if cfg!(windows) {
+        "echo first & echo second 1>&2 & echo third"
+    } else {
+        "printf 'first\\n'; printf 'second\\n' >&2; printf 'third\\n'"
+    });
+    spec.capture_output = true;
+    spec.merge_output = true;
+    let mut tree = NativeProcessHost.spawn(&spec).unwrap();
+    let (mut output, mut empty) = tree.take_output().expect("merged output pipe");
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut output, &mut bytes).unwrap();
+    let mut stderr = Vec::new();
+    std::io::Read::read_to_end(&mut empty, &mut stderr).unwrap();
+    let status = until_empty(&mut *tree, Duration::from_secs(10)).expect("finished");
+    assert_eq!(status.exit_code, Some(0));
+    assert!(stderr.is_empty());
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.find("first").unwrap() < text.find("second").unwrap());
+    assert!(text.find("second").unwrap() < text.find("third").unwrap());
+}
+
+#[test]
 fn keep_awake_holds_a_native_request_and_releases_it() {
     let _serial = serial();
     use devworks_core::ports::process::{PowerPort, PowerRequest};
@@ -763,6 +808,1516 @@ impl ProcessHost for DelayedRegistrationHost {
     fn terminate(&self, identity: &devworks_core::ports::process::NativeIdentity) -> Probe {
         NativeProcessHost.terminate(identity)
     }
+}
+
+#[test]
+fn container_cli_runner_uses_owned_process_and_redacts_bounded_native_output() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let runner = ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    );
+    let mut spec = shell("echo private-token");
+    spec.capture_output = true;
+    let result = runner
+        .run(
+            &fx.agent("agent-a", "project-a", "s-a"),
+            None,
+            spec,
+            Duration::from_secs(10),
+            1024,
+            &["private-token".into()],
+        )
+        .unwrap();
+    assert_eq!(result.exit_code, Some(0));
+    assert!(
+        !result
+            .stdout
+            .windows(b"private-token".len())
+            .any(|x| x == b"private-token")
+    );
+    assert!(result.stderr.is_empty());
+    assert!(!result.truncated);
+    assert_eq!(fx.events("ProcessReaped").len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn container_cli_runner_allows_subsecond_execution_before_cleanup() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let runner = ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    );
+    let mut spec = shell("sleep 0.1; echo ready");
+    spec.capture_output = true;
+    let result = runner
+        .run(
+            &fx.agent("agent-a", "project-a", "s-a"),
+            None,
+            spec,
+            Duration::from_millis(950),
+            1024,
+            &[],
+        )
+        .unwrap();
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.stdout, b"ready\n");
+}
+
+#[test]
+#[ignore = "requires a separately supplied running Docker engine"]
+fn native_docker_probe_uses_registered_executable_and_owned_processes() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let path = std::env::var_os("DEVWORKS_TEST_DOCKER_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/local/bin/docker"));
+    let bindings = ToolBindings::new(
+        [RegisteredExecutable {
+            id: id("docker"),
+            path,
+        }],
+        std::iter::empty(),
+    )
+    .unwrap();
+    let runner = ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    );
+    let outcome = container_probe::probe(
+        &runner,
+        &bindings,
+        &fx.agent("agent-a", "project-a", "s-a"),
+        ContainerBackend::Docker,
+        HostPlatform {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            macos_major: 0,
+        },
+    );
+    assert_eq!(
+        outcome.availability,
+        ContainerAvailability::Healthy,
+        "{outcome:?}"
+    );
+    assert!(outcome.version.unwrap().contains("Docker version"));
+    assert_eq!(fx.events("ProcessReaped").len(), 2);
+}
+
+#[test]
+#[ignore = "requires a separately supplied Docker engine with local alpine:latest image"]
+fn native_docker_owned_lifecycle_uses_the_exact_planned_container() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let path = std::env::var_os("DEVWORKS_TEST_DOCKER_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/local/bin/docker"));
+    let bindings = ToolBindings::new(
+        [RegisteredExecutable {
+            id: id("docker"),
+            path: path.clone(),
+        }],
+        std::iter::empty(),
+    )
+    .unwrap();
+    let runner = ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    );
+    let context = fx.agent("agent-a", "project-a", "s-a");
+    let name = format!("dw-native-test-{}", std::process::id());
+    struct Cleanup {
+        path: PathBuf,
+        name: String,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new(&self.path)
+                .args(["rm", "-f", &self.name])
+                .output();
+        }
+    }
+    let _cleanup = Cleanup {
+        path,
+        name: name.clone(),
+    };
+    let backend = ContainerBackend::Docker;
+    let run = |args| {
+        let spec = bound_spec(&bindings, backend, args, None).unwrap();
+        let result = runner
+            .run(&context, None, spec, Duration::from_secs(10), 16_384, &[])
+            .unwrap();
+        assert_eq!(
+            result.exit_code,
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        result
+    };
+    let labels = ownership_labels("operation-a", "project-a", "Agent");
+    let command = ["sleep".to_owned(), "30".to_owned()];
+    let environment = [("DW_TEST_VALUE".into(), "hello-native".into())];
+    let env_writer = NativeRegistryAuth::new(fx.h.root.join("container-auth")).unwrap();
+    let env_session = env_writer.prepare_workload(&environment).unwrap();
+    let create_args = backend
+        .create(&CreatePlan {
+            name: &name,
+            image: "alpine:latest",
+            labels: &labels,
+            mounts: &[],
+            ports: &[],
+            environment: &environment,
+            env_file: Some(env_session.path()),
+            command: &command,
+        })
+        .unwrap();
+    assert!(!create_args.iter().any(|arg| arg.contains("hello-native")));
+    let spec = bound_spec(&bindings, backend, create_args, None).unwrap();
+    let created = runner
+        .run(&context, None, spec, Duration::from_secs(10), 16_384, &[])
+        .unwrap();
+    assert_eq!(created.exit_code, Some(0));
+    run(backend.start(&name).unwrap());
+    let output = run(backend
+        .exec(
+            &name,
+            &["printenv".into(), "DW_TEST_VALUE".into()],
+            &[],
+            None,
+        )
+        .unwrap());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "hello-native"
+    );
+    let inspected = run(backend.inspect(&name).unwrap());
+    let observed = parse_container_inspect(backend, &inspected.stdout).unwrap();
+    assert!(ownership_matches(
+        &observed.labels,
+        "operation-a",
+        "project-a",
+        "Agent"
+    ));
+    let native_id =
+        verified_lifecycle_target(backend, &observed, "operation-a", "project-a", "Agent").unwrap();
+    assert_eq!(native_id.len(), 64);
+    run(backend.logs(&name).unwrap());
+    run(backend.stop(&name).unwrap());
+}
+
+#[test]
+#[ignore = "requires a separately supplied Docker engine with local alpine:latest image"]
+fn native_docker_build_uses_artifact_bytes_on_stdin_and_registered_context() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let path = std::env::var_os("DEVWORKS_TEST_DOCKER_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/local/bin/docker"));
+    let tag = format!("dw-native-build-{}:test", std::process::id());
+    struct Cleanup {
+        path: PathBuf,
+        tag: String,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new(&self.path)
+                .args(["image", "rm", &self.tag])
+                .output();
+        }
+    }
+    let _cleanup = Cleanup {
+        path: path.clone(),
+        tag: tag.clone(),
+    };
+    let scratch = Scratch::new("container-build");
+    let root_path = scratch.0.canonicalize().unwrap();
+    let context = root_path.join("context");
+    std::fs::create_dir_all(&context).unwrap();
+    let project = project("project-a");
+    let bindings = ToolBindings::new(
+        [RegisteredExecutable {
+            id: id("docker"),
+            path,
+        }],
+        [
+            devworks_core::services::process::tools::RegisteredWorkingRoot {
+                id: id("build-root"),
+                project: Some(project.clone()),
+                path: root_path,
+            },
+        ],
+    )
+    .unwrap();
+    let resolved = bindings
+        .resolve_registered_path(
+            &devworks_core::protocol::records::RegisteredPath {
+                root_id: id("build-root"),
+                relative: devworks_core::protocol::support::RelativePath("context".into()),
+            },
+            Some(&project),
+        )
+        .unwrap();
+    let runner = ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    );
+    let mut spec = bound_spec(
+        &bindings,
+        ContainerBackend::Docker,
+        ContainerBackend::Docker
+            .build("-", &tag, resolved.to_str().unwrap())
+            .unwrap(),
+        None,
+    )
+    .unwrap();
+    spec.stdin = Some(b"FROM alpine:latest\nCMD [\"true\"]\n".to_vec());
+    let result = runner
+        .run(
+            &fx.agent("agent-a", "project-a", "s-a"),
+            None,
+            spec,
+            Duration::from_secs(60),
+            65_536,
+            &[],
+        )
+        .unwrap();
+    assert_eq!(
+        result.exit_code,
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn container_create_receipt_atomically_records_ownership_before_effect_delivery() {
+    let _serial = serial();
+    let mut fx = Fx::new();
+    let runner = Arc::new(ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    ));
+    let service = Arc::new(
+        ContainerService::new(
+            fx.store.clone(),
+            runner,
+            ToolBindings::default(),
+            HostPlatform {
+                os: std::env::consts::OS,
+                arch: std::env::consts::ARCH,
+                macos_major: 0,
+            },
+            fx.h.ids.clone(),
+        )
+        .with_resources(fx.svc.clone()),
+    );
+    fx.cases = fx.cases.with_containers(service.clone());
+    let context = fx.agent("agent-a", "project-a", "s-a");
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let host_port = socket.local_addr().unwrap().port();
+    drop(socket);
+    let reply = fx.command_keyed(
+        &context,
+        "containers.create",
+        "container-create-1",
+        json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:latest",
+            "command":[],"mounts":[],"ports":[{"containerPort":8080,"hostPort":host_port,"protocol":"Tcp"}],"environment":[],"resourceIds":[]}}),
+        Some(1),
+    );
+    let operation = match recorded(reply).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected durable create intent: {other:?}"),
+    };
+    let containers = fx.read(|snapshot| {
+        snapshot
+            .resources()
+            .containers(&ContainerFilter::Project(project("project-a")), None, 10)
+    });
+    assert_eq!(containers.len(), 1);
+    assert_eq!(containers[0].phase, ContainerPhase::Creating);
+    assert_eq!(containers[0].create_operation_id, operation);
+    assert_eq!(containers[0].owner_kind, "Agent");
+    assert_eq!(containers[0].root_id, Some(root("root-a")));
+    let deliveries = fx.read(|snapshot| {
+        snapshot.queue().deliveries(
+            &DeliveryFilter {
+                consumer: Some("container_effects".into()),
+                operation_id: Some(operation.clone()),
+            },
+            None,
+            10,
+        )
+    });
+    assert_eq!(deliveries.entries.len(), 1);
+    assert_eq!(containers[0].resource_lease_ids.len(), 1);
+    fx.h.sql(&format!(
+        "UPDATE operations SET state='CancelledBeforeDispatch',revision=revision+1 WHERE id='{}'",
+        operation.0.as_str()
+    ));
+    let report = service.shutdown_agent_work(Duration::from_secs(1));
+    assert!(report.read_error.is_none(), "{report:?}");
+    assert!(report.uncertain.is_empty());
+    let failed = fx
+        .read(|snapshot| snapshot.resources().container(&containers[0].id))
+        .unwrap();
+    assert_eq!(failed.phase, ContainerPhase::Failed);
+    for lease in &failed.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Released
+        );
+    }
+}
+
+#[test]
+fn actor_scoped_project_artifact_is_hidden_from_same_project_peer() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let artifacts = ArtifactService::new(
+        Arc::new(NativeArtifactFiles::new(
+            fx.h.root.clone(),
+            fx.h.root.join("cache"),
+        )),
+        Arc::new(HostArtifactSources::new(
+            fx.h.clock.clone(),
+            fx.h.ids.clone(),
+        )),
+        Arc::new(NativeFilesystem::default()),
+        fx.h.clock.clone(),
+        fx.h.ids.clone(),
+    );
+    let owner = fx.agent("agent-a", "project-a", "s-a");
+    let peer = fx.agent("agent-c", "project-a", "s-c");
+    let observed = Observed {
+        project: Some(project("project-a")),
+        title: "Private container output".into(),
+        media_type: "text/plain".into(),
+        tags: vec!["container".into()],
+        source: json!({"kind":"ContainerLogs"}),
+        actor_audience: false,
+    };
+    let (private, ()) = artifacts
+        .publish_actor_observed(
+            &*fx.store,
+            &owner,
+            &Authorization::direct(),
+            observed.clone(),
+            b"private output",
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    let (ordinary, ()) = artifacts
+        .publish_observed(
+            &*fx.store,
+            &owner,
+            &Authorization::direct(),
+            observed,
+            b"ordinary project output",
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    assert!(
+        artifacts
+            .read_exact(&*fx.store, &owner, &private, 1024)
+            .is_ok()
+    );
+    assert!(
+        artifacts
+            .read_exact(&*fx.store, &peer, &private, 1024)
+            .is_err()
+    );
+    assert!(
+        artifacts
+            .read_exact(&*fx.store, &peer, &ordinary, 1024)
+            .is_ok()
+    );
+    let listed = fx.read(|snapshot| {
+        snapshot.artifacts().list(
+            &project("project-a"),
+            Some(&actor("agent-c")),
+            &[],
+            None,
+            10,
+        )
+    });
+    assert!(
+        !listed
+            .iter()
+            .any(|artifact| artifact.id == private.artifact_id)
+    );
+    assert!(
+        listed
+            .iter()
+            .any(|artifact| artifact.id == ordinary.artifact_id)
+    );
+}
+
+#[test]
+fn native_merged_output_uses_one_page_cursor() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let runner = ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    );
+    let mut spec = shell(if cfg!(windows) {
+        "echo first & echo second & echo third"
+    } else {
+        "echo first; echo second; echo third"
+    });
+    spec.capture_output = true;
+    let ctx = fx.agent("agent-a", "project-a", "s-a");
+    spec.merge_output = true;
+    let (whole, total, stderr_total) = runner
+        .run_window(
+            &ctx,
+            None,
+            spec.clone(),
+            Duration::from_secs(5),
+            (0, 0, 4096),
+            &[],
+        )
+        .unwrap();
+    assert_eq!(whole.exit_code, Some(0));
+    assert!(whole.stderr.is_empty());
+    assert_eq!(stderr_total, 0);
+    assert_eq!(whole.stdout.len() as u64, total);
+    let text = String::from_utf8_lossy(&whole.stdout);
+    assert!(text.find("first").unwrap() < text.find("second").unwrap());
+    assert!(text.find("second").unwrap() < text.find("third").unwrap());
+    let split = 7;
+    let (first, _, _) = runner
+        .run_window(
+            &ctx,
+            None,
+            spec.clone(),
+            Duration::from_secs(5),
+            (0, 0, split),
+            &[],
+        )
+        .unwrap();
+    let (second, _, _) = runner
+        .run_window(
+            &ctx,
+            None,
+            spec,
+            Duration::from_secs(5),
+            (split as u64, 0, 4096),
+            &[],
+        )
+        .unwrap();
+    assert_eq!([first.stdout, second.stdout].concat(), whole.stdout);
+}
+
+#[test]
+#[ignore = "explicit native Docker engine lifecycle; requires DW_NATIVE_DOCKER"]
+fn native_docker_container_effects_commit_owned_create_start_and_stop() {
+    native_container_effects_commit_owned_create_start_and_stop("docker", "DW_NATIVE_DOCKER");
+}
+
+#[cfg(unix)]
+#[test]
+fn credentialed_container_pull_uses_private_one_call_auth_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let _serial = serial();
+    let mut fx = Fx::new();
+    let set_runtime = |fx: &Fx, scope: ConfigScope, value: Value| {
+        fx.write(move |tx| {
+            let current = model::current_layer(tx.configuration(), &scope)?;
+            let key = devworks_core::services::containers::selection::PREFERRED_RUNTIME;
+            let schema = serde_json::to_value(descriptor(key).unwrap().schema_ref()).unwrap();
+            let assignment: SettingAssignment =
+                serde_json::from_value(json!({"key":key,"value":{"schema":schema,"value":value}}))
+                    .unwrap();
+            let plan = model::plan(&current, &[assignment]);
+            assert!(plan.is_valid());
+            let body = model::body(&plan, &actor("user-a"), tx.now_ms(), json!({"kind":"test"}));
+            tx.configuration().append_revision(
+                &scope,
+                model::NAMESPACE,
+                current.revision,
+                model::BODY_SCHEMA_VERSION,
+                body,
+            )?;
+            Ok(())
+        });
+    };
+    set_runtime(&fx, ConfigScope::Workspace, json!("podman"));
+    set_runtime(
+        &fx,
+        ConfigScope::Project(project("project-a")),
+        json!("docker"),
+    );
+    let executable = fx.h.root.join("fake-docker");
+    std::fs::write(
+        &executable,
+        r#"#!/bin/sh
+case "$1 $2" in
+  'pull registry.example.test/team/image:tag')
+    [ -f "$DOCKER_CONFIG/config.json" ] || exit 4
+    grep -Fq 'YWdlbnQ6c2VjcmV0LXRva2Vu' "$DOCKER_CONFIG/config.json" || exit 5
+    printf ok > "$(dirname "$0")/pull-marker";;
+  'pull registry.example.test/team/public:tag')
+    [ -f "$DOCKER_CONFIG/config.json" ] || exit 6
+    ! grep -Fq 'auths' "$DOCKER_CONFIG/config.json" || exit 7
+    printf ok > "$(dirname "$0")/anonymous-pull-marker";;
+  'image tag') exit 0;;
+  'image inspect')
+    case "$5" in
+      'registry.example.test/team/image:tag')
+        [ -f "$(dirname "$0")/pull-marker" ] || exit 1;;
+      'registry.example.test/team/public:tag')
+        [ -f "$(dirname "$0")/anonymous-pull-marker" ] || exit 1;;
+    esac
+    printf 'sha256:%064d\n' 0;;
+  *) exit 3;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let secrets = Arc::new(SessionSecrets::new());
+    secrets
+        .put(
+            &SecretKey::new(fx.store.info().store_id.0.as_str(), id("registry-handle")),
+            &Secret::new(r#"{"username":"agent","password":"secret-token"}"#),
+        )
+        .unwrap();
+    let bindings = ToolBindings::new(
+        [RegisteredExecutable {
+            id: id("docker"),
+            path: executable,
+        }],
+        [],
+    )
+    .unwrap()
+    .with_credentials([RegisteredCredential {
+        id: id("registry-credential"),
+        project: Some(project("project-a")),
+        handle: id("registry-handle"),
+    }])
+    .unwrap();
+    let runner = Arc::new(ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    ));
+    let auth_root = fx.h.root.join("registry-auth");
+    let service = Arc::new(
+        ContainerService::new(
+            fx.store.clone(),
+            runner,
+            bindings,
+            HostPlatform {
+                os: std::env::consts::OS,
+                arch: std::env::consts::ARCH,
+                macos_major: 0,
+            },
+            fx.h.ids.clone(),
+        )
+        .with_secrets(secrets)
+        .with_registry_auth(Arc::new(
+            NativeRegistryAuth::new(auth_root.clone()).unwrap(),
+        )),
+    );
+    fx.cases = fx.cases.with_containers(service.clone());
+    let context = fx.agent("agent-a", "project-a", "s-a");
+    let reply = fx.command_keyed(
+        &context,
+        "containers.pull",
+        "credentialed-pull",
+        json!({"engineId":"docker","image":"registry.example.test/team/image:tag",
+            "credentialRef":"registry-credential"}),
+        Some(1),
+    );
+    let operation_id = match recorded(reply).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted pull: {other:?}"),
+    };
+    let operation = fx
+        .read(|snapshot| snapshot.operations().operation(&operation_id))
+        .unwrap();
+    match service.execute_effect(&operation, &fx.authority()) {
+        ContainerEffectOutcome::Completed(_) => {}
+        ContainerEffectOutcome::Failed(reason) | ContainerEffectOutcome::Unknown(reason) => {
+            panic!("credentialed pull failed: {reason}")
+        }
+    }
+    assert!(fx.h.root.join("pull-marker").exists());
+    assert_eq!(std::fs::read_dir(&auth_root).unwrap().count(), 0);
+    let anonymous = fx.command_keyed(
+        &context,
+        "containers.pull",
+        "anonymous-pull",
+        json!({"engineId":"docker","image":"registry.example.test/team/public:tag"}),
+        Some(1),
+    );
+    let anonymous_id = match recorded(anonymous).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted anonymous pull: {other:?}"),
+    };
+    let anonymous_op = fx
+        .read(|snapshot| snapshot.operations().operation(&anonymous_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&anonymous_op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    assert!(fx.h.root.join("anonymous-pull-marker").exists());
+    assert_eq!(std::fs::read_dir(&auth_root).unwrap().count(), 0);
+    set_runtime(&fx, ConfigScope::Project(project("project-a")), Value::Null);
+    assert_eq!(
+        fx.read(
+            |snapshot| devworks_core::services::containers::selection::selected(
+                snapshot.configuration(),
+                Some(&project("project-a"))
+            )
+        ),
+        ContainerBackend::Podman
+    );
+    let reply = fx.command_keyed(
+        &context,
+        "containers.pull",
+        "pull-after-inheritance-restored",
+        json!({"engineId":"docker","image":"registry.example.test/team/image:tag"}),
+        Some(1),
+    );
+    assert!(
+        matches!(recorded(reply).0, DomainDecision::Refused { fault }
+        if fault.code == devworks_core::protocol::DomainErrorCode::Conflict)
+    );
+}
+
+#[test]
+#[ignore = "explicit native Podman engine lifecycle; requires DW_NATIVE_PODMAN"]
+fn native_podman_container_effects_commit_owned_create_start_and_stop() {
+    native_container_effects_commit_owned_create_start_and_stop("podman", "DW_NATIVE_PODMAN");
+}
+
+fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, executable_key: &str) {
+    let _serial = serial();
+    let executable = std::env::var(executable_key).expect("registered container CLI path");
+    struct Cleanup(String, String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new(&self.0)
+                .args(["rm", "-f", &self.1])
+                .output();
+        }
+    }
+    let mut fx = Fx::new();
+    if engine != "docker" {
+        let engine = engine.to_owned();
+        fx.write(move |tx| {
+            let scope = ConfigScope::Workspace;
+            let current = model::current_layer(tx.configuration(), &scope)?;
+            let key = devworks_core::services::containers::selection::PREFERRED_RUNTIME;
+            let schema = serde_json::to_value(descriptor(key).unwrap().schema_ref()).unwrap();
+            let assignment: SettingAssignment =
+                serde_json::from_value(json!({"key":key,"value":{"schema":schema,"value":engine}}))
+                    .unwrap();
+            let plan = model::plan(&current, &[assignment]);
+            assert!(plan.is_valid());
+            let body = model::body(&plan, &actor("user-a"), tx.now_ms(), json!({"kind":"test"}));
+            tx.configuration().append_revision(
+                &scope,
+                model::NAMESPACE,
+                current.revision,
+                model::BODY_SCHEMA_VERSION,
+                body,
+            )?;
+            Ok(())
+        });
+    }
+    let artifacts = Arc::new(ArtifactService::new(
+        Arc::new(NativeArtifactFiles::new(
+            fx.h.root.clone(),
+            fx.h.root.join("cache"),
+        )),
+        Arc::new(HostArtifactSources::new(
+            fx.h.clock.clone(),
+            fx.h.ids.clone(),
+        )),
+        Arc::new(NativeFilesystem::default()),
+        fx.h.clock.clone(),
+        fx.h.ids.clone(),
+    ));
+    let runner = Arc::new(ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    ));
+    let build_root = fx.h.root.join("container-build-context");
+    std::fs::create_dir_all(&build_root).unwrap();
+    std::fs::create_dir_all(build_root.join("mutable-child")).unwrap();
+    let repository_root = fx.h.root.canonicalize().unwrap();
+    fx.write(move |tx| {
+        let now = tx.now_ms();
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("container-build-repo"),
+            location: repository_root.to_string_lossy().into_owned(),
+            name: "Container build repository".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: "Active".into(),
+            languages: Vec::new(),
+            revision: 1,
+            registered_at_ms: now,
+        })?;
+        tx.projects()
+            .set_members(&project("project-a"), &[id("container-build-repo")])
+    });
+    let bindings = ToolBindings::new(
+        [RegisteredExecutable {
+            id: id(engine),
+            path: executable.clone().into(),
+        }],
+        [],
+    )
+    .unwrap();
+    let service = Arc::new(
+        ContainerService::new(
+            fx.store.clone(),
+            runner,
+            bindings,
+            HostPlatform {
+                os: std::env::consts::OS,
+                arch: std::env::consts::ARCH,
+                macos_major: 0,
+            },
+            fx.h.ids.clone(),
+        )
+        .with_artifacts(artifacts.clone())
+        .with_resources(fx.svc.clone())
+        .with_registry_auth(Arc::new(
+            NativeRegistryAuth::new(fx.h.root.join("container-registry-auth")).unwrap(),
+        ))
+        .with_workload_environment(Arc::new(
+            NativeRegistryAuth::new(fx.h.root.join("container-environment")).unwrap(),
+        )),
+    );
+    fx.cases = fx
+        .cases
+        .with_containers(service.clone())
+        .with_artifacts(artifacts.clone());
+    let context = fx.agent("agent-a", "project-a", "s-a");
+    let capabilities =
+        match result(fx.query_at(&context, "containers.capabilities", json!({}), Some(1))) {
+            OperationResult::ContainersCapabilities { value } => value.items.0,
+            other => panic!("expected container capabilities: {other:?}"),
+        };
+    let selected = capabilities
+        .iter()
+        .find(|c| c.engine_id.as_str() == engine)
+        .unwrap();
+    assert!(matches!(
+        selected.state,
+        devworks_core::protocol::records::ItemState::Healthy
+    ));
+    assert_eq!(selected.capabilities.0.len(), 8);
+    let apple = capabilities
+        .iter()
+        .find(|c| c.engine_id.as_str() == "apple")
+        .unwrap();
+    assert!(apple.capabilities.0.is_empty());
+    let pull = fx.command_keyed(
+        &context,
+        "containers.pull",
+        "native-effect-pull",
+        json!({"engineId":engine,"image":"docker.io/library/alpine:latest"}),
+        Some(1),
+    );
+    let pull_id = match recorded(pull).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted pull: {other:?}"),
+    };
+    let pull_op = fx
+        .read(|snapshot| snapshot.operations().operation(&pull_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&pull_op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    let (definition, ()) = artifacts
+        .publish_observed(
+            &*fx.store,
+            &context,
+            &Authorization::direct(),
+            Observed {
+                project: Some(project("project-a")),
+                title: "Container build definition".into(),
+                media_type: "text/plain".into(),
+                tags: vec!["container".into(), "build".into()],
+                source: json!({"kind":"NativeQualification"}),
+                actor_audience: false,
+            },
+            b"FROM docker.io/library/alpine:latest\nRUN echo qualified > /qualified\n",
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    let tag = format!("dw49-build-{}:qualified", std::process::id());
+    let scoped_tag = |image: &str| {
+        let scope = devworks_core::fingerprint::sha256_hex(b"project:project-a");
+        let image = devworks_core::fingerprint::sha256_hex(image.as_bytes());
+        format!("devworks-local:{}-{}", &scope[..16], &image[..16])
+    };
+    struct ImageCleanup(String, String);
+    impl Drop for ImageCleanup {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new(&self.0)
+                .args(["image", "rm", &self.1])
+                .output();
+        }
+    }
+    let _image_cleanup = ImageCleanup(executable.clone(), scoped_tag(&tag));
+    let _pull_cleanup = ImageCleanup(
+        executable.clone(),
+        scoped_tag("docker.io/library/alpine:latest"),
+    );
+    let build = fx.command_keyed(
+        &context,
+        "containers.build",
+        "native-effect-build",
+        json!({"engineId":engine,"projectId":"project-a",
+            "context":{"rootId":"container-build-repo","relative":"container-build-context"},
+            "definition":definition,"tag":tag}),
+        Some(1),
+    );
+    let build_id = match recorded(build).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted build: {other:?}"),
+    };
+    let build_op = fx
+        .read(|snapshot| snapshot.operations().operation(&build_id))
+        .unwrap();
+    let build_outcome = service.execute_effect(&build_op, &fx.authority());
+    match build_outcome {
+        ContainerEffectOutcome::Completed(_) => {}
+        ContainerEffectOutcome::Failed(reason) | ContainerEffectOutcome::Unknown(reason) => {
+            panic!("build outcome: {reason}")
+        }
+    }
+    let digest = std::process::Command::new(&executable)
+        .args(["image", "inspect", "--format", "{{.Id}}", &scoped_tag(&tag)])
+        .output()
+        .unwrap();
+    assert!(digest.status.success());
+    let digest = String::from_utf8(digest.stdout).unwrap().trim().to_owned();
+    let other_project = fx.agent("agent-b", "project-b", "s-b");
+    let cross_project = fx.command_keyed(
+        &other_project,
+        "containers.create",
+        "native-effect-cross-project-image-id",
+        json!({"spec":{"engineId":engine,"projectId":"project-b","image":digest.clone(),
+            "command":[],"mounts":[],"ports":[],"environment":[],"resourceIds":[]}}),
+        Some(1),
+    );
+    let cross_project_id = match recorded(cross_project).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted create intent: {other:?}"),
+    };
+    let cross_project_op = fx
+        .read(|snapshot| snapshot.operations().operation(&cross_project_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&cross_project_op, &fx.authority()),
+        ContainerEffectOutcome::Failed(reason)
+            if reason.contains("not published for this project")
+    ));
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let host_port = socket.local_addr().unwrap().port();
+    drop(socket);
+    let create = fx.command_keyed(
+        &context,
+        "containers.create",
+        "native-effect-create",
+        json!({"spec":{"engineId":engine,"projectId":"project-a","image":digest,
+            "command":["sh","-c","echo booted; i=0; while [ \"$i\" -lt 1100 ]; do printf '%01024d\\n' 0; i=$((i+1)); done; echo stderr-marker >&2; sleep 60"],
+            "mounts":[{"source":{"rootId":"container-build-repo","relative":"container-build-context"},"destination":"/workspace","readOnly":false}],
+            "ports":[{"containerPort":8080,"hostPort":host_port,"protocol":"Tcp"}],
+            "environment":[{"name":"DOCKER_HOST","value":"tcp://127.0.0.1:1"}],"resourceIds":["build-slot"]}}),
+        Some(1),
+    );
+    let create_id = match recorded(create).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted create: {other:?}"),
+    };
+    let row = fx.read(|snapshot| {
+        snapshot
+            .resources()
+            .containers(&ContainerFilter::Project(project("project-a")), None, 10)
+    })[0]
+        .clone();
+    let _cleanup = Cleanup(executable.clone(), row.id.as_str().into());
+    assert_eq!(row.resource_lease_ids.len(), 2);
+    for lease in &row.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Held
+        );
+    }
+    let external = format!("dw-external-{}", std::process::id());
+    let _external_cleanup = Cleanup(executable.clone(), external.clone());
+    let existing = std::process::Command::new(&executable)
+        .args([
+            "run",
+            "-d",
+            "--name",
+            &external,
+            "docker.io/library/alpine:latest",
+            "sleep",
+            "60",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        existing.status.success(),
+        "{}",
+        String::from_utf8_lossy(&existing.stderr)
+    );
+    let op = fx
+        .read(|snapshot| snapshot.operations().operation(&create_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    assert!(matches!(
+        service.observe_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    let created = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    assert_eq!(created.phase, ContainerPhase::Created);
+    let start = fx.command_keyed(
+        &context,
+        "containers.start",
+        "native-effect-start",
+        json!({"containerId":row.id.as_str(),"expectedRevision":created.revision.to_string()}),
+        Some(1),
+    );
+    let start_id = match recorded(start).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted start: {other:?}"),
+    };
+    let op = fx
+        .read(|snapshot| snapshot.operations().operation(&start_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    assert!(matches!(
+        service.observe_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    let running = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    assert_eq!(running.phase, ContainerPhase::Running);
+    let unsafe_build = fx.command_keyed(
+        &context,
+        "containers.build",
+        "native-effect-descendant-build",
+        json!({"engineId":engine,"projectId":"project-a",
+            "context":{"rootId":"container-build-repo","relative":"container-build-context/mutable-child"},
+            "definition":definition,"tag":"unsafe-build:latest"}),
+        Some(1),
+    );
+    let unsafe_build_id = match recorded(unsafe_build).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected recorded descendant build: {other:?}"),
+    };
+    let unsafe_build_op = fx
+        .read(|snapshot| snapshot.operations().operation(&unsafe_build_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&unsafe_build_op, &fx.authority()),
+        ContainerEffectOutcome::Failed(reason) if reason.contains("build context changed")
+    ));
+    // The running agent has a writable direct-child mount. A later descendant source
+    // could be replaced by that workload between path validation and engine dispatch.
+    let descendant = fx.command_keyed(
+        &context,
+        "containers.create",
+        "native-effect-descendant-mount",
+        json!({"spec":{"engineId":engine,"projectId":"project-a","image":"docker.io/library/alpine:latest",
+            "command":[],"mounts":[{"source":{"rootId":"container-build-repo","relative":"container-build-context/mutable-child"},
+                "destination":"/child","readOnly":true}],"ports":[],"environment":[],"resourceIds":[]}}),
+        Some(1),
+    );
+    let descendant_id = match recorded(descendant).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected recorded descendant create: {other:?}"),
+    };
+    let descendant_op = fx
+        .read(|snapshot| snapshot.operations().operation(&descendant_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&descendant_op, &fx.authority()),
+        ContainerEffectOutcome::Failed(reason) if reason.contains("not safely registered")
+    ));
+    let exec = fx.command_keyed(
+        &context,
+        "containers.exec",
+        "native-effect-exec",
+        json!({"containerId":row.id.as_str(),"expectedRevision":running.revision.to_string(),
+            "command":["printf","ok"],"environment":[],"timeoutMs":"10000"}),
+        Some(1),
+    );
+    let exec_id = match recorded(exec).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted exec: {other:?}"),
+    };
+    let op = fx
+        .read(|snapshot| snapshot.operations().operation(&exec_id))
+        .unwrap();
+    let ContainerEffectOutcome::Completed(completion) =
+        service.execute_effect(&op, &fx.authority())
+    else {
+        panic!("container exec did not complete");
+    };
+    let decoded: OperationResult = serde_json::from_value(completion["result"].clone()).unwrap();
+    let OperationResult::ContainersExec { value } = decoded else {
+        panic!("wrong exec result")
+    };
+    assert_eq!(value.exit_code, Some(0));
+    let (bytes, _) = artifacts
+        .read_exact(
+            &*fx.store,
+            &context,
+            value.output.as_ref().unwrap(),
+            1_048_576,
+        )
+        .unwrap();
+    let output: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(output["stdoutBase64"], "b2s=");
+    let exec_artifact_id = value.output.as_ref().unwrap().artifact_id.clone();
+    let peer = fx.agent("agent-c", "project-a", "s-c");
+    assert!(
+        artifacts
+            .read_exact(&*fx.store, &peer, &definition, 1_048_576)
+            .is_ok(),
+        "the same-project peer must retain access to ordinary project artifacts"
+    );
+    assert!(
+        artifacts
+            .read_exact(&*fx.store, &peer, value.output.as_ref().unwrap(), 1_048_576,)
+            .is_err(),
+        "a same-project peer must not read another actor's execution output"
+    );
+    let logs = result(fx.query_at(
+        &context,
+        "containers.logs",
+        json!({"containerId":row.id.as_str(),"afterBytes":"0","maxBytes":1024}),
+        Some(1),
+    ));
+    let OperationResult::ContainersLogs { value } = logs else {
+        panic!("wrong logs result")
+    };
+    let (bytes, _) = artifacts
+        .read_exact(&*fx.store, &context, &value, 1_048_576)
+        .unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("booted"));
+    assert!(
+        artifacts
+            .read_exact(&*fx.store, &peer, &value, 1_048_576)
+            .is_err(),
+        "a same-project peer must not read another actor's logs"
+    );
+    let peer_artifacts = fx.read(|snapshot| {
+        snapshot.artifacts().list(
+            &project("project-a"),
+            Some(&actor("agent-c")),
+            &[],
+            None,
+            500,
+        )
+    });
+    assert!(
+        peer_artifacts
+            .iter()
+            .any(|artifact| artifact.id == definition.artifact_id)
+    );
+    assert!(
+        !peer_artifacts.iter().any(|artifact| {
+            artifact.id == value.artifact_id || artifact.id == exec_artifact_id
+        })
+    );
+    let logs_deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let later_logs = result(fx.query_at(
+            &context,
+            "containers.logs",
+            json!({"containerId":row.id.as_str(),"afterBytes":"1048576","maxBytes":1024}),
+            Some(1),
+        ));
+        let OperationResult::ContainersLogs { value } = later_logs else {
+            panic!("wrong later logs result")
+        };
+        let (later, _) = artifacts
+            .read_exact(&*fx.store, &context, &value, 1_048_576)
+            .unwrap();
+        if later.len() == 1024 {
+            break;
+        }
+        if std::time::Instant::now() >= logs_deadline {
+            let first = result(fx.query_at(
+                &context,
+                "containers.logs",
+                json!({"containerId":row.id.as_str(),"afterBytes":"0","maxBytes":1048576}),
+                Some(1),
+            ));
+            let OperationResult::ContainersLogs { value } = first else {
+                panic!("wrong diagnostic logs result")
+            };
+            let (first, _) = artifacts
+                .read_exact(&*fx.store, &context, &value, 1_048_576)
+                .unwrap();
+            panic!(
+                "late log page stayed at {} bytes; first page has {} bytes",
+                later.len(),
+                first.len()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let stderr_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        // The selected CLI may order its two native log streams differently. Locate the
+        // marker in that backend's merged stream before testing a deep page around it.
+        let mut spec =
+            ProcessSpec::new(&[executable.clone(), "logs".into(), row.id.as_str().into()]).unwrap();
+        spec.capture_output = true;
+        spec.merge_output = true;
+        let mut tree = NativeProcessHost.spawn(&spec).unwrap();
+        let (mut merged, _) = tree.take_output().unwrap();
+        let mut full_logs = Vec::new();
+        std::io::Read::read_to_end(&mut merged, &mut full_logs).unwrap();
+        assert_eq!(
+            until_empty(&mut *tree, Duration::from_secs(10))
+                .expect("logs process finished")
+                .exit_code,
+            Some(0)
+        );
+        let Some(marker_at) = full_logs
+            .windows(b"stderr-marker".len())
+            .position(|window| window == b"stderr-marker")
+        else {
+            assert!(
+                std::time::Instant::now() < stderr_deadline,
+                "stderr log marker never arrived"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        };
+        let stderr_logs = result(fx.query_at(
+            &context,
+            "containers.logs",
+            json!({"containerId":row.id.as_str(),"afterBytes":marker_at.saturating_sub(32).to_string(),"maxBytes":1024}),
+            Some(1),
+        ));
+        let OperationResult::ContainersLogs { value } = stderr_logs else {
+            panic!("wrong stderr logs result")
+        };
+        let (stderr_page, _) = artifacts
+            .read_exact(&*fx.store, &context, &value, 1_048_576)
+            .unwrap();
+        if String::from_utf8_lossy(&stderr_page).contains("stderr-marker") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < stderr_deadline,
+            "stderr log page never arrived"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let stop = fx.command_keyed(
+        &context,
+        "containers.stop",
+        "native-effect-stop",
+        json!({"containerId":row.id.as_str(),"expectedRevision":running.revision.to_string()}),
+        Some(1),
+    );
+    let stop_id = match recorded(stop).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted stop: {other:?}"),
+    };
+    let op = fx
+        .read(|snapshot| snapshot.operations().operation(&stop_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    assert!(matches!(
+        service.observe_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    let stopped = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    assert_eq!(stopped.phase, ContainerPhase::Stopped);
+    for lease in &stopped.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Released
+        );
+    }
+    let human = fx.ctx("user-a", PrincipalKind::Human, Some("project-a"));
+    let restart = fx.command_keyed(
+        &human,
+        "containers.start",
+        "native-effect-restart",
+        json!({"containerId":row.id.as_str(),"expectedRevision":stopped.revision.to_string()}),
+        Some(1),
+    );
+    let restart_id = match recorded(restart).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted restart: {other:?}"),
+    };
+    let restarting = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    assert_eq!(restarting.resource_lease_ids.len(), 2);
+    for lease in &restarting.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Held
+        );
+    }
+    let op = fx
+        .read(|snapshot| snapshot.operations().operation(&restart_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    fx.h.set_now(T0 + 86_400_001);
+    fx.reconcile(ReconcileCause::Sweep);
+    for lease in &restarting.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Held
+        );
+    }
+    let report = service.stop_agent_work_for_root(&root("root-a"), Duration::from_secs(20));
+    assert_eq!(report.verified_stopped, vec![row.id.clone()]);
+    assert!(report.uncertain.is_empty());
+    let closed = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    assert_eq!(closed.phase, ContainerPhase::Stopped);
+    for lease in &closed.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Released
+        );
+    }
+    let untouched = std::process::Command::new(&executable)
+        .args(["inspect", "--format", "{{.State.Running}}", &external])
+        .output()
+        .unwrap();
+    assert!(untouched.status.success());
+    assert_eq!(String::from_utf8_lossy(&untouched.stdout).trim(), "true");
+    let refused = fx.command_keyed(
+        &context,
+        "containers.create",
+        "native-effect-refused-create",
+        json!({"spec":{"engineId":engine,"projectId":"project-a","image":"docker.io/library/alpine:latest",
+            "command":[],"mounts":[],"ports":[],
+            "environment":[{"name":"TOKEN","credentialRef":"missing"}],
+            "resourceIds":["refused-slot"]}}),
+        Some(1),
+    );
+    let refused_id = match recorded(refused).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted create: {other:?}"),
+    };
+    let refused_row = fx
+        .read(|snapshot| {
+            snapshot.resources().containers(
+                &ContainerFilter::Project(project("project-a")),
+                None,
+                10,
+            )
+        })
+        .into_iter()
+        .find(|candidate| candidate.create_operation_id == refused_id)
+        .unwrap();
+    let refused_op = fx
+        .read(|snapshot| snapshot.operations().operation(&refused_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&refused_op, &fx.authority()),
+        ContainerEffectOutcome::Failed(_)
+    ));
+    let failed = fx
+        .read(|snapshot| snapshot.resources().container(&refused_row.id))
+        .unwrap();
+    assert_eq!(failed.phase, ContainerPhase::Failed);
+    for lease in &failed.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Released
+        );
+    }
+    let archive_restart = fx.command_keyed(
+        &context,
+        "containers.start",
+        "native-effect-archive-restart",
+        json!({"containerId":row.id.as_str(),"expectedRevision":closed.revision.to_string()}),
+        Some(1),
+    );
+    let archive_restart_id = match recorded(archive_restart).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted archive test restart: {other:?}"),
+    };
+    let archive_op = fx
+        .read(|snapshot| snapshot.operations().operation(&archive_restart_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&archive_op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    fx.h.sql("UPDATE projects SET lifecycle='Archived', revision=revision+1 WHERE id='project-a'");
+    let archived_report = service.shutdown_agent_work(Duration::from_secs(20));
+    assert_eq!(archived_report.verified_stopped, vec![row.id.clone()]);
+    assert!(archived_report.uncertain.is_empty());
+    fx.h.sql("UPDATE projects SET lifecycle='Active', revision=revision+1 WHERE id='project-a'");
+    let archived_stopped = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    let restart = fx.command_keyed(
+        &human,
+        "containers.start",
+        "native-effect-revocation-restart",
+        json!({"containerId":row.id.as_str(),"expectedRevision":archived_stopped.revision.to_string()}),
+        Some(1),
+    );
+    let restart_id = match recorded(restart).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted revocation restart: {other:?}"),
+    };
+    let restart_op = fx
+        .read(|snapshot| snapshot.operations().operation(&restart_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&restart_op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    let user = fx.ctx("user-a", PrincipalKind::Human, None);
+    fx.write(move |tx| {
+        let revision = tx
+            .authority()
+            .principal(&actor("agent-a"))?
+            .unwrap()
+            .revision;
+        devworks_core::authority::service::revoke_principal(tx, &user, &actor("agent-a"), revision)
+            .map_err(|_| StorageError::ScopeDenied)
+    });
+    let revoked_report = service.reconcile_revoked_agent_work(Duration::from_secs(20));
+    assert_eq!(revoked_report.verified_stopped, vec![row.id.clone()]);
+    assert!(revoked_report.uncertain.is_empty());
+    assert_eq!(
+        fx.read(|snapshot| snapshot.resources().container(&row.id))
+            .unwrap()
+            .phase,
+        ContainerPhase::Stopped
+    );
+    let user = fx.ctx("user-a", PrincipalKind::Human, None);
+    fx.write(move |tx| {
+        let revision = tx
+            .authority()
+            .principal(&actor("agent-a"))?
+            .unwrap()
+            .revision;
+        auth::bind_principal(
+            tx,
+            &user,
+            NewPrincipalBinding {
+                actor: actor("agent-a"),
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::Worker),
+                project_id: Some(project("project-a")),
+                tool_families: None,
+                bound_by: actor("user-a"),
+            },
+            Some(revision),
+        )
+        .map_err(|_| StorageError::ScopeDenied)
+    });
+    let stopped = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    let restart = fx.command_keyed(
+        &human,
+        "containers.start",
+        "native-effect-policy-restart",
+        json!({"containerId":row.id.as_str(),"expectedRevision":stopped.revision.to_string()}),
+        Some(1),
+    );
+    let restart_id = match recorded(restart).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted policy restart: {other:?}"),
+    };
+    let restart_op = fx
+        .read(|snapshot| snapshot.operations().operation(&restart_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&restart_op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    fx.write(move |tx| {
+        let scope = ConfigScope::Workspace;
+        let current = model::current_layer(tx.configuration(), &scope)?;
+        let key = devworks_core::authority::policy::ACCESS_PROFILE_KEY;
+        let schema = serde_json::to_value(descriptor(key).unwrap().schema_ref()).unwrap();
+        let assignment: SettingAssignment = serde_json::from_value(
+            json!({"key":key,"value":{"schema":schema,"value":"projectScope"}}),
+        )
+        .unwrap();
+        let plan = model::plan(&current, &[assignment]);
+        assert!(plan.is_valid());
+        let body = model::body(&plan, &actor("user-a"), tx.now_ms(), json!({"kind":"test"}));
+        tx.configuration().append_revision(
+            &scope,
+            model::NAMESPACE,
+            current.revision,
+            model::BODY_SCHEMA_VERSION,
+            body,
+        )?;
+        Ok(())
+    });
+    let narrowed = service.reconcile_revoked_agent_work(Duration::from_secs(20));
+    assert_eq!(narrowed.verified_stopped, vec![row.id.clone()]);
+    assert!(narrowed.uncertain.is_empty());
 }
 
 #[test]

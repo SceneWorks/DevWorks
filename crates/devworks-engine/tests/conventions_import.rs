@@ -950,6 +950,7 @@ fn captured_root_stop_epoch_prevents_an_admitted_import_from_publishing() {
     assert_eq!(
         read(f.store.as_ref(), |r| r.artifacts().list(
             &project,
+            None,
             &[],
             None,
             50

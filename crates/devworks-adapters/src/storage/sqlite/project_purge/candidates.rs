@@ -203,6 +203,10 @@ pub(super) fn selection(project: &ProjectId) -> Result<Selection, StorageError> 
         "project_managed_files".into(),
         Value::String("project_id=?1".into()),
     );
+    predicates.insert(
+        "owned_containers".into(),
+        Value::String("project_id=?1".into()),
+    );
     Ok(Selection {
         project: project.clone(),
         anchors,

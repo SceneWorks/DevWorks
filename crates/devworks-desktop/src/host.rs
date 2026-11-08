@@ -133,6 +133,23 @@ fn process_executables_on_path()
     registered
 }
 
+#[cfg(target_os = "macos")]
+fn macos_major_version() -> u32 {
+    std::process::Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|version| version.split('.').next()?.parse().ok())
+        .unwrap_or(0)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_major_version() -> u32 {
+    0
+}
+
 /// Builds the web tools' ports over the secret resolver the host composed.
 pub type WebPortsFactory = Arc<dyn Fn(Arc<dyn SecretResolver>) -> WebPorts + Send + Sync>;
 
@@ -152,6 +169,9 @@ pub struct DesktopConfig {
     /// Explicit host grants for process environment credential handles. An unregistered
     /// credentialRef is refused; the generic provider connection handles are not exported.
     pub process_credentials: Vec<devworks_core::services::process::tools::RegisteredCredential>,
+    /// Explicit grants for container workload environment and registry credentials. Process
+    /// grants do not imply access to these handles.
+    pub container_credentials: Vec<devworks_core::services::process::tools::RegisteredCredential>,
     /// Native computer-control adapter; tests may inject a scripted desktop with no OS input.
     pub desktop_platform: Option<Arc<dyn devworks_core::ports::desktop::DesktopPlatform>>,
     /// Replaces the connection directory the router reads (tests script connection states).
@@ -199,6 +219,7 @@ impl DesktopConfig {
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),
             process_credentials: Vec::new(),
+            container_credentials: Vec::new(),
             desktop_platform: None,
             connections: None,
             secrets: None,
@@ -209,6 +230,14 @@ impl DesktopConfig {
             indexing: IndexingConfig::default(),
         }
     }
+}
+
+fn container_bindings(
+    config: &DesktopConfig,
+    executables: Vec<devworks_core::services::process::tools::RegisteredExecutable>,
+) -> Result<devworks_core::services::process::tools::ToolBindings, &'static str> {
+    devworks_core::services::process::tools::ToolBindings::new(executables, std::iter::empty())?
+        .with_credentials(config.container_credentials.clone())
 }
 
 /// How often the connection service's background step runs (device codes are polled at their
@@ -439,6 +468,38 @@ async fn compose(
         secrets: secrets.clone(),
     });
     let executables = process_executables_on_path();
+    let container_executables: Vec<_> = executables
+        .iter()
+        .filter(|executable| matches!(executable.id.as_str(), "docker" | "podman" | "container"))
+        .cloned()
+        .collect();
+    if !container_executables.is_empty() {
+        let bindings = container_bindings(config, container_executables)
+            .map_err(|reason| StartError::Thread(reason.into()))?;
+        let container_private_files = Arc::new(
+            devworks_adapters::containers::NativeRegistryAuth::new(
+                config.data_root.join("container-auth"),
+            )
+            .map_err(|reason| StartError::Thread(reason.into()))?,
+        );
+        runtime_config.containers = Some(devworks_engine::runtime::ContainerComposition {
+            bindings,
+            filesystem: Arc::new(NativeFilesystem::new()),
+            protected_roots: ProtectedRoots::new(
+                Vec::new(),
+                Vec::new(),
+                Some(config.data_root.display().to_string()),
+            ),
+            secrets: secrets.clone(),
+            registry_auth: container_private_files.clone(),
+            workload_environment: container_private_files,
+            host: devworks_core::services::containers::probe::HostPlatform {
+                os: std::env::consts::OS,
+                arch: std::env::consts::ARCH,
+                macos_major: macos_major_version(),
+            },
+        });
+    }
     if !executables.is_empty() {
         let bindings = devworks_core::services::process::tools::ToolBindings::new(
             executables,
@@ -1183,5 +1244,41 @@ mod metadata_runtime_tests {
             .await
             .expect("production metadata runtime I/O completes");
         });
+    }
+}
+
+#[cfg(test)]
+mod container_credential_boundary_tests {
+    use super::*;
+    use devworks_core::ports::secrets::{SecretKey, SessionSecrets};
+    use devworks_core::services::process::tools::{BindingRefusal, RegisteredCredential};
+
+    #[test]
+    fn process_grant_does_not_become_a_container_grant() {
+        let mut config = DesktopConfig::new(std::env::temp_dir());
+        let grant = RegisteredCredential {
+            id: Id::new("credential-1").unwrap(),
+            project: None,
+            handle: Id::new("secret-1").unwrap(),
+        };
+        config.process_credentials.push(grant.clone());
+        let secrets = SessionSecrets::new();
+        secrets
+            .put(
+                &SecretKey::new("store-1", grant.handle.clone()),
+                &Secret::new("private-token"),
+            )
+            .unwrap();
+        let bindings = container_bindings(&config, Vec::new()).unwrap();
+        assert_eq!(
+            bindings.resolve_container_credential(&grant.id, None, &secrets, "store-1"),
+            Err(BindingRefusal::UnknownCredential)
+        );
+        config.container_credentials.push(grant.clone());
+        let bindings = container_bindings(&config, Vec::new()).unwrap();
+        assert_eq!(
+            bindings.resolve_container_credential(&grant.id, None, &secrets, "store-1"),
+            Ok("private-token".into())
+        );
     }
 }

@@ -32,7 +32,7 @@ use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
     ApprovalState, OutputEncoding, ProcessOutput, ProcessRecord, ProposalRecord,
 };
-use crate::protocol::records::{ProcessSpec, ToolProfile};
+use crate::protocol::records::{ProcessSpec, RegisteredPath, ToolProfile};
 use crate::protocol::results::{DomainDecision, OperationCompletion, OperationResult};
 use crate::protocol::support::BoundedText;
 use crate::protocol::{
@@ -98,6 +98,104 @@ pub enum BindingRefusal {
 }
 
 impl ToolBindings {
+    pub fn resolve_container_credential(
+        &self,
+        reference: &Id,
+        project: Option<&ProjectId>,
+        secrets: &dyn SecretStore,
+        namespace: &str,
+    ) -> Result<String, BindingRefusal> {
+        let registered = self
+            .credentials
+            .get(reference.as_str())
+            .ok_or(BindingRefusal::UnknownCredential)?;
+        if registered.project.as_ref() != project {
+            return Err(BindingRefusal::OutOfProject);
+        }
+        secrets
+            .get(&SecretKey::new(namespace, registered.handle.clone()))
+            .ok()
+            .flatten()
+            .map(|secret| secret.expose().to_owned())
+            .ok_or(BindingRefusal::UnknownCredential)
+    }
+
+    /// Resolve container environment entries only after its command intent has committed.
+    /// Registered handles stay project-bound and values never enter the receipt or CLI argv.
+    pub fn resolve_container_environment(
+        &self,
+        entries: &[crate::protocol::records::EnvironmentEntry],
+        project: Option<&ProjectId>,
+        secrets: &dyn SecretStore,
+        namespace: &str,
+    ) -> Result<Vec<(String, String)>, BindingRefusal> {
+        let mut names = HashSet::new();
+        let mut values = Vec::with_capacity(entries.len());
+        for entry in entries {
+            if !names.insert(entry.name.0.as_str()) {
+                return Err(BindingRefusal::DuplicateEnvironment);
+            }
+            let value = match (&entry.value, &entry.credential_ref) {
+                (Some(value), None) => value.0.clone(),
+                (None, Some(reference)) => {
+                    let registered = self
+                        .credentials
+                        .get(reference.as_str())
+                        .ok_or(BindingRefusal::UnknownCredential)?;
+                    if registered.project.as_ref() != project {
+                        return Err(BindingRefusal::OutOfProject);
+                    }
+                    secrets
+                        .get(&SecretKey::new(namespace, registered.handle.clone()))
+                        .ok()
+                        .flatten()
+                        .ok_or(BindingRefusal::UnknownCredential)?
+                        .expose()
+                        .to_owned()
+                }
+                _ => return Err(BindingRefusal::UnknownCredential),
+            };
+            values.push((entry.name.0.clone(), value));
+        }
+        Ok(values)
+    }
+
+    /// Resolve a project path under its exact registered root, rejecting symlink escapes.
+    pub fn resolve_registered_path(
+        &self,
+        path: &RegisteredPath,
+        project: Option<&ProjectId>,
+    ) -> Result<PathBuf, BindingRefusal> {
+        let root = self
+            .roots
+            .get(path.root_id.as_str())
+            .ok_or(BindingRefusal::UnknownRoot)?;
+        if root.project.as_ref() != project {
+            return Err(BindingRefusal::OutOfProject);
+        }
+        let root_path = exact_directory(&root.path).ok_or(BindingRefusal::ChangedRoot)?;
+        let resolved = root_path
+            .join(&path.relative.0)
+            .canonicalize()
+            .map_err(|_| BindingRefusal::ChangedRoot)?;
+        if !resolved.starts_with(&root_path) {
+            return Err(BindingRefusal::OutOfProject);
+        }
+        Ok(resolved)
+    }
+
+    /// A backend selector resolves only a host-registered executable, rechecking its exact
+    /// target at dispatch. Missing runtimes remain unavailable; no PATH fallback occurs here.
+    pub fn resolve_named_executable(&self, name: &str) -> Result<String, BindingRefusal> {
+        let (path, target) = self
+            .executables
+            .get(name)
+            .ok_or(BindingRefusal::UnknownExecutable)?;
+        exact_file(path, target)
+            .map(|path| path.to_string_lossy().into_owned())
+            .ok_or(BindingRefusal::ChangedExecutable)
+    }
+
     /// Duplicate IDs fail closed; a host must never let registration order select an executable.
     pub fn new(
         executables: impl IntoIterator<Item = RegisteredExecutable>,
@@ -222,6 +320,7 @@ impl ToolBindings {
                 .collect(),
             clear_env: false,
             capture_output: true,
+            merge_output: false,
             no_child_processes: false,
             control_pipe: None,
             pipe_stdin: false,
@@ -276,7 +375,7 @@ fn exact_directory(path: &Path) -> Option<PathBuf> {
 
 /// Secret values can straddle a capture page or budget boundary. Remove any retained suffix
 /// matching the beginning of a secret before publishing an incomplete output prefix.
-fn redacted_output(bytes: &[u8], values: &[String], incomplete: bool) -> Vec<u8> {
+pub(crate) fn redacted_output(bytes: &[u8], values: &[String], incomplete: bool) -> Vec<u8> {
     if values.is_empty() {
         return bytes.to_vec();
     }
@@ -338,6 +437,7 @@ fn redacted_output(bytes: &[u8], values: &[String], incomplete: bool) -> Vec<u8>
 pub struct BoundedOutput {
     bytes: Vec<u8>,
     seen: u64,
+    start: u64,
     limit: usize,
 }
 
@@ -1061,6 +1161,7 @@ impl ProcessToolService {
                 env,
                 clear_env: true,
                 capture_output: true,
+                merge_output: false,
                 no_child_processes: false,
                 control_pipe: None,
                 pipe_stdin: false,
@@ -2247,21 +2348,35 @@ impl QueryHandler for ProcessToolService {
 
 impl BoundedOutput {
     pub fn new(limit: usize) -> Self {
+        Self::from_offset(limit, 0)
+    }
+
+    pub fn from_offset(limit: usize, start: u64) -> Self {
         Self {
             bytes: Vec::new(),
             seen: 0,
+            start,
             limit,
         }
     }
 
     pub fn append(&mut self, chunk: &[u8]) {
+        let before = self.seen;
         self.seen = self.seen.saturating_add(chunk.len() as u64);
-        let keep = self.limit.saturating_sub(self.bytes.len()).min(chunk.len());
-        self.bytes.extend_from_slice(&chunk[..keep]);
+        let skip = self.start.saturating_sub(before).min(chunk.len() as u64) as usize;
+        let keep = self
+            .limit
+            .saturating_sub(self.bytes.len())
+            .min(chunk.len() - skip);
+        self.bytes.extend_from_slice(&chunk[skip..skip + keep]);
     }
 
     pub fn truncated(&self) -> bool {
-        self.seen > self.bytes.len() as u64
+        self.seen.saturating_sub(self.start) > self.bytes.len() as u64
+    }
+
+    pub fn seen(&self) -> u64 {
+        self.seen
     }
 
     pub fn page(&self, after: u64, max: usize) -> (u64, &[u8], u64) {
@@ -2407,6 +2522,12 @@ mod tests {
         assert_eq!(output.page(2, 2), (2, b"cd".as_slice(), 4));
         assert_eq!(output.page(5, 2), (5, b"".as_slice(), 5));
         assert_eq!(output.page(u64::MAX, usize::MAX), (5, b"".as_slice(), 5));
+        let mut later = BoundedOutput::from_offset(3, 4);
+        later.append(b"abc");
+        later.append(b"defghij");
+        assert_eq!(later.retained(), b"efg");
+        assert_eq!(later.seen(), 10);
+        assert!(later.truncated());
     }
 
     #[test]
