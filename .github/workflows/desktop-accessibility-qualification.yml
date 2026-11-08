@@ -1,0 +1,57 @@
+name: Native desktop accessibility qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: AT-SPI X11 and Wayland
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install native desktop fixtures
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb dbus-x11 at-spi2-core libatk-adaptor python3-gi gir1.2-gtk-3.0 weston
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: test-desktop
+      - name: Exercise AT-SPI target on X11
+        run: |
+          dbus-run-session -- xvfb-run -a env NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge \
+            cargo test -p devworks-adapters --test desktop_accessibility_qualification --locked -- --ignored --nocapture
+      - name: Exercise AT-SPI target on Wayland
+        run: |
+          dbus-run-session -- bash -euc '
+            runtime_dir=$(mktemp -d)
+            chmod 700 "$runtime_dir"
+            export XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY=wayland-1 GDK_BACKEND=wayland NO_AT_BRIDGE=0
+            weston --backend=headless-backend.so --socket=wayland-1 --idle-time=0 --log="$runtime_dir/weston.log" &
+            weston_pid=$!
+            trap '\''kill "$weston_pid" 2>/dev/null || true; rm -rf "$runtime_dir"'\'' EXIT
+            for attempt in $(seq 1 50); do test -S "$runtime_dir/wayland-1" && break; sleep 0.1; done
+            test -S "$runtime_dir/wayland-1" || { cat "$runtime_dir/weston.log"; exit 1; }
+            cargo test -p devworks-adapters --test desktop_accessibility_qualification --locked -- --ignored --nocapture
+          '
+
+  windows:
+    name: UI Automation
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: test-desktop
+      - name: Exercise UIA target on a disposable WinForms window
+        shell: pwsh
+        run: cargo test -p devworks-adapters --test desktop_accessibility_qualification --locked -- --ignored --nocapture
