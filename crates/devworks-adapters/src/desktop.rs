@@ -11,7 +11,7 @@ use image::GenericImage;
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use std::io::Cursor;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-use xcap::Monitor;
+use xcap::{Monitor, Window};
 
 #[derive(Default)]
 pub struct NativeDesktop;
@@ -68,6 +68,9 @@ impl DesktopPlatform for NativeDesktop {
         }
         let mut enigo =
             Enigo::new(&Settings::default()).map_err(|_| DesktopFault::NativeFailure)?;
+        if own_window_targeted(action, &enigo)? {
+            return Err(DesktopFault::Unsupported);
+        }
         match action {
             DesktopInput::Click { x, y, button } => {
                 let (target_x, target_y) = click_position(*x, *y)?;
@@ -134,10 +137,138 @@ fn capture_available() -> bool {
     Monitor::all().is_ok()
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn own_window_targeted(action: &DesktopInput, enigo: &Enigo) -> Result<bool, DesktopFault> {
+    let point = match action {
+        DesktopInput::Click { x, y, .. } => Some(click_position(*x, *y)?),
+        DesktopInput::Scroll { .. } => {
+            Some(enigo.location().map_err(|_| DesktopFault::NativeFailure)?)
+        }
+        _ => None,
+    };
+    for window in Window::all().map_err(|_| DesktopFault::NativeFailure)? {
+        if window.pid().map_err(|_| DesktopFault::NativeFailure)? != std::process::id() {
+            continue;
+        }
+        if let Some((x, y)) = point {
+            let (left, top, width, height) = (
+                window.x().map_err(|_| DesktopFault::NativeFailure)?,
+                window.y().map_err(|_| DesktopFault::NativeFailure)?,
+                window.width().map_err(|_| DesktopFault::NativeFailure)?,
+                window.height().map_err(|_| DesktopFault::NativeFailure)?,
+            );
+            if i64::from(x) >= i64::from(left)
+                && i64::from(x) < i64::from(left) + i64::from(width)
+                && i64::from(y) >= i64::from(top)
+                && i64::from(y) < i64::from(top) + i64::from(height)
+            {
+                return Ok(true);
+            }
+        } else if window
+            .is_focused()
+            .map_err(|_| DesktopFault::NativeFailure)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(target_os = "linux")]
 fn capture_available() -> bool {
     use x11rb::connection::Connection;
     x11rb::connect(None).is_ok_and(|(connection, _)| connection.setup().roots.len() == 1)
+}
+
+#[cfg(target_os = "linux")]
+fn own_window_targeted(action: &DesktopInput, enigo: &Enigo) -> Result<bool, DesktopFault> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+    let (connection, screen_number) =
+        x11rb::connect(None).map_err(|_| DesktopFault::NativeFailure)?;
+    let root = connection.setup().roots[screen_number].root;
+    let pid_atom = connection
+        .intern_atom(false, b"_NET_WM_PID")
+        .map_err(|_| DesktopFault::NativeFailure)?
+        .reply()
+        .map_err(|_| DesktopFault::NativeFailure)?
+        .atom;
+    let own_pid = std::process::id();
+    let pid_of = |window| -> Result<Option<u32>, DesktopFault> {
+        Ok(connection
+            .get_property(false, window, pid_atom, AtomEnum::CARDINAL, 0, 1)
+            .map_err(|_| DesktopFault::NativeFailure)?
+            .reply()
+            .map_err(|_| DesktopFault::NativeFailure)?
+            .value32()
+            .and_then(|mut values| values.next()))
+    };
+    match action {
+        DesktopInput::Click { .. } | DesktopInput::Scroll { .. } => {
+            let (x, y) = match action {
+                DesktopInput::Click { x, y, .. } => click_position(*x, *y)?,
+                _ => enigo.location().map_err(|_| DesktopFault::NativeFailure)?,
+            };
+            let mut windows = vec![(root, 0_usize)];
+            let mut visited = 0_usize;
+            while let Some((window, depth)) = windows.pop() {
+                visited += 1;
+                if visited > 2048 {
+                    return Err(DesktopFault::Unsupported);
+                }
+                if pid_of(window)? == Some(own_pid) {
+                    let geometry = connection
+                        .get_geometry(window)
+                        .map_err(|_| DesktopFault::NativeFailure)?
+                        .reply()
+                        .map_err(|_| DesktopFault::NativeFailure)?;
+                    let location = connection
+                        .translate_coordinates(window, root, 0, 0)
+                        .map_err(|_| DesktopFault::NativeFailure)?
+                        .reply()
+                        .map_err(|_| DesktopFault::NativeFailure)?;
+                    if i64::from(x) >= i64::from(location.dst_x)
+                        && i64::from(x) < i64::from(location.dst_x) + i64::from(geometry.width)
+                        && i64::from(y) >= i64::from(location.dst_y)
+                        && i64::from(y) < i64::from(location.dst_y) + i64::from(geometry.height)
+                    {
+                        return Ok(true);
+                    }
+                }
+                if depth < 3 {
+                    let tree = connection
+                        .query_tree(window)
+                        .map_err(|_| DesktopFault::NativeFailure)?
+                        .reply()
+                        .map_err(|_| DesktopFault::NativeFailure)?;
+                    windows.extend(tree.children.into_iter().map(|child| (child, depth + 1)));
+                }
+            }
+        }
+        _ => {
+            let mut window = connection
+                .get_input_focus()
+                .map_err(|_| DesktopFault::NativeFailure)?
+                .reply()
+                .map_err(|_| DesktopFault::NativeFailure)?
+                .focus;
+            for _ in 0..16 {
+                if window == root || window == 0 {
+                    break;
+                }
+                if pid_of(window)? == Some(own_pid) {
+                    return Ok(true);
+                }
+                window = connection
+                    .query_tree(window)
+                    .map_err(|_| DesktopFault::NativeFailure)?
+                    .reply()
+                    .map_err(|_| DesktopFault::NativeFailure)?
+                    .parent;
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]

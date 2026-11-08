@@ -532,15 +532,18 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         )
     });
     let desktop = config.desktop.as_ref().map(|composition| {
-        Arc::new(devworks_core::services::desktop::DesktopService::new(
-            composition.platform.clone(),
-            resources.clone(),
-            artifacts.clone(),
-            store.clone(),
-            clock.clone(),
-            ids.clone(),
-            authority.clone(),
-        ))
+        Arc::new(
+            devworks_core::services::desktop::DesktopService::new(
+                composition.platform.clone(),
+                resources.clone(),
+                artifacts.clone(),
+                store.clone(),
+                clock.clone(),
+                ids.clone(),
+                authority.clone(),
+            )
+            .with_git_source(git.clone()),
+        )
     });
     let mut use_cases = use_cases;
     if let Some(service) = &desktop {
@@ -1469,6 +1472,13 @@ impl Runtime {
     /// mint this private exact-content witness, even for a context whose kind is Human.
     pub fn record_human_decision(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
         const OPERATION: &str = "approvals.record_human_decision";
+        if self
+            .desktop
+            .as_ref()
+            .is_some_and(|desktop| desktop.automation_may_be_active())
+        {
+            return self.command(ctx, OPERATION, frame);
+        }
         let decoded = devworks_core::admission::decode(
             devworks_core::admission::Selection {
                 operation: OPERATION,
@@ -1493,6 +1503,13 @@ impl Runtime {
     /// this proof; current authority and manifest freshness remain required.
     pub fn confirm_project_purge(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
         const OPERATION: &str = "projects.purge";
+        if self
+            .desktop
+            .as_ref()
+            .is_some_and(|desktop| desktop.automation_may_be_active())
+        {
+            return self.command(ctx, OPERATION, frame);
+        }
         let decoded = devworks_core::admission::decode(
             devworks_core::admission::Selection {
                 operation: OPERATION,

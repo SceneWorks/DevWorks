@@ -111,6 +111,8 @@ pub const MAX_LABEL_CHARS: usize = 64;
 pub const LISTED: usize = 50;
 /// The canonical name of the machine desktop (input and focus), capacity one.
 pub const DESKTOP: &str = "desktop";
+/// Reserved lease purpose minted only by the reviewed desktop takeover owner.
+pub const DESKTOP_CONSENT_PURPOSE: &str = "desktop-consent:";
 /// History aggregate of lease transitions.
 pub const LEASE_AGGREGATE: &str = "resource_lease";
 /// History aggregate of reconciliation passes.
@@ -565,12 +567,51 @@ impl ResourceService {
     // -----------------------------------------------------------------------------------------
     // Commands
 
-    pub(crate) fn acquire(
+    pub(crate) fn acquire_desktop(
         &self,
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         i: &ops::AcquireInput,
     ) -> Result<DomainDecision, Failure> {
+        if !i.resource_id.0.as_str().eq_ignore_ascii_case(DESKTOP)
+            || !i
+                .purpose
+                .as_ref()
+                .is_some_and(|p| p.0.starts_with(DESKTOP_CONSENT_PURPOSE))
+        {
+            return Err(invalid("desktop_consent_lease").into());
+        }
+        self.acquire_inner(tx, ctx, i, true)
+    }
+
+    fn acquire(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        i: &ops::AcquireInput,
+    ) -> Result<DomainDecision, Failure> {
+        self.acquire_inner(tx, ctx, i, false)
+    }
+
+    fn acquire_inner(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        i: &ops::AcquireInput,
+        desktop_owner: bool,
+    ) -> Result<DomainDecision, Failure> {
+        if !desktop_owner
+            && i.purpose
+                .as_ref()
+                .is_some_and(|p| p.0.starts_with(DESKTOP_CONSENT_PURPOSE))
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "desktop_consent_lease",
+                None,
+            )
+            .into());
+        }
         // An archived (or deleted) project allocates nothing, a shared resource included.
         if let Some(p) = ctx.project_id()
             && tx
@@ -797,6 +838,17 @@ impl ResourceService {
     ) -> Result<DomainDecision, Failure> {
         let lease_ms = lease_ms(&i.lease_ms.0)?;
         let (mut l, res) = self.own_lease(tx, ctx, &i.lease_id)?;
+        if l.purpose
+            .as_deref()
+            .is_some_and(|p| p.starts_with(DESKTOP_CONSENT_PURPOSE))
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "desktop_consent_lease",
+                Some(l.id),
+            )
+            .into());
+        }
         if l.fence != i.expected_fence.get() {
             return Err(lease_lost(&l));
         }

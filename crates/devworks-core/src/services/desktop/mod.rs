@@ -9,8 +9,8 @@ use crate::ports::desktop::{DesktopAvailability, DesktopCapabilities, DesktopPla
 use crate::ports::storage::{
     ApplicationStore, ApprovalSource, ArtifactScope, ConfigScope, LeasePhase, NewEvent,
     NewOperation, NewQueueEntry, OperationRecord, ReadOptions, ReadSnapshot, ResourceRead,
-    ResourceScopeKind, StorageError, StoredResource, WriteOptions, WriteTransaction, canonical_key,
-    read_snapshot, run_write,
+    ResourceScopeKind, StorageError, StoredLease, StoredResource, WriteOptions, WriteTransaction,
+    canonical_key, read_snapshot, run_write,
 };
 use crate::ports::{
     AuthorityPort, AuthorityRequest, Clock, CommandHandler, Decided, HandlerFailure, IdKind,
@@ -19,15 +19,16 @@ use crate::ports::{
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{DesktopCapture, DesktopRecord, ItemState};
 use crate::protocol::results::{DomainDecision, OperationCompletion, OperationResult};
-use crate::protocol::support::{BoundedText, Check, Limit};
+use crate::protocol::support::{BoundedText, Check, Limit, RevisionDimension};
 use crate::protocol::{
-    ActorId, AssignmentId, CorrelationId, DomainErrorCode, DomainFault, EventId, Id, OperationId,
-    OperationState, ProjectId, Protocol, ResourceId, RetryAdvice, RootId,
+    ActorId, AssignmentId, CommandReply, CorrelationId, DomainErrorCode, DomainFault, EventId, Id,
+    OperationId, OperationState, ProjectId, Protocol, ResourceId, RetryAdvice, RootId,
 };
 use crate::registry::Mode;
 use crate::services::approvals::OwnerPreview;
 use crate::services::artifacts::ArtifactService;
 use crate::services::artifacts::evidence::{Evidence, EvidenceFailure};
+use crate::services::git::context::SourceBinding;
 use crate::services::sessions::{Failure, Refusal, counter, decided, query_fault, rev};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -40,8 +41,17 @@ pub const OPERATIONS: [&str; 5] = [
     "desktop.input",
     "desktop.release_control",
 ];
-const CONSENT_PURPOSE: &str = "desktop-consent:";
+const CONSENT_PURPOSE: &str = crate::services::resources::DESKTOP_CONSENT_PURPOSE;
 pub const INPUT_CONSUMER: &str = "desktop_input_effects";
+
+#[derive(Clone)]
+enum StagedInput {
+    Source {
+        tested_repository: Option<Value>,
+        binding: Option<SourceBinding>,
+    },
+    Refused(Refusal),
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct InputJob {
@@ -55,11 +65,21 @@ struct InputJob {
     policy_revision: i64,
     authority_sources: Vec<Id>,
     fingerprint: String,
+    #[serde(default)]
+    tested_repository: Option<Value>,
+    #[serde(default)]
+    source_binding: Option<SourceBinding>,
     input: ops::InputInput,
 }
 
 impl InputJob {
-    fn new(ctx: &InvocationContext, command: &AdmittedCommand, input: &ops::InputInput) -> Self {
+    fn new(
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+        input: &ops::InputInput,
+        tested_repository: Option<Value>,
+        source_binding: Option<SourceBinding>,
+    ) -> Self {
         Self {
             actor: ctx.principal().clone(),
             kind: format!("{:?}", ctx.principal_kind()),
@@ -71,19 +91,29 @@ impl InputJob {
             policy_revision: ctx.policy_revision().get(),
             authority_sources: ctx.authority_sources().to_vec(),
             fingerprint: command.fingerprint().as_str().into(),
+            tested_repository,
+            source_binding,
             input: input.clone(),
         }
     }
 
-    fn context(&self, store: &dyn ApplicationStore, operation: &OperationId) -> InvocationContext {
+    fn context(
+        &self,
+        store: &dyn ApplicationStore,
+        operation: &OperationId,
+    ) -> Option<InvocationContext> {
         let kind = match self.kind.as_str() {
             "Human" => PrincipalKind::Human,
             "Agent" => PrincipalKind::Agent,
             "Package" => PrincipalKind::Package,
             "McpClient" => PrincipalKind::McpClient,
             "Schedule" => PrincipalKind::Schedule,
-            _ => PrincipalKind::Host,
+            "Host" => PrincipalKind::Host,
+            _ => return None,
         };
+        if store.info().restore_epoch != self.restore_epoch {
+            return None;
+        }
         let mut ctx = InvocationContext::new(
             self.actor.clone(),
             kind,
@@ -104,7 +134,11 @@ impl InputJob {
         for source in &self.authority_sources {
             ctx = ctx.with_authority_source(source.clone());
         }
-        ctx
+        if let Some(binding) = &self.source_binding {
+            let bound = binding.context(store).ok()?.worktree()?.clone();
+            ctx = ctx.bind_worktree(bound);
+        }
+        Some(ctx)
     }
 }
 
@@ -122,6 +156,7 @@ pub struct DesktopService {
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdSource>,
     authority: Arc<dyn AuthorityPort>,
+    git_source: Option<Arc<crate::services::git::GitService>>,
 }
 
 impl DesktopService {
@@ -142,11 +177,53 @@ impl DesktopService {
             clock,
             ids,
             authority,
+            git_source: None,
         }
+    }
+
+    pub fn with_git_source(
+        mut self,
+        source: Option<Arc<crate::services::git::GitService>>,
+    ) -> Self {
+        self.git_source = source;
+        self
+    }
+
+    fn tested_source(
+        &self,
+        ctx: &InvocationContext,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Option<Value>, Failure> {
+        if ctx.worktree().is_none() {
+            return Ok(None);
+        }
+        self.git_source
+            .as_ref()
+            .ok_or_else(|| {
+                Refusal::new(DomainErrorCode::UnsupportedCapability, "git_source", None)
+            })?
+            .observe_source(ctx, stop)
     }
 
     fn correlation(&self) -> CorrelationId {
         CorrelationId(self.ids.next_id(crate::ports::IdKind::Correlation))
+    }
+
+    /// Native automation can generate ordinary UI events. Trusted confirmation ingress stays
+    /// closed while any desktop holder may inject them, regardless of that holder's project.
+    pub fn automation_may_be_active(&self) -> bool {
+        read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+            let key = canonical_key(
+                ResourceScopeKind::Machine,
+                None,
+                crate::services::resources::DESKTOP,
+            );
+            let Some(resource) = snapshot.resources().resource_by_key(&key)? else {
+                return Ok(false);
+            };
+            Ok(!snapshot.resources().holders(&resource.id, 0, 1)?.is_empty())
+        })
+        .unwrap_or(true)
     }
 
     /// Scoped typed completion for an accepted input effect. Success attests OS injection only;
@@ -265,26 +342,7 @@ impl DesktopService {
             .and_then(|lease| lease.purpose.as_deref())
             .and_then(|purpose| purpose.strip_prefix(CONSENT_PURPOSE))
             .and_then(|id| Id::new(id).ok());
-        let revision = if resource.fence_seq == 0 {
-            1
-        } else {
-            resource
-                .fence_seq
-                .checked_mul(2)
-                .and_then(|n| {
-                    n.checked_add(
-                        if holder
-                            .as_ref()
-                            .is_some_and(|lease| lease.phase == LeasePhase::Held)
-                        {
-                            2
-                        } else {
-                            3
-                        },
-                    )
-                })
-                .ok_or_else(|| StorageError::InvalidRecord("desktop revision overflow".into()))?
-        };
+        let revision = desktop_revision(&resource, holder.as_ref())?;
         let capabilities = self.platform.capabilities();
         let state = if !matches!(capabilities.input, DesktopAvailability::Available)
             && !matches!(capabilities.capture, DesktopAvailability::Available)
@@ -481,7 +539,7 @@ impl DesktopService {
             capacity: None,
             labels: None,
         };
-        let allocated = self.resources.acquire(tx, ctx, &acquire)?;
+        let allocated = self.resources.acquire_desktop(tx, ctx, &acquire)?;
         let (applied, lease) = match allocated {
             DomainDecision::Applied {
                 result: OperationResult::ResourcesAcquire { value },
@@ -595,7 +653,38 @@ impl DesktopService {
         }
         Self::validate_input(tx, ctx, input)?;
         let operation = OperationId(tx.new_id(IdKind::Operation));
-        let job = InputJob::new(ctx, command, input);
+        let (tested_repository, source_binding) = match command.prepared::<StagedInput>() {
+            Some(StagedInput::Source {
+                tested_repository,
+                binding,
+            }) => {
+                if ctx.worktree().is_some()
+                    && !binding
+                        .as_ref()
+                        .map(|b| b.validate_in(tx))
+                        .transpose()?
+                        .unwrap_or(false)
+                {
+                    return Err(
+                        Refusal::new(DomainErrorCode::SourceChanged, "git_source", None).into(),
+                    );
+                }
+                (tested_repository.clone(), binding.clone())
+            }
+            _ if ctx.worktree().is_some() => {
+                return Err(
+                    Refusal::new(DomainErrorCode::SourceChanged, "git_source", None).into(),
+                );
+            }
+            _ => (None, None),
+        };
+        let job = InputJob::new(
+            ctx,
+            command,
+            input,
+            tested_repository.clone(),
+            source_binding,
+        );
         let payload =
             serde_json::to_value(&job).map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
         tx.operations().record_intent(NewOperation {
@@ -613,7 +702,7 @@ impl DesktopService {
             root_id: ctx.root_id().cloned(), operation_id: Some(operation.clone()),
             aggregate_kind: "desktop_input".into(), aggregate_id: operation.0.as_str().into(),
             aggregate_revision: 1, kind: "DesktopInputRequested".into(),
-            payload: json!({"desktopId":resource.id.as_str(),"leaseId":input.lease_id.as_str(),"consentId":input.consent_id.as_str()}),
+            payload: json!({"desktopId":resource.id.as_str(),"leaseId":input.lease_id.as_str(),"consentId":input.consent_id.as_str(),"testedRepository":tested_repository}),
         })?;
         let now = tx.now_ms();
         let entry = tx.new_id(IdKind::QueueEntry);
@@ -646,6 +735,7 @@ impl DesktopService {
             )
         })?;
         if lease.owner != *ctx.principal()
+            || lease.resource_id != input.desktop_id
             || lease.session_id.as_ref() != ctx.session_id()
             || lease.project_id.as_ref() != ctx.project_id()
             || lease.phase != LeasePhase::Held
@@ -671,6 +761,44 @@ impl DesktopService {
         let audit = tx
             .decisions()
             .human_decision(ApprovalSource::Generic, &input.consent_id)?;
+        let resume = tx.decisions().approval_resume(&input.consent_id)?;
+        let issued = resume.as_ref().and_then(|resume| {
+            if resume.state != "Admitted"
+                || resume.operation != "desktop.request_control"
+                || resume.principal != *ctx.principal()
+                || resume.request_digest != approval.content_digest
+            {
+                return None;
+            }
+            let request =
+                serde_json::from_value::<ops::RequestControlInput>(resume.input.clone()).ok()?;
+            let approved_ms = request.lease_ms.0.parse::<i64>().ok()?;
+            let granted = lease.granted_at_ms?;
+            let approved_until = granted.checked_add(approved_ms)?;
+            if request.desktop_id != input.desktop_id
+                || lease.lease_ms != approved_ms
+                || lease.requested_at_ms < approval.decided_at_ms?
+                || tx.now_ms() >= approved_until
+            {
+                return None;
+            }
+            let CommandReply::Recorded { receipt, .. } =
+                serde_json::from_value::<CommandReply<DomainDecision>>(resume.result.clone()?)
+                    .ok()?
+            else {
+                return None;
+            };
+            let record = match receipt.decision {
+                DomainDecision::Applied {
+                    result: OperationResult::DesktopRequestControl { value },
+                }
+                | DomainDecision::NoChange {
+                    result: OperationResult::DesktopRequestControl { value },
+                } => value,
+                _ => return None,
+            };
+            record.lease_id
+        });
         if approval.state != "Approved"
             || approval.operation_kind != "desktop.request_control"
             || approval.target_id != input.desktop_id
@@ -684,6 +812,7 @@ impl DesktopService {
             || audit
                 .as_ref()
                 .is_none_or(|decision| decision.decision != "Approved")
+            || issued.as_ref() != Some(&input.lease_id)
             || !approval.decided_by.as_ref().is_some_and(|id| {
                 tx.actors().actor_kind(id).ok().flatten() == Some(PrincipalKind::Human)
             })
@@ -713,7 +842,15 @@ impl DesktopService {
         let Ok(job) = serde_json::from_value::<InputJob>(operation.payload.clone()) else {
             return InputEffectOutcome::Failed("invalid desktop intent".into());
         };
-        let ctx = job.context(&*self.store, &operation.id);
+        let Some(ctx) = job.context(&*self.store, &operation.id) else {
+            return InputEffectOutcome::Failed(
+                "desktop intent principal, source binding or restore epoch invalid".into(),
+            );
+        };
+        let tested_repository = match self.tested_source(&ctx, &|| false) {
+            Ok(source) => source,
+            Err(_) => return InputEffectOutcome::Failed("desktop tested source changed".into()),
+        };
         let Some(descriptor) = crate::registry::find("desktop.input") else {
             return InputEffectOutcome::Failed("desktop descriptor unavailable".into());
         };
@@ -773,7 +910,7 @@ impl DesktopService {
                 });
                 match record {
                     Ok(record) => InputEffectOutcome::Completed(
-                        json!({"result":OperationResult::DesktopInput { value: record },"actionApplied":true}),
+                        json!({"result":OperationResult::DesktopInput { value: record },"actionApplied":true,"testedRepository":tested_repository}),
                     ),
                     Err(_) => InputEffectOutcome::Unknown(
                         "desktop input applied but completion record unavailable".into(),
@@ -810,6 +947,28 @@ fn permission_label(capabilities: &DesktopCapabilities) -> String {
     )
 }
 
+fn desktop_revision(
+    resource: &StoredResource,
+    holder: Option<&StoredLease>,
+) -> Result<i64, StorageError> {
+    if resource.fence_seq == 0 {
+        return Ok(1);
+    }
+    resource
+        .fence_seq
+        .checked_mul(2)
+        .and_then(|n| {
+            n.checked_add(
+                if holder.is_some_and(|lease| lease.phase == LeasePhase::Held) {
+                    2
+                } else {
+                    3
+                },
+            )
+        })
+        .ok_or_else(|| StorageError::InvalidRecord("desktop revision overflow".into()))
+}
+
 impl QueryHandler for DesktopService {
     fn prepare(
         &self,
@@ -820,25 +979,28 @@ impl QueryHandler for DesktopService {
         let OperationInput::Desktop(ops::Input::Capture(input)) = query.input() else {
             return Ok(None);
         };
-        let target = input.desktop_id.clone();
-        let found = env
-            .read(move |snapshot| {
-                let key = canonical_key(
-                    ResourceScopeKind::Machine,
-                    None,
-                    crate::services::resources::DESKTOP,
-                );
-                let resource = snapshot.resources().resource_by_key(&key)?;
-                Ok(resource.is_some_and(|r| r.id == target))
-            })
+        let current = env
+            .read(|snapshot| self.record(snapshot.resources()).map(|(_, record)| record))
             .map_err(|e| query_fault(e.into(), "desktop", self.correlation()))?;
-        if !found {
+        if current.desktop_id != input.desktop_id {
             return Err(self.fault(
                 DomainErrorCode::NotFound,
                 "desktop",
                 Some(input.desktop_id.clone()),
             ));
         }
+        if current.revision != input.expected_revision {
+            return Err(self.fault(
+                DomainErrorCode::RevisionConflict,
+                "desktop",
+                Some(input.desktop_id.clone()),
+            ));
+        }
+        let tested_repository = self
+            .tested_source(ctx, &|| env.stopped(self.clock.now_ms().get()))
+            .map_err(|failure| query_fault(failure, "git_source", self.correlation()))?;
+        let source_binding = SourceBinding::prepare(ctx, &*self.store)
+            .map_err(|error| query_fault(error.into(), "git_source", self.correlation()))?;
         let png = self.platform.capture_png().map_err(|fault| match fault {
             crate::ports::desktop::DesktopFault::PermissionRequired => {
                 self.fault(DomainErrorCode::PermissionDenied, "screen_capture", None)
@@ -865,11 +1027,52 @@ impl QueryHandler for DesktopService {
             title: "Desktop capture".into(),
             media_type: "image/png".into(),
             tags: vec!["desktop".into(), "capture".into()],
-            source: serde_json::json!({"kind":"DesktopCapture","desktopId":input.desktop_id.as_str()}),
+            source: serde_json::json!({"kind":"DesktopCapture","desktopId":input.desktop_id.as_str(),"testedRepository":tested_repository}),
         };
+        let target = input.desktop_id.clone();
+        let expected = input.expected_revision.clone();
+        let binding = source_binding;
         let (reference, ()) = self
             .artifacts
-            .publish_evidence(&*self.store, evidence, &png, |_tx, _ref| Ok(()))
+            .publish_evidence(&*self.store, evidence, &png, move |tx, _ref| {
+                if binding
+                    .as_ref()
+                    .map(|binding| binding.validate_in(tx))
+                    .transpose()?
+                    .is_some_and(|valid| !valid)
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
+                let key = canonical_key(
+                    ResourceScopeKind::Machine,
+                    None,
+                    crate::services::resources::DESKTOP,
+                );
+                let resource = tx
+                    .resources()
+                    .resource_by_key(&key)?
+                    .filter(|resource| resource.id == target)
+                    .ok_or_else(|| StorageError::NotFound {
+                        kind: "desktop",
+                        id: target.as_str().into(),
+                    })?;
+                let holder = tx
+                    .resources()
+                    .holders(&resource.id, 0, 1)?
+                    .into_iter()
+                    .next();
+                let current = rev(desktop_revision(&resource, holder.as_ref())?);
+                if current != expected {
+                    return Err(StorageError::conflict(
+                        RevisionDimension::Control,
+                        "desktop",
+                        target.clone(),
+                        expected.clone(),
+                        current,
+                    ));
+                }
+                Ok(())
+            })
             .map_err(|e| match e {
                 EvidenceFailure::Refused(refusal) => refusal.fault(self.correlation()),
                 EvidenceFailure::Storage(error) => {
@@ -931,12 +1134,54 @@ impl QueryHandler for DesktopService {
 }
 
 impl CommandHandler for DesktopService {
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+        env: &Preparation<'_>,
+    ) -> Result<Option<Prepared>, StorageError> {
+        if !matches!(
+            command.input(),
+            OperationInput::Desktop(ops::Input::Input(_))
+        ) {
+            return Ok(None);
+        }
+        let tested_repository =
+            match self.tested_source(ctx, &|| env.stopped(self.clock.now_ms().get())) {
+                Ok(source) => source,
+                Err(failure) => {
+                    return Ok(Some(Prepared::new(StagedInput::Refused(match failure {
+                        Failure::Refused(refusal) => refusal,
+                        _ => Refusal::new(DomainErrorCode::SourceChanged, "git_source", None),
+                    }))));
+                }
+            };
+        let binding = match SourceBinding::prepare(ctx, &*self.store) {
+            Ok(binding) => binding,
+            Err(StorageError::ScopeDenied) => {
+                return Ok(Some(Prepared::new(StagedInput::Refused(Refusal::new(
+                    DomainErrorCode::SourceChanged,
+                    "git_source",
+                    None,
+                )))));
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(Some(Prepared::new(StagedInput::Source {
+            tested_repository,
+            binding,
+        })))
+    }
+
     fn decide(
         &self,
         ctx: &InvocationContext,
         command: &AdmittedCommand,
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
+        if let Some(StagedInput::Refused(refusal)) = command.prepared::<StagedInput>() {
+            return decided(tx, Err(refusal.clone().into()));
+        }
         if let OperationInput::Desktop(ops::Input::Input(input)) = command.input() {
             return match self.queue_input(ctx, command, input, tx) {
                 Ok(DomainDecision::Accepted { operation_id }) => Ok(Decided {
