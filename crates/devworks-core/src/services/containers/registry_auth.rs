@@ -8,6 +8,11 @@ pub trait RegistryAuthSession: Send {
 }
 
 pub trait RegistryAuth: Send + Sync {
+    /// Prepare an isolated client configuration with no registry credentials.
+    fn prepare_anonymous(
+        &self,
+        backend: Backend,
+    ) -> Result<Box<dyn RegistryAuthSession>, &'static str>;
     /// Prepare a private credential context. Dropping the returned session deletes it.
     fn prepare(
         &self,

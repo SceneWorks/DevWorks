@@ -214,6 +214,67 @@ fn docker_config_for_pull(
 }
 
 impl RegistryAuth for NativeRegistryAuth {
+    fn prepare_anonymous(
+        &self,
+        backend: Backend,
+    ) -> Result<Box<dyn RegistryAuthSession>, &'static str> {
+        if backend == Backend::Apple {
+            return Err("Apple registry auth is not qualified");
+        }
+        let directory = Builder::new()
+            .prefix("dw-auth-")
+            .tempdir_in(&self.root)
+            .map_err(|_| "private registry auth directory unavailable")?;
+        let file_name = if backend == Backend::Docker {
+            "config.json"
+        } else {
+            "auth.json"
+        };
+        let file = directory.path().join(file_name);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut output = options
+            .open(&file)
+            .map_err(|_| "registry auth file unavailable")?;
+        let config = if backend == Backend::Docker {
+            docker_config_for_pull(docker_config_root(), directory.path())?
+        } else {
+            serde_json::Map::new()
+        };
+        serde_json::to_writer(&mut output, &Value::Object(config))
+            .map_err(|_| "registry auth encoding unavailable")?;
+        output
+            .flush()
+            .map_err(|_| "registry auth flush unavailable")?;
+        let environment = if backend == Backend::Docker {
+            vec![(
+                "DOCKER_CONFIG".into(),
+                directory.path().to_string_lossy().into_owned(),
+            )]
+        } else {
+            vec![
+                (
+                    "REGISTRY_AUTH_FILE".into(),
+                    file.to_string_lossy().into_owned(),
+                ),
+                (
+                    "HOME".into(),
+                    directory.path().to_string_lossy().into_owned(),
+                ),
+            ]
+        };
+        Ok(Box::new(NativeAuthSession {
+            _directory: directory,
+            environment,
+            redactions: Vec::new(),
+        }))
+    }
+
     fn prepare(
         &self,
         backend: Backend,
@@ -276,10 +337,16 @@ impl RegistryAuth for NativeRegistryAuth {
                 directory.path().to_string_lossy().into_owned(),
             )]
         } else {
-            vec![(
-                "REGISTRY_AUTH_FILE".into(),
-                file.to_string_lossy().into_owned(),
-            )]
+            vec![
+                (
+                    "REGISTRY_AUTH_FILE".into(),
+                    file.to_string_lossy().into_owned(),
+                ),
+                (
+                    "HOME".into(),
+                    directory.path().to_string_lossy().into_owned(),
+                ),
+            ]
         };
         Ok(Box::new(NativeAuthSession {
             _directory: directory,
@@ -292,6 +359,35 @@ impl RegistryAuth for NativeRegistryAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn anonymous_registry_session_has_no_saved_credentials() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let adapter = NativeRegistryAuth::new(sandbox.path().join("private")).unwrap();
+        for backend in [Backend::Docker, Backend::Podman] {
+            let session = adapter.prepare_anonymous(backend).unwrap();
+            let environment = session.environment();
+            let (name, value) = &environment[0];
+            let file = if backend == Backend::Docker {
+                assert_eq!(name, "DOCKER_CONFIG");
+                PathBuf::from(value).join("config.json")
+            } else {
+                assert_eq!(name, "REGISTRY_AUTH_FILE");
+                assert_eq!(environment[1].0, "HOME");
+                assert_eq!(
+                    PathBuf::from(&environment[1].1),
+                    PathBuf::from(value).parent().unwrap()
+                );
+                PathBuf::from(value)
+            };
+            let config: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+            assert!(config.get("auths").is_none());
+            assert!(config.get("credsStore").is_none());
+            assert!(config.get("credHelpers").is_none());
+            drop(session);
+            assert!(!file.exists());
+        }
+    }
 
     #[test]
     fn private_env_file_keeps_daemon_settings_out_of_cli_environment() {

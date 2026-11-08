@@ -180,6 +180,17 @@ impl ContainerService {
     /// owners, pre-existing containers, images and volumes are never selected or deleted.
     /// An unverified or failed stop remains Uncertain for boot recovery and project purge.
     pub fn shutdown_agent_work(&self, bound: Duration) -> ShutdownReport {
+        self.stop_agent_work(bound, false)
+    }
+
+    /// Reconcile live agent workloads after a principal is revoked or its container
+    /// selection, role, or project scope is narrowed. Repeated passes retry uncertain
+    /// stops; the ownership ledger remains the durable cleanup queue.
+    pub fn reconcile_revoked_agent_work(&self, bound: Duration) -> ShutdownReport {
+        self.stop_agent_work(bound, true)
+    }
+
+    fn stop_agent_work(&self, bound: Duration, revoked_only: bool) -> ShutdownReport {
         let deadline = Instant::now() + bound;
         let mut report = ShutdownReport::default();
         let mut after: Option<Id> = None;
@@ -215,6 +226,31 @@ impl ContainerService {
                         return report;
                     }
                 };
+                if revoked_only {
+                    let revoked =
+                        read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+                            let binding = snapshot.authority().principal(&row.actor)?;
+                            Ok(binding.is_none_or(|binding| {
+                                !binding.active
+                                    || binding
+                                        .project_id
+                                        .as_ref()
+                                        .is_some_and(|project| project != &row.project_id)
+                                    || binding.role.is_some_and(|role| role.read_only())
+                                    || binding.tool_families.as_ref().is_some_and(|families| {
+                                        !families.iter().any(|family| family == "containers")
+                                    })
+                            }))
+                        });
+                    match revoked {
+                        Ok(false) => continue,
+                        Ok(true) => {}
+                        Err(error) => {
+                            report.read_error = Some(error.to_string());
+                            return report;
+                        }
+                    }
+                }
                 if !matches!(
                     row.phase,
                     ContainerPhase::Creating
@@ -270,6 +306,30 @@ impl ContainerService {
                         continue;
                     }
                 }
+                let row = if revoked_only && row.phase != ContainerPhase::Uncertain {
+                    if let Err(error) = self.mark_shutdown_phase(
+                        &row,
+                        ContainerPhase::Uncertain,
+                        Some("owner container authority revoked; stop pending"),
+                    ) {
+                        report.read_error = Some(format!(
+                            "revoked container cleanup marker unavailable: {error}"
+                        ));
+                        continue;
+                    }
+                    match read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+                        snapshot.resources().container(&row.id)
+                    }) {
+                        Ok(Some(current)) => current,
+                        Ok(None) => continue,
+                        Err(error) => {
+                            report.read_error = Some(error.to_string());
+                            return report;
+                        }
+                    }
+                } else {
+                    row
+                };
                 report.attempted.push(row.id.clone());
                 match self.stop_agent_row(&row, deadline) {
                     Ok(()) => report.verified_stopped.push(row.id),

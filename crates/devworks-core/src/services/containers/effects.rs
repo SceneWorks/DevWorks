@@ -563,13 +563,21 @@ impl ContainerService {
             Ok(args) => args,
             Err(_) => return EffectOutcome::Failed("container build arguments invalid".into()),
         };
+        let Some(registry_auth) = &self.registry_auth else {
+            return EffectOutcome::Failed("container registry isolation unavailable".into());
+        };
+        let anonymous = match registry_auth.prepare_anonymous(backend) {
+            Ok(session) => session,
+            Err(reason) => return EffectOutcome::Failed(reason.into()),
+        };
+        let environment = anonymous.environment();
         let result = match self.run_plan(
             context,
             &operation.id,
             ExecutionPlan {
                 backend,
                 args,
-                environment: &[],
+                environment: &environment,
                 redactions: &[],
                 stdin: Some(definition),
                 timeout: Duration::from_secs(600),
@@ -602,6 +610,9 @@ impl ContainerService {
             Ok(backend) => backend,
             Err(outcome) => return outcome,
         };
+        let Some(registry_auth) = &self.registry_auth else {
+            return EffectOutcome::Failed("container registry isolation unavailable".into());
+        };
         let auth = if let Some(reference) = &input.credential_ref {
             let Some(secrets) = &self.secrets else {
                 return EffectOutcome::Failed(
@@ -621,24 +632,18 @@ impl ContainerService {
                     );
                 }
             };
-            let Some(auth) = &self.registry_auth else {
-                return EffectOutcome::Failed(
-                    "container registry authentication unavailable".into(),
-                );
-            };
-            match auth.prepare(backend, &input.image.0, &credential) {
-                Ok(session) => Some(session),
+            match registry_auth.prepare(backend, &input.image.0, &credential) {
+                Ok(session) => session,
                 Err(reason) => return EffectOutcome::Failed(reason.into()),
             }
         } else {
-            None
+            match registry_auth.prepare_anonymous(backend) {
+                Ok(session) => session,
+                Err(reason) => return EffectOutcome::Failed(reason.into()),
+            }
         };
-        let environment = auth
-            .as_ref()
-            .map_or_else(Vec::new, |session| session.environment());
-        let redactions = auth
-            .as_ref()
-            .map_or_else(Vec::new, |session| session.redactions());
+        let environment = auth.environment();
+        let redactions = auth.redactions();
         let args = match backend.pull(&input.image.0) {
             Ok(args) => args,
             Err(_) => return EffectOutcome::Failed("container image reference invalid".into()),

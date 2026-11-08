@@ -1364,7 +1364,7 @@ fn credentialed_container_pull_uses_private_one_call_auth_file() {
     let executable = fx.h.root.join("fake-docker");
     std::fs::write(
         &executable,
-        "#!/bin/sh\ncase \"$1 $2\" in\n  'pull registry.example.test/team/image:tag')\n    [ -f \"$DOCKER_CONFIG/config.json\" ] || exit 4\n    grep -Fq 'YWdlbnQ6c2VjcmV0LXRva2Vu' \"$DOCKER_CONFIG/config.json\" || exit 5\n    printf ok > \"$(dirname \"$0\")/pull-marker\";;\n  'image tag') exit 0;;\n  'image inspect') printf 'sha256:%064d\\n' 0;;\n  *) exit 3;;\nesac\n",
+        "#!/bin/sh\ncase \"$1 $2\" in\n  'pull registry.example.test/team/image:tag')\n    [ -f \"$DOCKER_CONFIG/config.json\" ] || exit 4\n    grep -Fq 'YWdlbnQ6c2VjcmV0LXRva2Vu' \"$DOCKER_CONFIG/config.json\" || exit 5\n    printf ok > \"$(dirname \"$0\")/pull-marker\";;\n  'pull registry.example.test/team/public:tag')\n    [ -f \"$DOCKER_CONFIG/config.json\" ] || exit 6\n    ! grep -Fq 'auths' \"$DOCKER_CONFIG/config.json\" || exit 7\n    printf ok > \"$(dirname \"$0\")/anonymous-pull-marker\";;\n  'image tag') exit 0;;\n  'image inspect') printf 'sha256:%064d\\n' 0;;\n  *) exit 3;;\nesac\n",
     )
     .unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -1434,7 +1434,27 @@ fn credentialed_container_pull_uses_private_one_call_auth_file() {
         ContainerEffectOutcome::Completed(_)
     ));
     assert!(fx.h.root.join("pull-marker").exists());
-    assert_eq!(std::fs::read_dir(auth_root).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(&auth_root).unwrap().count(), 0);
+    let anonymous = fx.command_keyed(
+        &context,
+        "containers.pull",
+        "anonymous-pull",
+        json!({"engineId":"docker","image":"registry.example.test/team/public:tag"}),
+        Some(1),
+    );
+    let anonymous_id = match recorded(anonymous).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted anonymous pull: {other:?}"),
+    };
+    let anonymous_op = fx
+        .read(|snapshot| snapshot.operations().operation(&anonymous_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&anonymous_op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    assert!(fx.h.root.join("anonymous-pull-marker").exists());
+    assert_eq!(std::fs::read_dir(&auth_root).unwrap().count(), 0);
     set_runtime(&fx, ConfigScope::Project(project("project-a")), Value::Null);
     assert_eq!(
         fx.read(
@@ -1559,6 +1579,9 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         )
         .with_artifacts(artifacts.clone())
         .with_resources(fx.svc.clone())
+        .with_registry_auth(Arc::new(
+            NativeRegistryAuth::new(fx.h.root.join("container-registry-auth")).unwrap(),
+        ))
         .with_workload_environment(Arc::new(
             NativeRegistryAuth::new(fx.h.root.join("container-environment")).unwrap(),
         )),
@@ -2137,6 +2160,47 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
     let archived_report = service.shutdown_agent_work(Duration::from_secs(20));
     assert_eq!(archived_report.verified_stopped, vec![row.id.clone()]);
     assert!(archived_report.uncertain.is_empty());
+    fx.h.sql("UPDATE projects SET lifecycle='Active', revision=revision+1 WHERE id='project-a'");
+    let archived_stopped = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    let restart = fx.command_keyed(
+        &human,
+        "containers.start",
+        "native-effect-revocation-restart",
+        json!({"containerId":row.id.as_str(),"expectedRevision":archived_stopped.revision.to_string()}),
+        Some(1),
+    );
+    let restart_id = match recorded(restart).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted revocation restart: {other:?}"),
+    };
+    let restart_op = fx
+        .read(|snapshot| snapshot.operations().operation(&restart_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&restart_op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    let user = fx.ctx("user-a", PrincipalKind::Human, None);
+    fx.write(move |tx| {
+        let revision = tx
+            .authority()
+            .principal(&actor("agent-a"))?
+            .unwrap()
+            .revision;
+        devworks_core::authority::service::revoke_principal(tx, &user, &actor("agent-a"), revision)
+            .map_err(|_| StorageError::ScopeDenied)
+    });
+    let revoked_report = service.reconcile_revoked_agent_work(Duration::from_secs(20));
+    assert_eq!(revoked_report.verified_stopped, vec![row.id.clone()]);
+    assert!(revoked_report.uncertain.is_empty());
+    assert_eq!(
+        fx.read(|snapshot| snapshot.resources().container(&row.id))
+            .unwrap()
+            .phase,
+        ContainerPhase::Stopped
+    );
 }
 
 #[test]

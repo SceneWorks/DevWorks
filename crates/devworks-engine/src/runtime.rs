@@ -1257,6 +1257,20 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             }
         }));
     }
+    if let Some(service) = &containers {
+        let service = service.clone();
+        let stopping = collector.clone();
+        tasks.push(tokio::spawn(async move {
+            while !stopping.stopping.load(Ordering::Acquire) {
+                let current = service.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    current.reconcile_revoked_agent_work(Duration::from_secs(30))
+                })
+                .await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }));
+    }
     if let Some(worker) = &embedding_probes {
         let worker = worker.clone();
         tasks.push(tokio::spawn(async move {
