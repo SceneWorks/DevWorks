@@ -1243,6 +1243,7 @@ dependencies = [
  "url",
  "webpki-roots 1.0.11",
  "windows-sys 0.61.2",
+ "x11rb",
  "xcap",
  "zbus",
 ]

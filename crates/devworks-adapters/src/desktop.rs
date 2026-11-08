@@ -6,8 +6,11 @@ use devworks_core::ports::desktop::{
 };
 use devworks_core::protocol::records::{DesktopInput, KeyModifier, MouseButton};
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
-use image::{DynamicImage, GenericImage, ImageFormat, RgbaImage};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use image::GenericImage;
+use image::{DynamicImage, ImageFormat, RgbaImage};
 use std::io::Cursor;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use xcap::Monitor;
 
 #[derive(Default)]
@@ -25,7 +28,7 @@ impl DesktopPlatform for NativeDesktop {
         }
         let capture = if !screen_permission() {
             DesktopAvailability::PermissionRequired("screen-recording")
-        } else if Monitor::all().is_err() {
+        } else if !capture_available() {
             DesktopAvailability::Unsupported("screen-capture-unavailable")
         } else {
             DesktopAvailability::Available
@@ -52,67 +55,7 @@ impl DesktopPlatform for NativeDesktop {
             }
             DesktopAvailability::Unsupported(_) => return Err(DesktopFault::Unsupported),
         }
-        let monitors = Monitor::all().map_err(|_| DesktopFault::NativeFailure)?;
-        if monitors.is_empty() || monitors.len() > 16 {
-            return Err(DesktopFault::Unsupported);
-        }
-        let mut frames = Vec::with_capacity(monitors.len());
-        let mut pixels = 0_u64;
-        let mut captured_pixels = 0_u64;
-        for monitor in monitors {
-            let dimensions = u64::from(monitor.width().map_err(|_| DesktopFault::NativeFailure)?)
-                * u64::from(monitor.height().map_err(|_| DesktopFault::NativeFailure)?);
-            pixels = pixels
-                .checked_add(dimensions)
-                .ok_or(DesktopFault::NativeFailure)?;
-            if pixels > 100_000_000 {
-                return Err(DesktopFault::NativeFailure);
-            }
-            let x = monitor.x().map_err(|_| DesktopFault::NativeFailure)?;
-            let y = monitor.y().map_err(|_| DesktopFault::NativeFailure)?;
-            let frame = monitor
-                .capture_image()
-                .map_err(|_| DesktopFault::NativeFailure)?;
-            captured_pixels = captured_pixels
-                .checked_add(u64::from(frame.width()) * u64::from(frame.height()))
-                .ok_or(DesktopFault::NativeFailure)?;
-            if captured_pixels > 100_000_000 {
-                return Err(DesktopFault::NativeFailure);
-            }
-            frames.push((x, y, frame));
-        }
-        let left = frames.iter().map(|(x, _, _)| i64::from(*x)).min().unwrap();
-        let top = frames.iter().map(|(_, y, _)| i64::from(*y)).min().unwrap();
-        let right = frames
-            .iter()
-            .map(|(x, _, image)| i64::from(*x) + i64::from(image.width()))
-            .max()
-            .unwrap();
-        let bottom = frames
-            .iter()
-            .map(|(_, y, image)| i64::from(*y) + i64::from(image.height()))
-            .max()
-            .unwrap();
-        let width = u32::try_from(right - left).map_err(|_| DesktopFault::NativeFailure)?;
-        let height = u32::try_from(bottom - top).map_err(|_| DesktopFault::NativeFailure)?;
-        if width == 0 || height == 0 || u64::from(width) * u64::from(height) > 100_000_000 {
-            return Err(DesktopFault::NativeFailure);
-        }
-        let mut canvas = RgbaImage::new(width, height);
-        for (x, y, frame) in frames {
-            canvas
-                .copy_from(
-                    &frame,
-                    (i64::from(x) - left) as u32,
-                    (i64::from(y) - top) as u32,
-                )
-                .map_err(|_| DesktopFault::NativeFailure)?;
-        }
-        let mut png = Cursor::new(Vec::new());
-        DynamicImage::ImageRgba8(canvas)
-            .write_to(&mut png, ImageFormat::Png)
-            .map_err(|_| DesktopFault::NativeFailure)?;
-        Ok(png.into_inner())
+        capture_native()
     }
 
     fn inject(&self, action: &DesktopInput) -> Result<(), DesktopFault> {
@@ -127,40 +70,7 @@ impl DesktopPlatform for NativeDesktop {
             Enigo::new(&Settings::default()).map_err(|_| DesktopFault::NativeFailure)?;
         match action {
             DesktopInput::Click { x, y, button } => {
-                // Capture uses the bounding rectangle of every monitor. Its image origin may
-                // differ from the OS virtual desktop origin when a display sits left or above
-                // the primary display.
-                let monitors = Monitor::all().map_err(|_| DesktopFault::NativeFailure)?;
-                let left = monitors
-                    .iter()
-                    .map(|monitor| monitor.x().map_err(|_| DesktopFault::NativeFailure))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .min()
-                    .ok_or(DesktopFault::Unsupported)?;
-                let top = monitors
-                    .iter()
-                    .map(|monitor| monitor.y().map_err(|_| DesktopFault::NativeFailure))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .min()
-                    .ok_or(DesktopFault::Unsupported)?;
-                let target_x = x.checked_add(left).ok_or(DesktopFault::NativeFailure)?;
-                let target_y = y.checked_add(top).ok_or(DesktopFault::NativeFailure)?;
-                let on_monitor = monitors.iter().any(|monitor| {
-                    let (Ok(mx), Ok(my), Ok(width), Ok(height)) =
-                        (monitor.x(), monitor.y(), monitor.width(), monitor.height())
-                    else {
-                        return false;
-                    };
-                    i64::from(target_x) >= i64::from(mx)
-                        && i64::from(target_x) < i64::from(mx) + i64::from(width)
-                        && i64::from(target_y) >= i64::from(my)
-                        && i64::from(target_y) < i64::from(my) + i64::from(height)
-                });
-                if !on_monitor {
-                    return Err(DesktopFault::Unsupported);
-                }
+                let (target_x, target_y) = click_position(*x, *y)?;
                 enigo
                     .move_mouse(target_x, target_y, Coordinate::Abs)
                     .map_err(|_| DesktopFault::NativeFailure)?;
@@ -216,6 +126,248 @@ impl DesktopPlatform for NativeDesktop {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn capture_available() -> bool {
+    Monitor::all().is_ok()
+}
+
+#[cfg(target_os = "linux")]
+fn capture_available() -> bool {
+    use x11rb::connection::Connection;
+    x11rb::connect(None).is_ok_and(|(connection, _)| connection.setup().roots.len() == 1)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn capture_native() -> Result<Vec<u8>, DesktopFault> {
+    let monitors = Monitor::all().map_err(|_| DesktopFault::NativeFailure)?;
+    if monitors.is_empty() || monitors.len() > 16 {
+        return Err(DesktopFault::Unsupported);
+    }
+    let mut frames = Vec::with_capacity(monitors.len());
+    let mut pixels = 0_u64;
+    let mut captured_pixels = 0_u64;
+    for monitor in monitors {
+        let dimensions = u64::from(monitor.width().map_err(|_| DesktopFault::NativeFailure)?)
+            * u64::from(monitor.height().map_err(|_| DesktopFault::NativeFailure)?);
+        pixels = pixels
+            .checked_add(dimensions)
+            .ok_or(DesktopFault::NativeFailure)?;
+        if pixels > 100_000_000 {
+            return Err(DesktopFault::NativeFailure);
+        }
+        let x = monitor.x().map_err(|_| DesktopFault::NativeFailure)?;
+        let y = monitor.y().map_err(|_| DesktopFault::NativeFailure)?;
+        let frame = monitor
+            .capture_image()
+            .map_err(|_| DesktopFault::NativeFailure)?;
+        captured_pixels = captured_pixels
+            .checked_add(u64::from(frame.width()) * u64::from(frame.height()))
+            .ok_or(DesktopFault::NativeFailure)?;
+        if captured_pixels > 100_000_000 {
+            return Err(DesktopFault::NativeFailure);
+        }
+        frames.push((x, y, frame));
+    }
+    let left = frames.iter().map(|(x, _, _)| i64::from(*x)).min().unwrap();
+    let top = frames.iter().map(|(_, y, _)| i64::from(*y)).min().unwrap();
+    let right = frames
+        .iter()
+        .map(|(x, _, image)| i64::from(*x) + i64::from(image.width()))
+        .max()
+        .unwrap();
+    let bottom = frames
+        .iter()
+        .map(|(_, y, image)| i64::from(*y) + i64::from(image.height()))
+        .max()
+        .unwrap();
+    let width = u32::try_from(right - left).map_err(|_| DesktopFault::NativeFailure)?;
+    let height = u32::try_from(bottom - top).map_err(|_| DesktopFault::NativeFailure)?;
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > 100_000_000 {
+        return Err(DesktopFault::NativeFailure);
+    }
+    let mut canvas = RgbaImage::new(width, height);
+    for (x, y, frame) in frames {
+        canvas
+            .copy_from(
+                &frame,
+                (i64::from(x) - left) as u32,
+                (i64::from(y) - top) as u32,
+            )
+            .map_err(|_| DesktopFault::NativeFailure)?;
+    }
+    let mut png = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(canvas)
+        .write_to(&mut png, ImageFormat::Png)
+        .map_err(|_| DesktopFault::NativeFailure)?;
+    Ok(png.into_inner())
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn click_position(x: i32, y: i32) -> Result<(i32, i32), DesktopFault> {
+    // Image coordinates start at the virtual display bounding rectangle, which can be negative.
+    let monitors = Monitor::all().map_err(|_| DesktopFault::NativeFailure)?;
+    let left = monitors
+        .iter()
+        .map(|m| m.x().map_err(|_| DesktopFault::NativeFailure))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .min()
+        .ok_or(DesktopFault::Unsupported)?;
+    let top = monitors
+        .iter()
+        .map(|m| m.y().map_err(|_| DesktopFault::NativeFailure))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .min()
+        .ok_or(DesktopFault::Unsupported)?;
+    let target_x = x.checked_add(left).ok_or(DesktopFault::NativeFailure)?;
+    let target_y = y.checked_add(top).ok_or(DesktopFault::NativeFailure)?;
+    let on_monitor = monitors.iter().any(|m| {
+        let (Ok(mx), Ok(my), Ok(w), Ok(h)) = (m.x(), m.y(), m.width(), m.height()) else {
+            return false;
+        };
+        i64::from(target_x) >= i64::from(mx)
+            && i64::from(target_x) < i64::from(mx) + i64::from(w)
+            && i64::from(target_y) >= i64::from(my)
+            && i64::from(target_y) < i64::from(my) + i64::from(h)
+    });
+    if !on_monitor {
+        return Err(DesktopFault::Unsupported);
+    }
+    Ok((target_x, target_y))
+}
+
+#[cfg(target_os = "linux")]
+fn click_position(x: i32, y: i32) -> Result<(i32, i32), DesktopFault> {
+    use x11rb::connection::Connection;
+    let (connection, screen_number) =
+        x11rb::connect(None).map_err(|_| DesktopFault::NativeFailure)?;
+    if connection.setup().roots.len() != 1 {
+        return Err(DesktopFault::Unsupported);
+    }
+    let screen = &connection.setup().roots[screen_number];
+    if x < 0
+        || y < 0
+        || x >= i32::from(screen.width_in_pixels)
+        || y >= i32::from(screen.height_in_pixels)
+    {
+        return Err(DesktopFault::Unsupported);
+    }
+    Ok((x, y))
+}
+
+#[cfg(target_os = "linux")]
+fn capture_native() -> Result<Vec<u8>, DesktopFault> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{
+        ConnectionExt, ImageFormat as XImageFormat, ImageOrder, VisualClass,
+    };
+    let (connection, screen_number) =
+        x11rb::connect(None).map_err(|_| DesktopFault::NativeFailure)?;
+    let setup = connection.setup();
+    if setup.roots.len() != 1 {
+        return Err(DesktopFault::Unsupported);
+    }
+    let screen = &setup.roots[screen_number];
+    let width = screen.width_in_pixels;
+    let height = screen.height_in_pixels;
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > 100_000_000 {
+        return Err(DesktopFault::Unsupported);
+    }
+    let format = setup
+        .pixmap_formats
+        .iter()
+        .find(|f| f.depth == screen.root_depth)
+        .ok_or(DesktopFault::Unsupported)?;
+    let bpp = usize::from(format.bits_per_pixel);
+    let pad = usize::from(format.scanline_pad);
+    if !matches!(bpp, 16 | 24 | 32) || !matches!(pad, 8 | 16 | 32) {
+        return Err(DesktopFault::Unsupported);
+    }
+    let visual = screen
+        .allowed_depths
+        .iter()
+        .flat_map(|d| &d.visuals)
+        .find(|v| v.visual_id == screen.root_visual && v.class == VisualClass::TRUE_COLOR)
+        .ok_or(DesktopFault::Unsupported)?;
+    let reply = connection
+        .get_image(
+            XImageFormat::Z_PIXMAP,
+            screen.root,
+            0,
+            0,
+            width,
+            height,
+            u32::MAX,
+        )
+        .map_err(|_| DesktopFault::NativeFailure)?
+        .reply()
+        .map_err(|_| DesktopFault::NativeFailure)?;
+    if reply.depth != screen.root_depth {
+        return Err(DesktopFault::NativeFailure);
+    }
+    let stride = (usize::from(width) * bpp).div_ceil(pad) * pad / 8;
+    if reply.data.len() < stride * usize::from(height) {
+        return Err(DesktopFault::NativeFailure);
+    }
+    let mut image = RgbaImage::new(u32::from(width), u32::from(height));
+    for y in 0..usize::from(height) {
+        for x in 0..usize::from(width) {
+            let at = y * stride + x * (bpp / 8);
+            let bytes = &reply.data[at..at + bpp / 8];
+            let pixel = if setup.image_byte_order == ImageOrder::LSB_FIRST {
+                bytes
+                    .iter()
+                    .rev()
+                    .fold(0_u32, |acc, byte| (acc << 8) | u32::from(*byte))
+            } else {
+                bytes
+                    .iter()
+                    .fold(0_u32, |acc, byte| (acc << 8) | u32::from(*byte))
+            };
+            image.put_pixel(
+                x as u32,
+                y as u32,
+                image::Rgba([
+                    color_channel(pixel, visual.red_mask)?,
+                    color_channel(pixel, visual.green_mask)?,
+                    color_channel(pixel, visual.blue_mask)?,
+                    255,
+                ]),
+            );
+        }
+    }
+    let mut png = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(image)
+        .write_to(&mut png, ImageFormat::Png)
+        .map_err(|_| DesktopFault::NativeFailure)?;
+    Ok(png.into_inner())
+}
+
+#[cfg(target_os = "linux")]
+fn color_channel(pixel: u32, mask: u32) -> Result<u8, DesktopFault> {
+    if mask == 0 {
+        return Err(DesktopFault::Unsupported);
+    }
+    let shift = mask.trailing_zeros();
+    let max = mask >> shift;
+    let value = (pixel & mask) >> shift;
+    Ok(((u64::from(value) * 255 + u64::from(max) / 2) / u64::from(max)) as u8)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    #[test]
+    fn x11_true_color_masks_decode_native_pixels() {
+        use super::color_channel;
+        let pixel = 0x0012_80ff;
+        assert_eq!(color_channel(pixel, 0x00ff_0000).unwrap(), 0x12);
+        assert_eq!(color_channel(pixel, 0x0000_ff00).unwrap(), 0x80);
+        assert_eq!(color_channel(pixel, 0x0000_00ff).unwrap(), 0xff);
+        assert_eq!(color_channel(0xf800, 0xf800).unwrap(), 255);
     }
 }
 
