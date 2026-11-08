@@ -10,6 +10,7 @@ pub mod artifacts;
 pub mod browser;
 pub mod conventions;
 pub mod cursor;
+pub mod desktop;
 pub mod diagnostics;
 pub mod evals;
 pub mod git;
@@ -297,6 +298,13 @@ impl UseCases {
     /// Registers the browser family (`BrowserBackend`).
     pub fn with_browser(mut self, service: Arc<browser::BrowserService>) -> Self {
         for op in browser::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+    /// Registers native desktop queries and consent-bound computer control.
+    pub fn with_desktop(mut self, service: Arc<desktop::DesktopService>) -> Self {
+        for op in desktop::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

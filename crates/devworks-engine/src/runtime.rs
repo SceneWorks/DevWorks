@@ -194,6 +194,15 @@ pub struct PurgeComposition {
     pub files: Arc<dyn devworks_core::ports::project_purge::ProjectPurgeFiles>,
     pub client: Arc<dyn devworks_core::ports::project_purge::ProjectPurgeClient>,
 }
+#[derive(Clone)]
+pub struct DesktopComposition {
+    pub platform: Arc<dyn devworks_core::ports::desktop::DesktopPlatform>,
+}
+impl std::fmt::Debug for DesktopComposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DesktopComposition")
+    }
+}
 impl std::fmt::Debug for PurgeComposition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("PurgeComposition")
@@ -201,6 +210,9 @@ impl std::fmt::Debug for PurgeComposition {
 }
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
+    /// The native desktop adapter. It remains registered when an OS permission is missing so
+    /// inspect can report the actual capability state.
+    pub desktop: Option<DesktopComposition>,
     pub purge: Option<PurgeComposition>,
     pub schemas: Option<crate::schemas::SchemaComposition>,
     /// Native bounded credential-free price source and cadence; absent sources refuse refresh.
@@ -248,6 +260,7 @@ pub struct RuntimeConfig {
 impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
         Self {
+            desktop: None,
             dispatcher: DispatcherConfig::new(owner),
             purge: None,
             price_refresh: None,
@@ -382,6 +395,7 @@ pub struct Runtime {
     diagnostics: Arc<DiagnosticService>,
     monitor: Arc<Monitor>,
     browser: Option<Arc<BrowserService>>,
+    desktop: Option<Arc<devworks_core::services::desktop::DesktopService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
     help: Option<Arc<devworks_core::services::help::HelpService>>,
     browser_supervision: Arc<BrowserSupervision>,
@@ -517,7 +531,22 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .with_git_source(git.clone()),
         )
     });
+    let desktop = config.desktop.as_ref().map(|composition| {
+        Arc::new(devworks_core::services::desktop::DesktopService::new(
+            composition.platform.clone(),
+            resources.clone(),
+            artifacts.clone(),
+            store.clone(),
+            clock.clone(),
+            ids.clone(),
+            authority.clone(),
+        ))
+    });
     let mut use_cases = use_cases;
+    if let Some(service) = &desktop {
+        use_cases = use_cases.with_desktop(service.clone());
+        consumers.push(crate::desktop::consumer(service.clone()));
+    }
     if let Some(service) = &git {
         use_cases = use_cases.with_git(service.clone());
         consumers.push(crate::git::consumer(service.clone()));
@@ -765,6 +794,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 packages.as_ref().map(|p| p.service.clone()),
                 Some(jobs.clone()),
             )
+            .with_desktop(desktop.clone())
             .with_control(runs.service.clone())
             .with_evidence(store.clone(), artifacts.clone()),
         )),
@@ -1162,6 +1192,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         diagnostics,
         monitor,
         browser,
+        desktop,
         git,
         help,
         browser_supervision,
@@ -1267,6 +1298,11 @@ impl Runtime {
     /// commands are read through [`BrowserService::completion`].
     pub fn browser(&self) -> Option<&Arc<BrowserService>> {
         self.browser.as_ref()
+    }
+
+    /// The desktop service and its scoped typed input completions.
+    pub fn desktop(&self) -> Option<&Arc<devworks_core::services::desktop::DesktopService>> {
+        self.desktop.as_ref()
     }
 
     /// The package host (helper processes, invocations and the quiescence barrier), when packages

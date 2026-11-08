@@ -565,7 +565,7 @@ impl ResourceService {
     // -----------------------------------------------------------------------------------------
     // Commands
 
-    fn acquire(
+    pub(crate) fn acquire(
         &self,
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
@@ -841,7 +841,7 @@ impl ResourceService {
         })
     }
 
-    fn release(
+    pub(crate) fn release(
         &self,
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,

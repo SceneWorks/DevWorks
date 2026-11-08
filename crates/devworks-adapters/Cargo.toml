@@ -92,6 +92,11 @@ ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
 # The OS random generator for PKCE verifiers and sign-in state (core `Entropy`). Already in the
 # lockfile through the UI stack.
 getrandom = "=0.3.4"
+# Native desktop capture and input. Wayland is reported unsupported until an input path can be
+# qualified as well as capture; X11, macOS and Windows are probed separately at runtime.
+xcap = { version = "=0.9.8", default-features = false }
+enigo = { version = "=0.6.1", default-features = false, features = ["x11rb"] }
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 # A throwaway certificate authority for the local TLS server the transport tests connect to.
