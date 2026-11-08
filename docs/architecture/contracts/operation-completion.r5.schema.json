@@ -4865,6 +4865,78 @@
       ],
       "type": "string"
     },
+    "DesktopAccessibilityNode": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "parentId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "targetId": {
+          "$ref": "#/$defs/Text1To256"
+        }
+      },
+      "required": [
+        "targetId",
+        "role",
+        "name",
+        "enabled",
+        "actions"
+      ],
+      "type": "object"
+    },
+    "DesktopAccessibilitySnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "nodes": {
+          "$ref": "#/$defs/List_DesktopAccessibilityNode_0_500"
+        },
+        "platform": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "revision": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "revision",
+        "platform",
+        "nodes",
+        "truncated"
+      ],
+      "type": "object"
+    },
     "DesktopCapture": {
       "additionalProperties": false,
       "properties": {
@@ -4888,6 +4960,10 @@
     "DesktopRecord": {
       "additionalProperties": false,
       "properties": {
+        "accessibility": {
+          "$ref": "#/$defs/DesktopAccessibilitySnapshot",
+          "x-since": 2
+        },
         "consentId": {
           "anyOf": [
             {
@@ -9954,6 +10030,14 @@
         "$ref": "#/$defs/DecisionQuestionType"
       },
       "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_DesktopAccessibilityNode_0_500": {
+      "items": {
+        "$ref": "#/$defs/DesktopAccessibilityNode"
+      },
+      "maxItems": 500,
       "minItems": 0,
       "type": "array"
     },

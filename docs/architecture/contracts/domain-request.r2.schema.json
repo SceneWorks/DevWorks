@@ -1193,6 +1193,83 @@
             "y"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/DesktopTargetAction"
+            },
+            "kind": {
+              "const": "Target",
+              "type": "string"
+            },
+            "snapshotRevision": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "targetId": {
+              "$ref": "#/$defs/Text1To256"
+            }
+          },
+          "required": [
+            "kind",
+            "targetId",
+            "snapshotRevision",
+            "action"
+          ],
+          "type": "object",
+          "x-since": 2
+        }
+      ]
+    },
+    "DesktopTargetAction": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "kind": {
+              "const": "Invoke",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "action"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "SetValue",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Text0To65536"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Focus",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
         }
       ]
     },

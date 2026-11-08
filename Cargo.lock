@@ -1187,6 +1187,7 @@ checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 name = "devworks-adapters"
 version = "0.1.0"
 dependencies = [
+ "atspi",
  "core-foundation 0.9.4",
  "devworks-core",
  "devworks-extension-protocol",
@@ -1201,6 +1202,7 @@ dependencies = [
  "jsonschema",
  "libc",
  "native-tls",
+ "objc2-app-kit 0.3.2",
  "percent-encoding",
  "postgres-native-tls",
  "quick-xml",
@@ -1242,6 +1244,7 @@ dependencies = [
  "ureq 3.4.2",
  "url",
  "webpki-roots 1.0.11",
+ "windows 0.62.2",
  "windows-sys 0.61.2",
  "x11rb",
  "xcap",

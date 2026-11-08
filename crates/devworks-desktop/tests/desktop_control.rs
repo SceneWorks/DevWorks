@@ -3,7 +3,8 @@
 mod common;
 use common::*;
 use devworks_core::ports::desktop::{
-    DesktopAvailability, DesktopCapabilities, DesktopFault, DesktopPlatform,
+    AccessibilityNode, AccessibilitySnapshot, DesktopAvailability, DesktopCapabilities,
+    DesktopFault, DesktopPlatform,
 };
 use devworks_core::ports::storage::{ReadOptions, read_snapshot};
 use devworks_core::protocol::records::{DesktopInput, DesktopRecord, ItemState};
@@ -28,6 +29,7 @@ impl DesktopPlatform for ScriptedDesktop {
             target: "test-scripted".into(),
             capture: DesktopAvailability::Available,
             input: DesktopAvailability::Available,
+            accessibility: DesktopAvailability::Available,
         }
     }
     fn capture_png(&self) -> Result<Vec<u8>, DesktopFault> {
@@ -42,6 +44,27 @@ impl DesktopPlatform for ScriptedDesktop {
         self.input.lock().unwrap().push(action.clone());
         Ok(())
     }
+    fn accessibility_snapshot(&self) -> Result<AccessibilitySnapshot, DesktopFault> {
+        Ok(AccessibilitySnapshot {
+            platform: "scripted".into(),
+            nodes: vec![AccessibilityNode {
+                target_id: "test:button".into(),
+                parent_id: None,
+                role: "button".into(),
+                name: "Continue".into(),
+                description: None,
+                enabled: true,
+                actions: vec!["press".into()],
+            }],
+            truncated: false,
+        })
+    }
+}
+
+fn at_revision(frame: Vec<u8>, revision: u64) -> Vec<u8> {
+    let mut frame: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+    frame["schemaRevision"] = json!(revision);
+    serde_json::to_vec(&frame).unwrap()
 }
 
 fn inspect(backend: &dyn Backend) -> DesktopRecord {
@@ -239,6 +262,52 @@ fn control_requires_human_ok_and_live_fenced_consent() {
             ..
         })
     ));
+    let (target_inspection, _) = ops::query_result(backend.query(
+        "desktop.inspect",
+        &at_revision(ops::query_frame(&*backend, "desktop.inspect", json!({})), 2),
+    ))
+    .expect("revision-two accessibility inspection");
+    let OperationResult::DesktopInspect {
+        value: target_inspection,
+    } = target_inspection
+    else {
+        panic!("wrong accessibility inspection result");
+    };
+    let tree = target_inspection
+        .accessibility
+        .expect("native accessibility tree");
+    assert_eq!(tree.nodes.0[0].target_id.0, "test:button");
+    let target_action = json!({"desktopId":held.desktop_id,"leaseId":lease_id,
+        "expectedFence":lease.fence.to_string(),"consentId":proposal.id,
+        "expectedDesktopRevision":held.revision,
+        "action":{"kind":"Target","targetId":"test:button",
+            "snapshotRevision":tree.revision.0,
+            "action":{"kind":"Invoke","action":"press"}}});
+    let target_operation = match decision(
+        backend
+            .command(
+                "desktop.input",
+                &at_revision(
+                    ops::command_frame(&*backend, "desktop.input", target_action),
+                    2,
+                ),
+            )
+            .expect("target input reply"),
+    ) {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted target input: {other:?}"),
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !matches!(
+        backend
+            .desktop_completion(&target_operation)
+            .expect("target completion"),
+        Some(OperationCompletion::Succeeded { .. })
+    ) {
+        assert!(Instant::now() < deadline, "target input did not complete");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(platform.input.lock().unwrap().len(), 2);
     let released = decision(backend.command("desktop.release_control",
         &ops::command_frame(&*backend,"desktop.release_control",json!({
             "desktopId":held.desktop_id,"leaseId":lease_id,"expectedFence":lease.fence.to_string()
@@ -276,7 +345,7 @@ fn control_requires_human_ok_and_live_fenced_consent() {
             .expect("stale input reply"),
     );
     assert!(matches!(stale, DomainDecision::Refused { .. }));
-    assert_eq!(platform.input.lock().unwrap().len(), 1);
+    assert_eq!(platform.input.lock().unwrap().len(), 2);
 
     let after = inspect(&*backend);
     let (capture, _) = ops::query_result(backend.query(
