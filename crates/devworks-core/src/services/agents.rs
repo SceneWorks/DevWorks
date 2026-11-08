@@ -5,9 +5,9 @@ use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::OperationInput;
 use crate::operations::agents as ops;
 use crate::ports::storage::{
-    AssignmentState, BlockerFilter, NewPrincipalBinding, ReadSnapshot, RunRead, StorageError,
-    StoredAgentAssignmentContext, StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
-    StoredAssignment, StoredSession, WriteTransaction,
+    ActivationPhase, AssignmentState, BlockerFilter, NewPrincipalBinding, ReadSnapshot, RunRead,
+    StorageError, StoredAgentAssignmentContext, StoredAgentDelivery, StoredAgentMessage,
+    StoredAgentMessageEvent, StoredAssignment, StoredSession, WriteTransaction,
 };
 use crate::ports::{
     CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
@@ -202,6 +202,140 @@ pub struct AgentService {
 impl AgentService {
     pub fn new(ids: Arc<dyn IdSource>, runs: Arc<ControlService>) -> Self {
         Self { ids, runs }
+    }
+
+    /// Materializes the root's one coordinator only after the host owns a running activation.
+    /// A live primary is reused with its session and checkpoint; a child never takes its work.
+    pub fn materialize_primary(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        host: &InvocationContext,
+        activation_id: &crate::protocol::Id,
+        owner_epoch: i64,
+    ) -> Result<AgentRecord, Failure> {
+        if host.principal_kind() != PrincipalKind::Host {
+            return Err(Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into());
+        }
+        let activation = tx.runs().activation(activation_id)?.ok_or_else(|| {
+            Refusal::new(
+                DomainErrorCode::NotFound,
+                "activation",
+                Some(activation_id.clone()),
+            )
+        })?;
+        if activation.phase != ActivationPhase::Running || activation.owner_epoch != owner_epoch {
+            return Err(Refusal::new(
+                DomainErrorCode::Conflict,
+                "activation",
+                Some(activation_id.clone()),
+            )
+            .into());
+        }
+        let root = tx
+            .sessions()
+            .work_root(&activation.root_id)?
+            .ok_or_else(denied)?;
+        if !runs::is_run_root(&root)
+            || host.project_id().is_some_and(|p| p != &root.project_id)
+            || host.root_id().is_some_and(|r| r != &root.id)
+        {
+            return Err(denied().into());
+        }
+        let role = if root.kind == "feature" {
+            AgentRole::FeatureCoordinator
+        } else {
+            AgentRole::IssueCoordinator
+        };
+        let now = tx.now_ms();
+        let assignment = if let Some(existing) = runs::coordinator(tx.runs(), &root.id)? {
+            if existing.purpose != crate::ports::storage::AssignmentPurpose::Primary
+                || existing.execution_id.as_ref() != Some(activation_id)
+            {
+                return Err(Refusal::new(
+                    DomainErrorCode::Conflict,
+                    "assignment",
+                    Some(existing.id.0),
+                )
+                .into());
+            }
+            existing
+        } else {
+            let actor = ActorId(tx.new_id(IdKind::Link));
+            tx.actors()
+                .register(&actor, PrincipalKind::Agent, role.as_str())?;
+            let session = StoredSession {
+                id: tx.new_id(IdKind::Session),
+                conversation_id: tx.new_id(IdKind::Conversation),
+                agent_id: actor,
+                project_id: Some(root.project_id.clone()),
+                root_id: Some(root.id.clone()),
+                title: format!("{}: {}", role.as_str(), root.title),
+                context_epoch: 0,
+                revision: 1,
+                created_by: host.principal().clone(),
+                created_at_ms: now,
+                closed_at_ms: None,
+                closed_by: None,
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            };
+            tx.sessions().insert_session(&session)?;
+            self.runs
+                .register_assignment(
+                    tx,
+                    host.principal(),
+                    NewRunAssignment {
+                        root: root.id.clone(),
+                        work: root.id.clone(),
+                        parent: None,
+                        session: session.id,
+                        scope_key: None,
+                    },
+                )?
+                .map_err(fenced)?
+        };
+        let session = tx
+            .sessions()
+            .session(&assignment.session_id)?
+            .ok_or_else(denied)?;
+        if session.closed()
+            || session.root_id.as_ref() != Some(&root.id)
+            || session.project_id.as_ref() != Some(&root.project_id)
+            || tx.actors().actor_kind(&session.agent_id)? != Some(PrincipalKind::Agent)
+        {
+            return Err(denied().into());
+        }
+        if let Some(context) = tx.runs().agent_assignment_context(&assignment.id)? {
+            if context.project_id != root.project_id || context.role_id.as_str() != role.as_str() {
+                return Err(denied().into());
+            }
+        } else {
+            let instructions = crate::settings::service::role_instructions(
+                tx.configuration(),
+                role,
+                Some(&root.project_id),
+            )
+            .map_err(|error| match error {
+                crate::settings::service::Failure::Storage(error) => Failure::Storage(error),
+                crate::settings::service::Failure::Refused(refusal) => {
+                    Refusal::new(refusal.code, refusal.target_kind, refusal.target_id).into()
+                }
+            })?;
+            tx.runs()
+                .insert_agent_assignment_context(&StoredAgentAssignmentContext {
+                    assignment_id: assignment.id.clone(),
+                    project_id: root.project_id.clone(),
+                    role_id: crate::protocol::Id::new(role.as_str()).map_err(|_| denied())?,
+                    role_instructions: instructions.text,
+                    role_revisions: serde_json::json!({"workspace":instructions.revisions.workspace,"project":instructions.revisions.project}),
+                    brief: root.title,
+                    task_ids: serde_json::json!([]),
+                    source_checkpoint_id: None,
+                    created_at_ms: now,
+                })?;
+        }
+        bind_role_authority(tx, host, &session.agent_id, role, &root.project_id)?;
+        agent_record(tx.runs(), &assignment).map_err(failure)
     }
 
     fn inspect(
@@ -757,6 +891,56 @@ pub fn checkpoint_assignment(
     Ok(record)
 }
 
+fn bind_role_authority(
+    tx: &mut dyn WriteTransaction,
+    host: &InvocationContext,
+    actor: &ActorId,
+    role: AgentRole,
+    project: &ProjectId,
+) -> Result<(), Failure> {
+    if host.principal_kind() != PrincipalKind::Host {
+        return Err(Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into());
+    }
+    if let Some(existing) = tx.authority().principal(actor)? {
+        if existing.active
+            && existing.kind == PrincipalKind::Agent
+            && existing.role == Some(role)
+            && existing.project_id.as_ref() == Some(project)
+        {
+            return Ok(());
+        }
+        return Err(Refusal::new(
+            DomainErrorCode::PermissionDenied,
+            "agent_authority",
+            Some(actor.0.clone()),
+        )
+        .into());
+    }
+    crate::authority::service::bind_principal(
+        tx,
+        host,
+        NewPrincipalBinding {
+            actor: actor.clone(),
+            kind: PrincipalKind::Agent,
+            role: Some(role),
+            project_id: Some(project.clone()),
+            tool_families: None,
+            bound_by: host.principal().clone(),
+        },
+        None,
+    )
+    .map_err(|error| match error {
+        crate::authority::service::AdminError::Storage(error) => Failure::Storage(error),
+        crate::authority::service::AdminError::Denied(_) => {
+            Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into()
+        }
+        crate::authority::service::AdminError::Invalid(_) => {
+            Refusal::new(DomainErrorCode::InvalidArgument, "agent_authority", None).into()
+        }
+    })?;
+    Ok(())
+}
+
 /// Trusted host materialization of a recorded child intent. An agent's delegate command cannot
 /// mint this authority; the host supervisor calls this before launching the child session.
 pub fn bind_child_authority(
@@ -805,42 +989,7 @@ pub fn bind_child_authority(
     if tx.actors().actor_kind(&actor)? != Some(PrincipalKind::Agent) {
         return Err(denied().into());
     }
-    if let Some(existing) = tx.authority().principal(&actor)? {
-        if existing.active
-            && existing.role == Some(role)
-            && existing.project_id == Some(root.project_id)
-        {
-            return Ok(actor);
-        }
-        return Err(Refusal::new(
-            DomainErrorCode::PermissionDenied,
-            "agent_authority",
-            Some(actor.0),
-        )
-        .into());
-    }
-    crate::authority::service::bind_principal(
-        tx,
-        host,
-        NewPrincipalBinding {
-            actor: actor.clone(),
-            kind: PrincipalKind::Agent,
-            role: Some(role),
-            project_id: Some(root.project_id),
-            tool_families: None,
-            bound_by: host.principal().clone(),
-        },
-        None,
-    )
-    .map_err(|error| match error {
-        crate::authority::service::AdminError::Storage(error) => Failure::Storage(error),
-        crate::authority::service::AdminError::Denied(_) => {
-            Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into()
-        }
-        crate::authority::service::AdminError::Invalid(_) => {
-            Refusal::new(DomainErrorCode::InvalidArgument, "agent_authority", None).into()
-        }
-    })?;
+    bind_role_authority(tx, host, &actor, role, &root.project_id)?;
     Ok(actor)
 }
 

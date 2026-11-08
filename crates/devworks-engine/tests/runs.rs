@@ -690,6 +690,73 @@ fn standalone_issue_can_register_children_without_replacing_its_primary_owner() 
 }
 
 #[test]
+fn host_materializes_one_issue_coordinator_for_a_running_activation() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let activation = fx.launch("coordinator-runner");
+    let stale_actor = fx.agent.clone();
+    let stale_id = activation.id.clone();
+    let stale_epoch = activation.owner_epoch;
+    let agents =
+        devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    assert!(fx.tx(move |_, tx| {
+        Ok(agents
+            .materialize_primary(tx, &stale_actor, &stale_id, stale_epoch)
+            .is_err())
+    }));
+    let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
+    let stale_host = host.clone();
+    let stale_id = activation.id.clone();
+    let agents =
+        devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    assert!(fx.tx(move |_, tx| {
+        Ok(agents
+            .materialize_primary(tx, &stale_host, &stale_id, stale_epoch - 1)
+            .is_err())
+    }));
+    let agents =
+        devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let activation_id = activation.id.clone();
+    let epoch = activation.owner_epoch;
+    let first = fx.tx(move |_, tx| {
+        agents
+            .materialize_primary(tx, &host, &activation_id, epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("primary refused: {error:?}")))
+    });
+    let (assignment, session, profile, binding) = read(&*fx.store, |snapshot| {
+        let assignment = snapshot.runs().assignment(&first.assignment_id)?.unwrap();
+        let session = snapshot
+            .sessions()
+            .session(&assignment.session_id)?
+            .unwrap();
+        let profile = snapshot
+            .runs()
+            .agent_assignment_context(&assignment.id)?
+            .unwrap();
+        let binding = snapshot.authority().principal(&session.agent_id)?.unwrap();
+        Ok((assignment, session, profile, binding))
+    });
+    assert_eq!(assignment.purpose, AssignmentPurpose::Primary);
+    assert_eq!(assignment.execution_id, Some(activation.id.clone()));
+    assert_eq!(session.root_id, Some(rid("root-i")));
+    assert_eq!(profile.role_id.as_str(), "issueCoordinator");
+    assert!(!profile.role_instructions.is_empty());
+    assert_eq!(binding.role, Some(AgentRole::IssueCoordinator));
+    let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
+    let agents =
+        devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let activation_id = activation.id.clone();
+    let again = fx.tx(move |_, tx| {
+        agents
+            .materialize_primary(tx, &host, &activation_id, epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("replay refused: {error:?}")))
+    });
+    assert_eq!(again.assignment_id, first.assignment_id);
+    assert_eq!(fx.inspection("root-i").assignments.len(), 1);
+}
+
+#[test]
 fn issue_subagent_allowance_is_atomic_per_root() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
