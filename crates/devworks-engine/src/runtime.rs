@@ -206,6 +206,15 @@ impl std::fmt::Debug for ProcessToolComposition {
         f.write_str("ProcessToolComposition")
     }
 }
+#[derive(Clone)]
+pub struct DesktopComposition {
+    pub platform: Arc<dyn devworks_core::ports::desktop::DesktopPlatform>,
+}
+impl std::fmt::Debug for DesktopComposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DesktopComposition")
+    }
+}
 impl std::fmt::Debug for PurgeComposition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("PurgeComposition")
@@ -213,6 +222,9 @@ impl std::fmt::Debug for PurgeComposition {
 }
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
+    /// The native desktop adapter. It remains registered when an OS permission is missing so
+    /// inspect can report the actual capability state.
+    pub desktop: Option<DesktopComposition>,
     pub purge: Option<PurgeComposition>,
     /// Process tools are offered only when a host supplies owned executable/root and secret
     /// bindings. Missing qualification leaves the family unregistered.
@@ -263,6 +275,7 @@ pub struct RuntimeConfig {
 impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
         Self {
+            desktop: None,
             dispatcher: DispatcherConfig::new(owner),
             purge: None,
             process_tools: None,
@@ -401,6 +414,7 @@ pub struct Runtime {
     monitor: Arc<Monitor>,
     browser: Option<Arc<BrowserService>>,
     process_tools: Option<Arc<devworks_core::services::process::tools::ProcessToolService>>,
+    desktop: Option<Arc<devworks_core::services::desktop::DesktopService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
     help: Option<Arc<devworks_core::services::help::HelpService>>,
     browser_supervision: Arc<BrowserSupervision>,
@@ -550,11 +564,29 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .with_git_source(git.clone()),
         )
     });
+    let desktop = config.desktop.as_ref().map(|composition| {
+        Arc::new(
+            devworks_core::services::desktop::DesktopService::new(
+                composition.platform.clone(),
+                resources.clone(),
+                artifacts.clone(),
+                store.clone(),
+                clock.clone(),
+                ids.clone(),
+                authority.clone(),
+            )
+            .with_git_source(git.clone()),
+        )
+    });
     let mut use_cases = use_cases;
     if let Some(service) = &process_tools {
         use_cases = use_cases.with_process_tools(service.clone());
         consumers.push(crate::process_tools::consumer(service.clone()));
         consumers.push(crate::process_tools::cancel_consumer(service.clone()));
+    }
+    if let Some(service) = &desktop {
+        use_cases = use_cases.with_desktop(service.clone());
+        consumers.push(crate::desktop::consumer(service.clone()));
     }
     if let Some(service) = &git {
         use_cases = use_cases.with_git(service.clone());
@@ -803,6 +835,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 packages.as_ref().map(|p| p.service.clone()),
                 Some(jobs.clone()),
             )
+            .with_desktop(desktop.clone())
             .with_control(runs.service.clone())
             .with_evidence(store.clone(), artifacts.clone()),
         )),
@@ -1217,6 +1250,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         monitor,
         browser,
         process_tools,
+        desktop,
         git,
         help,
         browser_supervision,
@@ -1330,6 +1364,10 @@ impl Runtime {
         &self,
     ) -> Option<&Arc<devworks_core::services::process::tools::ProcessToolService>> {
         self.process_tools.as_ref()
+    }
+    /// The desktop service and its scoped typed input completions.
+    pub fn desktop(&self) -> Option<&Arc<devworks_core::services::desktop::DesktopService>> {
+        self.desktop.as_ref()
     }
 
     /// The package host (helper processes, invocations and the quiescence barrier), when packages
@@ -1496,6 +1534,13 @@ impl Runtime {
     /// mint this private exact-content witness, even for a context whose kind is Human.
     pub fn record_human_decision(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
         const OPERATION: &str = "approvals.record_human_decision";
+        if self
+            .desktop
+            .as_ref()
+            .is_some_and(|desktop| desktop.automation_may_be_active())
+        {
+            return self.command(ctx, OPERATION, frame);
+        }
         let decoded = devworks_core::admission::decode(
             devworks_core::admission::Selection {
                 operation: OPERATION,
@@ -1520,6 +1565,13 @@ impl Runtime {
     /// this proof; current authority and manifest freshness remain required.
     pub fn confirm_project_purge(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
         const OPERATION: &str = "projects.purge";
+        if self
+            .desktop
+            .as_ref()
+            .is_some_and(|desktop| desktop.automation_may_be_active())
+        {
+            return self.command(ctx, OPERATION, frame);
+        }
         let decoded = devworks_core::admission::decode(
             devworks_core::admission::Selection {
                 operation: OPERATION,

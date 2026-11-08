@@ -10,6 +10,7 @@ pub mod artifacts;
 pub mod browser;
 pub mod conventions;
 pub mod cursor;
+pub mod desktop;
 pub mod diagnostics;
 pub mod evals;
 pub mod git;
@@ -312,6 +313,13 @@ impl UseCases {
             Some(service.clone()),
         );
         self.register("process.request_system_install", None, Some(service));
+        self
+    }
+    /// Registers native desktop queries and consent-bound computer control.
+    pub fn with_desktop(mut self, service: Arc<desktop::DesktopService>) -> Self {
+        for op in desktop::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
         self
     }
     /// Registers the addons family (`PackageService`).

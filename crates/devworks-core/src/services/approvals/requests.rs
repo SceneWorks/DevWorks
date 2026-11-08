@@ -14,7 +14,8 @@ pub fn reviewed_job(operation: &str) -> bool {
 
 /// Every candidate still needs its registered owner and current safety/target preview.
 pub fn candidate(operation: &str) -> bool {
-    reviewed_job(operation)
+    operation == "desktop.request_control"
+        || reviewed_job(operation)
         || crate::authority::policy::APPROVAL_REQUIRED.contains(&operation)
         || crate::authority::policy::NATIVE_EXECUTION.contains(&operation)
 }

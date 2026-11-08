@@ -6,6 +6,7 @@ use crate::ports::Preparation;
 use crate::ports::storage::WriteTransaction;
 use crate::protocol::DomainErrorCode;
 use crate::services::approvals::{OwnerPreview, SavedOperationOwners};
+use crate::services::desktop::DesktopService;
 use crate::services::sessions::{Failure, Refusal};
 use crate::services::{git::GitService, jobs::JobService, packages::PackageService};
 use std::sync::Arc;
@@ -17,6 +18,7 @@ pub struct NativeOwnerPreviews {
     git: Option<Arc<GitService>>,
     packages: Option<Arc<PackageService>>,
     jobs: Option<Arc<JobService>>,
+    desktop: Option<Arc<DesktopService>>,
     evidence: Option<(
         Arc<dyn crate::ports::storage::ApplicationStore>,
         Arc<crate::services::artifacts::ArtifactService>,
@@ -32,6 +34,7 @@ impl NativeOwnerPreviews {
             git,
             packages,
             jobs,
+            desktop: None,
             evidence: None,
         }
     }
@@ -52,6 +55,10 @@ impl NativeOwnerPreviews {
         }
         self
     }
+    pub fn with_desktop(mut self, desktop: Option<Arc<DesktopService>>) -> Self {
+        self.desktop = desktop;
+        self
+    }
 }
 fn unsupported() -> Failure {
     Refusal::new(
@@ -68,6 +75,7 @@ impl SavedOperationOwners for NativeOwnerPreviews {
             "addons.install" | "addons.update" | "addons.enable" | "addons.rollback"
             | "addons.configure" => self.packages.is_some(),
             "jobs.create" | "jobs.edit" | "jobs.enable" | "jobs.run_now" => self.jobs.is_some(),
+            "desktop.request_control" => self.desktop.is_some(),
             _ => false,
         }
     }
@@ -93,6 +101,11 @@ impl SavedOperationOwners for NativeOwnerPreviews {
                 .approval_preview(ctx, request, env),
             "jobs" => self
                 .jobs
+                .as_ref()
+                .ok_or_else(unsupported)?
+                .approval_preview(ctx, request, env),
+            "desktop" => self
+                .desktop
                 .as_ref()
                 .ok_or_else(unsupported)?
                 .approval_preview(ctx, request, env),
@@ -149,6 +162,11 @@ impl SavedOperationOwners for NativeOwnerPreviews {
                 .validate_approval_preview(tx, ctx, request, preview),
             "jobs" => self
                 .jobs
+                .as_ref()
+                .ok_or_else(unsupported)?
+                .validate_approval_preview(tx, ctx, request, preview),
+            "desktop" => self
+                .desktop
                 .as_ref()
                 .ok_or_else(unsupported)?
                 .validate_approval_preview(tx, ctx, request, preview),

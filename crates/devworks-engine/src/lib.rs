@@ -202,6 +202,7 @@
 pub mod approvals;
 pub mod browser;
 pub mod conventions;
+pub mod desktop;
 pub mod diagnostics;
 pub mod dispatch;
 pub mod evals;

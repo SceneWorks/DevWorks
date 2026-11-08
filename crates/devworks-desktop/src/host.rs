@@ -152,6 +152,8 @@ pub struct DesktopConfig {
     /// Explicit host grants for process environment credential handles. An unregistered
     /// credentialRef is refused; the generic provider connection handles are not exported.
     pub process_credentials: Vec<devworks_core::services::process::tools::RegisteredCredential>,
+    /// Native computer-control adapter; tests may inject a scripted desktop with no OS input.
+    pub desktop_platform: Option<Arc<dyn devworks_core::ports::desktop::DesktopPlatform>>,
     /// Replaces the connection directory the router reads (tests script connection states).
     /// `None` (production) routes through the provider connection service's durable rows.
     pub connections: Option<Arc<dyn ConnectionDirectory>>,
@@ -197,6 +199,7 @@ impl DesktopConfig {
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),
             process_credentials: Vec::new(),
+            desktop_platform: None,
             connections: None,
             secrets: None,
             http: None,
@@ -468,6 +471,12 @@ async fn compose(
     runtime_config.native_notifications = Some(Arc::new(
         crate::native_notifications::NativeOsNotifications::new(),
     ));
+    runtime_config.desktop = Some(devworks_engine::runtime::DesktopComposition {
+        platform: config
+            .desktop_platform
+            .clone()
+            .unwrap_or_else(|| Arc::new(devworks_adapters::desktop::NativeDesktop)),
+    });
     // The run-control quiesce (live work held for Continue) gets this cooperative period; it
     // stays within the shell's Quiescing bound, so the window persists only after it ended.
     runtime_config.shutdown_grace = runtime_config
@@ -891,6 +900,18 @@ impl Backend for DesktopBackend {
         devworks_core::protocol::DomainFault,
     > {
         match self.host.runtime.process_tools() {
+            Some(service) => service.completion(&self.host.ctx, operation),
+            None => Ok(None),
+        }
+    }
+    fn desktop_completion(
+        &self,
+        operation: &devworks_core::protocol::OperationId,
+    ) -> Result<
+        Option<devworks_core::protocol::results::OperationCompletion>,
+        devworks_core::protocol::DomainFault,
+    > {
+        match self.host.runtime.desktop() {
             Some(service) => service.completion(&self.host.ctx, operation),
             None => Ok(None),
         }
