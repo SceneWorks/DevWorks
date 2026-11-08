@@ -52,9 +52,37 @@ impl ContainerRunner {
         max_output: usize,
         secrets: &[String],
     ) -> Result<CliResult, CliError> {
+        self.run_inner(ctx, operation, spec, timeout, (0, max_output), secrets)
+            .map(|(result, _)| result)
+    }
+
+    /// Drain the full CLI stream while retaining only one requested stdout byte window.
+    pub fn run_window(
+        &self,
+        ctx: &InvocationContext,
+        operation: Option<OperationId>,
+        spec: ProcessSpec,
+        timeout: Duration,
+        window: (u64, usize),
+        secrets: &[String],
+    ) -> Result<(CliResult, u64), CliError> {
+        self.run_inner(ctx, operation, spec, timeout, window, secrets)
+    }
+
+    fn run_inner(
+        &self,
+        ctx: &InvocationContext,
+        operation: Option<OperationId>,
+        spec: ProcessSpec,
+        timeout: Duration,
+        window: (u64, usize),
+        secrets: &[String],
+    ) -> Result<(CliResult, u64), CliError> {
+        let (after, max_output) = window;
         if timeout.is_zero() || timeout > Duration::from_secs(3600) || max_output > 1_048_576 {
             return Err(CliError::Refused("container CLI bounds are invalid".into()));
         }
+        let deadline = Instant::now() + timeout;
         let policy = LaunchPolicy {
             fs: &*self.filesystem,
             roots: &self.protected_roots,
@@ -79,14 +107,16 @@ impl ContainerRunner {
                 other => CliError::Refused(format!("container CLI launch refused: {other:?}")),
             })?;
         let Some((stdout, stderr)) = self.processes.take_output(&process) else {
-            let _ = self
-                .processes
-                .cancel(&process, Duration::ZERO, Duration::from_secs(5));
+            let _ = self.processes.cancel(
+                &process,
+                Duration::ZERO,
+                deadline.saturating_duration_since(Instant::now()),
+            );
             return Err(CliError::Unknown("container CLI output unavailable".into()));
         };
         // Keep the streams separate: successful engine JSON on stdout must remain parseable
         // even when the CLI writes a warning to stderr.
-        let stdout_bytes = Arc::new(Mutex::new(BoundedOutput::new(max_output)));
+        let stdout_bytes = Arc::new(Mutex::new(BoundedOutput::from_offset(max_output, after)));
         let stderr_bytes = Arc::new(Mutex::new(BoundedOutput::new(max_output)));
         let (drained_tx, drained_rx) = mpsc::channel();
         for (mut pipe, output) in [
@@ -110,17 +140,21 @@ impl ContainerRunner {
             });
         }
         drop(drained_tx);
-        let deadline = Instant::now() + timeout;
+        let command_deadline = deadline - timeout.min(Duration::from_secs(1));
         let outcome = loop {
             // A native poll or its record write can fail transiently. Retain process
             // ownership and the timeout guard until a later poll verifies the exit.
             if let Ok(Some(outcome)) = self.processes.poll(&process) {
                 break outcome;
             }
-            if Instant::now() >= deadline {
+            if Instant::now() >= command_deadline {
                 break self
                     .processes
-                    .cancel(&process, Duration::from_secs(1), Duration::from_secs(5))
+                    .cancel(
+                        &process,
+                        Duration::ZERO,
+                        deadline.saturating_duration_since(Instant::now()),
+                    )
                     .map_err(|failure| {
                         CliError::Unknown(format!(
                             "container CLI timeout stop not recorded: {}",
@@ -136,10 +170,13 @@ impl ContainerRunner {
             ));
         };
         for _ in 0..2 {
-            if drained_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+            if drained_rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .is_err()
+            {
                 let _ = self
                     .processes
-                    .cancel(&process, Duration::ZERO, Duration::from_secs(5));
+                    .cancel(&process, Duration::ZERO, Duration::ZERO);
                 return Err(CliError::Unknown(
                     "container CLI output did not drain".into(),
                 ));
@@ -148,14 +185,18 @@ impl ContainerRunner {
         let stdout_bytes = stdout_bytes.lock().unwrap_or_else(|p| p.into_inner());
         let stderr_bytes = stderr_bytes.lock().unwrap_or_else(|p| p.into_inner());
         let truncated = stdout_bytes.truncated() || stderr_bytes.truncated();
-        Ok(CliResult {
-            exit_code,
-            stdout: redacted_output(stdout_bytes.retained(), secrets, truncated),
-            stderr: redacted_output(stderr_bytes.retained(), secrets, truncated),
-            truncated: truncated
-                || secrets
-                    .iter()
-                    .any(|value| !value.is_empty() && value.len() < 4),
-        })
+        let seen = stdout_bytes.seen();
+        Ok((
+            CliResult {
+                exit_code,
+                stdout: redacted_output(stdout_bytes.retained(), secrets, truncated),
+                stderr: redacted_output(stderr_bytes.retained(), secrets, truncated),
+                truncated: truncated
+                    || secrets
+                        .iter()
+                        .any(|value| !value.is_empty() && value.len() < 4),
+            },
+            seen,
+        ))
     }
 }

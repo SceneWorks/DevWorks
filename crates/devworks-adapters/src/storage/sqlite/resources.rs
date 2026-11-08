@@ -596,7 +596,7 @@ macro_rules! resource_reads {
             fn container_lease_in_use(&self, lease: &Id) -> Result<bool, StorageError> {
                 db(db(self.conn.prepare_cached(
                     "SELECT 1 FROM owned_containers c, json_each(c.resource_lease_ids) j \
-                     WHERE j.value=?1 AND c.state IN ('Creating','Starting','Running','Stopping','Uncertain') LIMIT 1",
+                     WHERE j.value=?1 AND c.state IN ('Creating','Created','Starting','Running','Stopping','Uncertain') LIMIT 1",
                 ))?.exists([lease.as_str()]))
             }
             fn containers(&self, filter: &ContainerFilter, after: Option<&Id>, n: u16) -> Result<Vec<StoredContainer>, StorageError> {

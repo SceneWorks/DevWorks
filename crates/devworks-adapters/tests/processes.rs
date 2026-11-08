@@ -46,9 +46,7 @@ use devworks_core::services::containers::{
 };
 #[cfg(unix)]
 use devworks_core::services::process::tools::RegisteredCredential;
-use devworks_core::services::process::tools::{
-    RegisteredExecutable, RegisteredWorkingRoot, ToolBindings,
-};
+use devworks_core::services::process::tools::{RegisteredExecutable, ToolBindings};
 use devworks_core::services::process::{
     ConfirmRefusal, LaunchPolicy, LaunchRefusal, LaunchRequest, LeaseClaim, OwnedProcess,
     ProcessSupervisor, StopFailure, StopOutcome, StopScope, all_recorded,
@@ -1300,16 +1298,29 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
     ));
     let build_root = fx.h.root.join("container-build-context");
     std::fs::create_dir_all(&build_root).unwrap();
+    let repository_root = fx.h.root.canonicalize().unwrap();
+    fx.write(move |tx| {
+        let now = tx.now_ms();
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("container-build-repo"),
+            location: repository_root.to_string_lossy().into_owned(),
+            name: "Container build repository".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: "Active".into(),
+            languages: Vec::new(),
+            revision: 1,
+            registered_at_ms: now,
+        })?;
+        tx.projects()
+            .set_members(&project("project-a"), &[id("container-build-repo")])
+    });
     let bindings = ToolBindings::new(
         [RegisteredExecutable {
             id: id(engine),
             path: executable.clone().into(),
         }],
-        [RegisteredWorkingRoot {
-            id: id("container-build-root"),
-            project: Some(project("project-a")),
-            path: fx.h.root.canonicalize().unwrap(),
-        }],
+        [],
     )
     .unwrap();
     let service = Arc::new(
@@ -1400,7 +1411,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         "containers.build",
         "native-effect-build",
         json!({"engineId":engine,"projectId":"project-a",
-            "context":{"rootId":"container-build-root","relative":"container-build-context"},
+            "context":{"rootId":"container-build-repo","relative":"container-build-context"},
             "definition":definition,"tag":tag}),
         Some(1),
     );
@@ -1426,7 +1437,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         "containers.create",
         "native-effect-create",
         json!({"spec":{"engineId":engine,"projectId":"project-a","image":"docker.io/library/alpine:latest",
-            "command":["sh","-c","echo booted; sleep 60"],"mounts":[],
+            "command":["sh","-c","echo booted; yes x | head -c 1100000; sleep 60"],"mounts":[],
             "ports":[{"containerPort":8080,"hostPort":host_port,"protocol":"Tcp"}],
             "environment":[],"resourceIds":["build-slot"]}}),
         Some(1),
@@ -1477,6 +1488,10 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         service.execute_effect(&op, &fx.authority()),
         ContainerEffectOutcome::Completed(_)
     ));
+    assert!(matches!(
+        service.observe_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
     let created = fx
         .read(|snapshot| snapshot.resources().container(&row.id))
         .unwrap();
@@ -1497,6 +1512,10 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         .unwrap();
     assert!(matches!(
         service.execute_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    assert!(matches!(
+        service.observe_effect(&op, &fx.authority()),
         ContainerEffectOutcome::Completed(_)
     ));
     let running = fx
@@ -1551,6 +1570,19 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         .read_exact(&*fx.store, &context, &value, 1_048_576)
         .unwrap();
     assert!(String::from_utf8_lossy(&bytes).contains("booted"));
+    let later_logs = result(fx.query_at(
+        &context,
+        "containers.logs",
+        json!({"containerId":row.id.as_str(),"afterBytes":"1048576","maxBytes":1024}),
+        Some(1),
+    ));
+    let OperationResult::ContainersLogs { value } = later_logs else {
+        panic!("wrong later logs result")
+    };
+    let (later, _) = artifacts
+        .read_exact(&*fx.store, &context, &value, 1_048_576)
+        .unwrap();
+    assert_eq!(later.len(), 1024);
     let stop = fx.command_keyed(
         &context,
         "containers.stop",
@@ -1569,6 +1601,10 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         service.execute_effect(&op, &fx.authority()),
         ContainerEffectOutcome::Completed(_)
     ));
+    assert!(matches!(
+        service.observe_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
     let stopped = fx
         .read(|snapshot| snapshot.resources().container(&row.id))
         .unwrap();
@@ -1581,8 +1617,9 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
             LeasePhase::Released
         );
     }
+    let human = fx.ctx("user-a", PrincipalKind::Human, Some("project-a"));
     let restart = fx.command_keyed(
-        &context,
+        &human,
         "containers.start",
         "native-effect-restart",
         json!({"containerId":row.id.as_str(),"expectedRevision":stopped.revision.to_string()}),
@@ -1611,6 +1648,16 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         service.execute_effect(&op, &fx.authority()),
         ContainerEffectOutcome::Completed(_)
     ));
+    fx.h.set_now(T0 + 86_400_001);
+    fx.reconcile(ReconcileCause::Sweep);
+    for lease in &restarting.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Held
+        );
+    }
     let report = service.shutdown_agent_work(Duration::from_secs(20));
     assert_eq!(report.verified_stopped, vec![row.id.clone()]);
     assert!(report.uncertain.is_empty());
@@ -1676,6 +1723,28 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
             LeasePhase::Released
         );
     }
+    let archive_restart = fx.command_keyed(
+        &context,
+        "containers.start",
+        "native-effect-archive-restart",
+        json!({"containerId":row.id.as_str(),"expectedRevision":closed.revision.to_string()}),
+        Some(1),
+    );
+    let archive_restart_id = match recorded(archive_restart).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted archive test restart: {other:?}"),
+    };
+    let archive_op = fx
+        .read(|snapshot| snapshot.operations().operation(&archive_restart_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&archive_op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    fx.h.sql("UPDATE projects SET lifecycle='Archived', revision=revision+1 WHERE id='project-a'");
+    let archived_report = service.shutdown_agent_work(Duration::from_secs(20));
+    assert_eq!(archived_report.verified_stopped, vec![row.id.clone()]);
+    assert!(archived_report.uncertain.is_empty());
 }
 
 #[test]

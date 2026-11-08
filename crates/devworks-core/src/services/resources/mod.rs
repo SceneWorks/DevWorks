@@ -446,7 +446,7 @@ impl ResourceService {
             let mut lease = tx.resources().lease(id)?.ok_or_else(|| {
                 StorageError::InvalidRecord("container resource lease missing".into())
             })?;
-            if lease.owner != container.actor
+            if lease.project_id.as_ref() != Some(&container.project_id)
                 || lease.holder_key != format!("session:{}", container.id.as_str())
             {
                 return Err(StorageError::InvalidRecord(
@@ -1618,6 +1618,12 @@ fn settle(
         for mut l in page {
             after = l.fence;
             let expired = l.expires_at_ms <= now;
+            if l.phase == LeasePhase::Held
+                && expired
+                && tx.resources().container_lease_in_use(&l.id)?
+            {
+                continue;
+            }
             if l.phase == LeasePhase::Held && expired {
                 if res.physical {
                     l.unreachable_since_ms.get_or_insert(l.expires_at_ms);
@@ -1860,6 +1866,13 @@ fn effective(
     res: &StoredResource,
     now: i64,
 ) -> (LeasePhase, Option<LeaseEndReason>) {
+    if l.phase == LeasePhase::Held
+        && l.purpose
+            .as_deref()
+            .is_some_and(|p| p.starts_with("container:"))
+    {
+        return (LeasePhase::Held, None);
+    }
     match l.phase {
         LeasePhase::Held if l.expires_at_ms <= now && res.physical => (LeasePhase::Uncertain, None),
         LeasePhase::Held | LeasePhase::Waiting if l.expires_at_ms <= now => {

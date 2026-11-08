@@ -9,18 +9,20 @@ use super::selection;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::AdmittedQuery;
 use crate::operations::{OperationInput, containers as ops};
-use crate::ports::storage::{ApplicationStore, ReadSnapshot, StoredContainer};
+use crate::ports::storage::{ApplicationStore, ReadSnapshot, StoredContainer, read_snapshot};
 use crate::ports::{IdKind, IdSource, Preparation, Prepared, QueryAnswer, QueryHandler};
+use crate::protocol::ProjectId;
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
-    ContainerCapability, ContainerRecord, Diagnostic, ItemState, Severity,
+    ContainerCapability, ContainerRecord, Diagnostic, ItemState, RegisteredPath, Severity,
 };
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id};
 use crate::services::artifacts::observed::Observed;
-use crate::services::process::tools::ToolBindings;
+use crate::services::process::tools::{BindingRefusal, ToolBindings};
 use crate::services::sessions::{Refusal, query_fault, rev};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -49,6 +51,40 @@ pub struct ContainerService {
 }
 
 impl ContainerService {
+    /// Static host grants and current project member repositories are valid container roots.
+    /// Repository IDs remain usable when projects or repositories are registered after boot.
+    pub(super) fn resolve_project_path(
+        &self,
+        path: &RegisteredPath,
+        project: &ProjectId,
+    ) -> Option<PathBuf> {
+        match self.bindings.resolve_registered_path(path, Some(project)) {
+            Ok(resolved) => return Some(resolved),
+            Err(BindingRefusal::UnknownRoot) => {}
+            Err(_) => return None,
+        }
+        let (repository, members) = read_snapshot(
+            &*self.store,
+            &crate::ports::storage::ReadOptions::default(),
+            |snapshot| {
+                Ok((
+                    snapshot.projects().repository(&path.root_id)?,
+                    snapshot.projects().repository_projects(&path.root_id)?,
+                ))
+            },
+        )
+        .ok()?;
+        let repository = repository?;
+        if !repository.primary || repository.lifecycle == "Deleted" || !members.contains(project) {
+            return None;
+        }
+        let root = PathBuf::from(repository.location);
+        if !root.is_absolute() || root.canonicalize().ok()? != root || !root.is_dir() {
+            return None;
+        }
+        let resolved = root.join(&path.relative.0).canonicalize().ok()?;
+        resolved.starts_with(&root).then_some(resolved)
+    }
     pub fn new(
         store: Arc<dyn ApplicationStore>,
         runner: Arc<ContainerRunner>,
@@ -334,13 +370,23 @@ impl QueryHandler for ContainerService {
                 let spec = bound_spec(&self.bindings, backend, args, None).map_err(|_| {
                     self.fault(DomainErrorCode::UnsupportedCapability, Some(row.id.clone()))
                 })?;
-                let result = self
+                let (result, total_bytes) = self
                     .runner
-                    .run(ctx, None, spec, Duration::from_secs(10), 1_048_576, &[])
+                    .run_window(
+                        ctx,
+                        None,
+                        spec,
+                        Duration::from_secs(10),
+                        (
+                            input.after_bytes.get() as u64,
+                            input.max_bytes.get() as usize,
+                        ),
+                        &[],
+                    )
                     .map_err(|_| {
                         self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone()))
                     })?;
-                if result.exit_code != Some(0) || result.truncated {
+                if result.exit_code != Some(0) {
                     return Err(self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone())));
                 }
                 let Some(artifacts) = &self.artifacts else {
@@ -348,13 +394,9 @@ impl QueryHandler for ContainerService {
                         self.fault(DomainErrorCode::UnsupportedCapability, Some(row.id.clone()))
                     );
                 };
-                let offset = usize::try_from(input.after_bytes.get())
-                    .unwrap_or(usize::MAX)
-                    .min(result.stdout.len());
-                let end = offset
-                    .saturating_add(input.max_bytes.get() as usize)
-                    .min(result.stdout.len());
-                let bytes = &result.stdout[offset..end];
+                let offset = (input.after_bytes.get() as u64).min(total_bytes);
+                let end = offset.saturating_add(result.stdout.len() as u64);
+                let bytes = result.stdout.as_slice();
                 let (reference, ()) = artifacts.publish_observed(&*self.store, ctx, query.authorization(),
                     Observed {
                         project: Some(row.project_id.clone()),

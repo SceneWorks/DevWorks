@@ -2021,6 +2021,14 @@ fn base_directory(
                     ui.selectable_value(&mut choice, "docker".into(), "Docker");
                     ui.selectable_value(&mut choice, "podman".into(), "Podman");
                     ui.selectable_value(&mut choice, "apple".into(), "Apple container");
+                })
+                .response
+                .widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::Role::ComboBox,
+                        true,
+                        "Project container runtime",
+                    )
                 });
         });
         if choice == "inherit" {

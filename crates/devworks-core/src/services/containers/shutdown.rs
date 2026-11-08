@@ -23,7 +23,7 @@ pub struct ShutdownReport {
 }
 
 impl ContainerService {
-    fn shutdown_context(&self, row: &StoredContainer) -> Result<InvocationContext, StorageError> {
+    fn shutdown_context(&self, _row: &StoredContainer) -> Result<InvocationContext, StorageError> {
         let policy = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             snapshot
                 .configuration()
@@ -31,20 +31,17 @@ impl ContainerService {
         })?
         .map_or(1, |setting| setting.revision);
         let info = self.store.info();
-        Ok(HostIngress::new(&*self.store)
-            .context(
-                info.host_actor,
-                PrincipalKind::Host,
-                self.ids.next_id(IdKind::Command),
-                Id::new("container-shutdown").expect("static ingress ID"),
-                counter(info.restore_epoch),
-                rev(policy),
-            )
-            .with_lineage(
-                Some(row.project_id.clone()),
-                row.root_id.clone(),
-                row.assignment_id.clone(),
-            ))
+        // Cleanup uses the host's unscoped process identity so an archived project cannot
+        // fence the ownership inspection needed to stop its already-running container. The
+        // container row and exact labels still fence the external target and retain attribution.
+        Ok(HostIngress::new(&*self.store).context(
+            info.host_actor,
+            PrincipalKind::Host,
+            self.ids.next_id(IdKind::Command),
+            Id::new("container-shutdown").expect("static ingress ID"),
+            counter(info.restore_epoch),
+            rev(policy),
+        ))
     }
 
     fn mark_shutdown_phase(

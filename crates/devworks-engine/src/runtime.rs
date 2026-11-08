@@ -1868,13 +1868,23 @@ impl Runtime {
         self.scheduler.drain(deadline).await;
         let container_shutdown = if let Some(service) = self.containers.clone() {
             let bound = left();
+            let mut task = tokio::task::spawn_blocking(move || service.shutdown_agent_work(bound));
             Some(
-                tokio::task::spawn_blocking(move || service.shutdown_agent_work(bound))
-                    .await
-                    .unwrap_or_else(|_| devworks_core::services::containers::ShutdownReport {
-                        read_error: Some("container shutdown worker panicked".into()),
-                        ..Default::default()
+                match dispatch::first(tokio::time::sleep_until(deadline), &mut task).await {
+                    dispatch::Either::Right(result) => result.unwrap_or_else(|_| {
+                        devworks_core::services::containers::ShutdownReport {
+                            read_error: Some("container shutdown worker panicked".into()),
+                            ..Default::default()
+                        }
                     }),
+                    dispatch::Either::Left(()) => {
+                        task.abort();
+                        devworks_core::services::containers::ShutdownReport {
+                            read_error: Some("container shutdown deadline elapsed".into()),
+                            ..Default::default()
+                        }
+                    }
+                },
             )
         } else {
             None

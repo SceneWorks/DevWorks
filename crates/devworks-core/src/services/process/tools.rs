@@ -436,6 +436,7 @@ pub(crate) fn redacted_output(bytes: &[u8], values: &[String], incomplete: bool)
 pub struct BoundedOutput {
     bytes: Vec<u8>,
     seen: u64,
+    start: u64,
     limit: usize,
 }
 
@@ -2345,21 +2346,35 @@ impl QueryHandler for ProcessToolService {
 
 impl BoundedOutput {
     pub fn new(limit: usize) -> Self {
+        Self::from_offset(limit, 0)
+    }
+
+    pub fn from_offset(limit: usize, start: u64) -> Self {
         Self {
             bytes: Vec::new(),
             seen: 0,
+            start,
             limit,
         }
     }
 
     pub fn append(&mut self, chunk: &[u8]) {
+        let before = self.seen;
         self.seen = self.seen.saturating_add(chunk.len() as u64);
-        let keep = self.limit.saturating_sub(self.bytes.len()).min(chunk.len());
-        self.bytes.extend_from_slice(&chunk[..keep]);
+        let skip = self.start.saturating_sub(before).min(chunk.len() as u64) as usize;
+        let keep = self
+            .limit
+            .saturating_sub(self.bytes.len())
+            .min(chunk.len() - skip);
+        self.bytes.extend_from_slice(&chunk[skip..skip + keep]);
     }
 
     pub fn truncated(&self) -> bool {
-        self.seen > self.bytes.len() as u64
+        self.seen.saturating_sub(self.start) > self.bytes.len() as u64
+    }
+
+    pub fn seen(&self) -> u64 {
+        self.seen
     }
 
     pub fn page(&self, after: u64, max: usize) -> (u64, &[u8], u64) {
@@ -2505,6 +2520,12 @@ mod tests {
         assert_eq!(output.page(2, 2), (2, b"cd".as_slice(), 4));
         assert_eq!(output.page(5, 2), (5, b"".as_slice(), 5));
         assert_eq!(output.page(u64::MAX, usize::MAX), (5, b"".as_slice(), 5));
+        let mut later = BoundedOutput::from_offset(3, 4);
+        later.append(b"abc");
+        later.append(b"defghij");
+        assert_eq!(later.retained(), b"efg");
+        assert_eq!(later.seen(), 10);
+        assert!(later.truncated());
     }
 
     #[test]

@@ -146,9 +146,17 @@ impl ContainerService {
                     kind: "container",
                     id: id.as_str().into(),
                 })?;
-            if row.last_operation_id != operation || row.phase != pending {
+            if row.last_operation_id != operation {
                 return Err(StorageError::InvalidRecord(
                     "container effect superseded".into(),
+                ));
+            }
+            if row.phase == terminal {
+                return Ok(row);
+            }
+            if row.phase != pending {
+                return Err(StorageError::InvalidRecord(
+                    "container effect phase changed".into(),
                 ));
             }
             let expected = row.revision;
@@ -215,8 +223,35 @@ impl ContainerService {
             Ok(row) => row,
             Err(outcome) => return outcome,
         };
-        if row.phase != ContainerPhase::Creating || row.project_id != input.spec.project_id {
+        if !matches!(
+            row.phase,
+            ContainerPhase::Creating | ContainerPhase::Created
+        ) || row.project_id != input.spec.project_id
+        {
             return EffectOutcome::Failed("container creation phase or project changed".into());
+        }
+        if row.phase == ContainerPhase::Created {
+            let observed = match self.inspect_live(context, &row) {
+                Ok(observed) if observed.phase == ObservedPhase::Stopped => observed,
+                _ => return EffectOutcome::Unknown("settled create needs owner inspection".into()),
+            };
+            let Some(backend) = Backend::parse(&row.engine) else {
+                return EffectOutcome::Failed("unknown container backend".into());
+            };
+            if verified_lifecycle_target(
+                backend,
+                &observed,
+                row.create_operation_id.0.as_str(),
+                row.project_id.0.as_str(),
+                &row.owner_kind,
+            )
+            .is_err()
+            {
+                return EffectOutcome::Unknown("settled create ownership changed".into());
+            }
+            return EffectOutcome::Completed(json!({"result":OperationResult::ContainersCreate {
+                value: self.container_record(&row, &observed),
+            }}));
         }
         let backend = match Backend::parse(&row.engine) {
             Some(Backend::Docker) => Backend::Docker,
@@ -245,7 +280,7 @@ impl ContainerService {
             expected_resources.insert(format!("hostport-{protocol}-{}", port.host_port.get()));
         }
         let lease_ids = row.resource_lease_ids.clone();
-        let owner = row.actor.clone();
+        let project = row.project_id.clone();
         let holder = format!("session:{}", row.id.as_str());
         let leases_valid = run_write(&*self.store, WriteOptions::default(), move |tx| {
             if lease_ids.len() != expected_resources.len() {
@@ -257,9 +292,10 @@ impl ContainerService {
                     return Ok(false);
                 };
                 if lease.phase != crate::ports::storage::LeasePhase::Held
-                    || lease.owner != owner
+                    || lease.project_id.as_ref() != Some(&project)
                     || lease.holder_key != holder
-                    || lease.expires_at_ms <= tx.now_ms()
+                    || (lease.expires_at_ms <= tx.now_ms()
+                        && !tx.resources().container_lease_in_use(lease_id)?)
                 {
                     return Ok(false);
                 }
@@ -283,12 +319,9 @@ impl ContainerService {
         }
         let mut sources = Vec::new();
         for mount in &input.spec.mounts.0 {
-            let path = match self
-                .bindings
-                .resolve_registered_path(&mount.source, Some(&row.project_id))
-            {
-                Ok(path) => path,
-                Err(_) => {
+            let path = match self.resolve_project_path(&mount.source, &row.project_id) {
+                Some(path) => path,
+                None => {
                     return EffectOutcome::Failed("registered container mount changed".into());
                 }
             };
@@ -420,11 +453,8 @@ impl ContainerService {
                     );
                 }
             };
-        let context_path = match self
-            .bindings
-            .resolve_registered_path(&input.context, Some(&input.project_id))
-        {
-            Ok(path) if path.is_dir() => path,
+        let context_path = match self.resolve_project_path(&input.context, &input.project_id) {
+            Some(path) if path.is_dir() => path,
             _ => return EffectOutcome::Failed("registered container build context changed".into()),
         };
         let args = match backend.build("-", &input.tag.0, &context_path.to_string_lossy()) {
@@ -676,12 +706,49 @@ impl ContainerService {
         } else {
             ContainerPhase::Running
         };
+        if row.phase == terminal {
+            let Some(backend) = Backend::parse(&row.engine) else {
+                return EffectOutcome::Failed("unknown container backend".into());
+            };
+            let observed = match self.inspect_live(context, &row) {
+                Ok(observed) => observed,
+                Err(_) => {
+                    return EffectOutcome::Unknown(
+                        "settled lifecycle needs owner inspection".into(),
+                    );
+                }
+            };
+            let desired = if stop {
+                ObservedPhase::Stopped
+            } else {
+                ObservedPhase::Running
+            };
+            if observed.phase != desired
+                || verified_lifecycle_target(
+                    backend,
+                    &observed,
+                    row.create_operation_id.0.as_str(),
+                    row.project_id.0.as_str(),
+                    &row.owner_kind,
+                )
+                .is_err()
+            {
+                return EffectOutcome::Unknown("settled lifecycle ownership changed".into());
+            }
+            let value = self.container_record(&row, &observed);
+            let result = if stop {
+                OperationResult::ContainersStop { value }
+            } else {
+                OperationResult::ContainersStart { value }
+            };
+            return EffectOutcome::Completed(json!({"result":result}));
+        }
         if row.phase != pending {
             return EffectOutcome::Failed("container lifecycle phase changed".into());
         }
         if !stop && !row.resource_lease_ids.is_empty() {
             let lease_ids = row.resource_lease_ids.clone();
-            let owner = row.actor.clone();
+            let project = row.project_id.clone();
             let holder = format!("session:{}", row.id.as_str());
             let valid = run_write(&*self.store, WriteOptions::default(), move |tx| {
                 for id in &lease_ids {
@@ -689,9 +756,10 @@ impl ContainerService {
                         return Ok(false);
                     };
                     if lease.phase != crate::ports::storage::LeasePhase::Held
-                        || lease.owner != owner
+                        || lease.project_id.as_ref() != Some(&project)
                         || lease.holder_key != holder
-                        || lease.expires_at_ms <= tx.now_ms()
+                        || (lease.expires_at_ms <= tx.now_ms()
+                            && !tx.resources().container_lease_in_use(id)?)
                     {
                         return Ok(false);
                     }
@@ -894,6 +962,27 @@ impl ContainerService {
                 if observed.phase != ObservedPhase::Stopped {
                     return EffectOutcome::Unknown(
                         "container create phase not yet verified".into(),
+                    );
+                }
+                if row.phase == ContainerPhase::Created {
+                    let Some(backend) = Backend::parse(&row.engine) else {
+                        return EffectOutcome::Failed("unknown container backend".into());
+                    };
+                    if verified_lifecycle_target(
+                        backend,
+                        &observed,
+                        row.create_operation_id.0.as_str(),
+                        row.project_id.0.as_str(),
+                        &row.owner_kind,
+                    )
+                    .is_err()
+                    {
+                        return EffectOutcome::Unknown("settled create ownership changed".into());
+                    }
+                    return EffectOutcome::Completed(
+                        json!({"result":OperationResult::ContainersCreate {
+                            value: self.container_record(&row, &observed),
+                        }}),
                     );
                 }
                 let settled = match self.settle_phase(

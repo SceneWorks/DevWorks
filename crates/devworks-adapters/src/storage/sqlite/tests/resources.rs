@@ -137,6 +137,35 @@ fn owned_container_intent_survives_restart_and_stop_listing_is_agent_scoped() {
             .any(|row| row.table == "owned_containers"
                 && row.action == ProjectPurgeRowAction::Delete)
     );
+    let mut failed = intent;
+    failed.id = id("dw-container-failed");
+    failed.create_operation_id = devworks_core::protocol::OperationId(id("op-create-failed"));
+    failed.last_operation_id = failed.create_operation_id.clone();
+    fx.write({
+        let failed = failed.clone();
+        move |tx| tx.resources().insert_container(&failed)
+    });
+    failed.phase = ContainerPhase::Failed;
+    failed.revision += 1;
+    fx.write(move |tx| tx.resources().update_container(&failed, 1));
+    let purge = fx
+        .read(|r| r.projects().purge_planning(&project("project-a")))
+        .unwrap();
+    assert!(
+        !purge
+            .unresolved
+            .iter()
+            .any(|row| row.table == "owned_containers")
+    );
+    assert_eq!(
+        purge
+            .rows
+            .iter()
+            .filter(|row| row.table == "owned_containers"
+                && row.action == ProjectPurgeRowAction::Delete)
+            .count(),
+        2
+    );
 }
 
 #[test]

@@ -534,7 +534,7 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
     while let Some(row) = db(active_containers.next())? {
         let id: String = db(row.get(0))?;
         let state: String = db(row.get(1))?;
-        if state != "Stopped" {
+        if !matches!(state.as_str(), "Stopped" | "Failed") {
             let digest =
                 super::guard::key_digest(&serde_json::to_string(&[id]).map_err(|_| invalid())?)?;
             let key = ("owned_containers".into(), digest.clone());
