@@ -40,6 +40,7 @@ use devworks_core::services::runs::{ControlService, ResumeBinding, Target};
 use devworks_core::services::sessions::SessionService;
 use devworks_core::services::work::WorkService;
 use devworks_core::settings::catalog::AgentRole;
+use devworks_engine::agent_supervisor::{AgentLauncher, AgentTurnExecutor};
 use devworks_engine::{
     ActivationLauncher, Composition, Launch, LaunchEnd, LaunchFuture, RunComposition, RunGate,
     RunSupervisor, RunTick, RuntimeConfig, ShutdownStage, boot,
@@ -738,6 +739,8 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
         Ok((assignment, session, profile, binding))
     });
     assert_eq!(assignment.purpose, AssignmentPurpose::Primary);
+    assert_eq!(assignment.state, AssignmentState::Active);
+    assert_eq!(first.state, OperationState::Dispatching);
     assert_eq!(assignment.execution_id, Some(activation.id.clone()));
     assert_eq!(session.root_id, Some(rid("root-i")));
     assert_eq!(profile.role_id.as_str(), "issueCoordinator");
@@ -753,7 +756,184 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
             .map_err(|error| StorageError::InvalidRecord(format!("replay refused: {error:?}")))
     });
     assert_eq!(again.assignment_id, first.assignment_id);
+    assert_eq!(again.revision, first.revision);
     assert_eq!(fx.inspection("root-i").assignments.len(), 1);
+
+    let agent = devworks_core::context::HostIngress::new(&*fx.store)
+        .context(
+            session.agent_id,
+            PrincipalKind::Agent,
+            id("delegate-invocation"),
+            id("delegate-ingress"),
+            devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(session.id)
+        .with_lineage(
+            Some(ProjectId(id("project-a"))),
+            Some(rid("root-i")),
+            Some(first.assignment_id.clone()),
+        );
+    let request = devworks_core::operations::agents::DelegateInput {
+        root_id: rid("root-i"),
+        expected_control_revision: Revision::new(fx.control("root-i").revision).unwrap(),
+        task_ids: devworks_core::protocol::support::BoundedList(vec![]),
+        role_id: id("worker"),
+        instruction: devworks_core::protocol::support::BoundedText("Investigate".into()),
+        source_checkpoint_id: None,
+    };
+    let agents =
+        devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    fx.tx(move |_, tx| {
+        agents
+            .delegate(tx, &agent, &request)
+            .map_err(|error| StorageError::InvalidRecord(format!("delegate refused: {error:?}")))
+    });
+    let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
+    let agents =
+        devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let activation_id = activation.id.clone();
+    let assignment_id = first.assignment_id;
+    assert!(fx.tx(move |_, tx| {
+        Ok(agents
+            .complete_primary(tx, &host, &assignment_id, &activation_id, epoch)
+            .is_err())
+    }));
+}
+
+#[derive(Default)]
+struct CompletedCoordinator(Mutex<Vec<(ActorId, AssignmentId)>>);
+impl AgentTurnExecutor for CompletedCoordinator {
+    fn run(
+        &self,
+        context: InvocationContext,
+        coordinator: devworks_core::protocol::records::AgentRecord,
+        stop: tokio::sync::watch::Receiver<bool>,
+    ) -> LaunchFuture {
+        assert!(!*stop.borrow());
+        self.0
+            .lock()
+            .unwrap()
+            .push((context.principal().clone(), coordinator.assignment_id));
+        Box::pin(async {
+            LaunchEnd::Finished {
+                outcome: ActivationOutcome::Completed,
+                detail: None,
+            }
+        })
+    }
+}
+
+#[test]
+fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let turns = Arc::new(CompletedCoordinator::default());
+    let launcher = Arc::new(AgentLauncher::new(
+        fx.store.clone(),
+        fx.h.ids.clone(),
+        Arc::new(devworks_core::services::agents::AgentService::new(
+            fx.h.ids.clone(),
+            fx.service.clone(),
+        )),
+        turns.clone(),
+    ));
+    let (supervisor, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let rt = runtime();
+    rt.block_on(async {
+        supervisor.tick().await.unwrap();
+        within("the coordinator settles", async {
+            while !supervisor.launched().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+    });
+    let seen = turns.0.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    let assignment = read(&*fx.store, |snapshot| {
+        snapshot.runs().assignment(&seen[0].1)
+    })
+    .unwrap();
+    assert_eq!(assignment.purpose, AssignmentPurpose::Primary);
+    assert_eq!(assignment.state, AssignmentState::Completed);
+    let session = read(&*fx.store, |snapshot| {
+        snapshot.sessions().session(&assignment.session_id)
+    })
+    .unwrap();
+    assert_eq!(seen[0].0, session.agent_id);
+    assert_eq!(
+        fx.activation(&assignment.execution_id.unwrap()).outcome,
+        Some(ActivationOutcome::Completed)
+    );
+}
+
+struct CompletesOnStop;
+impl AgentTurnExecutor for CompletesOnStop {
+    fn run(
+        &self,
+        _: InvocationContext,
+        _: devworks_core::protocol::records::AgentRecord,
+        mut stop: tokio::sync::watch::Receiver<bool>,
+    ) -> LaunchFuture {
+        Box::pin(async move {
+            while !*stop.borrow() {
+                if stop.changed().await.is_err() {
+                    break;
+                }
+            }
+            LaunchEnd::Finished {
+                outcome: ActivationOutcome::Completed,
+                detail: None,
+            }
+        })
+    }
+}
+
+#[test]
+fn agent_launcher_refuses_late_completion_after_pause() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let launcher = Arc::new(AgentLauncher::new(
+        fx.store.clone(),
+        fx.h.ids.clone(),
+        Arc::new(devworks_core::services::agents::AgentService::new(
+            fx.h.ids.clone(),
+            fx.service.clone(),
+        )),
+        Arc::new(CompletesOnStop),
+    ));
+    let (supervisor, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let rt = runtime();
+    let activation = rt.block_on(supervisor.tick()).unwrap().launched.remove(0);
+    rt.block_on(async {
+        within("the coordinator materializes", async {
+            while fx.inspection("root-i").assignments.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+    });
+    applied(&fx.pause(&fx.user, "root-i"));
+    rt.block_on(async {
+        supervisor.tick().await.unwrap();
+        within("the paused coordinator settles", async {
+            while !supervisor.launched().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+    });
+    assert_eq!(
+        fx.activation(&activation).outcome,
+        Some(ActivationOutcome::Cancelled)
+    );
+    assert_eq!(
+        fx.inspection("root-i").assignments[0].state,
+        AssignmentState::Waiting
+    );
 }
 
 #[test]

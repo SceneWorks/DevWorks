@@ -238,6 +238,7 @@ impl AgentService {
         if !runs::is_run_root(&root)
             || host.project_id().is_some_and(|p| p != &root.project_id)
             || host.root_id().is_some_and(|r| r != &root.id)
+            || !self.runs.root_permits_dispatch(tx, &root.id)?
         {
             return Err(denied().into());
         }
@@ -335,7 +336,66 @@ impl AgentService {
                 })?;
         }
         bind_role_authority(tx, host, &session.agent_id, role, &root.project_id)?;
+        let assignment = if assignment.state == AssignmentState::Active {
+            assignment
+        } else {
+            self.runs
+                .set_assignment_state(
+                    tx,
+                    host.principal(),
+                    &assignment.id,
+                    assignment.revision,
+                    AssignmentState::Active,
+                    None,
+                )?
+                .map_err(fenced)?
+        };
         agent_record(tx.runs(), &assignment).map_err(failure)
+    }
+
+    /// A coordinator may finish only after its descendants have settled. The host checks the
+    /// exact activation epoch again, so a late turn cannot finish a replacement coordinator.
+    pub fn complete_primary(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        host: &InvocationContext,
+        assignment_id: &AssignmentId,
+        activation_id: &crate::protocol::Id,
+        owner_epoch: i64,
+    ) -> Result<(), Failure> {
+        if host.principal_kind() != PrincipalKind::Host {
+            return Err(Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into());
+        }
+        let activation = tx.runs().activation(activation_id)?.ok_or_else(denied)?;
+        let assignment = tx.runs().assignment(assignment_id)?.ok_or_else(denied)?;
+        if activation.phase != ActivationPhase::Running
+            || activation.owner_epoch != owner_epoch
+            || assignment.purpose != crate::ports::storage::AssignmentPurpose::Primary
+            || assignment.execution_id.as_ref() != Some(activation_id)
+            || assignment.root_id != activation.root_id
+            || assignment.state != AssignmentState::Active
+            || runs::root_assignments(tx.runs(), &assignment.root_id, true)?
+                .iter()
+                .any(|child| child.parent_id.is_some())
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::Conflict,
+                "assignment",
+                Some(assignment.id.0),
+            )
+            .into());
+        }
+        self.runs
+            .set_assignment_state(
+                tx,
+                host.principal(),
+                assignment_id,
+                assignment.revision,
+                AssignmentState::Completed,
+                None,
+            )?
+            .map_err(fenced)?;
+        Ok(())
     }
 
     fn inspect(
