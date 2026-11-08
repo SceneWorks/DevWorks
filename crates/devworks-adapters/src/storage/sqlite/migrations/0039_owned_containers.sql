@@ -18,7 +18,7 @@ CREATE TABLE owned_containers (
     revision INTEGER NOT NULL CHECK(revision > 0),
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
-);
+) STRICT;
 CREATE INDEX owned_containers_agent_work ON owned_containers(owner_kind,state,id)
     WHERE owner_kind='Agent' AND state IN ('Creating','Starting','Running','Stopping','Uncertain');
 CREATE INDEX owned_containers_project ON owned_containers(project_id,id);
