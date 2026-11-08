@@ -53,6 +53,7 @@ pub struct ContainerService {
     host: HostPlatform<'static>,
     pub(super) ids: Arc<dyn IdSource>,
     lifecycle_gates: Mutex<HashMap<Id, Weak<Mutex<()>>>>,
+    pub(super) image_gate: Mutex<()>,
 }
 
 impl ContainerService {
@@ -188,6 +189,7 @@ impl ContainerService {
             host,
             ids,
             lifecycle_gates: Mutex::new(HashMap::new()),
+            image_gate: Mutex::new(()),
         }
     }
 

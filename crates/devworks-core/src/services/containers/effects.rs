@@ -1,5 +1,5 @@
 //! One-shot external container effects with label-fenced reconciliation.
-use super::backend::{Backend, CreatePlan, Port, ResolvedMount, ownership_labels};
+use super::backend::{Backend, CreatePlan, Port, ResolvedMount, ownership_labels, safe_reference};
 use super::execution::{bound_spec, with_environment};
 use super::inspection::{ObservedPhase, verified_lifecycle_target};
 use super::intent::{ContainerCommand, ContainerIntent};
@@ -7,6 +7,7 @@ use super::runner::CliError;
 use super::selection;
 use super::service::ContainerService;
 use crate::fingerprint::Fingerprint;
+use crate::fingerprint::sha256_hex;
 use crate::ports::Authorization;
 use crate::ports::secrets::SessionSecrets;
 use crate::ports::storage::{
@@ -16,9 +17,11 @@ use crate::ports::storage::{
 use crate::ports::{AuthorityPort, AuthorityRequest};
 use crate::protocol::OperationId;
 use crate::protocol::OperationState;
+use crate::protocol::ProjectId;
 use crate::protocol::records::ProcessRecord;
 use crate::protocol::records::{ContainerImage, ItemState};
 use crate::protocol::results::OperationResult;
+use crate::protocol::support::BoundedText;
 use crate::registry::Mode;
 use crate::services::artifacts::observed::Observed;
 use crate::services::sessions::rev;
@@ -42,7 +45,54 @@ struct ExecutionPlan<'a> {
     timeout: Duration,
 }
 
+fn scoped_image_tag(project: Option<&ProjectId>, image: &str) -> String {
+    let scope = project.map_or_else(
+        || "workspace".to_owned(),
+        |id| format!("project:{}", id.0.as_str()),
+    );
+    let scope_hash = sha256_hex(scope.as_bytes());
+    let image_hash = sha256_hex(image.as_bytes());
+    format!("devworks-local:{}-{}", &scope_hash[..16], &image_hash[..16])
+}
+
+fn parse_image_id(bytes: &[u8]) -> Option<String> {
+    let id = std::str::from_utf8(bytes).ok()?.trim();
+    let digest = id.strip_prefix("sha256:").unwrap_or(id);
+    (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| format!("sha256:{digest}"))
+}
+
 impl ContainerService {
+    fn image_id(
+        &self,
+        backend: Backend,
+        reference: &str,
+        context: &crate::context::InvocationContext,
+        operation: &OperationId,
+    ) -> Result<String, EffectOutcome> {
+        let args = backend
+            .image_id(reference)
+            .map_err(|_| EffectOutcome::Failed("container image reference invalid".into()))?;
+        let result = self.run_plan(
+            context,
+            operation,
+            ExecutionPlan {
+                backend,
+                args,
+                environment: &[],
+                redactions: &[],
+                stdin: None,
+                timeout: Duration::from_secs(20),
+            },
+        )?;
+        if result.exit_code != Some(0) {
+            return Err(EffectOutcome::Failed(
+                "container image is not published for this scope".into(),
+            ));
+        }
+        parse_image_id(&result.stdout)
+            .ok_or_else(|| EffectOutcome::Unknown("container image ID invalid".into()))
+    }
     fn selected_backend(
         &self,
         requested: &crate::protocol::Id,
@@ -262,6 +312,9 @@ impl ContainerService {
                 );
             }
         };
+        if safe_reference(&input.spec.image.0).is_err() {
+            return EffectOutcome::Failed("container image reference invalid".into());
+        }
         let selected = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             selection::selected(snapshot.configuration(), Some(&row.project_id))
         });
@@ -397,9 +450,17 @@ impl ContainerService {
         } else {
             None
         };
+        // A caller may use an already-local immutable image ID directly. Mutable references
+        // must have been published through this project's pull/build path first.
+        let image_reference = parse_image_id(input.spec.image.0.as_bytes())
+            .unwrap_or_else(|| scoped_image_tag(Some(&row.project_id), &input.spec.image.0));
+        let image_id = match self.image_id(backend, &image_reference, context, &operation.id) {
+            Ok(id) => id,
+            Err(outcome) => return outcome,
+        };
         let args = match backend.create(&CreatePlan {
             name: id.as_str(),
-            image: &input.spec.image.0,
+            image: &image_id,
             labels: &labels,
             mounts: &mounts,
             ports: &ports,
@@ -470,6 +531,9 @@ impl ContainerService {
             Ok(backend) => backend,
             Err(outcome) => return outcome,
         };
+        if safe_reference(&input.tag.0).is_err() {
+            return EffectOutcome::Failed("container build tag invalid".into());
+        }
         let Some(artifacts) = &self.artifacts else {
             return EffectOutcome::Failed("container build artifact reader unavailable".into());
         };
@@ -482,11 +546,20 @@ impl ContainerService {
                     );
                 }
             };
-        let context_path = match self.resolve_project_path(&input.context, &input.project_id) {
+        let resolved = if matches!(
+            context.principal_kind(),
+            crate::context::PrincipalKind::Human | crate::context::PrincipalKind::Host
+        ) {
+            self.resolve_project_path(&input.context, &input.project_id)
+        } else {
+            self.resolve_agent_mount_root(&input.context, &input.project_id)
+        };
+        let context_path = match resolved {
             Some(path) if path.is_dir() => path,
             _ => return EffectOutcome::Failed("registered container build context changed".into()),
         };
-        let args = match backend.build("-", &input.tag.0, &context_path.to_string_lossy()) {
+        let image_tag = scoped_image_tag(Some(&input.project_id), &input.tag.0);
+        let args = match backend.build("-", &image_tag, &context_path.to_string_lossy()) {
             Ok(args) => args,
             Err(_) => return EffectOutcome::Failed("container build arguments invalid".into()),
         };
@@ -510,8 +583,12 @@ impl ContainerService {
                 "container build outcome needs image reconciliation".into(),
             );
         }
+        let image_id = match self.image_id(backend, &image_tag, context, &operation.id) {
+            Ok(id) => id,
+            Err(outcome) => return outcome,
+        };
         EffectOutcome::Completed(json!({"result":OperationResult::ContainersBuild {
-            value: ContainerImage { engine_id: input.engine_id.clone(), image: input.tag.clone(), digest: None, state: ItemState::Healthy, owned: false },
+            value: ContainerImage { engine_id: input.engine_id.clone(), image: input.tag.clone(), digest: Some(BoundedText(image_id)), state: ItemState::Healthy, owned: true },
         }}))
     }
 
@@ -586,8 +663,35 @@ impl ContainerService {
                 "container pull outcome needs image reconciliation".into(),
             );
         }
+        let image_tag = scoped_image_tag(context.project_id(), &input.image.0);
+        let args = match backend.image_tag(&input.image.0, &image_tag) {
+            Ok(args) => args,
+            Err(_) => return EffectOutcome::Failed("container scoped image invalid".into()),
+        };
+        let tagged = match self.run_plan(
+            context,
+            &operation.id,
+            ExecutionPlan {
+                backend,
+                args,
+                environment: &[],
+                redactions: &[],
+                stdin: None,
+                timeout: Duration::from_secs(20),
+            },
+        ) {
+            Ok(result) => result,
+            Err(outcome) => return outcome,
+        };
+        if tagged.exit_code != Some(0) {
+            return EffectOutcome::Unknown("container scoped image tagging failed".into());
+        }
+        let image_id = match self.image_id(backend, &image_tag, context, &operation.id) {
+            Ok(id) => id,
+            Err(outcome) => return outcome,
+        };
         EffectOutcome::Completed(json!({"result":OperationResult::ContainersPull {
-            value: ContainerImage { engine_id: input.engine_id.clone(), image: input.image.clone(), digest: None, state: ItemState::Healthy, owned: false },
+            value: ContainerImage { engine_id: input.engine_id.clone(), image: input.image.clone(), digest: Some(BoundedText(image_id)), state: ItemState::Healthy, owned: true },
         }}))
     }
 
@@ -957,6 +1061,11 @@ impl ContainerService {
             ContainerCommand::Stop(input) => Some(self.lifecycle_gate(&input.container_id)),
             _ => None,
         };
+        let _image_guard = matches!(
+            intent.command,
+            ContainerCommand::Build(_) | ContainerCommand::Pull(_) | ContainerCommand::Create(_)
+        )
+        .then(|| self.image_gate.lock().unwrap_or_else(|p| p.into_inner()));
         let _lifecycle_guard = lifecycle_gate
             .as_ref()
             .map(|gate| gate.lock().unwrap_or_else(|p| p.into_inner()));
@@ -1083,5 +1192,36 @@ impl ContainerService {
             }
             _ => EffectOutcome::Unknown("container effect requires owner reconciliation".into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod image_scope_tests {
+    use super::*;
+
+    #[test]
+    fn mutable_image_tags_are_distinct_between_projects_and_id_is_pinned() {
+        let first = ProjectId(crate::protocol::Id::new("project-a").unwrap());
+        let second = ProjectId(crate::protocol::Id::new("project-b").unwrap());
+        let image = "docker.io/library/alpine:latest";
+        assert_ne!(
+            scoped_image_tag(Some(&first), image),
+            scoped_image_tag(Some(&second), image)
+        );
+        assert_ne!(
+            scoped_image_tag(Some(&first), image),
+            scoped_image_tag(None, image)
+        );
+        let workspace_named_project = ProjectId(crate::protocol::Id::new("workspace").unwrap());
+        assert_ne!(
+            scoped_image_tag(Some(&workspace_named_project), image),
+            scoped_image_tag(None, image)
+        );
+        let digest = "0".repeat(64);
+        assert_eq!(
+            parse_image_id(format!("sha256:{digest}\n").as_bytes()),
+            Some(format!("sha256:{digest}"))
+        );
+        assert_eq!(parse_image_id(b"sha256:not-an-id"), None);
     }
 }

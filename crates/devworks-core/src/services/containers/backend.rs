@@ -125,6 +125,28 @@ impl Backend {
         Ok(args)
     }
 
+    pub fn image_tag(self, source: &str, target: &str) -> Result<Vec<String>, PlanError> {
+        safe_reference(source)?;
+        safe_reference(target)?;
+        Ok(vec![
+            "image".into(),
+            "tag".into(),
+            source.into(),
+            target.into(),
+        ])
+    }
+
+    pub fn image_id(self, image: &str) -> Result<Vec<String>, PlanError> {
+        safe_reference(image)?;
+        Ok(vec![
+            "image".into(),
+            "inspect".into(),
+            "--format".into(),
+            "{{.Id}}".into(),
+            image.into(),
+        ])
+    }
+
     pub fn create(self, plan: &CreatePlan<'_>) -> Result<Vec<String>, PlanError> {
         safe_name(plan.name)?;
         safe_reference(plan.image)?;
@@ -279,7 +301,7 @@ fn safe_name(value: &str) -> Result<(), PlanError> {
     Ok(())
 }
 
-fn safe_reference(value: &str) -> Result<(), PlanError> {
+pub(super) fn safe_reference(value: &str) -> Result<(), PlanError> {
     if value.is_empty()
         || value.len() > 4096
         || value.starts_with('-')

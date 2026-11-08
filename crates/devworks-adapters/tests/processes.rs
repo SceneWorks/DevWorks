@@ -1364,7 +1364,7 @@ fn credentialed_container_pull_uses_private_one_call_auth_file() {
     let executable = fx.h.root.join("fake-docker");
     std::fs::write(
         &executable,
-        "#!/bin/sh\n[ \"$1\" = pull ] || exit 3\n[ -f \"$DOCKER_CONFIG/config.json\" ] || exit 4\ngrep -Fq 'YWdlbnQ6c2VjcmV0LXRva2Vu' \"$DOCKER_CONFIG/config.json\" || exit 5\nprintf ok > \"$(dirname \"$0\")/pull-marker\"\n",
+        "#!/bin/sh\ncase \"$1 $2\" in\n  'pull registry.example.test/team/image:tag')\n    [ -f \"$DOCKER_CONFIG/config.json\" ] || exit 4\n    grep -Fq 'YWdlbnQ6c2VjcmV0LXRva2Vu' \"$DOCKER_CONFIG/config.json\" || exit 5\n    printf ok > \"$(dirname \"$0\")/pull-marker\";;\n  'image tag') exit 0;;\n  'image inspect') printf 'sha256:%064d\\n' 0;;\n  *) exit 3;;\nesac\n",
     )
     .unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -1623,6 +1623,11 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         )
         .unwrap();
     let tag = format!("dw49-build-{}:qualified", std::process::id());
+    let scoped_tag = |image: &str| {
+        let scope = devworks_core::fingerprint::sha256_hex(b"project:project-a");
+        let image = devworks_core::fingerprint::sha256_hex(image.as_bytes());
+        format!("devworks-local:{}-{}", &scope[..16], &image[..16])
+    };
     struct ImageCleanup(String, String);
     impl Drop for ImageCleanup {
         fn drop(&mut self) {
@@ -1631,7 +1636,11 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
                 .output();
         }
     }
-    let _image_cleanup = ImageCleanup(executable.clone(), tag.clone());
+    let _image_cleanup = ImageCleanup(executable.clone(), scoped_tag(&tag));
+    let _pull_cleanup = ImageCleanup(
+        executable.clone(),
+        scoped_tag("docker.io/library/alpine:latest"),
+    );
     let build = fx.command_keyed(
         &context,
         "containers.build",
@@ -1749,7 +1758,27 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         .read(|snapshot| snapshot.resources().container(&row.id))
         .unwrap();
     assert_eq!(running.phase, ContainerPhase::Running);
-    // The running agent has a writable repository-root mount. A later descendant source
+    let unsafe_build = fx.command_keyed(
+        &context,
+        "containers.build",
+        "native-effect-descendant-build",
+        json!({"engineId":engine,"projectId":"project-a",
+            "context":{"rootId":"container-build-repo","relative":"container-build-context/mutable-child"},
+            "definition":definition,"tag":"unsafe-build:latest"}),
+        Some(1),
+    );
+    let unsafe_build_id = match recorded(unsafe_build).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected recorded descendant build: {other:?}"),
+    };
+    let unsafe_build_op = fx
+        .read(|snapshot| snapshot.operations().operation(&unsafe_build_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&unsafe_build_op, &fx.authority()),
+        ContainerEffectOutcome::Failed(reason) if reason.contains("build context changed")
+    ));
+    // The running agent has a writable direct-child mount. A later descendant source
     // could be replaced by that workload between path validation and engine dispatch.
     let descendant = fx.command_keyed(
         &context,
