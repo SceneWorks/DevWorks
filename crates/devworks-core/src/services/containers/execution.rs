@@ -28,8 +28,10 @@ pub fn bound_spec(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::Id;
-    use crate::services::process::tools::RegisteredExecutable;
+    use crate::protocol::records::RegisteredPath;
+    use crate::protocol::support::RelativePath;
+    use crate::protocol::{Id, ProjectId};
+    use crate::services::process::tools::{RegisteredExecutable, RegisteredWorkingRoot};
 
     #[test]
     fn selected_backend_requires_registered_exact_executable() {
@@ -49,5 +51,62 @@ mod tests {
             bound_spec(&bindings, Backend::Podman, Vec::new(), None),
             Err(BindingRefusal::UnknownExecutable)
         ));
+    }
+
+    #[test]
+    fn registered_mount_path_is_confined_to_its_project_root() {
+        let directory = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "dw-container-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(directory.clone());
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("file"), b"content").unwrap();
+        let project = ProjectId(Id::new("project-a").unwrap());
+        let bindings = ToolBindings::new(
+            std::iter::empty::<RegisteredExecutable>(),
+            [RegisteredWorkingRoot {
+                id: Id::new("root-a").unwrap(),
+                project: Some(project.clone()),
+                path: directory.clone(),
+            }],
+        )
+        .unwrap();
+        let path = RegisteredPath {
+            root_id: Id::new("root-a").unwrap(),
+            relative: RelativePath("file".into()),
+        };
+        assert_eq!(
+            bindings
+                .resolve_registered_path(&path, Some(&project))
+                .unwrap(),
+            directory.join("file")
+        );
+        assert!(matches!(
+            bindings.resolve_registered_path(&path, None),
+            Err(BindingRefusal::OutOfProject)
+        ));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(std::env::temp_dir(), directory.join("escape")).unwrap();
+            let escaped = RegisteredPath {
+                relative: RelativePath("escape".into()),
+                ..path
+            };
+            assert!(matches!(
+                bindings.resolve_registered_path(&escaped, Some(&project)),
+                Err(BindingRefusal::OutOfProject)
+            ));
+        }
     }
 }

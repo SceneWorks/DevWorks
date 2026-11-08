@@ -32,7 +32,7 @@ use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
     ApprovalState, OutputEncoding, ProcessOutput, ProcessRecord, ProposalRecord,
 };
-use crate::protocol::records::{ProcessSpec, ToolProfile};
+use crate::protocol::records::{ProcessSpec, RegisteredPath, ToolProfile};
 use crate::protocol::results::{DomainDecision, OperationCompletion, OperationResult};
 use crate::protocol::support::BoundedText;
 use crate::protocol::{
@@ -98,6 +98,30 @@ pub enum BindingRefusal {
 }
 
 impl ToolBindings {
+    /// Resolve a project path under its exact registered root, rejecting symlink escapes.
+    pub fn resolve_registered_path(
+        &self,
+        path: &RegisteredPath,
+        project: Option<&ProjectId>,
+    ) -> Result<PathBuf, BindingRefusal> {
+        let root = self
+            .roots
+            .get(path.root_id.as_str())
+            .ok_or(BindingRefusal::UnknownRoot)?;
+        if root.project.as_ref() != project {
+            return Err(BindingRefusal::OutOfProject);
+        }
+        let root_path = exact_directory(&root.path).ok_or(BindingRefusal::ChangedRoot)?;
+        let resolved = root_path
+            .join(&path.relative.0)
+            .canonicalize()
+            .map_err(|_| BindingRefusal::ChangedRoot)?;
+        if !resolved.starts_with(&root_path) {
+            return Err(BindingRefusal::OutOfProject);
+        }
+        Ok(resolved)
+    }
+
     /// A backend selector resolves only a host-registered executable, rechecking its exact
     /// target at dispatch. Missing runtimes remain unavailable; no PATH fallback occurs here.
     pub fn resolve_named_executable(&self, name: &str) -> Result<String, BindingRefusal> {

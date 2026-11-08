@@ -956,7 +956,7 @@ fn container_create_receipt_atomically_records_ownership_before_effect_delivery(
         fx.h.ids.clone(),
     ));
     fx.cases = fx.cases.with_containers(service);
-    let context = fx.ctx("user-a", PrincipalKind::Human, Some("project-a"));
+    let context = fx.agent("agent-a", "project-a", "s-a");
     let reply = fx.command_keyed(
         &context,
         "containers.create",
@@ -977,7 +977,8 @@ fn container_create_receipt_atomically_records_ownership_before_effect_delivery(
     assert_eq!(containers.len(), 1);
     assert_eq!(containers[0].phase, ContainerPhase::Creating);
     assert_eq!(containers[0].create_operation_id, operation);
-    assert_eq!(containers[0].owner_kind, "Human");
+    assert_eq!(containers[0].owner_kind, "Agent");
+    assert_eq!(containers[0].root_id, Some(root("root-a")));
     let deliveries = fx.read(|snapshot| {
         snapshot.queue().deliveries(
             &DeliveryFilter {
