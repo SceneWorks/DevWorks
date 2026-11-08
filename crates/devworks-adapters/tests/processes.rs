@@ -6,7 +6,6 @@
 //! while another test thread holds open files can transiently inherit them (observed with the
 //! data-root lock), so spawning tests never share a test process with concurrent store reopens.
 #![allow(dead_code, clippy::result_large_err)]
-#[cfg(unix)]
 use devworks_adapters::containers::NativeRegistryAuth;
 use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;

@@ -426,7 +426,7 @@ impl ResourceService {
         Ok(matches!(lease.state, LeaseState::Held).then_some(lease.id))
     }
 
-    /// Release the leases only after the exact owned container has been observed stopped.
+    /// Release leases after the owned container is stopped or creation failed before dispatch.
     /// The container row and lease transitions commit together.
     pub(crate) fn release_container_leases(
         &self,

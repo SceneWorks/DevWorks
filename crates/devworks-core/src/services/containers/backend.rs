@@ -163,7 +163,7 @@ impl Backend {
             safe_env_name(name)?;
         }
         if let Some(path) = plan.env_file {
-            safe_path(path)?;
+            safe_env_file(path)?;
             args.extend(["--env-file".into(), path.into()]);
         } else if self == Self::Apple {
             for (name, _) in plan.environment {
@@ -198,7 +198,7 @@ impl Backend {
             safe_env_name(key)?;
         }
         if let Some(path) = env_file {
-            safe_path(path)?;
+            safe_env_file(path)?;
             args.extend(["--env-file".into(), path.into()]);
         } else if self == Self::Apple {
             for (key, _) in environment {
@@ -317,6 +317,13 @@ fn safe_env_name(value: &str) -> Result<(), PlanError> {
     Ok(())
 }
 
+fn safe_env_file(value: &str) -> Result<(), PlanError> {
+    if value.is_empty() || value.starts_with('-') || value.contains('\0') {
+        return Err(PlanError::InvalidPath);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,7 +390,7 @@ mod tests {
             mounts: &mounts,
             ports: &ports,
             environment: &environment,
-            env_file: Some("/private/env"),
+            env_file: Some("/private, scoped/env"),
             command: &[],
         };
         let args = Backend::Docker.create(&plan).unwrap();
@@ -402,7 +409,7 @@ mod tests {
         );
         assert!(
             args.windows(2)
-                .any(|pair| pair == ["--env-file", "/private/env"])
+                .any(|pair| pair == ["--env-file", "/private, scoped/env"])
         );
         assert!(!args.iter().any(|arg| arg.contains("value with spaces")));
         assert_eq!(args.last().unwrap(), "alpine:latest");
