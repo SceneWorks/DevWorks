@@ -1,5 +1,6 @@
 //! Selected container backend operations and owned agent-work lifecycle (DW-49).
 pub mod backend;
+mod commands;
 pub mod execution;
 pub mod intent;
 pub mod probe;

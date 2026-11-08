@@ -6,7 +6,7 @@ use super::selection;
 use crate::context::InvocationContext;
 use crate::gateway::AdmittedQuery;
 use crate::operations::{OperationInput, containers as ops};
-use crate::ports::storage::ReadSnapshot;
+use crate::ports::storage::{ApplicationStore, ReadSnapshot};
 use crate::ports::{IdKind, IdSource, Preparation, Prepared, QueryAnswer, QueryHandler};
 use crate::protocol::records::{ContainerCapability, Diagnostic, ItemState, Severity};
 use crate::protocol::results::OperationResult;
@@ -17,6 +17,7 @@ use crate::services::sessions::{Refusal, query_fault, rev};
 use std::sync::Arc;
 
 pub struct ContainerService {
+    pub(super) store: Arc<dyn ApplicationStore>,
     runner: Arc<ContainerRunner>,
     bindings: ToolBindings,
     host: HostPlatform<'static>,
@@ -25,12 +26,14 @@ pub struct ContainerService {
 
 impl ContainerService {
     pub fn new(
+        store: Arc<dyn ApplicationStore>,
         runner: Arc<ContainerRunner>,
         bindings: ToolBindings,
         host: HostPlatform<'static>,
         ids: Arc<dyn IdSource>,
     ) -> Self {
         Self {
+            store,
             runner,
             bindings,
             host,

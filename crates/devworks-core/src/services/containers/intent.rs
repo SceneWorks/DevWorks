@@ -62,6 +62,7 @@ pub struct ContainerIntent {
     authority_sources: Vec<Id>,
     fingerprint: String,
     source_binding: Option<SourceBinding>,
+    pub container_id: Option<Id>,
     pub command: ContainerCommand,
 }
 
@@ -84,6 +85,7 @@ impl ContainerIntent {
             authority_sources: ctx.authority_sources().to_vec(),
             fingerprint: admitted.fingerprint().as_str().into(),
             source_binding,
+            container_id: None,
             command,
         }
     }

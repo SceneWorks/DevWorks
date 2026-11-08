@@ -28,6 +28,7 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::containers::runner::ContainerRunner;
+use devworks_core::services::containers::service::ContainerService;
 use devworks_core::services::containers::{
     backend::{Backend as ContainerBackend, CreatePlan, ownership_labels, ownership_matches},
     execution::bound_spec,
@@ -932,6 +933,62 @@ fn native_docker_owned_lifecycle_uses_the_exact_planned_container() {
     ));
     run(backend.logs(&name).unwrap());
     run(backend.stop(&name).unwrap());
+}
+
+#[test]
+fn container_create_receipt_atomically_records_ownership_before_effect_delivery() {
+    let _serial = serial();
+    let mut fx = Fx::new();
+    let runner = Arc::new(ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    ));
+    let service = Arc::new(ContainerService::new(
+        fx.store.clone(),
+        runner,
+        ToolBindings::default(),
+        HostPlatform {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            macos_major: 0,
+        },
+        fx.h.ids.clone(),
+    ));
+    fx.cases = fx.cases.with_containers(service);
+    let context = fx.ctx("user-a", PrincipalKind::Human, Some("project-a"));
+    let reply = fx.command_keyed(
+        &context,
+        "containers.create",
+        "container-create-1",
+        json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:latest",
+            "command":[],"mounts":[],"ports":[],"environment":[],"resourceIds":[]}}),
+        Some(1),
+    );
+    let operation = match recorded(reply).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected durable create intent: {other:?}"),
+    };
+    let containers = fx.read(|snapshot| {
+        snapshot
+            .resources()
+            .containers(&ContainerFilter::Project(project("project-a")), None, 10)
+    });
+    assert_eq!(containers.len(), 1);
+    assert_eq!(containers[0].phase, ContainerPhase::Creating);
+    assert_eq!(containers[0].create_operation_id, operation);
+    assert_eq!(containers[0].owner_kind, "Human");
+    let deliveries = fx.read(|snapshot| {
+        snapshot.queue().deliveries(
+            &DeliveryFilter {
+                consumer: Some("container_effects".into()),
+                operation_id: Some(operation),
+            },
+            None,
+            10,
+        )
+    });
+    assert_eq!(deliveries.entries.len(), 1);
 }
 
 #[test]
