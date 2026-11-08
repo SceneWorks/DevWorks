@@ -895,6 +895,18 @@ impl ContainerService {
             }
             Err(outcome) => return outcome,
         };
+        let lifecycle_gate = match &intent.command {
+            ContainerCommand::Create(_) => intent
+                .container_id
+                .as_ref()
+                .map(|id| self.lifecycle_gate(id)),
+            ContainerCommand::Start(input) => Some(self.lifecycle_gate(&input.container_id)),
+            ContainerCommand::Stop(input) => Some(self.lifecycle_gate(&input.container_id)),
+            _ => None,
+        };
+        let _lifecycle_guard = lifecycle_gate
+            .as_ref()
+            .map(|gate| gate.lock().unwrap_or_else(|p| p.into_inner()));
         let outcome = match &intent.command {
             ContainerCommand::Build(input) => self.execute_build(operation, &context, input),
             ContainerCommand::Pull(input) => self.execute_pull(operation, &context, input),
@@ -942,6 +954,18 @@ impl ContainerService {
             Ok(value) => value,
             Err(outcome) => return outcome,
         };
+        let lifecycle_gate = match &intent.command {
+            ContainerCommand::Create(_) => intent
+                .container_id
+                .as_ref()
+                .map(|id| self.lifecycle_gate(id)),
+            ContainerCommand::Start(input) => Some(self.lifecycle_gate(&input.container_id)),
+            ContainerCommand::Stop(input) => Some(self.lifecycle_gate(&input.container_id)),
+            _ => None,
+        };
+        let _lifecycle_guard = lifecycle_gate
+            .as_ref()
+            .map(|gate| gate.lock().unwrap_or_else(|p| p.into_inner()));
         match &intent.command {
             ContainerCommand::Create(_) => {
                 let Some(id) = intent.container_id.as_ref() else {

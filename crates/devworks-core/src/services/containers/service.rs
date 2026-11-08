@@ -22,9 +22,10 @@ use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id};
 use crate::services::artifacts::observed::Observed;
 use crate::services::process::tools::{BindingRefusal, ToolBindings};
 use crate::services::sessions::{Refusal, query_fault, rev};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 struct PreparedInspect {
@@ -48,9 +49,26 @@ pub struct ContainerService {
     pub(super) registry_auth: Option<Arc<dyn super::registry_auth::RegistryAuth>>,
     host: HostPlatform<'static>,
     pub(super) ids: Arc<dyn IdSource>,
+    lifecycle_gates: Mutex<HashMap<Id, Weak<Mutex<()>>>>,
 }
 
 impl ContainerService {
+    pub(super) fn lifecycle_gate(&self, id: &Id) -> Arc<Mutex<()>> {
+        let mut gates = self
+            .lifecycle_gates
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(gate) = gates.get(id).and_then(Weak::upgrade) {
+            return gate;
+        }
+        if gates.len() > 1024 {
+            gates.retain(|_, gate| gate.strong_count() > 0);
+        }
+        let gate = Arc::new(Mutex::new(()));
+        gates.insert(id.clone(), Arc::downgrade(&gate));
+        gate
+    }
+
     /// Static host grants and current project member repositories are valid container roots.
     /// Repository IDs remain usable when projects or repositories are registered after boot.
     pub(super) fn resolve_project_path(
@@ -102,6 +120,7 @@ impl ContainerService {
             registry_auth: None,
             host,
             ids,
+            lifecycle_gates: Mutex::new(HashMap::new()),
         }
     }
 
@@ -370,33 +389,67 @@ impl QueryHandler for ContainerService {
                 let spec = bound_spec(&self.bindings, backend, args, None).map_err(|_| {
                     self.fault(DomainErrorCode::UnsupportedCapability, Some(row.id.clone()))
                 })?;
-                let (result, total_bytes) = self
+                let after = input.after_bytes.get() as u64;
+                let max = input.max_bytes.get() as usize;
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let (first, stdout_total, stderr_total) = self
                     .runner
                     .run_window(
                         ctx,
                         None,
-                        spec,
-                        Duration::from_secs(10),
-                        (
-                            input.after_bytes.get() as u64,
-                            input.max_bytes.get() as usize,
-                        ),
+                        spec.clone(),
+                        deadline.saturating_duration_since(Instant::now()),
+                        (after, 0, max),
                         &[],
                     )
                     .map_err(|_| {
                         self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone()))
                     })?;
-                if result.exit_code != Some(0) {
+                if first.exit_code != Some(0) {
                     return Err(self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone())));
+                }
+                // Define one byte cursor over stdout followed by stderr. A deep stderr page
+                // needs a second bounded read once the stdout boundary is known.
+                let total_bytes = stdout_total.saturating_add(stderr_total);
+                let mut bytes = if after < stdout_total {
+                    first.stdout
+                } else if after == stdout_total {
+                    first.stderr.clone()
+                } else if after >= total_bytes {
+                    Vec::new()
+                } else {
+                    let (second, _, _) = self
+                        .runner
+                        .run_window(
+                            ctx,
+                            None,
+                            spec,
+                            deadline.saturating_duration_since(Instant::now()),
+                            (u64::MAX, after - stdout_total, max),
+                            &[],
+                        )
+                        .map_err(|_| {
+                            self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone()))
+                        })?;
+                    if second.exit_code != Some(0) {
+                        return Err(
+                            self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone()))
+                        );
+                    }
+                    second.stderr
+                };
+                if after < stdout_total && bytes.len() < max {
+                    bytes.extend_from_slice(
+                        &first.stderr[..(max - bytes.len()).min(first.stderr.len())],
+                    );
                 }
                 let Some(artifacts) = &self.artifacts else {
                     return Err(
                         self.fault(DomainErrorCode::UnsupportedCapability, Some(row.id.clone()))
                     );
                 };
-                let offset = (input.after_bytes.get() as u64).min(total_bytes);
-                let end = offset.saturating_add(result.stdout.len() as u64);
-                let bytes = result.stdout.as_slice();
+                let offset = after.min(total_bytes);
+                let end = offset.saturating_add(bytes.len() as u64);
                 let (reference, ()) = artifacts.publish_observed(&*self.store, ctx, query.authorization(),
                     Observed {
                         project: Some(row.project_id.clone()),
@@ -404,7 +457,7 @@ impl QueryHandler for ContainerService {
                         media_type: "text/plain; charset=utf-8".into(),
                         tags: vec!["container".into(), "logs".into()],
                         source: serde_json::json!({"kind":"ContainerLogs","containerId":row.id.as_str(),"engine":row.engine,"offset":offset,"end":end}),
-                    }, bytes, |_, _| Ok(()))
+                    }, &bytes, |_, _| Ok(()))
                     .map_err(|_| self.fault(DomainErrorCode::ViewUnavailable, Some(row.id.clone())))?;
                 Ok(Some(Prepared::new(PreparedLogs {
                     revision: row.revision,

@@ -819,6 +819,32 @@ fn container_cli_runner_uses_owned_process_and_redacts_bounded_native_output() {
     assert_eq!(fx.events("ProcessReaped").len(), 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn container_cli_runner_allows_subsecond_execution_before_cleanup() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let runner = ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    );
+    let mut spec = shell("sleep 0.1; echo ready");
+    spec.capture_output = true;
+    let result = runner
+        .run(
+            &fx.agent("agent-a", "project-a", "s-a"),
+            None,
+            spec,
+            Duration::from_millis(950),
+            1024,
+            &[],
+        )
+        .unwrap();
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.stdout, b"ready\n");
+}
+
 #[test]
 #[ignore = "requires a separately supplied running Docker engine"]
 fn native_docker_probe_uses_registered_executable_and_owned_processes() {
@@ -1437,7 +1463,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         "containers.create",
         "native-effect-create",
         json!({"spec":{"engineId":engine,"projectId":"project-a","image":"docker.io/library/alpine:latest",
-            "command":["sh","-c","echo booted; yes x | head -c 1100000; sleep 60"],"mounts":[],
+            "command":["sh","-c","echo booted; i=0; while [ \"$i\" -lt 1100 ]; do printf '%01024d\\n' 0; i=$((i+1)); done; echo stderr-marker >&2; sleep 60"],"mounts":[],
             "ports":[{"containerPort":8080,"hostPort":host_port,"protocol":"Tcp"}],
             "environment":[],"resourceIds":["build-slot"]}}),
         Some(1),
@@ -1587,10 +1613,47 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         if later.len() == 1024 {
             break;
         }
+        if std::time::Instant::now() >= logs_deadline {
+            let first = result(fx.query_at(
+                &context,
+                "containers.logs",
+                json!({"containerId":row.id.as_str(),"afterBytes":"0","maxBytes":1048576}),
+                Some(1),
+            ));
+            let OperationResult::ContainersLogs { value } = first else {
+                panic!("wrong diagnostic logs result")
+            };
+            let (first, _) = artifacts
+                .read_exact(&*fx.store, &context, &value, 1_048_576)
+                .unwrap();
+            panic!(
+                "late log page stayed at {} bytes; first page has {} bytes",
+                later.len(),
+                first.len()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let stderr_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let stderr_logs = result(fx.query_at(
+            &context,
+            "containers.logs",
+            json!({"containerId":row.id.as_str(),"afterBytes":"1127507","maxBytes":1024}),
+            Some(1),
+        ));
+        let OperationResult::ContainersLogs { value } = stderr_logs else {
+            panic!("wrong stderr logs result")
+        };
+        let (stderr_page, _) = artifacts
+            .read_exact(&*fx.store, &context, &value, 1_048_576)
+            .unwrap();
+        if String::from_utf8_lossy(&stderr_page).contains("stderr-marker") {
+            break;
+        }
         assert!(
-            std::time::Instant::now() < logs_deadline,
-            "late log page stayed at {} bytes",
-            later.len()
+            std::time::Instant::now() < stderr_deadline,
+            "stderr log page never arrived"
         );
         std::thread::sleep(Duration::from_millis(100));
     }

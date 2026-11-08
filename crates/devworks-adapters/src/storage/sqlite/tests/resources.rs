@@ -169,6 +169,53 @@ fn owned_container_intent_survives_restart_and_stop_listing_is_agent_scoped() {
 }
 
 #[test]
+fn created_container_keeps_its_physical_lease_held_across_boot() {
+    let fx = Fx::new();
+    fx.register(MachineResource {
+        name: "container-port".into(),
+        capacity: 1,
+        physical: true,
+        labels: vec![],
+    });
+    let owner = fx.agent("agent-a", "project-a", "dw-container-boot");
+    let lease = lease(fx.acquire(
+        &owner,
+        "container-port",
+        json!({"purpose":"container:dw-container-boot"}),
+    ));
+    let mut row = StoredContainer {
+        id: id("dw-container-boot"),
+        engine: "docker".into(),
+        phase: ContainerPhase::Creating,
+        image: "alpine:latest".into(),
+        actor: actor("agent-a"),
+        owner_kind: "Agent".into(),
+        session_id: Some(id("dw-container-boot")),
+        project_id: project("project-a"),
+        root_id: Some(root("root-a")),
+        assignment_id: None,
+        create_operation_id: devworks_core::protocol::OperationId(id("op-container-boot")),
+        last_operation_id: devworks_core::protocol::OperationId(id("op-container-boot")),
+        resource_lease_ids: vec![lease.id.clone()],
+        detail: None,
+        revision: 1,
+        created_at_ms: T0,
+        updated_at_ms: T0,
+    };
+    fx.write({
+        let row = row.clone();
+        move |tx| tx.resources().insert_container(&row)
+    });
+    row.phase = ContainerPhase::Created;
+    row.revision += 1;
+    fx.write(move |tx| tx.resources().update_container(&row, 1));
+    let fx = fx.restart();
+    let report = fx.reconcile(ReconcileCause::Boot);
+    assert_eq!(report.uncertain, 0);
+    assert_eq!(fx.stored(&lease).phase, LeasePhase::Held);
+}
+
+#[test]
 fn container_backend_selection_inherits_and_clears_project_override() {
     use devworks_core::services::containers::{
         backend::Backend,

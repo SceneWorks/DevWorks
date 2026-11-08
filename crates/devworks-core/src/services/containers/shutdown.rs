@@ -190,6 +190,28 @@ impl ContainerService {
             let full = rows.len() == 500;
             for row in rows {
                 after = Some(row.id.clone());
+                let gate = self.lifecycle_gate(&row.id);
+                let _guard = gate.lock().unwrap_or_else(|p| p.into_inner());
+                let row = match read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+                    snapshot.resources().container(&row.id)
+                }) {
+                    Ok(Some(current)) => current,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        report.read_error = Some(error.to_string());
+                        return report;
+                    }
+                };
+                if !matches!(
+                    row.phase,
+                    ContainerPhase::Creating
+                        | ContainerPhase::Starting
+                        | ContainerPhase::Running
+                        | ContainerPhase::Stopping
+                        | ContainerPhase::Uncertain
+                ) {
+                    continue;
+                }
                 // A committed intent that was never dispatched cannot have launched this
                 // container. Leave it to the outbox on boot rather than turning it uncertain.
                 if matches!(

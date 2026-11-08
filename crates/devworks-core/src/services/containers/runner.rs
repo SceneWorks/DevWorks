@@ -52,20 +52,20 @@ impl ContainerRunner {
         max_output: usize,
         secrets: &[String],
     ) -> Result<CliResult, CliError> {
-        self.run_inner(ctx, operation, spec, timeout, (0, max_output), secrets)
-            .map(|(result, _)| result)
+        self.run_inner(ctx, operation, spec, timeout, (0, 0, max_output), secrets)
+            .map(|(result, _, _)| result)
     }
 
-    /// Drain the full CLI stream while retaining only one requested stdout byte window.
+    /// Drain both CLI streams while retaining one requested byte window from each.
     pub fn run_window(
         &self,
         ctx: &InvocationContext,
         operation: Option<OperationId>,
         spec: ProcessSpec,
         timeout: Duration,
-        window: (u64, usize),
+        window: (u64, u64, usize),
         secrets: &[String],
-    ) -> Result<(CliResult, u64), CliError> {
+    ) -> Result<(CliResult, u64, u64), CliError> {
         self.run_inner(ctx, operation, spec, timeout, window, secrets)
     }
 
@@ -75,10 +75,10 @@ impl ContainerRunner {
         operation: Option<OperationId>,
         spec: ProcessSpec,
         timeout: Duration,
-        window: (u64, usize),
+        window: (u64, u64, usize),
         secrets: &[String],
-    ) -> Result<(CliResult, u64), CliError> {
-        let (after, max_output) = window;
+    ) -> Result<(CliResult, u64, u64), CliError> {
+        let (stdout_after, stderr_after, max_output) = window;
         if timeout.is_zero() || timeout > Duration::from_secs(3600) || max_output > 1_048_576 {
             return Err(CliError::Refused("container CLI bounds are invalid".into()));
         }
@@ -116,8 +116,14 @@ impl ContainerRunner {
         };
         // Keep the streams separate: successful engine JSON on stdout must remain parseable
         // even when the CLI writes a warning to stderr.
-        let stdout_bytes = Arc::new(Mutex::new(BoundedOutput::from_offset(max_output, after)));
-        let stderr_bytes = Arc::new(Mutex::new(BoundedOutput::new(max_output)));
+        let stdout_bytes = Arc::new(Mutex::new(BoundedOutput::from_offset(
+            max_output,
+            stdout_after,
+        )));
+        let stderr_bytes = Arc::new(Mutex::new(BoundedOutput::from_offset(
+            max_output,
+            stderr_after,
+        )));
         let (drained_tx, drained_rx) = mpsc::channel();
         for (mut pipe, output) in [
             (stdout, stdout_bytes.clone()),
@@ -140,7 +146,7 @@ impl ContainerRunner {
             });
         }
         drop(drained_tx);
-        let command_deadline = deadline - timeout.min(Duration::from_secs(1));
+        let command_deadline = deadline - (timeout / 5).min(Duration::from_secs(1));
         let outcome = loop {
             // A native poll or its record write can fail transiently. Retain process
             // ownership and the timeout guard until a later poll verifies the exit.
@@ -185,7 +191,8 @@ impl ContainerRunner {
         let stdout_bytes = stdout_bytes.lock().unwrap_or_else(|p| p.into_inner());
         let stderr_bytes = stderr_bytes.lock().unwrap_or_else(|p| p.into_inner());
         let truncated = stdout_bytes.truncated() || stderr_bytes.truncated();
-        let seen = stdout_bytes.seen();
+        let stdout_seen = stdout_bytes.seen();
+        let stderr_seen = stderr_bytes.seen();
         Ok((
             CliResult {
                 exit_code,
@@ -196,7 +203,8 @@ impl ContainerRunner {
                         .iter()
                         .any(|value| !value.is_empty() && value.len() < 4),
             },
-            seen,
+            stdout_seen,
+            stderr_seen,
         ))
     }
 }

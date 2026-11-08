@@ -419,7 +419,13 @@ impl CommandHandler for ContainerService {
                     )
                     .into());
                 }
-                if row.phase == ContainerPhase::Stopped {
+                if !matches!(
+                    row.phase,
+                    ContainerPhase::Created
+                        | ContainerPhase::Starting
+                        | ContainerPhase::Running
+                        | ContainerPhase::Uncertain
+                ) {
                     return decided(
                         tx,
                         Err(Refusal::new(

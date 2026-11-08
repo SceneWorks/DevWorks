@@ -560,6 +560,14 @@ impl ResourceService {
             let Some(res) = tx.resources().resource(&l.resource_id)? else {
                 continue;
             };
+            // A recorded container retains the reservation across host restarts. Boot
+            // recovery verifies its external identity before any later stop or release.
+            if cause == ReconcileCause::Boot
+                && l.phase == LeasePhase::Held
+                && tx.resources().container_lease_in_use(&l.id)?
+            {
+                continue;
+            }
             match &cause {
                 ReconcileCause::Boot => match l.phase {
                     LeasePhase::Waiting => {
