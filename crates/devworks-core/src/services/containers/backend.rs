@@ -86,12 +86,13 @@ impl Backend {
 
     pub fn health(self) -> Vec<String> {
         match self {
-            Self::Apple => vec!["system".into(), "status".into()],
-            _ => vec![
-                "info".into(),
+            Self::Apple => vec![
+                "system".into(),
+                "status".into(),
                 "--format".into(),
-                "{{json .ServerVersion}}".into(),
+                "json".into(),
             ],
+            _ => vec!["info".into(), "--format".into(), "json".into()],
         }
     }
 
@@ -332,6 +333,7 @@ mod tests {
             vec!["image", "pull", "alpine:latest"]
         );
         for backend in [Backend::Docker, Backend::Podman, Backend::Apple] {
+            assert_eq!(backend.health().last().map(String::as_str), Some("json"));
             assert_eq!(
                 backend.stop("dw-123").unwrap(),
                 vec!["stop", "--time", "5", "dw-123"]

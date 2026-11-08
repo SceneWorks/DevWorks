@@ -98,6 +98,18 @@ pub enum BindingRefusal {
 }
 
 impl ToolBindings {
+    /// A backend selector resolves only a host-registered executable, rechecking its exact
+    /// target at dispatch. Missing runtimes remain unavailable; no PATH fallback occurs here.
+    pub fn resolve_named_executable(&self, name: &str) -> Result<String, BindingRefusal> {
+        let (path, target) = self
+            .executables
+            .get(name)
+            .ok_or(BindingRefusal::UnknownExecutable)?;
+        exact_file(path, target)
+            .map(|path| path.to_string_lossy().into_owned())
+            .ok_or(BindingRefusal::ChangedExecutable)
+    }
+
     /// Duplicate IDs fail closed; a host must never let registration order select an executable.
     pub fn new(
         executables: impl IntoIterator<Item = RegisteredExecutable>,
