@@ -1332,6 +1332,25 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         .with_containers(service.clone())
         .with_artifacts(artifacts.clone());
     let context = fx.agent("agent-a", "project-a", "s-a");
+    let capabilities =
+        match result(fx.query_at(&context, "containers.capabilities", json!({}), Some(1))) {
+            OperationResult::ContainersCapabilities { value } => value.items.0,
+            other => panic!("expected container capabilities: {other:?}"),
+        };
+    let selected = capabilities
+        .iter()
+        .find(|c| c.engine_id.as_str() == engine)
+        .unwrap();
+    assert!(matches!(
+        selected.state,
+        devworks_core::protocol::records::ItemState::Healthy
+    ));
+    assert_eq!(selected.capabilities.0.len(), 8);
+    let apple = capabilities
+        .iter()
+        .find(|c| c.engine_id.as_str() == "apple")
+        .unwrap();
+    assert!(apple.capabilities.0.is_empty());
     let pull = fx.command_keyed(
         &context,
         "containers.pull",
