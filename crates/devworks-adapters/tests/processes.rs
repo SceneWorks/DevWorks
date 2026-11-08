@@ -1158,6 +1158,89 @@ fn container_create_receipt_atomically_records_ownership_before_effect_delivery(
 }
 
 #[test]
+fn actor_scoped_project_artifact_is_hidden_from_same_project_peer() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let artifacts = ArtifactService::new(
+        Arc::new(NativeArtifactFiles::new(
+            fx.h.root.clone(),
+            fx.h.root.join("cache"),
+        )),
+        Arc::new(HostArtifactSources::new(
+            fx.h.clock.clone(),
+            fx.h.ids.clone(),
+        )),
+        Arc::new(NativeFilesystem::default()),
+        fx.h.clock.clone(),
+        fx.h.ids.clone(),
+    );
+    let owner = fx.agent("agent-a", "project-a", "s-a");
+    let peer = fx.agent("agent-c", "project-a", "s-c");
+    let observed = Observed {
+        project: Some(project("project-a")),
+        title: "Private container output".into(),
+        media_type: "text/plain".into(),
+        tags: vec!["container".into()],
+        source: json!({"kind":"ContainerLogs"}),
+        actor_audience: false,
+    };
+    let (private, ()) = artifacts
+        .publish_actor_observed(
+            &*fx.store,
+            &owner,
+            &Authorization::direct(),
+            observed.clone(),
+            b"private output",
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    let (ordinary, ()) = artifacts
+        .publish_observed(
+            &*fx.store,
+            &owner,
+            &Authorization::direct(),
+            observed,
+            b"ordinary project output",
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    assert!(
+        artifacts
+            .read_exact(&*fx.store, &owner, &private, 1024)
+            .is_ok()
+    );
+    assert!(
+        artifacts
+            .read_exact(&*fx.store, &peer, &private, 1024)
+            .is_err()
+    );
+    assert!(
+        artifacts
+            .read_exact(&*fx.store, &peer, &ordinary, 1024)
+            .is_ok()
+    );
+    let listed = fx.read(|snapshot| {
+        snapshot.artifacts().list(
+            &project("project-a"),
+            Some(&actor("agent-c")),
+            &[],
+            None,
+            10,
+        )
+    });
+    assert!(
+        !listed
+            .iter()
+            .any(|artifact| artifact.id == private.artifact_id)
+    );
+    assert!(
+        listed
+            .iter()
+            .any(|artifact| artifact.id == ordinary.artifact_id)
+    );
+}
+
+#[test]
 #[ignore = "explicit native Docker engine lifecycle; requires DW_NATIVE_DOCKER"]
 fn native_docker_container_effects_commit_owned_create_start_and_stop() {
     native_container_effects_commit_owned_create_start_and_stop("docker", "DW_NATIVE_DOCKER");
@@ -1450,6 +1533,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
                 media_type: "text/plain".into(),
                 tags: vec!["container".into(), "build".into()],
                 source: json!({"kind":"NativeQualification"}),
+                actor_audience: false,
             },
             b"FROM docker.io/library/alpine:latest\nRUN echo qualified > /qualified\n",
             |_, _| Ok(()),
@@ -1616,6 +1700,20 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         .unwrap();
     let output: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(output["stdoutBase64"], "b2s=");
+    let exec_artifact_id = value.output.as_ref().unwrap().artifact_id.clone();
+    let peer = fx.agent("agent-c", "project-a", "s-c");
+    assert!(
+        artifacts
+            .read_exact(&*fx.store, &peer, &definition, 1_048_576)
+            .is_ok(),
+        "the same-project peer must retain access to ordinary project artifacts"
+    );
+    assert!(
+        artifacts
+            .read_exact(&*fx.store, &peer, value.output.as_ref().unwrap(), 1_048_576,)
+            .is_err(),
+        "a same-project peer must not read another actor's execution output"
+    );
     let logs = result(fx.query_at(
         &context,
         "containers.logs",
@@ -1629,6 +1727,31 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         .read_exact(&*fx.store, &context, &value, 1_048_576)
         .unwrap();
     assert!(String::from_utf8_lossy(&bytes).contains("booted"));
+    assert!(
+        artifacts
+            .read_exact(&*fx.store, &peer, &value, 1_048_576)
+            .is_err(),
+        "a same-project peer must not read another actor's logs"
+    );
+    let peer_artifacts = fx.read(|snapshot| {
+        snapshot.artifacts().list(
+            &project("project-a"),
+            Some(&actor("agent-c")),
+            &[],
+            None,
+            500,
+        )
+    });
+    assert!(
+        peer_artifacts
+            .iter()
+            .any(|artifact| artifact.id == definition.artifact_id)
+    );
+    assert!(
+        !peer_artifacts.iter().any(|artifact| {
+            artifact.id == value.artifact_id || artifact.id == exec_artifact_id
+        })
+    );
     let logs_deadline = std::time::Instant::now() + Duration::from_secs(15);
     loop {
         let later_logs = result(fx.query_at(

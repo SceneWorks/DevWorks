@@ -460,13 +460,14 @@ impl QueryHandler for ContainerService {
                 };
                 let offset = after.min(total_bytes);
                 let end = offset.saturating_add(bytes.len() as u64);
-                let (reference, ()) = artifacts.publish_observed(&*self.store, ctx, query.authorization(),
+                let (reference, ()) = artifacts.publish_actor_observed(&*self.store, ctx, query.authorization(),
                     Observed {
                         project: Some(row.project_id.clone()),
                         title: format!("Container {} logs", row.id.as_str()),
                         media_type: "text/plain; charset=utf-8".into(),
                         tags: vec!["container".into(), "logs".into()],
                         source: serde_json::json!({"kind":"ContainerLogs","containerId":row.id.as_str(),"engine":row.engine,"offset":offset,"end":end}),
+                        actor_audience: false,
                     }, &bytes, |_, _| Ok(()))
                     .map_err(|_| self.fault(DomainErrorCode::ViewUnavailable, Some(row.id.clone())))?;
                 Ok(Some(Prepared::new(PreparedLogs {

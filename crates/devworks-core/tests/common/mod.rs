@@ -1301,6 +1301,7 @@ impl ArtifactRead for Unsupported {
     fn list(
         &self,
         _: &ProjectId,
+        _: Option<&ActorId>,
         _: &[String],
         _: Option<&ListPosition>,
         _: u16,

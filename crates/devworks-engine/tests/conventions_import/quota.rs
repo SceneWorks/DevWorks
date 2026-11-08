@@ -201,8 +201,8 @@ fn retained(f: &Fx, source: &ProjectId, destination: &ProjectId) -> RetainedStat
                 500,
             )?,
             artifacts: [
-                r.artifacts().list(source, &[], None, 500)?,
-                r.artifacts().list(destination, &[], None, 500)?,
+                r.artifacts().list(source, None, &[], None, 500)?,
+                r.artifacts().list(destination, None, &[], None, 500)?,
             ],
             usage: [
                 r.artifacts().project_usage(source)?,

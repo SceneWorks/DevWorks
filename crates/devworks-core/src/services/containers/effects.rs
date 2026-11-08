@@ -706,13 +706,14 @@ impl ContainerService {
                 return EffectOutcome::Unknown("container exec output encoding unavailable".into());
             }
         };
-        let reference = match artifacts.publish_observed(&*self.store, context, authorization,
+        let reference = match artifacts.publish_actor_observed(&*self.store, context, authorization,
             Observed {
                 project: Some(row.project_id.clone()),
                 title: format!("Container {} execution", row.id.as_str()),
                 media_type: "application/json".into(),
                 tags: vec!["container".into(), "execution".into()],
                 source: json!({"kind":"ContainerExec","containerId":row.id.as_str(),"operationId":operation.id.0.as_str()}),
+                actor_audience: false,
             }, &bytes, |_, _| Ok(())) {
             Ok((reference, ())) => reference,
             Err(_) => return EffectOutcome::Unknown("container exec output publication unavailable".into()),

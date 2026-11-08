@@ -403,9 +403,13 @@ pub(crate) fn publish_review_evidence(
         let mut after = None;
         loop {
             let artifacts = match ctx.project_id() {
-                Some(project) => snapshot
-                    .artifacts()
-                    .list(project, &tags, after.as_ref(), 500)?,
+                Some(project) => snapshot.artifacts().list(
+                    project,
+                    Some(ctx.principal()),
+                    &tags,
+                    after.as_ref(),
+                    500,
+                )?,
                 None => snapshot.artifacts().list_workspace(
                     Some(ctx.principal()),
                     &tags,
