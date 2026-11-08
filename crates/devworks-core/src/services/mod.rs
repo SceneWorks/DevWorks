@@ -5,6 +5,7 @@
 //! the same validation, authority, receipts and implementation (ARCH-02). An operation with no
 //! registered use case is reported as [`GatewayFailure::NoUseCase`] before any store access, so
 //! nothing unimplemented is advertised or recorded.
+pub mod agents;
 pub mod approvals;
 pub mod artifacts;
 pub mod browser;

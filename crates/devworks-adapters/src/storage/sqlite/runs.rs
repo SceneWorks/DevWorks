@@ -644,6 +644,9 @@ const LIVE_ASSIGNMENT: &str = "state IN ('Ready','Active','Waiting')";
 macro_rules! run_reads {
     ($t:ty) => {
         impl RunRead for $t {
+            fn agent_assignment_context(&self, assignment: &AssignmentId) -> Result<Option<StoredAgentAssignmentContext>, StorageError> {
+                agent_messages::agent_assignment_context(self.conn, assignment)
+            }
             fn agent_message(&self, id: &Id) -> Result<Option<StoredAgentMessage>, StorageError> {
                 agent_messages::message(self.conn, id)
             }
@@ -652,6 +655,9 @@ macro_rules! run_reads {
             }
             fn agent_messages(&self, project: &ProjectId, before: Option<&Id>, limit: u16) -> Result<Vec<StoredAgentMessage>, StorageError> {
                 agent_messages::messages(self.conn, project, before, limit)
+            }
+            fn agent_assignment_thread(&self, project: &ProjectId, assignment: &AssignmentId, direction: &str, unacknowledged_only: bool, before: Option<&Id>, limit: u16) -> Result<Vec<(StoredAgentMessage, Option<StoredAgentDelivery>)>, StorageError> {
+                agent_messages::assignment_thread(self.conn, project, assignment, direction, unacknowledged_only, before, limit)
             }
             fn agent_delivery(&self, message: &Id, recipient: Option<&AssignmentId>) -> Result<Option<StoredAgentDelivery>, StorageError> {
                 agent_messages::delivery(self.conn, message, recipient)
@@ -1010,6 +1016,12 @@ fn root_exists(conn: &Connection, root: &RootId) -> Result<(), StorageError> {
 }
 
 impl RunRepository for Unit<'_> {
+    fn insert_agent_assignment_context(
+        &mut self,
+        context: &StoredAgentAssignmentContext,
+    ) -> Result<(), StorageError> {
+        agent_messages::insert_agent_assignment_context(self.conn, context)
+    }
     fn insert_agent_message(&mut self, message: &StoredAgentMessage) -> Result<(), StorageError> {
         agent_messages::insert_message(self.conn, message)
     }

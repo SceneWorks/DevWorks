@@ -6,7 +6,8 @@
 //! record's revision, so a stale writer gets a [`StorageError::RevisionConflict`] and changes
 //! nothing.
 use super::{
-    MAX_PAGE, StorageError, StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
+    MAX_PAGE, StorageError, StoredAgentAssignmentContext, StoredAgentDelivery, StoredAgentMessage,
+    StoredAgentMessageEvent,
 };
 use crate::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId, RootId};
 use serde_json::Value;
@@ -530,6 +531,10 @@ pub struct StoredStopCoverage {
 }
 
 pub trait RunRead {
+    fn agent_assignment_context(
+        &self,
+        assignment: &AssignmentId,
+    ) -> Result<Option<StoredAgentAssignmentContext>, StorageError>;
     fn agent_message(&self, id: &Id) -> Result<Option<StoredAgentMessage>, StorageError>;
     fn agent_message_by_key(
         &self,
@@ -544,6 +549,17 @@ pub trait RunRead {
         before: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<StoredAgentMessage>, StorageError>;
+    /// Assignment's inbound/outbound message thread, newest first; `before` is the prior page's
+    /// final ID. An unacknowledged filter only selects inbound pending/delivered copies.
+    fn agent_assignment_thread(
+        &self,
+        project: &ProjectId,
+        assignment: &AssignmentId,
+        direction: &str,
+        unacknowledged_only: bool,
+        before: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<(StoredAgentMessage, Option<StoredAgentDelivery>)>, StorageError>;
     fn agent_delivery(
         &self,
         message: &Id,
@@ -673,6 +689,10 @@ pub trait RunRead {
 }
 
 pub trait RunRepository: RunRead {
+    fn insert_agent_assignment_context(
+        &mut self,
+        context: &StoredAgentAssignmentContext,
+    ) -> Result<(), StorageError>;
     fn insert_agent_message(&mut self, message: &StoredAgentMessage) -> Result<(), StorageError>;
     fn resolve_agent_message(
         &mut self,

@@ -211,6 +211,7 @@ pub(super) fn selection(project: &ProjectId) -> Result<Selection, StorageError> 
         "agent_messages",
         "agent_message_deliveries",
         "agent_message_events",
+        "agent_assignment_context",
     ] {
         predicates.insert(table.into(), Value::String("project_id=?1".into()));
     }

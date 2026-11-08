@@ -1,7 +1,8 @@
 //! SQLite rows for durable agent messages, recipient deliveries and project stream events.
 use super::conn::db;
 use devworks_core::ports::storage::{
-    MAX_PAGE, StorageError, StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
+    MAX_PAGE, StorageError, StoredAgentAssignmentContext, StoredAgentDelivery, StoredAgentMessage,
+    StoredAgentMessageEvent,
 };
 use devworks_core::protocol::{ActorId, AssignmentId, Id, ProjectId, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -9,6 +10,46 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 const MESSAGE_COLUMNS: &str = "id,project_id,root_id,channel,from_assignment_id,to_assignment_id,message_class,body,attachments_json,in_reply_to_id,state,blocking,idempotency_key,revision,created_at,resolved_at,from_actor_id,target_item_id,target_feature_id,resource_name,target_session_id,to_human,sender_session_id,resolved_by_actor_id,resolved_by_session_id";
 const DELIVERY_COLUMNS: &str = "sequence,message_id,project_id,recipient_assignment_id,recipient_human,state,revision,delivered_at,read_at,recipient_session_id,handed_over,resolved_at";
 const EVENT_COLUMNS: &str = "sequence,project_id,message_id,kind,actor_id,recipient_assignment_id,created_at,recipient_session_id,recipient_human";
+
+pub(super) fn agent_assignment_context(
+    conn: &Connection,
+    assignment: &AssignmentId,
+) -> Result<Option<StoredAgentAssignmentContext>, StorageError> {
+    let mut stmt = db(conn.prepare("SELECT assignment_id,project_id,role_id,role_instructions,role_revisions_json,brief,task_ids_json,source_checkpoint_id,created_at FROM agent_assignment_context WHERE assignment_id=?1"))?;
+    let mut rows = db(stmt.query([assignment.0.as_str()]))?;
+    let Some(row) = db(rows.next())? else {
+        return Ok(None);
+    };
+    let revisions: String = db(row.get(4))?;
+    let tasks: String = db(row.get(6))?;
+    Ok(Some(StoredAgentAssignmentContext {
+        assignment_id: AssignmentId(id(db(row.get(0))?)?),
+        project_id: ProjectId(id(db(row.get(1))?)?),
+        role_id: id(db(row.get(2))?)?,
+        role_instructions: db(row.get(3))?,
+        role_revisions: serde_json::from_str(&revisions).map_err(|_| corrupt("role revisions"))?,
+        brief: db(row.get(5))?,
+        task_ids: serde_json::from_str(&tasks).map_err(|_| corrupt("task references"))?,
+        source_checkpoint_id: optional_id(db(row.get(7))?)?,
+        created_at_ms: db(row.get(8))?,
+    }))
+}
+
+pub(super) fn insert_agent_assignment_context(
+    conn: &Connection,
+    context: &StoredAgentAssignmentContext,
+) -> Result<(), StorageError> {
+    if assignment_project(conn, &context.assignment_id)?.as_deref()
+        != Some(context.project_id.0.as_str())
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    db(conn.execute(
+        "INSERT INTO agent_assignment_context(assignment_id,project_id,role_id,role_instructions,role_revisions_json,brief,task_ids_json,source_checkpoint_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![context.assignment_id.0.as_str(),context.project_id.0.as_str(),context.role_id.as_str(),context.role_instructions,context.role_revisions.to_string(),context.brief,context.task_ids.to_string(),context.source_checkpoint_id.as_ref().map(Id::as_str),context.created_at_ms],
+    ))?;
+    Ok(())
+}
 
 fn corrupt(what: &str) -> StorageError {
     StorageError::InvalidRecord(format!("invalid stored agent {what}"))
@@ -166,6 +207,59 @@ pub(super) fn messages(
         out.push(message_row(row)?);
     }
     Ok(out)
+}
+pub(super) fn assignment_thread(
+    conn: &Connection,
+    project: &ProjectId,
+    assignment: &AssignmentId,
+    direction: &str,
+    unacknowledged_only: bool,
+    before: Option<&Id>,
+    limit: u16,
+) -> Result<Vec<(StoredAgentMessage, Option<StoredAgentDelivery>)>, StorageError> {
+    if !matches!(direction, "Inbound" | "Outbound" | "Both") {
+        return Err(StorageError::InvalidRecord(
+            "invalid message direction".into(),
+        ));
+    }
+    if assignment_project(conn, assignment)?.as_deref() != Some(project.0.as_str()) {
+        return Err(StorageError::ScopeDenied);
+    }
+    let (time, key) = match before {
+        Some(key) => {
+            let m = message(conn, key)?.ok_or(StorageError::CursorExpired)?;
+            if m.project_id != *project {
+                return Err(StorageError::CursorExpired);
+            }
+            (m.created_at_ms, key.as_str())
+        }
+        None => (i64::MAX, "~"),
+    };
+    let mut stmt=db(conn.prepare(
+        "SELECT m.id FROM agent_messages m LEFT JOIN agent_message_deliveries d ON d.message_id=m.id AND d.recipient_assignment_id=?2 AND d.recipient_session_id IS NULL WHERE m.project_id=?1 AND ((?3='Inbound' AND d.sequence IS NOT NULL) OR (?3='Outbound' AND m.from_assignment_id=?2) OR (?3='Both' AND (d.sequence IS NOT NULL OR m.from_assignment_id=?2))) AND (NOT ?4 OR d.state IN ('Pending','Delivered')) AND (m.created_at<?5 OR (m.created_at=?5 AND m.id<?6)) ORDER BY m.created_at DESC,m.id DESC LIMIT ?7"
+    ))?;
+    let mut rows = db(stmt.query(params![
+        project.0.as_str(),
+        assignment.0.as_str(),
+        direction,
+        unacknowledged_only,
+        time,
+        key,
+        page(limit)?
+    ]))?;
+    let mut ids = Vec::new();
+    while let Some(row) = db(rows.next())? {
+        ids.push(id(db(row.get(0))?)?);
+    }
+    drop(rows);
+    drop(stmt);
+    ids.into_iter()
+        .map(|key| {
+            let m = message(conn, &key)?.ok_or_else(|| corrupt("thread message"))?;
+            let d = delivery(conn, &key, Some(assignment))?;
+            Ok((m, d))
+        })
+        .collect()
 }
 pub(super) fn delivery(
     conn: &Connection,

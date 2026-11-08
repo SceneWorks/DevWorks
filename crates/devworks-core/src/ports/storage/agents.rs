@@ -3,6 +3,20 @@
 use crate::protocol::{ActorId, AssignmentId, Id, ProjectId, RootId};
 use serde_json::Value;
 
+/// The approved role text and task brief an assignment was launched with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredAgentAssignmentContext {
+    pub assignment_id: AssignmentId,
+    pub project_id: ProjectId,
+    pub role_id: Id,
+    pub role_instructions: String,
+    pub role_revisions: Value,
+    pub brief: String,
+    pub task_ids: Value,
+    pub source_checkpoint_id: Option<Id>,
+    pub created_at_ms: i64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredAgentMessage {
     pub id: Id,
