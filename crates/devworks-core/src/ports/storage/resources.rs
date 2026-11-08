@@ -311,6 +311,8 @@ pub struct NewProcess {
 /// Which owned processes a listing covers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProcessFilter {
+    /// Every owned process launched for this exact journaled operation, including settled ones.
+    Operation(OperationId),
     /// Processes serving one lease.
     Lease(Id),
     /// Processes not yet quiesced (`Launching`, `Running`, `Stopping`, `Uncertain`, `Lost`)

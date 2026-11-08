@@ -34,6 +34,7 @@
 //! identity is `Lost` (its effects are unknown). It then runs the resource boot reconciliation.
 //! Only a person can declare a `Lost` or `Uncertain` tree stopped
 //! ([`ProcessSupervisor::confirm_stopped`]), and that is recorded as their statement.
+pub mod tools;
 use crate::authority::destructive::{FilesystemResolver, ProtectedRoots};
 use crate::authority::redact::Redactor;
 use crate::authority::shell::{
@@ -292,6 +293,28 @@ impl ProcessSupervisor {
         request: LaunchRequest,
         policy: &LaunchPolicy<'_>,
     ) -> Result<OwnedProcess, LaunchRefusal> {
+        self.launch_with_id(ctx, request, policy, None)
+    }
+
+    /// A journaled process tool reserves its public process ID with its operation receipt, so
+    /// output and cancellation can address the attempt before a child is launched.
+    pub(super) fn launch_reserved(
+        &self,
+        ctx: &InvocationContext,
+        request: LaunchRequest,
+        policy: &LaunchPolicy<'_>,
+        process_id: Id,
+    ) -> Result<OwnedProcess, LaunchRefusal> {
+        self.launch_with_id(ctx, request, policy, Some(process_id))
+    }
+
+    fn launch_with_id(
+        &self,
+        ctx: &InvocationContext,
+        request: LaunchRequest,
+        policy: &LaunchPolicy<'_>,
+        reserved_id: Option<Id>,
+    ) -> Result<OwnedProcess, LaunchRefusal> {
         let argv = request.spec.argv();
         let cwd = request
             .spec
@@ -391,7 +414,9 @@ impl ProcessSupervisor {
                 }
                 None => None,
             };
-            let id = tx.new_id(IdKind::Process);
+            let id = reserved_id
+                .clone()
+                .unwrap_or_else(|| tx.new_id(IdKind::Process));
             let record = tx.resources().insert_process(NewProcess {
                 id,
                 platform: platform.to_owned(),
