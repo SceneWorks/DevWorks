@@ -1,5 +1,6 @@
 //! Agent coordination domain rules shared by the native UI and tool gateway.
 //! A message is stored with its recipient delivery and project event in one write unit.
+pub mod retained;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::OperationInput;

@@ -294,6 +294,104 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
+    let ingress = HostIngress::new(&s);
+    let child_context = ingress
+        .context(
+            ActorId(id("agent-a")),
+            PrincipalKind::Agent,
+            id("delivery-invocation"),
+            id("delivery-ingress"),
+            Counter::new(s.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(id("session-child"))
+        .with_lineage(
+            Some(project("project-a")),
+            Some(RootId(id("root-a"))),
+            Some(assignment("recipient")),
+        );
+    for _ in 0..2 {
+        let context = child_context.clone();
+        run_write(&s, WriteOptions::default(), move |tx| {
+            let page = devworks_core::services::agents::retained::deliver_inbox(
+                tx,
+                &context,
+                &project("project-a"),
+                &devworks_core::services::agents::retained::Recipient::Session(id("session-child")),
+                0,
+                false,
+                10,
+            )?;
+            assert_eq!(page.items.len(), 1);
+            assert_eq!(page.next_sequence, 2);
+            assert_eq!(page.items[0].0.state, "Delivered");
+            Ok(())
+        })
+        .unwrap();
+    }
+    read_snapshot(&s, &ReadOptions::default(), |snap| {
+        assert_eq!(
+            snap.runs()
+                .agent_session_delivery(&id("message-direct"), &id("session-child"))?
+                .unwrap()
+                .revision,
+            2
+        );
+        Ok(())
+    })
+    .unwrap();
+    for expected in [1, 0] {
+        let context = child_context.clone();
+        run_write(&s, WriteOptions::default(), move |tx| {
+            let result = devworks_core::services::agents::retained::acknowledge(
+                tx,
+                &context,
+                &project("project-a"),
+                &devworks_core::services::agents::retained::Recipient::Session(id("session-child")),
+                devworks_core::services::agents::retained::AckSelection::Messages(vec![id(
+                    "message-direct",
+                )]),
+            )?;
+            assert_eq!(result.changed.len(), expected);
+            Ok(())
+        })
+        .unwrap();
+    }
+    read_snapshot(&s, &ReadOptions::default(), |snap| {
+        assert_eq!(
+            snap.runs()
+                .agent_session_delivery(&id("message-direct"), &id("session-child"))?
+                .unwrap()
+                .state,
+            "Read"
+        );
+        Ok(())
+    })
+    .unwrap();
+    let home_context = ingress
+        .context(
+            ActorId(id("agent-a")),
+            PrincipalKind::Agent,
+            id("home-delivery-invocation"),
+            id("home-delivery-ingress"),
+            Counter::new(s.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(id("session-home"))
+        .with_lineage(Some(project("project-a")), None, None);
+    run_write(&s, WriteOptions::default(), move |tx| {
+        let result = devworks_core::services::agents::retained::acknowledge(
+            tx,
+            &home_context,
+            &project("project-a"),
+            &devworks_core::services::agents::retained::Recipient::Session(id("session-home")),
+            devworks_core::services::agents::retained::AckSelection::Through(3),
+        )?;
+        assert_eq!(result.changed.len(), 1);
+        assert_eq!(result.changed[0].1.id, id("message-rootless"));
+        Ok(())
+    })
+    .unwrap();
     run_write(&s, WriteOptions::default(), move |tx| {
         let mut delivery = tx
             .runs()
