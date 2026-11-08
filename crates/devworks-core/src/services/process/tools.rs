@@ -2340,11 +2340,8 @@ mod tests {
 
     #[test]
     fn registered_ids_and_project_scope_bound_native_launch() {
-        let base = std::env::temp_dir().join(format!(
-            "devworks-process-bindings-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
+        let base =
+            std::env::temp_dir().join(format!("devworks-process-bindings-{}", std::process::id()));
         let work = base.join("work");
         std::fs::create_dir_all(&work).expect("working root");
         let executable = std::env::current_exe().expect("test binary");

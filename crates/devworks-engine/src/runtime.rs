@@ -1004,16 +1004,19 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let mut tasks = vec![delivery, collection, housekeeping];
     // Unknown external effects remain held, never retried. Re-observe them while the app is
     // running as well as at boot; an owner can establish a terminal fact without a restart.
-    let (observing_dispatcher, observing_stop) = (dispatcher.clone(), collector.clone());
-    tasks.push(tokio::spawn(async move {
-        while !observing_stop.stopping.load(Ordering::Acquire) {
-            let _ = observing_dispatcher.observe_unknown().await;
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(10)) => {},
-                _ = observing_stop.observation_stop.notified() => {},
+    if process_tools.is_some() {
+        let (observing_dispatcher, observing_stop) = (dispatcher.clone(), collector.clone());
+        tasks.push(tokio::spawn(async move {
+            while !observing_stop.stopping.load(Ordering::Acquire) {
+                let _ = observing_dispatcher.observe_unknown().await;
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    observing_stop.observation_stop.notified(),
+                )
+                .await;
             }
-        }
-    }));
+        }));
+    }
     if let Some(worker) = purge_worker {
         // Client effects run before UI restoration; held effects retain their original authority.
         let recovered = worker.clone();
