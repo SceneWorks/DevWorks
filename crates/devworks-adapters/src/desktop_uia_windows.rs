@@ -31,19 +31,23 @@ impl Drop for ComSession {
 }
 
 fn automation() -> Result<(ComSession, IUIAutomation), DesktopFault> {
+    eprintln!("UIA qualification: initializing COM");
     // SAFETY: this thread owns one balanced COM initialization for the lifetime of its proxies.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
         .ok()
         .map_err(|_| DesktopFault::Unsupported)?;
     let session = ComSession;
+    eprintln!("UIA qualification: creating automation");
     let v2: IUIAutomation2 =
         unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }
             .map_err(|_| DesktopFault::Unsupported)?;
+    eprintln!("UIA qualification: setting timeouts");
     unsafe { v2.SetConnectionTimeout(750) }.map_err(|_| DesktopFault::Unsupported)?;
     unsafe { v2.SetTransactionTimeout(750) }.map_err(|_| DesktopFault::Unsupported)?;
     let automation = v2
         .cast::<IUIAutomation>()
         .map_err(|_| DesktopFault::Unsupported)?;
+    eprintln!("UIA qualification: automation ready");
     Ok((session, automation))
 }
 
@@ -101,8 +105,10 @@ fn runtime_id(element: &IUIAutomationElement, pid: i32) -> Result<String, Deskto
 fn observe(
     automation: &IUIAutomation,
 ) -> Result<(AccessibilitySnapshot, HashMap<String, IUIAutomationElement>), DesktopFault> {
+    eprintln!("UIA qualification: reading focused element");
     let focused =
         unsafe { automation.GetFocusedElement() }.map_err(|_| DesktopFault::Unsupported)?;
+    eprintln!("UIA qualification: reading focused process");
     let pid = unsafe { focused.CurrentProcessId() }.map_err(|_| DesktopFault::NativeFailure)?;
     if pid <= 0 || pid as u32 == std::process::id() {
         return Ok((
@@ -116,6 +122,7 @@ fn observe(
     }
     let desktop =
         unsafe { automation.GetRootElement() }.map_err(|_| DesktopFault::NativeFailure)?;
+    eprintln!("UIA qualification: finding root windows");
     let condition =
         unsafe { automation.CreateTrueCondition() }.map_err(|_| DesktopFault::NativeFailure)?;
     let top = unsafe { desktop.FindAll(TreeScope_Children, &condition) }
@@ -141,6 +148,7 @@ fn observe(
     let mut handles = HashMap::new();
     let mut truncated = false;
     while let Some((element, parent_id, depth)) = queue.pop_front() {
+        eprintln!("UIA qualification: visiting node {}", nodes.len());
         if nodes.len() >= 500 || started.elapsed() >= Duration::from_secs(3) {
             truncated = true;
             break;

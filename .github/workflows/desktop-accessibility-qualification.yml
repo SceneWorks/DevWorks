@@ -2,12 +2,19 @@ name: Native desktop accessibility qualification
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Native desktop target to qualify
+        type: choice
+        options: [all, linux, windows]
+        default: all
 
 permissions:
   contents: read
 
 jobs:
   linux:
+    if: inputs.target != 'windows'
     name: AT-SPI X11 and Wayland
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -41,6 +48,7 @@ jobs:
           '
 
   windows:
+    if: inputs.target != 'linux'
     name: UI Automation
     runs-on: windows-latest
     timeout-minutes: 45

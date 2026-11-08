@@ -18,6 +18,7 @@ impl Drop for Fixture {
 #[test]
 #[ignore = "requires a prepared interactive native desktop; run the accessibility qualification workflow"]
 fn native_target_action_reaches_disposable_control() {
+    eprintln!("accessibility qualification: start");
     let marker =
         std::env::temp_dir().join(format!("devworks-accessibility-{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&marker);
@@ -44,6 +45,7 @@ fn native_target_action_reaches_disposable_control() {
             .spawn()
             .expect("start disposable native window"),
     );
+    eprintln!("accessibility qualification: fixture launched");
     let platform = NativeDesktop;
     if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some() {
         assert!(matches!(
@@ -54,7 +56,9 @@ fn native_target_action_reaches_disposable_control() {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut saw_target = false;
     loop {
+        eprintln!("accessibility qualification: checking capability");
         let capability = platform.capabilities().accessibility;
+        eprintln!("accessibility qualification: capability {capability:?}");
         if matches!(&capability, DesktopAvailability::Available)
             && let Ok(snapshot) = platform.accessibility_snapshot()
             && let Some(node) = snapshot
