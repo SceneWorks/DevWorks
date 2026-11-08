@@ -936,6 +936,91 @@ fn native_docker_owned_lifecycle_uses_the_exact_planned_container() {
 }
 
 #[test]
+#[ignore = "requires a separately supplied Docker engine with local alpine:latest image"]
+fn native_docker_build_uses_artifact_bytes_on_stdin_and_registered_context() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let path = std::env::var_os("DEVWORKS_TEST_DOCKER_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/local/bin/docker"));
+    let tag = format!("dw-native-build-{}:test", std::process::id());
+    struct Cleanup {
+        path: PathBuf,
+        tag: String,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new(&self.path)
+                .args(["image", "rm", &self.tag])
+                .output();
+        }
+    }
+    let _cleanup = Cleanup {
+        path: path.clone(),
+        tag: tag.clone(),
+    };
+    let scratch = Scratch::new("container-build");
+    let root_path = scratch.0.canonicalize().unwrap();
+    let context = root_path.join("context");
+    std::fs::create_dir_all(&context).unwrap();
+    let project = project("project-a");
+    let bindings = ToolBindings::new(
+        [RegisteredExecutable {
+            id: id("docker"),
+            path,
+        }],
+        [
+            devworks_core::services::process::tools::RegisteredWorkingRoot {
+                id: id("build-root"),
+                project: Some(project.clone()),
+                path: root_path,
+            },
+        ],
+    )
+    .unwrap();
+    let resolved = bindings
+        .resolve_registered_path(
+            &devworks_core::protocol::records::RegisteredPath {
+                root_id: id("build-root"),
+                relative: devworks_core::protocol::support::RelativePath("context".into()),
+            },
+            Some(&project),
+        )
+        .unwrap();
+    let runner = ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    );
+    let mut spec = bound_spec(
+        &bindings,
+        ContainerBackend::Docker,
+        ContainerBackend::Docker
+            .build("-", &tag, resolved.to_str().unwrap())
+            .unwrap(),
+        None,
+    )
+    .unwrap();
+    spec.stdin = Some(b"FROM alpine:latest\nCMD [\"true\"]\n".to_vec());
+    let result = runner
+        .run(
+            &fx.agent("agent-a", "project-a", "s-a"),
+            None,
+            spec,
+            Duration::from_secs(60),
+            65_536,
+            &[],
+        )
+        .unwrap();
+    assert_eq!(
+        result.exit_code,
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
 fn container_create_receipt_atomically_records_ownership_before_effect_delivery() {
     let _serial = serial();
     let mut fx = Fx::new();
