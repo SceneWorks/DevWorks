@@ -1364,7 +1364,28 @@ fn credentialed_container_pull_uses_private_one_call_auth_file() {
     let executable = fx.h.root.join("fake-docker");
     std::fs::write(
         &executable,
-        "#!/bin/sh\ncase \"$1 $2\" in\n  'pull registry.example.test/team/image:tag')\n    [ -f \"$DOCKER_CONFIG/config.json\" ] || exit 4\n    grep -Fq 'YWdlbnQ6c2VjcmV0LXRva2Vu' \"$DOCKER_CONFIG/config.json\" || exit 5\n    printf ok > \"$(dirname \"$0\")/pull-marker\";;\n  'pull registry.example.test/team/public:tag')\n    [ -f \"$DOCKER_CONFIG/config.json\" ] || exit 6\n    ! grep -Fq 'auths' \"$DOCKER_CONFIG/config.json\" || exit 7\n    printf ok > \"$(dirname \"$0\")/anonymous-pull-marker\";;\n  'image tag') exit 0;;\n  'image inspect') printf 'sha256:%064d\\n' 0;;\n  *) exit 3;;\nesac\n",
+        r#"#!/bin/sh
+case "$1 $2" in
+  'pull registry.example.test/team/image:tag')
+    [ -f "$DOCKER_CONFIG/config.json" ] || exit 4
+    grep -Fq 'YWdlbnQ6c2VjcmV0LXRva2Vu' "$DOCKER_CONFIG/config.json" || exit 5
+    printf ok > "$(dirname "$0")/pull-marker";;
+  'pull registry.example.test/team/public:tag')
+    [ -f "$DOCKER_CONFIG/config.json" ] || exit 6
+    ! grep -Fq 'auths' "$DOCKER_CONFIG/config.json" || exit 7
+    printf ok > "$(dirname "$0")/anonymous-pull-marker";;
+  'image tag') exit 0;;
+  'image inspect')
+    case "$5" in
+      'registry.example.test/team/image:tag')
+        [ -f "$(dirname "$0")/pull-marker" ] || exit 1;;
+      'registry.example.test/team/public:tag')
+        [ -f "$(dirname "$0")/anonymous-pull-marker" ] || exit 1;;
+    esac
+    printf 'sha256:%064d\n' 0;;
+  *) exit 3;;
+esac
+"#,
     )
     .unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -1429,10 +1450,12 @@ fn credentialed_container_pull_uses_private_one_call_auth_file() {
     let operation = fx
         .read(|snapshot| snapshot.operations().operation(&operation_id))
         .unwrap();
-    assert!(matches!(
-        service.execute_effect(&operation, &fx.authority()),
-        ContainerEffectOutcome::Completed(_)
-    ));
+    match service.execute_effect(&operation, &fx.authority()) {
+        ContainerEffectOutcome::Completed(_) => {}
+        ContainerEffectOutcome::Failed(reason) | ContainerEffectOutcome::Unknown(reason) => {
+            panic!("credentialed pull failed: {reason}")
+        }
+    }
     assert!(fx.h.root.join("pull-marker").exists());
     assert_eq!(std::fs::read_dir(&auth_root).unwrap().count(), 0);
     let anonymous = fx.command_keyed(
@@ -1687,6 +1710,33 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
             panic!("build outcome: {reason}")
         }
     }
+    let digest = std::process::Command::new(&executable)
+        .args(["image", "inspect", "--format", "{{.Id}}", &scoped_tag(&tag)])
+        .output()
+        .unwrap();
+    assert!(digest.status.success());
+    let digest = String::from_utf8(digest.stdout).unwrap().trim().to_owned();
+    let other_project = fx.agent("agent-b", "project-b", "s-b");
+    let cross_project = fx.command_keyed(
+        &other_project,
+        "containers.create",
+        "native-effect-cross-project-image-id",
+        json!({"spec":{"engineId":engine,"projectId":"project-b","image":digest.clone(),
+            "command":[],"mounts":[],"ports":[],"environment":[],"resourceIds":[]}}),
+        Some(1),
+    );
+    let cross_project_id = match recorded(cross_project).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted create intent: {other:?}"),
+    };
+    let cross_project_op = fx
+        .read(|snapshot| snapshot.operations().operation(&cross_project_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&cross_project_op, &fx.authority()),
+        ContainerEffectOutcome::Failed(reason)
+            if reason.contains("not published for this project")
+    ));
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let host_port = socket.local_addr().unwrap().port();
     drop(socket);
@@ -1694,7 +1744,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         &context,
         "containers.create",
         "native-effect-create",
-        json!({"spec":{"engineId":engine,"projectId":"project-a","image":"docker.io/library/alpine:latest",
+        json!({"spec":{"engineId":engine,"projectId":"project-a","image":digest,
             "command":["sh","-c","echo booted; i=0; while [ \"$i\" -lt 1100 ]; do printf '%01024d\\n' 0; i=$((i+1)); done; echo stderr-marker >&2; sleep 60"],
             "mounts":[{"source":{"rootId":"container-build-repo","relative":"container-build-context"},"destination":"/workspace","readOnly":false}],
             "ports":[{"containerPort":8080,"hostPort":host_port,"protocol":"Tcp"}],
@@ -2073,7 +2123,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
             LeasePhase::Held
         );
     }
-    let report = service.shutdown_agent_work(Duration::from_secs(20));
+    let report = service.stop_agent_work_for_root(&root("root-a"), Duration::from_secs(20));
     assert_eq!(report.verified_stopped, vec![row.id.clone()]);
     assert!(report.uncertain.is_empty());
     let closed = fx
@@ -2201,6 +2251,73 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
             .phase,
         ContainerPhase::Stopped
     );
+    let user = fx.ctx("user-a", PrincipalKind::Human, None);
+    fx.write(move |tx| {
+        let revision = tx
+            .authority()
+            .principal(&actor("agent-a"))?
+            .unwrap()
+            .revision;
+        auth::bind_principal(
+            tx,
+            &user,
+            NewPrincipalBinding {
+                actor: actor("agent-a"),
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::Worker),
+                project_id: Some(project("project-a")),
+                tool_families: None,
+                bound_by: actor("user-a"),
+            },
+            Some(revision),
+        )
+        .map_err(|_| StorageError::ScopeDenied)
+    });
+    let stopped = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    let restart = fx.command_keyed(
+        &human,
+        "containers.start",
+        "native-effect-policy-restart",
+        json!({"containerId":row.id.as_str(),"expectedRevision":stopped.revision.to_string()}),
+        Some(1),
+    );
+    let restart_id = match recorded(restart).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted policy restart: {other:?}"),
+    };
+    let restart_op = fx
+        .read(|snapshot| snapshot.operations().operation(&restart_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&restart_op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    fx.write(move |tx| {
+        let scope = ConfigScope::Workspace;
+        let current = model::current_layer(tx.configuration(), &scope)?;
+        let key = devworks_core::authority::policy::ACCESS_PROFILE_KEY;
+        let schema = serde_json::to_value(descriptor(key).unwrap().schema_ref()).unwrap();
+        let assignment: SettingAssignment = serde_json::from_value(
+            json!({"key":key,"value":{"schema":schema,"value":"projectScope"}}),
+        )
+        .unwrap();
+        let plan = model::plan(&current, &[assignment]);
+        assert!(plan.is_valid());
+        let body = model::body(&plan, &actor("user-a"), tx.now_ms(), json!({"kind":"test"}));
+        tx.configuration().append_revision(
+            &scope,
+            model::NAMESPACE,
+            current.revision,
+            model::BODY_SCHEMA_VERSION,
+            body,
+        )?;
+        Ok(())
+    });
+    let narrowed = service.reconcile_revoked_agent_work(Duration::from_secs(20));
+    assert_eq!(narrowed.verified_stopped, vec![row.id.clone()]);
+    assert!(narrowed.uncertain.is_empty());
 }
 
 #[test]

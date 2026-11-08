@@ -1010,6 +1010,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     if let Some(s) = Arc::get_mut(&mut run_supervisor) {
         s.stop_grace = config.shutdown_grace.min(config.shutdown_bound);
         s.stop_bound = config.shutdown_bound;
+        s.with_containers(containers.clone());
     }
     let recovered_runs = run_supervisor
         .boot()

@@ -198,15 +198,17 @@ fn docker_config_for_pull(
     };
     let file = source.join("config.json");
     if file.exists() {
-        config = serde_json::from_slice::<Value>(
+        let source_config = serde_json::from_slice::<Value>(
             &fs::read(file).map_err(|_| "Docker config unavailable")?,
         )
         .map_err(|_| "Docker config invalid")?
         .as_object()
         .cloned()
         .ok_or("Docker config invalid")?;
-        for key in ["auths", "credsStore", "credHelpers"] {
-            config.remove(key);
+        // Only daemon selection belongs to the container CLI. Docker's proxy settings
+        // are inherited by builds and created containers, and can carry credentials.
+        if let Some(context) = source_config.get("currentContext") {
+            config.insert("currentContext".into(), context.clone());
         }
     }
     copy_private_contexts(&source.join("contexts"), &target.join("contexts"))?;
@@ -427,7 +429,7 @@ mod tests {
         fs::create_dir(&target).unwrap();
         fs::write(
             source.join("config.json"),
-            r#"{"currentContext":"remote","auths":{"old":{"auth":"old-secret"}},"credsStore":"desktop","credsStoreOther":"kept"}"#,
+            r#"{"currentContext":"remote","auths":{"old":{"auth":"old-secret"}},"credsStore":"desktop","credsStoreOther":"kept","proxies":{"default":{"httpsProxy":"http://user:secret@proxy"}}}"#,
         )
         .unwrap();
         fs::write(
@@ -437,9 +439,10 @@ mod tests {
         .unwrap();
         let config = docker_config_for_pull(Some(source), &target).unwrap();
         assert_eq!(config["currentContext"], "remote");
-        assert_eq!(config["credsStoreOther"], "kept");
+        assert!(!config.contains_key("credsStoreOther"));
         assert!(!config.contains_key("auths"));
         assert!(!config.contains_key("credsStore"));
+        assert!(!config.contains_key("proxies"));
         assert_eq!(
             fs::read_to_string(target.join("contexts/meta/hash/meta.json")).unwrap(),
             r#"{"Name":"remote"}"#

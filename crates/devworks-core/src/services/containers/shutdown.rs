@@ -3,13 +3,14 @@ use super::backend::Backend;
 use super::execution::bound_spec;
 use super::inspection::{ObservedPhase, verified_lifecycle_target};
 use super::service::ContainerService;
+use crate::authority::policy::{AccessProfile, resolve_policy};
 use crate::context::{HostIngress, InvocationContext, PrincipalKind};
 use crate::ports::IdKind;
 use crate::ports::storage::{
     ConfigScope, ContainerFilter, ContainerPhase, NewEvent, ReadOptions, StorageError,
     StoredContainer, WriteOptions, read_snapshot, run_write,
 };
-use crate::protocol::{EventId, Id, OperationState};
+use crate::protocol::{EventId, Id, OperationState, RootId};
 use crate::services::sessions::{counter, rev};
 use serde_json::json;
 use std::time::{Duration, Instant};
@@ -180,17 +181,27 @@ impl ContainerService {
     /// owners, pre-existing containers, images and volumes are never selected or deleted.
     /// An unverified or failed stop remains Uncertain for boot recovery and project purge.
     pub fn shutdown_agent_work(&self, bound: Duration) -> ShutdownReport {
-        self.stop_agent_work(bound, false)
+        self.stop_agent_work(bound, false, None)
     }
 
     /// Reconcile live agent workloads after a principal is revoked or its container
     /// selection, role, or project scope is narrowed. Repeated passes retry uncertain
     /// stops; the ownership ledger remains the durable cleanup queue.
     pub fn reconcile_revoked_agent_work(&self, bound: Duration) -> ShutdownReport {
-        self.stop_agent_work(bound, true)
+        self.stop_agent_work(bound, true, None)
     }
 
-    fn stop_agent_work(&self, bound: Duration, revoked_only: bool) -> ShutdownReport {
+    /// Stop only agent workloads attributed to this run root.
+    pub fn stop_agent_work_for_root(&self, root: &RootId, bound: Duration) -> ShutdownReport {
+        self.stop_agent_work(bound, false, Some(root))
+    }
+
+    fn stop_agent_work(
+        &self,
+        bound: Duration,
+        revoked_only: bool,
+        root: Option<&RootId>,
+    ) -> ShutdownReport {
         let deadline = Instant::now() + bound;
         let mut report = ShutdownReport::default();
         let mut after: Option<Id> = None;
@@ -214,6 +225,9 @@ impl ContainerService {
             let full = rows.len() == 500;
             for row in rows {
                 after = Some(row.id.clone());
+                if root.is_some_and(|root| row.root_id.as_ref() != Some(root)) {
+                    continue;
+                }
                 let gate = self.lifecycle_gate(&row.id);
                 let _guard = gate.lock().unwrap_or_else(|p| p.into_inner());
                 let row = match read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
@@ -230,6 +244,8 @@ impl ContainerService {
                     let revoked =
                         read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
                             let binding = snapshot.authority().principal(&row.actor)?;
+                            let policy =
+                                resolve_policy(snapshot.configuration(), Some(&row.project_id))?;
                             Ok(binding.is_none_or(|binding| {
                                 !binding.active
                                     || binding
@@ -240,7 +256,7 @@ impl ContainerService {
                                     || binding.tool_families.as_ref().is_some_and(|families| {
                                         !families.iter().any(|family| family == "containers")
                                     })
-                            }))
+                            }) || policy.profile != Some(AccessProfile::Full))
                         });
                     match revoked {
                         Ok(false) => continue,

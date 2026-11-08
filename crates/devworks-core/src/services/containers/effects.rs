@@ -46,13 +46,17 @@ struct ExecutionPlan<'a> {
 }
 
 fn scoped_image_tag(project: Option<&ProjectId>, image: &str) -> String {
+    let image_hash = sha256_hex(image.as_bytes());
+    format!("{}{}", scoped_image_prefix(project), &image_hash[..16])
+}
+
+fn scoped_image_prefix(project: Option<&ProjectId>) -> String {
     let scope = project.map_or_else(
         || "workspace".to_owned(),
         |id| format!("project:{}", id.0.as_str()),
     );
     let scope_hash = sha256_hex(scope.as_bytes());
-    let image_hash = sha256_hex(image.as_bytes());
-    format!("devworks-local:{}-{}", &scope_hash[..16], &image_hash[..16])
+    format!("devworks-local:{}-", &scope_hash[..16])
 }
 
 fn parse_image_id(bytes: &[u8]) -> Option<String> {
@@ -63,6 +67,43 @@ fn parse_image_id(bytes: &[u8]) -> Option<String> {
 }
 
 impl ContainerService {
+    fn image_has_project_tag(
+        &self,
+        backend: Backend,
+        image: &str,
+        project: &ProjectId,
+        context: &crate::context::InvocationContext,
+        operation: &OperationId,
+    ) -> Result<bool, EffectOutcome> {
+        let args = backend
+            .image_tags(image)
+            .map_err(|_| EffectOutcome::Failed("container image reference invalid".into()))?;
+        let result = self.run_plan(
+            context,
+            operation,
+            ExecutionPlan {
+                backend,
+                args,
+                environment: &[],
+                redactions: &[],
+                stdin: None,
+                timeout: Duration::from_secs(20),
+            },
+        )?;
+        if result.exit_code != Some(0) {
+            return Ok(false);
+        }
+        let tags = serde_json::from_slice::<Vec<String>>(&result.stdout)
+            .map_err(|_| EffectOutcome::Unknown("container image tag inventory invalid".into()))?;
+        let prefix = scoped_image_prefix(Some(project));
+        Ok(tags.iter().any(|tag| {
+            tag.starts_with(&prefix)
+                || tag
+                    .strip_prefix("localhost/")
+                    .is_some_and(|local| local.starts_with(&prefix))
+        }))
+    }
+
     fn image_id(
         &self,
         backend: Backend,
@@ -452,7 +493,30 @@ impl ContainerService {
         };
         // A caller may use an already-local immutable image ID directly. Mutable references
         // must have been published through this project's pull/build path first.
-        let image_reference = parse_image_id(input.spec.image.0.as_bytes())
+        let direct_id = parse_image_id(input.spec.image.0.as_bytes());
+        if let Some(digest) = &direct_id
+            && !matches!(
+                context.principal_kind(),
+                crate::context::PrincipalKind::Human | crate::context::PrincipalKind::Host
+            )
+        {
+            match self.image_has_project_tag(
+                backend,
+                digest,
+                &row.project_id,
+                context,
+                &operation.id,
+            ) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return EffectOutcome::Failed(
+                        "container image ID is not published for this project".into(),
+                    );
+                }
+                Err(outcome) => return outcome,
+            }
+        }
+        let image_reference = direct_id
             .unwrap_or_else(|| scoped_image_tag(Some(&row.project_id), &input.spec.image.0));
         let image_id = match self.image_id(backend, &image_reference, context, &operation.id) {
             Ok(id) => id,
@@ -471,17 +535,21 @@ impl ContainerService {
             Ok(args) => args,
             Err(_) => return EffectOutcome::Failed("container create arguments invalid".into()),
         };
+        let Some(registry_auth) = &self.registry_auth else {
+            return EffectOutcome::Failed("container client isolation unavailable".into());
+        };
+        let client = match registry_auth.prepare_anonymous(backend) {
+            Ok(session) => session,
+            Err(reason) => return EffectOutcome::Failed(reason.into()),
+        };
+        let client_environment = client.environment();
         let result = match self.run_plan(
             context,
             &operation.id,
             ExecutionPlan {
                 backend,
                 args,
-                environment: if backend == Backend::Apple {
-                    &environment
-                } else {
-                    &[]
-                },
+                environment: &client_environment,
                 redactions: &environment
                     .iter()
                     .map(|(_, value)| value.clone())
@@ -1033,7 +1101,7 @@ impl ContainerService {
         operation: &OperationRecord,
         authority: &dyn AuthorityPort,
     ) -> EffectOutcome {
-        let (intent, context, authorization) = match self.command_context(operation, authority) {
+        let (intent, _, _) = match self.command_context(operation, authority) {
             Ok(value) => value,
             Err(EffectOutcome::Failed(reason)) => {
                 if let Ok(intent) =
@@ -1074,6 +1142,30 @@ impl ContainerService {
         let _lifecycle_guard = lifecycle_gate
             .as_ref()
             .map(|gate| gate.lock().unwrap_or_else(|p| p.into_inner()));
+        // A competing image or lifecycle effect may hold this gate for minutes. The
+        // authority observed before the wait cannot authorize the eventual native call.
+        let (_, context, authorization) = match self.command_context(operation, authority) {
+            Ok(value) => value,
+            Err(EffectOutcome::Failed(reason)) => {
+                if matches!(intent.command, ContainerCommand::Create(_))
+                    && let Some(id) = &intent.container_id
+                    && self
+                        .settle_phase(
+                            id.clone(),
+                            operation.id.clone(),
+                            ContainerPhase::Creating,
+                            ContainerPhase::Failed,
+                        )
+                        .is_err()
+                {
+                    return EffectOutcome::Unknown(
+                        "container create authority refusal could not release reservations".into(),
+                    );
+                }
+                return EffectOutcome::Failed(reason);
+            }
+            Err(outcome) => return outcome,
+        };
         let outcome = match &intent.command {
             ContainerCommand::Build(input) => self.execute_build(operation, &context, input),
             ContainerCommand::Pull(input) => self.execute_pull(operation, &context, input),

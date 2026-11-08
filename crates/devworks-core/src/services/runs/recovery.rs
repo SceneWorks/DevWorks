@@ -24,8 +24,8 @@ use super::{
 };
 use crate::ports::storage::{
     ActivationFilter, ActivationOutcome, ActivationPhase, AssignmentState, AttemptBinding,
-    BlockerFilter, DesiredExecution, HoldCause, ProcessFilter, StopCause, StorageError,
-    StoredActivation, WorkRoot, WriteTransaction,
+    BlockerFilter, ContainerFilter, DesiredExecution, HoldCause, ProcessFilter, StopCause,
+    StorageError, StoredActivation, WorkRoot, WriteTransaction,
 };
 use crate::protocol::{Id, OperationId, OperationState, RootId};
 use serde_json::json;
@@ -752,9 +752,22 @@ pub fn root_quiesced(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<boo
             }
         }
         if page.len() < usize::from(PAGE) {
-            return Ok(true);
+            break;
         }
         after = page.last().cloned();
+    }
+    let mut after: Option<Id> = None;
+    loop {
+        let page =
+            tx.resources()
+                .containers(&ContainerFilter::AgentWorkMayRun, after.as_ref(), PAGE)?;
+        if page.iter().any(|row| row.root_id.as_ref() == Some(root)) {
+            return Ok(false);
+        }
+        if page.len() < usize::from(PAGE) {
+            return Ok(true);
+        }
+        after = page.last().map(|row| row.id.clone());
     }
 }
 

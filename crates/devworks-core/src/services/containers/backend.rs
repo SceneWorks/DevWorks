@@ -105,14 +105,20 @@ impl Backend {
         safe_reference(tag)?;
         safe_path(definition)?;
         safe_path(context)?;
-        Ok(vec![
-            "build".into(),
+        let mut args = vec!["build".into()];
+        match self {
+            Self::Docker => args.push("--pull".into()),
+            Self::Podman => args.push("--pull=always".into()),
+            Self::Apple => {}
+        }
+        args.extend([
             "--file".into(),
             definition.into(),
             "--tag".into(),
             tag.into(),
             context.into(),
-        ])
+        ]);
+        Ok(args)
     }
 
     pub fn pull(self, image: &str) -> Result<Vec<String>, PlanError> {
@@ -143,6 +149,17 @@ impl Backend {
             "inspect".into(),
             "--format".into(),
             "{{.Id}}".into(),
+            image.into(),
+        ])
+    }
+
+    pub fn image_tags(self, image: &str) -> Result<Vec<String>, PlanError> {
+        safe_reference(image)?;
+        Ok(vec![
+            "image".into(),
+            "inspect".into(),
+            "--format".into(),
+            "{{json .RepoTags}}".into(),
             image.into(),
         ])
     }
