@@ -13,11 +13,7 @@
         "membership",
         "archive",
         "restore",
-        "delete",
-        "prepare_purge",
-        "purge_manifest",
-        "purge",
-        "purge_status"
+        "delete"
       ],
       "effectAndAuthority": "Read queries; mutations revisioned; active archive and purge require concrete confirmation",
       "status": "Proposed; exact command/tool schemas require review"

@@ -93,7 +93,7 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['resources.renew'], {2})
         for name in ('desktop.inspect', 'desktop.capture', 'desktop.request_control',
                      'desktop.input', 'desktop.release_control'):
-            self.assertEqual(carried[name], {2})
+            self.assertEqual(carried[name], {3})
         self.assertEqual(carried['router.availability'], {2, 3})
         self.assertEqual(carried['router.route'], {3})
         self.assertEqual(carried['router.pin'], {3})

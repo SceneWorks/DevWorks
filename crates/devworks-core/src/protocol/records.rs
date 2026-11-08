@@ -3959,7 +3959,7 @@ pub struct DesktopRecord {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "DesktopAccessibilitySnapshot", extend("x-since" = 2))]
+    #[schemars(with = "DesktopAccessibilitySnapshot", extend("x-since" = 3))]
     pub accessibility: Option<DesktopAccessibilitySnapshot>,
 }
 impl Check for DesktopRecord {
@@ -3981,7 +3981,7 @@ impl Check for DesktopRecord {
 
 impl Revisioned for DesktopRecord {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 3 {
             self.accessibility = None;
         }
     }
@@ -4032,7 +4032,7 @@ pub enum DesktopInput {
         x: i32,
         y: i32,
     },
-    #[schemars(extend("x-since" = 2))]
+    #[schemars(extend("x-since" = 3))]
     Target {
         target_id: Label,
         snapshot_revision: Label,
@@ -4076,7 +4076,7 @@ impl Revisioned for DesktopInput {
     fn retain_revision(&mut self, _: u32) {}
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
-            Self::Target { .. } if revision < 2 => {
+            Self::Target { .. } if revision < 3 => {
                 return Err("union variant predates its introduction: Target".into());
             }
             _ => {}

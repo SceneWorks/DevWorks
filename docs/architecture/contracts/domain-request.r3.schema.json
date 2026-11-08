@@ -1598,7 +1598,7 @@
             "action"
           ],
           "type": "object",
-          "x-since": 2
+          "x-since": 3
         }
       ]
     },

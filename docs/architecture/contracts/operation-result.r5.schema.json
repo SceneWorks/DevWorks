@@ -4962,7 +4962,7 @@
       "properties": {
         "accessibility": {
           "$ref": "#/$defs/DesktopAccessibilitySnapshot",
-          "x-since": 2
+          "x-since": 3
         },
         "consentId": {
           "anyOf": [

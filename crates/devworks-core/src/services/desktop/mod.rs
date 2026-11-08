@@ -1019,7 +1019,7 @@ impl QueryHandler for DesktopService {
             query.input(),
             OperationInput::Desktop(ops::Input::Inspect(_))
         ) {
-            if query.schema_revision().0 < 2 {
+            if query.schema_revision().0 < 3 {
                 return Ok(None);
             }
             return match self.platform.capabilities().accessibility {

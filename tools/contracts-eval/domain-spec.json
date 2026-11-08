@@ -1502,7 +1502,7 @@
         "accessibility": "?DesktopAccessibilitySnapshot"
       },
       "since": {
-        "accessibility": 2
+        "accessibility": 3
       }
     },
     "DesktopCapture": {
@@ -1539,7 +1539,7 @@
         }
       },
       "introducedVariants": {
-        "Target": 2
+        "Target": 3
       }
     },
     "EnvironmentEntry": {
@@ -11595,23 +11595,23 @@
     ],
     "desktop.capture": [
       1,
-      2
+      3
     ],
     "desktop.input": [
       1,
-      2
+      3
     ],
     "desktop.inspect": [
       1,
-      2
+      3
     ],
     "desktop.request_control": [
       1,
-      2
+      3
     ],
     "desktop.release_control": [
       1,
-      2
+      3
     ]
   },
   "familyRules": {

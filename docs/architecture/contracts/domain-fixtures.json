@@ -12698,6 +12698,76 @@
     "schemaValid": true
   },
   {
+    "id": "dw13-r3-admission-desktop.capture-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"desktop.capture\",\"desktopId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-desktop.capture",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"desktop.capture\",\"value\":{\"desktop\":{\"desktopId\":\"id-a\",\"revision\":\"1\",\"state\":\"Enabled\",\"permissionState\":\"fixture\"},\"image\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"capturedAtMs\":\"0\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-desktop.input-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.input\",\"desktopId\":\"id-a\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\",\"consentId\":\"id-a\",\"expectedDesktopRevision\":\"1\",\"action\":{\"kind\":\"Click\",\"x\":1,\"y\":1,\"button\":\"Primary\"}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-desktop.input",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"desktop.input\",\"value\":{\"desktopId\":\"id-a\",\"revision\":\"1\",\"state\":\"Enabled\",\"permissionState\":\"fixture\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-desktop.inspect-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"desktop.inspect\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-desktop.inspect",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"desktop.inspect\",\"value\":{\"desktopId\":\"id-a\",\"revision\":\"1\",\"state\":\"Enabled\",\"permissionState\":\"fixture\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-desktop.request_control-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.request_control\",\"desktopId\":\"id-a\",\"expectedRevision\":\"1\",\"reason\":\"Fixture content\",\"leaseMs\":\"1\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-desktop.request_control",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"desktop.request_control\",\"value\":{\"desktopId\":\"id-a\",\"revision\":\"1\",\"state\":\"Enabled\",\"permissionState\":\"fixture\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-desktop.release_control-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.release_control\",\"desktopId\":\"id-a\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-desktop.release_control",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"desktop.release_control\",\"value\":{\"desktopId\":\"id-a\",\"revision\":\"1\",\"state\":\"Enabled\",\"permissionState\":\"fixture\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "dw33-r4-admission-conventions.list",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"conventions.list\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20},\"applicability\":[]},\"schemaRevision\":4}",
@@ -13307,15 +13377,15 @@
     "schemaValid": true
   },
   {
-    "id": "dw150-r2-input-desktop.inspect",
-    "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"desktop.inspect\"},\"schemaRevision\":2}",
+    "id": "dw150-r3-input-desktop.inspect",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"desktop.inspect\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw150-r2-result-desktop.inspect",
-    "entry": "operation-result.r2",
+    "id": "dw150-r3-result-desktop.inspect",
+    "entry": "operation-result.r3",
     "raw": "{\"kind\":\"desktop.inspect\",\"value\":{\"desktopId\":\"id-a\",\"revision\":\"1\",\"state\":\"Enabled\",\"permissionState\":\"fixture\",\"accessibility\":{\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"platform\":\"macos-ax\",\"nodes\":[{\"targetId\":\"mac:42:0\",\"parentId\":null,\"role\":\"AXButton\",\"name\":\"Apply\",\"description\":null,\"enabled\":true,\"actions\":[\"AXPress\"]}],\"truncated\":false}}}",
     "typedValid": true,
     "schemaValid": true
@@ -13328,65 +13398,72 @@
     "schemaValid": false
   },
   {
-    "id": "dw150-r2-input-desktop.capture",
-    "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"desktop.capture\",\"desktopId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":2}",
+    "id": "dw150-reject-r2-tree",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"desktop.inspect\",\"value\":{\"desktopId\":\"id-a\",\"revision\":\"1\",\"state\":\"Enabled\",\"permissionState\":\"fixture\",\"accessibility\":{\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"platform\":\"macos-ax\",\"nodes\":[{\"targetId\":\"mac:42:0\",\"parentId\":null,\"role\":\"AXButton\",\"name\":\"Apply\",\"description\":null,\"enabled\":true,\"actions\":[\"AXPress\"]}],\"truncated\":false}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw150-r3-input-desktop.capture",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"desktop.capture\",\"desktopId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw150-r2-result-desktop.capture",
-    "entry": "operation-result.r2",
+    "id": "dw150-r3-result-desktop.capture",
+    "entry": "operation-result.r3",
     "raw": "{\"kind\":\"desktop.capture\",\"value\":{\"desktop\":{\"desktopId\":\"id-a\",\"revision\":\"1\",\"state\":\"Enabled\",\"permissionState\":\"fixture\",\"accessibility\":{\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"platform\":\"macos-ax\",\"nodes\":[{\"targetId\":\"mac:42:0\",\"parentId\":null,\"role\":\"AXButton\",\"name\":\"Apply\",\"description\":null,\"enabled\":true,\"actions\":[\"AXPress\"]}],\"truncated\":false}},\"image\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"capturedAtMs\":\"0\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw150-r2-input-desktop.request_control",
-    "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.request_control\",\"desktopId\":\"id-a\",\"expectedRevision\":\"1\",\"reason\":\"Fixture content\",\"leaseMs\":\"1\"},\"schemaRevision\":2}",
+    "id": "dw150-r3-input-desktop.request_control",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.request_control\",\"desktopId\":\"id-a\",\"expectedRevision\":\"1\",\"reason\":\"Fixture content\",\"leaseMs\":\"1\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw150-r2-result-desktop.request_control",
-    "entry": "operation-result.r2",
+    "id": "dw150-r3-result-desktop.request_control",
+    "entry": "operation-result.r3",
     "raw": "{\"kind\":\"desktop.request_control\",\"value\":{\"desktopId\":\"id-a\",\"revision\":\"1\",\"state\":\"Enabled\",\"permissionState\":\"fixture\",\"accessibility\":{\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"platform\":\"macos-ax\",\"nodes\":[{\"targetId\":\"mac:42:0\",\"parentId\":null,\"role\":\"AXButton\",\"name\":\"Apply\",\"description\":null,\"enabled\":true,\"actions\":[\"AXPress\"]}],\"truncated\":false}}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw150-r2-input-desktop.input",
-    "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.input\",\"desktopId\":\"id-a\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\",\"consentId\":\"id-a\",\"expectedDesktopRevision\":\"1\",\"action\":{\"kind\":\"Click\",\"x\":1,\"y\":1,\"button\":\"Primary\"}},\"schemaRevision\":2}",
+    "id": "dw150-r3-input-desktop.input",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.input\",\"desktopId\":\"id-a\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\",\"consentId\":\"id-a\",\"expectedDesktopRevision\":\"1\",\"action\":{\"kind\":\"Click\",\"x\":1,\"y\":1,\"button\":\"Primary\"}},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw150-r2-result-desktop.input",
-    "entry": "operation-result.r2",
+    "id": "dw150-r3-result-desktop.input",
+    "entry": "operation-result.r3",
     "raw": "{\"kind\":\"desktop.input\",\"value\":{\"desktopId\":\"id-a\",\"revision\":\"1\",\"state\":\"Enabled\",\"permissionState\":\"fixture\",\"accessibility\":{\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"platform\":\"macos-ax\",\"nodes\":[{\"targetId\":\"mac:42:0\",\"parentId\":null,\"role\":\"AXButton\",\"name\":\"Apply\",\"description\":null,\"enabled\":true,\"actions\":[\"AXPress\"]}],\"truncated\":false}}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw150-r2-input-desktop.release_control",
-    "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.release_control\",\"desktopId\":\"id-a\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\"},\"schemaRevision\":2}",
+    "id": "dw150-r3-input-desktop.release_control",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.release_control\",\"desktopId\":\"id-a\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw150-r2-result-desktop.release_control",
-    "entry": "operation-result.r2",
+    "id": "dw150-r3-result-desktop.release_control",
+    "entry": "operation-result.r3",
     "raw": "{\"kind\":\"desktop.release_control\",\"value\":{\"desktopId\":\"id-a\",\"revision\":\"1\",\"state\":\"Enabled\",\"permissionState\":\"fixture\",\"accessibility\":{\"revision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"platform\":\"macos-ax\",\"nodes\":[{\"targetId\":\"mac:42:0\",\"parentId\":null,\"role\":\"AXButton\",\"name\":\"Apply\",\"description\":null,\"enabled\":true,\"actions\":[\"AXPress\"]}],\"truncated\":false}}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw150-r2-target-input",
-    "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.input\",\"desktopId\":\"id-a\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\",\"consentId\":\"id-a\",\"expectedDesktopRevision\":\"1\",\"action\":{\"kind\":\"Target\",\"targetId\":\"mac:42:0\",\"snapshotRevision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"action\":{\"kind\":\"Invoke\",\"action\":\"AXPress\"}}},\"schemaRevision\":2}",
+    "id": "dw150-r3-target-input",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.input\",\"desktopId\":\"id-a\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\",\"consentId\":\"id-a\",\"expectedDesktopRevision\":\"1\",\"action\":{\"kind\":\"Target\",\"targetId\":\"mac:42:0\",\"snapshotRevision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"action\":{\"kind\":\"Invoke\",\"action\":\"AXPress\"}}},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -13394,6 +13471,13 @@
     "id": "dw150-reject-r1-target-input",
     "entry": "domain-request",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.input\",\"desktopId\":\"id-a\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\",\"consentId\":\"id-a\",\"expectedDesktopRevision\":\"1\",\"action\":{\"kind\":\"Target\",\"targetId\":\"mac:42:0\",\"snapshotRevision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"action\":{\"kind\":\"Invoke\",\"action\":\"AXPress\"}}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw150-reject-r2-target-input",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.input\",\"desktopId\":\"id-a\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\",\"consentId\":\"id-a\",\"expectedDesktopRevision\":\"1\",\"action\":{\"kind\":\"Target\",\"targetId\":\"mac:42:0\",\"snapshotRevision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"action\":{\"kind\":\"Invoke\",\"action\":\"AXPress\"}}},\"schemaRevision\":2}",
     "typedValid": false,
     "schemaValid": false
   }

@@ -13577,10 +13577,10 @@
               "completionSchema": null
             },
             {
-              "revision": 2,
-              "inputSchema": "domain-request.r2.schema.json",
-              "resultSchema": "operation-result.r2.schema.json",
-              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -13631,10 +13631,10 @@
               "completionSchema": null
             },
             {
-              "revision": 2,
-              "inputSchema": "domain-request.r2.schema.json",
-              "resultSchema": "operation-result.r2.schema.json",
-              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -13685,12 +13685,12 @@
               "completionSchema": "operation-completion.schema.json"
             },
             {
-              "revision": 2,
-              "inputSchema": "domain-request.r2.schema.json",
-              "resultSchema": "operation-result.r2.schema.json",
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
               "queryReplySchema": null,
-              "commandReplySchema": "domain-command-reply.r2.schema.json",
-              "completionSchema": "operation-completion.r2.schema.json"
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -13739,12 +13739,12 @@
               "completionSchema": "operation-completion.schema.json"
             },
             {
-              "revision": 2,
-              "inputSchema": "domain-request.r2.schema.json",
-              "resultSchema": "operation-result.r2.schema.json",
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
               "queryReplySchema": null,
-              "commandReplySchema": "domain-command-reply.r2.schema.json",
-              "completionSchema": "operation-completion.r2.schema.json"
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -13793,12 +13793,12 @@
               "completionSchema": "operation-completion.schema.json"
             },
             {
-              "revision": 2,
-              "inputSchema": "domain-request.r2.schema.json",
-              "resultSchema": "operation-result.r2.schema.json",
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
               "queryReplySchema": null,
-              "commandReplySchema": "domain-command-reply.r2.schema.json",
-              "completionSchema": "operation-completion.r2.schema.json"
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
