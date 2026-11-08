@@ -5899,7 +5899,7 @@ pub(super) static CATALOG: [OperationDescriptor; 364] = [
         result_type: "DesktopRecord",
         result_schema: schema_of::<DesktopRecord>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "desktop.capture",
@@ -5921,7 +5921,7 @@ pub(super) static CATALOG: [OperationDescriptor; 364] = [
         result_type: "DesktopCapture",
         result_schema: schema_of::<DesktopCapture>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "desktop.request_control",
@@ -5943,7 +5943,7 @@ pub(super) static CATALOG: [OperationDescriptor; 364] = [
         result_type: "DesktopRecord",
         result_schema: schema_of::<DesktopRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "desktop.input",
@@ -5965,7 +5965,7 @@ pub(super) static CATALOG: [OperationDescriptor; 364] = [
         result_type: "DesktopRecord",
         result_schema: schema_of::<DesktopRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "desktop.release_control",
@@ -5987,7 +5987,7 @@ pub(super) static CATALOG: [OperationDescriptor; 364] = [
         result_type: "DesktopRecord",
         result_schema: schema_of::<DesktopRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "process.execute",

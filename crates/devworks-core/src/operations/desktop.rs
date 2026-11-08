@@ -93,7 +93,13 @@ impl Check for InputInput {
     }
 }
 impl Revisioned for InputInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.action.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.action.check_revision(revision)?;
+        Ok(())
+    }
 }
 
 /// `desktop.release_control` Command input.

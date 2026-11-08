@@ -3949,6 +3949,13 @@ pub struct DesktopRecord {
     pub lease_id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consent_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DesktopAccessibilitySnapshot", extend("x-since" = 3))]
+    pub accessibility: Option<DesktopAccessibilitySnapshot>,
 }
 impl Check for DesktopRecord {
     fn check(&self) -> Result<(), String> {
@@ -3958,11 +3965,20 @@ impl Check for DesktopRecord {
         self.permission_state.check()?;
         self.lease_id.check()?;
         self.consent_id.check()?;
+        self.accessibility.check()?;
         super::domain_rules::record(
             "DesktopRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for DesktopRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.accessibility = None;
+        }
     }
 }
 
@@ -3986,6 +4002,12 @@ impl Check for DesktopCapture {
     }
 }
 
+impl Revisioned for DesktopCapture {
+    fn retain_revision(&mut self, revision: u32) {
+        self.desktop.retain_revision(revision);
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DesktopInput {
@@ -4004,6 +4026,12 @@ pub enum DesktopInput {
     Scroll {
         x: i32,
         y: i32,
+    },
+    #[schemars(extend("x-since" = 3))]
+    Target {
+        target_id: Label,
+        snapshot_revision: Label,
+        action: DesktopTargetAction,
     },
 }
 impl Check for DesktopInput {
@@ -4025,6 +4053,32 @@ impl Check for DesktopInput {
                 x.check()?;
                 y.check()?;
             }
+            Self::Target {
+                target_id,
+                snapshot_revision,
+                action,
+            } => {
+                target_id.check()?;
+                snapshot_revision.check()?;
+                action.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Revisioned for DesktopInput {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            _ => {}
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Target { .. } if revision < 3 => {
+                return Err("union variant predates its introduction: Target".into());
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -17143,6 +17197,80 @@ impl Check for ProjectPurgeEntryPage {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum DesktopTargetAction {
+    Invoke { action: Label },
+    SetValue { value: Content },
+    Focus {},
+}
+impl Check for DesktopTargetAction {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Invoke { action } => {
+                action.check()?;
+            }
+            Self::SetValue { value } => {
+                value.check()?;
+            }
+            Self::Focus {} => {}
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopAccessibilityNode {
+    pub target_id: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<Label>,
+    pub role: Label,
+    pub name: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<Text>,
+    pub enabled: bool,
+    pub actions: Items<Label>,
+}
+impl Check for DesktopAccessibilityNode {
+    fn check(&self) -> Result<(), String> {
+        self.target_id.check()?;
+        self.parent_id.check()?;
+        self.role.check()?;
+        self.name.check()?;
+        self.description.check()?;
+        self.enabled.check()?;
+        self.actions.check()?;
+        super::domain_rules::record(
+            "DesktopAccessibilityNode",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopAccessibilitySnapshot {
+    pub revision: Label,
+    pub platform: Label,
+    pub nodes: Rows<DesktopAccessibilityNode>,
+    pub truncated: bool,
+}
+impl Check for DesktopAccessibilitySnapshot {
+    fn check(&self) -> Result<(), String> {
+        self.revision.check()?;
+        self.platform.check()?;
+        self.nodes.check()?;
+        self.truncated.check()?;
+        super::domain_rules::record(
+            "DesktopAccessibilitySnapshot",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DomainQuery {
     #[serde(rename = "projects.list")]
     ProjectsList {
@@ -24196,6 +24324,9 @@ impl Revisioned for DomainCommand {
                     *labels = None;
                 }
             }
+            Self::DesktopInput { action, .. } => {
+                action.retain_revision(revision);
+            }
             Self::RouterPriceOverride { change, .. } => {
                 if revision < 3 {
                     *change = None;
@@ -24282,6 +24413,10 @@ impl Revisioned for DomainCommand {
             }
             Self::ProjectsPurge { .. } if revision < 6 => {
                 Err("operation predates its introduction".into())
+            }
+            Self::DesktopInput { action, .. } => {
+                action.check_revision(revision)?;
+                Ok(())
             }
             Self::RouterConfigure { action, .. } => {
                 action.check_revision(revision)?;
@@ -25921,6 +26056,11 @@ impl Revisioned for OperationResult {
             Self::BrowserUpload { value } => value.retain_revision(revision),
             Self::BrowserConsole { value } => value.retain_revision(revision),
             Self::BrowserNetwork { value } => value.retain_revision(revision),
+            Self::DesktopInspect { value } => value.retain_revision(revision),
+            Self::DesktopCapture { value } => value.retain_revision(revision),
+            Self::DesktopRequestControl { value } => value.retain_revision(revision),
+            Self::DesktopInput { value } => value.retain_revision(revision),
+            Self::DesktopReleaseControl { value } => value.retain_revision(revision),
             Self::WebSearch { value } => value.retain_revision(revision),
             Self::WebFetch { value } => value.retain_revision(revision),
             Self::JobsList { value } => value.retain_revision(revision),

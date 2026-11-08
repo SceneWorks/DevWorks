@@ -13,6 +13,16 @@ use std::io::Cursor;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use xcap::{Monitor, Window};
 
+#[cfg(target_os = "linux")]
+#[path = "desktop_atspi_linux.rs"]
+mod desktop_atspi_linux;
+#[cfg(target_os = "macos")]
+#[path = "desktop_ax_macos.rs"]
+mod desktop_ax_macos;
+#[cfg(target_os = "windows")]
+#[path = "desktop_uia_windows.rs"]
+mod desktop_uia_windows;
+
 #[derive(Default)]
 pub struct NativeDesktop;
 
@@ -24,6 +34,7 @@ impl DesktopPlatform for NativeDesktop {
                 target,
                 capture: DesktopAvailability::Unsupported("wayland-portal-not-qualified"),
                 input: DesktopAvailability::Unsupported("wayland-input-not-qualified"),
+                accessibility: accessibility_availability(),
             };
         }
         let capture = if !screen_permission() {
@@ -44,6 +55,7 @@ impl DesktopPlatform for NativeDesktop {
             target,
             capture,
             input,
+            accessibility: accessibility_availability(),
         }
     }
 
@@ -59,6 +71,26 @@ impl DesktopPlatform for NativeDesktop {
     }
 
     fn inject(&self, action: &DesktopInput) -> Result<(), DesktopFault> {
+        if let DesktopInput::Target {
+            target_id,
+            snapshot_revision,
+            action,
+        } = action
+        {
+            match self.capabilities().accessibility {
+                DesktopAvailability::Available => {}
+                DesktopAvailability::PermissionRequired(_) => {
+                    return Err(DesktopFault::PermissionRequired);
+                }
+                DesktopAvailability::Unsupported(_) => return Err(DesktopFault::Unsupported),
+            }
+            #[cfg(target_os = "macos")]
+            return desktop_ax_macos::inject_target(&target_id.0, &snapshot_revision.0, action);
+            #[cfg(target_os = "linux")]
+            return desktop_atspi_linux::inject_target(&target_id.0, &snapshot_revision.0, action);
+            #[cfg(target_os = "windows")]
+            return desktop_uia_windows::inject_target(&target_id.0, &snapshot_revision.0, action);
+        }
         match self.capabilities().input {
             DesktopAvailability::Available => {}
             DesktopAvailability::PermissionRequired(_) => {
@@ -127,8 +159,56 @@ impl DesktopPlatform for NativeDesktop {
                         .map_err(|_| DesktopFault::NativeFailure)?;
                 }
             }
+            DesktopInput::Target { .. } => return Err(DesktopFault::Unsupported),
         }
         Ok(())
+    }
+
+    fn accessibility_snapshot(
+        &self,
+    ) -> Result<devworks_core::ports::desktop::AccessibilitySnapshot, DesktopFault> {
+        #[cfg(target_os = "macos")]
+        {
+            if !input_permission() {
+                return Err(DesktopFault::PermissionRequired);
+            }
+            desktop_ax_macos::snapshot()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            desktop_atspi_linux::snapshot()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            desktop_uia_windows::snapshot()
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn accessibility_availability() -> DesktopAvailability {
+    if input_permission() {
+        DesktopAvailability::Available
+    } else {
+        DesktopAvailability::PermissionRequired("accessibility-input")
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn accessibility_availability() -> DesktopAvailability {
+    if desktop_atspi_linux::available() {
+        DesktopAvailability::Available
+    } else {
+        DesktopAvailability::Unsupported("atspi-session-bus-unavailable")
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn accessibility_availability() -> DesktopAvailability {
+    if desktop_uia_windows::available() {
+        DesktopAvailability::Available
+    } else {
+        DesktopAvailability::Unsupported("windows-uia-unavailable")
     }
 }
 
