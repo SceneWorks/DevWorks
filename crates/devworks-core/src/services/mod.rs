@@ -302,6 +302,19 @@ impl UseCases {
         }
         self
     }
+    /// Registers only the process operations whose native service is composed.
+    pub fn with_process_tools(mut self, service: Arc<process::tools::ProcessToolService>) -> Self {
+        self.register("process.execute", None, Some(service.clone()));
+        self.register("process.output", Some(service.clone()), None);
+        self.register("process.cancel", None, Some(service.clone()));
+        self.register(
+            "process.install_project_dependencies",
+            None,
+            Some(service.clone()),
+        );
+        self.register("process.request_system_install", None, Some(service));
+        self
+    }
     /// Registers native desktop queries and consent-bound computer control.
     pub fn with_desktop(mut self, service: Arc<desktop::DesktopService>) -> Self {
         for op in desktop::OPERATIONS {

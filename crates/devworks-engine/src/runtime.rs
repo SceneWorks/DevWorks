@@ -195,6 +195,18 @@ pub struct PurgeComposition {
     pub client: Arc<dyn devworks_core::ports::project_purge::ProjectPurgeClient>,
 }
 #[derive(Clone)]
+pub struct ProcessToolComposition {
+    pub bindings: devworks_core::services::process::tools::ToolBindings,
+    pub filesystem: Arc<dyn devworks_core::authority::destructive::FilesystemResolver>,
+    pub protected_roots: devworks_core::authority::destructive::ProtectedRoots,
+    pub secrets: Arc<dyn devworks_core::ports::secrets::SecretStore>,
+}
+impl std::fmt::Debug for ProcessToolComposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ProcessToolComposition")
+    }
+}
+#[derive(Clone)]
 pub struct DesktopComposition {
     pub platform: Arc<dyn devworks_core::ports::desktop::DesktopPlatform>,
 }
@@ -214,6 +226,9 @@ pub struct RuntimeConfig {
     /// inspect can report the actual capability state.
     pub desktop: Option<DesktopComposition>,
     pub purge: Option<PurgeComposition>,
+    /// Process tools are offered only when a host supplies owned executable/root and secret
+    /// bindings. Missing qualification leaves the family unregistered.
+    pub process_tools: Option<ProcessToolComposition>,
     pub schemas: Option<crate::schemas::SchemaComposition>,
     /// Native bounded credential-free price source and cadence; absent sources refuse refresh.
     pub price_refresh: Option<crate::prices::PriceComposition>,
@@ -263,6 +278,7 @@ impl RuntimeConfig {
             desktop: None,
             dispatcher: DispatcherConfig::new(owner),
             purge: None,
+            process_tools: None,
             price_refresh: None,
             schemas: None,
             collect_interval: Duration::from_secs(15 * 60),
@@ -339,6 +355,7 @@ pub struct CollectionPass {
 
 struct Collector {
     trigger: Notify,
+    observation_stop: Notify,
     stopping: AtomicBool,
     status: watch::Sender<Option<CollectionPass>>,
 }
@@ -346,6 +363,7 @@ impl Collector {
     fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         self.trigger.notify_one();
+        self.observation_stop.notify_one();
     }
 }
 
@@ -395,6 +413,7 @@ pub struct Runtime {
     diagnostics: Arc<DiagnosticService>,
     monitor: Arc<Monitor>,
     browser: Option<Arc<BrowserService>>,
+    process_tools: Option<Arc<devworks_core::services::process::tools::ProcessToolService>>,
     desktop: Option<Arc<devworks_core::services::desktop::DesktopService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
     help: Option<Arc<devworks_core::services::help::HelpService>>,
@@ -483,6 +502,20 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         process_host,
         resources.clone(),
     ));
+    let process_tools = config.process_tools.as_ref().map(|composition| {
+        Arc::new(
+            devworks_core::services::process::tools::ProcessToolService::new(
+                store.clone(),
+                supervisor.clone(),
+                authority.clone(),
+                composition.secrets.clone(),
+                composition.bindings.clone(),
+                composition.filesystem.clone(),
+                composition.protected_roots.clone(),
+                ids.clone(),
+            ),
+        )
+    });
     let git = git.and_then(|composition| {
         let fs = composition.config.filesystem.clone()?;
         let helpers = Arc::new(
@@ -546,6 +579,11 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         )
     });
     let mut use_cases = use_cases;
+    if let Some(service) = &process_tools {
+        use_cases = use_cases.with_process_tools(service.clone());
+        consumers.push(crate::process_tools::consumer(service.clone()));
+        consumers.push(crate::process_tools::cancel_consumer(service.clone()));
+    }
     if let Some(service) = &desktop {
         use_cases = use_cases.with_desktop(service.clone());
         consumers.push(crate::desktop::consumer(service.clone()));
@@ -973,6 +1011,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let (status, _) = watch::channel(None);
     let collector = Arc::new(Collector {
         trigger: Notify::new(),
+        observation_stop: Notify::new(),
         stopping: AtomicBool::new(false),
         status,
     });
@@ -996,6 +1035,21 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     );
     let browser_supervision = Arc::new(BrowserSupervision::default());
     let mut tasks = vec![delivery, collection, housekeeping];
+    // Unknown external effects remain held, never retried. Re-observe them while the app is
+    // running as well as at boot; an owner can establish a terminal fact without a restart.
+    if process_tools.is_some() {
+        let (observing_dispatcher, observing_stop) = (dispatcher.clone(), collector.clone());
+        tasks.push(tokio::spawn(async move {
+            while !observing_stop.stopping.load(Ordering::Acquire) {
+                let _ = observing_dispatcher.observe_unknown().await;
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    observing_stop.observation_stop.notified(),
+                )
+                .await;
+            }
+        }));
+    }
     if let Some(worker) = purge_worker {
         // Client effects run before UI restoration; held effects retain their original authority.
         let recovered = worker.clone();
@@ -1195,6 +1249,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         diagnostics,
         monitor,
         browser,
+        process_tools,
         desktop,
         git,
         help,
@@ -1303,6 +1358,13 @@ impl Runtime {
         self.browser.as_ref()
     }
 
+    /// The process owner shared by the native UI, agent tools and its durable effect consumer.
+    /// Typed completions supply the process ID after an accepted execute settles.
+    pub fn process_tools(
+        &self,
+    ) -> Option<&Arc<devworks_core::services::process::tools::ProcessToolService>> {
+        self.process_tools.as_ref()
+    }
     /// The desktop service and its scoped typed input completions.
     pub fn desktop(&self) -> Option<&Arc<devworks_core::services::desktop::DesktopService>> {
         self.desktop.as_ref()

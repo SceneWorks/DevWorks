@@ -64,11 +64,12 @@ pub const NATIVE_EXECUTION: [&str; 16] = [
 ];
 
 /// Commands a non-human principal may run only with an explicit approval for the exact request:
-/// a system install, and the destructive project and repository-index changes (archiving fences
+/// destructive project and repository-index changes (archiving fences
 /// and stops a project's work at once, deletion tombstones it, index removal drops a shared
-/// registration's index for every project). The user's own command is its confirmation.
-pub const APPROVAL_REQUIRED: [&str; 4] = [
-    "process.request_system_install",
+/// registration's index for every project). `process.request_system_install` only stages a
+/// proposal and performs no installation; its later approval is the human decision.
+/// The user's own command is its confirmation.
+pub const APPROVAL_REQUIRED: [&str; 3] = [
     "projects.archive",
     "projects.delete",
     "repositories.remove_index",

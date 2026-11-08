@@ -732,6 +732,106 @@ fn policy_parts() -> (NativeFilesystem, ProtectedRoots) {
     )
 }
 
+/// Holds a real native child after spawn, before the supervisor can register it.
+struct DelayedRegistrationHost {
+    spawned: std::sync::mpsc::Sender<()>,
+    resume: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+impl ProcessHost for DelayedRegistrationHost {
+    fn platform(&self) -> &'static str {
+        NativeProcessHost.platform()
+    }
+    fn environment(&self) -> Vec<(String, String)> {
+        NativeProcessHost.environment()
+    }
+    fn spawn(
+        &self,
+        spec: &ProcessSpec,
+    ) -> Result<Box<dyn ProcessTree>, devworks_core::ports::process::ProcessError> {
+        let tree = NativeProcessHost.spawn(spec)?;
+        self.spawned.send(()).expect("test receiver");
+        self.resume
+            .lock()
+            .unwrap()
+            .recv()
+            .expect("resume registration");
+        Ok(tree)
+    }
+    fn probe(&self, identity: &devworks_core::ports::process::NativeIdentity) -> Probe {
+        NativeProcessHost.probe(identity)
+    }
+    fn terminate(&self, identity: &devworks_core::ports::process::NativeIdentity) -> Probe {
+        NativeProcessHost.terminate(identity)
+    }
+}
+
+#[test]
+fn cancellation_during_native_launch_stops_the_registered_tree() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let (spawned_tx, spawned_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let supervisor = ProcessSupervisor::new(
+        fx.store.clone(),
+        Arc::new(DelayedRegistrationHost {
+            spawned: spawned_tx,
+            resume: Mutex::new(resume_rx),
+        }),
+        fx.svc.clone(),
+    );
+    let (fs, roots) = policy_parts();
+    let policy = LaunchPolicy {
+        fs: &fs,
+        roots: &roots,
+        protected_branches: &[],
+    };
+    let actor = fx.agent("agent-a", "project-a", "s-a");
+    std::thread::scope(|scope| {
+        let launch = scope.spawn(|| {
+            supervisor
+                .launch(
+                    &actor,
+                    LaunchRequest {
+                        spec: sleeping_tree(30),
+                        operation_id: None,
+                        lease: None,
+                        approved_hold: false,
+                    },
+                    &policy,
+                )
+                .unwrap()
+        });
+        spawned_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("native child spawned");
+        let records = fx.read(|r| r.resources().processes(&ProcessFilter::Unsettled, None, 10));
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].phase, ProcessPhase::Launching);
+        let target = OwnedProcess {
+            id: records[0].id.clone(),
+            identity: devworks_core::ports::process::NativeIdentity {
+                pid: 0,
+                birth: String::new(),
+                group: None,
+            },
+            lease: None,
+        };
+        assert!(matches!(
+            supervisor.cancel(&target, Duration::from_millis(100), Duration::from_secs(5)),
+            Ok(StopOutcome::Uncertain(_))
+        ));
+        resume_tx.send(()).unwrap();
+        let owned = launch.join().unwrap();
+        let result = supervisor.poll(&owned).unwrap();
+        assert!(matches!(result, Some(StopOutcome::Reaped { .. })));
+        let id = owned.id.clone();
+        assert_eq!(
+            fx.read(move |r| r.resources().process(&id)).unwrap().phase,
+            ProcessPhase::Reaped
+        );
+    });
+}
+
 #[test]
 fn generic_process_approval_cannot_bypass_owned_git_push_resolution() {
     let _serial = serial();
