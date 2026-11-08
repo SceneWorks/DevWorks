@@ -190,6 +190,19 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             tx.runs().insert_agent_message(&oversized),
             Err(StorageError::InvalidRecord(_))
         ));
+        oversized.id = id("message-bad-kind");
+        oversized.body = "valid length".into();
+        oversized.message_class = "Evidence".into();
+        assert!(matches!(
+            tx.runs().insert_agent_message(&oversized),
+            Err(StorageError::InvalidRecord(_))
+        ));
+        oversized.message_class = "Question".into();
+        oversized.state = None;
+        assert!(matches!(
+            tx.runs().insert_agent_message(&oversized),
+            Err(StorageError::InvalidRecord(_))
+        ));
         Ok(())
     })
     .unwrap();
