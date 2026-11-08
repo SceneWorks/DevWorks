@@ -402,6 +402,10 @@ pub(super) fn insert_message(
     if m.revision != 1
         || m.body.is_empty()
         || m.body.chars().count() > 65536
+        || matches!(
+            m.channel.as_str(),
+            "Item" | "Project" | "Feature" | "Resource" | "Session" | "Human"
+        ) && m.body.chars().count() > 8000
         || m.body.contains('\0')
         || m.idempotency_key
             .as_ref()

@@ -180,6 +180,16 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             resolved_at_ms: None,
             handed_over: false,
         })?;
+        let mut oversized = m.clone();
+        oversized.id = id("message-oversized");
+        oversized.channel = "Session".into();
+        oversized.to_assignment_id = None;
+        oversized.target_session_id = Some(id("session-home"));
+        oversized.body = "a".repeat(8001);
+        assert!(matches!(
+            tx.runs().insert_agent_message(&oversized),
+            Err(StorageError::InvalidRecord(_))
+        ));
         Ok(())
     })
     .unwrap();
