@@ -496,23 +496,62 @@ impl Shell {
         } else {
             (None, None)
         };
+        let tab = match self.route {
+            Route::Approvals => self.decisions.tab,
+            Route::Knowledge => self.knowledge.tab,
+            Route::Databases => self.graph.tab,
+            Route::Usage => self.usage.tab,
+            _ => self.routes.get(&self.route).map_or(0, |view| view.tab),
+        };
+        let selection = match self.route {
+            Route::Approvals => self.decisions.selected.as_ref().map(|v| v.id.as_str()),
+            Route::Knowledge => self.knowledge.selected.as_ref().map(Id::as_str),
+            Route::Databases => self.graph.selected.as_ref().map(|v| v.node_id.as_str()),
+            Route::Jobs => self.jobs.selected.as_deref(),
+            Route::AddOns => self.addons.selected.as_deref(),
+            Route::Help => self.help.selected.as_ref().map(|(_, topic)| topic.as_str()),
+            _ => self
+                .routes
+                .get(&self.route)
+                .and_then(|view| view.selection.as_deref()),
+        };
+        let selection = selection.unwrap_or("");
+        let knowledge_project = if self.route == Route::Knowledge {
+            self.knowledge.project.as_deref().unwrap_or("")
+        } else {
+            ""
+        };
         let key = format!(
-            "{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}",
             screen.id,
             self.selected_project.as_deref().unwrap_or(""),
             board.unwrap_or(""),
-            card.unwrap_or("")
+            card.unwrap_or(""),
+            tab,
+            selection,
+            knowledge_project
         );
         if self.last_coordinator_notice.as_ref() == Some(&(session.clone(), key.clone())) {
             return;
         }
         let context = format!(
-            "Current screen: {}. {}\nProject: {}\nFeature: {}\nItem: {}\nLocal Help topic: {}",
+            "Current screen: {}. {}\nProject: {}\nFeature: {}\nItem: {}\nSubview: {}\nSelection: {}\nKnowledge scope: {}\nLocal Help topic: {}",
             screen.title,
             screen.summary,
             self.selected_project.as_deref().unwrap_or("workspace"),
             board.unwrap_or("none"),
             card.unwrap_or("none"),
+            screen.subviews.get(tab).copied().unwrap_or("default"),
+            if selection.is_empty() {
+                "none"
+            } else {
+                selection
+            },
+            if knowledge_project.is_empty() {
+                "workspace"
+            } else {
+                knowledge_project
+            },
             screen.help_topic
         );
         self.last_coordinator_notice = Some((session.clone(), key));

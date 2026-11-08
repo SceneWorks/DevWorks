@@ -496,6 +496,18 @@ fn the_coordinator_sidebar_is_the_home_conversation_and_stays_open_until_closed_
     // Closing explicitly preserves the session; later navigation does not reopen it.
     click_nav(&mut h, "Approvals");
     click(&mut h, Role::Button, "Workspace coordinator");
+    assert_eq!(transcript(&*backend, &session).len(), 4);
+    h.query_all_by_role_and_label(Role::Button, "History")
+        .find(|n| n.rect().left() > devworks_desktop::theme::NAV)
+        .expect("Approvals history subview")
+        .click();
+    settle(&mut h);
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        5,
+        "changing a subview while open appends its context"
+    );
+    assert_eq!(h.query_all_by_label_contains("Subview: History").count(), 1);
     type_into(&mut h, COMPOSER_LABEL, "kept");
     click(
         &mut h,
@@ -507,7 +519,7 @@ fn the_coordinator_sidebar_is_the_home_conversation_and_stays_open_until_closed_
     assert!(!h.state().coordinator_open());
     assert_eq!(
         transcript(&*backend, &session).len(),
-        4,
+        5,
         "closed-sidebar browsing adds no notice"
     );
     click_nav(&mut h, "Chat");
