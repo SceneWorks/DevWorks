@@ -609,7 +609,9 @@ pub fn acknowledge_assignment(
     input: &ops::AcknowledgeInput,
 ) -> Result<AgentMessage, StorageError> {
     let (assignment, project) = assignment_scope(tx, &input.assignment_id)?;
-    if ctx.assignment_id() != Some(&assignment.id)
+    if !assignment.state.is_live()
+        || ctx.principal_kind() != PrincipalKind::Agent
+        || ctx.assignment_id() != Some(&assignment.id)
         || ctx.session_id() != Some(&assignment.session_id)
         || ctx.project_id().is_some_and(|p| p != &project)
     {
@@ -619,7 +621,7 @@ pub fn acknowledge_assignment(
         .sessions()
         .session(&assignment.session_id)?
         .ok_or_else(denied)?;
-    if session.agent_id != *ctx.principal() {
+    if session.closed() || session.agent_id != *ctx.principal() {
         return Err(denied());
     }
     let message =

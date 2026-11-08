@@ -387,6 +387,31 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut assignment = tx.runs().assignment(&assignment("recipient"))?.unwrap();
+        let expected = assignment.revision;
+        assignment.state = AssignmentState::Completed;
+        assignment.revision += 1;
+        tx.runs().update_assignment(&assignment, expected)?;
+        Ok(())
+    })
+    .unwrap();
+    let closed_recipient = context("recipient", "session-child", "root-a");
+    let repeated_ack = ops::AcknowledgeInput {
+        assignment_id: assignment("recipient"),
+        message_id: posted.id.clone(),
+        expected_revision: Revision::new(2).unwrap(),
+    };
+    assert!(matches!(
+        run_write(&s, WriteOptions::default(), move |tx| {
+            devworks_core::services::agents::acknowledge_assignment(
+                tx,
+                &closed_recipient,
+                &repeated_ack,
+            )
+        }),
+        Err(StorageError::ScopeDenied)
+    ));
 
     // A root issue without a feature can record a child intent with a brief and no cards.
     let coordinator = context("sender", "session-a", "root-a");
