@@ -644,6 +644,21 @@ fn standalone_issue_can_register_children_without_replacing_its_primary_owner() 
     let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
+    // Seed an active reservation at the activation boundary so the rebind path must preserve
+    // its primary session when it walks the child assignment too.
+    let (queue_revision, now) = fx.tx(|_, tx| {
+        Ok((
+            tx.work()
+                .queue_revision(&ProjectId(id("project-a")), PROJECT_QUEUE)?,
+            tx.now_ms(),
+        ))
+    });
+    let db = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
+    db.execute(
+        "INSERT INTO allocation_claims(id,project_id,root_id,work_id,kind,queue_key,owner_id,session_id,ingress_namespace,invocation_id,fence,expires_at,state,revision,work_revision,parent_feature_id,root_control_revision,queue_revision,feature_task_set_revision,created_at,execution_id) VALUES('issue-claim','project-a','root-i','root-i','task','project',?1,NULL,?2,'issue-allocation-call',1,?3,'Active',1,(SELECT revision FROM work_items WHERE id='root-i'),NULL,?4,?5,NULL,?6,NULL)",
+        rusqlite::params![fx.user.principal().0.as_str(),fx.user.ingress_namespace().as_str(),now+60_000,fx.control("root-i").revision,queue_revision,now],
+    )
+    .unwrap();
     let primary = fx.assign("root-i", "root-i", None, None);
     let new = NewRunAssignment {
         root: rid("root-i"),
@@ -665,6 +680,13 @@ fn standalone_issue_can_register_children_without_replacing_its_primary_owner() 
         snapshot.runs().live_assignment_for_work(&rid("root-i"))
     });
     assert_eq!(owner.unwrap().id, primary.id);
+    let launched = fx.launch("issue-runner");
+    let owner = read(&*fx.store, |snapshot| {
+        snapshot.work().allocation_claim(&id("issue-claim"))
+    })
+    .unwrap();
+    assert_eq!(owner.execution_id, Some(launched.id));
+    assert_eq!(owner.session_id, Some(primary.session_id));
 }
 
 #[test]
