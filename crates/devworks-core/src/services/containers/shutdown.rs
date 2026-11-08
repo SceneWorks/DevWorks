@@ -68,13 +68,26 @@ impl ContainerService {
                     "container changed during shutdown".into(),
                 ));
             }
+            if phase == ContainerPhase::Failed
+                && (current.phase != ContainerPhase::Creating
+                    || !matches!(
+                        tx.operations()
+                            .operation(&current.last_operation_id)?
+                            .map(|op| op.state),
+                        Some(OperationState::CancelledBeforeDispatch)
+                    ))
+            {
+                return Err(StorageError::InvalidRecord(
+                    "container creation was not cancelled before dispatch".into(),
+                ));
+            }
             let mut next = current;
             next.phase = phase;
             next.detail = detail.clone();
             next.revision += 1;
             next.updated_at_ms = tx.now_ms();
             tx.resources().update_container(&next, row.revision)?;
-            if phase == ContainerPhase::Stopped
+            if matches!(phase, ContainerPhase::Stopped | ContainerPhase::Failed)
                 && let Some(resources) = &resources
             {
                 resources.release_container_leases(tx, &next)?;
@@ -90,10 +103,10 @@ impl ContainerService {
                 aggregate_kind: "container".into(),
                 aggregate_id: row.id.as_str().into(),
                 aggregate_revision: next.revision,
-                kind: if phase == ContainerPhase::Stopped {
-                    "ContainerShutdownStopped"
-                } else {
-                    "ContainerShutdownUncertain"
+                kind: match phase {
+                    ContainerPhase::Stopped => "ContainerShutdownStopped",
+                    ContainerPhase::Failed => "ContainerCreateCancelled",
+                    _ => "ContainerShutdownUncertain",
                 }
                 .into(),
                 payload: json!({"phase":phase.as_str(),"detail":detail}),
@@ -211,6 +224,29 @@ impl ContainerService {
                         | ContainerPhase::Uncertain
                 ) {
                     continue;
+                }
+                if row.phase == ContainerPhase::Creating {
+                    let cancelled =
+                        read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+                            snapshot.operations().operation(&row.last_operation_id)
+                        })
+                        .ok()
+                        .flatten()
+                        .is_some_and(|operation| {
+                            operation.state == OperationState::CancelledBeforeDispatch
+                        });
+                    if cancelled {
+                        if let Err(error) = self.mark_shutdown_phase(
+                            &row,
+                            ContainerPhase::Failed,
+                            Some("create cancelled before dispatch"),
+                        ) {
+                            report.read_error = Some(format!(
+                                "cancelled container reservation release unavailable: {error}"
+                            ));
+                        }
+                        continue;
+                    }
                 }
                 // A committed intent that was never dispatched cannot have launched this
                 // container. Leave it to the outbox on boot rather than turning it uncertain.

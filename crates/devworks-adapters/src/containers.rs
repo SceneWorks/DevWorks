@@ -1,12 +1,14 @@
 //! Private registry auth files scoped to one native container CLI pull.
 use base64::Engine as _;
 use devworks_core::services::containers::backend::Backend;
-use devworks_core::services::containers::registry_auth::{RegistryAuth, RegistryAuthSession};
+use devworks_core::services::containers::registry_auth::{
+    RegistryAuth, RegistryAuthSession, WorkloadEnvironment, WorkloadEnvironmentSession,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::{Builder, TempDir};
 
 #[derive(Deserialize)]
@@ -24,6 +26,17 @@ struct NativeAuthSession {
     _directory: TempDir,
     environment: Vec<(String, String)>,
     redactions: Vec<String>,
+}
+
+struct NativeEnvironmentSession {
+    _directory: TempDir,
+    path: String,
+}
+
+impl WorkloadEnvironmentSession for NativeEnvironmentSession {
+    fn path(&self) -> &str {
+        &self.path
+    }
 }
 
 impl RegistryAuthSession for NativeAuthSession {
@@ -53,7 +66,10 @@ impl NativeRegistryAuth {
         }
         for entry in fs::read_dir(&root).map_err(|_| "registry auth recovery unavailable")? {
             let entry = entry.map_err(|_| "registry auth recovery unavailable")?;
-            if !entry.file_name().to_string_lossy().starts_with("dw-auth-") {
+            if !["dw-auth-", "dw-env-"]
+                .iter()
+                .any(|prefix| entry.file_name().to_string_lossy().starts_with(prefix))
+            {
                 continue;
             }
             if !entry
@@ -66,6 +82,45 @@ impl NativeRegistryAuth {
             fs::remove_dir_all(entry.path()).map_err(|_| "registry auth recovery unavailable")?;
         }
         Ok(Self { root })
+    }
+}
+
+impl WorkloadEnvironment for NativeRegistryAuth {
+    fn prepare_workload(
+        &self,
+        environment: &[(String, String)],
+    ) -> Result<Box<dyn WorkloadEnvironmentSession>, &'static str> {
+        if environment.iter().any(|(name, value)| {
+            name.contains(['\n', '\r', '=', '\0']) || value.contains(['\n', '\r', '\0'])
+        }) {
+            return Err("container environment cannot be encoded as an env file");
+        }
+        let directory = Builder::new()
+            .prefix("dw-env-")
+            .tempdir_in(&self.root)
+            .map_err(|_| "private container environment directory unavailable")?;
+        let file = directory.path().join("environment.list");
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut output = options
+            .open(&file)
+            .map_err(|_| "private container environment file unavailable")?;
+        for (name, value) in environment {
+            writeln!(output, "{name}={value}")
+                .map_err(|_| "container environment write unavailable")?;
+        }
+        output
+            .flush()
+            .map_err(|_| "container environment flush unavailable")?;
+        Ok(Box::new(NativeEnvironmentSession {
+            _directory: directory,
+            path: file.to_string_lossy().into_owned(),
+        }))
     }
 }
 
@@ -82,6 +137,80 @@ fn registry(image: &str, backend: Backend) -> Result<String, &'static str> {
     } else {
         registry.into()
     })
+}
+
+fn docker_config_root() -> Option<PathBuf> {
+    std::env::var_os("DOCKER_CONFIG")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".docker"))
+        })
+}
+
+fn copy_private_contexts(source: &Path, target: &Path) -> Result<(), &'static str> {
+    if !source.exists() {
+        return Ok(());
+    }
+    let metadata = fs::symlink_metadata(source).map_err(|_| "Docker context unavailable")?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err("Docker context is not a directory");
+    }
+    fs::create_dir(target).map_err(|_| "private Docker context unavailable")?;
+    for entry in fs::read_dir(source).map_err(|_| "Docker context unavailable")? {
+        let entry = entry.map_err(|_| "Docker context unavailable")?;
+        let metadata =
+            fs::symlink_metadata(entry.path()).map_err(|_| "Docker context unavailable")?;
+        if metadata.file_type().is_symlink() {
+            return Err("Docker context contains a symlink");
+        }
+        let destination = target.join(entry.file_name());
+        if metadata.is_dir() {
+            copy_private_contexts(&entry.path(), &destination)?;
+        } else if metadata.is_file() {
+            let bytes = fs::read(entry.path()).map_err(|_| "Docker context unavailable")?;
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            options
+                .open(destination)
+                .and_then(|mut output| output.write_all(&bytes))
+                .map_err(|_| "private Docker context unavailable")?;
+        } else {
+            return Err("Docker context contains an unsupported entry");
+        }
+    }
+    Ok(())
+}
+
+fn docker_config_for_pull(
+    source: Option<PathBuf>,
+    target: &Path,
+) -> Result<serde_json::Map<String, Value>, &'static str> {
+    let mut config = serde_json::Map::new();
+    let Some(source) = source else {
+        return Ok(config);
+    };
+    let file = source.join("config.json");
+    if file.exists() {
+        config = serde_json::from_slice::<Value>(
+            &fs::read(file).map_err(|_| "Docker config unavailable")?,
+        )
+        .map_err(|_| "Docker config invalid")?
+        .as_object()
+        .cloned()
+        .ok_or("Docker config invalid")?;
+        for key in ["auths", "credsStore", "credHelpers"] {
+            config.remove(key);
+        }
+    }
+    copy_private_contexts(&source.join("contexts"), &target.join("contexts"))?;
+    Ok(config)
 }
 
 impl RegistryAuth for NativeRegistryAuth {
@@ -130,7 +259,13 @@ impl RegistryAuth for NativeRegistryAuth {
         let mut output = options
             .open(&file)
             .map_err(|_| "registry auth file unavailable")?;
-        serde_json::to_writer(&mut output, &json!({"auths":Value::Object(auths)}))
+        let mut config = if backend == Backend::Docker {
+            docker_config_for_pull(docker_config_root(), directory.path())?
+        } else {
+            serde_json::Map::new()
+        };
+        config.insert("auths".into(), Value::Object(auths));
+        serde_json::to_writer(&mut output, &Value::Object(config))
             .map_err(|_| "registry auth encoding unavailable")?;
         output
             .flush()
@@ -157,6 +292,63 @@ impl RegistryAuth for NativeRegistryAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_env_file_keeps_daemon_settings_out_of_cli_environment() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let root = sandbox.path().join("private");
+        let adapter = NativeRegistryAuth::new(root.clone()).unwrap();
+        let environment = vec![("DOCKER_HOST".into(), "tcp://wrong-daemon:2375".into())];
+        let session = adapter.prepare_workload(&environment).unwrap();
+        let path = PathBuf::from(session.path());
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "DOCKER_HOST=tcp://wrong-daemon:2375\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        drop(session);
+        assert!(!path.exists());
+        let stale = root.join("dw-env-stale");
+        fs::create_dir(&stale).unwrap();
+        fs::write(stale.join("environment.list"), "private stale data").unwrap();
+        NativeRegistryAuth::new(root).unwrap();
+        assert!(!stale.exists());
+    }
+
+    #[test]
+    fn credentialed_pull_preserves_selected_docker_context_without_prior_credentials() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let source = sandbox.path().join("docker-config");
+        let target = sandbox.path().join("private");
+        fs::create_dir_all(source.join("contexts/meta/hash")).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(
+            source.join("config.json"),
+            r#"{"currentContext":"remote","auths":{"old":{"auth":"old-secret"}},"credsStore":"desktop","credsStoreOther":"kept"}"#,
+        )
+        .unwrap();
+        fs::write(
+            source.join("contexts/meta/hash/meta.json"),
+            r#"{"Name":"remote"}"#,
+        )
+        .unwrap();
+        let config = docker_config_for_pull(Some(source), &target).unwrap();
+        assert_eq!(config["currentContext"], "remote");
+        assert_eq!(config["credsStoreOther"], "kept");
+        assert!(!config.contains_key("auths"));
+        assert!(!config.contains_key("credsStore"));
+        assert_eq!(
+            fs::read_to_string(target.join("contexts/meta/hash/meta.json")).unwrap(),
+            r#"{"Name":"remote"}"#
+        );
+    }
 
     #[test]
     fn registry_secret_stays_in_private_one_pull_file_and_is_removed() {

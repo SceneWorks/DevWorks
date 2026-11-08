@@ -468,6 +468,12 @@ async fn compose(
         )
         .and_then(|bindings| bindings.with_credentials(config.process_credentials.clone()))
         .map_err(|reason| StartError::Thread(reason.into()))?;
+        let container_private_files = Arc::new(
+            devworks_adapters::containers::NativeRegistryAuth::new(
+                config.data_root.join("container-auth"),
+            )
+            .map_err(|reason| StartError::Thread(reason.into()))?,
+        );
         runtime_config.containers = Some(devworks_engine::runtime::ContainerComposition {
             bindings,
             filesystem: Arc::new(NativeFilesystem::new()),
@@ -477,12 +483,8 @@ async fn compose(
                 Some(config.data_root.display().to_string()),
             ),
             secrets: secrets.clone(),
-            registry_auth: Arc::new(
-                devworks_adapters::containers::NativeRegistryAuth::new(
-                    config.data_root.join("container-auth"),
-                )
-                .map_err(|reason| StartError::Thread(reason.into()))?,
-            ),
+            registry_auth: container_private_files.clone(),
+            workload_environment: container_private_files,
             host: devworks_core::services::containers::probe::HostPlatform {
                 os: std::env::consts::OS,
                 arch: std::env::consts::ARCH,

@@ -16,3 +16,15 @@ pub trait RegistryAuth: Send + Sync {
         credential: &str,
     ) -> Result<Box<dyn RegistryAuthSession>, &'static str>;
 }
+
+pub trait WorkloadEnvironmentSession: Send {
+    fn path(&self) -> &str;
+}
+
+pub trait WorkloadEnvironment: Send + Sync {
+    /// Store values in a private CLI env file, without placing them in the host CLI environment.
+    fn prepare_workload(
+        &self,
+        environment: &[(String, String)],
+    ) -> Result<Box<dyn WorkloadEnvironmentSession>, &'static str>;
+}

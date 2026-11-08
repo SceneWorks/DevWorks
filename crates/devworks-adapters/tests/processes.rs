@@ -36,11 +36,12 @@ use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::artifacts::observed::Observed;
 use devworks_core::services::containers::EffectOutcome as ContainerEffectOutcome;
+use devworks_core::services::containers::registry_auth::WorkloadEnvironment;
 use devworks_core::services::containers::runner::ContainerRunner;
 use devworks_core::services::containers::service::ContainerService;
 use devworks_core::services::containers::{
     backend::{Backend as ContainerBackend, CreatePlan, ownership_labels, ownership_matches},
-    execution::{bound_spec, with_environment},
+    execution::bound_spec,
     inspection::{parse as parse_container_inspect, verified_lifecycle_target},
     probe::{self as container_probe, Availability as ContainerAvailability, HostPlatform},
 };
@@ -941,6 +942,8 @@ fn native_docker_owned_lifecycle_uses_the_exact_planned_container() {
     let labels = ownership_labels("operation-a", "project-a", "Agent");
     let command = ["sleep".to_owned(), "30".to_owned()];
     let environment = [("DW_TEST_VALUE".into(), "hello-native".into())];
+    let env_writer = NativeRegistryAuth::new(fx.h.root.join("container-auth")).unwrap();
+    let env_session = env_writer.prepare_workload(&environment).unwrap();
     let create_args = backend
         .create(&CreatePlan {
             name: &name,
@@ -949,22 +952,24 @@ fn native_docker_owned_lifecycle_uses_the_exact_planned_container() {
             mounts: &[],
             ports: &[],
             environment: &environment,
+            env_file: Some(env_session.path()),
             command: &command,
         })
         .unwrap();
     assert!(!create_args.iter().any(|arg| arg.contains("hello-native")));
-    let spec = with_environment(
-        bound_spec(&bindings, backend, create_args, None).unwrap(),
-        backend,
-        &environment,
-    );
+    let spec = bound_spec(&bindings, backend, create_args, None).unwrap();
     let created = runner
         .run(&context, None, spec, Duration::from_secs(10), 16_384, &[])
         .unwrap();
     assert_eq!(created.exit_code, Some(0));
     run(backend.start(&name).unwrap());
     let output = run(backend
-        .exec(&name, &["printenv".into(), "DW_TEST_VALUE".into()], &[])
+        .exec(
+            &name,
+            &["printenv".into(), "DW_TEST_VALUE".into()],
+            &[],
+            None,
+        )
         .unwrap());
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
@@ -1079,25 +1084,31 @@ fn container_create_receipt_atomically_records_ownership_before_effect_delivery(
         Arc::new(NativeFilesystem::default()),
         ProtectedRoots::new(Vec::new(), Vec::new(), None),
     ));
-    let service = Arc::new(ContainerService::new(
-        fx.store.clone(),
-        runner,
-        ToolBindings::default(),
-        HostPlatform {
-            os: std::env::consts::OS,
-            arch: std::env::consts::ARCH,
-            macos_major: 0,
-        },
-        fx.h.ids.clone(),
-    ));
-    fx.cases = fx.cases.with_containers(service);
+    let service = Arc::new(
+        ContainerService::new(
+            fx.store.clone(),
+            runner,
+            ToolBindings::default(),
+            HostPlatform {
+                os: std::env::consts::OS,
+                arch: std::env::consts::ARCH,
+                macos_major: 0,
+            },
+            fx.h.ids.clone(),
+        )
+        .with_resources(fx.svc.clone()),
+    );
+    fx.cases = fx.cases.with_containers(service.clone());
     let context = fx.agent("agent-a", "project-a", "s-a");
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let host_port = socket.local_addr().unwrap().port();
+    drop(socket);
     let reply = fx.command_keyed(
         &context,
         "containers.create",
         "container-create-1",
         json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:latest",
-            "command":[],"mounts":[],"ports":[],"environment":[],"resourceIds":[]}}),
+            "command":[],"mounts":[],"ports":[{"containerPort":8080,"hostPort":host_port,"protocol":"Tcp"}],"environment":[],"resourceIds":[]}}),
         Some(1),
     );
     let operation = match recorded(reply).0 {
@@ -1118,13 +1129,33 @@ fn container_create_receipt_atomically_records_ownership_before_effect_delivery(
         snapshot.queue().deliveries(
             &DeliveryFilter {
                 consumer: Some("container_effects".into()),
-                operation_id: Some(operation),
+                operation_id: Some(operation.clone()),
             },
             None,
             10,
         )
     });
     assert_eq!(deliveries.entries.len(), 1);
+    assert_eq!(containers[0].resource_lease_ids.len(), 1);
+    fx.h.sql(&format!(
+        "UPDATE operations SET state='CancelledBeforeDispatch',revision=revision+1 WHERE id='{}'",
+        operation.0.as_str()
+    ));
+    let report = service.shutdown_agent_work(Duration::from_secs(1));
+    assert!(report.read_error.is_none(), "{report:?}");
+    assert!(report.uncertain.is_empty());
+    let failed = fx
+        .read(|snapshot| snapshot.resources().container(&containers[0].id))
+        .unwrap();
+    assert_eq!(failed.phase, ContainerPhase::Failed);
+    for lease in &failed.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Released
+        );
+    }
 }
 
 #[test]
@@ -1362,7 +1393,10 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
             fx.h.ids.clone(),
         )
         .with_artifacts(artifacts.clone())
-        .with_resources(fx.svc.clone()),
+        .with_resources(fx.svc.clone())
+        .with_workload_environment(Arc::new(
+            NativeRegistryAuth::new(fx.h.root.join("container-environment")).unwrap(),
+        )),
     );
     fx.cases = fx
         .cases
@@ -1465,7 +1499,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         json!({"spec":{"engineId":engine,"projectId":"project-a","image":"docker.io/library/alpine:latest",
             "command":["sh","-c","echo booted; i=0; while [ \"$i\" -lt 1100 ]; do printf '%01024d\\n' 0; i=$((i+1)); done; echo stderr-marker >&2; sleep 60"],"mounts":[],
             "ports":[{"containerPort":8080,"hostPort":host_port,"protocol":"Tcp"}],
-            "environment":[],"resourceIds":["build-slot"]}}),
+            "environment":[{"name":"DOCKER_HOST","value":"tcp://127.0.0.1:1"}],"resourceIds":["build-slot"]}}),
         Some(1),
     );
     let create_id = match recorded(create).0 {

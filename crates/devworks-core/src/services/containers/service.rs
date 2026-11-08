@@ -47,6 +47,7 @@ pub struct ContainerService {
     pub(super) secrets: Option<Arc<dyn crate::ports::secrets::SecretStore>>,
     pub(super) resources: Option<Arc<crate::services::resources::ResourceService>>,
     pub(super) registry_auth: Option<Arc<dyn super::registry_auth::RegistryAuth>>,
+    pub(super) workload_environment: Option<Arc<dyn super::registry_auth::WorkloadEnvironment>>,
     host: HostPlatform<'static>,
     pub(super) ids: Arc<dyn IdSource>,
     lifecycle_gates: Mutex<HashMap<Id, Weak<Mutex<()>>>>,
@@ -118,6 +119,7 @@ impl ContainerService {
             secrets: None,
             resources: None,
             registry_auth: None,
+            workload_environment: None,
             host,
             ids,
             lifecycle_gates: Mutex::new(HashMap::new()),
@@ -147,6 +149,14 @@ impl ContainerService {
 
     pub fn with_registry_auth(mut self, auth: Arc<dyn super::registry_auth::RegistryAuth>) -> Self {
         self.registry_auth = Some(auth);
+        self
+    }
+
+    pub fn with_workload_environment(
+        mut self,
+        environment: Arc<dyn super::registry_auth::WorkloadEnvironment>,
+    ) -> Self {
+        self.workload_environment = Some(environment);
         self
     }
 

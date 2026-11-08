@@ -376,6 +376,17 @@ impl ContainerService {
             .iter()
             .map(|part| part.0.clone())
             .collect();
+        let env_session = if backend != Backend::Apple && !environment.is_empty() {
+            let Some(writer) = &self.workload_environment else {
+                return EffectOutcome::Failed("private container environment unavailable".into());
+            };
+            match writer.prepare_workload(&environment) {
+                Ok(session) => Some(session),
+                Err(reason) => return EffectOutcome::Failed(reason.into()),
+            }
+        } else {
+            None
+        };
         let args = match backend.create(&CreatePlan {
             name: id.as_str(),
             image: &input.spec.image.0,
@@ -383,6 +394,7 @@ impl ContainerService {
             mounts: &mounts,
             ports: &ports,
             environment: &environment,
+            env_file: env_session.as_ref().map(|session| session.path()),
             command: &command,
         }) {
             Ok(args) => args,
@@ -394,8 +406,15 @@ impl ContainerService {
             ExecutionPlan {
                 backend,
                 args,
-                environment: &environment,
-                redactions: &[],
+                environment: if backend == Backend::Apple {
+                    &environment
+                } else {
+                    &[]
+                },
+                redactions: &environment
+                    .iter()
+                    .map(|(_, value)| value.clone())
+                    .collect::<Vec<_>>(),
                 stdin: None,
                 timeout: Duration::from_secs(60),
             },
@@ -476,7 +495,7 @@ impl ContainerService {
             Ok(result) => result,
             Err(outcome) => return outcome,
         };
-        if result.exit_code != Some(0) || result.truncated {
+        if result.exit_code != Some(0) {
             return EffectOutcome::Unknown(
                 "container build outcome needs image reconciliation".into(),
             );
@@ -625,7 +644,23 @@ impl ContainerService {
             }
         };
         let command: Vec<String> = input.command.0.iter().map(|part| part.0.clone()).collect();
-        let args = match backend.exec(&target, &command, &environment) {
+        let env_session = if backend != Backend::Apple && !environment.is_empty() {
+            let Some(writer) = &self.workload_environment else {
+                return EffectOutcome::Failed("private container environment unavailable".into());
+            };
+            match writer.prepare_workload(&environment) {
+                Ok(session) => Some(session),
+                Err(reason) => return EffectOutcome::Failed(reason.into()),
+            }
+        } else {
+            None
+        };
+        let args = match backend.exec(
+            &target,
+            &command,
+            &environment,
+            env_session.as_ref().map(|session| session.path()),
+        ) {
             Ok(args) => args,
             Err(_) => return EffectOutcome::Failed("container exec arguments invalid".into()),
         };
@@ -639,8 +674,15 @@ impl ContainerService {
             ExecutionPlan {
                 backend,
                 args,
-                environment: &environment,
-                redactions: &[],
+                environment: if backend == Backend::Apple {
+                    &environment
+                } else {
+                    &[]
+                },
+                redactions: &environment
+                    .iter()
+                    .map(|(_, value)| value.clone())
+                    .collect::<Vec<_>>(),
                 stdin: None,
                 timeout: Duration::from_millis(timeout_ms),
             },

@@ -161,7 +161,16 @@ impl Backend {
         }
         for (name, _) in plan.environment {
             safe_env_name(name)?;
-            args.extend(["--env".into(), name.clone()]);
+        }
+        if let Some(path) = plan.env_file {
+            safe_path(path)?;
+            args.extend(["--env-file".into(), path.into()]);
+        } else if self == Self::Apple {
+            for (name, _) in plan.environment {
+                args.extend(["--env".into(), name.clone()]);
+            }
+        } else if !plan.environment.is_empty() {
+            return Err(PlanError::InvalidEnvironment);
         }
         args.push(plan.image.into());
         args.extend(plan.command.iter().cloned());
@@ -178,6 +187,7 @@ impl Backend {
         name: &str,
         command: &[String],
         environment: &[(String, String)],
+        env_file: Option<&str>,
     ) -> Result<Vec<String>, PlanError> {
         safe_name(name)?;
         if command.is_empty() {
@@ -186,7 +196,16 @@ impl Backend {
         let mut args = vec!["exec".into()];
         for (key, _) in environment {
             safe_env_name(key)?;
-            args.extend(["--env".into(), key.clone()]);
+        }
+        if let Some(path) = env_file {
+            safe_path(path)?;
+            args.extend(["--env-file".into(), path.into()]);
+        } else if self == Self::Apple {
+            for (key, _) in environment {
+                args.extend(["--env".into(), key.clone()]);
+            }
+        } else if !environment.is_empty() {
+            return Err(PlanError::InvalidEnvironment);
         }
         args.push(name.into());
         args.extend(command.iter().cloned());
@@ -243,6 +262,7 @@ pub struct CreatePlan<'a> {
     pub mounts: &'a [ResolvedMount<'a>],
     pub ports: &'a [Port<'a>],
     pub environment: &'a [(String, String)],
+    pub env_file: Option<&'a str>,
     pub command: &'a [String],
 }
 
@@ -363,6 +383,7 @@ mod tests {
             mounts: &mounts,
             ports: &ports,
             environment: &environment,
+            env_file: Some("/private/env"),
             command: &[],
         };
         let args = Backend::Docker.create(&plan).unwrap();
@@ -379,7 +400,10 @@ mod tests {
             args.windows(2)
                 .any(|pair| pair == ["--publish", "1080:80/tcp"])
         );
-        assert!(args.windows(2).any(|pair| pair == ["--env", "A"]));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--env-file", "/private/env"])
+        );
         assert!(!args.iter().any(|arg| arg.contains("value with spaces")));
         assert_eq!(args.last().unwrap(), "alpine:latest");
     }
