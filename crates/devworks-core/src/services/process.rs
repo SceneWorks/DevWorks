@@ -55,7 +55,7 @@ use crate::services::resources::{
     DispatchFailure, ReconcileCause, ReconcileReport, ResourceService,
 };
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -243,6 +243,9 @@ pub struct ProcessSupervisor {
     host: Arc<dyn ProcessHost>,
     resources: Arc<ResourceService>,
     live: Mutex<HashMap<String, Arc<Mutex<Live>>>>,
+    /// Cancellation can arrive after the durable launch intent but before native registration.
+    /// Access this while holding `live`, so registration cannot slip between lookup and marking.
+    pending_cancel: Mutex<HashSet<String>>,
 }
 
 impl ProcessSupervisor {
@@ -262,6 +265,7 @@ impl ProcessSupervisor {
             host,
             resources,
             live: Mutex::new(HashMap::new()),
+            pending_cancel: Mutex::new(HashSet::new()),
         }
     }
 
@@ -442,6 +446,10 @@ impl ProcessSupervisor {
 
         match self.host.spawn(&request.spec) {
             Err(e) => {
+                self.pending_cancel
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .remove(record.id.as_str());
                 let detail = Redactor::new().redact_text(&e.to_string());
                 let mut failed = record.clone();
                 self.settle(
@@ -466,25 +474,39 @@ impl ProcessSupervisor {
                     json!({"pid": identity.pid}),
                 );
                 if let Err(e) = recorded {
+                    self.pending_cancel
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .remove(record.id.as_str());
                     // The identity could not be recorded: never leave an untracked tree running.
                     let mut tree = tree;
                     let _ = tree.kill();
                     return Err(LaunchRefusal::Storage(e));
                 }
                 let id = running.id.clone();
-                self.live.lock().unwrap_or_else(|p| p.into_inner()).insert(
-                    id.as_str().to_owned(),
-                    Arc::new(Mutex::new(Live {
-                        tree,
-                        epoch,
-                        record: running.clone(),
-                    })),
-                );
+                let cancel_requested = {
+                    let mut live = self.live.lock().unwrap_or_else(|p| p.into_inner());
+                    live.insert(
+                        id.as_str().to_owned(),
+                        Arc::new(Mutex::new(Live {
+                            tree,
+                            epoch,
+                            record: running.clone(),
+                        })),
+                    );
+                    self.pending_cancel
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .remove(id.as_str())
+                };
                 let owned = OwnedProcess {
                     id,
                     identity,
                     lease: running.lease_id.clone(),
                 };
+                if cancel_requested {
+                    let _ = self.cancel(&owned, Duration::from_secs(1), Duration::from_secs(5));
+                }
                 // An archival that committed after the intent above may have snapshotted the live
                 // trees before this one was registered. Rechecked now that it is registered,
                 // either that archival's stop saw it, or this read sees the archival (closed, or a
@@ -603,8 +625,29 @@ impl ProcessSupervisor {
         bound: Duration,
     ) -> Result<StopOutcome, StopFailure> {
         let start = Instant::now();
-        let Some(entry) = self.entry(&p.id) else {
-            return self.settled_outcome(&p.id).map_err(|error| StopFailure {
+        let entry = {
+            let live = self.live.lock().unwrap_or_else(|p| p.into_inner());
+            let entry = live.get(p.id.as_str()).cloned();
+            if entry.is_none() {
+                self.pending_cancel
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(p.id.as_str().to_owned());
+            }
+            entry
+        };
+        let Some(entry) = entry else {
+            let outcome = self.settled_outcome(&p.id);
+            if matches!(
+                &outcome,
+                Ok(StopOutcome::Reaped { .. }) | Err(StorageError::NotFound { .. })
+            ) {
+                self.pending_cancel
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .remove(p.id.as_str());
+            }
+            return outcome.map_err(|error| StopFailure {
                 outcome: StopOutcome::Uncertain("the stored record could not be read".into()),
                 error,
             });
