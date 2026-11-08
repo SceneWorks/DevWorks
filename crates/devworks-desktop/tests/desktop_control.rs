@@ -15,20 +15,34 @@ use devworks_desktop::{decision_ops as dops, ops};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use serde_json::json;
 use std::io::Cursor;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-#[derive(Default)]
 struct ScriptedDesktop {
     input: Mutex<Vec<DesktopInput>>,
     captures: Mutex<usize>,
+    pointer_available: AtomicBool,
+}
+impl Default for ScriptedDesktop {
+    fn default() -> Self {
+        Self {
+            input: Mutex::default(),
+            captures: Mutex::default(),
+            pointer_available: AtomicBool::new(false),
+        }
+    }
 }
 impl DesktopPlatform for ScriptedDesktop {
     fn capabilities(&self) -> DesktopCapabilities {
         DesktopCapabilities {
             target: "test-scripted".into(),
             capture: DesktopAvailability::Available,
-            input: DesktopAvailability::Available,
+            input: if self.pointer_available.load(Ordering::SeqCst) {
+                DesktopAvailability::Available
+            } else {
+                DesktopAvailability::Unsupported("pointer-not-available")
+            },
             accessibility: DesktopAvailability::Available,
         }
     }
@@ -160,6 +174,8 @@ fn control_requires_human_ok_and_live_fenced_consent() {
         std::thread::sleep(Duration::from_millis(25));
     };
     let lease_id = held.lease_id.clone().expect("held lease");
+    // The lease was granted while only accessibility control was available.
+    platform.pointer_available.store(true, Ordering::SeqCst);
     let second_request = json!({"desktopId":held.desktop_id,"expectedRevision":held.revision,
         "reason":"Second takeover while automation can inject input", "leaseMs":"30000"});
     let decoded = devworks_core::services::approvals::requests::decode(

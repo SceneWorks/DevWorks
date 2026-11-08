@@ -533,10 +533,10 @@ impl DesktopService {
             )
             .into());
         }
-        if !matches!(
-            self.platform.capabilities().input,
-            DesktopAvailability::Available
-        ) {
+        let capabilities = self.platform.capabilities();
+        if !matches!(capabilities.input, DesktopAvailability::Available)
+            && !matches!(capabilities.accessibility, DesktopAvailability::Available)
+        {
             return Err(Refusal::new(
                 DomainErrorCode::UnsupportedCapability,
                 "desktop_input",

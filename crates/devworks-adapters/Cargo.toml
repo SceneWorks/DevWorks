@@ -133,7 +133,7 @@ zbus = "=5.19.0"
 # Microsoft's generated raw binding crate, so the struct layouts and signatures come from the
 # Windows metadata instead of hand-written FFI.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "=0.62.2", features = ["Win32_UI_Accessibility", "Win32_System_Com"] }
+windows = { version = "=0.62.2", features = ["Win32_UI_Accessibility", "Win32_System_Com", "Win32_System_Ole"] }
 windows-sys = { version = "=0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",

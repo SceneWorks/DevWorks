@@ -116,7 +116,7 @@ fn observe(
             .unwrap_or_else(|_| "unknown".into());
         let name: String = accessible.get_property("Name").unwrap_or_default();
         let description: Option<String> = accessible
-            .call::<_, _, String>("GetDescription", &())
+            .get_property::<String>("Description")
             .ok()
             .filter(|value| !value.is_empty())
             .map(|value| normalized(value, "", 4096));
@@ -248,7 +248,7 @@ pub fn inject_target(
             let numeric: f64 = value.0.parse().map_err(|_| DesktopFault::Unsupported)?;
             let numeric_value = proxy(&connection, reference, "org.a11y.atspi.Value")?;
             numeric_value
-                .call::<_, _, ()>("SetCurrentValue", &(numeric,))
+                .set_property("CurrentValue", numeric)
                 .map_err(|_| DesktopFault::NativeFailure)
         }
         DesktopTargetAction::Focus {} => {

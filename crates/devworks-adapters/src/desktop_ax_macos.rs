@@ -1,6 +1,13 @@
 //! Focused-application AX tree. Every target action re-reads the bounded tree and its digest.
 use core_foundation::base::{CFType, CFTypeRef, TCFType};
 use core_foundation::boolean::CFBoolean;
+use core_foundation::number::{
+    CFNumber, CFNumberGetType, kCFNumberCFIndexType, kCFNumberCGFloatType, kCFNumberCharType,
+    kCFNumberDoubleType, kCFNumberFloat32Type, kCFNumberFloat64Type, kCFNumberFloatType,
+    kCFNumberIntType, kCFNumberLongLongType, kCFNumberLongType, kCFNumberNSIntegerType,
+    kCFNumberSInt8Type, kCFNumberSInt16Type, kCFNumberSInt32Type, kCFNumberSInt64Type,
+    kCFNumberShortType,
+};
 use core_foundation::string::{CFString, CFStringRef};
 use devworks_core::ports::desktop::{AccessibilityNode, AccessibilitySnapshot, DesktopFault};
 use devworks_core::protocol::records::DesktopTargetAction;
@@ -41,6 +48,7 @@ unsafe extern "C" {
     fn CFArrayGetValueAtIndex(array: *const c_void, index: isize) -> *const c_void;
     fn CFArrayGetTypeID() -> usize;
     fn CFGetTypeID(value: CFTypeRef) -> usize;
+    fn CFHash(value: CFTypeRef) -> usize;
 }
 
 fn attribute(element: &CFType, key: &str) -> Option<CFType> {
@@ -178,7 +186,8 @@ fn observe() -> Result<(AccessibilitySnapshot, HashMap<String, CFType>), Desktop
         unsafe {
             AXUIElementSetMessagingTimeout(element.as_CFTypeRef(), 0.25);
         }
-        let target_id = format!("mac:{pid}:{path}");
+        let native_identity = unsafe { CFHash(element.as_CFTypeRef()) };
+        let target_id = format!("mac:{pid}:{native_identity:x}:{path}");
         let role = normalized(string_attribute(&element, "AXRole"), "unknown", 256);
         let name = normalized(
             string_attribute(&element, "AXTitle")
@@ -237,6 +246,7 @@ pub fn snapshot() -> Result<AccessibilitySnapshot, DesktopFault> {
     observe().map(|(snapshot, _)| snapshot)
 }
 
+#[allow(non_upper_case_globals)] // CoreFoundation number-type constants use Apple's spelling.
 pub fn inject_target(
     target_id: &str,
     revision: &str,
@@ -273,13 +283,55 @@ pub fn inject_target(
             if !node.actions.iter().any(|listed| listed == "setValue") {
                 return Err(DesktopFault::Unsupported);
             }
-            let value = CFString::new(&value.0);
             let key = CFString::new("AXValue");
+            let current = attribute(element, "AXValue").ok_or(DesktopFault::Unsupported)?;
+            let replacement: CFType = if let Some(number) = current.downcast::<CFNumber>() {
+                let kind = unsafe { CFNumberGetType(number.as_concrete_TypeRef()) };
+                let replacement = match kind {
+                    kCFNumberSInt8Type | kCFNumberSInt16Type | kCFNumberSInt32Type
+                    | kCFNumberCharType | kCFNumberShortType | kCFNumberIntType => CFNumber::from(
+                        value
+                            .0
+                            .parse::<i32>()
+                            .map_err(|_| DesktopFault::Unsupported)?,
+                    ),
+                    kCFNumberSInt64Type
+                    | kCFNumberLongType
+                    | kCFNumberLongLongType
+                    | kCFNumberCFIndexType
+                    | kCFNumberNSIntegerType => CFNumber::from(
+                        value
+                            .0
+                            .parse::<i64>()
+                            .map_err(|_| DesktopFault::Unsupported)?,
+                    ),
+                    kCFNumberFloat32Type | kCFNumberFloatType => CFNumber::from(
+                        value
+                            .0
+                            .parse::<f32>()
+                            .map_err(|_| DesktopFault::Unsupported)?,
+                    ),
+                    kCFNumberFloat64Type | kCFNumberDoubleType | kCFNumberCGFloatType => {
+                        CFNumber::from(
+                            value
+                                .0
+                                .parse::<f64>()
+                                .map_err(|_| DesktopFault::Unsupported)?,
+                        )
+                    }
+                    _ => return Err(DesktopFault::Unsupported),
+                };
+                replacement.as_CFType()
+            } else if current.downcast::<CFString>().is_some() {
+                CFString::new(&value.0).as_CFType()
+            } else {
+                return Err(DesktopFault::Unsupported);
+            };
             unsafe {
                 AXUIElementSetAttributeValue(
                     element.as_CFTypeRef(),
                     key.as_concrete_TypeRef(),
-                    value.as_CFTypeRef(),
+                    replacement.as_CFTypeRef(),
                 )
             }
         }
