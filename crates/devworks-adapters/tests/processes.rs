@@ -6,6 +6,8 @@
 //! while another test thread holds open files can transiently inherit them (observed with the
 //! data-root lock), so spawning tests never share a test process with concurrent store reopens.
 #![allow(dead_code, clippy::result_large_err)]
+#[cfg(unix)]
+use devworks_adapters::containers::NativeRegistryAuth;
 use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;
 use devworks_adapters::fs::sources::HostArtifactSources;
@@ -18,6 +20,8 @@ use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::process::{Probe, ProcessHost, ProcessSpec, ProcessTree, TreeStatus};
+#[cfg(unix)]
+use devworks_core::ports::secrets::{Secret, SecretKey, SecretStore, SessionSecrets};
 use devworks_core::ports::storage::*;
 use devworks_core::ports::{Authorization, Clock, IdKind, IdSource};
 use devworks_core::protocol::records::{LeaseRecord, LeaseState, SettingAssignment};
@@ -40,6 +44,8 @@ use devworks_core::services::containers::{
     inspection::{parse as parse_container_inspect, verified_lifecycle_target},
     probe::{self as container_probe, Availability as ContainerAvailability, HostPlatform},
 };
+#[cfg(unix)]
+use devworks_core::services::process::tools::RegisteredCredential;
 use devworks_core::services::process::tools::{
     RegisteredExecutable, RegisteredWorkingRoot, ToolBindings,
 };
@@ -1101,6 +1107,136 @@ fn container_create_receipt_atomically_records_ownership_before_effect_delivery(
 #[ignore = "explicit native Docker engine lifecycle; requires DW_NATIVE_DOCKER"]
 fn native_docker_container_effects_commit_owned_create_start_and_stop() {
     native_container_effects_commit_owned_create_start_and_stop("docker", "DW_NATIVE_DOCKER");
+}
+
+#[cfg(unix)]
+#[test]
+fn credentialed_container_pull_uses_private_one_call_auth_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let _serial = serial();
+    let mut fx = Fx::new();
+    let set_runtime = |fx: &Fx, scope: ConfigScope, value: Value| {
+        fx.write(move |tx| {
+            let current = model::current_layer(tx.configuration(), &scope)?;
+            let key = devworks_core::services::containers::selection::PREFERRED_RUNTIME;
+            let schema = serde_json::to_value(descriptor(key).unwrap().schema_ref()).unwrap();
+            let assignment: SettingAssignment =
+                serde_json::from_value(json!({"key":key,"value":{"schema":schema,"value":value}}))
+                    .unwrap();
+            let plan = model::plan(&current, &[assignment]);
+            assert!(plan.is_valid());
+            let body = model::body(&plan, &actor("user-a"), tx.now_ms(), json!({"kind":"test"}));
+            tx.configuration().append_revision(
+                &scope,
+                model::NAMESPACE,
+                current.revision,
+                model::BODY_SCHEMA_VERSION,
+                body,
+            )?;
+            Ok(())
+        });
+    };
+    set_runtime(&fx, ConfigScope::Workspace, json!("podman"));
+    set_runtime(
+        &fx,
+        ConfigScope::Project(project("project-a")),
+        json!("docker"),
+    );
+    let executable = fx.h.root.join("fake-docker");
+    std::fs::write(
+        &executable,
+        "#!/bin/sh\n[ \"$1\" = pull ] || exit 3\n[ -f \"$DOCKER_CONFIG/config.json\" ] || exit 4\ngrep -Fq 'YWdlbnQ6c2VjcmV0LXRva2Vu' \"$DOCKER_CONFIG/config.json\" || exit 5\nprintf ok > \"$(dirname \"$0\")/pull-marker\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let secrets = Arc::new(SessionSecrets::new());
+    secrets
+        .put(
+            &SecretKey::new(fx.store.info().store_id.0.as_str(), id("registry-handle")),
+            &Secret::new(r#"{"username":"agent","password":"secret-token"}"#),
+        )
+        .unwrap();
+    let bindings = ToolBindings::new(
+        [RegisteredExecutable {
+            id: id("docker"),
+            path: executable,
+        }],
+        [],
+    )
+    .unwrap()
+    .with_credentials([RegisteredCredential {
+        id: id("registry-credential"),
+        project: Some(project("project-a")),
+        handle: id("registry-handle"),
+    }])
+    .unwrap();
+    let runner = Arc::new(ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    ));
+    let auth_root = fx.h.root.join("registry-auth");
+    let service = Arc::new(
+        ContainerService::new(
+            fx.store.clone(),
+            runner,
+            bindings,
+            HostPlatform {
+                os: std::env::consts::OS,
+                arch: std::env::consts::ARCH,
+                macos_major: 0,
+            },
+            fx.h.ids.clone(),
+        )
+        .with_secrets(secrets)
+        .with_registry_auth(Arc::new(
+            NativeRegistryAuth::new(auth_root.clone()).unwrap(),
+        )),
+    );
+    fx.cases = fx.cases.with_containers(service.clone());
+    let context = fx.agent("agent-a", "project-a", "s-a");
+    let reply = fx.command_keyed(
+        &context,
+        "containers.pull",
+        "credentialed-pull",
+        json!({"engineId":"docker","image":"registry.example.test/team/image:tag",
+            "credentialRef":"registry-credential"}),
+        Some(1),
+    );
+    let operation_id = match recorded(reply).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted pull: {other:?}"),
+    };
+    let operation = fx
+        .read(|snapshot| snapshot.operations().operation(&operation_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&operation, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    assert!(fx.h.root.join("pull-marker").exists());
+    assert_eq!(std::fs::read_dir(auth_root).unwrap().count(), 0);
+    set_runtime(&fx, ConfigScope::Project(project("project-a")), Value::Null);
+    assert_eq!(
+        fx.read(
+            |snapshot| devworks_core::services::containers::selection::selected(
+                snapshot.configuration(),
+                Some(&project("project-a"))
+            )
+        ),
+        ContainerBackend::Podman
+    );
+    let reply = fx.command_keyed(
+        &context,
+        "containers.pull",
+        "pull-after-inheritance-restored",
+        json!({"engineId":"docker","image":"registry.example.test/team/image:tag"}),
+        Some(1),
+    );
+    assert!(
+        matches!(recorded(reply).0, DomainDecision::Refused { fault }
+        if fault.code == devworks_core::protocol::DomainErrorCode::Conflict)
+    );
 }
 
 #[test]
