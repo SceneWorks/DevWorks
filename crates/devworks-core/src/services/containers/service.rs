@@ -42,8 +42,9 @@ pub struct ContainerService {
     pub(super) bindings: ToolBindings,
     pub(super) artifacts: Option<Arc<crate::services::artifacts::ArtifactService>>,
     pub(super) secrets: Option<Arc<dyn crate::ports::secrets::SecretStore>>,
+    pub(super) resources: Option<Arc<crate::services::resources::ResourceService>>,
     host: HostPlatform<'static>,
-    ids: Arc<dyn IdSource>,
+    pub(super) ids: Arc<dyn IdSource>,
 }
 
 impl ContainerService {
@@ -60,6 +61,7 @@ impl ContainerService {
             bindings,
             artifacts: None,
             secrets: None,
+            resources: None,
             host,
             ids,
         }
@@ -75,6 +77,14 @@ impl ContainerService {
 
     pub fn with_secrets(mut self, secrets: Arc<dyn crate::ports::secrets::SecretStore>) -> Self {
         self.secrets = Some(secrets);
+        self
+    }
+
+    pub fn with_resources(
+        mut self,
+        resources: Arc<crate::services::resources::ResourceService>,
+    ) -> Self {
+        self.resources = Some(resources);
         self
     }
 
@@ -158,6 +168,15 @@ impl ContainerService {
         ctx: &InvocationContext,
         row: &StoredContainer,
     ) -> Result<Inspected, DomainFault> {
+        self.inspect_live_with_timeout(ctx, row, Duration::from_secs(10))
+    }
+
+    pub(super) fn inspect_live_with_timeout(
+        &self,
+        ctx: &InvocationContext,
+        row: &StoredContainer,
+        timeout: Duration,
+    ) -> Result<Inspected, DomainFault> {
         let backend = Backend::parse(&row.engine).ok_or_else(|| {
             self.fault(DomainErrorCode::UnsupportedCapability, Some(row.id.clone()))
         })?;
@@ -169,7 +188,7 @@ impl ContainerService {
         })?;
         let result = self
             .runner
-            .run(ctx, None, spec, Duration::from_secs(10), 1_048_576, &[])
+            .run(ctx, None, spec, timeout, 1_048_576, &[])
             .map_err(|_| self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone())))?;
         if result.exit_code != Some(0) || result.truncated {
             return Err(self.fault(DomainErrorCode::OutcomeUnknown, Some(row.id.clone())));

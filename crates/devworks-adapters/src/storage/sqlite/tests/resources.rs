@@ -67,6 +67,7 @@ fn owned_container_intent_survives_restart_and_stop_listing_is_agent_scoped() {
         assignment_id: None,
         create_operation_id: devworks_core::protocol::OperationId(id("op-create")),
         last_operation_id: devworks_core::protocol::OperationId(id("op-create")),
+        resource_lease_ids: Vec::new(),
         detail: None,
         revision: 1,
         created_at_ms: T0,

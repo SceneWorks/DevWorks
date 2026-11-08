@@ -133,6 +133,23 @@ fn process_executables_on_path()
     registered
 }
 
+#[cfg(target_os = "macos")]
+fn macos_major_version() -> u32 {
+    std::process::Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|version| version.split('.').next()?.parse().ok())
+        .unwrap_or(0)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_major_version() -> u32 {
+    0
+}
+
 /// Builds the web tools' ports over the secret resolver the host composed.
 pub type WebPortsFactory = Arc<dyn Fn(Arc<dyn SecretResolver>) -> WebPorts + Send + Sync>;
 
@@ -439,6 +456,34 @@ async fn compose(
         secrets: secrets.clone(),
     });
     let executables = process_executables_on_path();
+    let container_executables: Vec<_> = executables
+        .iter()
+        .filter(|executable| matches!(executable.id.as_str(), "docker" | "podman" | "container"))
+        .cloned()
+        .collect();
+    if !container_executables.is_empty() {
+        let bindings = devworks_core::services::process::tools::ToolBindings::new(
+            container_executables,
+            std::iter::empty(),
+        )
+        .and_then(|bindings| bindings.with_credentials(config.process_credentials.clone()))
+        .map_err(|reason| StartError::Thread(reason.into()))?;
+        runtime_config.containers = Some(devworks_engine::runtime::ContainerComposition {
+            bindings,
+            filesystem: Arc::new(NativeFilesystem::new()),
+            protected_roots: ProtectedRoots::new(
+                Vec::new(),
+                Vec::new(),
+                Some(config.data_root.display().to_string()),
+            ),
+            secrets: secrets.clone(),
+            host: devworks_core::services::containers::probe::HostPlatform {
+                os: std::env::consts::OS,
+                arch: std::env::consts::ARCH,
+                macos_major: macos_major_version(),
+            },
+        });
+    }
     if !executables.is_empty() {
         let bindings = devworks_core::services::process::tools::ToolBindings::new(
             executables,

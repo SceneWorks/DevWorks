@@ -1145,19 +1145,25 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
             },
             fx.h.ids.clone(),
         )
-        .with_artifacts(artifacts.clone()),
+        .with_artifacts(artifacts.clone())
+        .with_resources(fx.svc.clone()),
     );
     fx.cases = fx
         .cases
         .with_containers(service.clone())
         .with_artifacts(artifacts.clone());
     let context = fx.agent("agent-a", "project-a", "s-a");
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let host_port = socket.local_addr().unwrap().port();
+    drop(socket);
     let create = fx.command_keyed(
         &context,
         "containers.create",
         "native-effect-create",
         json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:latest",
-            "command":["sh","-c","echo booted; sleep 60"],"mounts":[],"ports":[],"environment":[],"resourceIds":[]}}),
+            "command":["sh","-c","echo booted; sleep 60"],"mounts":[],
+            "ports":[{"containerPort":8080,"hostPort":host_port,"protocol":"Tcp"}],
+            "environment":[],"resourceIds":["build-slot"]}}),
         Some(1),
     );
     let create_id = match recorded(create).0 {
@@ -1170,7 +1176,35 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
             .containers(&ContainerFilter::Project(project("project-a")), None, 10)
     })[0]
         .clone();
-    let _cleanup = Cleanup(docker, row.id.as_str().into());
+    let _cleanup = Cleanup(docker.clone(), row.id.as_str().into());
+    assert_eq!(row.resource_lease_ids.len(), 2);
+    for lease in &row.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Held
+        );
+    }
+    let external = format!("dw-external-{}", std::process::id());
+    let _external_cleanup = Cleanup(docker.clone(), external.clone());
+    let existing = std::process::Command::new(&docker)
+        .args([
+            "run",
+            "-d",
+            "--name",
+            &external,
+            "alpine:latest",
+            "sleep",
+            "60",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        existing.status.success(),
+        "{}",
+        String::from_utf8_lossy(&existing.stderr)
+    );
     let op = fx
         .read(|snapshot| snapshot.operations().operation(&create_id))
         .unwrap();
@@ -1274,6 +1308,109 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
         .read(|snapshot| snapshot.resources().container(&row.id))
         .unwrap();
     assert_eq!(stopped.phase, ContainerPhase::Stopped);
+    for lease in &stopped.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Released
+        );
+    }
+    let restart = fx.command_keyed(
+        &context,
+        "containers.start",
+        "native-effect-restart",
+        json!({"containerId":row.id.as_str(),"expectedRevision":stopped.revision.to_string()}),
+        Some(1),
+    );
+    let restart_id = match recorded(restart).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted restart: {other:?}"),
+    };
+    let restarting = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    assert_eq!(restarting.resource_lease_ids.len(), 2);
+    for lease in &restarting.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Held
+        );
+    }
+    let op = fx
+        .read(|snapshot| snapshot.operations().operation(&restart_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&op, &fx.authority()),
+        ContainerEffectOutcome::Completed(_)
+    ));
+    let report = service.shutdown_agent_work(Duration::from_secs(20));
+    assert_eq!(report.verified_stopped, vec![row.id.clone()]);
+    assert!(report.uncertain.is_empty());
+    let closed = fx
+        .read(|snapshot| snapshot.resources().container(&row.id))
+        .unwrap();
+    assert_eq!(closed.phase, ContainerPhase::Stopped);
+    for lease in &closed.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Released
+        );
+    }
+    let untouched = std::process::Command::new(&docker)
+        .args(["inspect", "--format", "{{.State.Running}}", &external])
+        .output()
+        .unwrap();
+    assert!(untouched.status.success());
+    assert_eq!(String::from_utf8_lossy(&untouched.stdout).trim(), "true");
+    let refused = fx.command_keyed(
+        &context,
+        "containers.create",
+        "native-effect-refused-create",
+        json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:latest",
+            "command":[],"mounts":[],"ports":[],
+            "environment":[{"name":"TOKEN","credentialRef":"missing"}],
+            "resourceIds":["refused-slot"]}}),
+        Some(1),
+    );
+    let refused_id = match recorded(refused).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted create: {other:?}"),
+    };
+    let refused_row = fx
+        .read(|snapshot| {
+            snapshot.resources().containers(
+                &ContainerFilter::Project(project("project-a")),
+                None,
+                10,
+            )
+        })
+        .into_iter()
+        .find(|candidate| candidate.create_operation_id == refused_id)
+        .unwrap();
+    let refused_op = fx
+        .read(|snapshot| snapshot.operations().operation(&refused_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&refused_op, &fx.authority()),
+        ContainerEffectOutcome::Failed(_)
+    ));
+    let failed = fx
+        .read(|snapshot| snapshot.resources().container(&refused_row.id))
+        .unwrap();
+    assert_eq!(failed.phase, ContainerPhase::Failed);
+    for lease in &failed.resource_lease_ids {
+        assert_eq!(
+            fx.read(|snapshot| snapshot.resources().lease(lease))
+                .unwrap()
+                .phase,
+            LeasePhase::Released
+        );
+    }
 }
 
 #[test]

@@ -390,7 +390,7 @@ fn processes<P: rusqlite::Params>(
 }
 const UNSETTLED: &str = "state NOT IN ('Reaped','Failed')";
 
-const CONTAINER_COLUMNS: &str = "id,engine,state,image,actor_id,owner_kind,session_id,project_id,root_id,assignment_id,create_operation_id,last_operation_id,detail,revision,created_at,updated_at";
+const CONTAINER_COLUMNS: &str = "id,engine,state,image,actor_id,owner_kind,session_id,project_id,root_id,assignment_id,create_operation_id,last_operation_id,resource_lease_ids,detail,revision,created_at,updated_at";
 #[allow(clippy::type_complexity)] // Fixed SQLite column tuple, decoded once into StoredContainer.
 type ContainerColumns = (
     String,
@@ -403,6 +403,7 @@ type ContainerColumns = (
     String,
     Option<String>,
     Option<String>,
+    String,
     String,
     String,
     Option<String>,
@@ -428,6 +429,7 @@ fn container_row(r: &Row<'_>) -> rusqlite::Result<ContainerColumns> {
         r.get(13)?,
         r.get(14)?,
         r.get(15)?,
+        r.get(16)?,
     ))
 }
 fn container_of(r: ContainerColumns) -> Result<StoredContainer, StorageError> {
@@ -444,6 +446,7 @@ fn container_of(r: ContainerColumns) -> Result<StoredContainer, StorageError> {
         assignment,
         create,
         last,
+        lease_ids,
         detail,
         revision,
         created,
@@ -462,6 +465,8 @@ fn container_of(r: ContainerColumns) -> Result<StoredContainer, StorageError> {
         assignment_id: opt_id(assignment)?.map(AssignmentId),
         create_operation_id: OperationId(id_of(create)?),
         last_operation_id: OperationId(id_of(last)?),
+        resource_lease_ids: serde_json::from_str(&lease_ids)
+            .map_err(|error| corrupt(format!("stored container resource leases: {error}")))?,
         detail,
         revision,
         created_at_ms: created,
@@ -587,6 +592,12 @@ macro_rules! resource_reads {
             }
             fn container(&self, id: &Id) -> Result<Option<StoredContainer>, StorageError> {
                 Ok(containers(self.conn, "id=?1", [id.as_str()])?.into_iter().next())
+            }
+            fn container_lease_in_use(&self, lease: &Id) -> Result<bool, StorageError> {
+                db(db(self.conn.prepare_cached(
+                    "SELECT 1 FROM owned_containers c, json_each(c.resource_lease_ids) j \
+                     WHERE j.value=?1 AND c.state IN ('Creating','Starting','Running','Stopping','Uncertain') LIMIT 1",
+                ))?.exists([lease.as_str()]))
             }
             fn containers(&self, filter: &ContainerFilter, after: Option<&Id>, n: u16) -> Result<Vec<StoredContainer>, StorageError> {
                 let n = limit(n)?;
@@ -892,12 +903,12 @@ impl ResourceRepository for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO owned_containers(id,engine,state,image,actor_id,owner_kind,session_id,project_id,root_id,assignment_id,create_operation_id,last_operation_id,detail,revision,created_at,updated_at) VALUES(?1,?2,'Creating',?3,?4,?5,?6,?7,?8,?9,?10,?10,NULL,1,?11,?11)",
+            "INSERT INTO owned_containers(id,engine,state,image,actor_id,owner_kind,session_id,project_id,root_id,assignment_id,create_operation_id,last_operation_id,resource_lease_ids,detail,revision,created_at,updated_at) VALUES(?1,?2,'Creating',?3,?4,?5,?6,?7,?8,?9,?10,?10,?11,NULL,1,?12,?12)",
         ))?.execute(params![
             c.id.as_str(), c.engine, c.image, c.actor.0.as_str(), c.owner_kind,
             c.session_id.as_ref().map(Id::as_str), c.project_id.0.as_str(),
             c.root_id.as_ref().map(|x| x.0.as_str()), c.assignment_id.as_ref().map(|x| x.0.as_str()),
-            c.create_operation_id.0.as_str(), self.now,
+            c.create_operation_id.0.as_str(), serde_json::to_string(&c.resource_lease_ids).map_err(|error| invalid(error.to_string()))?, self.now,
         ]))?;
         Ok(())
     }
@@ -920,6 +931,9 @@ impl ResourceRepository for Unit<'_> {
             || current.root_id != c.root_id
             || current.assignment_id != c.assignment_id
             || current.create_operation_id != c.create_operation_id
+            || (current.resource_lease_ids != c.resource_lease_ids
+                && !(current.phase == ContainerPhase::Stopped
+                    && c.phase == ContainerPhase::Starting))
             || current.created_at_ms != c.created_at_ms
             || c.detail.as_ref().is_some_and(|x| x.len() > 1024)
         {
@@ -928,8 +942,8 @@ impl ResourceRepository for Unit<'_> {
             ));
         }
         let n = db(db(self.conn.prepare_cached(
-            "UPDATE owned_containers SET state=?2,last_operation_id=?3,detail=?4,revision=?5,updated_at=?6 WHERE id=?1 AND revision=?7",
-        ))?.execute(params![c.id.as_str(), c.phase.as_str(), c.last_operation_id.0.as_str(), c.detail, c.revision, self.now, expected]))?;
+            "UPDATE owned_containers SET state=?2,last_operation_id=?3,detail=?4,revision=?5,updated_at=?6,resource_lease_ids=?8 WHERE id=?1 AND revision=?7",
+        ))?.execute(params![c.id.as_str(), c.phase.as_str(), c.last_operation_id.0.as_str(), c.detail, c.revision, self.now, expected, serde_json::to_string(&c.resource_lease_ids).map_err(|error| invalid(error.to_string()))?]))?;
         if n != 1 {
             return Err(lost("owned_container", &c.id));
         }

@@ -13,6 +13,7 @@ CREATE TABLE owned_containers (
     assignment_id TEXT,
     create_operation_id TEXT NOT NULL UNIQUE,
     last_operation_id TEXT NOT NULL,
+    resource_lease_ids TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(resource_lease_ids)),
     detail TEXT,
     revision INTEGER NOT NULL CHECK(revision > 0),
     created_at INTEGER NOT NULL,

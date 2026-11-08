@@ -14,10 +14,12 @@ use crate::ports::{CommandHandler, Decided, HandlerFailure, IdKind, Preparation,
 use crate::protocol::results::DomainDecision;
 use crate::protocol::{DomainErrorCode, EventId, Id, OperationId, ProjectId, RevisionDimension};
 use crate::services::git::context::SourceBinding;
-use crate::services::sessions::{Refusal, decided, rev};
+use crate::services::sessions::{Failure, Refusal, decided, rev};
 use serde_json::json;
+use std::collections::BTreeSet;
 
 pub const CONSUMER: &str = "container_effects";
+pub const STOP_CONSUMER: &str = "container_stops";
 
 fn project_matches(ctx: &InvocationContext, project: &ProjectId) -> bool {
     ctx.project_id() == Some(project)
@@ -170,6 +172,83 @@ impl CommandHandler for ContainerService {
                         Err(refusal) => return decided(tx, Err(refusal.into())),
                     };
                 let id = tx.new_id(IdKind::Container);
+                let mut requested = BTreeSet::new();
+                for resource in &spec.resource_ids.0 {
+                    let name = resource.0.as_str().to_ascii_lowercase();
+                    if name.starts_with("hostport-tcp-") || name.starts_with("hostport-udp-") {
+                        return decided(
+                            tx,
+                            Err(Refusal::new(
+                                DomainErrorCode::InvalidArgument,
+                                "container_port_namespace",
+                                Some(resource.0.clone()),
+                            )
+                            .into()),
+                        );
+                    }
+                    requested.insert((name, false));
+                }
+                for port in &spec.ports.0 {
+                    let protocol = match port.protocol {
+                        crate::protocol::records::PortProtocol::Tcp => "tcp",
+                        crate::protocol::records::PortProtocol::Udp => "udp",
+                    };
+                    if !requested.insert((
+                        format!("hostport-{protocol}-{}", port.host_port.get()),
+                        true,
+                    )) {
+                        return decided(
+                            tx,
+                            Err(Refusal::new(
+                                DomainErrorCode::InvalidArgument,
+                                "duplicate_container_port",
+                                None,
+                            )
+                            .into()),
+                        );
+                    }
+                }
+                let mut lease_ids = Vec::new();
+                if !requested.is_empty() {
+                    let Some(resources) = &self.resources else {
+                        return decided(
+                            tx,
+                            Err(Refusal::new(
+                                DomainErrorCode::UnsupportedCapability,
+                                "container_resources",
+                                None,
+                            )
+                            .into()),
+                        );
+                    };
+                    let savepoint = tx.savepoint()?;
+                    for (name, machine) in requested {
+                        match resources.reserve_container(tx, ctx, &id, &name, machine) {
+                            Ok(Some(lease)) => lease_ids.push(lease),
+                            Ok(None) => {
+                                tx.rollback_to(savepoint)?;
+                                return decided(
+                                    tx,
+                                    Err(Refusal::new(
+                                    DomainErrorCode::CapacityWait,
+                                        "container_resource_waiting",
+                                        None,
+                                    )
+                                    .into()),
+                                );
+                            }
+                            Err(Failure::Refused(refusal)) => {
+                                tx.rollback_to(savepoint)?;
+                                return decided(tx, Err(refusal.into()));
+                            }
+                            Err(Failure::Storage(error)) => {
+                                tx.rollback_to(savepoint)?;
+                                return Err(error.into());
+                            }
+                        }
+                    }
+                    tx.release(savepoint)?;
+                }
                 let now = tx.now_ms();
                 tx.resources().insert_container(&StoredContainer {
                     id: id.clone(),
@@ -189,6 +268,7 @@ impl CommandHandler for ContainerService {
                     assignment_id: ctx.assignment_id().cloned(),
                     create_operation_id: operation.clone(),
                     last_operation_id: operation.clone(),
+                    resource_lease_ids: lease_ids,
                     detail: None,
                     revision: 1,
                     created_at_ms: now,
@@ -225,6 +305,63 @@ impl CommandHandler for ContainerService {
                 }
                 let expected = row.revision;
                 let mut next = row;
+                if next.phase == ContainerPhase::Stopped && !next.resource_lease_ids.is_empty() {
+                    let Some(resources) = &self.resources else {
+                        return decided(
+                            tx,
+                            Err(Refusal::new(
+                                DomainErrorCode::UnsupportedCapability,
+                                "container_resources",
+                                None,
+                            )
+                            .into()),
+                        );
+                    };
+                    let mut names = BTreeSet::new();
+                    for id in &next.resource_lease_ids {
+                        let lease = tx.resources().lease(id)?.ok_or_else(|| {
+                            StorageError::InvalidRecord("container lease missing".into())
+                        })?;
+                        let resource =
+                            tx.resources()
+                                .resource(&lease.resource_id)?
+                                .ok_or_else(|| {
+                                    StorageError::InvalidRecord("container resource missing".into())
+                                })?;
+                        let is_host_port = resource.name.starts_with("hostport-tcp-")
+                            || resource.name.starts_with("hostport-udp-");
+                        names.insert((resource.name, is_host_port));
+                    }
+                    let savepoint = tx.savepoint()?;
+                    let mut leases = Vec::new();
+                    for (name, machine) in names {
+                        match resources.reserve_container(tx, ctx, &next.id, &name, machine) {
+                            Ok(Some(lease)) => leases.push(lease),
+                            Ok(None) => {
+                                tx.rollback_to(savepoint)?;
+                                return decided(
+                                    tx,
+                                    Err(Refusal::new(
+                                    DomainErrorCode::CapacityWait,
+                                        "container_resource_waiting",
+                                        None,
+                                    )
+                                    .into()),
+                                );
+                            }
+                            Err(Failure::Refused(refusal)) => {
+                                tx.rollback_to(savepoint)?;
+                                return decided(tx, Err(refusal.into()));
+                            }
+                            Err(Failure::Storage(error)) => {
+                                tx.rollback_to(savepoint)?;
+                                return Err(error.into());
+                            }
+                        }
+                    }
+                    tx.release(savepoint)?;
+                    next.resource_lease_ids = leases;
+                }
                 next.phase = ContainerPhase::Starting;
                 next.last_operation_id = operation.clone();
                 next.revision += 1;
@@ -324,7 +461,12 @@ impl CommandHandler for ContainerService {
         let now = tx.now_ms();
         tx.queue().enqueue(NewQueueEntry {
             id: queue_id,
-            consumer: CONSUMER.into(),
+            consumer: if matches!(command, ContainerCommand::Stop(_)) {
+                STOP_CONSUMER
+            } else {
+                CONSUMER
+            }
+            .into(),
             event_id: event,
             root_id: if matches!(command, ContainerCommand::Stop(_)) {
                 None

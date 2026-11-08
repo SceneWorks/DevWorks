@@ -24,6 +24,7 @@ use crate::services::artifacts::observed::Observed;
 use crate::services::sessions::rev;
 use base64::Engine as _;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 pub enum EffectOutcome {
@@ -135,6 +136,7 @@ impl ContainerService {
         pending: ContainerPhase,
         terminal: ContainerPhase,
     ) -> Result<StoredContainer, EffectOutcome> {
+        let resources = self.resources.clone();
         run_write(&*self.store, WriteOptions::default(), move |tx| {
             let row = tx
                 .resources()
@@ -154,6 +156,11 @@ impl ContainerService {
             next.revision += 1;
             next.updated_at_ms = tx.now_ms();
             tx.resources().update_container(&next, expected)?;
+            if matches!(terminal, ContainerPhase::Stopped | ContainerPhase::Failed)
+                && let Some(resources) = &resources
+            {
+                resources.release_container_leases(tx, &next)?;
+            }
             Ok(next)
         })
         .map_err(|error| {
@@ -224,8 +231,53 @@ impl ContainerService {
         if !matches!(selected, Ok(engine) if engine == backend) {
             return EffectOutcome::Failed("selected backend changed before create".into());
         }
-        if !input.spec.resource_ids.0.is_empty() || !input.spec.ports.0.is_empty() {
-            return EffectOutcome::Failed("container resource coordination unavailable".into());
+        let mut expected_resources = BTreeSet::new();
+        for resource in &input.spec.resource_ids.0 {
+            expected_resources.insert(resource.0.as_str().to_ascii_lowercase());
+        }
+        for port in &input.spec.ports.0 {
+            let protocol = match port.protocol {
+                crate::protocol::records::PortProtocol::Tcp => "tcp",
+                crate::protocol::records::PortProtocol::Udp => "udp",
+            };
+            expected_resources.insert(format!("hostport-{protocol}-{}", port.host_port.get()));
+        }
+        let lease_ids = row.resource_lease_ids.clone();
+        let owner = row.actor.clone();
+        let holder = format!("session:{}", row.id.as_str());
+        let leases_valid = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            if lease_ids.len() != expected_resources.len() {
+                return Ok(false);
+            }
+            let mut actual = BTreeSet::new();
+            for lease_id in &lease_ids {
+                let Some(lease) = tx.resources().lease(lease_id)? else {
+                    return Ok(false);
+                };
+                if lease.phase != crate::ports::storage::LeasePhase::Held
+                    || lease.owner != owner
+                    || lease.holder_key != holder
+                    || lease.expires_at_ms <= tx.now_ms()
+                {
+                    return Ok(false);
+                }
+                let Some(resource) = tx.resources().resource(&lease.resource_id)? else {
+                    return Ok(false);
+                };
+                actual.insert(resource.name);
+            }
+            Ok(actual == expected_resources)
+        });
+        match leases_valid {
+            Ok(true) => {}
+            Ok(false) => {
+                return EffectOutcome::Failed(
+                    "container resource leases changed before dispatch".into(),
+                );
+            }
+            Err(_) => {
+                return EffectOutcome::Unknown("container resource leases unavailable".into());
+            }
         }
         let mut sources = Vec::new();
         for mount in &input.spec.mounts.0 {
@@ -252,7 +304,17 @@ impl ContainerService {
                 read_only: *read_only,
             })
             .collect();
-        let ports: Vec<Port<'_>> = Vec::new();
+        let ports: Vec<Port<'_>> = input
+            .spec
+            .ports
+            .0
+            .iter()
+            .map(|port| Port {
+                host: port.host_port.get() as u16,
+                container: port.container_port.get() as u16,
+                protocol: &port.protocol,
+            })
+            .collect();
         let fallback = SessionSecrets::default();
         let environment = match self.bindings.resolve_container_environment(
             &input.spec.environment.0,
@@ -577,6 +639,37 @@ impl ContainerService {
         if row.phase != pending {
             return EffectOutcome::Failed("container lifecycle phase changed".into());
         }
+        if !stop && !row.resource_lease_ids.is_empty() {
+            let lease_ids = row.resource_lease_ids.clone();
+            let owner = row.actor.clone();
+            let holder = format!("session:{}", row.id.as_str());
+            let valid = run_write(&*self.store, WriteOptions::default(), move |tx| {
+                for id in &lease_ids {
+                    let Some(lease) = tx.resources().lease(id)? else {
+                        return Ok(false);
+                    };
+                    if lease.phase != crate::ports::storage::LeasePhase::Held
+                        || lease.owner != owner
+                        || lease.holder_key != holder
+                        || lease.expires_at_ms <= tx.now_ms()
+                    {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            });
+            match valid {
+                Ok(true) => {}
+                Ok(false) => {
+                    return EffectOutcome::Failed(
+                        "container resource lease lost before start".into(),
+                    );
+                }
+                Err(_) => {
+                    return EffectOutcome::Unknown("container resource lease unavailable".into());
+                }
+            }
+        }
         let Some(backend) = Backend::parse(&row.engine) else {
             return EffectOutcome::Failed("unknown container backend".into());
         };
@@ -671,9 +764,29 @@ impl ContainerService {
     ) -> EffectOutcome {
         let (intent, context, authorization) = match self.command_context(operation, authority) {
             Ok(value) => value,
+            Err(EffectOutcome::Failed(reason)) => {
+                if let Ok(intent) =
+                    serde_json::from_value::<ContainerIntent>(operation.payload.clone())
+                    && matches!(intent.command, ContainerCommand::Create(_))
+                    && let Some(id) = intent.container_id
+                    && self
+                        .settle_phase(
+                            id,
+                            operation.id.clone(),
+                            ContainerPhase::Creating,
+                            ContainerPhase::Failed,
+                        )
+                        .is_err()
+                {
+                    return EffectOutcome::Unknown(
+                        "container create authority refusal could not release reservations".into(),
+                    );
+                }
+                return EffectOutcome::Failed(reason);
+            }
             Err(outcome) => return outcome,
         };
-        match &intent.command {
+        let outcome = match &intent.command {
             ContainerCommand::Build(input) => self.execute_build(operation, &context, input),
             ContainerCommand::Pull(input) => self.execute_pull(operation, &context, input),
             ContainerCommand::Create(input) => {
@@ -688,7 +801,27 @@ impl ContainerService {
             ContainerCommand::Stop(input) => {
                 self.execute_lifecycle(operation, &context, &input.container_id, true, false)
             }
+        };
+        if let (ContainerCommand::Create(_), EffectOutcome::Failed(reason)) =
+            (&intent.command, &outcome)
+        {
+            if let Some(id) = &intent.container_id
+                && self
+                    .settle_phase(
+                        id.clone(),
+                        operation.id.clone(),
+                        ContainerPhase::Creating,
+                        ContainerPhase::Failed,
+                    )
+                    .is_err()
+            {
+                return EffectOutcome::Unknown(
+                    "container create refusal could not release reservations".into(),
+                );
+            }
+            return EffectOutcome::Failed(reason.clone());
         }
+        outcome
     }
 
     pub fn observe_effect(

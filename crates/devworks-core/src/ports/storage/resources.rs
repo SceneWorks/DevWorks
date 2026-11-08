@@ -339,6 +339,8 @@ pub struct StoredContainer {
     pub assignment_id: Option<AssignmentId>,
     pub create_operation_id: OperationId,
     pub last_operation_id: OperationId,
+    /// Fenced resource leases held for this exact external container incarnation.
+    pub resource_lease_ids: Vec<Id>,
     pub detail: Option<String>,
     pub revision: i64,
     pub created_at_ms: i64,
@@ -446,6 +448,8 @@ pub trait ResourceRead {
         limit: u16,
     ) -> Result<Vec<StoredProcess>, StorageError>;
     fn container(&self, id: &Id) -> Result<Option<StoredContainer>, StorageError>;
+    /// A physical lease cannot transfer while a linked external container may still run.
+    fn container_lease_in_use(&self, lease: &Id) -> Result<bool, StorageError>;
     /// Container records in ID order strictly after `after`, at most `limit`.
     fn containers(
         &self,

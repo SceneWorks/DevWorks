@@ -1642,6 +1642,9 @@ impl ResourceRead for Unsupported {
     fn container(&self, _: &Id) -> Result<Option<StoredContainer>, StorageError> {
         nope()
     }
+    fn container_lease_in_use(&self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
     fn containers(
         &self,
         _: &ContainerFilter,
