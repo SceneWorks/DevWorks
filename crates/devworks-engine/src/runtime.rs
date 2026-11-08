@@ -342,6 +342,7 @@ pub struct CollectionPass {
 
 struct Collector {
     trigger: Notify,
+    observation_stop: Notify,
     stopping: AtomicBool,
     status: watch::Sender<Option<CollectionPass>>,
 }
@@ -349,6 +350,7 @@ impl Collector {
     fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         self.trigger.notify_one();
+        self.observation_stop.notify_one();
     }
 }
 
@@ -976,6 +978,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let (status, _) = watch::channel(None);
     let collector = Arc::new(Collector {
         trigger: Notify::new(),
+        observation_stop: Notify::new(),
         stopping: AtomicBool::new(false),
         status,
     });
@@ -1005,7 +1008,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     tasks.push(tokio::spawn(async move {
         while !observing_stop.stopping.load(Ordering::Acquire) {
             let _ = observing_dispatcher.observe_unknown().await;
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {},
+                _ = observing_stop.observation_stop.notified() => {},
+            }
         }
     }));
     if let Some(worker) = purge_worker {
