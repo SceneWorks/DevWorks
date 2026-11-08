@@ -804,7 +804,7 @@ fn permission_label(capabilities: &DesktopCapabilities) -> String {
         }
     }
     format!(
-        "capture:{};input:{}",
+        "capture:{};input:{};accessibility-targets:unsupported:no-native-selector",
         label(&capabilities.capture),
         label(&capabilities.input)
     )
