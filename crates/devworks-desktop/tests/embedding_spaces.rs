@@ -120,12 +120,21 @@ fn setup_qualify_reopen(paid: bool, lose_acks: bool) {
             frames.iter().all(|f| f == &frames[0]),
             "unknown acknowledgment retries exactly the original admitted frame"
         );
-        let original_operation = page().items.0[0]
-            .qualification_operation
-            .as_ref()
-            .unwrap()
-            .operation_id
-            .clone();
+        // The command receipt can commit before the background qualification intent becomes
+        // visible to a separate read snapshot. Wait for that exact durable operation rather
+        // than assuming the UI's last repaint also advanced the worker.
+        let deadline = std::time::Instant::now() + SETTLE_BOUND;
+        let original_operation = loop {
+            let current = page();
+            if let Some(operation) = current.items.0[0].qualification_operation.as_ref() {
+                break operation.operation_id.clone();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "qualification intent was not recorded: {current:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
         h.state_mut().on_exit();
         let saved = devworks_desktop::memory::Memory::load(&root.memory());
         assert_eq!(saved.pending.commands.len(), 1);
