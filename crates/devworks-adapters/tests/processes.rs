@@ -20,7 +20,7 @@ use devworks_core::gateway::Gateway;
 use devworks_core::ports::process::{Probe, ProcessHost, ProcessSpec, ProcessTree, TreeStatus};
 use devworks_core::ports::storage::*;
 use devworks_core::ports::{Clock, IdKind, IdSource};
-use devworks_core::protocol::records::{LeaseRecord, LeaseState};
+use devworks_core::protocol::records::{LeaseRecord, LeaseState, SettingAssignment};
 use devworks_core::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
 };
@@ -48,7 +48,8 @@ use devworks_core::services::resources::{
     DispatchFailure, DispatchRefusal, MachineResource, ReconcileCause, ResourceService,
     register_machine,
 };
-use devworks_core::settings::catalog::AgentRole;
+use devworks_core::settings::catalog::{AgentRole, descriptor};
+use devworks_core::settings::model;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -1096,8 +1097,18 @@ fn container_create_receipt_atomically_records_ownership_before_effect_delivery(
 #[test]
 #[ignore = "explicit native Docker engine lifecycle; requires DW_NATIVE_DOCKER"]
 fn native_docker_container_effects_commit_owned_create_start_and_stop() {
+    native_container_effects_commit_owned_create_start_and_stop("docker", "DW_NATIVE_DOCKER");
+}
+
+#[test]
+#[ignore = "explicit native Podman engine lifecycle; requires DW_NATIVE_PODMAN"]
+fn native_podman_container_effects_commit_owned_create_start_and_stop() {
+    native_container_effects_commit_owned_create_start_and_stop("podman", "DW_NATIVE_PODMAN");
+}
+
+fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, executable_key: &str) {
     let _serial = serial();
-    let docker = std::env::var("DW_NATIVE_DOCKER").expect("registered Docker CLI path");
+    let executable = std::env::var(executable_key).expect("registered container CLI path");
     struct Cleanup(String, String);
     impl Drop for Cleanup {
         fn drop(&mut self) {
@@ -1107,6 +1118,29 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
         }
     }
     let mut fx = Fx::new();
+    if engine != "docker" {
+        let engine = engine.to_owned();
+        fx.write(move |tx| {
+            let scope = ConfigScope::Workspace;
+            let current = model::current_layer(tx.configuration(), &scope)?;
+            let key = devworks_core::services::containers::selection::PREFERRED_RUNTIME;
+            let schema = serde_json::to_value(descriptor(key).unwrap().schema_ref()).unwrap();
+            let assignment: SettingAssignment =
+                serde_json::from_value(json!({"key":key,"value":{"schema":schema,"value":engine}}))
+                    .unwrap();
+            let plan = model::plan(&current, &[assignment]);
+            assert!(plan.is_valid());
+            let body = model::body(&plan, &actor("user-a"), tx.now_ms(), json!({"kind":"test"}));
+            tx.configuration().append_revision(
+                &scope,
+                model::NAMESPACE,
+                current.revision,
+                model::BODY_SCHEMA_VERSION,
+                body,
+            )?;
+            Ok(())
+        });
+    }
     let artifacts = Arc::new(ArtifactService::new(
         Arc::new(NativeArtifactFiles::new(
             fx.h.root.clone(),
@@ -1127,8 +1161,8 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
     ));
     let bindings = ToolBindings::new(
         [RegisteredExecutable {
-            id: id("docker"),
-            path: docker.clone().into(),
+            id: id(engine),
+            path: executable.clone().into(),
         }],
         std::iter::empty(),
     )
@@ -1160,7 +1194,7 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
         &context,
         "containers.create",
         "native-effect-create",
-        json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:latest",
+        json!({"spec":{"engineId":engine,"projectId":"project-a","image":"docker.io/library/alpine:latest",
             "command":["sh","-c","echo booted; sleep 60"],"mounts":[],
             "ports":[{"containerPort":8080,"hostPort":host_port,"protocol":"Tcp"}],
             "environment":[],"resourceIds":["build-slot"]}}),
@@ -1176,7 +1210,7 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
             .containers(&ContainerFilter::Project(project("project-a")), None, 10)
     })[0]
         .clone();
-    let _cleanup = Cleanup(docker.clone(), row.id.as_str().into());
+    let _cleanup = Cleanup(executable.clone(), row.id.as_str().into());
     assert_eq!(row.resource_lease_ids.len(), 2);
     for lease in &row.resource_lease_ids {
         assert_eq!(
@@ -1187,14 +1221,14 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
         );
     }
     let external = format!("dw-external-{}", std::process::id());
-    let _external_cleanup = Cleanup(docker.clone(), external.clone());
-    let existing = std::process::Command::new(&docker)
+    let _external_cleanup = Cleanup(executable.clone(), external.clone());
+    let existing = std::process::Command::new(&executable)
         .args([
             "run",
             "-d",
             "--name",
             &external,
-            "alpine:latest",
+            "docker.io/library/alpine:latest",
             "sleep",
             "60",
         ])
@@ -1361,7 +1395,7 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
             LeasePhase::Released
         );
     }
-    let untouched = std::process::Command::new(&docker)
+    let untouched = std::process::Command::new(&executable)
         .args(["inspect", "--format", "{{.State.Running}}", &external])
         .output()
         .unwrap();
@@ -1371,7 +1405,7 @@ fn native_docker_container_effects_commit_owned_create_start_and_stop() {
         &context,
         "containers.create",
         "native-effect-refused-create",
-        json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:latest",
+        json!({"spec":{"engineId":engine,"projectId":"project-a","image":"docker.io/library/alpine:latest",
             "command":[],"mounts":[],"ports":[],
             "environment":[{"name":"TOKEN","credentialRef":"missing"}],
             "resourceIds":["refused-slot"]}}),
