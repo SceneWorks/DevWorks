@@ -202,6 +202,7 @@
 pub mod approvals;
 pub mod browser;
 pub mod conventions;
+pub mod desktop;
 pub mod diagnostics;
 pub mod dispatch;
 pub mod evals;
@@ -235,7 +236,9 @@ pub use runtime::{
     RunComposition, Runtime, RuntimeConfig, ShutdownStage, boot,
 };
 
+pub mod containers;
 pub mod prices;
+pub mod process_tools;
 
 pub mod providers;
 

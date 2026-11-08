@@ -25,6 +25,8 @@ pub struct ProcessSpec {
     pub clear_env: bool,
     /// Capture stdout and stderr as pipes ([`ProcessTree::take_output`]); otherwise discard.
     pub capture_output: bool,
+    /// Capture stdout and stderr in one ordered pipe. Requires `capture_output`.
+    pub merge_output: bool,
     /// Require an OS-enforced ban on child process creation. If enforcement is unavailable
     /// (including exempt Unix credentials), fail before this program executes. This does not
     /// restrict files, network or in-place exec.
@@ -63,6 +65,7 @@ impl ProcessSpec {
             env: Vec::new(),
             clear_env: false,
             capture_output: false,
+            merge_output: false,
             no_child_processes: false,
             control_pipe: None,
             pipe_stdin: false,

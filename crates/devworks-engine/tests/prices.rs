@@ -1679,6 +1679,7 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
     };
     phase.phase = "capture_shutdown_baseline";
     let mut before = snapshot();
+    let calls_at_shutdown = source.calls.load(Ordering::SeqCst);
     assert_eq!(before.2, Some(last_good));
     assert_eq!(
         before.6.as_ref().unwrap().state,
@@ -1765,7 +1766,11 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
         "late source changed catalog, operation or delivery after shutdown"
     );
     assert_eq!(app.price_refreshes().unwrap().tick().await.unwrap(), 0);
-    assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        source.calls.load(Ordering::SeqCst),
+        calls_at_shutdown,
+        "shutdown started a new price source request"
+    );
     phase.done = true;
 }
 

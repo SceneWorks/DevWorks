@@ -451,11 +451,19 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0038_purge_effect_leases.sql"),
         rebuilds_tables: false,
     },
+    // A prior writer cannot preserve the new ownership record during project deletion.
     Migration {
         version: 39,
-        minimum_reader: 39,
+        minimum_reader: 38,
         minimum_writer: 39,
-        sql: include_str!("migrations/0039_assignment_purpose.sql"),
+        sql: include_str!("migrations/0039_owned_containers.sql"),
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 40,
+        minimum_reader: 40,
+        minimum_writer: 40,
+        sql: include_str!("migrations/0040_assignment_purpose.sql"),
         rebuilds_tables: false,
     },
 ];

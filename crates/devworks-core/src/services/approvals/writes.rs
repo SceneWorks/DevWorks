@@ -4,6 +4,7 @@ use crate::gateway::AdmittedCommand;
 use crate::operations::approvals as ops;
 use crate::ports::IdKind;
 use crate::ports::storage::*;
+use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{ApprovalContent, ProposalDecision};
 use crate::protocol::results::OperationResult;
 use crate::services::sessions::{Failure, not_found, project_visible};
@@ -223,6 +224,36 @@ impl ApprovalService {
             }
             if approve {
                 match p.payload["content"]["kind"].as_str() {
+                    None if p.operation_kind == "process.request_system_install" => {
+                        // This proposal records an exact human decision only. It never starts a
+                        // system installer or grants a native process implicit elevation.
+                        let reference: ArtifactRef =
+                            serde_json::from_value(p.payload["reviewed"]["packageSpec"].clone())
+                                .map_err(|_| invalid("package_spec"))?;
+                        if reference.artifact_id != p.target_id
+                            || reference.sha256.0 != p.content_digest
+                        {
+                            return Err(invalid("system_install_binding"));
+                        }
+                        let artifact = tx
+                            .artifacts()
+                            .artifact(&reference.artifact_id)?
+                            .ok_or_else(|| conflict(id))?;
+                        let version = tx
+                            .artifacts()
+                            .version(&reference.version_id)?
+                            .ok_or_else(|| conflict(id))?;
+                        if artifact.state != ArtifactState::Live
+                            || artifact.revision != p.target_revision
+                            || !version.live()
+                            || version.artifact_id != artifact.id
+                            || version.blob_digest != reference.sha256.0
+                            || version.byte_count != reference.byte_length.get()
+                            || version.media_type != reference.media_type
+                        {
+                            return Err(conflict(id));
+                        }
+                    }
                     Some("FindingRisk") => {
                         let payload: ApprovalContent =
                             serde_json::from_value(p.payload["content"].clone())

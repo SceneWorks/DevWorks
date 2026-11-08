@@ -51,6 +51,224 @@ fn root(s: &str) -> RootId {
     RootId(id(s))
 }
 
+#[test]
+fn owned_container_intent_survives_restart_and_stop_listing_is_agent_scoped() {
+    let fx = Fx::new();
+    let intent = StoredContainer {
+        id: id("dw-container-1"),
+        engine: "docker".into(),
+        phase: ContainerPhase::Creating,
+        image: "alpine:latest".into(),
+        actor: actor("agent-a"),
+        owner_kind: "Agent".into(),
+        session_id: Some(id("session-a")),
+        project_id: project("project-a"),
+        root_id: Some(root("root-a")),
+        assignment_id: None,
+        create_operation_id: devworks_core::protocol::OperationId(id("op-create")),
+        last_operation_id: devworks_core::protocol::OperationId(id("op-create")),
+        resource_lease_ids: Vec::new(),
+        detail: None,
+        revision: 1,
+        created_at_ms: T0,
+        updated_at_ms: T0,
+    };
+    fx.write({
+        let intent = intent.clone();
+        move |tx| tx.resources().insert_container(&intent)
+    });
+    let fx = fx.restart();
+    let stored = fx
+        .read(|r| r.resources().container(&id("dw-container-1")))
+        .unwrap();
+    assert_eq!(stored.phase, ContainerPhase::Creating);
+    assert_eq!(
+        fx.read(|r| r
+            .resources()
+            .containers(&ContainerFilter::AgentWorkMayRun, None, 10))
+            .len(),
+        1,
+        "shutdown must see an in-flight create intent"
+    );
+    let mut running = stored.clone();
+    running.revision += 1;
+    running.phase = ContainerPhase::Running;
+    fx.write({
+        let running = running.clone();
+        move |tx| tx.resources().update_container(&running, 1)
+    });
+    let listing = fx.read(|r| {
+        r.resources()
+            .containers(&ContainerFilter::AgentWorkMayRun, None, 10)
+    });
+    assert_eq!(listing.len(), 1);
+    assert_eq!(listing[0].id, intent.id);
+    let purge = fx
+        .read(|r| r.projects().purge_planning(&project("project-a")))
+        .unwrap();
+    assert!(
+        purge
+            .unresolved
+            .iter()
+            .any(|row| row.table == "owned_containers"
+                && row.reason == ProjectPurgeUnresolvedReason::ActiveContainer)
+    );
+    let stale = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+        tx.resources().update_container(&running, 1)
+    });
+    assert!(matches!(stale, Err(StorageError::LeaseLost { .. })));
+    let mut stopped = listing[0].clone();
+    stopped.phase = ContainerPhase::Stopped;
+    stopped.revision += 1;
+    fx.write(move |tx| tx.resources().update_container(&stopped, 2));
+    let purge = fx
+        .read(|r| r.projects().purge_planning(&project("project-a")))
+        .unwrap();
+    assert!(
+        !purge
+            .unresolved
+            .iter()
+            .any(|row| row.table == "owned_containers")
+    );
+    assert!(
+        purge
+            .rows
+            .iter()
+            .any(|row| row.table == "owned_containers"
+                && row.action == ProjectPurgeRowAction::Delete)
+    );
+    let mut failed = intent;
+    failed.id = id("dw-container-failed");
+    failed.create_operation_id = devworks_core::protocol::OperationId(id("op-create-failed"));
+    failed.last_operation_id = failed.create_operation_id.clone();
+    fx.write({
+        let failed = failed.clone();
+        move |tx| tx.resources().insert_container(&failed)
+    });
+    failed.phase = ContainerPhase::Failed;
+    failed.revision += 1;
+    fx.write(move |tx| tx.resources().update_container(&failed, 1));
+    let purge = fx
+        .read(|r| r.projects().purge_planning(&project("project-a")))
+        .unwrap();
+    assert!(
+        !purge
+            .unresolved
+            .iter()
+            .any(|row| row.table == "owned_containers")
+    );
+    assert_eq!(
+        purge
+            .rows
+            .iter()
+            .filter(|row| row.table == "owned_containers"
+                && row.action == ProjectPurgeRowAction::Delete)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn created_container_keeps_its_physical_lease_held_across_boot() {
+    let fx = Fx::new();
+    fx.register(MachineResource {
+        name: "container-port".into(),
+        capacity: 1,
+        physical: true,
+        labels: vec![],
+    });
+    let owner = fx.agent("agent-a", "project-a", "dw-container-boot");
+    let lease = lease(fx.acquire(
+        &owner,
+        "container-port",
+        json!({"purpose":"container:dw-container-boot"}),
+    ));
+    let mut row = StoredContainer {
+        id: id("dw-container-boot"),
+        engine: "docker".into(),
+        phase: ContainerPhase::Creating,
+        image: "alpine:latest".into(),
+        actor: actor("agent-a"),
+        owner_kind: "Agent".into(),
+        session_id: Some(id("dw-container-boot")),
+        project_id: project("project-a"),
+        root_id: Some(root("root-a")),
+        assignment_id: None,
+        create_operation_id: devworks_core::protocol::OperationId(id("op-container-boot")),
+        last_operation_id: devworks_core::protocol::OperationId(id("op-container-boot")),
+        resource_lease_ids: vec![lease.id.clone()],
+        detail: None,
+        revision: 1,
+        created_at_ms: T0,
+        updated_at_ms: T0,
+    };
+    fx.write({
+        let row = row.clone();
+        move |tx| tx.resources().insert_container(&row)
+    });
+    row.phase = ContainerPhase::Created;
+    row.revision += 1;
+    fx.write(move |tx| tx.resources().update_container(&row, 1));
+    let fx = fx.restart();
+    let report = fx.reconcile(ReconcileCause::Boot);
+    assert_eq!(report.uncertain, 0);
+    assert_eq!(fx.stored(&lease).phase, LeasePhase::Held);
+}
+
+#[test]
+fn container_backend_selection_inherits_and_clears_project_override() {
+    use devworks_core::services::containers::{
+        backend::Backend,
+        selection::{PREFERRED_RUNTIME, SelectionError, require_selected, selected},
+    };
+    let fx = Fx::new();
+    let selected_for = |scope: Option<&str>| {
+        let project = scope.map(project);
+        fx.read(|r| selected(r.configuration(), project.as_ref()))
+    };
+    assert_eq!(selected_for(Some("project-a")), Backend::Docker);
+    let set = |scope: ConfigScope, value: serde_json::Value| {
+        fx.write(move |tx| {
+            let current = model::current_layer(tx.configuration(), &scope)?;
+            let schema =
+                serde_json::to_value(descriptor(PREFERRED_RUNTIME).unwrap().schema_ref()).unwrap();
+            let assignment: SettingAssignment = serde_json::from_value(
+                json!({"key":PREFERRED_RUNTIME,"value":{"schema":schema,"value":value}}),
+            )
+            .unwrap();
+            let plan = model::plan(&current, &[assignment]);
+            assert!(plan.is_valid());
+            let body = model::body(&plan, &actor("user-a"), tx.now_ms(), json!({"kind":"test"}));
+            tx.configuration().append_revision(
+                &scope,
+                model::NAMESPACE,
+                current.revision,
+                model::BODY_SCHEMA_VERSION,
+                body,
+            )?;
+            Ok(())
+        });
+    };
+    set(ConfigScope::Workspace, json!("podman"));
+    assert_eq!(selected_for(Some("project-a")), Backend::Podman);
+    set(ConfigScope::Project(project("project-a")), json!("apple"));
+    assert_eq!(selected_for(Some("project-a")), Backend::Apple);
+    assert_eq!(selected_for(Some("project-b")), Backend::Podman);
+    assert_eq!(
+        fx.read(|r| require_selected(r.configuration(), &project("project-a"), &id("docker"))),
+        Err(SelectionError::NotSelected)
+    );
+    assert_eq!(
+        fx.read(|r| require_selected(r.configuration(), &project("project-a"), &id("apple"))),
+        Ok(Backend::Apple)
+    );
+    set(
+        ConfigScope::Project(project("project-a")),
+        serde_json::Value::Null,
+    );
+    assert_eq!(selected_for(Some("project-a")), Backend::Podman);
+}
+
 struct Fx {
     h: Harness,
     store: Arc<SqliteStore>,

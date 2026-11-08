@@ -7,6 +7,7 @@
 //! across threads. Core stays runtime-agnostic (no async runtime dependency).
 pub mod browser;
 pub mod database;
+pub mod desktop;
 pub mod diagnostics;
 pub mod files;
 pub mod git_transport;
@@ -66,6 +67,7 @@ pub enum IdKind {
     Resource,
     Lease,
     Process,
+    Container,
     Diagnostic,
     /// Owned browser sessions (DW-047).
     BrowserSession,

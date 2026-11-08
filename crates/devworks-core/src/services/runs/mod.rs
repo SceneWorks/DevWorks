@@ -58,9 +58,9 @@ use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, runs as ops};
 use crate::ports::storage::{
     ActivationFilter, ActivationOutcome, ActivationPhase, ActivationPurpose, BlockerFilter,
-    BlockerState, DesiredExecution, GrantRecord, HoldCause, InstructionStage, NewEvent,
-    NewOperation, ProcessFilter, QueueState, ReadSnapshot, RunRead, SessionRead, StopCause,
-    StorageError, StoredActivation, StoredAssignment, StoredBlocker, StoredInstruction,
+    BlockerState, ContainerFilter, DesiredExecution, GrantRecord, HoldCause, InstructionStage,
+    NewEvent, NewOperation, ProcessFilter, QueueState, ReadSnapshot, RunRead, SessionRead,
+    StopCause, StorageError, StoredActivation, StoredAssignment, StoredBlocker, StoredInstruction,
     StoredRootControl, StoredStopCoverage, WorkRoot, WriteTransaction, cancellation_applies,
     is_terminal, possibly_dispatched,
 };
@@ -2083,8 +2083,8 @@ impl ControlService {
         })
     }
 
-    /// Whether anything of the root may still be running: an unsettled root-scoped delivery or
-    /// an unsettled owned process.
+    /// Whether anything of the root may still be running: an unsettled delivery,
+    /// owned process, or agent-owned external container.
     fn root_has_work(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
         if !tx.runs().root_deliveries(root, None, 1)?.is_empty() {
             return Ok(true);
@@ -2098,9 +2098,24 @@ impl ControlService {
                 return Ok(true);
             }
             if page.len() < usize::from(PAGE) {
-                return Ok(false);
+                break;
             }
             after = page.last().map(|p| p.id.clone());
+        }
+        let mut after: Option<Id> = None;
+        loop {
+            let page = tx.resources().containers(
+                &ContainerFilter::AgentWorkMayRun,
+                after.as_ref(),
+                PAGE,
+            )?;
+            if page.iter().any(|row| row.root_id.as_ref() == Some(root)) {
+                return Ok(true);
+            }
+            if page.len() < usize::from(PAGE) {
+                return Ok(false);
+            }
+            after = page.last().map(|row| row.id.clone());
         }
     }
 

@@ -68,9 +68,9 @@ fn assignment(a: &str, work: &str, parent: Option<&str>, session: &str) -> Store
 }
 
 #[test]
-fn migration_39_keeps_primary_ownership_and_allows_issue_children() {
+fn migration_40_keeps_primary_ownership_and_allows_issue_children() {
     let h = Harness::new();
-    drop(SqliteStore::open_with(h.config(), &through(38)).unwrap());
+    drop(SqliteStore::open_with(h.config(), &through(39)).unwrap());
     h.raw().execute_batch(
         "INSERT INTO actors VALUES('agent-a','agent','Agent');
          INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
@@ -181,7 +181,7 @@ fn migration_11_adds_run_controls_to_a_version_10_store() {
     );
 
     // Exercise the current repository implementation after checking the version-11 upgrade.
-    // Its assignment reader intentionally requires the purpose column introduced in 39.
+    // Its assignment reader intentionally requires the purpose column introduced in 40.
     drop(s);
     let s = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
 

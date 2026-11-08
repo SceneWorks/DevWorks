@@ -1,0 +1,65 @@
+name: Native container qualification
+on:
+  pull_request:
+    paths:
+      - 'crates/devworks-core/src/services/containers/**'
+      - 'crates/devworks-core/src/services/resources/**'
+      - 'crates/devworks-adapters/tests/processes.rs'
+      - 'crates/devworks-adapters/src/storage/sqlite/resources.rs'
+      - 'crates/devworks-engine/src/containers.rs'
+      - 'crates/devworks-engine/src/runtime.rs'
+      - 'crates/devworks-desktop/src/host.rs'
+      - 'Cargo.lock'
+      - '.github/workflows/container-qualification.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-containers-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  docker:
+    name: Docker native owned lifecycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+        with:
+          shared-key: native-containers
+      - name: Qualify Docker ownership, resources and shutdown
+        env:
+          DW_NATIVE_DOCKER: /usr/bin/docker
+        run: |
+          docker pull docker.io/library/alpine:latest
+          cargo test -p devworks-adapters --test processes \
+            native_docker_container_effects_commit_owned_create_start_and_stop \
+            -- --exact --ignored --nocapture
+  podman:
+    name: Podman native owned lifecycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+        with:
+          shared-key: native-containers
+      - name: Install and probe native Podman
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq podman
+          sudo podman info --format json >/dev/null
+          sudo podman pull docker.io/library/alpine:latest
+      - name: Qualify Podman ownership, resources and shutdown
+        run: |
+          sudo env HOME="$HOME" PATH="$PATH" RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" \
+            DW_NATIVE_PODMAN=/usr/bin/podman \
+            cargo test -p devworks-adapters --test processes \
+            native_podman_container_effects_commit_owned_create_start_and_stop \
+            -- --exact --ignored --nocapture

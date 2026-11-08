@@ -1807,6 +1807,72 @@ fn spawn_owned(fx: &Fx, processes: &ProcessSupervisor, root: Option<&str>, proje
 }
 
 #[test]
+fn rooted_agent_container_keeps_stop_pending_until_verified_stopped() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    write(&*fx.store, |tx| {
+        let now = tx.now_ms();
+        let mut row = StoredContainer {
+            id: id("owned-run-container"),
+            engine: "docker".into(),
+            phase: ContainerPhase::Creating,
+            image: "alpine:latest".into(),
+            actor: ActorId(id("agent-a")),
+            owner_kind: "Agent".into(),
+            session_id: None,
+            project_id: ProjectId(id("project-a")),
+            root_id: Some(rid("root-i")),
+            assignment_id: None,
+            create_operation_id: OperationId(id("owned-run-create")),
+            last_operation_id: OperationId(id("owned-run-create")),
+            resource_lease_ids: Vec::new(),
+            detail: None,
+            revision: 1,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+        tx.resources().insert_container(&row)?;
+        row.phase = ContainerPhase::Running;
+        row.revision = 2;
+        tx.resources().update_container(&row, 1)
+    })
+    .unwrap();
+    let stop = fx.stop(&fx.user, "root-i");
+    let op = match decision(&stop) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("live container must keep stop pending: {other:?}"),
+    };
+    let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), None);
+    let rt = runtime();
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::Dispatching)]
+    );
+    write(&*fx.store, |tx| {
+        let mut row = tx
+            .resources()
+            .container(&id("owned-run-container"))?
+            .unwrap();
+        row.phase = ContainerPhase::Stopped;
+        row.revision += 1;
+        tx.resources().update_container(&row, row.revision - 1)
+    })
+    .unwrap();
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-i"), OperationState::ObservedComplete)]
+    );
+    assert_eq!(
+        read(&*fx.store, |snapshot| snapshot.operations().operation(&op))
+            .unwrap()
+            .state,
+        OperationState::ObservedComplete
+    );
+}
+
+#[test]
 fn stop_cancels_root_work_stops_owned_trees_and_answers_a_finished_stop_unchanged() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();

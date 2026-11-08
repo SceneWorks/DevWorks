@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1901), 1901);
+    assert_eq!(run("domain-fixtures.json", 1926), 1926);
 }
 
 #[test]
@@ -445,7 +445,8 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // Accepted DW89 adds one admission; DW36 adds eight revision5 admissions.
     // DW83 adds four revision-6 project purge bindings and history.command_receipt
     // at revision 6: five additional recorded native admissions.
-    assert_eq!(admitted.len(), 602);
+    // Native accessibility targeting adds five selected revision-3 admissions.
+    assert_eq!(admitted.len(), 607);
 }
 
 #[test]

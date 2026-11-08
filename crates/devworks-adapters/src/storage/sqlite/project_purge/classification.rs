@@ -27,9 +27,13 @@ const RECOVERY_EXTENSION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/architecture/validation/project-purge/schema38-extension.json"
 ));
-const ASSIGNMENT_EXTENSION: &str = include_str!(concat!(
+const CONTAINER_EXTENSION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/architecture/validation/project-purge/schema39-extension.json"
+));
+const ASSIGNMENT_EXTENSION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/architecture/validation/project-purge/schema40-extension.json"
 ));
 pub(super) type Key = (String, String);
 fn invalid() -> StorageError {
@@ -62,6 +66,22 @@ fn policies(conn: &Connection) -> Result<BTreeMap<String, (String, String)>, Sto
                 table.into(),
                 ("purge_control".into(), "purge_control".into()),
             )
+            .is_some()
+        {
+            return Err(invalid());
+        }
+    }
+    let container_extension: Value =
+        serde_json::from_str(CONTAINER_EXTENSION).map_err(|_| invalid())?;
+    for row in container_extension["additionalTables"]
+        .as_array()
+        .ok_or_else(invalid)?
+    {
+        let table = row["table"].as_str().ok_or_else(invalid)?;
+        let class = row["class"].as_str().ok_or_else(invalid)?;
+        let disposition = row["disposition"].as_str().ok_or_else(invalid)?;
+        if known
+            .insert(table.into(), (class.into(), disposition.into()))
             .is_some()
         {
             return Err(invalid());
@@ -512,6 +532,27 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
     super::mixed::intake(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     super::mixed::managed_files(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     super::mixed::source_access(conn, project, &snapshot, &mut rows, &mut unresolved)?;
+    let mut container_states =
+        db(conn.prepare("SELECT id,state FROM owned_containers WHERE project_id=?1"))?;
+    let mut active_containers = db(container_states.query([project.0.as_str()]))?;
+    while let Some(row) = db(active_containers.next())? {
+        let id: String = db(row.get(0))?;
+        let state: String = db(row.get(1))?;
+        if !matches!(state.as_str(), "Stopped" | "Failed") {
+            let digest =
+                super::guard::key_digest(&serde_json::to_string(&[id]).map_err(|_| invalid())?)?;
+            let key = ("owned_containers".into(), digest.clone());
+            rows.remove(&key);
+            unresolved.insert(
+                key,
+                ProjectPurgeUnresolved {
+                    table: "owned_containers".into(),
+                    key_digest: digest,
+                    reason: Unresolved::ActiveContainer,
+                },
+            );
+        }
+    }
     propagate_content(&snapshot, &mut rows, &mut unresolved)?;
     super::client_keepers::retain(conn, keepers, &snapshot, &mut rows, &mut unresolved)?;
     // Only retention decisions propagate. A reference can never add a deletion.
@@ -629,6 +670,7 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
         "stagingExtension":devworks_core::fingerprint::sha256_hex(STAGING_EXTENSION.as_bytes()),
         "recoveryExtension":devworks_core::fingerprint::sha256_hex(RECOVERY_EXTENSION.as_bytes()),
         "assignmentExtension":devworks_core::fingerprint::sha256_hex(ASSIGNMENT_EXTENSION.as_bytes()),
+        "containerExtension":devworks_core::fingerprint::sha256_hex(CONTAINER_EXTENSION.as_bytes()),
         "scrubPolicy":scrub_policy,"clientKeepers":super::client_keepers::digest(keepers),"selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
     })).map_err(|_|invalid())?.as_bytes());
     Ok(Some(ProjectPurgePlanning {

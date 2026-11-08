@@ -34,6 +34,7 @@
 //! identity is `Lost` (its effects are unknown). It then runs the resource boot reconciliation.
 //! Only a person can declare a `Lost` or `Uncertain` tree stopped
 //! ([`ProcessSupervisor::confirm_stopped`]), and that is recorded as their statement.
+pub mod tools;
 use crate::authority::destructive::{FilesystemResolver, ProtectedRoots};
 use crate::authority::redact::Redactor;
 use crate::authority::shell::{
@@ -54,7 +55,7 @@ use crate::services::resources::{
     DispatchFailure, ReconcileCause, ReconcileReport, ResourceService,
 };
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -168,6 +169,8 @@ pub type StopResult = (Id, Result<StopOutcome, StopFailure>);
 #[derive(Clone, Debug)]
 pub struct ShutdownReport {
     pub stopped: Vec<StopResult>,
+    /// Externally managed agent-work containers verified stopped before the process owner closes.
+    pub containers: Option<crate::services::containers::ShutdownReport>,
     /// The `Shutdown` reconciliation of resources.
     pub reconciliation: Result<ReconcileReport, StorageError>,
     /// Actual inference attempts whose local transport closure was not verified. The process
@@ -180,6 +183,13 @@ impl ShutdownReport {
     /// failure (the native stops ran regardless).
     pub fn into_result(self) -> Result<Vec<(Id, StopOutcome)>, StorageError> {
         let stopped = all_recorded(self.stopped)?;
+        if self
+            .containers
+            .as_ref()
+            .is_some_and(|report| report.read_error.is_some() || !report.uncertain.is_empty())
+        {
+            return Err(StorageError::Busy);
+        }
         self.reconciliation?;
         if !self.unclosed_inference_attempts.is_empty() {
             return Err(StorageError::Busy);
@@ -242,6 +252,9 @@ pub struct ProcessSupervisor {
     host: Arc<dyn ProcessHost>,
     resources: Arc<ResourceService>,
     live: Mutex<HashMap<String, Arc<Mutex<Live>>>>,
+    /// Cancellation can arrive after the durable launch intent but before native registration.
+    /// Access this while holding `live`, so registration cannot slip between lookup and marking.
+    pending_cancel: Mutex<HashSet<String>>,
 }
 
 impl ProcessSupervisor {
@@ -261,6 +274,7 @@ impl ProcessSupervisor {
             host,
             resources,
             live: Mutex::new(HashMap::new()),
+            pending_cancel: Mutex::new(HashSet::new()),
         }
     }
 
@@ -291,6 +305,28 @@ impl ProcessSupervisor {
         ctx: &InvocationContext,
         request: LaunchRequest,
         policy: &LaunchPolicy<'_>,
+    ) -> Result<OwnedProcess, LaunchRefusal> {
+        self.launch_with_id(ctx, request, policy, None)
+    }
+
+    /// A journaled process tool reserves its public process ID with its operation receipt, so
+    /// output and cancellation can address the attempt before a child is launched.
+    pub(super) fn launch_reserved(
+        &self,
+        ctx: &InvocationContext,
+        request: LaunchRequest,
+        policy: &LaunchPolicy<'_>,
+        process_id: Id,
+    ) -> Result<OwnedProcess, LaunchRefusal> {
+        self.launch_with_id(ctx, request, policy, Some(process_id))
+    }
+
+    fn launch_with_id(
+        &self,
+        ctx: &InvocationContext,
+        request: LaunchRequest,
+        policy: &LaunchPolicy<'_>,
+        reserved_id: Option<Id>,
     ) -> Result<OwnedProcess, LaunchRefusal> {
         let argv = request.spec.argv();
         let cwd = request
@@ -391,7 +427,9 @@ impl ProcessSupervisor {
                 }
                 None => None,
             };
-            let id = tx.new_id(IdKind::Process);
+            let id = reserved_id
+                .clone()
+                .unwrap_or_else(|| tx.new_id(IdKind::Process));
             let record = tx.resources().insert_process(NewProcess {
                 id,
                 platform: platform.to_owned(),
@@ -417,6 +455,10 @@ impl ProcessSupervisor {
 
         match self.host.spawn(&request.spec) {
             Err(e) => {
+                self.pending_cancel
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .remove(record.id.as_str());
                 let detail = Redactor::new().redact_text(&e.to_string());
                 let mut failed = record.clone();
                 self.settle(
@@ -441,25 +483,39 @@ impl ProcessSupervisor {
                     json!({"pid": identity.pid}),
                 );
                 if let Err(e) = recorded {
+                    self.pending_cancel
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .remove(record.id.as_str());
                     // The identity could not be recorded: never leave an untracked tree running.
                     let mut tree = tree;
                     let _ = tree.kill();
                     return Err(LaunchRefusal::Storage(e));
                 }
                 let id = running.id.clone();
-                self.live.lock().unwrap_or_else(|p| p.into_inner()).insert(
-                    id.as_str().to_owned(),
-                    Arc::new(Mutex::new(Live {
-                        tree,
-                        epoch,
-                        record: running.clone(),
-                    })),
-                );
+                let cancel_requested = {
+                    let mut live = self.live.lock().unwrap_or_else(|p| p.into_inner());
+                    live.insert(
+                        id.as_str().to_owned(),
+                        Arc::new(Mutex::new(Live {
+                            tree,
+                            epoch,
+                            record: running.clone(),
+                        })),
+                    );
+                    self.pending_cancel
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .remove(id.as_str())
+                };
                 let owned = OwnedProcess {
                     id,
                     identity,
                     lease: running.lease_id.clone(),
                 };
+                if cancel_requested {
+                    let _ = self.cancel(&owned, Duration::from_secs(1), Duration::from_secs(5));
+                }
                 // An archival that committed after the intent above may have snapshotted the live
                 // trees before this one was registered. Rechecked now that it is registered,
                 // either that archival's stop saw it, or this read sees the archival (closed, or a
@@ -578,8 +634,29 @@ impl ProcessSupervisor {
         bound: Duration,
     ) -> Result<StopOutcome, StopFailure> {
         let start = Instant::now();
-        let Some(entry) = self.entry(&p.id) else {
-            return self.settled_outcome(&p.id).map_err(|error| StopFailure {
+        let entry = {
+            let live = self.live.lock().unwrap_or_else(|p| p.into_inner());
+            let entry = live.get(p.id.as_str()).cloned();
+            if entry.is_none() {
+                self.pending_cancel
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(p.id.as_str().to_owned());
+            }
+            entry
+        };
+        let Some(entry) = entry else {
+            let outcome = self.settled_outcome(&p.id);
+            if matches!(
+                &outcome,
+                Ok(StopOutcome::Reaped { .. }) | Err(StorageError::NotFound { .. })
+            ) {
+                self.pending_cancel
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .remove(p.id.as_str());
+            }
+            return outcome.map_err(|error| StopFailure {
                 outcome: StopOutcome::Uncertain("the stored record could not be read".into()),
                 error,
             });
@@ -737,6 +814,7 @@ impl ProcessSupervisor {
         });
         ShutdownReport {
             stopped,
+            containers: None,
             reconciliation,
             unclosed_inference_attempts: Vec::new(),
         }

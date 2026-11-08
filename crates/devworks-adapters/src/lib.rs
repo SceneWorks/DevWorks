@@ -1,6 +1,8 @@
 //! DevWorks infrastructure adapters.
 pub mod browser;
+pub mod containers;
 pub mod database;
+pub mod desktop;
 pub mod diagnostics;
 pub mod fs;
 pub mod git_transport;

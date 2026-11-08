@@ -157,6 +157,7 @@ pub struct RunSupervisor {
     clock: Arc<dyn Clock>,
     service: Arc<ControlService>,
     processes: Arc<ProcessSupervisor>,
+    containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
     launcher: Option<Arc<dyn ActivationLauncher>>,
     hooks: Arc<dyn LifecycleHooks>,
     owner: Id,
@@ -198,6 +199,7 @@ impl RunSupervisor {
             clock,
             service,
             processes,
+            containers: None,
             launcher,
             hooks,
             owner,
@@ -217,6 +219,12 @@ impl RunSupervisor {
 
     pub fn service(&self) -> &Arc<ControlService> {
         &self.service
+    }
+    pub fn with_containers(
+        &mut self,
+        containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
+    ) {
+        self.containers = containers;
     }
     /// The owner identity recorded on this supervisor's activation claims.
     pub fn owner(&self) -> &Id {
@@ -482,6 +490,27 @@ impl RunSupervisor {
             None => Vec::new(),
         };
         let uncertain = unverified(results);
+        if !superseded && let Some(containers) = &self.containers {
+            let mut roots = vec![root.clone()];
+            roots.extend(
+                linked
+                    .iter()
+                    .filter(|(_, moved)| !moved)
+                    .map(|(card, _)| card.root.clone()),
+            );
+            for target in roots {
+                let containers = containers.clone();
+                let bound = self.stop_bound;
+                let report = tokio::task::spawn_blocking(move || {
+                    containers.stop_agent_work_for_root(&target, bound)
+                })
+                .await
+                .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
+                if let Some(error) = report.read_error {
+                    return Err(StorageError::InvalidRecord(error));
+                }
+            }
+        }
         let (service, root, op) = (self.service.clone(), root.clone(), op.clone());
         // Settlement adds the trees it covers that are still unsettled.
         store::write(&self.store, move |tx| {

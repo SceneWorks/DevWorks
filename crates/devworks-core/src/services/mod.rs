@@ -8,8 +8,10 @@
 pub mod approvals;
 pub mod artifacts;
 pub mod browser;
+pub mod containers;
 pub mod conventions;
 pub mod cursor;
+pub mod desktop;
 pub mod diagnostics;
 pub mod evals;
 pub mod git;
@@ -297,6 +299,43 @@ impl UseCases {
     /// Registers the browser family (`BrowserBackend`).
     pub fn with_browser(mut self, service: Arc<browser::BrowserService>) -> Self {
         for op in browser::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+    /// Registers only the process operations whose native service is composed.
+    pub fn with_process_tools(mut self, service: Arc<process::tools::ProcessToolService>) -> Self {
+        self.register("process.execute", None, Some(service.clone()));
+        self.register("process.output", Some(service.clone()), None);
+        self.register("process.cancel", None, Some(service.clone()));
+        self.register(
+            "process.install_project_dependencies",
+            None,
+            Some(service.clone()),
+        );
+        self.register("process.request_system_install", None, Some(service));
+        self
+    }
+    /// Registers the one selected-container domain owner when its effect consumer is composed.
+    pub fn with_containers(mut self, service: Arc<containers::service::ContainerService>) -> Self {
+        for op in [
+            "containers.capabilities",
+            "containers.build",
+            "containers.pull",
+            "containers.create",
+            "containers.start",
+            "containers.exec",
+            "containers.inspect",
+            "containers.logs",
+            "containers.stop",
+        ] {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+    /// Registers native desktop queries and consent-bound computer control.
+    pub fn with_desktop(mut self, service: Arc<desktop::DesktopService>) -> Self {
+        for op in desktop::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

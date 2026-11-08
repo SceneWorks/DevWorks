@@ -443,6 +443,12 @@ pub(crate) fn visible_in(
             }
         });
     }
+    if matches!(artifact.scope, ArtifactScope::Project(_))
+        && artifact.owner.is_some()
+        && !viewer.sees_owned(artifact.owner.as_ref())
+    {
+        return Ok(false);
+    }
     Ok(match (project, &artifact.scope) {
         (None, ArtifactScope::Project(_)) => true,
         (None, ArtifactScope::Workspace) => viewer.sees_owned(artifact.owner.as_ref()),
@@ -2109,7 +2115,11 @@ impl ArtifactService {
         };
         let page = limit.saturating_add(1).min(501);
         let mut rows = match &scope {
-            ListScope::Project(project) => read.list(project, tags, after.as_ref(), page)?,
+            ListScope::Project(project) => {
+                let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
+                let actor = (!viewer.sees_owned(None)).then_some(ctx.principal());
+                read.list(project, actor, tags, after.as_ref(), page)?
+            }
             ListScope::Workspace => {
                 read.list_workspace(owner.as_ref(), tags, after.as_ref(), page)?
             }
