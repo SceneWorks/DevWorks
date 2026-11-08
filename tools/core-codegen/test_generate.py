@@ -72,6 +72,8 @@ class SchemaRevisionRules(unittest.TestCase):
             'indexing.status', 'indexing.runs', 'indexing.refresh_overlay',
             'artifacts.read', 'git.pull_request', 'browser.sessions', 'browser.input',
             'browser.upload', 'browser.console', 'browser.network',
+            'desktop.inspect', 'desktop.capture', 'desktop.request_control',
+            'desktop.input', 'desktop.release_control',
             'help.search', 'help.read', 'help.topic_for_screen', 'help.package_guides',
             'conventions.list', 'conventions.read', 'conventions.edit', 'conventions.move',
             'conventions.applicability', 'conventions.delete', 'conventions.delete_resource',
@@ -89,6 +91,9 @@ class SchemaRevisionRules(unittest.TestCase):
             self.assertEqual(carried[name], {5})
         self.assertEqual(carried['features.edit'], {2, 3})
         self.assertEqual(carried['resources.renew'], {2})
+        for name in ('desktop.inspect', 'desktop.capture', 'desktop.request_control',
+                     'desktop.input', 'desktop.release_control'):
+            self.assertEqual(carried[name], {2})
         self.assertEqual(carried['router.availability'], {2, 3})
         self.assertEqual(carried['router.route'], {3})
         self.assertEqual(carried['router.pin'], {3})
