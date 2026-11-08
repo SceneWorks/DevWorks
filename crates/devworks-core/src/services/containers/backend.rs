@@ -159,9 +159,9 @@ impl Backend {
                 ),
             ]);
         }
-        for (name, value) in plan.environment {
+        for (name, _) in plan.environment {
             safe_env_name(name)?;
-            args.extend(["--env".into(), format!("{name}={value}")]);
+            args.extend(["--env".into(), name.clone()]);
         }
         args.push(plan.image.into());
         args.extend(plan.command.iter().cloned());
@@ -184,9 +184,9 @@ impl Backend {
             return Err(PlanError::InvalidCommand);
         }
         let mut args = vec!["exec".into()];
-        for (key, value) in environment {
+        for (key, _) in environment {
             safe_env_name(key)?;
-            args.extend(["--env".into(), format!("{key}={value}")]);
+            args.extend(["--env".into(), key.clone()]);
         }
         args.push(name.into());
         args.extend(command.iter().cloned());
@@ -379,10 +379,8 @@ mod tests {
             args.windows(2)
                 .any(|pair| pair == ["--publish", "1080:80/tcp"])
         );
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--env", "A=value with spaces"])
-        );
+        assert!(args.windows(2).any(|pair| pair == ["--env", "A"]));
+        assert!(!args.iter().any(|arg| arg.contains("value with spaces")));
         assert_eq!(args.last().unwrap(), "alpine:latest");
     }
 }

@@ -25,6 +25,19 @@ pub fn bound_spec(
     })
 }
 
+/// Container environment values travel only in the child environment, not the command line.
+/// Apple receives no ambient host environment because older CLI versions may inherit variables
+/// named by image metadata in addition to the explicit bare-name flags.
+pub fn with_environment(
+    mut spec: ProcessSpec,
+    backend: Backend,
+    environment: &[(String, String)],
+) -> ProcessSpec {
+    spec.env = environment.to_vec();
+    spec.clear_env = backend == Backend::Apple;
+    spec
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

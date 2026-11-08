@@ -31,7 +31,7 @@ use devworks_core::services::containers::runner::ContainerRunner;
 use devworks_core::services::containers::service::ContainerService;
 use devworks_core::services::containers::{
     backend::{Backend as ContainerBackend, CreatePlan, ownership_labels, ownership_matches},
-    execution::bound_spec,
+    execution::{bound_spec, with_environment},
     inspection::{parse as parse_container_inspect, verified_lifecycle_target},
     probe::{self as container_probe, Availability as ContainerAvailability, HostPlatform},
 };
@@ -902,22 +902,36 @@ fn native_docker_owned_lifecycle_uses_the_exact_planned_container() {
     };
     let labels = ownership_labels("operation-a", "project-a", "Agent");
     let command = ["sleep".to_owned(), "30".to_owned()];
-    run(backend
+    let environment = [("DW_TEST_VALUE".into(), "hello-native".into())];
+    let create_args = backend
         .create(&CreatePlan {
             name: &name,
             image: "alpine:latest",
             labels: &labels,
             mounts: &[],
             ports: &[],
-            environment: &[],
+            environment: &environment,
             command: &command,
         })
-        .unwrap());
+        .unwrap();
+    assert!(!create_args.iter().any(|arg| arg.contains("hello-native")));
+    let spec = with_environment(
+        bound_spec(&bindings, backend, create_args, None).unwrap(),
+        backend,
+        &environment,
+    );
+    let created = runner
+        .run(&context, None, spec, Duration::from_secs(10), 16_384, &[])
+        .unwrap();
+    assert_eq!(created.exit_code, Some(0));
     run(backend.start(&name).unwrap());
     let output = run(backend
-        .exec(&name, &["printf".into(), "ok".into()], &[])
+        .exec(&name, &["printenv".into(), "DW_TEST_VALUE".into()], &[])
         .unwrap());
-    assert_eq!(output.stdout, b"ok");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "hello-native"
+    );
     let inspected = run(backend.inspect(&name).unwrap());
     let observed = parse_container_inspect(backend, &inspected.stdout).unwrap();
     assert!(ownership_matches(
