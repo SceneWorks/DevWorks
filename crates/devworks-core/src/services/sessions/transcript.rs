@@ -367,6 +367,22 @@ pub fn append_session_batch(
     if let Err(r) = structure(batch, path) {
         return Ok(BatchOutcome::Refused(r));
     }
+    if actor != ctx.principal() {
+        return Ok(BatchOutcome::Refused(BatchRefusal::Unauthorized(
+            "ActorMismatch",
+        )));
+    }
+    if ctx.principal_kind() != PrincipalKind::Host
+        && batch
+            .batch
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.body, TranscriptBody::HostNotice { .. }))
+    {
+        return Ok(BatchOutcome::Refused(BatchRefusal::Unauthorized(
+            "HostNoticeRequiresHost",
+        )));
+    }
     let digest = batch_digest(actor, batch)?;
     let b = &batch.batch;
     if let Some(prior) = tx.sessions().batch(&b.session_id, &b.batch_id)? {

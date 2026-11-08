@@ -194,6 +194,21 @@ impl UseCases {
         self
     }
 
+    /// One agent-coordination owner for the selected UI and tool operations.
+    pub fn with_agents(mut self, service: Arc<agents::AgentService>) -> Self {
+        for op in [
+            "agents.inspect",
+            "agents.delegate",
+            "agents.messages",
+            "agents.inbox",
+            "agents.acknowledge",
+            "agents.checkpoint",
+        ] {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
     /// Registers the history family (`HistoryService`).
     pub fn with_history(mut self, service: Arc<history::HistoryService>) -> Self {
         for op in history::OPERATIONS {

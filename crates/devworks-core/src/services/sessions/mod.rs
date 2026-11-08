@@ -45,6 +45,7 @@
 //! `.transcript` and `.append_message`. Run control (`AskController.CancelRun`, `runs.stop`)
 //! belongs to the run-control item; this service provides the transcript and session data it
 //! reads.
+pub mod notice;
 pub mod transcript;
 pub mod turn;
 

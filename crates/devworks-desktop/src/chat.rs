@@ -246,6 +246,8 @@ pub enum StartReason {
 }
 
 pub struct Chat {
+    /// Verified visible text of host notices, keyed by exact artifact version.
+    pub notice_texts: HashMap<String, String>,
     pub sessions: Vec<SessionRecord>,
     pub sessions_loaded: bool,
     pub sessions_error: Option<String>,
@@ -298,6 +300,7 @@ impl Chat {
             history_query: String::new(),
             drafts: BTreeMap::new(),
             transcripts: HashMap::new(),
+            notice_texts: HashMap::new(),
             text_preview: None,
             starting: None,
             send_after_start: false,
@@ -743,6 +746,7 @@ fn transcript_state(
         }
         Some(entry)
     }).collect();
+    let notice_texts = &chat.notice_texts;
     let width = ui.available_width();
     t.blocks.show(
         ui,
@@ -767,7 +771,7 @@ fn transcript_state(
                 }
                 return;
             }
-            entry_block(ui, entries[i]);
+            entry_block(ui, entries[i], notice_texts);
         },
     );
 }
@@ -792,7 +796,7 @@ fn empty_invitation(ui: &mut Ui, surface: Surface) {
     });
 }
 
-fn entry_block(ui: &mut Ui, entry: &TranscriptEntry) {
+fn entry_block(ui: &mut Ui, entry: &TranscriptEntry, notice_texts: &HashMap<String, String>) {
     let (who, fill) = match &entry.body {
         TranscriptBody::UserMessage { .. } => ("You", theme::RAISED),
         TranscriptBody::AssistantAttempt { .. } => ("Coordinator", theme::PANEL),
@@ -847,8 +851,16 @@ fn entry_block(ui: &mut Ui, entry: &TranscriptEntry) {
                 TranscriptBody::ToolResponseRecorded { .. } => {
                     ui.label(RichText::new("Tool result recorded").color(theme::MUTED));
                 }
-                TranscriptBody::HostNotice { .. } => {
-                    ui.label(RichText::new("Host notice").color(theme::MUTED));
+                TranscriptBody::HostNotice { artifact, .. } => {
+                    ui.label(
+                        RichText::new(
+                            notice_texts
+                                .get(artifact.version_id.as_str())
+                                .map(String::as_str)
+                                .unwrap_or("Host notice"),
+                        )
+                        .color(theme::MUTED),
+                    );
                 }
                 TranscriptBody::NativeItem { .. } => {
                     ui.label(RichText::new("Provider continuation material").color(theme::DIM));

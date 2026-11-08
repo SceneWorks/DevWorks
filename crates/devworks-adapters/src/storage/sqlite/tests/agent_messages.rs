@@ -28,11 +28,13 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
          INSERT INTO projects VALUES('project-a','A','Active',1,1,1),('project-b','B','Active',1,1,1);
          INSERT INTO work_items VALUES('root-a','project-a','issue',NULL,NULL,NULL,'A',1,0,1,1,1,'{}'),
                                        ('root-b','project-b','issue',NULL,NULL,NULL,'B',1,0,1,1,1,'{}');
-         INSERT INTO conversations VALUES('conv-a','root-a',0),('conv-b','root-b',0);
+         INSERT INTO conversations VALUES('conv-a','root-a',0),('conv-b','root-b',0),('conv-home',NULL,0);
          INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision)
            VALUES('session-a','conv-a','agent-a','root-a',0,1),
                  ('session-child','conv-a','agent-a','root-a',0,1),
-                 ('session-b','conv-b','agent-a','root-b',0,1);
+                 ('session-b','conv-b','agent-a','root-b',0,1),
+                 ('session-home','conv-home','agent-a',NULL,0,1);
+         UPDATE sessions SET title='Home coordinator' WHERE id='session-home';
          INSERT INTO assignments(id,root_id,work_id,parent_id,session_id,state,generation,slot_held,revision,created_at,purpose)
            VALUES('sender','root-a','root-a',NULL,'session-a','Ready',0,0,1,0,'Primary'),
                  ('recipient','root-a','root-a','sender','session-child','Ready',0,0,1,0,'Child'),
@@ -469,4 +471,107 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
+
+    let artifacts = Arc::new(devworks_core::services::artifacts::ArtifactService::new(
+        Arc::new(crate::fs::artifacts::NativeArtifactFiles::new(
+            h.root.0.clone(),
+            h.root.0.join("cache"),
+        )),
+        Arc::new(crate::fs::sources::HostArtifactSources::new(
+            h.clock.clone(),
+            h.ids.clone(),
+        )),
+        Arc::new(crate::fs::NativeFilesystem::new()),
+        h.clock.clone(),
+        h.ids.clone(),
+    ));
+    let host = ingress.context(
+        ActorId(id("host")),
+        PrincipalKind::Host,
+        id("notice-invocation"),
+        id("notice-namespace"),
+        Counter::new(s.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    for (screen, context) in [
+        ("features", "Viewing feature board"),
+        ("issues", "Viewing project issues"),
+    ] {
+        devworks_core::services::sessions::notice::append_screen_context(
+            &s,
+            &artifacts,
+            &host,
+            &id("session-home"),
+            screen,
+            context,
+        )
+        .unwrap();
+    }
+    read_snapshot(&s, &ReadOptions::default(), |snapshot| {
+        let entries = snapshot.sessions().entries(&id("session-home"), 0, 10)?;
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|entry| entry.kind == "HostNotice"));
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            snapshot
+                .sessions()
+                .session(&id("session-home"))?
+                .unwrap()
+                .next_sequence,
+            3
+        );
+        Ok(())
+    })
+    .unwrap();
+    let notice = read_snapshot(&s, &ReadOptions::default(), |snapshot| {
+        let entry = snapshot
+            .sessions()
+            .entries(&id("session-home"), 0, 1)?
+            .remove(0);
+        serde_json::from_value::<devworks_core::protocol::provider::TranscriptBody>(entry.body)
+            .map_err(|_| StorageError::InvalidRecord("notice fixture".into()))
+    })
+    .unwrap();
+    let agent = ingress
+        .context(
+            ActorId(id("agent-a")),
+            PrincipalKind::Agent,
+            id("notice-spoof"),
+            id("notice-spoof-namespace"),
+            Counter::new(s.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(id("session-home"));
+    let outcome = run_write(&s, WriteOptions::default(), move |tx| {
+        let batch = devworks_core::services::sessions::turn::batch_of(
+            &id("session-home"),
+            tx.new_id(devworks_core::ports::IdKind::TranscriptBatch),
+            0,
+            3,
+            vec![notice],
+            || tx.new_id(devworks_core::ports::IdKind::TranscriptEntry),
+        );
+        devworks_core::services::sessions::transcript::append_session_batch(
+            tx,
+            &agent,
+            agent.principal(),
+            &devworks_core::services::sessions::transcript::SessionBatch::entries(batch),
+            devworks_core::services::sessions::transcript::AppendPath::Runtime,
+        )
+    })
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        devworks_core::services::sessions::transcript::BatchOutcome::Refused(
+            devworks_core::services::sessions::transcript::BatchRefusal::Unauthorized(
+                "HostNoticeRequiresHost"
+            )
+        )
+    ));
 }

@@ -428,8 +428,17 @@ fn the_coordinator_sidebar_is_the_home_conversation_and_stays_open_until_closed_
     type_into(&mut h, COMPOSER_LABEL, "shared ");
     click_nav(&mut h, "Settings");
     assert!(!h.state().coordinator_open(), "navigation never opens it");
+    assert!(
+        transcript(&*backend, &session).is_empty(),
+        "closed-sidebar navigation appends nothing"
+    );
     click(&mut h, Role::Button, "Workspace coordinator");
     assert!(h.state().coordinator_open());
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        1,
+        "opening appends current screen once"
+    );
     assert!(has_text(&h, "same conversation as Chat"));
     // Same draft, same session: typing in the sidebar continues the Home draft.
     type_into(&mut h, COMPOSER_LABEL, "draft");
@@ -438,17 +447,52 @@ fn the_coordinator_sidebar_is_the_home_conversation_and_stays_open_until_closed_
         h.state().coordinator_open(),
         "it stays open across navigation"
     );
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        2,
+        "meaningful navigation appends once"
+    );
+    settle(&mut h);
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        2,
+        "unchanged frames add no notice"
+    );
+    assert_eq!(
+        h.query_all_by_label_contains("Current screen: Artifacts")
+            .count(),
+        1
+    );
+    assert_eq!(
+        h.query_all_by_label_contains("Current screen: Settings")
+            .count(),
+        0,
+        "the UI projects only the latest notice"
+    );
     click(&mut h, Role::Button, SEND_LABEL);
     let bodies = transcript(&*backend, &session);
     assert!(
-        matches!(&bodies[..], [TranscriptBody::UserMessage { content }] if matches!(&content[0], UserContent::Text { text } if text == "shared draft")),
+        matches!(&bodies[..],
+        [TranscriptBody::HostNotice{..},TranscriptBody::HostNotice{..},TranscriptBody::UserMessage { content }]
+        if matches!(&content[0], UserContent::Text { text } if text == "shared draft")),
         "{bodies:?}"
     );
     // Returning Home closes it and shows the same conversation in the centre.
     click_nav(&mut h, "Chat");
     assert!(!h.state().coordinator_open());
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        3,
+        "returning Home adds no notice"
+    );
     assert_eq!(h.state().chat.selected.as_deref(), Some(session.as_str()));
     assert!(has_text(&h, "shared draft"));
+    assert_eq!(
+        h.query_all_by_label_contains("Current screen: Artifacts")
+            .count(),
+        1,
+        "Home retains only the latest recorded screen context"
+    );
     // Closing explicitly preserves the session; later navigation does not reopen it.
     click_nav(&mut h, "Approvals");
     click(&mut h, Role::Button, "Workspace coordinator");
@@ -461,6 +505,11 @@ fn the_coordinator_sidebar_is_the_home_conversation_and_stays_open_until_closed_
     assert!(!h.state().coordinator_open());
     click_nav(&mut h, "Knowledge");
     assert!(!h.state().coordinator_open());
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        4,
+        "closed-sidebar browsing adds no notice"
+    );
     click_nav(&mut h, "Chat");
     assert_eq!(
         h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
