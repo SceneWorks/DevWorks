@@ -4,6 +4,36 @@
 //! resource leases before dispatching it through the owned process supervisor. No backend is
 //! substituted for another when the selected executable or connection is unavailable.
 use crate::protocol::records::PortProtocol;
+use std::collections::BTreeMap;
+
+pub const CREATE_OPERATION_LABEL: &str = "devworks.create_operation";
+pub const PROJECT_LABEL: &str = "devworks.project";
+pub const OWNER_KIND_LABEL: &str = "devworks.owner_kind";
+
+/// The external container must carry the identity recorded before its create effect ran.
+/// A reused name without these exact labels is never an owned shutdown target.
+pub fn ownership_labels(
+    create_operation: &str,
+    project: &str,
+    owner_kind: &str,
+) -> Vec<(String, String)> {
+    vec![
+        (CREATE_OPERATION_LABEL.into(), create_operation.into()),
+        (PROJECT_LABEL.into(), project.into()),
+        (OWNER_KIND_LABEL.into(), owner_kind.into()),
+    ]
+}
+
+pub fn ownership_matches(
+    observed: &BTreeMap<String, String>,
+    create_operation: &str,
+    project: &str,
+    owner_kind: &str,
+) -> bool {
+    ownership_labels(create_operation, project, owner_kind)
+        .iter()
+        .all(|(key, value)| observed.get(key) == Some(value))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -269,6 +299,31 @@ fn safe_env_name(value: &str) -> Result<(), PlanError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reused_container_name_without_original_ownership_labels_is_never_owned() {
+        let mut observed =
+            BTreeMap::from_iter(ownership_labels("operation-a", "project-a", "Agent"));
+        assert!(ownership_matches(
+            &observed,
+            "operation-a",
+            "project-a",
+            "Agent"
+        ));
+        observed.insert(CREATE_OPERATION_LABEL.into(), "operation-b".into());
+        assert!(!ownership_matches(
+            &observed,
+            "operation-a",
+            "project-a",
+            "Agent"
+        ));
+        assert!(!ownership_matches(
+            &observed,
+            "operation-b",
+            "project-b",
+            "Agent"
+        ));
+    }
 
     #[test]
     fn apple_pull_uses_image_subcommand_and_every_stop_names_one_container() {

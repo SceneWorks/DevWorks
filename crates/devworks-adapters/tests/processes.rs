@@ -27,6 +27,7 @@ use devworks_core::protocol::{
     ActorId, CommandReply, Counter, DomainFault, Id, ProjectId, Revision, RootId,
 };
 use devworks_core::services::UseCases;
+use devworks_core::services::containers::runner::ContainerRunner;
 use devworks_core::services::process::{
     ConfirmRefusal, LaunchPolicy, LaunchRefusal, LaunchRequest, LeaseClaim, OwnedProcess,
     ProcessSupervisor, StopFailure, StopOutcome, StopScope, all_recorded,
@@ -763,6 +764,38 @@ impl ProcessHost for DelayedRegistrationHost {
     fn terminate(&self, identity: &devworks_core::ports::process::NativeIdentity) -> Probe {
         NativeProcessHost.terminate(identity)
     }
+}
+
+#[test]
+fn container_cli_runner_uses_owned_process_and_redacts_bounded_native_output() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let runner = ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    );
+    let mut spec = shell("echo private-token");
+    spec.capture_output = true;
+    let result = runner
+        .run(
+            &fx.agent("agent-a", "project-a", "s-a"),
+            None,
+            spec,
+            Duration::from_secs(10),
+            1024,
+            &["private-token".into()],
+        )
+        .unwrap();
+    assert_eq!(result.exit_code, Some(0));
+    assert!(
+        !result
+            .output
+            .windows(b"private-token".len())
+            .any(|x| x == b"private-token")
+    );
+    assert!(!result.truncated);
+    assert_eq!(fx.events("ProcessReaped").len(), 1);
 }
 
 #[test]

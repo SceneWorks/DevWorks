@@ -276,7 +276,7 @@ fn exact_directory(path: &Path) -> Option<PathBuf> {
 
 /// Secret values can straddle a capture page or budget boundary. Remove any retained suffix
 /// matching the beginning of a secret before publishing an incomplete output prefix.
-fn redacted_output(bytes: &[u8], values: &[String], incomplete: bool) -> Vec<u8> {
+pub(crate) fn redacted_output(bytes: &[u8], values: &[String], incomplete: bool) -> Vec<u8> {
     if values.is_empty() {
         return bytes.to_vec();
     }

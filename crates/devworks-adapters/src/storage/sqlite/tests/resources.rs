@@ -142,7 +142,7 @@ fn owned_container_intent_survives_restart_and_stop_listing_is_agent_scoped() {
 fn container_backend_selection_inherits_and_clears_project_override() {
     use devworks_core::services::containers::{
         backend::Backend,
-        selection::{PREFERRED_RUNTIME, selected},
+        selection::{PREFERRED_RUNTIME, SelectionError, require_selected, selected},
     };
     let fx = Fx::new();
     let selected_for = |scope: Option<&str>| {
@@ -177,6 +177,14 @@ fn container_backend_selection_inherits_and_clears_project_override() {
     set(ConfigScope::Project(project("project-a")), json!("apple"));
     assert_eq!(selected_for(Some("project-a")), Backend::Apple);
     assert_eq!(selected_for(Some("project-b")), Backend::Podman);
+    assert_eq!(
+        fx.read(|r| require_selected(r.configuration(), &project("project-a"), &id("docker"))),
+        Err(SelectionError::NotSelected)
+    );
+    assert_eq!(
+        fx.read(|r| require_selected(r.configuration(), &project("project-a"), &id("apple"))),
+        Ok(Backend::Apple)
+    );
     set(
         ConfigScope::Project(project("project-a")),
         serde_json::Value::Null,
