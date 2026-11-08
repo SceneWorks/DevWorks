@@ -6,7 +6,7 @@
       "table": "owned_containers",
       "class": "container_ownership",
       "disposition": "project_owner",
-      "activeStates": ["Creating", "Created", "Starting", "Running", "Stopping", "Uncertain"],
+      "unverifiedStates": ["Creating", "Created", "Starting", "Running", "Stopping", "Failed", "Uncertain"],
       "purpose": "Project-owned container records are deletable only after the external agent-work container is verified stopped."
     }
   ],

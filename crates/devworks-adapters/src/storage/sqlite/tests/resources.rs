@@ -138,6 +138,52 @@ fn owned_container_intent_survives_restart_and_stop_listing_is_agent_scoped() {
     );
 }
 
+#[test]
+fn container_backend_selection_inherits_and_clears_project_override() {
+    use devworks_core::services::containers::{
+        backend::Backend,
+        selection::{PREFERRED_RUNTIME, selected},
+    };
+    let fx = Fx::new();
+    let selected_for = |scope: Option<&str>| {
+        let project = scope.map(project);
+        fx.read(|r| selected(r.configuration(), project.as_ref()))
+    };
+    assert_eq!(selected_for(Some("project-a")), Backend::Docker);
+    let set = |scope: ConfigScope, value: serde_json::Value| {
+        fx.write(move |tx| {
+            let current = model::current_layer(tx.configuration(), &scope)?;
+            let schema =
+                serde_json::to_value(descriptor(PREFERRED_RUNTIME).unwrap().schema_ref()).unwrap();
+            let assignment: SettingAssignment = serde_json::from_value(
+                json!({"key":PREFERRED_RUNTIME,"value":{"schema":schema,"value":value}}),
+            )
+            .unwrap();
+            let plan = model::plan(&current, &[assignment]);
+            assert!(plan.is_valid());
+            let body = model::body(&plan, &actor("user-a"), tx.now_ms(), json!({"kind":"test"}));
+            tx.configuration().append_revision(
+                &scope,
+                model::NAMESPACE,
+                current.revision,
+                model::BODY_SCHEMA_VERSION,
+                body,
+            )?;
+            Ok(())
+        });
+    };
+    set(ConfigScope::Workspace, json!("podman"));
+    assert_eq!(selected_for(Some("project-a")), Backend::Podman);
+    set(ConfigScope::Project(project("project-a")), json!("apple"));
+    assert_eq!(selected_for(Some("project-a")), Backend::Apple);
+    assert_eq!(selected_for(Some("project-b")), Backend::Podman);
+    set(
+        ConfigScope::Project(project("project-a")),
+        serde_json::Value::Null,
+    );
+    assert_eq!(selected_for(Some("project-a")), Backend::Podman);
+}
+
 struct Fx {
     h: Harness,
     store: Arc<SqliteStore>,
