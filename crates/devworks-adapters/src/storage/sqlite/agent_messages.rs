@@ -363,6 +363,14 @@ pub(super) fn session_inbox(
         })
         .collect()
 }
+pub(super) fn recipient_count(conn: &Connection, message: &Id) -> Result<usize, StorageError> {
+    let count: i64 = db(conn.query_row(
+        "SELECT count(*) FROM agent_message_deliveries WHERE message_id=?1 AND handed_over=0",
+        [message.as_str()],
+        |row| row.get(0),
+    ))?;
+    usize::try_from(count).map_err(|_| corrupt("negative agent recipient count"))
+}
 pub(super) fn delivery_head(conn: &Connection) -> Result<i64, StorageError> {
     db(conn.query_row(
         "SELECT coalesce(max(sequence),0) FROM agent_message_deliveries",
@@ -572,9 +580,10 @@ pub(super) fn insert_delivery(
         kind: "agent_message",
         id: d.message_id.as_str().into(),
     })?;
+    // A direct message's first copy names its target session, but a resolver or handover may
+    // need another session's copy later. Project scope, not that initial target, is invariant.
     if m.project_id != d.project_id
         || (m.channel == "Assignment" && m.to_assignment_id != d.recipient_assignment_id)
-        || (m.channel == "Session" && m.target_session_id != d.recipient_session_id)
     {
         return Err(StorageError::ScopeDenied);
     }

@@ -24,7 +24,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     let h = Harness::new();
     drop(SqliteStore::open_with(h.config(), &through(40)).unwrap());
     h.raw().execute_batch(
-        "INSERT INTO actors VALUES('agent-a','agent','Agent');
+        "INSERT INTO actors VALUES('agent-a','agent','Agent'),('human-a','human','Human');
          INSERT INTO projects VALUES('project-a','A','Active',1,1,1),('project-b','B','Active',1,1,1);
          INSERT INTO work_items VALUES('root-a','project-a','issue',NULL,NULL,NULL,'A',1,0,1,1,1,'{}'),
                                        ('root-b','project-b','issue',NULL,NULL,NULL,'B',1,0,1,1,1,'{}');
@@ -160,8 +160,8 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         rootless.channel = "Session".into();
         rootless.to_assignment_id = None;
         rootless.target_session_id = Some(id("session-home"));
-        rootless.message_class = "Info".into();
-        rootless.state = None;
+        rootless.message_class = "Question".into();
+        rootless.state = Some("Open".into());
         rootless.body = "Rootless project session".into();
         rootless.idempotency_key = Some("request-3".into());
         tx.runs().insert_agent_message(&rootless)?;
@@ -351,6 +351,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                 devworks_core::services::agents::retained::AckSelection::Messages(vec![id(
                     "message-direct",
                 )]),
+                None,
             )?;
             assert_eq!(result.changed.len(), expected);
             Ok(())
@@ -379,16 +380,111 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         )
         .with_session(id("session-home"))
         .with_lineage(Some(project("project-a")), None, None);
+    let context = home_context.clone();
     run_write(&s, WriteOptions::default(), move |tx| {
         let result = devworks_core::services::agents::retained::acknowledge(
             tx,
-            &home_context,
+            &context,
             &project("project-a"),
             &devworks_core::services::agents::retained::Recipient::Session(id("session-home")),
             devworks_core::services::agents::retained::AckSelection::Through(3),
+            None,
         )?;
         assert_eq!(result.changed.len(), 1);
         assert_eq!(result.changed[0].1.id, id("message-rootless"));
+        Ok(())
+    })
+    .unwrap();
+    for expected in [1, 0] {
+        let context = home_context.clone();
+        run_write(&s, WriteOptions::default(), move |tx| {
+            let result = devworks_core::services::agents::retained::acknowledge(
+                tx,
+                &context,
+                &project("project-a"),
+                &devworks_core::services::agents::retained::Recipient::Session(id("session-home")),
+                devworks_core::services::agents::retained::AckSelection::Messages(vec![id(
+                    "message-rootless",
+                )]),
+                Some(devworks_core::services::agents::retained::Resolution::Answered),
+            )?;
+            assert_eq!(result.changed.len(), expected);
+            if expected == 1 {
+                assert_eq!(result.changed[0].1.state.as_deref(), Some("Answered"));
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+    let spec = devworks_core::services::agents::retained::PostSpec {
+        project: project("project-a"),
+        body: "Please review this item".into(),
+        kind: devworks_core::services::agents::retained::MessageKind::Question,
+        item: Some(RootId(id("root-a"))),
+        feature: None,
+        resource: None,
+        to_session: None,
+        to_human: true,
+        blocking: false,
+        in_reply_to: None,
+        resolves: None,
+        idempotency_key: Some("review-request".into()),
+    };
+    let context = child_context.clone();
+    let (new_message, replay) = run_write(&s, WriteOptions::default(), move |tx| {
+        let created = devworks_core::services::agents::retained::post_message(tx, &context, &spec)?;
+        let repeated =
+            devworks_core::services::agents::retained::post_message(tx, &context, &spec)?;
+        Ok((created, repeated))
+    })
+    .unwrap();
+    assert!(new_message.created);
+    assert!(!replay.created);
+    assert_eq!(new_message.message.id, replay.message.id);
+    assert_eq!(new_message.recipients, 1);
+    let human_context = ingress.context(
+        ActorId(id("human-a")),
+        PrincipalKind::Human,
+        id("human-invocation"),
+        id("human-ingress"),
+        Counter::new(s.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    let parent_id = new_message.message.id.clone();
+    let reply = run_write(&s, WriteOptions::default(), move |tx| {
+        let reply = devworks_core::services::agents::retained::post_message(
+            tx,
+            &human_context,
+            &devworks_core::services::agents::retained::PostSpec {
+                project: project("project-a"),
+                body: "Approved".into(),
+                kind: devworks_core::services::agents::retained::MessageKind::Info,
+                item: None,
+                feature: None,
+                resource: None,
+                to_session: None,
+                to_human: false,
+                blocking: false,
+                in_reply_to: Some(parent_id),
+                resolves: Some(devworks_core::services::agents::retained::Resolution::Answered),
+                idempotency_key: None,
+            },
+        )?;
+        assert_eq!(reply.message.channel, "Session");
+        assert_eq!(reply.recipients, 1);
+        assert_eq!(
+            reply.resolved.as_ref().and_then(|m| m.state.as_deref()),
+            Some("Answered")
+        );
+        Ok(reply)
+    })
+    .unwrap();
+    read_snapshot(&s, &ReadOptions::default(), |snap| {
+        let delivery = snap
+            .runs()
+            .agent_session_delivery(&reply.message.id, &id("session-child"))?
+            .unwrap();
+        assert_eq!(delivery.state, "Pending");
         Ok(())
     })
     .unwrap();

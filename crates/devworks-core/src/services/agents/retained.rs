@@ -5,8 +5,11 @@ use crate::ports::storage::{
     StorageError, StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
     WriteTransaction,
 };
-use crate::protocol::{Id, ProjectId};
+use crate::protocol::{Id, ProjectId, Revision, RevisionDimension};
 use std::collections::HashSet;
+
+mod post;
+pub use post::{MessageKind, PostSpec, PostedMessage, post_message};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Recipient {
@@ -26,6 +29,21 @@ pub enum AckSelection {
     Through(i64),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Resolution {
+    Answered,
+    Declined,
+}
+
+impl Resolution {
+    fn state(self) -> &'static str {
+        match self {
+            Self::Answered => "Answered",
+            Self::Declined => "Declined",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Acknowledged {
     pub changed: Vec<(StoredAgentDelivery, StoredAgentMessage)>,
@@ -37,6 +55,9 @@ fn authorize_recipient(
     project: &ProjectId,
     recipient: &Recipient,
 ) -> Result<(), StorageError> {
+    if tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind()) {
+        return Err(StorageError::ScopeDenied);
+    }
     if ctx.project_id().is_some_and(|scope| scope != project) {
         return Err(StorageError::ScopeDenied);
     }
@@ -163,7 +184,13 @@ pub fn acknowledge(
     project: &ProjectId,
     recipient: &Recipient,
     selection: AckSelection,
+    resolution: Option<Resolution>,
 ) -> Result<Acknowledged, StorageError> {
+    if resolution.is_some() && !matches!(selection, AckSelection::Messages(_)) {
+        return Err(StorageError::InvalidRecord(
+            "resolution requires named messages".into(),
+        ));
+    }
     authorize_recipient(tx, ctx, project, recipient)?;
     let ids = match selection {
         AckSelection::Messages(ids) => {
@@ -212,32 +239,130 @@ pub fn acknowledge(
     let mut changed = Vec::new();
     for id in ids {
         let (mut delivery, message) = delivery_for(tx, project, recipient, &id)?;
-        if matches!(delivery.state.as_str(), "Read" | "Answered" | "Declined") {
-            continue;
+        if !matches!(delivery.state.as_str(), "Read" | "Answered" | "Declined") {
+            let expected = delivery.revision;
+            delivery.state = "Read".into();
+            delivery.revision += 1;
+            delivery.delivered_at_ms.get_or_insert(now);
+            delivery.read_at_ms = Some(now);
+            tx.runs().update_agent_delivery(&delivery, expected)?;
+            let event_sequence = tx.runs().agent_event_head()? + 1;
+            tx.runs()
+                .insert_agent_message_event(&StoredAgentMessageEvent {
+                    sequence: event_sequence,
+                    project_id: project.clone(),
+                    message_id: id,
+                    kind: "Read".into(),
+                    actor_id: ctx.principal().clone(),
+                    recipient_assignment_id: None,
+                    recipient_session_id: match recipient {
+                        Recipient::Session(id) => Some(id.clone()),
+                        Recipient::Human => None,
+                    },
+                    recipient_human: matches!(recipient, Recipient::Human),
+                    created_at_ms: now,
+                })?;
+            changed.push((delivery, message.clone()));
         }
-        let expected = delivery.revision;
-        delivery.state = "Read".into();
-        delivery.revision += 1;
-        delivery.delivered_at_ms.get_or_insert(now);
-        delivery.read_at_ms = Some(now);
-        tx.runs().update_agent_delivery(&delivery, expected)?;
-        let event_sequence = tx.runs().agent_event_head()? + 1;
-        tx.runs()
-            .insert_agent_message_event(&StoredAgentMessageEvent {
-                sequence: event_sequence,
-                project_id: project.clone(),
-                message_id: id,
-                kind: "Read".into(),
-                actor_id: ctx.principal().clone(),
-                recipient_assignment_id: None,
-                recipient_session_id: match recipient {
-                    Recipient::Session(id) => Some(id.clone()),
-                    Recipient::Human => None,
-                },
-                recipient_human: matches!(recipient, Recipient::Human),
-                created_at_ms: now,
-            })?;
-        changed.push((delivery, message));
+        if let Some(resolution) = resolution
+            && let Some(updated) =
+                resolve_message(tx, ctx, project, recipient, &message, resolution)?
+        {
+            if let Some(entry) = changed.iter_mut().find(|(_, row)| row.id == message.id) {
+                *entry = updated;
+            } else {
+                changed.push(updated);
+            }
+        }
     }
     Ok(Acknowledged { changed })
+}
+
+pub(super) fn resolve_message(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    project: &ProjectId,
+    recipient: &Recipient,
+    message: &StoredAgentMessage,
+    resolution: Resolution,
+) -> Result<Option<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+    if !matches!(message.message_class.as_str(), "Question" | "Request") {
+        return Err(StorageError::InvalidRecord(
+            "only a question or request can be resolved".into(),
+        ));
+    }
+    if message.state.as_deref() == Some(resolution.state())
+        && message.resolved_by_actor_id.as_ref() == Some(ctx.principal())
+        && message.resolved_by_session_id.as_ref() == ctx.session_id()
+    {
+        return Ok(None);
+    }
+    if message.state.as_deref() != Some("Open") {
+        return Err(StorageError::conflict(
+            RevisionDimension::Store,
+            "agent_message",
+            message.id.clone(),
+            Revision::new((message.revision - 1).max(1)).expect("positive revision"),
+            Revision::new(message.revision).expect("positive revision"),
+        ));
+    }
+    let now = tx.now_ms();
+    let mut resolved = message.clone();
+    resolved.state = Some(resolution.state().into());
+    resolved.revision += 1;
+    resolved.resolved_at_ms = Some(now);
+    resolved.resolved_by_actor_id = Some(ctx.principal().clone());
+    resolved.resolved_by_session_id = ctx.session_id().cloned();
+    tx.runs()
+        .resolve_agent_message(&resolved, message.revision)?;
+    let mut delivery = match recipient {
+        Recipient::Session(id) => tx.runs().agent_session_delivery(&message.id, id)?,
+        Recipient::Human => tx.runs().agent_delivery(&message.id, None)?,
+    };
+    if delivery.is_none() {
+        let new = StoredAgentDelivery {
+            sequence: tx.runs().agent_delivery_head()? + 1,
+            message_id: message.id.clone(),
+            project_id: project.clone(),
+            recipient_assignment_id: None,
+            recipient_human: matches!(recipient, Recipient::Human),
+            state: "Pending".into(),
+            revision: 1,
+            delivered_at_ms: None,
+            read_at_ms: None,
+            recipient_session_id: match recipient {
+                Recipient::Session(id) => Some(id.clone()),
+                Recipient::Human => None,
+            },
+            handed_over: false,
+            resolved_at_ms: None,
+        };
+        tx.runs().insert_agent_delivery(&new)?;
+        delivery = Some(new);
+    }
+    let mut delivery = delivery.expect("inserted or existing delivery");
+    let expected = delivery.revision;
+    delivery.state = resolution.state().into();
+    delivery.revision += 1;
+    delivery.delivered_at_ms.get_or_insert(now);
+    delivery.read_at_ms.get_or_insert(now);
+    delivery.resolved_at_ms = Some(now);
+    tx.runs().update_agent_delivery(&delivery, expected)?;
+    let event_sequence = tx.runs().agent_event_head()? + 1;
+    tx.runs()
+        .insert_agent_message_event(&StoredAgentMessageEvent {
+            sequence: event_sequence,
+            project_id: project.clone(),
+            message_id: message.id.clone(),
+            kind: resolution.state().into(),
+            actor_id: ctx.principal().clone(),
+            recipient_assignment_id: None,
+            recipient_session_id: match recipient {
+                Recipient::Session(id) => Some(id.clone()),
+                Recipient::Human => None,
+            },
+            recipient_human: matches!(recipient, Recipient::Human),
+            created_at_ms: now,
+        })?;
+    Ok(Some((delivery, resolved)))
 }
