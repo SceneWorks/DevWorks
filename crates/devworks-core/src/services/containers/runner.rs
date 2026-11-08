@@ -112,8 +112,17 @@ impl ContainerRunner {
         drop(drained_tx);
         let deadline = Instant::now() + timeout;
         let outcome = loop {
-            if let Ok(Some(outcome)) = self.processes.poll(&process) {
-                break outcome;
+            match self.processes.poll(&process) {
+                Ok(Some(outcome)) => break outcome,
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = self
+                        .processes
+                        .cancel(&process, Duration::ZERO, Duration::from_secs(5));
+                    return Err(CliError::Unknown(format!(
+                        "container CLI poll failed: {error}"
+                    )));
+                }
             }
             if Instant::now() >= deadline {
                 break self

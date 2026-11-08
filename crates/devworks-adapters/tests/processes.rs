@@ -29,7 +29,8 @@ use devworks_core::protocol::{
 use devworks_core::services::UseCases;
 use devworks_core::services::containers::runner::ContainerRunner;
 use devworks_core::services::containers::{
-    backend::Backend as ContainerBackend,
+    backend::{Backend as ContainerBackend, CreatePlan, ownership_labels, ownership_matches},
+    execution::bound_spec,
     probe::{self as container_probe, Availability as ContainerAvailability, HostPlatform},
 };
 use devworks_core::services::process::tools::{RegisteredExecutable, ToolBindings};
@@ -843,6 +844,94 @@ fn native_docker_probe_uses_registered_executable_and_owned_processes() {
     );
     assert!(outcome.version.unwrap().contains("Docker version"));
     assert_eq!(fx.events("ProcessReaped").len(), 2);
+}
+
+#[test]
+#[ignore = "requires a separately supplied Docker engine with local alpine:latest image"]
+fn native_docker_owned_lifecycle_uses_the_exact_planned_container() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let path = std::env::var_os("DEVWORKS_TEST_DOCKER_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/local/bin/docker"));
+    let bindings = ToolBindings::new(
+        [RegisteredExecutable {
+            id: id("docker"),
+            path: path.clone(),
+        }],
+        std::iter::empty(),
+    )
+    .unwrap();
+    let runner = ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    );
+    let context = fx.agent("agent-a", "project-a", "s-a");
+    let name = format!("dw-native-test-{}", std::process::id());
+    struct Cleanup {
+        path: PathBuf,
+        name: String,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new(&self.path)
+                .args(["rm", "-f", &self.name])
+                .output();
+        }
+    }
+    let _cleanup = Cleanup {
+        path,
+        name: name.clone(),
+    };
+    let backend = ContainerBackend::Docker;
+    let run = |args| {
+        let spec = bound_spec(&bindings, backend, args, None).unwrap();
+        let result = runner
+            .run(&context, None, spec, Duration::from_secs(10), 16_384, &[])
+            .unwrap();
+        assert_eq!(
+            result.exit_code,
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        result
+    };
+    let labels = ownership_labels("operation-a", "project-a", "Agent");
+    let command = ["sleep".to_owned(), "30".to_owned()];
+    run(backend
+        .create(&CreatePlan {
+            name: &name,
+            image: "alpine:latest",
+            labels: &labels,
+            mounts: &[],
+            ports: &[],
+            environment: &[],
+            command: &command,
+        })
+        .unwrap());
+    run(backend.start(&name).unwrap());
+    let output = run(backend
+        .exec(&name, &["printf".into(), "ok".into()], &[])
+        .unwrap());
+    assert_eq!(output.stdout, b"ok");
+    let inspected = run(backend.inspect(&name).unwrap());
+    let rows: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
+    let actual = rows[0]["Config"]["Labels"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_owned())))
+        .collect();
+    assert!(ownership_matches(
+        &actual,
+        "operation-a",
+        "project-a",
+        "Agent"
+    ));
+    run(backend.logs(&name).unwrap());
+    run(backend.stop(&name).unwrap());
 }
 
 #[test]
