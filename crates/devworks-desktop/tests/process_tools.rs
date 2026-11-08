@@ -165,9 +165,9 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
                 &*backend,
                 "process.execute",
                 json!({"spec": {
-                    "executableRef":"sleep", "args":["10"],
+                    "executableRef":"sleep", "args":["30"],
                     "workingDirectory":{"rootId":"process-repository","relative":"work"},
-                    "environment":[], "profile":"Full", "timeoutMs":"20000", "outputLimitBytes":"64"
+                    "environment":[], "profile":"Full", "timeoutMs":"60000", "outputLimitBytes":"64"
                 }}),
             ),
         )
@@ -195,6 +195,44 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
         assert!(Instant::now() < deadline, "owned sleeper did not launch");
         std::thread::sleep(Duration::from_millis(20));
     };
+    let second = backend
+        .command(
+            "process.execute",
+            &ops::command_frame(
+                &*backend,
+                "process.execute",
+                json!({"spec": {
+                    "executableRef":"sleep", "args":["30"],
+                    "workingDirectory":{"rootId":"process-repository","relative":"work"},
+                    "environment":[], "profile":"Full", "timeoutMs":"60000", "outputLimitBytes":"64"
+                }}),
+            ),
+        )
+        .expect("second sleep receipt");
+    let second_id = match second {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Accepted { operation_id } => operation_id,
+            other => panic!("second sleeper refused: {other:?}"),
+        },
+        other => panic!("expected second sleeper receipt: {other:?}"),
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let second_running = loop {
+        let process = read_snapshot(
+            &**engine.host().runtime().store(),
+            &ReadOptions::default(),
+            |snapshot| snapshot.resources().process(&second_id.0),
+        )
+        .expect("second process read");
+        if let Some(process) = process
+            && process.phase == ProcessPhase::Running
+        {
+            break process;
+        }
+        assert!(Instant::now() < deadline, "second sleeper did not launch");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // Both execute slots remain occupied here; cancellation must use its own consumer.
     let cancelled = backend
         .command(
             "process.cancel",
@@ -228,6 +266,42 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
             Some(other) => panic!("cancellation failed: {other:?}"),
             None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             None => panic!("cancellation completion timed out"),
+        }
+    }
+    let second_cancel = backend
+        .command(
+            "process.cancel",
+            &ops::command_frame(
+                &*backend,
+                "process.cancel",
+                json!({"processId":second_id.0,
+            "expectedRevision":second_running.revision.to_string()}),
+            ),
+        )
+        .expect("second cancellation receipt");
+    let second_cancel_id = match second_cancel {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Accepted { operation_id } => operation_id,
+            other => panic!("second cancellation refused: {other:?}"),
+        },
+        other => panic!("expected second cancellation receipt: {other:?}"),
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match backend
+            .process_completion(&second_cancel_id)
+            .expect("second cancellation completion")
+        {
+            Some(OperationCompletion::Succeeded {
+                result: OperationResult::ProcessCancel { value },
+                ..
+            }) => {
+                assert_eq!(value.id, second_id.0);
+                break;
+            }
+            Some(other) => panic!("second cancellation failed: {other:?}"),
+            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            None => panic!("second cancellation timed out"),
         }
     }
 

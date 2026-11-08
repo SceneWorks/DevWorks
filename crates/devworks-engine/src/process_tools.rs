@@ -5,7 +5,9 @@ use crate::dispatch::{
     RetryPolicy,
 };
 use devworks_core::ports::storage::{OperationRecord, StorageError, WriteTransaction};
-use devworks_core::services::process::tools::{EFFECT_CONSUMER, EffectOutcome, ProcessToolService};
+use devworks_core::services::process::tools::{
+    CANCEL_CONSUMER, EFFECT_CONSUMER, EffectOutcome, ProcessToolService,
+};
 use std::sync::Arc;
 
 struct Effects(Arc<ProcessToolService>);
@@ -63,4 +65,12 @@ pub fn consumer(service: Arc<ProcessToolService>) -> Consumer {
         },
         max_in_flight: Some(2),
     }
+}
+
+/// Cancellation is isolated from long-running execute/install slots, so a full worker pool
+/// cannot hold a stop request behind the processes it needs to stop.
+pub fn cancel_consumer(service: Arc<ProcessToolService>) -> Consumer {
+    let mut consumer = consumer(service);
+    consumer.name = CANCEL_CONSUMER.into();
+    consumer
 }

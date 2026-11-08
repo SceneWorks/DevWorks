@@ -552,6 +552,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     if let Some(service) = &process_tools {
         use_cases = use_cases.with_process_tools(service.clone());
         consumers.push(crate::process_tools::consumer(service.clone()));
+        consumers.push(crate::process_tools::cancel_consumer(service.clone()));
     }
     if let Some(service) = &git {
         use_cases = use_cases.with_git(service.clone());

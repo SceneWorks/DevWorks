@@ -274,6 +274,40 @@ fn exact_directory(path: &Path) -> Option<PathBuf> {
     (actual == path && actual.is_dir()).then_some(actual)
 }
 
+/// Secret values can straddle a capture page or budget boundary. Remove any retained suffix
+/// matching the beginning of a secret before publishing an incomplete output prefix.
+fn redacted_output(bytes: &[u8], values: &[String], incomplete: bool) -> Vec<u8> {
+    if values.is_empty() {
+        return bytes.to_vec();
+    }
+    // The shared redactor intentionally ignores values shorter than four bytes. A process
+    // credential has no such length guarantee, so suppress the body in that case.
+    if values
+        .iter()
+        .any(|value| !value.is_empty() && value.len() < 4)
+    {
+        return Vec::new();
+    }
+    let mut trim = 0;
+    if incomplete {
+        for value in values {
+            let secret = value.as_bytes();
+            for length in 1..secret.len() {
+                if bytes.ends_with(&secret[..length]) {
+                    trim = trim.max(length);
+                }
+            }
+        }
+    }
+    let mut redactor = Redactor::new();
+    for value in values {
+        redactor.register(value);
+    }
+    redactor
+        .redact_text(&String::from_utf8_lossy(&bytes[..bytes.len() - trim]))
+        .into_bytes()
+}
+
 /// A capture budget applies to the combined stdout and stderr stream. Readers continue draining
 /// after the budget is reached so a child cannot remain blocked on a full pipe; `seen` records
 /// the discarded tail without retaining it. Only the retained prefix may be paged to callers.
@@ -285,6 +319,7 @@ pub struct BoundedOutput {
 }
 
 pub const EFFECT_CONSUMER: &str = "process_tool_effects";
+pub const CANCEL_CONSUMER: &str = "process_tool_cancellations";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ExecuteJob {
@@ -297,6 +332,8 @@ struct ExecuteJob {
     restore_epoch: i64,
     policy_revision: i64,
     fingerprint: String,
+    #[serde(default)]
+    authority_sources: Vec<Id>,
     spec: ProcessSpec,
 }
 
@@ -311,6 +348,8 @@ struct InstallJob {
     restore_epoch: i64,
     policy_revision: i64,
     fingerprint: String,
+    #[serde(default)]
+    authority_sources: Vec<Id>,
     repository_id: Id,
     expected_revision: crate::protocol::Revision,
     manifest: ArtifactRef,
@@ -333,6 +372,7 @@ impl InstallJob {
             restore_epoch: ctx.restore_epoch().get(),
             policy_revision: ctx.policy_revision().get(),
             fingerprint: fingerprint.as_str().into(),
+            authority_sources: ctx.authority_sources().to_vec(),
             repository_id: input.repository_id.clone(),
             expected_revision: input.expected_revision.clone(),
             manifest: input.manifest.clone(),
@@ -351,6 +391,7 @@ impl InstallJob {
             self.assignment.as_ref(),
             self.restore_epoch,
             self.policy_revision,
+            &self.authority_sources,
         )
     }
     fn input(&self) -> ops::InstallProjectDependenciesInput {
@@ -379,6 +420,7 @@ impl ExecuteJob {
             restore_epoch: ctx.restore_epoch().get(),
             policy_revision: ctx.policy_revision().get(),
             fingerprint: fingerprint.as_str().to_owned(),
+            authority_sources: ctx.authority_sources().to_vec(),
             spec,
         }
     }
@@ -395,6 +437,7 @@ impl ExecuteJob {
             self.assignment.as_ref(),
             self.restore_epoch,
             self.policy_revision,
+            &self.authority_sources,
         )
     }
 }
@@ -411,6 +454,7 @@ fn process_context(
     assignment: Option<&crate::protocol::AssignmentId>,
     restore_epoch: i64,
     policy_revision: i64,
+    authority_sources: &[Id],
 ) -> InvocationContext {
     let kind = match kind {
         "Human" => PrincipalKind::Human,
@@ -432,6 +476,9 @@ fn process_context(
     .with_lineage(project.cloned(), root.cloned(), assignment.cloned());
     if let Some(session) = session {
         context = context.with_session(session.clone());
+    }
+    for source in authority_sources {
+        context = context.with_authority_source(source.clone());
     }
     context
 }
@@ -570,11 +617,12 @@ impl ProcessToolService {
         }
         let revision = rev(operation.revision);
         let effect = operation.latest_attempt().and_then(|attempt| {
-            attempt
-                .observations
-                .iter()
-                .rev()
-                .find_map(|observation| observation.get("effect").cloned())
+            attempt.observations.iter().rev().find_map(|observation| {
+                observation
+                    .get("effect")
+                    .or_else(|| observation.get("reconciliation"))
+                    .cloned()
+            })
         });
         Ok(match operation.state {
             OperationState::ObservedComplete => {
@@ -1260,18 +1308,11 @@ impl ProcessToolService {
             return EffectOutcome::Unknown("owned process record unavailable".into());
         };
         let output = output.lock().unwrap_or_else(|p| p.into_inner());
-        let mut redactor = Redactor::new();
-        for value in &redactions {
-            redactor.register(value);
-        }
-        let bytes = if redactions.is_empty() {
-            output.retained().to_vec()
-        } else {
-            redactor
-                .redact_text(&String::from_utf8_lossy(output.retained()))
-                .into_bytes()
-        };
-        let truncated = output.truncated();
+        let bytes = redacted_output(output.retained(), &redactions, output.truncated());
+        let truncated = output.truncated()
+            || redactions
+                .iter()
+                .any(|value| !value.is_empty() && value.len() < 4);
         let record = ProcessRecord {
             id: stored.id.clone(),
             revision: rev(stored.revision),
@@ -1477,7 +1518,7 @@ impl ProcessToolService {
         let now = tx.now_ms();
         tx.queue().enqueue(NewQueueEntry {
             id: entry,
-            consumer: EFFECT_CONSUMER.into(),
+            consumer: CANCEL_CONSUMER.into(),
             event_id: event,
             // Cleanup must run even when the root is paused or archived.
             root_id: None,
@@ -2117,30 +2158,17 @@ impl QueryHandler for ProcessToolService {
                 });
             }
             let live = live.lock().unwrap_or_else(|p| p.into_inner());
-            let mut redactor = Redactor::new();
-            let has_literals = job.as_ref().is_some_and(|job| {
-                job.spec
-                    .environment
-                    .0
-                    .iter()
-                    .any(|entry| entry.value.is_some())
-            });
-            if let Some(job) = job {
-                for entry in &job.spec.environment.0 {
-                    if let Some(value) = &entry.value {
-                        redactor.register(&value.0);
-                    }
-                }
-            }
+            let literals: Vec<String> = job
+                .into_iter()
+                .flat_map(|job| job.spec.environment.0.into_iter())
+                .filter_map(|entry| entry.value.map(|value| value.0))
+                .collect();
             (
-                if has_literals {
-                    redactor
-                        .redact_text(&String::from_utf8_lossy(live.retained()))
-                        .into_bytes()
-                } else {
-                    live.retained().to_vec()
-                },
-                live.truncated(),
+                redacted_output(live.retained(), &literals, true),
+                live.truncated()
+                    || literals
+                        .iter()
+                        .any(|value| !value.is_empty() && value.len() < 4),
             )
         } else {
             (Vec::new(), false)
@@ -2247,6 +2275,37 @@ mod tests {
             "outputLimitBytes":"1024"
         }))
         .expect("test process spec")
+    }
+
+    #[test]
+    fn truncated_secret_prefix_is_withheld_before_output_publication() {
+        let secrets = vec!["hunter2".to_owned()];
+        assert_eq!(redacted_output(b"hello hunt", &secrets, true), b"hello ");
+        assert_eq!(
+            redacted_output(b"hello hunter2!", &secrets, false),
+            b"hello [REDACTED]!"
+        );
+        assert!(redacted_output(b"short=abc", &["abc".to_owned()], false).is_empty());
+        assert_eq!(redacted_output(&[0xff], &[], true), vec![0xff]);
+    }
+
+    #[test]
+    fn committed_process_intent_retains_host_bound_authority_sources() {
+        let context = InvocationContext::new(
+            crate::protocol::ActorId(id("agent-1")),
+            PrincipalKind::Agent,
+            id("invocation-1"),
+            id("ingress-1"),
+            crate::protocol::StoreId(id("store-1")),
+            counter(0),
+            rev(1),
+        )
+        .with_authority_source(id("grant-1"));
+        let fingerprint = Fingerprint::from_hex(&"a".repeat(64)).expect("fingerprint");
+        let job = ExecuteJob::from_context(&context, &fingerprint, spec("Full", false));
+        let stored: ExecuteJob =
+            serde_json::from_value(serde_json::to_value(job).unwrap()).unwrap();
+        assert_eq!(stored.authority_sources, vec![id("grant-1")]);
     }
 
     #[test]
