@@ -319,10 +319,20 @@ impl ContainerService {
         }
         let mut sources = Vec::new();
         for mount in &input.spec.mounts.0 {
-            let path = match self.resolve_project_path(&mount.source, &row.project_id) {
+            let resolved = if matches!(
+                context.principal_kind(),
+                crate::context::PrincipalKind::Human | crate::context::PrincipalKind::Host
+            ) {
+                self.resolve_project_path(&mount.source, &row.project_id)
+            } else {
+                self.resolve_agent_mount_root(&mount.source, &row.project_id)
+            };
+            let path = match resolved {
                 Some(path) => path,
                 None => {
-                    return EffectOutcome::Failed("registered container mount changed".into());
+                    return EffectOutcome::Failed(
+                        "container mount source is not safely registered".into(),
+                    );
                 }
             };
             sources.push((

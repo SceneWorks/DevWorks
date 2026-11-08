@@ -1519,6 +1519,7 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
     ));
     let build_root = fx.h.root.join("container-build-context");
     std::fs::create_dir_all(&build_root).unwrap();
+    std::fs::create_dir_all(build_root.join("mutable-child")).unwrap();
     let repository_root = fx.h.root.canonicalize().unwrap();
     fx.write(move |tx| {
         let now = tx.now_ms();
@@ -1662,7 +1663,8 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         "containers.create",
         "native-effect-create",
         json!({"spec":{"engineId":engine,"projectId":"project-a","image":"docker.io/library/alpine:latest",
-            "command":["sh","-c","echo booted; i=0; while [ \"$i\" -lt 1100 ]; do printf '%01024d\\n' 0; i=$((i+1)); done; echo stderr-marker >&2; sleep 60"],"mounts":[],
+            "command":["sh","-c","echo booted; i=0; while [ \"$i\" -lt 1100 ]; do printf '%01024d\\n' 0; i=$((i+1)); done; echo stderr-marker >&2; sleep 60"],
+            "mounts":[{"source":{"rootId":"container-build-repo","relative":"container-build-context"},"destination":"/workspace","readOnly":false}],
             "ports":[{"containerPort":8080,"hostPort":host_port,"protocol":"Tcp"}],
             "environment":[{"name":"DOCKER_HOST","value":"tcp://127.0.0.1:1"}],"resourceIds":["build-slot"]}}),
         Some(1),
@@ -1747,6 +1749,28 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
         .read(|snapshot| snapshot.resources().container(&row.id))
         .unwrap();
     assert_eq!(running.phase, ContainerPhase::Running);
+    // The running agent has a writable repository-root mount. A later descendant source
+    // could be replaced by that workload between path validation and engine dispatch.
+    let descendant = fx.command_keyed(
+        &context,
+        "containers.create",
+        "native-effect-descendant-mount",
+        json!({"spec":{"engineId":engine,"projectId":"project-a","image":"docker.io/library/alpine:latest",
+            "command":[],"mounts":[{"source":{"rootId":"container-build-repo","relative":"container-build-context/mutable-child"},
+                "destination":"/child","readOnly":true}],"ports":[],"environment":[],"resourceIds":[]}}),
+        Some(1),
+    );
+    let descendant_id = match recorded(descendant).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected recorded descendant create: {other:?}"),
+    };
+    let descendant_op = fx
+        .read(|snapshot| snapshot.operations().operation(&descendant_id))
+        .unwrap();
+    assert!(matches!(
+        service.execute_effect(&descendant_op, &fx.authority()),
+        ContainerEffectOutcome::Failed(reason) if reason.contains("not safely registered")
+    ));
     let exec = fx.command_keyed(
         &context,
         "containers.exec",

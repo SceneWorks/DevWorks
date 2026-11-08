@@ -9,7 +9,9 @@ use super::selection;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::AdmittedQuery;
 use crate::operations::{OperationInput, containers as ops};
-use crate::ports::storage::{ApplicationStore, ReadSnapshot, StoredContainer, read_snapshot};
+use crate::ports::storage::{
+    ApplicationStore, ReadSnapshot, RepositoryFilter, StoredContainer, read_snapshot,
+};
 use crate::ports::{IdKind, IdSource, Preparation, Prepared, QueryAnswer, QueryHandler};
 use crate::protocol::ProjectId;
 use crate::protocol::provider::ArtifactRef;
@@ -103,6 +105,69 @@ impl ContainerService {
         }
         let resolved = root.join(&path.relative.0).canonicalize().ok()?;
         resolved.starts_with(&root).then_some(resolved)
+    }
+
+    /// A container-only principal can write inside a mounted direct child, but cannot rename
+    /// that mount source through its bind mount. Deeper paths are mutable through an earlier
+    /// writable mount, so they cannot be passed to an external engine as a later source.
+    pub(super) fn resolve_agent_mount_root(
+        &self,
+        path: &RegisteredPath,
+        project: &ProjectId,
+    ) -> Option<PathBuf> {
+        if path.relative.0.is_empty() || path.relative.0.contains(['/', '\\']) {
+            return None;
+        }
+        read_snapshot(
+            &*self.store,
+            &crate::ports::storage::ReadOptions::default(),
+            |snapshot| {
+                let projects = snapshot.projects();
+                let Some(repository) = projects.repository(&path.root_id)? else {
+                    return Ok(None);
+                };
+                if !repository.primary
+                    || repository.lifecycle == "Deleted"
+                    || !projects
+                        .repository_projects(&path.root_id)?
+                        .contains(project)
+                {
+                    return Ok(None);
+                }
+                let root = PathBuf::from(&repository.location);
+                if !root.is_absolute()
+                    || root.canonicalize().ok().as_ref() != Some(&root)
+                    || !root.is_dir()
+                {
+                    return Ok(None);
+                }
+                let source = root.join(&path.relative.0);
+                if source.canonicalize().ok().as_ref() != Some(&source) {
+                    return Ok(None);
+                }
+                // A second registered root above this one could itself be mounted writable by an
+                // agent. Refuse nested roots so that route cannot replace this source pathname.
+                let mut after = None;
+                loop {
+                    let page =
+                        projects.repositories(&RepositoryFilter::default(), after.as_ref(), 256)?;
+                    for other in &page {
+                        if other.id != repository.id
+                            && root.starts_with(PathBuf::from(&other.location))
+                        {
+                            return Ok(None);
+                        }
+                    }
+                    if page.len() < 256 {
+                        break;
+                    }
+                    after = page.last().map(|other| other.id.clone());
+                }
+                Ok(Some(source))
+            },
+        )
+        .ok()
+        .flatten()
     }
     pub fn new(
         store: Arc<dyn ApplicationStore>,
