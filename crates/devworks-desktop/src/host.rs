@@ -92,6 +92,8 @@ pub struct DesktopConfig {
     /// An explicitly configured Chromium-family browser executable (`DEVWORKS_BROWSER`), offered
     /// as the `configured` browser asset beside the discovered Chrome, Chromium and Edge.
     pub browser_path: Option<PathBuf>,
+    /// Native computer-control adapter; tests may inject a scripted desktop with no OS input.
+    pub desktop_platform: Option<Arc<dyn devworks_core::ports::desktop::DesktopPlatform>>,
     /// Replaces the connection directory the router reads (tests script connection states).
     /// `None` (production) routes through the provider connection service's durable rows.
     pub connections: Option<Arc<dyn ConnectionDirectory>>,
@@ -136,6 +138,7 @@ impl DesktopConfig {
             browser_path: std::env::var_os("DEVWORKS_BROWSER")
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),
+            desktop_platform: None,
             connections: None,
             secrets: None,
             http: None,
@@ -388,6 +391,12 @@ async fn compose(
     runtime_config.native_notifications = Some(Arc::new(
         crate::native_notifications::NativeOsNotifications::new(),
     ));
+    runtime_config.desktop = Some(devworks_engine::runtime::DesktopComposition {
+        platform: config
+            .desktop_platform
+            .clone()
+            .unwrap_or_else(|| Arc::new(devworks_adapters::desktop::NativeDesktop)),
+    });
     // The run-control quiesce (live work held for Continue) gets this cooperative period; it
     // stays within the shell's Quiescing bound, so the window persists only after it ended.
     runtime_config.shutdown_grace = runtime_config
@@ -802,6 +811,18 @@ impl Backend for DesktopBackend {
     }
     fn command(&self, operation: &str, frame: &[u8]) -> CommandOutcome {
         self.host.runtime.command(&self.host.ctx, operation, frame)
+    }
+    fn desktop_completion(
+        &self,
+        operation: &devworks_core::protocol::OperationId,
+    ) -> Result<
+        Option<devworks_core::protocol::results::OperationCompletion>,
+        devworks_core::protocol::DomainFault,
+    > {
+        match self.host.runtime.desktop() {
+            Some(service) => service.completion(&self.host.ctx, operation),
+            None => Ok(None),
+        }
     }
     fn human_decision(&self, frame: &[u8]) -> CommandOutcome {
         self.host

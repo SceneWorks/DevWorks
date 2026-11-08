@@ -7,6 +7,7 @@
 //! across threads. Core stays runtime-agnostic (no async runtime dependency).
 pub mod browser;
 pub mod database;
+pub mod desktop;
 pub mod diagnostics;
 pub mod files;
 pub mod git_transport;

@@ -155,6 +155,7 @@ enum Action {
     Reload,
     Inspect(String),
     Decide(bool),
+    WaitForDesktop,
     ReloadNotifications,
     Read(String),
     MarkRead(NotificationRecord, bool),
@@ -328,15 +329,25 @@ impl Shell {
             return;
         };
         let slot = Slot::ApprovalDecision(p.id.as_str().to_owned());
+        let desktop_takeover = p.operation_kind.0 == "desktop.request_control";
         if self.online().is_err()
             || self.pending(&slot)
             || self.unresolved(&slot)
-            || self.decisions.rationale.trim().is_empty()
+            || (!desktop_takeover && self.decisions.rationale.trim().is_empty())
         {
             return;
         }
+        let rationale = if desktop_takeover && self.decisions.rationale.trim().is_empty() {
+            if approve {
+                "OK: desktop takeover approved"
+            } else {
+                "Desktop takeover declined"
+            }
+        } else {
+            self.decisions.rationale.as_str()
+        };
         let body = json!({"proposalId":p.id,"expectedRevision":p.revision,"contentDigest":p.content_digest,
-            "decision":if approve {"Approve"} else {"Reject"},"rationale":self.decisions.rationale});
+            "decision":if approve {"Approve"} else {"Reject"},"rationale":rationale});
         let Some(b) = self.backend() else {
             return;
         };
@@ -671,6 +682,10 @@ impl Shell {
                 }
                 Action::Inspect(id) => self.inspect_approval(id),
                 Action::Decide(approve) => self.decide(approve),
+                Action::WaitForDesktop => {
+                    self.decisions.selected = None;
+                    self.decisions.rationale.clear();
+                }
                 Action::ReloadNotifications => {
                     self.decisions.notifications.clear();
                     self.decisions.notifications_loaded = false;
@@ -1368,23 +1383,28 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
     if ui.button("Refresh inspected proposal").clicked() {
         actions.push(Action::Inspect(p.id.as_str().into()));
     }
-    ui.label("Decision rationale");
-    let rationale_input = ui.add(
-        egui::TextEdit::multiline(&mut d.rationale)
-            .id_salt("approval-rationale")
-            .desired_rows(3)
-            .hint_text("Explain your decision for this exact proposal"),
-    );
-    rationale_input.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Decision rationale")
-    });
+    let desktop_takeover = p.operation_kind.0 == "desktop.request_control";
+    if desktop_takeover {
+        ui.label("Desktop control is waiting for your OK. Wait keeps this request pending and sends no input.");
+    } else {
+        ui.label("Decision rationale");
+        let rationale_input = ui.add(
+            egui::TextEdit::multiline(&mut d.rationale)
+                .id_salt("approval-rationale")
+                .desired_rows(3)
+                .hint_text("Explain your decision for this exact proposal"),
+        );
+        rationale_input.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Decision rationale")
+        });
+    }
     let can = enabled
         && matches!(p.state, ApprovalState::Pending)
         && d.current
             .as_ref()
             .is_none_or(|current| matches!(current.state, ApprovalState::Pending))
         && !changed
-        && !d.rationale.trim().is_empty();
+        && (desktop_takeover || !d.rationale.trim().is_empty());
     let approve = can
         && !stale
         && !changed
@@ -1395,19 +1415,23 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
     if ui
         .add_enabled(
             approve,
-            egui::Button::new(
-                if matches!(p.payload, Some(ApprovalContent::FindingRisk { .. })) {
-                    "Accept this finding's risk"
-                } else {
-                    "Approve exact proposal"
-                },
-            ),
+            egui::Button::new(if desktop_takeover {
+                "OK"
+            } else if matches!(p.payload, Some(ApprovalContent::FindingRisk { .. })) {
+                "Accept this finding's risk"
+            } else {
+                "Approve exact proposal"
+            }),
         )
         .clicked()
     {
         actions.push(Action::Decide(true));
     }
-    if ui
+    if desktop_takeover {
+        if ui.add_enabled(can, egui::Button::new("Wait")).clicked() {
+            actions.push(Action::WaitForDesktop);
+        }
+    } else if ui
         .add_enabled(can, egui::Button::new("Reject proposal"))
         .clicked()
     {
