@@ -70,6 +70,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
+mod agents;
 mod artifacts;
 mod authority;
 mod browser;
@@ -95,6 +96,7 @@ mod schemas;
 mod sessions;
 mod usage;
 mod work;
+pub use agents::*;
 pub use artifacts::*;
 pub use authority::*;
 pub use browser::*;

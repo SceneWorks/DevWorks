@@ -5,7 +5,9 @@
 //! service (`crate::services::runs`) is the only writer; every update is a compare-and-set on the
 //! record's revision, so a stale writer gets a [`StorageError::RevisionConflict`] and changes
 //! nothing.
-use super::{MAX_PAGE, StorageError};
+use super::{
+    MAX_PAGE, StorageError, StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
+};
 use crate::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId, RootId};
 use serde_json::Value;
 
@@ -528,6 +530,55 @@ pub struct StoredStopCoverage {
 }
 
 pub trait RunRead {
+    fn agent_message(&self, id: &Id) -> Result<Option<StoredAgentMessage>, StorageError>;
+    fn agent_message_by_key(
+        &self,
+        project: &ProjectId,
+        sender: &ActorId,
+        key: &str,
+    ) -> Result<Option<StoredAgentMessage>, StorageError>;
+    /// Project history, newest first. `before` is the last message ID of the prior page.
+    fn agent_messages(
+        &self,
+        project: &ProjectId,
+        before: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredAgentMessage>, StorageError>;
+    fn agent_delivery(
+        &self,
+        message: &Id,
+        recipient: Option<&AssignmentId>,
+    ) -> Result<Option<StoredAgentDelivery>, StorageError>;
+    fn agent_session_delivery(
+        &self,
+        message: &Id,
+        session: &Id,
+    ) -> Result<Option<StoredAgentDelivery>, StorageError>;
+    /// Delivery cursor is global, so a session can resume after a crash without reordering.
+    fn agent_inbox(
+        &self,
+        project: &ProjectId,
+        recipient: Option<&AssignmentId>,
+        after: i64,
+        include_read: bool,
+        limit: u16,
+    ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError>;
+    fn agent_session_inbox(
+        &self,
+        project: &ProjectId,
+        session: &Id,
+        after: i64,
+        include_read: bool,
+        limit: u16,
+    ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError>;
+    fn agent_delivery_head(&self) -> Result<i64, StorageError>;
+    fn agent_message_events(
+        &self,
+        project: &ProjectId,
+        after: i64,
+        limit: u16,
+    ) -> Result<Vec<StoredAgentMessageEvent>, StorageError>;
+    fn agent_event_head(&self) -> Result<i64, StorageError>;
     fn root_control(&self, root: &RootId) -> Result<Option<StoredRootControl>, StorageError>;
     /// Roots with a journaled stop whose outcome is still to be observed, in root order after
     /// `after`, at most `limit` (1..=500).
@@ -622,6 +673,23 @@ pub trait RunRead {
 }
 
 pub trait RunRepository: RunRead {
+    fn insert_agent_message(&mut self, message: &StoredAgentMessage) -> Result<(), StorageError>;
+    fn resolve_agent_message(
+        &mut self,
+        message: &StoredAgentMessage,
+        expected_revision: i64,
+    ) -> Result<(), StorageError>;
+    fn insert_agent_delivery(&mut self, delivery: &StoredAgentDelivery)
+    -> Result<(), StorageError>;
+    fn update_agent_delivery(
+        &mut self,
+        delivery: &StoredAgentDelivery,
+        expected_revision: i64,
+    ) -> Result<(), StorageError>;
+    fn insert_agent_message_event(
+        &mut self,
+        event: &StoredAgentMessageEvent,
+    ) -> Result<(), StorageError>;
     /// Inserts the root's first control record (its revision is the record's).
     fn insert_root_control(&mut self, control: &StoredRootControl) -> Result<(), StorageError>;
     /// Replaces the record when its stored revision is `expected` (a `Control` conflict

@@ -727,10 +727,22 @@ fn transcript_state(
     }
     // The atomic transcript commit can precede the registry's final sequence marker.
     // Keep one copy of this attempt's text throughout that handover.
-    let entries: Vec<_> = t.entries.iter().filter(|entry| !matches!(
-        (&entry.body, preview),
-        (TranscriptBody::AssistantAttempt { attempt_id, .. }, Some(p)) if *attempt_id == p.attempt_id
-    )).collect();
+    let latest_notice = t
+        .entries
+        .iter()
+        .rposition(|entry| matches!(&entry.body, TranscriptBody::HostNotice { .. }));
+    let entries: Vec<_> = t.entries.iter().enumerate().filter_map(|(index, entry)| {
+        if matches!(&entry.body, TranscriptBody::HostNotice { .. }) && Some(index) != latest_notice {
+            return None;
+        }
+        if matches!(
+            (&entry.body, preview),
+            (TranscriptBody::AssistantAttempt { attempt_id, .. }, Some(p)) if *attempt_id == p.attempt_id
+        ) {
+            return None;
+        }
+        Some(entry)
+    }).collect();
     let width = ui.available_width();
     t.blocks.show(
         ui,

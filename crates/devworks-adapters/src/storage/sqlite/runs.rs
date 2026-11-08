@@ -2,6 +2,7 @@
 //! and `blockers` (migration 1, extended by migration 11), `run_instructions` and
 //! `session_turns` (migration 11), `stop_coverage` (migration 16), plus the read-only views run
 //! control needs of `feature_plans`, `projects`, `work_items` and `queue_entries`.
+use super::agent_messages;
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use devworks_core::ports::storage::*;
@@ -643,6 +644,36 @@ const LIVE_ASSIGNMENT: &str = "state IN ('Ready','Active','Waiting')";
 macro_rules! run_reads {
     ($t:ty) => {
         impl RunRead for $t {
+            fn agent_message(&self, id: &Id) -> Result<Option<StoredAgentMessage>, StorageError> {
+                agent_messages::message(self.conn, id)
+            }
+            fn agent_message_by_key(&self, project: &ProjectId, sender: &ActorId, key: &str) -> Result<Option<StoredAgentMessage>, StorageError> {
+                agent_messages::by_key(self.conn, project, sender, key)
+            }
+            fn agent_messages(&self, project: &ProjectId, before: Option<&Id>, limit: u16) -> Result<Vec<StoredAgentMessage>, StorageError> {
+                agent_messages::messages(self.conn, project, before, limit)
+            }
+            fn agent_delivery(&self, message: &Id, recipient: Option<&AssignmentId>) -> Result<Option<StoredAgentDelivery>, StorageError> {
+                agent_messages::delivery(self.conn, message, recipient)
+            }
+            fn agent_session_delivery(&self, message: &Id, session: &Id) -> Result<Option<StoredAgentDelivery>, StorageError> {
+                agent_messages::session_delivery(self.conn, message, session)
+            }
+            fn agent_inbox(&self, project: &ProjectId, recipient: Option<&AssignmentId>, after: i64, include_read: bool, limit: u16) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+                agent_messages::inbox(self.conn, project, recipient, after, include_read, limit)
+            }
+            fn agent_session_inbox(&self, project: &ProjectId, session: &Id, after: i64, include_read: bool, limit: u16) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+                agent_messages::session_inbox(self.conn, project, session, after, include_read, limit)
+            }
+            fn agent_delivery_head(&self) -> Result<i64, StorageError> {
+                agent_messages::delivery_head(self.conn)
+            }
+            fn agent_message_events(&self, project: &ProjectId, after: i64, limit: u16) -> Result<Vec<StoredAgentMessageEvent>, StorageError> {
+                agent_messages::events(self.conn, project, after, limit)
+            }
+            fn agent_event_head(&self) -> Result<i64, StorageError> {
+                agent_messages::event_head(self.conn)
+            }
             fn root_control(
                 &self,
                 root: &RootId,
@@ -979,6 +1010,35 @@ fn root_exists(conn: &Connection, root: &RootId) -> Result<(), StorageError> {
 }
 
 impl RunRepository for Unit<'_> {
+    fn insert_agent_message(&mut self, message: &StoredAgentMessage) -> Result<(), StorageError> {
+        agent_messages::insert_message(self.conn, message)
+    }
+    fn resolve_agent_message(
+        &mut self,
+        message: &StoredAgentMessage,
+        expected_revision: i64,
+    ) -> Result<(), StorageError> {
+        agent_messages::resolve_message(self.conn, message, expected_revision)
+    }
+    fn insert_agent_delivery(
+        &mut self,
+        delivery: &StoredAgentDelivery,
+    ) -> Result<(), StorageError> {
+        agent_messages::insert_delivery(self.conn, delivery)
+    }
+    fn update_agent_delivery(
+        &mut self,
+        delivery: &StoredAgentDelivery,
+        expected_revision: i64,
+    ) -> Result<(), StorageError> {
+        agent_messages::update_delivery(self.conn, delivery, expected_revision)
+    }
+    fn insert_agent_message_event(
+        &mut self,
+        event: &StoredAgentMessageEvent,
+    ) -> Result<(), StorageError> {
+        agent_messages::insert_event(self.conn, event)
+    }
     fn insert_root_control(&mut self, c: &StoredRootControl) -> Result<(), StorageError> {
         if c.revision < 1 || c.generation < 0 {
             return Err(invalid("root control revision or generation out of range"));

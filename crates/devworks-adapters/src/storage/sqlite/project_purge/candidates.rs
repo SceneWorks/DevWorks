@@ -207,6 +207,13 @@ pub(super) fn selection(project: &ProjectId) -> Result<Selection, StorageError> 
         "owned_containers".into(),
         Value::String("project_id=?1".into()),
     );
+    for table in [
+        "agent_messages",
+        "agent_message_deliveries",
+        "agent_message_events",
+    ] {
+        predicates.insert(table.into(), Value::String("project_id=?1".into()));
+    }
     Ok(Selection {
         project: project.clone(),
         anchors,
