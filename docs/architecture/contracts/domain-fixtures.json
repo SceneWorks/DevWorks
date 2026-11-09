@@ -1780,42 +1780,42 @@
   {
     "id": "input-mcp.connect-Command",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.connect\",\"serverId\":\"id-a\",\"expectedRevision\":\"1\"}}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.connect\",\"scope\":{\"kind\":\"Workspace\"},\"serverId\":\"id-a\",\"expectedRevision\":\"1\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-mcp.discover-Command",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.discover\",\"serverId\":\"id-a\",\"expectedCatalogRevision\":\"1\"}}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.discover\",\"scope\":{\"kind\":\"Workspace\"},\"serverId\":\"id-a\",\"expectedCatalogRevision\":\"1\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-mcp.select_tools-Command",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.select_tools\",\"serverId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedCatalogRevision\":\"1\",\"toolIds\":[]}}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.select_tools\",\"scope\":{\"kind\":\"Workspace\"},\"serverId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedCatalogRevision\":\"1\",\"toolIds\":[]}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-mcp.resources-Query",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.resources\",\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20}}}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.resources\",\"scope\":{\"kind\":\"Workspace\"},\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20}}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-mcp.prompts-Query",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.prompts\",\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20}}}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.prompts\",\"scope\":{\"kind\":\"Workspace\"},\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20}}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-mcp.capabilities-Query",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.capabilities\",\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20}}}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.capabilities\",\"scope\":{\"kind\":\"Workspace\"},\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20}}}",
     "typedValid": true,
     "schemaValid": true
   },
