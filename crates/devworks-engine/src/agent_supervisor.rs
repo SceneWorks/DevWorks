@@ -3,10 +3,10 @@
 use crate::runs::{ActivationLauncher, Launch, LaunchEnd, LaunchFuture};
 use crate::store;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
-use devworks_core::ports::storage::{ApplicationStore, StorageError};
+use devworks_core::ports::storage::{ApplicationStore, StorageError, StoredSession};
 use devworks_core::ports::{IdKind, IdSource};
 use devworks_core::protocol::records::AgentRecord;
-use devworks_core::protocol::{Counter, Id, Revision};
+use devworks_core::protocol::{AssignmentId, Counter, Id, Revision};
 use devworks_core::services::agents::AgentService;
 use devworks_core::services::runs::substrate::ActivationFailure;
 use devworks_core::services::sessions::Failure;
@@ -57,6 +57,119 @@ impl AgentLauncher {
             Counter::new(info.restore_epoch).expect("nonnegative restore epoch"),
             Revision::new(1).expect("positive policy revision"),
         )
+    }
+
+    fn turn_context(
+        store: &dyn ApplicationStore,
+        ids: &dyn IdSource,
+        session: StoredSession,
+        assignment_id: AssignmentId,
+        activation_id: Id,
+        epoch: i64,
+    ) -> InvocationContext {
+        HostIngress::new(store)
+            .context(
+                session.agent_id,
+                PrincipalKind::Agent,
+                ids.next_id(IdKind::Invocation),
+                Id::new("agent-turn").expect("static ingress identity"),
+                Counter::new(store.info().restore_epoch).expect("nonnegative restore epoch"),
+                Revision::new(1).expect("positive policy revision"),
+            )
+            .with_session(session.id)
+            .with_lineage(session.project_id, session.root_id, Some(assignment_id))
+            .with_activation(activation_id, epoch)
+    }
+
+    /// Executes one ready child under the root activation. The caller schedules children within
+    /// the root's independent capacity; activation and completion each recheck current ownership.
+    pub fn launch_child(
+        &self,
+        assignment_id: AssignmentId,
+        activation_id: Id,
+        epoch: i64,
+        stop: watch::Receiver<bool>,
+    ) -> LaunchFuture {
+        let store = self.store.clone();
+        let ids = self.ids.clone();
+        let agents = self.agents.clone();
+        let executor = self.executor.clone();
+        Box::pin(async move {
+            if *stop.borrow() {
+                return stopped();
+            }
+            let host = Self::host_context(&*store, &*ids);
+            let child = {
+                let agents = agents.clone();
+                let host = host.clone();
+                let assignment_id = assignment_id.clone();
+                let activation_id = activation_id.clone();
+                store::write(&store, move |tx| {
+                    let child = match agents
+                        .activate_child(tx, &host, &assignment_id, &activation_id, epoch)
+                        .map_err(failure)?
+                    {
+                        Ok(child) => child,
+                        Err(fenced) => return Ok(Err(fenced)),
+                    };
+                    let assignment = tx
+                        .runs()
+                        .assignment(&child.assignment_id)?
+                        .ok_or(StorageError::ScopeDenied)?;
+                    let session = tx
+                        .sessions()
+                        .session(&assignment.session_id)?
+                        .ok_or(StorageError::ScopeDenied)?;
+                    Ok(Ok((child, session)))
+                })
+                .await
+            };
+            let (child, session) = match child {
+                Ok(Ok(value)) => value,
+                Ok(Err(fenced)) => {
+                    return failed(StorageError::InvalidRecord(format!(
+                        "child activation fenced: {fenced:?}"
+                    )));
+                }
+                Err(error) => return failed(error),
+            };
+            if *stop.borrow() {
+                return stopped();
+            }
+            let context = Self::turn_context(
+                &*store,
+                &*ids,
+                session,
+                child.assignment_id.clone(),
+                activation_id.clone(),
+                epoch,
+            );
+            let stop_watch = stop.clone();
+            let end = executor.run(context, child.clone(), stop).await;
+            if *stop_watch.borrow() {
+                return stopped();
+            }
+            if let LaunchEnd::Finished {
+                outcome: devworks_core::ports::storage::ActivationOutcome::Completed,
+                ..
+            } = &end
+            {
+                let assignment_id = child.assignment_id;
+                let complete = {
+                    let agents = agents.clone();
+                    store::write(&store, move |tx| {
+                        agents
+                            .complete_child(tx, &host, &assignment_id, &activation_id, epoch)
+                            .map_err(failure)
+                    })
+                    .await
+                };
+                if let Err(error) = complete {
+                    return failed(error);
+                }
+            }
+            end
+        })
     }
 }
 
@@ -127,22 +240,14 @@ impl ActivationLauncher for AgentLauncher {
             if *launch.stop.borrow() {
                 return stopped();
             }
-            let context = HostIngress::new(&*store)
-                .context(
-                    session.agent_id,
-                    PrincipalKind::Agent,
-                    ids.next_id(IdKind::Invocation),
-                    Id::new("agent-turn").expect("static ingress identity"),
-                    Counter::new(store.info().restore_epoch).expect("nonnegative restore epoch"),
-                    Revision::new(1).expect("positive policy revision"),
-                )
-                .with_session(session.id)
-                .with_lineage(
-                    session.project_id,
-                    session.root_id,
-                    Some(coordinator.assignment_id.clone()),
-                )
-                .with_activation(activation_id.clone(), epoch);
+            let context = Self::turn_context(
+                &*store,
+                &*ids,
+                session,
+                coordinator.assignment_id.clone(),
+                activation_id.clone(),
+                epoch,
+            );
             let stop_watch = launch.stop.clone();
             let end = executor
                 .run(context, coordinator.clone(), launch.stop)

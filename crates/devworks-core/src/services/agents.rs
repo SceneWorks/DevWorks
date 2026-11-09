@@ -441,6 +441,51 @@ impl AgentService {
         Ok(())
     }
 
+    /// A child turn reports completion only after its effects have settled; this transition
+    /// checks current activation ownership and descendants, then releases its per-root slot.
+    pub fn complete_child(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        host: &InvocationContext,
+        assignment_id: &AssignmentId,
+        activation_id: &crate::protocol::Id,
+        owner_epoch: i64,
+    ) -> Result<(), Failure> {
+        if host.principal_kind() != PrincipalKind::Host {
+            return Err(Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into());
+        }
+        let activation = tx.runs().activation(activation_id)?.ok_or_else(denied)?;
+        let assignment = tx.runs().assignment(assignment_id)?.ok_or_else(denied)?;
+        if activation.phase != ActivationPhase::Running
+            || activation.owner_epoch != owner_epoch
+            || assignment.purpose != crate::ports::storage::AssignmentPurpose::Child
+            || assignment.execution_id.as_ref() != Some(activation_id)
+            || assignment.root_id != activation.root_id
+            || assignment.state != AssignmentState::Active
+            || runs::root_assignments(tx.runs(), &assignment.root_id, true)?
+                .iter()
+                .any(|child| child.parent_id.as_ref() == Some(assignment_id))
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::Conflict,
+                "assignment",
+                Some(assignment.id.0),
+            )
+            .into());
+        }
+        self.runs
+            .set_assignment_state(
+                tx,
+                host.principal(),
+                assignment_id,
+                assignment.revision,
+                AssignmentState::Completed,
+                None,
+            )?
+            .map_err(fenced)?;
+        Ok(())
+    }
+
     /// Starts a durable child under the root's current activation. The child may investigate
     /// readiness before implementation; each later effect still needs its own dispatch admission.
     pub fn activate_child(

@@ -906,6 +906,33 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
                 if reason == "the child parent has ended"
         ))
     }));
+    let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
+    let child_id = child.assignment_id.clone();
+    let execution_id = activation.id.clone();
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    assert!(fx.tx({
+        let host = host.clone();
+        let child_id = child_id.clone();
+        let execution_id = execution_id.clone();
+        let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+        move |_, tx| {
+            Ok(agents
+                .complete_child(tx, &host, &child_id, &execution_id, epoch + 1)
+                .is_err())
+        }
+    }));
+    fx.tx(move |_, tx| {
+        agents
+            .complete_child(tx, &host, &child_id, &execution_id, epoch)
+            .map_err(|error| {
+                StorageError::InvalidRecord(format!("child completion refused: {error:?}"))
+            })
+    });
+    let completed = read(&*fx.store, |snapshot| {
+        snapshot.runs().assignment(&child.assignment_id)
+    })
+    .expect("completed child");
+    assert_eq!(completed.state, AssignmentState::Completed);
 }
 
 #[derive(Default)]
@@ -974,6 +1001,93 @@ fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
         fx.activation(&assignment.execution_id.unwrap()).outcome,
         Some(ActivationOutcome::Completed)
     );
+}
+
+#[test]
+fn agent_launcher_runs_a_ready_child_under_the_same_activation() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let activation = fx.launch("coordinator-runner");
+    let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let activation_id = activation.id.clone();
+    let epoch = activation.owner_epoch;
+    let primary = fx.tx(move |_, tx| {
+        agents
+            .materialize_primary(tx, &host, &activation_id, epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("primary: {error:?}")))
+    });
+    let session = read(&*fx.store, |snapshot| {
+        let assignment = snapshot.runs().assignment(&primary.assignment_id)?.unwrap();
+        snapshot.sessions().session(&assignment.session_id)
+    })
+    .unwrap();
+    let agent = devworks_core::context::HostIngress::new(&*fx.store)
+        .context(
+            session.agent_id,
+            PrincipalKind::Agent,
+            id("delegate-child"),
+            id("delegate-ingress"),
+            devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(session.id)
+        .with_lineage(
+            Some(ProjectId(id("project-a"))),
+            Some(rid("root-i")),
+            Some(primary.assignment_id),
+        )
+        .with_activation(activation.id.clone(), epoch);
+    let request = devworks_core::operations::agents::DelegateInput {
+        root_id: rid("root-i"),
+        expected_control_revision: Revision::new(fx.control("root-i").revision).unwrap(),
+        task_ids: devworks_core::protocol::support::BoundedList(vec![]),
+        role_id: id("worker"),
+        instruction: devworks_core::protocol::support::BoundedText("Investigate".into()),
+        source_checkpoint_id: None,
+    };
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let child = fx.tx(move |_, tx| {
+        agents
+            .delegate(tx, &agent, &request)
+            .map_err(|error| StorageError::InvalidRecord(format!("delegate: {error:?}")))
+    });
+    let turns = Arc::new(CompletedCoordinator::default());
+    let launcher = AgentLauncher::new(
+        fx.store.clone(),
+        fx.h.ids.clone(),
+        Arc::new(AgentService::new(fx.h.ids.clone(), fx.service.clone())),
+        turns.clone(),
+    );
+    let (_, stop) = tokio::sync::watch::channel(false);
+    let end = runtime().block_on(launcher.launch_child(
+        child.assignment_id.clone(),
+        activation.id,
+        epoch,
+        stop,
+    ));
+    assert!(matches!(
+        end,
+        LaunchEnd::Finished {
+            outcome: ActivationOutcome::Completed,
+            ..
+        }
+    ));
+    let seen = turns.0.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].1, child.assignment_id);
+    let assignment = read(&*fx.store, |snapshot| {
+        snapshot.runs().assignment(&child.assignment_id)
+    })
+    .unwrap();
+    assert_eq!(assignment.purpose, AssignmentPurpose::Child);
+    assert_eq!(assignment.state, AssignmentState::Completed);
+    let child_session = read(&*fx.store, |snapshot| {
+        snapshot.sessions().session(&assignment.session_id)
+    })
+    .unwrap();
+    assert_eq!(seen[0].0, child_session.agent_id);
 }
 
 struct CompletesOnStop;
