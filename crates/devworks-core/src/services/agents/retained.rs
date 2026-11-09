@@ -423,16 +423,6 @@ pub fn handover_item(
 const DIRECT_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
 const SILENT_SESSION_MS: i64 = 15 * 60 * 1_000;
 
-fn repository_scope(
-    tx: &mut dyn WriteTransaction,
-    session: &crate::ports::storage::StoredSession,
-) -> Result<Vec<Id>, StorageError> {
-    match &session.root_id {
-        Some(root) => tx.work().work_repositories(&root.0),
-        None => Ok(Vec::new()),
-    }
-}
-
 /// Passes an unread or still-open itemless direct message once from an ended or silent holder to
 /// a new session with the same project and repository scope. The original delivery is immutable
 /// to its recipient except for the successor marker; the new copy has its own inbox sequence.
@@ -448,7 +438,7 @@ pub fn handover_direct(
         return Err(StorageError::ScopeDenied);
     }
     let project = post::session_project(tx, &session)?.ok_or(StorageError::ScopeDenied)?;
-    let repositories = repository_scope(tx, &session)?;
+    let repositories = tx.sessions().session_repository_scope(session_id)?;
     let now = tx.now_ms();
     let retention_start = now.saturating_sub(DIRECT_RETENTION_MS);
     let stale_before = now.saturating_sub(SILENT_SESSION_MS);
@@ -488,7 +478,7 @@ pub fn handover_direct(
                 .ok_or(StorageError::ScopeDenied)?;
             if post::session_project(tx, &holder)?.as_ref() != Some(&project)
                 || post::session_project(tx, &original)?.as_ref() != Some(&project)
-                || repository_scope(tx, &original)? != repositories
+                || tx.sessions().session_repository_scope(original_id)? != repositories
             {
                 continue;
             }

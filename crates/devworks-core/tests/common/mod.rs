@@ -1429,6 +1429,9 @@ impl SessionRead for Unsupported {
     fn session(&self, _: &Id) -> Result<Option<StoredSession>, StorageError> {
         nope()
     }
+    fn session_repository_scope(&self, _: &Id) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
     fn sessions(
         &self,
         _: &SessionScope,

@@ -998,6 +998,20 @@ macro_rules! session_reads {
             fn session(&self, id: &Id) -> Result<Option<StoredSession>, StorageError> {
                 session(self.conn, id)
             }
+            fn session_repository_scope(&self, id: &Id) -> Result<Vec<Id>, StorageError> {
+                let raw: Option<String> = db(self.conn.query_row(
+                    "SELECT repository_ids_json FROM sessions WHERE id=?1",
+                    [id.as_str()], |row| row.get(0),
+                ).optional())?;
+                let raw = raw.ok_or(StorageError::ScopeDenied)?;
+                let ids: Vec<Id> = serde_json::from_str::<Vec<String>>(&raw)
+                    .map_err(|_| corrupt("session repository scope"))?
+                    .into_iter().map(id_of).collect::<Result<_, _>>()?;
+                if ids.windows(2).any(|pair| pair[0].as_str() >= pair[1].as_str()) {
+                    return Err(corrupt("unordered session repository scope"));
+                }
+                Ok(ids)
+            }
             fn sessions(
                 &self,
                 scope: &SessionScope,
@@ -1281,7 +1295,7 @@ impl SessionRepository for Unit<'_> {
             s.created_at_ms
         ]))?;
         db(db(self.conn.prepare_cached(
-            "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,pin_json,project_id,title,created_by,created_at,closed_at,closed_by,next_seq,checkpoint_seq) VALUES(?1,?2,?3,?4,?5,?6,NULL,?7,?8,?9,?10,?11,?12,?13,?14)",
+            "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,pin_json,project_id,title,created_by,created_at,closed_at,closed_by,next_seq,checkpoint_seq,repository_ids_json) VALUES(?1,?2,?3,?4,?5,?6,NULL,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
         ))?
         .execute(params![
             s.id.as_str(),
@@ -1297,7 +1311,20 @@ impl SessionRepository for Unit<'_> {
             s.closed_at_ms,
             s.closed_by.as_ref().map(|a| a.0.as_str()),
             s.next_sequence,
-            s.checkpoint_sequence
+            s.checkpoint_sequence,
+            {
+                let repositories: Vec<String> = match &s.root_id {
+                    Some(root) => {
+                        let mut statement = db(self.conn.prepare(
+                            "SELECT repository_id FROM work_repositories WHERE work_id=?1 ORDER BY repository_id"
+                        ))?;
+                        let rows = db(statement.query_map([root.0.as_str()], |row| row.get::<_, String>(0)))?;
+                        rows.map(db).collect::<Result<Vec<_>, _>>()?
+                    }
+                    None => Vec::new(),
+                };
+                serde_json::to_string(&repositories).map_err(|_| invalid("session repository scope"))?
+            }
         ]))?;
         Ok(())
     }

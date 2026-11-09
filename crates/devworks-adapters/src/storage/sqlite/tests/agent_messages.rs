@@ -93,13 +93,28 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
     })
     .unwrap();
     h.raw().execute_batch(
-        "UPDATE sessions SET closed_at=1700000000000,closed_by='human-a' WHERE id='session-old';
-         INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
-           VALUES('session-other','conv-b','agent-a','root-b',0,1,'project-a',1700000000000),
-                 ('session-next','conv-a','agent-a','root-a',0,1,'project-a',1700000000000),
-                 ('session-later','conv-a','agent-a','root-a',0,1,'project-a',1700000000000);"
+        r#"UPDATE sessions SET closed_at=1700000000000,closed_by='human-a' WHERE id='session-old';
+         INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
+           VALUES('session-other','conv-b','agent-a','root-b',0,1,'project-a',1700000000000,'["repo-b"]'),
+                 ('session-next','conv-a','agent-a','root-a',0,1,'project-a',1700000000000,'["repo-a"]'),
+                 ('session-later','conv-a','agent-a','root-a',0,1,'project-a',1700000000000,'["repo-a"]');"#
     ).unwrap();
+    h.raw()
+        .execute_batch(
+            "DELETE FROM work_repositories WHERE work_id='root-a';
+         INSERT INTO work_repositories VALUES('root-a','repo-b');",
+        )
+        .unwrap();
     let result = run_write(&s, WriteOptions::default(), move |tx| {
+        assert_eq!(
+            tx.sessions().session_repository_scope(&id("session-old"))?,
+            vec![id("repo-a")]
+        );
+        assert_eq!(
+            tx.sessions()
+                .session_repository_scope(&id("session-next"))?,
+            vec![id("repo-a")]
+        );
         assert_eq!(handover_direct(tx, &id("session-other"))?, 0);
         assert_eq!(handover_direct(tx, &id("session-next"))?, 1);
         assert_eq!(handover_direct(tx, &id("session-next"))?, 0);
@@ -151,8 +166,8 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
     .unwrap();
     h.set_now(1_700_000_000_000 + 8 * 24 * 60 * 60 * 1_000);
     h.raw().execute_batch(
-        "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
-           VALUES('session-expired','conv-a','agent-a','root-a',0,1,'project-a',1700691200000);"
+        r#"INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
+           VALUES('session-expired','conv-a','agent-a','root-a',0,1,'project-a',1700691200000,'["repo-a"]');"#
     ).unwrap();
     run_write(&s, WriteOptions::default(), |tx| {
         assert_eq!(handover_direct(tx, &id("session-expired"))?, 0);

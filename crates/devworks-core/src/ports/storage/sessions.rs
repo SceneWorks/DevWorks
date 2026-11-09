@@ -317,6 +317,8 @@ impl LineageRow {
 pub trait SessionRead {
     fn work_root(&self, root: &RootId) -> Result<Option<WorkRoot>, StorageError>;
     fn session(&self, id: &Id) -> Result<Option<StoredSession>, StorageError>;
+    /// Immutable repository IDs captured when the session was created, in ID order.
+    fn session_repository_scope(&self, id: &Id) -> Result<Vec<Id>, StorageError>;
     /// Sessions in `scope` (optionally only open or closed ones), newest first after `after`, at
     /// most `limit` (1..=500).
     fn sessions(
