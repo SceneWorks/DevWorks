@@ -133,7 +133,6 @@ impl ProviderContext {
         if previous.context_epoch.get().checked_add(1) != Some(next.context_epoch.get()) {
             return Err(ProviderError::InvalidInput("context_epoch_boundary"));
         }
-        let mut outstanding = std::collections::BTreeSet::<String>::new();
         let mut omitted = Vec::new();
         let mut messages = Vec::with_capacity(self.messages.len());
         for mut message in self.messages {
@@ -144,22 +143,6 @@ impl ProviderContext {
                         omitted.push(artifact);
                     }
                     ContentBlock::Native { .. } => return Err(ProviderError::ForeignNative),
-                    ContentBlock::ToolCall { ref call_id, .. } => {
-                        if !matches!(&message.role, MessageRole::Assistant)
-                            || !outstanding.insert(call_id.clone())
-                        {
-                            return Err(ProviderError::InvalidInput("tool_call_order"));
-                        }
-                        content.push(block);
-                    }
-                    ContentBlock::ToolResult { ref call_id, .. } => {
-                        if !matches!(&message.role, MessageRole::User)
-                            || !outstanding.remove(call_id)
-                        {
-                            return Err(ProviderError::InvalidInput("tool_result_order"));
-                        }
-                        content.push(block);
-                    }
                     _ => content.push(block),
                 }
             }
@@ -167,9 +150,6 @@ impl ProviderContext {
                 message.content = content;
                 messages.push(message);
             }
-        }
-        if !outstanding.is_empty() {
-            return Err(ProviderError::InvalidInput("unanswered_tool_call"));
         }
         self.messages = messages;
         self.validate()?;
@@ -214,6 +194,36 @@ impl ProviderContext {
             .any(|m| m.content.is_empty() || m.content.len() > 4096)
         {
             return Err(ProviderError::InvalidInput("context_blocks"));
+        }
+        let mut outstanding = std::collections::BTreeSet::<String>::new();
+        for message in &self.messages {
+            for block in &message.content {
+                match block {
+                    ContentBlock::ToolCall {
+                        call_id, wire_name, ..
+                    } => {
+                        if !matches!(message.role, MessageRole::Assistant)
+                            || call_id.is_empty()
+                            || call_id.len() > 1024
+                            || wire_name.is_empty()
+                            || wire_name.len() > 128
+                            || !outstanding.insert(call_id.clone())
+                        {
+                            return Err(ProviderError::InvalidInput("tool_call_order"));
+                        }
+                    }
+                    ContentBlock::ToolResult { call_id, .. }
+                        if matches!(message.role, MessageRole::User)
+                            && outstanding.remove(call_id) => {}
+                    ContentBlock::ToolResult { .. } => {
+                        return Err(ProviderError::InvalidInput("tool_result_order"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if !outstanding.is_empty() {
+            return Err(ProviderError::InvalidInput("unanswered_tool_call"));
         }
         Ok(())
     }

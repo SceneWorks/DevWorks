@@ -101,6 +101,55 @@ fn context() -> ProviderContext {
 }
 
 #[test]
+fn provider_context_requires_ordered_completed_tool_exchanges() {
+    let mut material = Material::new();
+    let arguments = material.put(b"{}", "application/json");
+    let call = || ContentBlock::ToolCall {
+        call_id: "call".into(),
+        wire_name: "lookup".into(),
+        arguments: arguments.clone(),
+    };
+    let result = || ContentBlock::ToolResult {
+        call_id: "call".into(),
+        content: vec![ResultBlock::Text { text: "ok".into() }],
+        is_error: false,
+        cache: None,
+    };
+    let mut unmatched = context();
+    unmatched.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![result()],
+    });
+    assert!(matches!(
+        unmatched.validate(),
+        Err(ProviderError::InvalidInput("tool_result_order"))
+    ));
+
+    let mut pending = context();
+    pending.messages.push(Message {
+        role: MessageRole::Assistant,
+        content: vec![call()],
+    });
+    assert!(matches!(
+        pending.validate(),
+        Err(ProviderError::InvalidInput("unanswered_tool_call"))
+    ));
+    pending.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![result()],
+    });
+    assert!(pending.validate().is_ok());
+    pending.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![result()],
+    });
+    assert!(matches!(
+        pending.validate(),
+        Err(ProviderError::InvalidInput("tool_result_order"))
+    ));
+}
+
+#[test]
 fn explicit_provider_epoch_conversion_preserves_completed_tool_exchange() {
     let mut material = Material::new();
     let native = material.put(b"opaque", "application/json");
@@ -417,6 +466,17 @@ fn exact_native_bindings_and_tool_argument_bytes_survive() {
                 arguments: args,
             },
         ],
+    });
+    c.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![ContentBlock::ToolResult {
+            call_id: "call-a".into(),
+            content: vec![ResultBlock::Text {
+                text: "found".into(),
+            }],
+            is_error: false,
+            cache: None,
+        }],
     });
     let r = request(&mut m, &c);
     let p = prepare(
@@ -1362,6 +1422,19 @@ fn repeated_native_and_tool_json_artifacts_share_the_request_expansion_budget() 
                     }],
                 })
                 .collect();
+            if !native {
+                context.messages.push(Message {
+                    role: MessageRole::User,
+                    content: (0..512)
+                        .map(|i| ContentBlock::ToolResult {
+                            call_id: format!("call-{i}"),
+                            content: vec![ResultBlock::Text { text: "ok".into() }],
+                            is_error: false,
+                            cache: None,
+                        })
+                        .collect(),
+                });
+            }
             let request = request(&mut materials, &context);
             let result = prepare(
                 identity(binding.clone()),
