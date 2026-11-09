@@ -220,6 +220,7 @@ pub mod runs;
 pub mod runtime;
 mod store;
 mod tool_turn;
+pub use tool_turn::ResolvedToolCall;
 pub mod usage;
 
 pub use dispatch::{

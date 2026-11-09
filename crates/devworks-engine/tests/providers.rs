@@ -15,7 +15,7 @@ use devworks_core::{
         storage::*,
         usage::{PriceQuery, PriceResolver},
     },
-    protocol::{ActorId, Counter, Id, Protocol, Revision, provider::*},
+    protocol::{ActorId, AttemptId, Counter, Id, Protocol, Revision, provider::*},
     providers::{
         capabilities::{Capabilities, EmbeddingDimensions, Support},
         context::*,
@@ -751,7 +751,7 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         use devworks_adapters::{power::NativePower, process::NativeProcessHost};
         use devworks_core::services::{diagnostics::DiagnosticService, resources::ResourceService};
         use devworks_engine::{Composition, RuntimeConfig, RunComposition, boot};
-        let event = json!({"choices":[{"index":0,"delta":{"tool_calls":[
+        let event = json!({"choices":[{"index":0,"delta":{"content":"Checking the requested sessions.","tool_calls":[
             {"index":0,"id":"bad","type":"function","function":{"name":"get_session","arguments":"{\"unexpected\":true}"}},
             {"index":1,"id":"good","type":"function","function":{"name":"get_session","arguments":"{\"sessionId\":\"session\"}"}},
             {"index":2,"id":"missing","type":"function","function":{"name":"get_session","arguments":"{\"sessionId\":\"absent\"}"}}
@@ -760,8 +760,17 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         let f = Fx::new("CompatibleChat", Script::sse(&wire), false);
         let tool = f.driver.schemas().builtin("sessions.get", devworks_core::registry::Mode::Query,
             devworks_core::registry::SchemaRevision(1), "get_session").unwrap();
-        let produced = f.produce(f.generation(vec![tool])).await.unwrap();
+        let request = f.generation(vec![tool]);
+        let previous = match &request.input {
+            InferenceInput::Generation { context, .. } => context.clone(),
+            _ => unreachable!(),
+        };
+        let produced = f.produce(request).await.unwrap();
         assert_eq!(produced.result.outcome, Some(AttemptEnd::ToolCallsReady));
+        let attempt = match produced.accounting {
+            DriveOutcome::Settled(balance) => AttemptId(balance.attempt_id),
+            other => panic!("{other:?}"),
+        };
 
         let composition = || {
             let connections = Arc::new(ConnectionService::new(
@@ -787,6 +796,7 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
             }
         };
         let app = boot(composition()).await.unwrap();
+        assert!(app.resolved_tool_turn(&f.context, &id("session"), &attempt, 0).is_err());
         let dispatched = app.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap();
         assert_eq!(dispatched.len(), 3);
         assert!(dispatched.iter().all(|d| matches!(d.outcome, Ok(devworks_core::services::sessions::transcript::BatchOutcome::Accepted(_)))));
@@ -798,6 +808,44 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         assert_eq!(reply("good").body["outcome"]["kind"], "Completed");
         assert_eq!(reply("missing").body["outcome"]["kind"], "Failed");
         assert_eq!(reply("missing").body["outcome"]["code"], "domain_NotFound");
+        let ordered = app.resolved_tool_turn(&f.context, &id("session"), &attempt, 0).unwrap();
+        assert_eq!(ordered.iter().map(|r| r.call.call.native_call_id.as_str()).collect::<Vec<_>>(),
+            vec!["bad", "good", "missing"]);
+        let binding = NativeBinding {
+            connection_id: id("connection"), account_revision: Revision::new(1).unwrap(),
+            endpoint_profile: EndpointProfile::CompatibleChat, model_id: f.model.clone(),
+            context_epoch: Counter::new(0).unwrap(),
+        };
+        let continuation = app.tool_continuation_context(
+            &f.context, &id("session"), &attempt, 0, &binding, &previous).unwrap();
+        assert_eq!(continuation.messages.len(), 3);
+        assert!(matches!(&continuation.messages[1].content[0], ContentBlock::Text { text, .. }
+            if text == "Checking the requested sessions."));
+        let assistant_calls: Vec<_> = continuation.messages[1].content.iter().filter_map(|block| {
+            if let ContentBlock::ToolCall { call_id, .. } = block { Some(call_id.as_str()) } else { None }
+        }).collect();
+        assert_eq!(assistant_calls, vec!["bad", "good", "missing"]);
+        let result_calls: Vec<_> = continuation.messages[2].content.iter().filter_map(|block| {
+            if let ContentBlock::ToolResult { call_id, .. } = block { Some(call_id.as_str()) } else { None }
+        }).collect();
+        assert_eq!(result_calls, assistant_calls);
+        let result_errors: Vec<_> = continuation.messages[2].content.iter().filter_map(|block| {
+            if let ContentBlock::ToolResult { is_error, .. } = block { Some(*is_error) } else { None }
+        }).collect();
+        assert_eq!(result_errors, vec![true, false, true]);
+        let mut foreign_context: ProviderContext = serde_json::from_slice(
+            &f.artifacts.read_exact(f.store.as_ref(), &f.context, &previous, 1024 * 1024).unwrap().0
+        ).unwrap();
+        foreign_context.messages.push(Message {
+            role: MessageRole::Assistant,
+            content: vec![ContentBlock::Native {
+                binding: NativeBinding { model_id: id("foreign-model"), ..binding.clone() },
+                artifact: previous.clone(),
+            }],
+        });
+        let foreign = f.bytes(&serde_json::to_vec(&foreign_context).unwrap());
+        assert!(app.tool_continuation_context(
+            &f.context, &id("session"), &attempt, 0, &binding, &foreign).is_err());
         let reference: ArtifactRef = serde_json::from_value(reply("good").body["outcome"]["artifacts"][0].clone()).unwrap();
         let bytes = f.artifacts.read_exact(f.store.as_ref(), &f.context, &reference, 1024 * 1024).unwrap().0;
         let value: Value = serde_json::from_slice(&bytes).unwrap();

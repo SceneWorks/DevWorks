@@ -7,10 +7,11 @@ use devworks_core::{
     fingerprint::sha256_hex,
     ports::{IdKind, storage::*},
     protocol::{
-        CONTRACT, CommandReply, Id, RetryAdvice,
-        provider::{CompleteToolCall, ToolCallKey, ToolOutcome, TranscriptBody},
+        AttemptId, CONTRACT, CommandReply, Id, RetryAdvice,
+        provider::{CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody},
         results::{DomainDecision, DomainQueryReply},
     },
+    providers::context::{ContentBlock, Message, MessageRole, ProviderContext, ResultBlock},
     registry::{self, Envelope, Mode, OperationDescriptor, SchemaRevision},
     services::{
         artifacts::{ArtifactService, host::HostArtifactPublication, version_ref},
@@ -22,6 +23,335 @@ use devworks_core::{
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
+
+/// One closed call recovered from the transcript. Its result may have completed before a
+/// lower-ordinal sibling, but provider continuation must emit it in the recorded call order.
+pub struct ResolvedToolCall {
+    pub call: CompleteToolCall,
+    pub outcome: ToolOutcome,
+    pub response_sequence: i64,
+}
+
+pub(crate) struct TurnSource<'a> {
+    pub session_id: &'a Id,
+    pub attempt_id: &'a AttemptId,
+    pub after_sequence: i64,
+}
+
+/// Reconstruct a provider turn from durable entries, never from worker completion order. A
+/// pending response leaves the entire turn unassembled while already completed siblings remain
+/// durable and eligible for recovery. `after_sequence` is the host's position before dispatch.
+pub(crate) fn resolved_turn(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    attempt_id: &AttemptId,
+    after_sequence: i64,
+) -> Result<Vec<ResolvedToolCall>, StorageError> {
+    if after_sequence < 0 || ctx.session_id() != Some(session_id) {
+        return Err(StorageError::ScopeDenied);
+    }
+    read_snapshot(store, &ReadOptions::default(), |read| {
+        let session = read
+            .sessions()
+            .session(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.closed()
+            || read.stamp().store_id != *ctx.store_id()
+            || read.stamp().restore_epoch != ctx.restore_epoch().get()
+            || !matches!(
+                ctx.principal_kind(),
+                PrincipalKind::Agent | PrincipalKind::Host
+            )
+            || (ctx.principal_kind() == PrincipalKind::Agent
+                && session.agent_id != *ctx.principal())
+            || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+            || after_sequence >= session.next_sequence
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        if ctx.principal_kind() == PrincipalKind::Agent {
+            let binding = read
+                .authority()
+                .principal(ctx.principal())?
+                .ok_or(StorageError::ScopeDenied)?;
+            if !binding.active
+                || binding
+                    .project_id
+                    .as_ref()
+                    .is_some_and(|project| session.project_id.as_ref() != Some(project))
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+        let mut position = after_sequence;
+        let mut calls = Vec::new();
+        // A turn larger than this is a visible recovery hold, never a silently truncated result.
+        while position < session.last_durable_sequence() {
+            if position - after_sequence >= 10_000 {
+                return Err(invalid("tool turn exceeds transcript scan bound"));
+            }
+            let page = read.sessions().entries(session_id, position, 500)?;
+            if page.is_empty() {
+                return Err(invalid("tool turn transcript gap"));
+            }
+            for entry in &page {
+                if entry.sequence != position + 1 {
+                    return Err(invalid("tool turn transcript gap"));
+                }
+                position = entry.sequence;
+                if entry.kind != "ToolCallRecorded" {
+                    continue;
+                }
+                let TranscriptBody::ToolCallRecorded { tool_call } =
+                    serde_json::from_value(entry.body.clone()).map_err(invalid)?
+                else {
+                    return Err(invalid("tool call entry kind mismatch"));
+                };
+                if &tool_call.call.attempt_id == attempt_id {
+                    calls.push(tool_call);
+                }
+            }
+        }
+        if calls.is_empty() {
+            return Err(StorageError::ScopeDenied);
+        }
+        calls.sort_by_key(|call| call.call.ordinal.get());
+        if calls
+            .windows(2)
+            .any(|pair| pair[0].call.ordinal == pair[1].call.ordinal)
+        {
+            return Err(invalid("duplicate tool call ordinal"));
+        }
+        calls
+            .into_iter()
+            .map(|call| {
+                let row = read
+                    .sessions()
+                    .tool_call(
+                        session_id,
+                        &call.call.attempt_id.0,
+                        &call.call.native_call_id,
+                    )?
+                    .ok_or(StorageError::ScopeDenied)?;
+                let sequence = row.response_sequence.ok_or_else(|| {
+                    StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "tool turn has unanswered calls",
+                    )
+                })?;
+                if row.ordinal != call.call.ordinal.get() || sequence <= row.call_sequence {
+                    return Err(invalid("tool response position mismatch"));
+                }
+                let entry = read
+                    .sessions()
+                    .entries(session_id, sequence - 1, 1)?
+                    .into_iter()
+                    .next()
+                    .filter(|entry| entry.sequence == sequence)
+                    .ok_or_else(|| invalid("tool response entry missing"))?;
+                let TranscriptBody::ToolResponseRecorded {
+                    call: response_key,
+                    outcome,
+                } = serde_json::from_value(entry.body).map_err(invalid)?
+                else {
+                    return Err(invalid("tool response entry kind mismatch"));
+                };
+                if response_key.attempt_id != call.call.attempt_id
+                    || response_key.native_call_id != call.call.native_call_id
+                    || response_key.ordinal != call.call.ordinal
+                {
+                    return Err(invalid("tool response identity mismatch"));
+                }
+                Ok(ResolvedToolCall {
+                    call,
+                    outcome,
+                    response_sequence: sequence,
+                })
+            })
+            .collect()
+    })
+}
+
+/// Append one settled provider exchange to the exact immutable request context that produced it.
+/// The assistant's text, opaque native items and calls retain their transcript order, while
+/// results use call ordinal. Encoders then preserve each endpoint's required native structure.
+pub(crate) fn continuation_context(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    source: TurnSource<'_>,
+    binding: &NativeBinding,
+    previous: &devworks_core::protocol::provider::ArtifactRef,
+) -> Result<ProviderContext, StorageError> {
+    let TurnSource {
+        session_id,
+        attempt_id,
+        after_sequence,
+    } = source;
+    let resolved = resolved_turn(store, ctx, session_id, attempt_id, after_sequence)?;
+    let base = artifacts
+        .read_exact(store, ctx, previous, 8 * 1024 * 1024)
+        .map_err(|_| StorageError::ScopeDenied)?
+        .0;
+    let mut context: ProviderContext = serde_json::from_slice(&base).map_err(invalid)?;
+    context.validate().map_err(|e| invalid(format!("{e:?}")))?;
+    if context
+        .messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .any(|block| {
+            matches!(block,
+        ContentBlock::Native { binding: prior, .. } if prior != binding)
+        })
+    {
+        return Err(invalid("foreign native state requires a new context epoch"));
+    }
+    let entries = read_snapshot(store, &ReadOptions::default(), |read| {
+        let session = read
+            .sessions()
+            .session(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let attempt = read
+            .usage()
+            .inference_attempt(&attempt_id.0)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.closed()
+            || session.context_epoch != binding.context_epoch.get()
+            || attempt.session_id.as_ref() != Some(session_id)
+            || attempt.connection_id != binding.connection_id
+            || attempt.catalog_model_id != binding.model_id
+            || attempt.endpoint_profile != format!("{:?}", binding.endpoint_profile)
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let mut position = after_sequence;
+        let mut selected = Vec::new();
+        while position < session.last_durable_sequence() {
+            if position - after_sequence >= 10_000 {
+                return Err(invalid("tool turn exceeds transcript scan bound"));
+            }
+            let page = read.sessions().entries(session_id, position, 500)?;
+            if page.is_empty() {
+                return Err(invalid("tool turn transcript gap"));
+            }
+            for entry in page {
+                if entry.sequence != position + 1 {
+                    return Err(invalid("tool turn transcript gap"));
+                }
+                position = entry.sequence;
+                let body: TranscriptBody = serde_json::from_value(entry.body).map_err(invalid)?;
+                let belongs = match &body {
+                    TranscriptBody::AssistantAttempt { attempt_id: id, .. } => id == attempt_id,
+                    TranscriptBody::ToolCallRecorded { tool_call } => {
+                        &tool_call.call.attempt_id == attempt_id
+                    }
+                    TranscriptBody::NativeItem { artifact, .. } => {
+                        let row = read
+                            .artifacts()
+                            .artifact(&artifact.artifact_id)?
+                            .ok_or(StorageError::ScopeDenied)?;
+                        row.provenance["derived"]["attemptId"] == attempt_id.0.as_str()
+                    }
+                    _ => false,
+                };
+                if belongs {
+                    selected.push(body);
+                }
+            }
+        }
+        Ok(selected)
+    })?;
+    let mut assistant = Vec::new();
+    for entry in entries {
+        match entry {
+            TranscriptBody::AssistantAttempt {
+                visible_text,
+                interrupted,
+                ..
+            } => {
+                if interrupted {
+                    return Err(invalid("interrupted assistant tool turn"));
+                }
+                if !visible_text.is_empty() {
+                    assistant.push(ContentBlock::Text {
+                        text: visible_text,
+                        cache: None,
+                    });
+                }
+            }
+            TranscriptBody::NativeItem {
+                binding: native_binding,
+                artifact,
+            } => {
+                if &native_binding != binding {
+                    return Err(invalid("foreign native item in tool turn"));
+                }
+                assistant.push(ContentBlock::Native {
+                    binding: native_binding,
+                    artifact,
+                });
+            }
+            TranscriptBody::ToolCallRecorded { tool_call } => {
+                let bytes = artifacts
+                    .read_exact(store, ctx, &tool_call.native_item, 1024 * 1024)
+                    .map_err(|_| StorageError::ScopeDenied)?
+                    .0;
+                let native: Value = serde_json::from_slice(&bytes).map_err(invalid)?;
+                let wire_name = native
+                    .get("name")
+                    .or_else(|| native.get("function").and_then(|v| v.get("name")))
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.is_empty() && name.len() <= 128)
+                    .ok_or_else(|| invalid("recorded native tool alias missing"))?;
+                assistant.push(ContentBlock::ToolCall {
+                    call_id: tool_call.call.native_call_id,
+                    wire_name: wire_name.into(),
+                    arguments: tool_call.arguments,
+                });
+            }
+            _ => return Err(invalid("unexpected selected tool turn entry")),
+        }
+    }
+    if assistant.is_empty() {
+        return Err(invalid("empty assistant tool turn"));
+    }
+    let mut results = Vec::new();
+    for item in resolved {
+        let (text, is_error) = match item.outcome {
+            ToolOutcome::Completed { artifacts: refs } if refs.len() == 1 => {
+                let bytes = artifacts
+                    .read_exact(store, ctx, &refs[0], 8 * 1024 * 1024)
+                    .map_err(|_| StorageError::ScopeDenied)?
+                    .0;
+                (String::from_utf8(bytes).map_err(invalid)?, false)
+            }
+            ToolOutcome::Completed { artifacts: refs } if refs.is_empty() => {
+                ("{\"kind\":\"Completed\"}".into(), false)
+            }
+            ToolOutcome::Completed { .. } => {
+                return Err(invalid("unsupported multiple tool result artifacts"));
+            }
+            other => (serde_json::to_string(&other).map_err(invalid)?, true),
+        };
+        results.push(ContentBlock::ToolResult {
+            call_id: item.call.call.native_call_id,
+            content: vec![ResultBlock::Text { text }],
+            is_error,
+            cache: None,
+        });
+    }
+    context.messages.push(Message {
+        role: MessageRole::Assistant,
+        content: assistant,
+    });
+    context.messages.push(Message {
+        role: MessageRole::User,
+        content: results,
+    });
+    context.validate().map_err(|e| invalid(format!("{e:?}")))?;
+    Ok(context)
+}
 
 /// Build the exact frame sent to the application gateway for a recorded native call. The
 /// stable key makes a retried command find its original receipt after a crash or lost reply.

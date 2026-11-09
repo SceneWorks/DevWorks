@@ -1596,6 +1596,50 @@ impl Runtime {
             .collect())
     }
 
+    /// Read a closed tool turn in native ordinal order after every emitted call has its one
+    /// durable initial response. The caller can then encode the next provider request without
+    /// depending on the order in which independent workers finished.
+    pub fn resolved_tool_turn(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        attempt_id: &devworks_core::protocol::AttemptId,
+        after_sequence: i64,
+    ) -> Result<Vec<crate::ResolvedToolCall>, StorageError> {
+        crate::tool_turn::resolved_turn(
+            self.store.as_ref(),
+            ctx,
+            session_id,
+            attempt_id,
+            after_sequence,
+        )
+    }
+
+    /// Build the next provider context from the immutable request context and settled native
+    /// exchange. The caller publishes the returned material before a new request.
+    pub fn tool_continuation_context(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        attempt_id: &devworks_core::protocol::AttemptId,
+        after_sequence: i64,
+        binding: &devworks_core::protocol::provider::NativeBinding,
+        previous: &devworks_core::protocol::provider::ArtifactRef,
+    ) -> Result<devworks_core::providers::context::ProviderContext, StorageError> {
+        crate::tool_turn::continuation_context(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            crate::tool_turn::TurnSource {
+                session_id,
+                attempt_id,
+                after_sequence,
+            },
+            binding,
+            previous,
+        )
+    }
+
     pub fn accounting(&self) -> &Arc<crate::usage::UsageRuntime> {
         &self.usage
     }
