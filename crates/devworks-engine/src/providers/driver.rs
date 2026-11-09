@@ -62,6 +62,19 @@ impl ProviderComposition {
             instruction_guard: None,
         }
     }
+    /// Host-composed repository source used by direct native provider owners. Boot installs
+    /// its registered indexing source automatically.
+    pub fn with_repository_source(
+        mut self,
+        store: Arc<dyn ApplicationStore>,
+        source: Arc<dyn devworks_core::ports::indexing::SourceTree>,
+    ) -> Self {
+        self.instruction_guard = Some(Arc::new(crate::instruction_guard::InstructionGuard::new(
+            store,
+            Some(source),
+        )));
+        self
+    }
     pub(crate) fn with_instruction_guard(
         mut self,
         guard: Arc<crate::instruction_guard::InstructionGuard>,

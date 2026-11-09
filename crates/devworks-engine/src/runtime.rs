@@ -905,7 +905,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             let provider = provider.with_instruction_guard(Arc::new(
                 crate::instruction_guard::InstructionGuard::new(
                     store.clone(),
-                    index_supervisor.clone(),
+                    index_supervisor.as_ref().map(|ix| ix.env().source.clone()),
                 ),
             ));
             let connections = use_cases.connection_service().ok_or_else(|| {
@@ -1779,8 +1779,11 @@ impl Runtime {
         repository_id: &Id,
         target_paths: &[String],
     ) -> Result<devworks_core::providers::instructions::InstructionBundle, StorageError> {
-        crate::instruction_guard::InstructionGuard::new(self.store.clone(), self.indexing.clone())
-            .resolve(ctx, repository_id, target_paths)
+        crate::instruction_guard::InstructionGuard::new(
+            self.store.clone(),
+            self.indexing.as_ref().map(|ix| ix.env().source.clone()),
+        )
+        .resolve(ctx, repository_id, target_paths)
     }
 
     /// Compose the effective instruction prefix and its exact source stamps for one provider

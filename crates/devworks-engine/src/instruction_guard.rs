@@ -1,7 +1,7 @@
 //! Current, authorized repository guidance for provider contexts and send gates.
-use crate::indexing::IndexSupervisor;
 use devworks_core::{
     context::InvocationContext,
+    ports::indexing::SourceTree,
     ports::storage::{ApplicationStore, StorageError, Unavailable},
     protocol::Id,
 };
@@ -9,14 +9,14 @@ use std::sync::Arc;
 
 pub(crate) struct InstructionGuard {
     store: Arc<dyn ApplicationStore>,
-    indexing: Option<Arc<IndexSupervisor>>,
+    source: Option<Arc<dyn SourceTree>>,
 }
 impl InstructionGuard {
     pub(crate) fn new(
         store: Arc<dyn ApplicationStore>,
-        indexing: Option<Arc<IndexSupervisor>>,
+        source: Option<Arc<dyn SourceTree>>,
     ) -> Self {
-        Self { store, indexing }
+        Self { store, source }
     }
 
     pub(crate) fn verify(
@@ -77,7 +77,7 @@ impl InstructionGuard {
         repository_id: &Id,
         target_paths: &[String],
     ) -> Result<devworks_core::providers::instructions::InstructionBundle, StorageError> {
-        let indexing = self.indexing.as_ref().ok_or_else(|| {
+        let source = self.source.as_ref().ok_or_else(|| {
             StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
                 "repository source reader unavailable",
@@ -156,7 +156,7 @@ impl InstructionGuard {
             },
         )?;
         let bundle = devworks_core::providers::instructions::resolve(
-            indexing.env().source.as_ref(),
+            source.as_ref(),
             std::path::Path::new(&root),
             repository_id.clone(),
             target_paths,
@@ -165,7 +165,7 @@ impl InstructionGuard {
             StorageError::InvalidRecord(format!("instruction resolution: {error:?}"))
         })?;
         let check = devworks_core::providers::instructions::resolve(
-            indexing.env().source.as_ref(),
+            source.as_ref(),
             std::path::Path::new(&root),
             repository_id.clone(),
             target_paths,

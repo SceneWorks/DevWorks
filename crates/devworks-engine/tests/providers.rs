@@ -5,6 +5,7 @@ use common::*;
 use devworks_adapters::fs::{
     NativeFilesystem, artifacts::NativeArtifactFiles, sources::HostArtifactSources,
 };
+use devworks_adapters::index::NativeSourceTree;
 use devworks_core::{
     context::{InvocationContext, PrincipalKind},
     ports::{
@@ -882,6 +883,74 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         assert!(restarted.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap().is_empty());
         assert_eq!(f.transcript().iter().filter(|e| e.kind == "ToolResponseRecorded").count(), 3);
         restarted.shutdown().await;
+    });
+}
+
+#[test]
+fn native_provider_holds_changed_repository_guidance_before_transport() {
+    runtime().block_on(async {
+        use devworks_core::ports::indexing::SourceTree;
+        let mut f = Fx::new("CompatibleChat", Script::sse("data: [DONE]\n\n"), false);
+        let root = f.h.root.join("guidance-repo");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "first guidance").unwrap();
+        let root = NativeSourceTree::new().canonical_dir(&root).unwrap();
+        let location = root.to_string_lossy().into_owned();
+        write(f.store.as_ref(), move |tx| {
+            tx.projects().insert_repository(&StoredRepository {
+                id: id("guidance-repo"),
+                location,
+                name: "Guidance".into(),
+                remote_url: None,
+                primary: true,
+                lifecycle: "Active".into(),
+                languages: vec![],
+                revision: 1,
+                registered_at_ms: 1,
+            })
+        })
+        .unwrap();
+        let source = Arc::new(NativeSourceTree::new());
+        let schemas = Arc::new(RegisteredSchemas::new(
+            f.store.clone(),
+            UseCases::new(),
+            None,
+            f.artifacts.clone(),
+        ));
+        f.driver = NativeProviders::new(
+            f.store.clone(),
+            f.artifacts.clone(),
+            f.connections.clone(),
+            f.usage.clone(),
+            schemas,
+            ProviderComposition::new(f.http.clone())
+                .with_repository_source(f.store.clone(), source.clone()),
+        );
+        let mut request = f.generation(vec![]);
+        if let InferenceInput::Generation { context, .. } = &mut request.input {
+            let bytes = f
+                .artifacts
+                .read_exact(f.store.as_ref(), &f.context, context, 1024 * 1024)
+                .unwrap()
+                .0;
+            let base: ProviderContext = serde_json::from_slice(&bytes).unwrap();
+            let bundle = devworks_core::providers::instructions::resolve(
+                source.as_ref(),
+                &root,
+                id("guidance-repo"),
+                &["README.md".into()],
+            )
+            .unwrap();
+            let bound =
+                devworks_core::providers::instructions::bind_context(base, &[bundle]).unwrap();
+            *context = f.bytes(&serde_json::to_vec(&bound).unwrap());
+        }
+        std::fs::write(root.join("AGENTS.md"), "changed before send").unwrap();
+        assert!(f.produce(request).await.is_err());
+        assert_eq!(f.http.lock().unwrap().reads.load(Ordering::SeqCst), 0);
+        assert!(f.transcript().is_empty());
+        f.usage.stop();
+        f.usage.drain().await;
     });
 }
 
