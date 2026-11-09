@@ -1,33 +1,45 @@
 //! Outgoing MCP configuration. The scoped configuration repository holds the complete server
 //! set at one revision, so every edit is durable, compare-and-set and project-purge aware.
-use crate::context::InvocationContext;
+use crate::context::{InvocationContext, PrincipalKind};
+use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, mcp as ops};
+use crate::ports::mcp::{McpEndpoint, McpRemote, McpRemoteFault, RemoteCatalog};
 use crate::ports::storage::{
-    ConfigScope, ProjectRead, ReadSnapshot, RevisionConflict, StorageError, WriteTransaction,
+    ApplicationStore, ConfigScope, NewEvent, NewOperation, NewQueueEntry, OperationRecord,
+    ProjectRead, ReadOptions, ReadSnapshot, RevisionConflict, StorageError, WriteTransaction,
+    read_snapshot,
 };
 use crate::ports::{
-    CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
+    AuthorityFence, Authorization, CommandHandler, Decided, HandlerFailure, IdKind, IdSource,
+    QueryAnswer, QueryHandler,
 };
 use crate::protocol::data::DataScope;
+use crate::protocol::provider::{Digest, QualifiedId, SchemaRef};
 use crate::protocol::records::{ItemState, McpCapability, McpServer, McpTransport, PageRequest};
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Page};
+use crate::protocol::support::{BoundedList, BoundedText, Check, Page};
 use crate::protocol::{
-    CorrelationId, DomainErrorCode, DomainFault, Id, RetryAdvice, Revision, RevisionDimension,
+    ActorId, CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId,
+    OperationState, RetryAdvice, Revision, RevisionDimension,
 };
 use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
+use std::sync::{Arc, OnceLock};
 
 const NAMESPACE: &str = "outgoing_mcp";
 const SCHEMA_VERSION: i64 = 1;
-pub const OPERATIONS: [&str; 4] = [
+pub const OPERATIONS: [&str; 6] = [
     "mcp.servers",
     "mcp.configure",
+    "mcp.connect",
+    "mcp.discover",
     "mcp.select_tools",
     "mcp.capabilities",
 ];
+pub const EFFECT_CONSUMER: &str = "mcp_effects";
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 struct Configuration {
@@ -39,6 +51,8 @@ struct StoredServer {
     public: McpServer,
     transport: McpTransport,
     capabilities: Vec<McpCapability>,
+    #[serde(default)]
+    schemas: BTreeMap<String, Value>,
     #[serde(default)]
     auto_select_read_only: bool,
 }
@@ -110,10 +124,397 @@ fn page<T: Clone>(
 
 pub struct McpClientService {
     ids: Arc<dyn IdSource>,
+    native: OnceLock<Native>,
+}
+struct Native {
+    store: Arc<dyn ApplicationStore>,
+    remote: Arc<dyn McpRemote>,
 }
 impl McpClientService {
     pub fn new(ids: Arc<dyn IdSource>) -> Self {
-        Self { ids }
+        Self {
+            ids,
+            native: OnceLock::new(),
+        }
+    }
+
+    /// Attach the one native connection owner after boot creates ProcessSupervisor. The gateway
+    /// service already registered at the desktop composition root then uses this same owner.
+    pub fn install_remote(
+        &self,
+        store: Arc<dyn ApplicationStore>,
+        remote: Arc<dyn McpRemote>,
+    ) -> Result<(), &'static str> {
+        self.native
+            .set(Native { store, remote })
+            .map_err(|_| "outgoing MCP remote already installed")
+    }
+
+    /// Run only after the dispatch journal has committed `Dispatching`. The saved scope and
+    /// revision fence prevent a queued connect from starting a server after its configuration
+    /// changes; authority fences are checked again immediately before the native call.
+    pub fn execute(self: &Arc<Self>, op: &OperationRecord) -> McpEffectOutcome {
+        if op.state != OperationState::Dispatching {
+            return McpEffectOutcome::Failed("MCP effect was not dispatched".into());
+        }
+        if !matches!(op.capability.as_str(), "mcp.connect" | "mcp.discover") {
+            return McpEffectOutcome::Failed("unsupported MCP effect".into());
+        }
+        let Some(native) = self.native.get() else {
+            return McpEffectOutcome::NotApplied("native MCP client is unavailable".into());
+        };
+        let Some(scope) = op
+            .payload
+            .get("scope")
+            .and_then(Value::as_str)
+            .and_then(ConfigScope::from_key)
+        else {
+            return McpEffectOutcome::Failed("invalid MCP effect scope".into());
+        };
+        let Some(server_id) = op
+            .payload
+            .get("serverId")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<Id>(v).ok())
+        else {
+            return McpEffectOutcome::Failed("invalid MCP effect server".into());
+        };
+        let Some(pending_revision) = op.payload.get("pendingRevision").and_then(Value::as_i64)
+        else {
+            return McpEffectOutcome::Failed("invalid MCP effect revision".into());
+        };
+        let Some(principal) = op
+            .payload
+            .get("principal")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<ActorId>(v).ok())
+        else {
+            return McpEffectOutcome::Failed("invalid MCP effect principal".into());
+        };
+        let kind = match op.payload.get("principalKind").and_then(Value::as_str) {
+            Some("Human") => PrincipalKind::Human,
+            Some("Agent") => PrincipalKind::Agent,
+            Some("Package") => PrincipalKind::Package,
+            Some("McpClient") => PrincipalKind::McpClient,
+            Some("Schedule") => PrincipalKind::Schedule,
+            Some("Host") => PrincipalKind::Host,
+            _ => return McpEffectOutcome::Failed("invalid MCP principal kind".into()),
+        };
+        let Some(fences) = op
+            .payload
+            .get("fences")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<Vec<AuthorityFence>>(v).ok())
+        else {
+            return McpEffectOutcome::Failed("invalid MCP authority fence".into());
+        };
+        let server = match read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
+            if snapshot.operations().operation(&op.id)?.as_ref() != Some(op) {
+                return Err(StorageError::InvalidRecord(
+                    "MCP effect journal fence changed".into(),
+                ));
+            }
+            if !crate::authority::authorization_holds(
+                snapshot,
+                &Authorization::direct().fenced_by(fences),
+            )? {
+                return Err(StorageError::InvalidRecord(
+                    "MCP authority changed before dispatch".into(),
+                ));
+            }
+            let (_, state) = current(snapshot.configuration(), &scope)?;
+            state
+                .servers
+                .into_iter()
+                .find(|server| {
+                    server.public.id == server_id
+                        && server.public.revision.get() == pending_revision
+                })
+                .ok_or_else(|| {
+                    StorageError::InvalidRecord("MCP configuration changed before dispatch".into())
+                })
+        }) {
+            Ok(server) => server,
+            Err(e) => return McpEffectOutcome::Failed(e.to_string()),
+        };
+        let info = native.store.info();
+        let mut context = InvocationContext::new(
+            principal,
+            kind,
+            op.id.0.clone(),
+            Id::new("mcp-effects").expect("static MCP ingress"),
+            info.store_id,
+            Counter::new(info.restore_epoch).expect("valid store epoch"),
+            rev(1),
+        )
+        .with_lineage(
+            scope.project_id().cloned(),
+            op.root_id.clone(),
+            op.assignment_id.clone(),
+        );
+        if let Some(session) = op
+            .payload
+            .get("sessionId")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<Option<Id>>(v).ok())
+            .flatten()
+        {
+            context = context.with_session(session);
+        }
+        if op.capability == "mcp.discover" {
+            let Some(catalog_revision) = op.payload.get("catalogRevision").and_then(Value::as_i64)
+            else {
+                return McpEffectOutcome::Failed("invalid MCP discovery catalog revision".into());
+            };
+            if server.public.catalog_revision.get() != catalog_revision {
+                return McpEffectOutcome::Failed("MCP catalog changed before discovery".into());
+            }
+            return self.execute_discover(
+                native,
+                op,
+                scope,
+                server_id,
+                pending_revision,
+                server,
+                context,
+            );
+        }
+        let endpoint = McpEndpoint {
+            server_id: server_id.clone(),
+            scope: scope.clone(),
+            transport: server.transport,
+        };
+        let outcome = native.remote.connect(&context, &endpoint);
+        let successful = outcome.is_ok();
+        let new_state = if successful {
+            ItemState::Healthy
+        } else {
+            ItemState::Failed
+        };
+        let scope_for_write = scope.clone();
+        let server_for_write = server_id.clone();
+        let root_for_write = op.root_id.clone();
+        let operation_for_write = op.id.clone();
+        let settled = crate::ports::storage::run_write(
+            &*native.store,
+            crate::ports::storage::WriteOptions::default(),
+            move |tx| {
+                let (version, mut state) = current(tx.configuration(), &scope_for_write)?;
+                let server = state
+                    .servers
+                    .iter_mut()
+                    .find(|server| {
+                        server.public.id == server_for_write
+                            && server.public.revision.get() == pending_revision
+                    })
+                    .ok_or_else(|| {
+                        StorageError::InvalidRecord(
+                            "MCP configuration changed during connect".into(),
+                        )
+                    })?;
+                server.public.revision = rev(pending_revision + 1);
+                server.public.state = new_state;
+                let result = server.public.clone();
+                let body = serde_json::to_value(state).map_err(|_| {
+                    StorageError::InvalidRecord("outgoing MCP configuration".into())
+                })?;
+                tx.configuration().append_revision(
+                    &scope_for_write,
+                    NAMESPACE,
+                    version,
+                    SCHEMA_VERSION,
+                    body,
+                )?;
+                let actor = tx.store().host_actor.clone();
+                let event_id = EventId(tx.new_id(IdKind::Event));
+                tx.history().append(NewEvent {
+                    id: event_id,
+                    actor,
+                    project_id: scope_for_write.project_id().cloned(),
+                    root_id: root_for_write,
+                    operation_id: Some(operation_for_write),
+                    aggregate_kind: "mcp_server".into(),
+                    aggregate_id: server_for_write.as_str().into(),
+                    aggregate_revision: pending_revision + 1,
+                    kind: if successful {
+                        "McpConnected"
+                    } else {
+                        "McpConnectFailed"
+                    }
+                    .into(),
+                    payload: json!({"serverId":server_for_write,"scope":scope_for_write.key()}),
+                })?;
+                Ok(result)
+            },
+        );
+        match settled {
+            Ok(server) => match outcome {
+                Ok(()) => {
+                    McpEffectOutcome::Completed(serde_json::to_value(server).unwrap_or(Value::Null))
+                }
+                Err(fault) => McpEffectOutcome::Failed(format!("MCP connection failed: {fault:?}")),
+            },
+            Err(e) => {
+                if outcome.is_ok() {
+                    let _ = native.remote.disconnect(&server_id);
+                }
+                McpEffectOutcome::Unknown(format!(
+                    "MCP connection outcome could not be recorded: {e}"
+                ))
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_discover(
+        self: &Arc<Self>,
+        native: &Native,
+        op: &OperationRecord,
+        scope: ConfigScope,
+        server_id: Id,
+        pending_revision: i64,
+        server: StoredServer,
+        context: InvocationContext,
+    ) -> McpEffectOutcome {
+        let mut discovery = native.remote.discover(&server_id);
+        if matches!(discovery, Err(McpRemoteFault::Unreachable)) {
+            let endpoint = McpEndpoint {
+                server_id: server_id.clone(),
+                scope: scope.clone(),
+                transport: server.transport,
+            };
+            discovery = native
+                .remote
+                .connect(&context, &endpoint)
+                .and_then(|_| native.remote.discover(&server_id));
+        }
+        let catalog = match discovery {
+            Ok(catalog) => catalog,
+            Err(fault) => {
+                self.settle_discovery_failure(native, op, &scope, &server_id, pending_revision);
+                return McpEffectOutcome::Failed(format!("MCP discovery failed: {fault:?}"));
+            }
+        };
+        let service = self.clone();
+        let scope_for_write = scope.clone();
+        let server_for_write = server_id.clone();
+        let root_for_write = op.root_id.clone();
+        let operation_for_write = op.id.clone();
+        let expected_catalog = server.public.catalog_revision;
+        let published = crate::ports::storage::run_write(
+            &*native.store,
+            crate::ports::storage::WriteOptions::default(),
+            move |tx| {
+                let (_, state) = current(tx.configuration(), &scope_for_write)?;
+                if !state.servers.iter().any(|server| {
+                    server.public.id == server_for_write
+                        && server.public.revision.get() == pending_revision
+                        && server.public.catalog_revision == expected_catalog
+                }) {
+                    return Err(StorageError::InvalidRecord(
+                        "MCP configuration changed during discovery".into(),
+                    ));
+                }
+                let result = service.publish_remote_catalog(
+                    tx,
+                    &scope_for_write,
+                    &server_for_write,
+                    &expected_catalog,
+                    catalog,
+                )?;
+                let actor = tx.store().host_actor.clone();
+                let event_id = EventId(tx.new_id(IdKind::Event));
+                tx.history().append(NewEvent {
+                    id: event_id,
+                    actor,
+                    project_id: scope_for_write.project_id().cloned(),
+                    root_id: root_for_write,
+                    operation_id: Some(operation_for_write),
+                    aggregate_kind: "mcp_server".into(),
+                    aggregate_id: server_for_write.as_str().into(),
+                    aggregate_revision: result.revision.get(),
+                    kind: "McpCatalogDiscovered".into(),
+                    payload: json!({"serverId":server_for_write,"scope":scope_for_write.key(),"catalogRevision":result.catalog_revision.get()}),
+                })?;
+                Ok(result)
+            },
+        );
+        match published {
+            Ok(server) => {
+                McpEffectOutcome::Completed(serde_json::to_value(server).unwrap_or(Value::Null))
+            }
+            Err(error) => {
+                self.settle_discovery_failure(native, op, &scope, &server_id, pending_revision);
+                McpEffectOutcome::Unknown(format!(
+                    "MCP discovery publication could not be confirmed: {error}"
+                ))
+            }
+        }
+    }
+
+    fn settle_discovery_failure(
+        &self,
+        native: &Native,
+        op: &OperationRecord,
+        scope: &ConfigScope,
+        server_id: &Id,
+        pending_revision: i64,
+    ) {
+        let scope = scope.clone();
+        let server_id = server_id.clone();
+        let root = op.root_id.clone();
+        let operation = op.id.clone();
+        let _ = crate::ports::storage::run_write(
+            &*native.store,
+            crate::ports::storage::WriteOptions::default(),
+            move |tx| {
+                let (version, mut state) = current(tx.configuration(), &scope)?;
+                let server = state
+                    .servers
+                    .iter_mut()
+                    .find(|s| {
+                        s.public.id == server_id && s.public.revision.get() == pending_revision
+                    })
+                    .ok_or_else(|| {
+                        StorageError::InvalidRecord(
+                            "MCP server changed during failed discovery".into(),
+                        )
+                    })?;
+                server.public.revision = rev(pending_revision + 1);
+                server.public.state = ItemState::Failed;
+                let body = serde_json::to_value(state).map_err(|_| {
+                    StorageError::InvalidRecord("outgoing MCP configuration".into())
+                })?;
+                tx.configuration().append_revision(
+                    &scope,
+                    NAMESPACE,
+                    version,
+                    SCHEMA_VERSION,
+                    body,
+                )?;
+                let actor = tx.store().host_actor.clone();
+                let event_id = EventId(tx.new_id(IdKind::Event));
+                tx.history().append(NewEvent {
+                    id: event_id,
+                    actor,
+                    project_id: scope.project_id().cloned(),
+                    root_id: root,
+                    operation_id: Some(operation),
+                    aggregate_kind: "mcp_server".into(),
+                    aggregate_id: server_id.as_str().into(),
+                    aggregate_revision: pending_revision + 1,
+                    kind: "McpDiscoveryFailed".into(),
+                    payload: json!({"serverId":server_id,"scope":scope.key()}),
+                })?;
+                Ok(())
+            },
+        );
+    }
+
+    pub fn observe(&self, _op: &OperationRecord) -> McpEffectOutcome {
+        McpEffectOutcome::Unknown(
+            "MCP connection outcome cannot be established after interruption".into(),
+        )
     }
 
     fn fault(&self, error: impl Into<Failure>) -> DomainFault {
@@ -136,6 +537,110 @@ impl McpClientService {
         expected_catalog_revision: &Revision,
         capabilities: Vec<McpCapability>,
     ) -> Result<McpServer, StorageError> {
+        self.write_catalog(
+            tx,
+            scope,
+            server_id,
+            expected_catalog_revision,
+            capabilities,
+            BTreeMap::new(),
+        )
+    }
+
+    /// Convert an untrusted wire catalog into stable, server-qualified identities and immutable
+    /// schema digests before publishing it. Raw schemas stay in the scoped configuration so a
+    /// later selected invocation can validate against the exact catalog revision it named.
+    pub fn publish_remote_catalog(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        scope: &ConfigScope,
+        server_id: &Id,
+        expected_catalog_revision: &Revision,
+        catalog: RemoteCatalog,
+    ) -> Result<McpServer, StorageError> {
+        let (_, state) = current(tx.configuration(), scope)?;
+        let previous = state
+            .servers
+            .iter()
+            .find(|server| &server.public.id == server_id)
+            .ok_or_else(|| StorageError::NotFound {
+                kind: "mcp_server",
+                id: server_id.as_str().into(),
+            })?;
+        let mut capabilities = Vec::new();
+        let mut schemas = BTreeMap::new();
+        for tool in catalog.tools {
+            let id = capability_id(server_id, "tool", &tool.name)?;
+            let input_schema =
+                schema_ref(server_id, "tool", &tool.name, "input", &tool.input_schema)?;
+            schemas.insert(input_schema.schema_id.as_str().into(), tool.input_schema);
+            let output_schema = tool
+                .output_schema
+                .map(|schema| {
+                    let reference = schema_ref(server_id, "tool", &tool.name, "output", &schema)?;
+                    schemas.insert(reference.schema_id.as_str().into(), schema);
+                    Ok(reference)
+                })
+                .transpose()?;
+            capabilities.push(capability(
+                previous,
+                id,
+                server_id,
+                "tool",
+                tool.name,
+                tool.description,
+                Some(input_schema),
+                output_schema,
+                tool.read_only_hint,
+            )?);
+        }
+        for resource in catalog.resources {
+            let id = capability_id(server_id, "resource", &resource.uri)?;
+            capabilities.push(capability(
+                previous,
+                id,
+                server_id,
+                "resource",
+                resource.name,
+                resource.description,
+                None,
+                None,
+                false,
+            )?);
+        }
+        for prompt in catalog.prompts {
+            let id = capability_id(server_id, "prompt", &prompt.name)?;
+            capabilities.push(capability(
+                previous,
+                id,
+                server_id,
+                "prompt",
+                prompt.name,
+                prompt.description,
+                None,
+                None,
+                false,
+            )?);
+        }
+        self.write_catalog(
+            tx,
+            scope,
+            server_id,
+            expected_catalog_revision,
+            capabilities,
+            schemas,
+        )
+    }
+
+    fn write_catalog(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        scope: &ConfigScope,
+        server_id: &Id,
+        expected_catalog_revision: &Revision,
+        capabilities: Vec<McpCapability>,
+        schemas: BTreeMap<String, Value>,
+    ) -> Result<McpServer, StorageError> {
         let (version, mut state) = current(tx.configuration(), scope)?;
         let server = state
             .servers
@@ -154,11 +659,20 @@ impl McpClientService {
                 current: server.public.catalog_revision.clone(),
             })));
         }
+        if capabilities.len() > 500 {
+            return Err(StorageError::InvalidRecord(
+                "MCP catalog exceeds page bound".into(),
+            ));
+        }
         let mut names = std::collections::HashSet::new();
+        let mut wire_names = std::collections::HashSet::new();
         if capabilities.iter().any(|capability| {
             &capability.server_id != server_id
                 || !names.insert(capability.id.as_str())
                 || !matches!(capability.kind.0.as_str(), "tool" | "resource" | "prompt")
+                || (capability.kind.0 != "resource"
+                    && !wire_names.insert((capability.kind.0.as_str(), capability.name.0.as_str())))
+                || capability.check().is_err()
         }) {
             return Err(StorageError::InvalidRecord(
                 "invalid MCP catalog identity".into(),
@@ -185,7 +699,13 @@ impl McpClientService {
                 .cloned()
                 .collect::<Vec<_>>()
         };
+        if selected.len() > 128 {
+            return Err(StorageError::InvalidRecord(
+                "MCP read-only selection exceeds contract bound".into(),
+            ));
+        }
         server.capabilities = capabilities;
+        server.schemas = schemas;
         server.auto_select_read_only = false;
         server.public.selected_tool_ids = BoundedList(selected);
         server.public.catalog_revision = rev(server.public.catalog_revision.get() + 1);
@@ -242,6 +762,7 @@ impl McpClientService {
                 server.public.catalog_revision = rev(server.public.catalog_revision.get() + 1);
                 server.public.selected_tool_ids = BoundedList(Vec::new());
                 server.capabilities.clear();
+                server.schemas.clear();
                 server.auto_select_read_only = true;
             }
             server.transport = input.transport.clone();
@@ -268,6 +789,7 @@ impl McpClientService {
                 public: public.clone(),
                 transport: input.transport.clone(),
                 capabilities: Vec::new(),
+                schemas: BTreeMap::new(),
                 auto_select_read_only: true,
             });
             public
@@ -342,6 +864,317 @@ impl McpClientService {
             result: OperationResult::McpSelectTools { value: result },
         })
     }
+
+    fn connect(
+        &self,
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+        input: &ops::ConnectInput,
+    ) -> Result<Decided, Failure> {
+        if self.native.get().is_none() {
+            return Err(
+                Refusal::new(DomainErrorCode::UnsupportedTarget, "mcp_runtime", None).into(),
+            );
+        }
+        let scope = ctx.project_id().map_or(ConfigScope::Workspace, |id| {
+            ConfigScope::Project(id.clone())
+        });
+        let (version, mut state) = current(tx.configuration(), &scope)?;
+        let server = state
+            .servers
+            .iter_mut()
+            .find(|s| s.public.id == input.server_id)
+            .ok_or_else(|| {
+                Refusal::new(
+                    DomainErrorCode::NotFound,
+                    "mcp_server",
+                    Some(input.server_id.clone()),
+                )
+            })?;
+        if server.public.revision != input.expected_revision {
+            return Err(StorageError::RevisionConflict(Box::new(RevisionConflict {
+                dimension: RevisionDimension::Configuration,
+                target_kind: "mcp_server",
+                target_id: input.server_id.clone(),
+                expected: input.expected_revision.clone(),
+                current: server.public.revision.clone(),
+            }))
+            .into());
+        }
+        server.public.revision = rev(server.public.revision.get() + 1);
+        server.public.state = ItemState::Unavailable;
+        let pending_revision = server.public.revision.get();
+        let body = serde_json::to_value(state)
+            .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
+        tx.configuration()
+            .append_revision(&scope, NAMESPACE, version, SCHEMA_VERSION, body)?;
+
+        let operation = OperationId(tx.new_id(IdKind::Operation));
+        let event = EventId(tx.new_id(IdKind::Event));
+        tx.operations().record_intent(NewOperation {
+            id: operation.clone(),
+            root_id: ctx.root_id().cloned(),
+            assignment_id: ctx.assignment_id().cloned(),
+            capability: "mcp.connect".into(),
+            schema_version: 1,
+            args_digest: sha256_hex(
+                format!(
+                    "{}|{}|{}",
+                    scope.key(),
+                    input.server_id.as_str(),
+                    input.expected_revision.get()
+                )
+                .as_bytes(),
+            ),
+            payload: json!({
+                "scope": scope.key(),
+                "serverId": input.server_id,
+                "pendingRevision": pending_revision,
+                "principal": ctx.principal(),
+                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "sessionId": ctx.session_id(),
+                "fences": command.authorization().fences(),
+            }),
+        })?;
+        tx.history().append(NewEvent {
+            id: event.clone(),
+            actor: ctx.principal().clone(),
+            project_id: ctx.project_id().cloned(),
+            root_id: ctx.root_id().cloned(),
+            operation_id: Some(operation.clone()),
+            aggregate_kind: "mcp_server".into(),
+            aggregate_id: input.server_id.as_str().into(),
+            aggregate_revision: pending_revision,
+            kind: "McpConnectRequested".into(),
+            payload: json!({"serverId":input.server_id,"scope":scope.key()}),
+        })?;
+        let now = tx.now_ms();
+        let queue_id = tx.new_id(IdKind::QueueEntry);
+        tx.queue().enqueue(NewQueueEntry {
+            id: queue_id,
+            consumer: EFFECT_CONSUMER.into(),
+            event_id: event,
+            root_id: ctx.root_id().cloned(),
+            operation_id: Some(operation.clone()),
+            partition: Some(format!("mcp:{}", input.server_id.as_str())),
+            priority: 0,
+            ready_at_ms: now,
+            payload: json!({"serverId":input.server_id}),
+        })?;
+        Ok(Decided {
+            decision: DomainDecision::Accepted {
+                operation_id: operation.clone(),
+            },
+            operation_id: Some(operation),
+        })
+    }
+
+    fn discover(
+        &self,
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+        input: &ops::DiscoverInput,
+    ) -> Result<Decided, Failure> {
+        if self.native.get().is_none() {
+            return Err(
+                Refusal::new(DomainErrorCode::UnsupportedTarget, "mcp_runtime", None).into(),
+            );
+        }
+        let scope = ctx.project_id().map_or(ConfigScope::Workspace, |id| {
+            ConfigScope::Project(id.clone())
+        });
+        let (version, mut state) = current(tx.configuration(), &scope)?;
+        let server = state
+            .servers
+            .iter_mut()
+            .find(|server| server.public.id == input.server_id)
+            .ok_or_else(|| {
+                Refusal::new(
+                    DomainErrorCode::NotFound,
+                    "mcp_server",
+                    Some(input.server_id.clone()),
+                )
+            })?;
+        if server.public.catalog_revision != input.expected_catalog_revision {
+            return Err(StorageError::RevisionConflict(Box::new(RevisionConflict {
+                dimension: RevisionDimension::Configuration,
+                target_kind: "mcp_catalog",
+                target_id: input.server_id.clone(),
+                expected: input.expected_catalog_revision.clone(),
+                current: server.public.catalog_revision.clone(),
+            }))
+            .into());
+        }
+        server.public.revision = rev(server.public.revision.get() + 1);
+        server.public.state = ItemState::Unavailable;
+        let pending_revision = server.public.revision.get();
+        let body = serde_json::to_value(state)
+            .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
+        tx.configuration()
+            .append_revision(&scope, NAMESPACE, version, SCHEMA_VERSION, body)?;
+        let operation = OperationId(tx.new_id(IdKind::Operation));
+        let event = EventId(tx.new_id(IdKind::Event));
+        tx.operations().record_intent(NewOperation {
+            id: operation.clone(),
+            root_id: ctx.root_id().cloned(),
+            assignment_id: ctx.assignment_id().cloned(),
+            capability: "mcp.discover".into(),
+            schema_version: 1,
+            args_digest: sha256_hex(
+                format!(
+                    "{}|{}|{}",
+                    scope.key(),
+                    input.server_id.as_str(),
+                    input.expected_catalog_revision.get()
+                )
+                .as_bytes(),
+            ),
+            payload: json!({
+                "scope":scope.key(),"serverId":input.server_id,"pendingRevision":pending_revision,
+                "catalogRevision":input.expected_catalog_revision.get(),
+                "principal":ctx.principal(),"principalKind":format!("{:?}",ctx.principal_kind()),
+                "sessionId":ctx.session_id(),"fences":command.authorization().fences(),
+            }),
+        })?;
+        tx.history().append(NewEvent {
+            id: event.clone(),
+            actor: ctx.principal().clone(),
+            project_id: ctx.project_id().cloned(),
+            root_id: ctx.root_id().cloned(),
+            operation_id: Some(operation.clone()),
+            aggregate_kind: "mcp_server".into(),
+            aggregate_id: input.server_id.as_str().into(),
+            aggregate_revision: pending_revision,
+            kind: "McpDiscoveryRequested".into(),
+            payload: json!({"serverId":input.server_id,"scope":scope.key()}),
+        })?;
+        let now = tx.now_ms();
+        let queue_id = tx.new_id(IdKind::QueueEntry);
+        tx.queue().enqueue(NewQueueEntry {
+            id: queue_id,
+            consumer: EFFECT_CONSUMER.into(),
+            event_id: event,
+            root_id: ctx.root_id().cloned(),
+            operation_id: Some(operation.clone()),
+            partition: Some(format!("mcp:{}", input.server_id.as_str())),
+            priority: 0,
+            ready_at_ms: now,
+            payload: json!({"serverId":input.server_id}),
+        })?;
+        Ok(Decided {
+            decision: DomainDecision::Accepted {
+                operation_id: operation.clone(),
+            },
+            operation_id: Some(operation),
+        })
+    }
+}
+
+fn capability_id(server: &Id, kind: &str, wire_name: &str) -> Result<Id, StorageError> {
+    Id::new(format!(
+        "mcp-{}",
+        sha256_hex(format!("{}:{kind}:{wire_name}", server.as_str()).as_bytes())
+    ))
+    .map_err(|_| StorageError::InvalidRecord("invalid MCP capability identity".into()))
+}
+
+fn schema_ref(
+    server: &Id,
+    kind: &str,
+    wire_name: &str,
+    direction: &str,
+    value: &Value,
+) -> Result<SchemaRef, StorageError> {
+    if !value.is_object() {
+        return Err(StorageError::InvalidRecord(
+            "MCP tool schema must be an object".into(),
+        ));
+    }
+    let canonical = crate::jcs::canonicalize(value)
+        .map_err(|_| StorageError::InvalidRecord("invalid MCP tool schema".into()))?;
+    if canonical.len() > 65_536 {
+        return Err(StorageError::InvalidRecord(
+            "MCP tool schema exceeds bound".into(),
+        ));
+    }
+    let identity =
+        sha256_hex(format!("{}:{kind}:{wire_name}:{direction}", server.as_str()).as_bytes());
+    Ok(SchemaRef {
+        schema_id: QualifiedId::try_from(format!("mcp/{identity}"))
+            .map_err(|_| StorageError::InvalidRecord("invalid MCP schema identity".into()))?,
+        revision: rev(1),
+        sha256: Digest::try_from(sha256_hex(canonical.as_bytes()))
+            .map_err(|_| StorageError::InvalidRecord("invalid MCP schema digest".into()))?,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capability(
+    previous: &StoredServer,
+    id: Id,
+    server_id: &Id,
+    kind: &str,
+    name: String,
+    description: String,
+    input_schema: Option<SchemaRef>,
+    output_schema: Option<SchemaRef>,
+    read_only: bool,
+) -> Result<McpCapability, StorageError> {
+    if name.is_empty()
+        || name.chars().count() > 256
+        || name.contains('\0')
+        || description.chars().count() > 65_536
+        || description.contains('\0')
+    {
+        return Err(StorageError::InvalidRecord(
+            "MCP capability text exceeds contract".into(),
+        ));
+    }
+    let mut cap = McpCapability {
+        id,
+        server_id: server_id.clone(),
+        kind: BoundedText(kind.into()),
+        name: BoundedText(name),
+        description: BoundedText(description),
+        input_schema,
+        output_schema,
+        read_only,
+        revision: rev(1),
+    };
+    if let Some(old) = previous.capabilities.iter().find(|old| old.id == cap.id) {
+        cap.revision = old.revision.clone();
+        if let Some(schema) = &mut cap.input_schema {
+            schema.revision = old
+                .input_schema
+                .as_ref()
+                .map_or_else(|| old.revision.clone(), |s| s.revision.clone());
+        }
+        if let Some(schema) = &mut cap.output_schema {
+            schema.revision = old
+                .output_schema
+                .as_ref()
+                .map_or_else(|| old.revision.clone(), |s| s.revision.clone());
+        }
+        if serde_json::to_value(old).ok() != serde_json::to_value(&cap).ok() {
+            cap.revision = rev(old.revision.get() + 1);
+            if let Some(schema) = &mut cap.input_schema {
+                schema.revision = cap.revision.clone();
+            }
+            if let Some(schema) = &mut cap.output_schema {
+                schema.revision = cap.revision.clone();
+            }
+        }
+    }
+    Ok(cap)
+}
+
+pub enum McpEffectOutcome {
+    Completed(Value),
+    Failed(String),
+    NotApplied(String),
+    Unknown(String),
 }
 
 impl QueryHandler for McpClientService {
@@ -428,6 +1261,18 @@ impl CommandHandler for McpClientService {
             OperationInput::Mcp(ops::Input::SelectTools(input)) => {
                 let result = self.select_tools(ctx, tx, input);
                 decided(tx, result)
+            }
+            OperationInput::Mcp(ops::Input::Connect(input)) => {
+                match self.connect(ctx, command, tx, input) {
+                    Ok(decision) => Ok(decision),
+                    Err(error) => decided(tx, Err(error)),
+                }
+            }
+            OperationInput::Mcp(ops::Input::Discover(input)) => {
+                match self.discover(ctx, command, tx, input) {
+                    Ok(decision) => Ok(decision),
+                    Err(error) => decided(tx, Err(error)),
+                }
             }
             _ => decided(
                 tx,

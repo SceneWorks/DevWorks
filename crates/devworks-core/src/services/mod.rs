@@ -79,15 +79,21 @@ pub struct UseCases {
     commands: BTreeMap<&'static str, Arc<dyn CommandHandler>>,
     inference_router: Option<Arc<router::InferenceRouter>>,
     connection_service: Option<Arc<router::connections::ConnectionService>>,
+    mcp_service: Option<Arc<mcp::McpClientService>>,
 }
 
 impl UseCases {
     /// Outgoing MCP configuration and selected capabilities share the gateway with UI and tools.
     pub fn with_mcp(mut self, service: Arc<mcp::McpClientService>) -> Self {
+        self.mcp_service = Some(service.clone());
         for operation in mcp::OPERATIONS {
             self.register(operation, Some(service.clone()), Some(service.clone()));
         }
         self
+    }
+
+    pub fn mcp_service(&self) -> Option<Arc<mcp::McpClientService>> {
+        self.mcp_service.clone()
     }
     /// Recorded-work evaluation uses the same admission and receipt path on every surface.
     pub fn with_evals(mut self, service: Arc<evals::EvalService>) -> Self {
