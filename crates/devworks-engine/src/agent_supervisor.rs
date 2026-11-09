@@ -179,6 +179,9 @@ impl AgentLauncher {
                     .await
                 };
                 if let Err(error) = complete {
+                    if *stop_watch.borrow() {
+                        return ChildLaunch::End(stopped());
+                    }
                     return ChildLaunch::End(failed(error));
                 }
             }
@@ -461,6 +464,9 @@ impl ActivationLauncher for AgentLauncher {
                     .await
                 };
                 if let Err(error) = complete {
+                    if *launch.stop.borrow() {
+                        return stopped();
+                    }
                     return failed(error);
                 }
             }
