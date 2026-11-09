@@ -47,7 +47,10 @@ webpki-roots = "=1.0.11"
 # The provider endpoint and query string are built with the same WHATWG URL type core decides on.
 url = "=2.5.8"
 percent-encoding = "=2.3.2"
-tokio = { version = "=1.54.1", default-features = false, features = ["sync", "rt-multi-thread", "net", "time", "macros"] }
+tokio = { version = "=1.54.1", default-features = false, features = ["sync", "rt-multi-thread", "net", "time", "macros", "io-util"] }
+# Outgoing MCP protocol, pagination and Streamable HTTP framing. The SDK's child-process
+# transport is deliberately disabled: stdio servers are launched by ProcessSupervisor.
+rmcp = { version = "=3.9.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client-reqwest"] }
 # Provider streaming owns its async runtime, uses asynchronous DNS, bundled rustls roots and
 # the user's proxy environment. No cookies, compression, automatic retries or redirects.
 reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls", "hickory-dns", "stream"] }
@@ -107,6 +110,9 @@ x11rb = { version = "=0.13.2", default-features = false }
 atspi = { version = "=0.29.0", default-features = false }
 
 [dev-dependencies]
+# An in-memory server proves the outgoing stdio protocol handshake without requiring Node,
+# Python or an installed external MCP runtime in the test suite.
+rmcp = { version = "=3.9.0", default-features = false, features = ["server"] }
 # A throwaway certificate authority for the local TLS server the transport tests connect to.
 rcgen = { version = "=0.13.2", default-features = false, features = ["ring", "pem"] }
 devworks-core = { path = "../devworks-core", features = ["contract-suite"] }

@@ -124,6 +124,7 @@ mod help;
 mod indexing;
 mod jobs;
 mod knowledge;
+mod mcp;
 mod operations;
 mod packages;
 mod projects;

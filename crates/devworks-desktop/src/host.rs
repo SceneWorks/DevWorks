@@ -46,6 +46,7 @@ use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::history::HistoryService;
 use devworks_core::services::indexing::IndexSettings;
 use devworks_core::services::knowledge::KnowledgeService;
+use devworks_core::services::mcp::McpClientService;
 use devworks_core::services::packages::PackageService;
 use devworks_core::services::process::ShutdownReport;
 use devworks_core::services::resources::ResourceService;
@@ -170,6 +171,7 @@ pub struct DesktopConfig {
     /// Explicit host grants for process environment credential handles. An unregistered
     /// credentialRef is refused; the generic provider connection handles are not exported.
     pub process_credentials: Vec<devworks_core::services::process::tools::RegisteredCredential>,
+    pub process_working_roots: Vec<devworks_core::services::process::tools::RegisteredWorkingRoot>,
     /// Explicit grants for container workload environment and registry credentials. Process
     /// grants do not imply access to these handles.
     pub container_credentials: Vec<devworks_core::services::process::tools::RegisteredCredential>,
@@ -220,6 +222,7 @@ impl DesktopConfig {
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),
             process_credentials: Vec::new(),
+            process_working_roots: Vec::new(),
             container_credentials: Vec::new(),
             desktop_platform: None,
             connections: None,
@@ -394,6 +397,7 @@ async fn compose(
             directory,
         )))
         .with_connections(connections.clone())
+        .with_mcp(Arc::new(McpClientService::new(id_source.clone())))
         .with_knowledge(knowledge.clone());
     let authority = Arc::new(StoreAuthority {
         store: store.clone(),
@@ -507,7 +511,7 @@ async fn compose(
     if !executables.is_empty() {
         let bindings = devworks_core::services::process::tools::ToolBindings::new(
             executables,
-            std::iter::empty(),
+            config.process_working_roots.clone(),
         )
         .and_then(|bindings| bindings.with_credentials(config.process_credentials.clone()))
         .map_err(|reason| StartError::Thread(reason.into()))?;

@@ -23,6 +23,7 @@ pub mod history;
 pub mod indexing;
 pub mod jobs;
 pub mod knowledge;
+pub mod mcp;
 pub mod notifications;
 pub mod packages;
 pub mod power;
@@ -81,6 +82,13 @@ pub struct UseCases {
 }
 
 impl UseCases {
+    /// Outgoing MCP configuration and selected capabilities share the gateway with UI and tools.
+    pub fn with_mcp(mut self, service: Arc<mcp::McpClientService>) -> Self {
+        for operation in mcp::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
     /// Recorded-work evaluation uses the same admission and receipt path on every surface.
     pub fn with_evals(mut self, service: Arc<evals::EvalService>) -> Self {
         for operation in evals::OPERATIONS {
