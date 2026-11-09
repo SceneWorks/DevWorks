@@ -1417,6 +1417,12 @@ pub struct ToolDispatch {
     pub outcome: Result<devworks_core::services::sessions::transcript::BatchOutcome, StorageError>,
 }
 
+/// One operation-linked tool call whose latest journal state was reconciled independently.
+pub struct ToolOperationUpdate {
+    pub operation_id: devworks_core::protocol::OperationId,
+    pub outcome: Result<Option<devworks_core::protocol::provider::ArtifactRef>, StorageError>,
+}
+
 impl Runtime {
     /// What boot recovery established.
     pub fn report(&self) -> &BootReport {
@@ -1621,6 +1627,40 @@ impl Runtime {
             session_id,
             operation_id,
         )
+    }
+
+    /// Reconcile every operation linked to an initial tool response without making a failure
+    /// on one operation suppress updates for unrelated calls.
+    pub fn reconcile_tool_operations(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+    ) -> Result<Vec<ToolOperationUpdate>, StorageError> {
+        crate::tool_turn::pending_calls(self.store.as_ref(), ctx, session_id)?;
+        let linked = devworks_core::ports::storage::read_snapshot(
+            self.store.as_ref(),
+            &devworks_core::ports::storage::ReadOptions::default(),
+            |read| read.sessions().linked_operations(session_id, 500),
+        )?;
+        if linked.len() == 500 {
+            return Err(StorageError::InvalidRecord(
+                "linked tool operations exceed scan bound".into(),
+            ));
+        }
+        let mut operations: Vec<_> = linked
+            .into_iter()
+            .filter_map(|call| call.operation_id)
+            .collect();
+        operations
+            .sort_by(|a: &devworks_core::protocol::OperationId, b| a.0.as_str().cmp(b.0.as_str()));
+        operations.dedup();
+        Ok(operations
+            .into_iter()
+            .map(|operation_id| ToolOperationUpdate {
+                outcome: self.record_tool_operation_update(ctx, session_id, &operation_id),
+                operation_id,
+            })
+            .collect())
     }
 
     /// Build the next provider context from the immutable request context and settled native

@@ -920,8 +920,10 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
             entry.kind == "ToolResponseRecorded"
                 && entry.body["call"]["nativeCallId"] == "accepted-operation-call"
         ).unwrap().body;
-        let updated = app.record_tool_operation_update(&f.context, &id("session"), &operation_id).unwrap();
-        assert!(updated.is_some());
+        let reconciled = app.reconcile_tool_operations(&f.context, &id("session")).unwrap();
+        assert_eq!(reconciled.len(), 1);
+        assert_eq!(reconciled[0].operation_id, operation_id);
+        assert!(matches!(&reconciled[0].outcome, Ok(Some(_))));
         assert!(app.record_tool_operation_update(&f.context, &id("session"), &operation_id).unwrap().is_none());
         assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "OperationUpdate").count(), 1);
         let retained_response = f.transcript().into_iter().find(|entry|
