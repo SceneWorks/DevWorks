@@ -176,6 +176,7 @@ fn finalized_native_artifacts_replay_in_order_into_the_actual_next_request() {
                 let context = ProviderContext {
                     version: 1,
                     instructions: vec![],
+                    instruction_stamps: vec![],
                     messages: vec![Message {
                         role: MessageRole::Assistant,
                         content,

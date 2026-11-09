@@ -88,6 +88,7 @@ fn context() -> ProviderContext {
             text: "Rules".into(),
             cache: None,
         }],
+        instruction_stamps: vec![],
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![ContentBlock::Text {

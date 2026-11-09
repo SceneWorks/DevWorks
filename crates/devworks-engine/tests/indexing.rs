@@ -21,6 +21,9 @@ use devworks_core::ports::process::{PowerAssertion, PowerPort, PowerRequest};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::CommandReply;
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
+use devworks_core::providers::context::{
+    ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext, TextBlock,
+};
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::indexing::IndexSettings;
@@ -275,6 +278,77 @@ fn discovery_scans_only_after_admission_and_only_for_people() {
     // A person's admitted query scans first.
     assert_eq!(discovered(&runtime_, &user).len(), 1);
     assert!(registered(&store).is_some());
+    rt.block_on(runtime_.shutdown());
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn provider_instructions_use_current_registered_checkout_and_scope() {
+    let _case = native_runtime_case();
+    let h = Harness::new();
+    let rt = runtime();
+    let src = sources();
+    let repo = src.join("svc");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("AGENTS.md"), "root instructions").unwrap();
+    std::fs::write(repo.join("src/CLAUDE.md"), "src instructions").unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "one"]);
+    let store = h.open();
+    let runtime_ = rt
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let user = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &user, &src);
+    let found = discovered(&runtime_, &user);
+    assert_eq!(found.len(), 1);
+    let targets = ["src/lib.rs".into(), "README.md".into()];
+    let first = runtime_
+        .effective_instructions(&user, &id(&found[0]), &targets)
+        .unwrap();
+    assert_eq!(
+        first
+            .sources
+            .iter()
+            .map(|s| s.path.as_str())
+            .collect::<Vec<_>>(),
+        ["AGENTS.md", "src/CLAUDE.md"]
+    );
+    assert_eq!(first.sources[1].applies_to, ["src/lib.rs"]);
+    std::fs::write(repo.join("src/CLAUDE.md"), "edited").unwrap();
+    let changed = runtime_
+        .effective_instructions(&user, &id(&found[0]), &targets)
+        .unwrap();
+    assert_ne!(first.revision, changed.revision);
+    let context = ProviderContext {
+        version: 1,
+        instructions: vec![TextBlock {
+            text: "role".into(),
+            cache: None,
+        }],
+        instruction_stamps: vec![],
+        messages: vec![Message {
+            role: MessageRole::User,
+            content: vec![ContentBlock::Text {
+                text: "work".into(),
+                cache: None,
+            }],
+        }],
+        parameters: GenerationParameters::default(),
+    };
+    let bound = runtime_
+        .bind_provider_instructions(&user, context, &[(id(&found[0]), targets.to_vec())])
+        .unwrap();
+    assert_eq!(bound.instruction_stamps[0].revision, changed.revision);
+    assert_eq!(bound.instructions[0].text, "role");
+    assert_eq!(bound.instructions.len(), 3);
+    let agent = principal(&*store, "agent", PrincipalKind::Agent);
+    assert!(
+        runtime_
+            .effective_instructions(&agent, &id(&found[0]), &targets)
+            .is_err()
+    );
     rt.block_on(runtime_.shutdown());
     let _ = std::fs::remove_dir_all(&src);
 }

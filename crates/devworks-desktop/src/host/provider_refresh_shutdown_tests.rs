@@ -394,6 +394,7 @@ pub(super) fn run_case(writer_race: bool) {
         let material = serde_json::to_vec(&ProviderContext {
             version: 1,
             instructions: vec![],
+            instruction_stamps: vec![],
             messages: vec![devworks_core::providers::context::Message {
                 role: devworks_core::providers::context::MessageRole::User,
                 content: vec![devworks_core::providers::context::ContentBlock::Text {

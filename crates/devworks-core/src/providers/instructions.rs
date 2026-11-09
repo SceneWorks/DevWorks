@@ -6,7 +6,7 @@ use crate::{
     protocol::Id,
     providers::context::TextBlock,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
@@ -37,7 +37,73 @@ pub struct InstructionBundle {
     pub sources: Vec<InstructionSource>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InstructionStamp {
+    pub repository_id: Id,
+    pub targets: Vec<String>,
+    pub revision: String,
+    pub sources: Vec<InstructionSourceStamp>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InstructionSourceStamp {
+    pub path: String,
+    pub sha256: String,
+    pub applies_to: Vec<String>,
+}
+
+impl InstructionStamp {
+    pub fn validate(&self) -> bool {
+        fn digest(value: &str) -> bool {
+            value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }
+        if self.targets.is_empty() || !digest(&self.revision) || self.sources.len() > MAX_SOURCES {
+            return false;
+        }
+        let mut targets = BTreeSet::new();
+        for path in &self.targets {
+            if target(path).is_err() || !targets.insert(path) {
+                return false;
+            }
+        }
+        let mut paths = BTreeSet::new();
+        for source in &self.sources {
+            if target(&source.path).is_err()
+                || !matches!(
+                    source.path.rsplit('/').next(),
+                    Some("AGENTS.md" | "CLAUDE.md")
+                )
+                || !digest(&source.sha256)
+                || source.applies_to.is_empty()
+                || !paths.insert(&source.path)
+                || source.applies_to.iter().any(|path| !targets.contains(path))
+            {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 impl InstructionBundle {
+    pub fn stamp(&self) -> InstructionStamp {
+        InstructionStamp {
+            repository_id: self.repository_id.clone(),
+            targets: self.targets.clone(),
+            revision: self.revision.clone(),
+            sources: self
+                .sources
+                .iter()
+                .map(|source| InstructionSourceStamp {
+                    path: source.path.clone(),
+                    sha256: source.sha256.clone(),
+                    applies_to: source.applies_to.clone(),
+                })
+                .collect(),
+        }
+    }
     /// Files appear ancestor first, and CLAUDE.md before AGENTS.md at one directory. Thus later
     /// applicable guidance wins a conflict while nonconflicting earlier guidance remains visible.
     pub fn text_blocks(&self) -> Vec<TextBlock> {
@@ -57,6 +123,33 @@ impl InstructionBundle {
     }
 }
 
+/// Append repository guidance after default role instructions, in stable repository order.
+/// A changed bundle starts from a fresh base at a new safe context epoch; it never rewrites the
+/// already dispatched context or removes a prior turn's provenance.
+pub fn bind_context(
+    mut base: crate::providers::context::ProviderContext,
+    bundles: &[InstructionBundle],
+) -> Result<crate::providers::context::ProviderContext, crate::providers::ProviderError> {
+    if !base.instruction_stamps.is_empty() {
+        return Err(crate::providers::ProviderError::InvalidInput(
+            "instruction_already_bound",
+        ));
+    }
+    let mut ordered: Vec<_> = bundles.iter().collect();
+    ordered.sort_by(|a, b| a.repository_id.as_str().cmp(b.repository_id.as_str()));
+    for (index, bundle) in ordered.iter().enumerate() {
+        if index > 0 && ordered[index - 1].repository_id == bundle.repository_id {
+            return Err(crate::providers::ProviderError::InvalidInput(
+                "duplicate_instruction_repository",
+            ));
+        }
+        base.instructions.extend(bundle.text_blocks());
+        base.instruction_stamps.push(bundle.stamp());
+    }
+    base.validate()?;
+    Ok(base)
+}
+
 #[derive(Debug)]
 pub enum InstructionFault {
     InvalidTarget,
@@ -67,6 +160,11 @@ pub enum InstructionFault {
 }
 
 fn target(path: &str) -> Result<Vec<&str>, InstructionFault> {
+    // A turn without a specific file still receives root guidance, without guessing a target
+    // subtree from the current working directory.
+    if path == "." {
+        return Ok(vec!["."]);
+    }
     if path.is_empty()
         || path.starts_with('/')
         || path.contains('\\')
@@ -236,6 +334,15 @@ mod tests {
         );
         assert_eq!(first.sources[2].applies_to, ["src/lib.rs"]);
         assert_eq!(first.sources[3].sha256, sha256_hex(b"src agents"));
+        let root_only = resolve(&tree, root, Id::new("repo").unwrap(), &[".".into()]).unwrap();
+        assert_eq!(
+            root_only
+                .sources
+                .iter()
+                .map(|s| s.path.as_str())
+                .collect::<Vec<_>>(),
+            ["CLAUDE.md", "AGENTS.md"]
+        );
         let mut changed = tree.0.clone();
         changed.insert("src/AGENTS.md".into(), b"edited".to_vec());
         let second = resolve(
@@ -250,5 +357,55 @@ mod tests {
             resolve(&tree, root, Id::new("repo").unwrap(), &["../escape".into()]),
             Err(InstructionFault::InvalidTarget)
         ));
+    }
+
+    #[test]
+    fn binding_preserves_role_prefix_and_records_sources_in_stable_repo_order() {
+        use crate::providers::context::{
+            ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext,
+        };
+        let tree = Tree(BTreeMap::from([("AGENTS.md".into(), b"guidance".to_vec())]));
+        let a = resolve(
+            &tree,
+            Path::new("/a"),
+            Id::new("a").unwrap(),
+            &["src/lib.rs".into()],
+        )
+        .unwrap();
+        let b = resolve(
+            &tree,
+            Path::new("/b"),
+            Id::new("b").unwrap(),
+            &["README.md".into()],
+        )
+        .unwrap();
+        let base = ProviderContext {
+            version: 1,
+            instructions: vec![TextBlock {
+                text: "role".into(),
+                cache: None,
+            }],
+            instruction_stamps: vec![],
+            messages: vec![Message {
+                role: MessageRole::User,
+                content: vec![ContentBlock::Text {
+                    text: "work".into(),
+                    cache: None,
+                }],
+            }],
+            parameters: GenerationParameters::default(),
+        };
+        let bound = bind_context(base, &[b, a]).unwrap();
+        assert_eq!(bound.instructions[0].text, "role");
+        assert_eq!(
+            bound
+                .instruction_stamps
+                .iter()
+                .map(|s| s.repository_id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert!(bound.instructions[1].text.contains("sha256"));
+        assert!(bound.instructions[1].text.contains("src/lib.rs"));
     }
 }

@@ -1827,6 +1827,55 @@ impl Runtime {
         }
         Ok(bundle)
     }
+
+    /// Compose the effective instruction prefix and its exact source stamps for one provider
+    /// request. The trusted turn caller supplies its authorized repository and target paths;
+    /// an empty path set means repository-root guidance only.
+    pub fn bind_provider_instructions(
+        &self,
+        ctx: &InvocationContext,
+        base: devworks_core::providers::context::ProviderContext,
+        targets: &[(Id, Vec<String>)],
+    ) -> Result<devworks_core::providers::context::ProviderContext, StorageError> {
+        let selected = if targets.is_empty() {
+            if let Some(bound) = ctx.worktree() {
+                vec![(bound.repository_id().clone(), Vec::new())]
+            } else if let Some(project) = ctx.project_id() {
+                devworks_core::ports::storage::read_snapshot(
+                    self.store.as_ref(),
+                    &devworks_core::ports::storage::ReadOptions::default(),
+                    |read| {
+                        Ok(read
+                            .projects()
+                            .members(project)?
+                            .into_iter()
+                            .map(|id| (id, Vec::new()))
+                            .collect())
+                    },
+                )?
+            } else {
+                Vec::new()
+            }
+        } else {
+            targets.to_vec()
+        };
+        if selected.len() > 64 {
+            return Err(StorageError::InvalidRecord(
+                "too many instruction repositories".into(),
+            ));
+        }
+        let mut bundles = Vec::with_capacity(selected.len());
+        for (repository, paths) in &selected {
+            let scope = if paths.is_empty() {
+                vec![".".into()]
+            } else {
+                paths.clone()
+            };
+            bundles.push(self.effective_instructions(ctx, repository, &scope)?);
+        }
+        devworks_core::providers::instructions::bind_context(base, &bundles)
+            .map_err(|error| StorageError::InvalidRecord(format!("instruction binding: {error:?}")))
+    }
     /// The keep-awake request as last applied (re-checking a held request).
     pub fn keep_awake(&self) -> KeepAwakeStatus {
         self.keep_awake.status()

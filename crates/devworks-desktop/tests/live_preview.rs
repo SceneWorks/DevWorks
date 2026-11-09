@@ -181,6 +181,7 @@ fn start_producer(engine: &Engine, session: Id) -> std::thread::JoinHandle<()> {
     let context = ProviderContext {
         version: 1,
         instructions: vec![],
+        instruction_stamps: vec![],
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![ContentBlock::Text {

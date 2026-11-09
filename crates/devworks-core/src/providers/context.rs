@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub struct ProviderContext {
     pub version: u32,
     pub instructions: Vec<TextBlock>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instruction_stamps: Vec<super::instructions::InstructionStamp>,
     pub messages: Vec<Message>,
     pub parameters: GenerationParameters,
 }
@@ -125,6 +127,14 @@ impl ProviderContext {
         }
         if self.messages.is_empty() || self.messages.len() > 4096 || self.instructions.len() > 256 {
             return Err(ProviderError::InvalidInput("context_messages"));
+        }
+        if self.instruction_stamps.len() > 64
+            || self
+                .instruction_stamps
+                .iter()
+                .any(|stamp| !stamp.validate())
+        {
+            return Err(ProviderError::InvalidInput("instruction_stamps"));
         }
         let p = &self.parameters;
         if p.temperature
