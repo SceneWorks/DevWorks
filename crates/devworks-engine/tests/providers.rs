@@ -1074,6 +1074,7 @@ fn compaction_result_is_artifact_only_and_does_not_enter_session_transcript() {
 fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
     let f = Fx::new("CompatibleChat", Script::aggregate("{}"), false);
     let human = principal(f.store.as_ref(), "tool-selector", PrincipalKind::Human);
+    assert!(f.driver.schemas().selected_builtins(&human).is_err());
     let agent = principal(f.store.as_ref(), "selected-worker", PrincipalKind::Agent);
     let binding = NewPrincipalBinding {
         actor: ActorId(id("selected-worker")),
@@ -1099,6 +1100,20 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
         )
         .unwrap();
     assert!(f.driver.schemas().tool(&agent, &alias).is_ok());
+    let initial_tools = f.driver.schemas().selected_builtins(&agent).unwrap();
+    assert!(initial_tools.iter().any(|tool| {
+        tool.capability_id.as_str() == "devworks/sessions.get"
+            && tool.wire_name == "sessions_get_query"
+    }));
+    assert!(
+        !initial_tools
+            .iter()
+            .any(|tool| tool.capability_id.as_str() == "devworks/agents.history")
+    );
+    assert_eq!(
+        serde_json::to_value(&initial_tools).unwrap(),
+        serde_json::to_value(f.driver.schemas().selected_builtins(&agent).unwrap()).unwrap()
+    );
     let descriptor = devworks_core::settings::catalog::descriptor("tools.overrides").unwrap();
     let schema = descriptor.schema_ref();
     write(f.store.as_ref(), move |tx| {
@@ -1114,6 +1129,14 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
     })
     .unwrap();
     assert!(f.driver.schemas().tool(&agent, &alias).is_err());
+    assert!(
+        !f.driver
+            .schemas()
+            .selected_builtins(&agent)
+            .unwrap()
+            .iter()
+            .any(|tool| tool.capability_id.as_str() == "devworks/sessions.get")
+    );
     let policy = read(f.store.as_ref(), |s| {
         devworks_core::authority::policy::resolve_policy(s.configuration(), None)
     });

@@ -66,6 +66,84 @@ impl RegisteredSchemas {
             input_schema: reference,
         })
     }
+    /// Current built-in tools the shared selection permits this agent to see. This is the
+    /// complete inventory, not a provider request: a turn planner must project a bounded
+    /// subset before dispatch because one request accepts at most 256 aliases and one mode
+    /// per capability ID.
+    pub fn selected_builtins(
+        &self,
+        ctx: &InvocationContext,
+    ) -> Result<Vec<ToolSchema>, StorageError> {
+        if ctx.principal_kind() != devworks_core::context::PrincipalKind::Agent {
+            return Err(StorageError::ScopeDenied);
+        }
+        let selected = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+            current_context(snapshot, ctx)?;
+            let principal = snapshot.authority().principal(ctx.principal())?;
+            let effective = policy::resolve_policy(snapshot.configuration(), ctx.project_id())?;
+            let mut selected = Vec::new();
+            for descriptor in registry::all() {
+                for binding in descriptor.modes {
+                    if self.registered(descriptor.name, binding.mode)
+                        && matches!(
+                            policy::registered_tool_visibility(
+                                ctx,
+                                principal.as_ref(),
+                                &effective,
+                                descriptor,
+                                binding,
+                                binding.effect,
+                            ),
+                            Verdict::Allow
+                        )
+                    {
+                        let revision = *descriptor.revisions.last().ok_or_else(|| {
+                            StorageError::InvalidRecord("operation has no schema revision".into())
+                        })?;
+                        selected.push((descriptor.name, binding.mode, revision));
+                    }
+                }
+            }
+            Ok(selected)
+        })?;
+        let mut tools = selected
+            .into_iter()
+            .map(|(name, mode, revision)| {
+                let mode_name = match mode {
+                    Mode::Query => "query",
+                    Mode::Command => "command",
+                };
+                let wire_name = format!("{}_{}", name.replace('.', "_"), mode_name);
+                if wire_name.len() > 128 {
+                    return Err(StorageError::InvalidRecord(
+                        "built-in alias too long".into(),
+                    ));
+                }
+                self.builtin(name, mode, revision, &wire_name)
+                    .map_err(|error| {
+                        StorageError::InvalidRecord(format!("built-in schema: {error:?}"))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        tools.sort_by(|a, b| {
+            a.capability_id
+                .as_str()
+                .cmp(b.capability_id.as_str())
+                .then_with(|| a.wire_name.cmp(&b.wire_name))
+        });
+        if tools
+            .iter()
+            .map(|tool| tool.wire_name.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != tools.len()
+        {
+            return Err(StorageError::InvalidRecord(
+                "ambiguous built-in alias".into(),
+            ));
+        }
+        Ok(tools)
+    }
     /// Only exact registered built-in bindings have a durable turn dispatcher. A package
     /// declaring a `devworks/` capability ID is still an external tool.
     pub(crate) fn builtin_binding(
