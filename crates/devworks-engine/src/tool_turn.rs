@@ -608,6 +608,11 @@ pub(crate) fn publish_continuation(
         let scope = session
             .project_id
             .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+        let root = crate::context_epoch::epoch_root(
+            tx.sessions(),
+            &session_id,
+            binding.context_epoch.get(),
+        )?;
         let version = service.commit_host_bytes_in_scope(
             tx,
             &staged_for_write,
@@ -615,7 +620,8 @@ pub(crate) fn publish_continuation(
                 title: "Provider turn continuation",
                 media_type: "application/vnd.devworks.provider-context+json",
                 provenance: json!({"kind":"ProviderTurnContinuation","sessionId":session_id,
-                    "attemptId":attempt_id,"binding":binding,"observedSequence":observed_sequence}),
+                    "attemptId":attempt_id,"binding":binding,"observedSequence":observed_sequence,
+                    "epochRoot":root}),
                 scope,
                 owner: ctx.principal().clone(),
             },
@@ -712,10 +718,31 @@ pub(crate) fn append_operation_updates(
             .artifacts()
             .version(&source.version_id)?
             .ok_or(StorageError::ScopeDenied)?;
+        if binding.context_epoch.get() > 0 {
+            let root: ArtifactRef = serde_json::from_value(
+                read.sessions()
+                    .epoch(session_id, binding.context_epoch.get())?
+                    .ok_or(StorageError::ScopeDenied)?
+                    .context,
+            )
+            .map_err(|_| StorageError::ScopeDenied)?;
+            let is_root = source.artifact_id == root.artifact_id
+                && source.version_id == root.version_id
+                && source.sha256 == root.sha256
+                && source.byte_length == root.byte_length
+                && source.media_type == root.media_type;
+            if (derived["kind"] == "ProviderContextEpoch" && !is_root)
+                || (derived["kind"] != "ProviderContextEpoch"
+                    && derived["epochRoot"] != json!(root))
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
         if session.context_epoch != binding.context_epoch.get()
             || after < 0
             || after > session.last_durable_sequence()
             || !version.live()
+            || version.version_no != 1
             || version.artifact_id != source.artifact_id
             || version.source["principalKind"] != "Host"
             || version.source["producedBy"] != store.info().host_actor.0.as_str()
@@ -837,11 +864,17 @@ pub(crate) fn append_operation_updates(
         let scope = session
             .project_id
             .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+        let root = crate::context_epoch::epoch_root(
+            tx.sessions(),
+            &session_for_write,
+            binding_for_write.context_epoch.get(),
+        )?;
         let version = artifacts_for_write.commit_host_bytes_in_scope(tx, &staged_for_write,
             HostArtifactPublication { title: "Provider operation update context",
                 media_type: "application/vnd.devworks.provider-context+json",
                 provenance: json!({"kind":"ProviderOperationUpdateContext","sessionId":session_for_write,
-                    "binding":binding_for_write,"observedSequence":observed}),
+                    "binding":binding_for_write,"observedSequence":observed,
+                    "epochRoot":root}),
                 scope, owner: ctx_for_write.principal().clone() })?;
         Ok(version_ref(&version))
     });

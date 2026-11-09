@@ -20,6 +20,82 @@ use devworks_core::{
 use serde_json::json;
 use std::sync::Arc;
 
+/// Constant-size host witness carried by derived contexts; never reconstruct ancestry by
+/// scanning an unbounded chain of previous turns.
+pub(crate) fn epoch_root(
+    sessions: &dyn SessionRead,
+    session_id: &Id,
+    epoch: i64,
+) -> Result<serde_json::Value, StorageError> {
+    if epoch == 0 {
+        return Ok(serde_json::Value::Null);
+    }
+    Ok(sessions
+        .epoch(session_id, epoch)?
+        .ok_or(StorageError::ScopeDenied)?
+        .context)
+}
+
+/// Only the immutable first version of a host-published continuation can carry an epoch
+/// witness. User-created copies, later edited versions and foreign bindings are not descendants.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_descendant(
+    store: &dyn ApplicationStore,
+    artifacts: &ArtifactService,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    reference: &ArtifactRef,
+    root: &ArtifactRef,
+    epoch: i64,
+    connection_id: &Id,
+    model_id: &Id,
+    profile: &str,
+) -> Result<(), StorageError> {
+    let (_, provenance) = artifacts
+        .read_exact(store, ctx, reference, 8 * 1024 * 1024)
+        .map_err(|_| StorageError::ScopeDenied)?;
+    read_snapshot(store, &ReadOptions::default(), |read| {
+        let version = read
+            .artifacts()
+            .version(&reference.version_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let session = read
+            .sessions()
+            .session(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let derived = &provenance["derived"];
+        let binding: NativeBinding = serde_json::from_value(derived["binding"].clone())
+            .map_err(|_| StorageError::ScopeDenied)?;
+        let host = store.info().host_actor.0;
+        if !version.live()
+            || version.version_no != 1
+            || version.source["principalKind"] != "Host"
+            || version.source["producedBy"] != host.as_str()
+            || provenance["principalKind"] != "Host"
+            || provenance["producedBy"] != host.as_str()
+            || !matches!(
+                derived["kind"].as_str(),
+                Some("ProviderTurnContinuation" | "ProviderOperationUpdateContext")
+            )
+            || derived["sessionId"] != session_id.as_str()
+            || derived["epochRoot"] != json!(root)
+            || !derived["observedSequence"]
+                .as_i64()
+                .is_some_and(|sequence| {
+                    sequence >= 0 && sequence <= session.last_durable_sequence()
+                })
+            || ctx.session_id() != Some(session_id)
+            || binding.context_epoch.get() != epoch
+            || binding.connection_id != *connection_id
+            || binding.model_id != *model_id
+            || format!("{:?}", binding.endpoint_profile) != profile
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        Ok(())
+    })
+}
+
 pub(crate) struct EpochChange {
     pub previous_epoch: i64,
     pub binding: NativeBinding,

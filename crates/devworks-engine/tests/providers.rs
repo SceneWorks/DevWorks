@@ -822,6 +822,65 @@ fn native_generation_attributes_observed_context_epoch_change_to_usage() {
     });
 }
 #[test]
+fn positive_epoch_accepts_host_continuation_but_rejects_unrelated_copy() {
+    runtime().block_on(async {
+        let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let f = Fx::new("CompatibleChat", Script::sse(wire), false);
+        let mut first = f.generation(vec![]);
+        let InferenceInput::Generation { context, context_epoch, .. } = &mut first.input else {
+            unreachable!()
+        };
+        let root = context.clone();
+        *context_epoch = Counter::new(1).unwrap();
+        let ctx = f.context.clone();
+        write(f.store.as_ref(), move |tx| {
+            use devworks_core::services::sessions::{transcript::{BatchOutcome, SessionBatch, SessionWriter}, turn};
+            let session = tx.sessions().session(&id("session"))?.unwrap();
+            let batch = turn::batch_of(&id("session"), tx.new_id(IdKind::TranscriptBatch),
+                1, session.next_sequence,
+                vec![TranscriptBody::ContextEpochChanged {
+                    previous_epoch: Counter::new(0).unwrap(),
+                    next_epoch: Counter::new(1).unwrap(),
+                    reason: ContextChangeReason::InstructionAdoption,
+                    context: root,
+                }], || tx.new_id(IdKind::TranscriptEntry));
+            assert!(matches!(SessionWriter::append_in(tx, &ctx, &SessionBatch::entries(batch))?,
+                BatchOutcome::Accepted(_)));
+            Ok(())
+        }).unwrap();
+        let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let invoke = |request| f.native_invocation(request, PricingContext {
+            input_semantics: InputSemantics::Unknown, cache_read_possible: false,
+            cache_write_possible: false, cache_write_ttl_ms: None,
+        }, vec!["Text".into()], None, None, false);
+        let first_result = app.produce_and_dispatch_native_turn(invoke(first), None).await.unwrap();
+        let descendant = first_result.continuation.expect("host continuation");
+        let bytes = f.artifacts.read_exact(f.store.as_ref(), &f.context, &descendant,
+            1024 * 1024).unwrap().0;
+
+        let mut unrelated = f.generation(vec![]);
+        unrelated.request_id = id("unrelated-epoch-context");
+        if let InferenceInput::Generation { context, context_epoch, .. } = &mut unrelated.input {
+            *context = f.bytes(&bytes);
+            *context_epoch = Counter::new(1).unwrap();
+        }
+        assert!(app.produce_and_dispatch_native_turn(invoke(unrelated), None).await.is_err());
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+
+        f.http.lock().unwrap().body = VecDeque::from([wire.as_bytes().to_vec()]);
+        let mut second = f.generation(vec![]);
+        second.request_id = id("second-epoch-request");
+        if let InferenceInput::Generation { context, context_epoch, .. } = &mut second.input {
+            *context = descendant;
+            *context_epoch = Counter::new(1).unwrap();
+        }
+        let second_result = app.produce_and_dispatch_native_turn(invoke(second), None).await.unwrap();
+        assert_eq!(second_result.provider.result.outcome, Some(AttemptEnd::Completed));
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 2);
+        app.shutdown().await;
+    });
+}
+#[test]
 fn embedding_actual_discovery_fixed_dimensions_durable_vectors_and_no_assistant_turn() {
     runtime().block_on(async{
     let f=Fx::new("Embedding",Script::aggregate(r#"{"model":"fixture-model","data":[{"index":1,"embedding":[0.3,0.4]},{"index":0,"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":2,"total_tokens":2}}"#),true);

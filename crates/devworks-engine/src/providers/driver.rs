@@ -520,8 +520,21 @@ impl NativeProviders {
                 || published.sha256 != request_context.sha256
                 || published.byte_length != request_context.byte_length
                 || published.media_type != request_context.media_type
-                || attempt.cache_diagnostics.len() >= 128
             {
+                crate::context_epoch::verify_descendant(
+                    self.store.as_ref(),
+                    &self.artifacts,
+                    &context,
+                    session_id,
+                    request_context,
+                    &published,
+                    context_epoch.get(),
+                    &attempt.query.connection_id,
+                    &attempt.query.catalog_model_id,
+                    &attempt.query.endpoint_profile,
+                )?;
+            }
+            if attempt.cache_diagnostics.len() >= 128 {
                 return Err(StorageError::ScopeDenied);
             }
             attempt.cache_diagnostics.push(
