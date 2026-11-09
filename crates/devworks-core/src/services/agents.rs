@@ -495,7 +495,12 @@ impl AgentService {
                 .ok_or_else(|| {
                     Refusal::new(DomainErrorCode::NotFound, "task", Some(task.clone()))
                 })?;
-            if work.project_id != root.project_id {
+            let within_root = if root.kind == "feature" {
+                work.kind != "feature" && work.parent_feature_id.as_ref() == Some(&root.id)
+            } else {
+                work.kind != "feature" && work.id == root.id
+            };
+            if work.project_id != root.project_id || !within_root {
                 return Err(Refusal::new(
                     DomainErrorCode::PermissionDenied,
                     "task",

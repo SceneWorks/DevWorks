@@ -27,7 +27,8 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         "INSERT INTO actors VALUES('agent-a','agent','Agent'),('human-a','human','Human');
          INSERT INTO projects VALUES('project-a','A','Active',1,1,1),('project-b','B','Active',1,1,1);
          INSERT INTO work_items VALUES('root-a','project-a','issue',NULL,NULL,NULL,'A',1,0,1,1,1,'{}'),
-                                       ('root-b','project-b','issue',NULL,NULL,NULL,'B',1,0,1,1,1,'{}');
+                                       ('root-b','project-b','issue',NULL,NULL,NULL,'B',1,0,1,1,1,'{}'),
+                                       ('root-c','project-a','issue',NULL,NULL,NULL,'C',1,0,1,1,1,'{}');
          INSERT INTO conversations VALUES('conv-a','root-a',0),('conv-b','root-b',0),('conv-home',NULL,0);
          INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision)
            VALUES('session-a','conv-a','agent-a','root-a',0,1),
@@ -802,6 +803,31 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Arc::new(devworks_core::services::runs::ControlService::new(
             h.ids.clone(),
         )),
+    );
+    let foreign_task = ops::DelegateInput {
+        root_id: RootId(id("root-a")),
+        expected_control_revision: Revision::new(1).unwrap(),
+        task_ids: BoundedList(vec![id("root-c")]),
+        role_id: id("worker"),
+        instruction: BoundedText("Investigate the root issue".into()),
+        source_checkpoint_id: None,
+    };
+    let rejected_service = devworks_core::services::agents::AgentService::new(
+        h.ids.clone(),
+        Arc::new(devworks_core::services::runs::ControlService::new(
+            h.ids.clone(),
+        )),
+    );
+    let rejected_context = coordinator.clone();
+    let rejected = run_write(&s, WriteOptions::default(), move |tx| {
+        rejected_service
+            .delegate(tx, &rejected_context, &foreign_task)
+            .map(|_| ())
+            .map_err(|error| StorageError::InvalidRecord(format!("delegation refused: {error:?}")))
+    });
+    assert!(
+        rejected.is_err(),
+        "another issue in the project is outside this root"
     );
     let request = ops::DelegateInput {
         root_id: RootId(id("root-a")),
