@@ -1115,6 +1115,31 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
             devworks_core::authority::DenialReason::ToolNotSelected
         )
     ));
+    for name in ["agents.history", "agents.events"] {
+        let hidden = read(f.store.as_ref(), |s| {
+            let binding = s.authority().principal(agent.principal())?.unwrap();
+            let operation = devworks_core::registry::find(name).unwrap();
+            let selected = operation
+                .binding(devworks_core::registry::Mode::Query)
+                .unwrap();
+            Ok(
+                devworks_core::authority::policy::registered_tool_visibility(
+                    &agent,
+                    Some(&binding),
+                    &policy,
+                    operation,
+                    selected,
+                    selected.effect,
+                ),
+            )
+        });
+        assert!(matches!(
+            hidden,
+            devworks_core::authority::Verdict::Deny(
+                devworks_core::authority::DenialReason::HumanOnly
+            )
+        ));
+    }
     write(f.store.as_ref(), |tx| {
         let mut session = tx.sessions().session(&id("session"))?.unwrap();
         session.id = id("agent-session");
