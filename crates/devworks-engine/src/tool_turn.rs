@@ -1148,12 +1148,7 @@ pub(crate) fn dispatch_one(
                 }
                 if let Some(blocked) = blocked_outcome(&fault)? {
                     (blocked, None)
-                } else if matches!(
-                    fault.retry,
-                    RetryAdvice::SameCommand
-                        | RetryAdvice::ResolveReceipt
-                        | RetryAdvice::ReconcileOperation
-                ) {
+                } else if needs_recovery(fault.retry) {
                     return Err(StorageError::unavailable(
                         Unavailable::UnsupportedRuntime,
                         "tool query requires retry or reconciliation",
@@ -1185,12 +1180,7 @@ pub(crate) fn dispatch_one(
             }
             Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
             Ok(CommandReply::Rejected { code, retry, .. }) => {
-                if matches!(
-                    retry,
-                    RetryAdvice::SameCommand
-                        | RetryAdvice::ResolveReceipt
-                        | RetryAdvice::ReconcileOperation
-                ) {
+                if needs_recovery(retry) {
                     return Err(StorageError::unavailable(
                         Unavailable::UnsupportedRuntime,
                         "tool command rejection requires reconciliation",
@@ -1614,6 +1604,12 @@ fn recorded_command(
             }
             match blocked_outcome(fault)? {
                 Some(blocked) => (blocked, None),
+                None if needs_recovery(fault.retry) => {
+                    return Err(StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "tool command refusal requires retry or reconciliation",
+                    ));
+                }
                 None => failed(&format!("domain_{:?}", fault.code)),
             }
         }
@@ -1640,6 +1636,16 @@ fn blocked_outcome(fault: &DomainFault) -> Result<Option<ToolOutcome>, StorageEr
     Ok(Some(ToolOutcome::DependencyBlocked {
         blocker_ids: fault.blocker_ids.0.clone(),
     }))
+}
+
+fn needs_recovery(retry: RetryAdvice) -> bool {
+    matches!(
+        retry,
+        RetryAdvice::SameCommand
+            | RetryAdvice::ResolveReceipt
+            | RetryAdvice::ReconcileOperation
+            | RetryAdvice::AfterBlockerClears
+    )
 }
 
 fn failed(code: &str) -> (ToolOutcome, Option<Vec<u8>>) {
@@ -1775,6 +1781,33 @@ mod tests {
             "operation",
             None,
         )
+        .fault(CorrelationId(Id::new("correlation").unwrap()));
+        let reply = CommandReply::Recorded {
+            protocol: Protocol::Draft1,
+            receipt: Receipt {
+                command_id: CommandId(Id::new("command").unwrap()),
+                committed_sequence: Revision::new(1).unwrap(),
+                accepted_at_ms: Counter::new(1).unwrap(),
+                request_digest: "a".repeat(64),
+                operation_id: None,
+                decision: DomainDecision::Refused { fault },
+            },
+            replayed: false,
+        };
+        assert!(matches!(
+            recorded_command(&reply),
+            Err(StorageError::StorageUnavailable { .. })
+        ));
+    }
+
+    #[test]
+    fn retryable_recorded_command_does_not_become_final_failed() {
+        let fault = devworks_core::services::sessions::Refusal::new(
+            DomainErrorCode::StorageUnavailable,
+            "operation",
+            None,
+        )
+        .retry(RetryAdvice::SameCommand)
         .fault(CorrelationId(Id::new("correlation").unwrap()));
         let reply = CommandReply::Recorded {
             protocol: Protocol::Draft1,
