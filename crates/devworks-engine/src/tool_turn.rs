@@ -691,6 +691,7 @@ pub(crate) fn append_operation_updates(
                 "ProviderTurnContinuation"
                     | "ProviderToolContinuation"
                     | "ProviderOperationUpdateContext"
+                    | "ProviderContextEpoch"
             )
         )
     {

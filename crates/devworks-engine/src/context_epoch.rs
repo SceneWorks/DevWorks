@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 pub(crate) struct EpochChange {
     pub previous_epoch: i64,
+    pub binding: NativeBinding,
     pub reason: ContextChangeReason,
     pub context: ProviderContext,
     pub omitted: Vec<ArtifactRef>,
@@ -72,6 +73,7 @@ pub(crate) fn provider_change(
         session_id,
         EpochChange {
             previous_epoch,
+            binding: next_binding.clone(),
             reason: ContextChangeReason::ProviderChange,
             context: converted,
             omitted,
@@ -88,6 +90,7 @@ pub(crate) fn publish(
 ) -> Result<ArtifactRef, StorageError> {
     let EpochChange {
         previous_epoch,
+        binding,
         reason,
         context: converted,
         omitted,
@@ -98,6 +101,11 @@ pub(crate) fn publish(
     let next_epoch = previous_epoch
         .checked_add(1)
         .ok_or_else(|| StorageError::InvalidRecord("context epoch overflow".into()))?;
+    if binding.context_epoch.get() != next_epoch {
+        return Err(StorageError::InvalidRecord(
+            "context epoch binding mismatch".into(),
+        ));
+    }
     converted
         .validate()
         .map_err(|e| StorageError::InvalidRecord(format!("context epoch: {e:?}")))?;
@@ -127,6 +135,7 @@ pub(crate) fn publish(
     let ctx_for_write = ctx.clone();
     let session_for_write = session_id.clone();
     let omitted_for_write = omitted.clone();
+    let binding_for_write = binding.clone();
     let committed = run_write(store, WriteOptions::default(), move |tx| {
         let session = tx
             .sessions()
@@ -182,6 +191,7 @@ pub(crate) fn publish(
                 media_type: "application/vnd.devworks.provider-context+json",
                 provenance: json!({"kind":"ProviderContextEpoch","reason":reason_name,
                     "sessionId":session_for_write,"previousEpoch":previous_epoch,
+                    "binding":binding_for_write,"observedSequence":session.next_sequence,
                     "omittedNative":omitted_for_write}),
                 scope,
                 owner: ctx_for_write.principal().clone(),

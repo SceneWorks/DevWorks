@@ -1304,8 +1304,17 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
             if text.contains("Tool operation update:") && text.contains("accepted-operation")));
         let replay = app.refresh_native_tool_context(&f.context, &id("session"), &first).unwrap();
         assert_eq!(replay.version_id, first.version_id);
+        let prior_binding = progress.provider.result.binding.unwrap();
         app.shutdown().await;
         let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let next_binding = NativeBinding {
+            connection_id: id("next-connection"),
+            endpoint_profile: EndpointProfile::AnthropicMessages,
+            context_epoch: Counter::new(1).unwrap(),
+            ..prior_binding.clone()
+        };
+        let changed = app.change_provider_epoch(&f.context, &id("session"), &first,
+            &prior_binding, &next_binding).unwrap();
         let operation_for_write = operation_id.clone();
         write(f.store.as_ref(), move |tx| {
             use devworks_core::protocol::OperationState;
@@ -1314,7 +1323,7 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
                 OperationState::CancelledBeforeDispatch, None)?;
             Ok(())
         }).unwrap();
-        let second = app.refresh_native_tool_context(&f.context, &id("session"), &first).unwrap();
+        let second = app.refresh_native_tool_context(&f.context, &id("session"), &changed).unwrap();
         let material: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
             f.store.as_ref(), &f.context, &second, 1024 * 1024).unwrap().0).unwrap();
         assert_eq!(material.messages.len(), 5);

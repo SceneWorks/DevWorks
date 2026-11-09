@@ -1897,6 +1897,7 @@ impl Runtime {
             session_id,
             crate::context_epoch::EpochChange {
                 previous_epoch,
+                binding: next_binding,
                 reason: devworks_core::protocol::provider::ContextChangeReason::InstructionAdoption,
                 context: converted,
                 omitted,
