@@ -674,6 +674,8 @@ impl Fx {
             request_id: request.request_id.clone(),
             purpose: if embedding {
                 Purpose::Embedding
+            } else if matches!(request.purpose, InferencePurpose::Compaction) {
+                Purpose::Compaction
             } else {
                 Purpose::Conversation
             },
@@ -846,6 +848,24 @@ fn compaction_result_is_artifact_only_and_does_not_enter_session_transcript() {
         assert_eq!(replay.result.result_artifact.unwrap().version_id, summary.version_id);
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
         assert!(f.transcript().is_empty());
+        let tool = f.driver.schemas().builtin("sessions.get", devworks_core::registry::Mode::Query,
+            devworks_core::registry::SchemaRevision(1), "get_session").unwrap();
+        let mut with_tools = f.generation(vec![tool]);
+        with_tools.request_id = id("compaction-with-tools");
+        with_tools.purpose = InferencePurpose::Compaction;
+        assert!(f.produce(with_tools).await.is_err());
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        assert!(f.transcript().is_empty());
+        let mut mislabeled = f.generation(vec![]);
+        mislabeled.request_id = id("mislabeled-compaction");
+        mislabeled.purpose = InferencePurpose::Compaction;
+        let mut invocation = f.native_invocation(mislabeled, PricingContext {
+            input_semantics: InputSemantics::Unknown, cache_read_possible: false,
+            cache_write_possible: false, cache_write_ttl_ms: None,
+        }, vec!["Text".into()], None, None, false);
+        invocation.logical.purpose = Purpose::Conversation;
+        assert!(f.driver.produce_cancellable(invocation, None).await.is_err());
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
     });
 }
 #[test]

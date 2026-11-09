@@ -448,8 +448,10 @@ impl NativeProviders {
             return Err(StorageError::Cancelled);
         }
         request.validate().map_err(invalid)?;
-        if matches!(request.purpose, InferencePurpose::Compaction)
-            && !matches!(&request.input, InferenceInput::Generation { tools, .. } if tools.is_empty())
+        let compaction = matches!(request.purpose, InferencePurpose::Compaction);
+        if compaction != (logical.purpose == devworks_core::services::router::Purpose::Compaction)
+            || (compaction
+                && !matches!(&request.input, InferenceInput::Generation { tools, .. } if tools.is_empty()))
         {
             return Err(StorageError::ScopeDenied);
         }
