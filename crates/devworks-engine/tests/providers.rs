@@ -985,6 +985,41 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
             .is_err()
     );
     assert!(f.http.lock().unwrap().requests.lock().unwrap().is_empty());
+    let selected_agent = agent.with_session(id("agent-session"));
+    let query = json!({"mode":"Query", "protocol":devworks_core::protocol::CONTRACT,
+        "queryId":"selected-tool-check", "body":{"kind":"sessions.get",
+            "sessionId":"agent-session"}});
+    let authority = devworks_core::authority::HostAuthority {
+        store: f.store.as_ref(),
+        clock: f.h.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &authority,
+        store: f.store.as_ref(),
+        ids: f.h.ids.as_ref(),
+    };
+    let selected_outcome = UseCases::new()
+        .with_sessions(Arc::new(
+            devworks_core::services::sessions::SessionService::new(
+                f.h.ids.clone(),
+                f.store.clone(),
+            ),
+        ))
+        .query(
+            &gateway,
+            &selected_agent,
+            "sessions.get",
+            query.to_string().as_bytes(),
+        );
+    assert!(
+        matches!(
+            &selected_outcome,
+            Ok(devworks_core::protocol::results::DomainQueryReply::Rejected { fault, .. })
+                if fault.code == devworks_core::protocol::DomainErrorCode::PermissionDenied
+        ),
+        "{selected_outcome:?}"
+    );
     let app = runtime()
         .block_on(devworks_engine::boot(tool_runtime_composition(&f)))
         .unwrap();
