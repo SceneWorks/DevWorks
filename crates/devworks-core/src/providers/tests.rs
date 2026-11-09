@@ -786,6 +786,65 @@ fn current_registered_tool_metadata_is_required_and_descriptions_reach_each_prof
     ));
 }
 #[test]
+fn tool_definition_order_is_stable_across_discovery_orders() {
+    let mut materials = Material::new();
+    let base = request(&mut materials, &context());
+    let aliases = [
+        ToolSchema {
+            capability_id: "package/zeta".to_owned().try_into().unwrap(),
+            wire_name: "zeta".into(),
+            input_schema: materials.schema_ref(),
+        },
+        ToolSchema {
+            capability_id: "devworks/alpha".to_owned().try_into().unwrap(),
+            wire_name: "alpha".into(),
+            input_schema: materials.schema_ref(),
+        },
+    ];
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::OpenAiResponses,
+        EndpointProfile::CompatibleChat,
+    ] {
+        let mut first = base.clone();
+        let mut second = base.clone();
+        if let InferenceInput::Generation { tools, .. } = &mut first.input {
+            *tools = aliases.to_vec();
+        }
+        if let InferenceInput::Generation { tools, .. } = &mut second.input {
+            *tools = aliases.iter().rev().cloned().collect();
+        }
+        let binding = binding(profile);
+        let first = prepare(
+            identity(binding.clone()),
+            &first,
+            &caps(binding.clone()),
+            &materials,
+            None,
+            &limits(),
+        )
+        .unwrap();
+        let second = prepare(
+            identity(binding.clone()),
+            &second,
+            &caps(binding),
+            &materials,
+            None,
+            &limits(),
+        )
+        .unwrap();
+        assert_eq!(first.body, second.body);
+        assert_eq!(
+            first
+                .tools
+                .iter()
+                .map(|tool| tool.wire_name.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "zeta"]
+        );
+    }
+}
+#[test]
 fn fixed_embedding_models_omit_dimensions_and_unknown_support_never_guesses() {
     let mut m = Material::new();
     let text = m.put(b"input", "text/plain");

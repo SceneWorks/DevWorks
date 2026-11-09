@@ -1031,6 +1031,30 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
     runtime().block_on(app.shutdown());
 }
 #[test]
+fn native_replay_keeps_tool_definitions_stable_across_discovery_order() {
+    runtime().block_on(async {
+        let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let f = Fx::new("CompatibleChat", Script::sse(wire), false);
+        let get = f.driver.schemas().builtin(
+            "sessions.get", devworks_core::registry::Mode::Query,
+            devworks_core::registry::SchemaRevision(1), "get_session",
+        ).unwrap();
+        let list = f.driver.schemas().builtin(
+            "sessions.list", devworks_core::registry::Mode::Query,
+            devworks_core::registry::SchemaRevision(1), "list_sessions",
+        ).unwrap();
+        let first = f.generation(vec![list, get]);
+        let mut reversed = first.clone();
+        if let InferenceInput::Generation { tools, .. } = &mut reversed.input {
+            tools.reverse();
+        }
+        assert!(matches!(f.produce(first).await.unwrap().accounting, DriveOutcome::Settled(_)));
+        assert!(matches!(f.produce(reversed).await.unwrap().accounting,
+            DriveOutcome::AlreadyDispatched));
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+    });
+}
+#[test]
 fn positive_epoch_accepts_host_continuation_but_rejects_unrelated_copy() {
     runtime().block_on(async {
         let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";

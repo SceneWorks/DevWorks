@@ -439,7 +439,7 @@ impl NativeProviders {
             mut logical,
             category,
             mut attempt,
-            request,
+            mut request,
         } = invocation;
         if cancellation
             .as_ref()
@@ -448,6 +448,14 @@ impl NativeProviders {
             return Err(StorageError::Cancelled);
         }
         request.validate().map_err(invalid)?;
+        if let InferenceInput::Generation { tools, .. } = &mut request.input {
+            tools.sort_by(|a, b| {
+                a.capability_id
+                    .as_str()
+                    .cmp(b.capability_id.as_str())
+                    .then_with(|| a.wire_name.cmp(&b.wire_name))
+            });
+        }
         let compaction = matches!(request.purpose, InferencePurpose::Compaction);
         if compaction != (logical.purpose == devworks_core::services::router::Purpose::Compaction)
             || (compaction

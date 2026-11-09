@@ -106,7 +106,17 @@ pub fn tools(
     aliases: &[ToolSchema],
     mut charge: impl FnMut(&PreparedTool) -> Result<(), ProviderError>,
 ) -> Result<Vec<PreparedTool>, ProviderError> {
-    aliases
+    // Provider tool definitions are part of the reusable prompt prefix. A caller that
+    // discovers the same built-in, package and MCP tools in a different order must send
+    // the same definition order without changing the frozen alias names or schemas.
+    let mut ordered = aliases.iter().collect::<Vec<_>>();
+    ordered.sort_by(|a, b| {
+        a.capability_id
+            .as_str()
+            .cmp(b.capability_id.as_str())
+            .then_with(|| a.wire_name.cmp(&b.wire_name))
+    });
+    ordered
         .iter()
         .map(|alias| {
             let tool = materials.tool(alias)?;
