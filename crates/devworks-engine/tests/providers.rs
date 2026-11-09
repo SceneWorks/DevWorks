@@ -788,6 +788,69 @@ fn native_generation_persists_text_usage_and_exact_receipt_replay_without_second
 }
 
 #[test]
+fn fresh_native_request_uses_published_context_head_before_transport() {
+    runtime().block_on(async {
+        let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let f = Fx::new("CompatibleChat", Script::sse(wire), false);
+        let mut request = f.generation(vec![]);
+        let source = match &request.input {
+            InferenceInput::Generation { context, .. } => context,
+            _ => unreachable!(),
+        };
+        let bytes = f
+            .artifacts
+            .read_exact(f.store.as_ref(), &f.context, source, 1024 * 1024)
+            .unwrap()
+            .0;
+        let prompt: ProviderContext = serde_json::from_slice(&bytes).unwrap();
+        let binding = NativeBinding {
+            connection_id: id("connection"),
+            account_revision: Revision::new(1).unwrap(),
+            endpoint_profile: EndpointProfile::CompatibleChat,
+            model_id: f.model.clone(),
+            context_epoch: Counter::new(0).unwrap(),
+        };
+        let app = devworks_engine::boot(tool_runtime_composition(&f))
+            .await
+            .unwrap();
+        let first = app
+            .publish_initial_native_context(&f.context, &id("session"), &binding, &prompt)
+            .unwrap();
+        let invoke = |request| {
+            f.native_invocation(
+                request,
+                PricingContext {
+                    input_semantics: InputSemantics::Unknown,
+                    cache_read_possible: false,
+                    cache_write_possible: false,
+                    cache_write_ttl_ms: None,
+                },
+                vec!["Text".into()],
+                None,
+                None,
+                false,
+            )
+        };
+        assert!(app
+            .produce_and_dispatch_native_turn(invoke(request.clone()), None)
+            .await
+            .is_err());
+        assert!(f.http.lock().unwrap().requests.lock().unwrap().is_empty());
+        if let InferenceInput::Generation { context, .. } = &mut request.input {
+            *context = first;
+        }
+        let progress = app
+            .produce_and_dispatch_native_turn(invoke(request), None)
+            .await
+            .unwrap();
+        assert_eq!(progress.provider.result.outcome, Some(AttemptEnd::Completed));
+        assert!(progress.continuation.is_some());
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        app.shutdown().await;
+    });
+}
+
+#[test]
 fn initial_native_context_is_durable_idempotent_and_bound_to_first_prompt() {
     runtime().block_on(async {
         let f = Fx::new("CompatibleChat", Script::sse("data: [DONE]\n\n"), false);

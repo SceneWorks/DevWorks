@@ -47,6 +47,31 @@ pub(crate) struct ContinuationMaterial {
     pub observed_sequence: i64,
 }
 
+#[derive(Clone)]
+pub(crate) struct ContextHeadFence {
+    pub session_id: Id,
+    pub epoch: i64,
+    pub sequence: i64,
+    pub head: Option<StoredProviderContextHead>,
+}
+
+impl ContextHeadFence {
+    pub fn check(&self, tx: &mut dyn WriteTransaction) -> Result<(), StorageError> {
+        let session = tx
+            .sessions()
+            .session(&self.session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.closed()
+            || session.context_epoch != self.epoch
+            || session.last_durable_sequence() != self.sequence
+            || tx.sessions().provider_context_head(&self.session_id)? != self.head
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        Ok(())
+    }
+}
+
 fn authorized_session(
     read: &dyn ReadSnapshot,
     ctx: &InvocationContext,
@@ -242,6 +267,43 @@ pub(crate) fn publish_initial_context(
     });
     artifacts.settle_host_bytes(store, &staged, matches!(&committed, Ok((_, true))));
     committed.map(|(artifact, _)| artifact)
+}
+
+/// A fresh native request must consume the current published context. A recorded route request
+/// is handled by the provider's replay checks, since its original source may precede a later
+/// completed turn that has already advanced the head.
+pub(crate) fn require_current_head_for_new_request(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    request_id: &Id,
+    source: &ArtifactRef,
+) -> Result<ContextHeadFence, StorageError> {
+    read_snapshot(store, &ReadOptions::default(), |read| {
+        let session = authorized_session(read, ctx, session_id)?;
+        if read.router().route_request(request_id)?.is_some() {
+            return Ok(ContextHeadFence {
+                session_id: session_id.clone(),
+                epoch: session.context_epoch,
+                sequence: session.last_durable_sequence(),
+                head: read.sessions().provider_context_head(session_id)?,
+            });
+        }
+        let head = read.sessions().provider_context_head(session_id)?;
+        if let Some(head) = &head
+            && head.context_epoch == session.context_epoch
+            && (head.observed_sequence != session.last_durable_sequence()
+                || head.artifact != json!(source))
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        Ok(ContextHeadFence {
+            session_id: session_id.clone(),
+            epoch: session.context_epoch,
+            sequence: session.last_durable_sequence(),
+            head,
+        })
+    })
 }
 
 /// Recover the last published immutable native context after a host restart. A new epoch uses
