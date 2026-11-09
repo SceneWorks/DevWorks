@@ -96,6 +96,33 @@ fn source_assignment(
     Ok(Some(id.clone()))
 }
 
+fn query_source_assignment(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    root: &crate::protocol::RootId,
+) -> Result<AssignmentId, StorageError> {
+    let id = ctx.assignment_id().ok_or_else(denied)?;
+    let assignment = snapshot.runs().assignment(id)?.ok_or_else(denied)?;
+    let session = snapshot
+        .sessions()
+        .session(&assignment.session_id)?
+        .ok_or_else(denied)?;
+    let execution = assignment.execution_id.as_ref().ok_or_else(denied)?;
+    let activation = snapshot.runs().activation(execution)?.ok_or_else(denied)?;
+    if assignment.root_id != *root
+        || assignment.state != AssignmentState::Active
+        || ctx.session_id() != Some(&assignment.session_id)
+        || session.agent_id != *ctx.principal()
+        || session.closed()
+        || activation.root_id != *root
+        || activation.phase != ActivationPhase::Running
+        || ctx.activation() != Some((execution, activation.owner_epoch))
+    {
+        return Err(denied());
+    }
+    Ok(id.clone())
+}
+
 fn class_name(class: &MessageClass) -> &'static str {
     match class {
         MessageClass::Instruction => "Instruction",
@@ -510,19 +537,7 @@ impl AgentService {
             return Err(denied());
         }
         if ctx.principal_kind() == PrincipalKind::Agent {
-            let caller = ctx.assignment_id().ok_or_else(denied)?;
-            let source = snapshot.runs().assignment(caller)?.ok_or_else(denied)?;
-            let session = snapshot
-                .sessions()
-                .session(&source.session_id)?
-                .ok_or_else(denied)?;
-            if source.root_id != root.id
-                || !source.state.is_live()
-                || ctx.session_id() != Some(&source.session_id)
-                || session.agent_id != *ctx.principal()
-            {
-                return Err(denied());
-            }
+            query_source_assignment(snapshot, ctx, &root.id)?;
         }
         Ok((
             agent_record(snapshot.runs(), &assignment)?,
@@ -703,13 +718,7 @@ impl AgentService {
             return Err(denied());
         }
         if ctx.principal_kind() == PrincipalKind::Agent {
-            let session = snapshot
-                .sessions()
-                .session(&assignment.session_id)?
-                .ok_or_else(denied)?;
-            if session.agent_id != *ctx.principal() || !assignment.state.is_live() {
-                return Err(denied());
-            }
+            query_source_assignment(snapshot, ctx, &assignment.root_id)?;
         }
         let project = snapshot
             .projects()
