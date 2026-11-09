@@ -5,6 +5,7 @@ use common::{Harness, id, principal, seed_root, write};
 use devworks_core::authority::HostAuthority;
 use devworks_core::context::PrincipalKind;
 use devworks_core::gateway::Gateway;
+use devworks_core::ports::storage::{Cancellation, StorageError};
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::support::DomainErrorCode;
 use devworks_core::protocol::{CommandReply, ProjectId};
@@ -18,6 +19,59 @@ use devworks_core::services::runs::scope::ScriptedScope;
 use devworks_engine::agent_inbox::{InboxSelection, RetainedInboxDriver};
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
+
+#[tokio::test]
+async fn waiting_inbox_cancels_without_a_held_writer() {
+    let harness = Harness::new();
+    let store = harness.open();
+    seed_root(&harness, "root-a");
+    let user = principal(store.as_ref(), "waiting-human", PrincipalKind::Human);
+    let driver = RetainedInboxDriver::new(store.clone());
+    let cancellation = Cancellation::new();
+    let stop = cancellation.clone();
+    let waiting = tokio::spawn(async move {
+        driver
+            .receive_cancellable(
+                user,
+                ProjectId(id("project-a")),
+                InboxSelection {
+                    recipient: Recipient::Human,
+                    after: 0,
+                    include_read: false,
+                    limit: 10,
+                    wait_seconds: 55,
+                },
+                Some(stop),
+            )
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let peer = store.clone();
+    let writer = tokio::task::spawn_blocking(move || {
+        write(peer.as_ref(), |tx| tx.runs().agent_delivery_head())
+    });
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writer)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    cancellation.cancel();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), waiting)
+            .await
+            .unwrap()
+            .unwrap(),
+        Err(StorageError::Cancelled)
+    ));
+    let head = common::read(store.as_ref(), |snapshot| {
+        snapshot.runs().agent_delivery_head()
+    });
+    assert_eq!(head, 0);
+}
 
 #[test]
 fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {

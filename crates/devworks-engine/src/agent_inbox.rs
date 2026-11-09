@@ -2,7 +2,7 @@
 //! waiting caller holds no SQLite write unit or connection between polls.
 use crate::store;
 use devworks_core::context::InvocationContext;
-use devworks_core::ports::storage::{ApplicationStore, StorageError};
+use devworks_core::ports::storage::{ApplicationStore, Cancellation, StorageError, WriteOptions};
 use devworks_core::protocol::ProjectId;
 use devworks_core::services::agents::retained::{
     AckSelection, Acknowledged, DeliveredInbox, MessageEventPage, Recipient, Resolution,
@@ -34,6 +34,17 @@ impl RetainedInboxDriver {
         project: ProjectId,
         selection: InboxSelection,
     ) -> Result<DeliveredInbox, StorageError> {
+        self.receive_cancellable(context, project, selection, None)
+            .await
+    }
+
+    pub async fn receive_cancellable(
+        &self,
+        context: InvocationContext,
+        project: ProjectId,
+        selection: InboxSelection,
+        cancellation: Option<Cancellation>,
+    ) -> Result<DeliveredInbox, StorageError> {
         if selection.wait_seconds > 55 {
             return Err(StorageError::InvalidRecord(
                 "wait_seconds exceeds 55".into(),
@@ -42,26 +53,45 @@ impl RetainedInboxDriver {
         let deadline =
             tokio::time::Instant::now() + Duration::from_secs(u64::from(selection.wait_seconds));
         loop {
+            if cancellation
+                .as_ref()
+                .is_some_and(Cancellation::is_cancelled)
+            {
+                return Err(StorageError::Cancelled);
+            }
             let context = context.clone();
             let project = project.clone();
             let recipient = selection.recipient.clone();
             let after = selection.after;
             let include_read = selection.include_read;
             let limit = selection.limit;
-            let page = store::write(&self.store, move |tx| {
-                deliver_inbox(
-                    tx,
-                    &context,
-                    &project,
-                    &recipient,
-                    after,
-                    include_read,
-                    limit,
-                )
-            })
+            let page = store::write_with(
+                &self.store,
+                WriteOptions {
+                    cancellation: cancellation.clone(),
+                    ..WriteOptions::default()
+                },
+                move |tx| {
+                    deliver_inbox(
+                        tx,
+                        &context,
+                        &project,
+                        &recipient,
+                        after,
+                        include_read,
+                        limit,
+                    )
+                },
+            )
             .await?;
             if !page.items.is_empty() || tokio::time::Instant::now() >= deadline {
                 return Ok(page);
+            }
+            if cancellation
+                .as_ref()
+                .is_some_and(Cancellation::is_cancelled)
+            {
+                return Err(StorageError::Cancelled);
             }
             tokio::time::sleep_until(std::cmp::min(
                 deadline,
