@@ -241,6 +241,7 @@ impl std::fmt::Debug for PurgeComposition {
 }
 #[derive(Clone)]
 pub struct McpComposition {
+    pub validator: Arc<dyn devworks_core::ports::packages::SchemaValidator>,
     pub factory: Arc<
         dyn Fn(
                 Arc<ProcessSupervisor>,
@@ -551,6 +552,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .install_remote(
                 store.clone(),
                 (composition.factory)(supervisor.clone(), tokio::runtime::Handle::current()),
+                composition.validator.clone(),
             )
             .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))?;
         consumers.push(crate::mcp::consumer(service));
@@ -1468,6 +1470,9 @@ pub struct NativeTurnProgress {
 }
 
 impl Runtime {
+    pub fn mcp_service(&self) -> Option<Arc<devworks_core::services::mcp::McpClientService>> {
+        self.use_cases.mcp_service()
+    }
     /// What boot recovery established.
     pub fn report(&self) -> &BootReport {
         &self.report

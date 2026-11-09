@@ -5,6 +5,7 @@ use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, mcp as ops};
 use crate::ports::mcp::{McpEndpoint, McpRemote, McpRemoteFault, RemoteCatalog};
+use crate::ports::packages::SchemaValidator;
 use crate::ports::storage::{
     ApplicationStore, ConfigScope, NewEvent, NewOperation, NewQueueEntry, OperationRecord,
     ProjectRead, ReadOptions, ReadSnapshot, RevisionConflict, StorageError, WriteTransaction,
@@ -15,13 +16,13 @@ use crate::ports::{
     QueryAnswer, QueryHandler,
 };
 use crate::protocol::data::DataScope;
-use crate::protocol::provider::{Digest, QualifiedId, SchemaRef};
+use crate::protocol::provider::{Digest, QualifiedId, SchemaRef, ToolCallKey, ToolSchema};
 use crate::protocol::records::{ItemState, McpCapability, McpServer, McpTransport, PageRequest};
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Check, Page};
 use crate::protocol::{
     ActorId, CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId,
-    OperationState, RetryAdvice, Revision, RevisionDimension,
+    OperationState, ProjectId, RetryAdvice, Revision, RevisionDimension,
 };
 use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
 use serde::{Deserialize, Serialize};
@@ -126,9 +127,23 @@ pub struct McpClientService {
     ids: Arc<dyn IdSource>,
     native: OnceLock<Native>,
 }
+
+#[derive(Clone)]
+pub struct McpToolMaterial {
+    pub alias: ToolSchema,
+    pub schema: Value,
+    pub description: String,
+    pub server_id: Id,
+    pub server_scope: ConfigScope,
+    pub server_revision: Revision,
+    pub catalog_revision: Revision,
+    pub capability_id: Id,
+    pub wire_name: String,
+}
 struct Native {
     store: Arc<dyn ApplicationStore>,
     remote: Arc<dyn McpRemote>,
+    validator: Arc<dyn SchemaValidator>,
 }
 impl McpClientService {
     pub fn new(ids: Arc<dyn IdSource>) -> Self {
@@ -144,10 +159,309 @@ impl McpClientService {
         &self,
         store: Arc<dyn ApplicationStore>,
         remote: Arc<dyn McpRemote>,
+        validator: Arc<dyn SchemaValidator>,
     ) -> Result<(), &'static str> {
         self.native
-            .set(Native { store, remote })
+            .set(Native {
+                store,
+                remote,
+                validator,
+            })
             .map_err(|_| "outgoing MCP remote already installed")
+    }
+
+    /// The same saved selection qualifies both provider exposure and later effect admission.
+    /// Workspace servers are inherited by project agents; project-owned servers stay scoped.
+    pub fn selected_tool_materials(
+        &self,
+        ctx: &InvocationContext,
+        snapshot: &dyn ReadSnapshot,
+    ) -> Result<Vec<McpToolMaterial>, StorageError> {
+        if snapshot.stamp().store_id != *ctx.store_id()
+            || snapshot.stamp().restore_epoch != ctx.restore_epoch().get()
+            || snapshot.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let binding = match ctx.principal_kind() {
+            PrincipalKind::Human | PrincipalKind::Host => None,
+            _ => snapshot.authority().principal(ctx.principal())?,
+        };
+        let policy =
+            crate::authority::policy::resolve_policy(snapshot.configuration(), ctx.project_id())?;
+        let scopes = std::iter::once(ConfigScope::Workspace)
+            .chain(ctx.project_id().cloned().map(ConfigScope::Project));
+        let mut selected = Vec::new();
+        for scope in scopes {
+            let (_, state) = current(snapshot.configuration(), &scope)?;
+            for server in state.servers {
+                if !matches!(server.public.state, ItemState::Healthy) {
+                    continue;
+                }
+                for cap in &server.capabilities {
+                    if cap.kind.0 != "tool" || !server.public.selected_tool_ids.0.contains(&cap.id)
+                    {
+                        continue;
+                    }
+                    let Some(reference) = &cap.input_schema else {
+                        continue;
+                    };
+                    let digest =
+                        cap.id.as_str().strip_prefix("mcp-").ok_or_else(|| {
+                            StorageError::InvalidRecord("invalid MCP tool ID".into())
+                        })?;
+                    let capability =
+                        QualifiedId::try_from(format!("mcp/{digest}")).map_err(|_| {
+                            StorageError::InvalidRecord("invalid MCP capability ID".into())
+                        })?;
+                    if !matches!(
+                        crate::authority::policy::outgoing_mcp_tool_visibility(
+                            ctx,
+                            binding.as_ref(),
+                            &policy,
+                            capability.as_str(),
+                        ),
+                        crate::authority::policy::Verdict::Allow
+                    ) {
+                        continue;
+                    }
+                    let schema = server
+                        .schemas
+                        .get(reference.schema_id.as_str())
+                        .ok_or_else(|| {
+                            StorageError::InvalidRecord("selected MCP schema missing".into())
+                        })?;
+                    let canonical = crate::jcs::canonicalize(schema).map_err(|_| {
+                        StorageError::InvalidRecord("selected MCP schema invalid".into())
+                    })?;
+                    if sha256_hex(canonical.as_bytes()) != reference.sha256.as_str() {
+                        return Err(StorageError::InvalidRecord(
+                            "selected MCP schema changed".into(),
+                        ));
+                    }
+                    selected.push(McpToolMaterial {
+                        alias: ToolSchema {
+                            capability_id: capability,
+                            wire_name: format!("mcp_{digest}"),
+                            input_schema: reference.clone(),
+                        },
+                        schema: schema.clone(),
+                        description: format!(
+                            "MCP {}: {}. {}",
+                            server.public.name.0, cap.name.0, cap.description.0
+                        ),
+                        server_id: server.public.id.clone(),
+                        server_scope: scope.clone(),
+                        server_revision: server.public.revision.clone(),
+                        catalog_revision: server.public.catalog_revision.clone(),
+                        capability_id: cap.id.clone(),
+                        wire_name: cap.name.0.clone(),
+                    });
+                }
+            }
+        }
+        selected.sort_by(|a, b| {
+            a.alias
+                .capability_id
+                .as_str()
+                .cmp(b.alias.capability_id.as_str())
+        });
+        Ok(selected)
+    }
+
+    /// Queue one provider-selected external tool under a stable call identity. A retry returns
+    /// the existing operation; only the dispatcher may send its journaled effect.
+    pub fn queue_selected_tool(
+        &self,
+        ctx: &InvocationContext,
+        call: &ToolCallKey,
+        alias: &ToolSchema,
+        arguments: Value,
+    ) -> Result<OperationId, StorageError> {
+        let Some(native) = self.native.get() else {
+            return Err(StorageError::ScopeDenied);
+        };
+        let Some(session_id) = ctx.session_id() else {
+            return Err(StorageError::ScopeDenied);
+        };
+        if !matches!(
+            ctx.principal_kind(),
+            PrincipalKind::Agent | PrincipalKind::Host
+        ) {
+            return Err(StorageError::ScopeDenied);
+        }
+        let Value::Object(_) = &arguments else {
+            return Err(StorageError::InvalidRecord(
+                "MCP tool arguments must be an object".into(),
+            ));
+        };
+        let canonical = crate::jcs::canonicalize(&arguments)
+            .map_err(|_| StorageError::InvalidRecord("invalid MCP tool arguments".into()))?;
+        if canonical.len() > 8 * 1024 * 1024 {
+            return Err(StorageError::InvalidRecord(
+                "MCP tool arguments exceed bound".into(),
+            ));
+        }
+        let identity = sha256_hex(
+            format!(
+                "{}\0{}\0{}\0{}",
+                session_id.as_str(),
+                call.attempt_id.0.as_str(),
+                call.native_call_id,
+                call.ordinal.as_str()
+            )
+            .as_bytes(),
+        );
+        let operation_id =
+            OperationId(Id::new(format!("mcp-{identity}")).expect("bounded digest ID"));
+        let digest = sha256_hex(
+            format!(
+                "{}\0{}\0{}",
+                alias.capability_id.as_str(),
+                alias.input_schema.sha256.as_str(),
+                canonical
+            )
+            .as_bytes(),
+        );
+        if let Some(existing) = read_snapshot(&*native.store, &ReadOptions::default(), |s| {
+            s.operations().operation(&operation_id)
+        })? {
+            return if existing.capability == "mcp.tool" && existing.args_digest == digest {
+                Ok(operation_id)
+            } else {
+                Err(StorageError::ScopeDenied)
+            };
+        }
+        let (material, fences) =
+            read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
+                let material = self
+                    .selected_tool_materials(ctx, snapshot)?
+                    .into_iter()
+                    .find(|material| {
+                        material.alias.capability_id.as_str() == alias.capability_id.as_str()
+                            && material.alias.wire_name == alias.wire_name
+                            && material.alias.input_schema.schema_id == alias.input_schema.schema_id
+                            && material.alias.input_schema.revision == alias.input_schema.revision
+                            && material.alias.input_schema.sha256 == alias.input_schema.sha256
+                    })
+                    .ok_or(StorageError::ScopeDenied)?;
+                let policy = crate::authority::policy::resolve_policy(
+                    snapshot.configuration(),
+                    ctx.project_id(),
+                )?;
+                let mut fences = vec![AuthorityFence::Policy {
+                    project_id: ctx.project_id().cloned(),
+                    digest: policy.digest(),
+                }];
+                if ctx.principal_kind() == PrincipalKind::Agent {
+                    let binding = snapshot
+                        .authority()
+                        .principal(ctx.principal())?
+                        .ok_or(StorageError::ScopeDenied)?;
+                    fences.push(AuthorityFence::Principal {
+                        actor: ctx.principal().clone(),
+                        revision: binding.revision,
+                    });
+                }
+                Ok((material, fences))
+            })?;
+        native
+            .validator
+            .validate(&material.schema, &arguments)
+            .map_err(|_| {
+                StorageError::InvalidRecord("MCP tool arguments failed the selected schema".into())
+            })?;
+        let ctx = ctx.clone();
+        let call = call.clone();
+        let operation_for_write = operation_id.clone();
+        let digest_for_write = digest.clone();
+        crate::ports::storage::run_write(
+            &*native.store,
+            crate::ports::storage::WriteOptions::default(),
+            move |tx| {
+                if let Some(existing) = tx.operations().operation(&operation_for_write)? {
+                    return if existing.capability == "mcp.tool"
+                        && existing.args_digest == digest_for_write
+                    {
+                        Ok(operation_for_write)
+                    } else {
+                        Err(StorageError::ScopeDenied)
+                    };
+                }
+                if tx.store().store_id != *ctx.store_id()
+                    || tx.store().restore_epoch != ctx.restore_epoch().get()
+                    || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+                    || !crate::authority::fences_hold(tx, &fences)?
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
+                let session = tx
+                    .sessions()
+                    .session(ctx.session_id().ok_or(StorageError::ScopeDenied)?)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                if session.closed() || session.agent_id != *ctx.principal() {
+                    return Err(StorageError::ScopeDenied);
+                }
+                let (_, state) = current(tx.configuration(), &material.server_scope)?;
+                let server = state
+                    .servers
+                    .iter()
+                    .find(|server| {
+                        server.public.id == material.server_id
+                            && server.public.revision == material.server_revision
+                            && server.public.catalog_revision == material.catalog_revision
+                    })
+                    .ok_or(StorageError::ScopeDenied)?;
+                if !server
+                    .public
+                    .selected_tool_ids
+                    .0
+                    .contains(&material.capability_id)
+                    || !server.capabilities.iter().any(|cap| {
+                        cap.id == material.capability_id
+                            && cap.input_schema.as_ref().is_some_and(|schema| {
+                                schema.sha256 == material.alias.input_schema.sha256
+                            })
+                    })
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
+                let event_id = EventId(tx.new_id(IdKind::Event));
+                tx.operations().record_intent(NewOperation {
+                id: operation_for_write.clone(), root_id: ctx.root_id().cloned(), assignment_id: ctx.assignment_id().cloned(),
+                capability: "mcp.tool".into(), schema_version: 1, args_digest: digest_for_write,
+                payload: json!({
+                    "scope":material.server_scope.key(),"serverId":material.server_id,
+                    "serverRevision":material.server_revision.get(),"catalogRevision":material.catalog_revision.get(),
+                    "capabilityId":material.capability_id,"schema":material.alias.input_schema,
+                    "wireName":material.wire_name,"arguments":arguments,
+                    "principal":ctx.principal(),"principalKind":format!("{:?}",ctx.principal_kind()),
+                    "sessionId":ctx.session_id(),"projectId":ctx.project_id(),"fences":fences,"call":call,
+                }),
+            })?;
+                tx.history().append(NewEvent {
+                id: event_id.clone(), actor: ctx.principal().clone(), project_id: ctx.project_id().cloned(),
+                root_id: ctx.root_id().cloned(), operation_id: Some(operation_for_write.clone()),
+                aggregate_kind: "mcp_tool_call".into(), aggregate_id: operation_for_write.0.as_str().into(),
+                aggregate_revision: 1, kind: "McpToolRequested".into(),
+                payload: json!({"serverId":material.server_id,"capabilityId":material.capability_id,"call":call}),
+            })?;
+                let queue_id = tx.new_id(IdKind::QueueEntry);
+                let now = tx.now_ms();
+                tx.queue().enqueue(NewQueueEntry {
+                    id: queue_id,
+                    consumer: EFFECT_CONSUMER.into(),
+                    event_id,
+                    root_id: ctx.root_id().cloned(),
+                    operation_id: Some(operation_for_write.clone()),
+                    partition: None,
+                    priority: 0,
+                    ready_at_ms: now,
+                    payload: json!({"serverId":material.server_id,"call":call}),
+                })?;
+                Ok(operation_for_write)
+            },
+        )
     }
 
     /// Run only after the dispatch journal has committed `Dispatching`. The saved scope and
@@ -156,6 +470,9 @@ impl McpClientService {
     pub fn execute(self: &Arc<Self>, op: &OperationRecord) -> McpEffectOutcome {
         if op.state != OperationState::Dispatching {
             return McpEffectOutcome::Failed("MCP effect was not dispatched".into());
+        }
+        if op.capability == "mcp.tool" {
+            return self.execute_tool(op);
         }
         if !matches!(op.capability.as_str(), "mcp.connect" | "mcp.discover") {
             return McpEffectOutcome::Failed("unsupported MCP effect".into());
@@ -362,6 +679,228 @@ impl McpClientService {
                     "MCP connection outcome could not be recorded: {e}"
                 ))
             }
+        }
+    }
+
+    fn execute_tool(&self, op: &OperationRecord) -> McpEffectOutcome {
+        let Some(native) = self.native.get() else {
+            return McpEffectOutcome::NotApplied("native MCP client is unavailable".into());
+        };
+        let Some(scope) = op
+            .payload
+            .get("scope")
+            .and_then(Value::as_str)
+            .and_then(ConfigScope::from_key)
+        else {
+            return McpEffectOutcome::Failed("invalid MCP tool scope".into());
+        };
+        let Some(server_id) = op
+            .payload
+            .get("serverId")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<Id>(v).ok())
+        else {
+            return McpEffectOutcome::Failed("invalid MCP tool server".into());
+        };
+        let Some(capability_id) = op
+            .payload
+            .get("capabilityId")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<Id>(v).ok())
+        else {
+            return McpEffectOutcome::Failed("invalid MCP tool capability".into());
+        };
+        let Some(reference) = op
+            .payload
+            .get("schema")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<SchemaRef>(v).ok())
+        else {
+            return McpEffectOutcome::Failed("invalid MCP tool schema".into());
+        };
+        let Some(wire_name) = op.payload.get("wireName").and_then(Value::as_str) else {
+            return McpEffectOutcome::Failed("invalid MCP tool name".into());
+        };
+        let Some(arguments @ Value::Object(_)) = op.payload.get("arguments").cloned() else {
+            return McpEffectOutcome::Failed("invalid MCP tool arguments".into());
+        };
+        let Some(server_revision) = op.payload.get("serverRevision").and_then(Value::as_i64) else {
+            return McpEffectOutcome::Failed("invalid MCP server revision".into());
+        };
+        let Some(catalog_revision) = op.payload.get("catalogRevision").and_then(Value::as_i64)
+        else {
+            return McpEffectOutcome::Failed("invalid MCP catalog revision".into());
+        };
+        let Some(principal) = op
+            .payload
+            .get("principal")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<ActorId>(v).ok())
+        else {
+            return McpEffectOutcome::Failed("invalid MCP tool principal".into());
+        };
+        let principal_kind = match op.payload.get("principalKind").and_then(Value::as_str) {
+            Some("Agent") => PrincipalKind::Agent,
+            Some("Host") => PrincipalKind::Host,
+            _ => return McpEffectOutcome::Failed("invalid MCP tool principal kind".into()),
+        };
+        let Some(session_id) = op
+            .payload
+            .get("sessionId")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<Id>(v).ok())
+        else {
+            return McpEffectOutcome::Failed("invalid MCP tool session".into());
+        };
+        let Some(project_id) = op
+            .payload
+            .get("projectId")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<Option<ProjectId>>(v).ok())
+        else {
+            return McpEffectOutcome::Failed("invalid MCP tool project".into());
+        };
+        let Some(fences) = op
+            .payload
+            .get("fences")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<Vec<AuthorityFence>>(v).ok())
+        else {
+            return McpEffectOutcome::Failed("invalid MCP tool authority fences".into());
+        };
+        let info = native.store.info();
+        let context = InvocationContext::new(
+            principal,
+            principal_kind,
+            op.id.0.clone(),
+            Id::new("mcp-effects").expect("static ingress"),
+            info.store_id,
+            Counter::new(info.restore_epoch).expect("valid store epoch"),
+            rev(1),
+        )
+        .with_lineage(project_id, op.root_id.clone(), op.assignment_id.clone())
+        .with_session(session_id.clone());
+        let selected = read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
+            if snapshot.operations().operation(&op.id)?.as_ref() != Some(op)
+                || !crate::authority::authorization_holds(
+                    snapshot,
+                    &Authorization::direct().fenced_by(fences.clone()),
+                )?
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            let session = snapshot
+                .sessions()
+                .session(&session_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if session.closed()
+                || session.agent_id != *context.principal()
+                || session.project_id.as_ref() != context.project_id()
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            self.selected_tool_materials(&context, snapshot)?
+                .into_iter()
+                .find(|material| {
+                    material.server_scope == scope
+                        && material.server_id == server_id
+                        && material.server_revision.get() == server_revision
+                        && material.catalog_revision.get() == catalog_revision
+                        && material.capability_id == capability_id
+                        && material.wire_name == wire_name
+                        && material.alias.input_schema.schema_id == reference.schema_id
+                        && material.alias.input_schema.revision == reference.revision
+                        && material.alias.input_schema.sha256 == reference.sha256
+                })
+                .ok_or(StorageError::ScopeDenied)
+        });
+        let material = match selected {
+            Ok(material) => material,
+            Err(error) => {
+                return McpEffectOutcome::Failed(format!("MCP tool authority changed: {error}"));
+            }
+        };
+        if native
+            .validator
+            .validate(&material.schema, &arguments)
+            .is_err()
+        {
+            return McpEffectOutcome::Failed(
+                "MCP tool arguments no longer match the selected schema".into(),
+            );
+        }
+        let mut result = native
+            .remote
+            .call_tool(&server_id, wire_name, arguments.clone());
+        if matches!(result, Err(McpRemoteFault::Unreachable)) {
+            let endpoint =
+                match read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
+                    let (_, state) = current(snapshot.configuration(), &scope)?;
+                    state
+                        .servers
+                        .into_iter()
+                        .find(|server| {
+                            server.public.id == server_id
+                                && server.public.revision.get() == server_revision
+                        })
+                        .map(|server| McpEndpoint {
+                            server_id: server_id.clone(),
+                            scope: scope.clone(),
+                            transport: server.transport,
+                        })
+                        .ok_or(StorageError::ScopeDenied)
+                }) {
+                    Ok(endpoint) => endpoint,
+                    Err(error) => {
+                        return McpEffectOutcome::Failed(format!(
+                            "MCP server changed before reconnect: {error}"
+                        ));
+                    }
+                };
+            result = match native.remote.connect(&context, &endpoint) {
+                Ok(()) => {
+                    let still_authorized =
+                        read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
+                            if snapshot.operations().operation(&op.id)?.as_ref() != Some(op)
+                                || !crate::authority::authorization_holds(
+                                    snapshot,
+                                    &Authorization::direct().fenced_by(fences.clone()),
+                                )?
+                            {
+                                return Err(StorageError::ScopeDenied);
+                            }
+                            self.selected_tool_materials(&context, snapshot)?
+                                .into_iter()
+                                .find(|candidate| {
+                                    candidate.server_id == server_id
+                                        && candidate.server_revision.get() == server_revision
+                                        && candidate.catalog_revision.get() == catalog_revision
+                                        && candidate.capability_id == capability_id
+                                        && candidate.alias.input_schema.sha256 == reference.sha256
+                                })
+                                .ok_or(StorageError::ScopeDenied)
+                        });
+                    if still_authorized.is_err() {
+                        return McpEffectOutcome::Failed(
+                            "MCP tool authority changed during reconnect".into(),
+                        );
+                    }
+                    native.remote.call_tool(&server_id, wire_name, arguments)
+                }
+                Err(fault) => Err(fault),
+            };
+        }
+        match result {
+            Ok(value) => McpEffectOutcome::Completed(value),
+            Err(
+                McpRemoteFault::Deadline
+                | McpRemoteFault::Protocol
+                | McpRemoteFault::TooLarge
+                | McpRemoteFault::InputRequired,
+            ) => McpEffectOutcome::Unknown(
+                "MCP tool may have run; reconcile its result before retry".into(),
+            ),
+            Err(fault) => McpEffectOutcome::Failed(format!("MCP tool was not sent: {fault:?}")),
         }
     }
 

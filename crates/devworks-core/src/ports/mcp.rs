@@ -49,6 +49,7 @@ pub enum McpRemoteFault {
     Protocol,
     Deadline,
     TooLarge,
+    InputRequired,
 }
 
 pub trait McpRemote: Send + Sync {
@@ -60,6 +61,20 @@ pub trait McpRemote: Send + Sync {
     ) -> Result<(), McpRemoteFault>;
     /// Reads a bounded complete catalog from a connected server.
     fn discover(&self, server_id: &Id) -> Result<RemoteCatalog, McpRemoteFault>;
+    /// One selected tool call. The core service records the effect before invoking this port.
+    fn call_tool(
+        &self,
+        server_id: &Id,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Value, McpRemoteFault>;
+    fn read_resource(&self, server_id: &Id, uri: &str) -> Result<Value, McpRemoteFault>;
+    fn get_prompt(
+        &self,
+        server_id: &Id,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Value, McpRemoteFault>;
     /// Drops a connection and stops its app-owned process tree when present.
     fn disconnect(&self, server_id: &Id) -> Result<(), McpRemoteFault>;
 }

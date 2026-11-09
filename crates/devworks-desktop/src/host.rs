@@ -532,6 +532,7 @@ async fn compose(
     let mcp_namespace = store.info().store_id.0.as_str().to_owned();
     let mcp_data_root = config.data_root.display().to_string();
     runtime_config.mcp = Some(devworks_engine::runtime::McpComposition {
+        validator: Arc::new(JsonSchemaValidator),
         factory: Arc::new(move |supervisor, handle| {
             Arc::new(NativeMcpClients::new(
                 supervisor,

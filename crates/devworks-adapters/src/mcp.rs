@@ -13,7 +13,11 @@ use devworks_core::services::process::tools::{BindingRefusal, ToolBindings};
 use devworks_core::services::process::{
     LaunchPolicy, LaunchRequest, OwnedProcess, ProcessSupervisor,
 };
-use rmcp::model::{ClientConfig, PaginatedRequestParams, Prompt, Resource, Tool};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, ClientConfig, GetPromptRequestParams,
+    GetPromptResponse, PaginatedRequestParams, Prompt, ReadResourceRequestParams,
+    ReadResourceResponse, Resource, Tool,
+};
 use rmcp::service::RunningService;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::{RoleClient, serve_client};
@@ -55,6 +59,7 @@ pub enum ConnectFault {
     Protocol,
     TooLarge,
     StopFailed,
+    InputRequired,
 }
 
 const CONNECT_DEADLINE: Duration = Duration::from_secs(20);
@@ -172,6 +177,7 @@ fn map_connect_fault(fault: ConnectFault) -> McpRemoteFault {
         ConnectFault::Handshake | ConnectFault::Protocol => McpRemoteFault::Protocol,
         ConnectFault::Deadline => McpRemoteFault::Deadline,
         ConnectFault::TooLarge => McpRemoteFault::TooLarge,
+        ConnectFault::InputRequired => McpRemoteFault::InputRequired,
     }
 }
 fn map_binding_fault(fault: BindingRefusal) -> McpRemoteFault {
@@ -182,6 +188,14 @@ fn map_binding_fault(fault: BindingRefusal) -> McpRemoteFault {
         BindingRefusal::UnknownCredential => McpRemoteFault::MissingCredential,
         _ => McpRemoteFault::InvalidConfiguration,
     }
+}
+
+fn bounded_result(result: &impl serde::Serialize) -> Result<serde_json::Value, ConnectFault> {
+    let bytes = serde_json::to_vec(result).map_err(|_| ConnectFault::Protocol)?;
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err(ConnectFault::TooLarge);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| ConnectFault::Protocol)
 }
 
 impl McpRemote for NativeMcpClients {
@@ -258,6 +272,77 @@ impl McpRemote for NativeMcpClients {
         })
     }
 
+    fn call_tool(
+        &self,
+        server_id: &Id,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, McpRemoteFault> {
+        let serde_json::Value::Object(arguments) = arguments else {
+            return Err(McpRemoteFault::InvalidConfiguration);
+        };
+        let slot = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(server_id.as_str())
+            .cloned()
+            .ok_or(McpRemoteFault::Unreachable)?;
+        self.runtime.block_on(async {
+            let guard = slot.lock().await;
+            let session = guard.as_ref().ok_or(McpRemoteFault::Unreachable)?;
+            session
+                .call_tool(name, arguments)
+                .await
+                .map_err(map_connect_fault)
+        })
+    }
+
+    fn read_resource(
+        &self,
+        server_id: &Id,
+        uri: &str,
+    ) -> Result<serde_json::Value, McpRemoteFault> {
+        let slot = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(server_id.as_str())
+            .cloned()
+            .ok_or(McpRemoteFault::Unreachable)?;
+        self.runtime.block_on(async {
+            let guard = slot.lock().await;
+            let session = guard.as_ref().ok_or(McpRemoteFault::Unreachable)?;
+            session.read_resource(uri).await.map_err(map_connect_fault)
+        })
+    }
+
+    fn get_prompt(
+        &self,
+        server_id: &Id,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, McpRemoteFault> {
+        let serde_json::Value::Object(arguments) = arguments else {
+            return Err(McpRemoteFault::InvalidConfiguration);
+        };
+        let slot = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(server_id.as_str())
+            .cloned()
+            .ok_or(McpRemoteFault::Unreachable)?;
+        self.runtime.block_on(async {
+            let guard = slot.lock().await;
+            let session = guard.as_ref().ok_or(McpRemoteFault::Unreachable)?;
+            session
+                .get_prompt(name, arguments)
+                .await
+                .map_err(map_connect_fault)
+        })
+    }
+
     fn disconnect(&self, server_id: &Id) -> Result<(), McpRemoteFault> {
         let slot = self
             .sessions
@@ -278,6 +363,59 @@ impl McpRemote for NativeMcpClients {
 }
 
 impl McpWireSession {
+    pub async fn read_resource(&self, uri: &str) -> Result<serde_json::Value, ConnectFault> {
+        let response = tokio::time::timeout(
+            CALL_DEADLINE,
+            self.client
+                .read_resource_once(ReadResourceRequestParams::new(uri)),
+        )
+        .await
+        .map_err(|_| ConnectFault::Deadline)?
+        .map_err(|_| ConnectFault::Protocol)?;
+        match response {
+            ReadResourceResponse::Complete(result) => bounded_result(&result),
+            ReadResourceResponse::InputRequired(_) => Err(ConnectFault::InputRequired),
+            _ => Err(ConnectFault::Protocol),
+        }
+    }
+
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value, ConnectFault> {
+        let params = GetPromptRequestParams::new(name).with_arguments(arguments);
+        let response = tokio::time::timeout(CALL_DEADLINE, self.client.get_prompt_once(params))
+            .await
+            .map_err(|_| ConnectFault::Deadline)?
+            .map_err(|_| ConnectFault::Protocol)?;
+        match response {
+            GetPromptResponse::Complete(result) => bounded_result(&result),
+            GetPromptResponse::InputRequired(_) => Err(ConnectFault::InputRequired),
+            _ => Err(ConnectFault::Protocol),
+        }
+    }
+
+    /// Return the exact bounded protocol result. Sampling and elicitation are not advertised by
+    /// the current client handler; servers that require them receive an explicit protocol fault.
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value, ConnectFault> {
+        let params = CallToolRequestParams::new(name.to_owned()).with_arguments(arguments);
+        let response = tokio::time::timeout(CALL_DEADLINE, self.client.call_tool_once(params))
+            .await
+            .map_err(|_| ConnectFault::Deadline)?
+            .map_err(|_| ConnectFault::Protocol)?;
+        let result = match response {
+            CallToolResponse::Complete(result) => result,
+            CallToolResponse::InputRequired(_) => return Err(ConnectFault::InputRequired),
+            CallToolResponse::Task(_) => return Err(ConnectFault::Protocol),
+            _ => return Err(ConnectFault::Protocol),
+        };
+        bounded_result(&result)
+    }
     /// Read a bounded complete catalog. Each advertised capability is queried independently;
     /// an unsupported family stays empty, while a failed advertised family fails discovery.
     pub async fn discover(&self) -> Result<McpWireCatalog, ConnectFault> {
@@ -527,6 +665,21 @@ mod tests {
             result.tools.push(tool);
             Ok(result)
         }
+
+        async fn call_tool(
+            &self,
+            request: CallToolRequestParams,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> Result<CallToolResponse, rmcp::ErrorData> {
+            assert_eq!(request.name, "read_note");
+            assert_eq!(
+                request.arguments.as_ref().and_then(|v| v.get("id")),
+                Some(&serde_json::json!("note-1"))
+            );
+            Ok(CallToolResponse::Complete(
+                rmcp::model::CallToolResult::success(vec![]),
+            ))
+        }
     }
 
     #[tokio::test]
@@ -551,6 +704,14 @@ mod tests {
         assert_eq!(catalog.tools[0].name, "read_note");
         assert!(catalog.resources.is_empty());
         assert!(catalog.prompts.is_empty());
+        let result = session
+            .call_tool(
+                "read_note",
+                serde_json::Map::from_iter([("id".into(), serde_json::json!("note-1"))]),
+            )
+            .await
+            .expect("native tool call");
+        assert_eq!(result["isError"], false);
         let _ = session.close().await;
         server.abort();
     }

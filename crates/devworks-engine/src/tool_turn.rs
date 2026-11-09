@@ -1472,116 +1472,157 @@ pub(crate) fn dispatch_one(
     if cancellation.is_some_and(Cancellation::is_cancelled) {
         return Err(StorageError::Cancelled);
     }
-    let result = match selected_builtin(schemas, &call) {
-        Ok((descriptor, mode, revision)) => {
-            // Missing or unreadable input material is a recovery hold. It must not become a
-            // permanent Failed response just because the local artifact read is unavailable.
-            let bytes = artifacts
-                .read_exact(store, ctx, &call.arguments, 8 * 1024 * 1024)
-                .map_err(|_| StorageError::ScopeDenied)?
-                .0;
-            match devworks_core::framing::parse(&bytes) {
-                Ok(args) => frame(session_id, key, descriptor, mode, revision, args)
-                    .map(|raw| (descriptor, mode, raw)),
-                Err(_) => Err("invalid tool arguments"),
-            }
-        }
-        // A recorded alias whose implementation is not composed here (for example a package
-        // tool) is not a provider argument error. Leave it unanswered for a qualified dispatcher
-        // rather than permanently closing the call with a false failure.
-        Err(_) => {
-            return Err(StorageError::unavailable(
-                Unavailable::UnsupportedRuntime,
-                "recorded tool binding unavailable",
-            ));
-        }
-    };
-    if cancellation.is_some_and(Cancellation::is_cancelled) {
-        return Err(StorageError::Cancelled);
-    }
-    if result.is_ok() {
+    let (outcome, bytes) = if call.capability_id.as_str().starts_with("mcp/") {
+        let alias = schemas
+            .selected_mcp_tools(ctx)?
+            .into_iter()
+            .find(|alias| {
+                alias.capability_id == call.capability_id
+                    && alias.input_schema.schema_id == call.input_schema.schema_id
+                    && alias.input_schema.revision == call.input_schema.revision
+                    && alias.input_schema.sha256 == call.input_schema.sha256
+            })
+            .ok_or_else(|| {
+                StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "recorded MCP tool binding is no longer selected",
+                )
+            })?;
+        let raw = artifacts
+            .read_exact(store, ctx, &call.arguments, 8 * 1024 * 1024)
+            .map_err(|_| StorageError::ScopeDenied)?
+            .0;
+        let arguments = devworks_core::framing::parse(&raw)
+            .map_err(|_| invalid("recorded MCP tool arguments are invalid"))?;
         mark_dispatch_started(store, ctx, session_id, key, cancellation)?;
         if cancellation.is_some_and(Cancellation::is_cancelled) {
             return Err(StorageError::Cancelled);
         }
-    }
-    let (outcome, bytes) = match result {
-        Ok((descriptor, Mode::Query, raw)) => match runtime.query_with(
-            ctx,
-            descriptor.name,
-            &raw,
-            &ReadOptions {
-                cancellation: cancellation.cloned(),
-                deadline_ms: None,
+        let service = runtime.mcp_service().ok_or_else(|| {
+            StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "native MCP client unavailable",
+            )
+        })?;
+        let operation_id = service.queue_selected_tool(ctx, key, &alias, arguments)?;
+        accepted(
+            serde_json::to_vec(&json!({"operationId": operation_id})).map_err(invalid)?,
+            operation_id,
+        )
+    } else {
+        let result = match selected_builtin(schemas, &call) {
+            Ok((descriptor, mode, revision)) => {
+                // Missing or unreadable input material is a recovery hold. It must not become a
+                // permanent Failed response just because the local artifact read is unavailable.
+                let bytes = artifacts
+                    .read_exact(store, ctx, &call.arguments, 8 * 1024 * 1024)
+                    .map_err(|_| StorageError::ScopeDenied)?
+                    .0;
+                match devworks_core::framing::parse(&bytes) {
+                    Ok(args) => frame(session_id, key, descriptor, mode, revision, args)
+                        .map(|raw| (descriptor, mode, raw)),
+                    Err(_) => Err("invalid tool arguments"),
+                }
+            }
+            // A recorded alias whose implementation is not composed here (for example a package
+            // tool) is not a provider argument error. Leave it unanswered for a qualified dispatcher
+            // rather than permanently closing the call with a false failure.
+            Err(_) => {
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "recorded tool binding unavailable",
+                ));
+            }
+        };
+        if cancellation.is_some_and(Cancellation::is_cancelled) {
+            return Err(StorageError::Cancelled);
+        }
+        if result.is_ok() {
+            mark_dispatch_started(store, ctx, session_id, key, cancellation)?;
+            if cancellation.is_some_and(Cancellation::is_cancelled) {
+                return Err(StorageError::Cancelled);
+            }
+        }
+        match result {
+            Ok((descriptor, Mode::Query, raw)) => match runtime.query_with(
+                ctx,
+                descriptor.name,
+                &raw,
+                &ReadOptions {
+                    cancellation: cancellation.cloned(),
+                    deadline_ms: None,
+                },
+            ) {
+                Ok(reply @ DomainQueryReply::Result { .. }) => {
+                    completed(serde_json::to_vec(&reply).map_err(invalid)?)
+                }
+                Ok(DomainQueryReply::Rejected { fault, .. }) => {
+                    if fault.code == DomainErrorCode::Cancelled
+                        && cancellation.is_some_and(Cancellation::is_cancelled)
+                    {
+                        // The marker was already durable. Keep this call available for recovery;
+                        // a cancellation cannot retroactively prove no query effect occurred.
+                        return Err(StorageError::Cancelled);
+                    }
+                    if fault.code == DomainErrorCode::ApprovalRequired {
+                        return Err(StorageError::unavailable(
+                            Unavailable::UnsupportedRuntime,
+                            "tool query approval lacks a durable approval and operation identity",
+                        ));
+                    }
+                    if let Some(blocked) = blocked_outcome(&fault)? {
+                        (blocked, None)
+                    } else if needs_recovery(fault.retry) {
+                        return Err(StorageError::unavailable(
+                            Unavailable::UnsupportedRuntime,
+                            "tool query requires retry or reconciliation",
+                        ));
+                    } else {
+                        failed(&format!("domain_{:?}", fault.code))
+                    }
+                }
+                Err(_) => {
+                    return Err(StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "tool query gateway failed before a durable response",
+                    ));
+                }
             },
-        ) {
-            Ok(reply @ DomainQueryReply::Result { .. }) => {
-                completed(serde_json::to_vec(&reply).map_err(invalid)?)
-            }
-            Ok(DomainQueryReply::Rejected { fault, .. }) => {
-                if fault.code == DomainErrorCode::Cancelled
-                    && cancellation.is_some_and(Cancellation::is_cancelled)
-                {
-                    // The marker was already durable. Keep this call available for recovery;
-                    // a cancellation cannot retroactively prove no query effect occurred.
-                    return Err(StorageError::Cancelled);
+            Ok((descriptor, Mode::Command, raw)) => {
+                match runtime.command(ctx, descriptor.name, &raw) {
+                    Ok(CommandReply::CommandStatusUnknown { .. }) => {
+                        // Same host key is retried on recovery until the gateway returns its receipt.
+                        return Err(StorageError::unavailable(
+                            Unavailable::UnsupportedRuntime,
+                            "tool command status unknown",
+                        ));
+                    }
+                    Ok(CommandReply::ReceiptPurged { .. }) => {
+                        return Err(StorageError::unavailable(
+                            Unavailable::UnsupportedRuntime,
+                            "tool command receipt purged before outcome reconciliation",
+                        ));
+                    }
+                    Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
+                    Ok(CommandReply::Rejected { code, retry, .. }) => {
+                        if needs_recovery(retry) {
+                            return Err(StorageError::unavailable(
+                                Unavailable::UnsupportedRuntime,
+                                "tool command rejection requires reconciliation",
+                            ));
+                        }
+                        failed(&format!("command_{code:?}"))
+                    }
+                    Err(_) => {
+                        return Err(StorageError::unavailable(
+                            Unavailable::UnsupportedRuntime,
+                            "tool command gateway failed before receipt reconciliation",
+                        ));
+                    }
                 }
-                if fault.code == DomainErrorCode::ApprovalRequired {
-                    return Err(StorageError::unavailable(
-                        Unavailable::UnsupportedRuntime,
-                        "tool query approval lacks a durable approval and operation identity",
-                    ));
-                }
-                if let Some(blocked) = blocked_outcome(&fault)? {
-                    (blocked, None)
-                } else if needs_recovery(fault.retry) {
-                    return Err(StorageError::unavailable(
-                        Unavailable::UnsupportedRuntime,
-                        "tool query requires retry or reconciliation",
-                    ));
-                } else {
-                    failed(&format!("domain_{:?}", fault.code))
-                }
             }
-            Err(_) => {
-                return Err(StorageError::unavailable(
-                    Unavailable::UnsupportedRuntime,
-                    "tool query gateway failed before a durable response",
-                ));
-            }
-        },
-        Ok((descriptor, Mode::Command, raw)) => match runtime.command(ctx, descriptor.name, &raw) {
-            Ok(CommandReply::CommandStatusUnknown { .. }) => {
-                // Same host key is retried on recovery until the gateway returns its receipt.
-                return Err(StorageError::unavailable(
-                    Unavailable::UnsupportedRuntime,
-                    "tool command status unknown",
-                ));
-            }
-            Ok(CommandReply::ReceiptPurged { .. }) => {
-                return Err(StorageError::unavailable(
-                    Unavailable::UnsupportedRuntime,
-                    "tool command receipt purged before outcome reconciliation",
-                ));
-            }
-            Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
-            Ok(CommandReply::Rejected { code, retry, .. }) => {
-                if needs_recovery(retry) {
-                    return Err(StorageError::unavailable(
-                        Unavailable::UnsupportedRuntime,
-                        "tool command rejection requires reconciliation",
-                    ));
-                }
-                failed(&format!("command_{code:?}"))
-            }
-            Err(_) => {
-                return Err(StorageError::unavailable(
-                    Unavailable::UnsupportedRuntime,
-                    "tool command gateway failed before receipt reconciliation",
-                ));
-            }
-        },
-        Err(_) => failed("tool_invalid_arguments"),
+            Err(_) => failed("tool_invalid_arguments"),
+        }
     };
     let staged =
         if let Some(bytes) = &bytes {

@@ -1,4 +1,5 @@
 use super::Harness;
+use crate::packages::JsonSchemaValidator;
 use crate::storage::sqlite::SqliteStore;
 use devworks_core::authority::HostAuthority;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
@@ -7,7 +8,8 @@ use devworks_core::ports::mcp::{
     McpEndpoint, McpRemote, McpRemoteFault, RemoteCatalog, RemoteTool,
 };
 use devworks_core::ports::storage::{
-    ApplicationStore, AttemptBinding, ConfigScope, OperationRecord, WriteOptions, run_write,
+    ApplicationStore, AttemptBinding, ConfigScope, OperationRecord, ReadOptions, WriteOptions,
+    read_snapshot, run_write,
 };
 use devworks_core::protocol::records::McpCapability;
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
@@ -45,6 +47,28 @@ impl McpRemote for RecordedRemote {
             resources: vec![],
             prompts: vec![],
         })
+    }
+
+    fn call_tool(
+        &self,
+        _server_id: &Id,
+        _name: &str,
+        _arguments: Value,
+    ) -> Result<Value, McpRemoteFault> {
+        Ok(json!({"content":[{"type":"text","text":"sample"}]}))
+    }
+
+    fn read_resource(&self, _server_id: &Id, _uri: &str) -> Result<Value, McpRemoteFault> {
+        Ok(json!({"contents":[]}))
+    }
+
+    fn get_prompt(
+        &self,
+        _server_id: &Id,
+        _name: &str,
+        _arguments: Value,
+    ) -> Result<Value, McpRemoteFault> {
+        Ok(json!({"messages":[]}))
     }
 
     fn disconnect(&self, _server_id: &Id) -> Result<(), McpRemoteFault> {
@@ -383,7 +407,7 @@ fn journaled_connect_rechecks_configuration_before_native_io() {
     let service = Arc::new(McpClientService::new(h.ids.clone()));
     let remote = Arc::new(RecordedRemote::default());
     service
-        .install_remote(store.clone(), remote.clone())
+        .install_remote(store.clone(), remote.clone(), Arc::new(JsonSchemaValidator))
         .unwrap();
     let cases = UseCases::new().with_mcp(service.clone());
     let DomainDecision::Applied {
@@ -506,6 +530,16 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
         .unwrap()
     };
     assert_eq!(first.selected_tool_ids.0.len(), 1);
+    let selected = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+        service.selected_tool_materials(&context(&store), snapshot)
+    })
+    .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].schema["type"], "object");
+    assert_eq!(
+        selected[0].alias.capability_id.as_str().split('/').next(),
+        Some("mcp")
+    );
     let first_cap = match capabilities(&h, &store, &cases, &server.id, 2) {
         DomainQueryReply::Result {
             result: OperationResult::McpCapabilities { value },
@@ -570,7 +604,9 @@ fn journaled_discovery_publishes_selected_read_only_catalog() {
     .unwrap();
     let service = Arc::new(McpClientService::new(h.ids.clone()));
     let remote = Arc::new(RecordedRemote::default());
-    service.install_remote(store.clone(), remote).unwrap();
+    service
+        .install_remote(store.clone(), remote, Arc::new(JsonSchemaValidator))
+        .unwrap();
     let cases = UseCases::new().with_mcp(service.clone());
     let DomainDecision::Applied {
         result: OperationResult::McpConfigure { value: server },
