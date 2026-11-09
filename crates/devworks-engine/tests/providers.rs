@@ -746,6 +746,68 @@ fn successful_native_end_closes_without_waiting_for_http_eof_and_keeps_tool_argu
 }
 
 #[test]
+fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_response() {
+    runtime().block_on(async {
+        use devworks_adapters::{power::NativePower, process::NativeProcessHost};
+        use devworks_core::services::{diagnostics::DiagnosticService, resources::ResourceService};
+        use devworks_engine::{Composition, RuntimeConfig, RunComposition, boot};
+        let event = json!({"choices":[{"index":0,"delta":{"tool_calls":[
+            {"index":0,"id":"bad","type":"function","function":{"name":"get_session","arguments":"{\"unexpected\":true}"}},
+            {"index":1,"id":"good","type":"function","function":{"name":"get_session","arguments":"{\"sessionId\":\"session\"}"}}
+        ]},"finish_reason":null}]});
+        let wire = format!("data: {event}\n\ndata: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n");
+        let f = Fx::new("CompatibleChat", Script::sse(&wire), false);
+        let tool = f.driver.schemas().builtin("sessions.get", devworks_core::registry::Mode::Query,
+            devworks_core::registry::SchemaRevision(1), "get_session").unwrap();
+        let produced = f.produce(f.generation(vec![tool])).await.unwrap();
+        assert_eq!(produced.result.outcome, Some(AttemptEnd::ToolCallsReady));
+
+        let composition = || {
+            let connections = Arc::new(ConnectionService::new(
+                f.h.ids.clone(), f.h.clock(), f.store.clone(), Arc::new(NoNetwork),
+                Arc::new(SessionSecrets::new()), Arc::new(EntropyFixture)));
+            let router = Arc::new(InferenceRouter::new(f.h.ids.clone(), f.h.clock(), connections.clone()));
+            let cases = UseCases::new().with_router(router).with_connections(connections)
+                .with_sessions(Arc::new(devworks_core::services::sessions::SessionService::new(
+                    f.h.ids.clone(), f.store.clone())));
+            let mut config = RuntimeConfig::new(id("tool-dispatcher"));
+            config.providers = Some(ProviderComposition::new(f.http.clone()));
+            config.collect_interval = std::time::Duration::from_secs(3600);
+            Composition {
+                store: f.store.clone(), clock: f.h.clock(), ids: f.h.ids.clone(),
+                authority: Arc::new(Authority), artifacts: f.artifacts.clone(),
+                resources: Arc::new(ResourceService::new(f.h.ids.clone(), f.h.clock())),
+                process_host: Arc::new(NativeProcessHost),
+                runs: RunComposition::new(Arc::new(ControlService::new(f.h.ids.clone()))),
+                power: Arc::new(NativePower),
+                diagnostics: Arc::new(DiagnosticService::new(f.store.clone(), f.h.ids.clone(), f.h.clock(), None)),
+                git: None, browser: None, packages: None, use_cases: cases, consumers: vec![],
+                indexing: None, config,
+            }
+        };
+        let app = boot(composition()).await.unwrap();
+        let dispatched = app.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap();
+        assert_eq!(dispatched.len(), 2);
+        assert!(dispatched.iter().all(|d| matches!(d.outcome, Ok(devworks_core::services::sessions::transcript::BatchOutcome::Accepted(_)))));
+        let rows = f.transcript();
+        let replies: Vec<_> = rows.iter().filter(|e| e.kind == "ToolResponseRecorded").collect();
+        assert_eq!(replies.len(), 2);
+        let reply = |native: &str| replies.iter().find(|e| e.body["call"]["nativeCallId"] == native).unwrap();
+        assert_eq!(reply("bad").body["outcome"]["kind"], "Failed");
+        assert_eq!(reply("good").body["outcome"]["kind"], "Completed");
+        let reference: ArtifactRef = serde_json::from_value(reply("good").body["outcome"]["artifacts"][0].clone()).unwrap();
+        let bytes = f.artifacts.read_exact(f.store.as_ref(), &f.context, &reference, 1024 * 1024).unwrap().0;
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["kind"], "Result");
+        app.shutdown().await;
+        let restarted = boot(composition()).await.unwrap();
+        assert!(restarted.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap().is_empty());
+        assert_eq!(f.transcript().iter().filter(|e| e.kind == "ToolResponseRecorded").count(), 2);
+        restarted.shutdown().await;
+    });
+}
+
+#[test]
 fn incomplete_native_call_never_enters_dispatchable_session_history() {
     runtime().block_on(async{
     let f=Fx::new("CompatibleChat",Script::sse("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\",\"tool_calls\":[{\"index\":0,\"id\":\"call_actual\",\"type\":\"function\",\"function\":{\"name\":\"list_sessions\",\"arguments\":\"{\"}}]},\"finish_reason\":null}]}\n\n"),false);

@@ -1405,6 +1405,12 @@ async fn collect(
     }
 }
 
+/// One independently attempted durable provider call.
+pub struct ToolDispatch {
+    pub call: devworks_core::protocol::provider::ToolCallKey,
+    pub outcome: Result<devworks_core::services::sessions::transcript::BatchOutcome, StorageError>,
+}
+
 impl Runtime {
     /// What boot recovery established.
     pub fn report(&self) -> &BootReport {
@@ -1501,6 +1507,93 @@ impl Runtime {
     }
     pub fn providers(&self) -> Option<&Arc<crate::providers::driver::NativeProviders>> {
         self.providers.as_ref()
+    }
+
+    /// Resume one durable provider call through the shared gateway, recording its single
+    /// initial response in the owning session. A caller can retry the same call after restart.
+    pub fn dispatch_tool_call(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        call: &devworks_core::protocol::provider::ToolCallKey,
+    ) -> Result<devworks_core::services::sessions::transcript::BatchOutcome, StorageError> {
+        let providers = self.providers.as_ref().ok_or_else(|| {
+            StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "native provider unavailable",
+            )
+        })?;
+        crate::tool_turn::dispatch_one(
+            self,
+            self.store.as_ref(),
+            &self.artifacts,
+            providers.schemas().as_ref(),
+            ctx,
+            session_id,
+            call,
+        )
+    }
+
+    /// Resume the durable unanswered calls of a session. Each call is handled independently:
+    /// an approval, status uncertainty or failure leaves the other calls eligible to run.
+    pub fn dispatch_pending_tool_calls(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+    ) -> Result<Vec<ToolDispatch>, StorageError> {
+        let pending = devworks_core::ports::storage::read_snapshot(
+            self.store.as_ref(),
+            &devworks_core::ports::storage::ReadOptions::default(),
+            |read| read.sessions().pending_calls(session_id, 500),
+        )?;
+        let calls: Vec<_> = pending
+            .into_iter()
+            .map(|row| {
+                Ok(devworks_core::protocol::provider::ToolCallKey {
+                    attempt_id: devworks_core::protocol::AttemptId(row.attempt_id),
+                    native_call_id: row.native_call_id,
+                    ordinal: devworks_core::protocol::Counter::new(row.ordinal)
+                        .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+                })
+            })
+            .collect::<Result<_, StorageError>>()?;
+        if calls.is_empty() {
+            return Ok(Vec::new());
+        }
+        // A bounded worker set allows independent gateway calls to finish out of order. Each
+        // writer reads the current sequence in its own serialized transaction, so a slow sibling
+        // cannot reserve a transcript position or cancel completed results.
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let results = std::sync::Mutex::new(
+            std::iter::repeat_with(|| None)
+                .take(calls.len())
+                .collect::<Vec<Option<ToolDispatch>>>(),
+        );
+        std::thread::scope(|scope| {
+            for _ in 0..calls.len().min(8) {
+                let calls = &calls;
+                let next = &next;
+                let results = &results;
+                scope.spawn(move || {
+                    loop {
+                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(call) = calls.get(index) else { break };
+                        let outcome = self.dispatch_tool_call(ctx, session_id, call);
+                        results.lock().unwrap_or_else(|p| p.into_inner())[index] =
+                            Some(ToolDispatch {
+                                call: call.clone(),
+                                outcome,
+                            });
+                    }
+                });
+            }
+        });
+        Ok(results
+            .into_inner()
+            .unwrap_or_else(|p| p.into_inner())
+            .into_iter()
+            .map(|result| result.expect("joined tool worker"))
+            .collect())
     }
 
     pub fn accounting(&self) -> &Arc<crate::usage::UsageRuntime> {
