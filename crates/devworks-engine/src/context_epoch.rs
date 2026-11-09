@@ -73,7 +73,20 @@ pub(crate) fn current_source(
             .ok_or(StorageError::ScopeDenied)?;
         (bytes, latest, Some(observed))
     } else {
-        (bytes, source.clone(), None)
+        // Even an initial caller-supplied context must fence the transcript position observed
+        // while changing epochs. Otherwise a concurrent redirect can land between this read
+        // and publication without being represented in the new context.
+        let observed = read_snapshot(store, &ReadOptions::default(), |read| {
+            let session = read
+                .sessions()
+                .session(session_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if session.closed() || ctx.session_id() != Some(session_id) {
+                return Err(StorageError::ScopeDenied);
+            }
+            Ok(session.last_durable_sequence())
+        })?;
+        (bytes, source.clone(), Some(observed))
     };
     let context: ProviderContext =
         serde_json::from_slice(&bytes).map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
