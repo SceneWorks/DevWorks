@@ -984,11 +984,65 @@ impl AgentTurnExecutor for CompletedCoordinator {
     }
 }
 
+struct ContextAwareCoordinator {
+    store: Arc<dyn ApplicationStore>,
+    seen: Mutex<
+        Vec<(
+            ActorId,
+            AssignmentId,
+            devworks_core::providers::context::ProviderContext,
+        )>,
+    >,
+}
+impl AgentTurnExecutor for ContextAwareCoordinator {
+    fn run(
+        &self,
+        context: InvocationContext,
+        coordinator: devworks_core::protocol::records::AgentRecord,
+        stop: tokio::sync::watch::Receiver<bool>,
+    ) -> LaunchFuture {
+        assert!(!*stop.borrow());
+        let prompt = devworks_engine::agent_turns::initial_context(
+            self.store.as_ref(),
+            &context,
+            &coordinator,
+        )
+        .expect("current materialized coordinator prompt");
+        let wrong_project = context.clone().with_lineage(
+            Some(ProjectId(id("project-b"))),
+            context.root_id().cloned(),
+            context.assignment_id().cloned(),
+        );
+        assert!(matches!(
+            devworks_engine::agent_turns::initial_context(
+                self.store.as_ref(),
+                &wrong_project,
+                &coordinator,
+            ),
+            Err(StorageError::ScopeDenied)
+        ));
+        self.seen.lock().unwrap().push((
+            context.principal().clone(),
+            coordinator.assignment_id,
+            prompt,
+        ));
+        Box::pin(async {
+            LaunchEnd::Finished {
+                outcome: ActivationOutcome::Completed,
+                detail: None,
+            }
+        })
+    }
+}
+
 #[test]
 fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
-    let turns = Arc::new(CompletedCoordinator::default());
+    let turns = Arc::new(ContextAwareCoordinator {
+        store: fx.store.clone(),
+        seen: Mutex::new(Vec::new()),
+    });
     let launcher = Arc::new(AgentLauncher::new(
         fx.store.clone(),
         fx.h.ids.clone(),
@@ -1010,7 +1064,7 @@ fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
         })
         .await;
     });
-    let seen = turns.0.lock().unwrap();
+    let seen = turns.seen.lock().unwrap();
     assert_eq!(seen.len(), 1);
     let assignment = read(&*fx.store, |snapshot| {
         snapshot.runs().assignment(&seen[0].1)
@@ -1023,6 +1077,21 @@ fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
     })
     .unwrap();
     assert_eq!(seen[0].0, session.agent_id);
+    let source = read(&*fx.store, |snapshot| {
+        snapshot.runs().agent_assignment_context(&assignment.id)
+    })
+    .unwrap();
+    assert_eq!(seen[0].2.instructions.len(), 1);
+    assert_eq!(seen[0].2.instructions[0].text, source.role_instructions);
+    let brief = &seen[0].2.messages[0].content;
+    assert!(
+        matches!(&brief[0], devworks_core::providers::context::ContentBlock::Text { text, .. }
+        if text.contains("root-i") && text.contains("projectId"))
+    );
+    assert!(
+        matches!(&brief[0], devworks_core::providers::context::ContentBlock::Text { text, .. }
+        if text == &source.brief)
+    );
     assert_eq!(
         fx.activation(&assignment.execution_id.unwrap()).outcome,
         Some(ActivationOutcome::Completed)

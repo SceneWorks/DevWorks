@@ -201,6 +201,7 @@
 //! clocks and scripted handlers, without inference, network or containers.
 pub mod agent_inbox;
 pub mod agent_supervisor;
+pub mod agent_turns;
 pub mod approvals;
 pub mod browser;
 mod context_epoch;
