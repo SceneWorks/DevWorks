@@ -1140,6 +1140,12 @@ pub(crate) fn dispatch_one(
                 completed(serde_json::to_vec(&reply).map_err(invalid)?)
             }
             Ok(DomainQueryReply::Rejected { fault, .. }) => {
+                if fault.code == DomainErrorCode::ApprovalRequired {
+                    return Err(StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "tool query approval lacks a durable approval and operation identity",
+                    ));
+                }
                 if let Some(blocked) = blocked_outcome(&fault)? {
                     (blocked, None)
                 } else if matches!(
@@ -1596,10 +1602,21 @@ fn recorded_command(
                 .ok_or_else(|| invalid("unknown tool effect lacks operation identity"))?;
             (ToolOutcome::OutcomeUnknown { operation_id }, None)
         }
-        DomainDecision::Refused { fault } => match blocked_outcome(fault)? {
-            Some(blocked) => (blocked, None),
-            None => failed(&format!("domain_{:?}", fault.code)),
-        },
+        DomainDecision::Refused { fault } => {
+            if fault.code == DomainErrorCode::ApprovalRequired {
+                // The provider transcript requires both the actual approval and waiting
+                // operation IDs. A domain fault alone proves neither; keep this call pending
+                // until the approval path can supply those identities.
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "tool command approval lacks a durable approval and operation identity",
+                ));
+            }
+            match blocked_outcome(fault)? {
+                Some(blocked) => (blocked, None),
+                None => failed(&format!("domain_{:?}", fault.code)),
+            }
+        }
         DomainDecision::Accepted { operation_id } => accepted(
             serde_json::to_vec(reply).map_err(invalid)?,
             operation_id.clone(),
@@ -1749,6 +1766,32 @@ mod tests {
             matches!(outcome, ToolOutcome::DependencyBlocked { blocker_ids } if blocker_ids == vec![hold])
         );
         assert!(bytes.is_none());
+    }
+
+    #[test]
+    fn approval_fault_cannot_be_recorded_as_failed_without_approval_identity() {
+        let fault = devworks_core::services::sessions::Refusal::new(
+            DomainErrorCode::ApprovalRequired,
+            "operation",
+            None,
+        )
+        .fault(CorrelationId(Id::new("correlation").unwrap()));
+        let reply = CommandReply::Recorded {
+            protocol: Protocol::Draft1,
+            receipt: Receipt {
+                command_id: CommandId(Id::new("command").unwrap()),
+                committed_sequence: Revision::new(1).unwrap(),
+                accepted_at_ms: Counter::new(1).unwrap(),
+                request_digest: "a".repeat(64),
+                operation_id: None,
+                decision: DomainDecision::Refused { fault },
+            },
+            replayed: false,
+        };
+        assert!(matches!(
+            recorded_command(&reply),
+            Err(StorageError::StorageUnavailable { .. })
+        ));
     }
 
     #[test]
