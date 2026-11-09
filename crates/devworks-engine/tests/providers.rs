@@ -894,7 +894,7 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
 fn native_provider_holds_changed_repository_guidance_before_transport() {
     runtime().block_on(async {
         use devworks_core::ports::indexing::SourceTree;
-        for fault in ["edited", "wrong_target"] {
+        for fault in ["edited", "wrong_target", "missing_target_set"] {
             let mut f = Fx::new("CompatibleChat", Script::sse("data: [DONE]\n\n"), false);
             let root = f.h.root.join("guidance-repo");
             std::fs::create_dir_all(&root).unwrap();
@@ -956,8 +956,15 @@ fn native_provider_holds_changed_repository_guidance_before_transport() {
             } else {
                 vec!["src/other.rs".into()]
             };
-            *f.instruction_targets.lock().unwrap() = Some(vec![(id("guidance-repo"), targets)]);
-            assert!(f.produce(request).await.is_err());
+            if fault != "missing_target_set" {
+                *f.instruction_targets.lock().unwrap() = Some(vec![(id("guidance-repo"), targets)]);
+            }
+            let result = f.produce(request).await;
+            if fault == "missing_target_set" {
+                assert!(matches!(result, Err(ref error) if format!("{error:?}").contains("target selection")), "{}", result.err().map_or_else(|| "success".into(), |e| format!("{e:?}")));
+            } else {
+                assert!(result.is_err());
+            }
             assert_eq!(f.http.lock().unwrap().reads.load(Ordering::SeqCst), 0);
             assert!(f.transcript().is_empty());
             f.usage.stop();

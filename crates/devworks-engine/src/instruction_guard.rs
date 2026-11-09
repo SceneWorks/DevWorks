@@ -28,7 +28,7 @@ impl InstructionGuard {
         context
             .validate()
             .map_err(|e| StorageError::InvalidRecord(format!("instruction context: {e:?}")))?;
-        let required = devworks_core::ports::storage::read_snapshot(
+        let (required, project_scope) = devworks_core::ports::storage::read_snapshot(
             self.store.as_ref(),
             &devworks_core::ports::storage::ReadOptions::default(),
             |read| {
@@ -38,11 +38,30 @@ impl InstructionGuard {
                 {
                     return Err(StorageError::ScopeDenied);
                 }
-                Ok(ctx
-                    .worktree()
-                    .map_or_else(Vec::new, |bound| vec![bound.repository_id().clone()]))
+                let session_project = match ctx.session_id() {
+                    Some(session_id) => read
+                        .sessions()
+                        .session(session_id)?
+                        .ok_or(StorageError::ScopeDenied)?
+                        .project_id
+                        .is_some(),
+                    None => false,
+                };
+                Ok((
+                    ctx.worktree()
+                        .map_or_else(Vec::new, |bound| vec![bound.repository_id().clone()]),
+                    session_project || ctx.project_id().is_some(),
+                ))
             },
         )?;
+        if (project_scope || !required.is_empty() || !context.instruction_stamps.is_empty())
+            && expected.is_none()
+        {
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "repository target selection is required before provider dispatch",
+            ));
+        }
         if required.len() > 64 {
             return Err(StorageError::InvalidRecord(
                 "too many instruction repositories".into(),
