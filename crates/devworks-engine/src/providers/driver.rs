@@ -448,6 +448,11 @@ impl NativeProviders {
             return Err(StorageError::Cancelled);
         }
         request.validate().map_err(invalid)?;
+        if matches!(request.purpose, InferencePurpose::Compaction)
+            && !matches!(&request.input, InferenceInput::Generation { tools, .. } if tools.is_empty())
+        {
+            return Err(StorageError::ScopeDenied);
+        }
         if let ModelSelection::Model { model_id } = &request.options.selection
             && model_id != &attempt.query.catalog_model_id
         {
@@ -1198,23 +1203,27 @@ impl LazySink {
                 }
                 _ => None,
             };
-            self.inner = Some(
-                ProviderSink::new(
-                    self.owner.store.clone(),
-                    self.owner.artifacts.clone(),
-                    self.context.clone(),
-                    prepared,
-                    SourceProvenance {
-                        context: match &self.request.input {
-                            InferenceInput::Generation { context, .. } => Some(context.clone()),
-                            InferenceInput::Embedding { .. } => None,
-                        },
-                        instruction_targets: self.instruction_targets.clone(),
+            let sink = ProviderSink::new(
+                self.owner.store.clone(),
+                self.owner.artifacts.clone(),
+                self.context.clone(),
+                prepared,
+                SourceProvenance {
+                    context: match &self.request.input {
+                        InferenceInput::Generation { context, .. } => Some(context.clone()),
+                        InferenceInput::Embedding { .. } => None,
                     },
-                    embedding,
-                    self.result.clone(),
-                )
-                .with_live(self.owner.live.clone()),
+                    instruction_targets: self.instruction_targets.clone(),
+                },
+                embedding,
+                self.result.clone(),
+            );
+            self.inner = Some(
+                if matches!(self.request.purpose, InferencePurpose::Compaction) {
+                    sink.with_compaction()
+                } else {
+                    sink.with_live(self.owner.live.clone())
+                },
             );
         }
         Ok(self.inner.as_mut())

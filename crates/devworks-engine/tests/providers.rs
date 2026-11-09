@@ -822,6 +822,28 @@ fn native_generation_attributes_observed_context_epoch_change_to_usage() {
     });
 }
 #[test]
+fn compaction_result_is_artifact_only_and_does_not_enter_session_transcript() {
+    runtime().block_on(async {
+        let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Retain the active plan.\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let f = Fx::new("CompatibleChat", Script::sse(wire), false);
+        let mut request = f.generation(vec![]);
+        request.purpose = InferencePurpose::Compaction;
+        let result = f.produce(request.clone()).await.unwrap();
+        assert_eq!(result.result.outcome, Some(AttemptEnd::Completed));
+        assert!(result.result.turn_start_sequence.is_none());
+        let summary = result.result.result_artifact.expect("summary artifact");
+        let bytes = f.artifacts.read_exact(f.store.as_ref(), &f.context, &summary,
+            1024 * 1024).unwrap().0;
+        assert_eq!(bytes, b"Retain the active plan.");
+        assert!(f.transcript().is_empty());
+        let replay = f.produce(request).await.unwrap();
+        assert!(matches!(replay.accounting, DriveOutcome::AlreadyDispatched));
+        assert_eq!(replay.result.result_artifact.unwrap().version_id, summary.version_id);
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        assert!(f.transcript().is_empty());
+    });
+}
+#[test]
 fn positive_epoch_accepts_host_continuation_but_rejects_unrelated_copy() {
     runtime().block_on(async {
         let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";

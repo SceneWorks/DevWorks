@@ -56,12 +56,14 @@ const MAX_CONTENT_ITEMS: usize = 65536;
 enum ArtifactKind {
     Evidence,
     NativeContinuation,
+    CompactionSummary,
 }
 pub struct ProviderSink {
     store: Arc<dyn ApplicationStore>,
     artifacts: Arc<ArtifactService>,
     context: InvocationContext,
     prepared: PreparedRequest,
+    compaction: bool,
     assembler: TurnAssembler,
     /// Private content slots use provider item/sub-block positions, independently of when
     /// completion evidence becomes releasable. No placeholder enters the transcript.
@@ -108,6 +110,7 @@ impl ProviderSink {
             artifacts,
             context,
             prepared,
+            compaction: false,
             assembler: TurnAssembler::positioned(),
             content: BTreeMap::new(),
             content_bytes: 0,
@@ -131,6 +134,10 @@ impl ProviderSink {
             evidence: Vec::new(),
             evidence_bytes: 0,
         }
+    }
+    pub(crate) fn with_compaction(mut self) -> Self {
+        self.compaction = true;
+        self
     }
     pub(crate) fn with_live(mut self, live: Arc<super::live::LiveTurns>) -> Self {
         self.live = Some(live);
@@ -302,6 +309,7 @@ impl ProviderSink {
         let artifact_kind = match kind {
             ArtifactKind::Evidence => "ProviderEvidence",
             ArtifactKind::NativeContinuation => "ProviderNativeContinuation",
+            ArtifactKind::CompactionSummary => "ProviderCompactionSummary",
         };
         fence.publication(|| {
             // Existing artifact staging journals and file publication run off the DB writer.
@@ -330,6 +338,9 @@ impl ProviderSink {
         call: DecodedToolCall,
         fence: &AccountingWriteFence,
     ) -> Result<(), StorageError> {
+        if self.compaction {
+            return Err(invalid("compaction cannot emit tool calls"));
+        }
         let tool = self
             .prepared
             .tools
@@ -593,7 +604,7 @@ impl OwnedInferenceSink for ProviderSink {
                             .or(self.retry_at);
                 }
                 self.evidence(attempt,json!({"kind":observation.kind,"ordinal":observation.ordinal,"rawJson":observation.raw_json,"replay":format!("{:?}",observation.replay)}),fence)?;
-                if let Some(value) = observation.continuation {
+                if let Some(value) = observation.continuation.filter(|_| !self.compaction) {
                     let bytes = serde_json::to_vec(&value)
                         .map_err(|_| invalid("native continuation JSON"))?;
                     let artifact = self.artifact(
@@ -823,6 +834,39 @@ impl ProviderSink {
                     .unwrap_or_else(|p| p.into_inner())
                     .outcome = Some(outcome);
             }
+            return Ok(());
+        }
+        if self.compaction {
+            if outcome == AttemptEnd::Completed {
+                let mut summary = String::new();
+                for (_, bodies) in std::mem::take(&mut self.content) {
+                    for body in bodies {
+                        let ProviderBody::TextDelta { text, .. } = body else {
+                            return Err(invalid("compaction emitted non-text content"));
+                        };
+                        summary.push_str(&text);
+                    }
+                }
+                if summary.trim().is_empty() {
+                    return Err(invalid("empty compaction summary"));
+                }
+                let artifact = self.artifact(
+                    attempt,
+                    summary.as_bytes(),
+                    "Provider compaction summary",
+                    "text/plain; charset=utf-8",
+                    ArtifactKind::CompactionSummary,
+                    fence,
+                )?;
+                self.result
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .result_artifact = Some(artifact);
+            }
+            self.result
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .outcome = Some(outcome);
             return Ok(());
         }
         let terminal = match outcome {
