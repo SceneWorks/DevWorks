@@ -337,6 +337,9 @@ pub enum Slot {
     WebSearch,
     /// The recent web activity record.
     WebActivity,
+    McpServers(Option<String>),
+    McpCapabilities(String, Option<String>),
+    McpCommand,
     /// Active and archived projects.
     ProjectsList,
     /// Deleted projects (their tombstones).

@@ -125,6 +125,107 @@ pub fn command_frame(backend: &dyn Backend, operation: &str, mut body: Value) ->
     .into_bytes()
 }
 
+pub fn mcp_servers(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
+    let mut page = json!({"limit": 100});
+    if let Some(cursor) = cursor {
+        page["cursor"] = json!(cursor);
+    }
+    query_frame(
+        backend,
+        "mcp.servers",
+        json!({"scope":{"kind":"Workspace"},"page":page}),
+    )
+}
+
+pub fn mcp_server_page(
+    outcome: QueryOutcome,
+) -> Result<
+    (
+        Vec<devworks_core::protocol::records::McpServer>,
+        Option<String>,
+    ),
+    Failure,
+> {
+    match query_result(outcome)? {
+        (OperationResult::McpServers { value }, _) => {
+            Ok((value.items.0, value.next_cursor.map(|cursor| cursor.0)))
+        }
+        (other, _) => Err(unexpected("mcp.servers", &other)),
+    }
+}
+
+pub fn mcp_capabilities(
+    backend: &dyn Backend,
+    server: &devworks_core::protocol::Id,
+    revision: i64,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    let mut page = json!({"limit": 100});
+    if let Some(cursor) = cursor {
+        page["cursor"] = json!(cursor);
+    }
+    query_frame(
+        backend,
+        "mcp.capabilities",
+        json!({"serverId":server,"catalogRevision":revision.to_string(),"page":page}),
+    )
+}
+
+pub fn mcp_capability_page(
+    outcome: QueryOutcome,
+) -> Result<
+    (
+        Vec<devworks_core::protocol::records::McpCapability>,
+        Option<String>,
+    ),
+    Failure,
+> {
+    match query_result(outcome)? {
+        (OperationResult::McpCapabilities { value }, _) => {
+            Ok((value.items.0, value.next_cursor.map(|cursor| cursor.0)))
+        }
+        (other, _) => Err(unexpected("mcp.capabilities", &other)),
+    }
+}
+
+pub fn mcp_command(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
+    command_frame(backend, operation, body)
+}
+
+pub fn mcp_command_status(
+    outcome: CommandOutcome,
+) -> Result<(String, bool, Option<devworks_core::protocol::Id>), Failure> {
+    match outcome.map_err(gateway)? {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Applied { result } => Ok((
+                "MCP configuration applied".into(),
+                false,
+                match result {
+                    OperationResult::McpConfigure { value } => Some(value.id),
+                    _ => None,
+                },
+            )),
+            DomainDecision::NoChange { result } => Ok((
+                "MCP configuration unchanged".into(),
+                false,
+                match result {
+                    OperationResult::McpConfigure { value } => Some(value.id),
+                    _ => None,
+                },
+            )),
+            DomainDecision::Accepted { operation_id } => Ok((
+                format!("MCP operation {} accepted", operation_id.0.as_str()),
+                true,
+                None,
+            )),
+            DomainDecision::Refused { fault } => Err(Failure::Refused(fault)),
+        },
+        CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
+        CommandReply::ReceiptPurged { outcome, .. } => Err(Failure::Purged(outcome)),
+        CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Settings (SET-01/02/07/08)
 

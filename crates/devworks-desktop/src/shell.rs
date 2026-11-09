@@ -5,6 +5,7 @@ use crate::attachments;
 use crate::backend::{Backend, Client, Reply, Slot, TaskOutput, Unresolved, is_unknown};
 use crate::chat::{self, AttachState, Attachment, Chat, ChatAction, StartReason, Surface};
 use crate::knowledge_screen::{self, KnowledgeAction, KnowledgeScreen};
+use crate::mcp_panel::McpAction;
 use crate::memory::{Memory, RouteMemory};
 use crate::notifications::{CardAction, Completions};
 use crate::ops::{self, Failure};
@@ -780,6 +781,7 @@ impl Shell {
             ops::settings_read,
         );
         self.refresh_container_capabilities();
+        self.load_mcp_servers(None);
     }
     fn refresh_container_capabilities(&mut self) {
         self.query(
@@ -2433,6 +2435,95 @@ impl Shell {
                 web.activity_loading = false;
                 web.activity = Some(ops::web_entries(q).map_err(|e| e.describe()));
             }
+            (Slot::McpServers(cursor), Reply::Query(q)) => match ops::mcp_server_page(q) {
+                Ok((servers, next)) => {
+                    self.settings
+                        .mcp
+                        .loaded_servers(servers, cursor.is_some(), next.is_none());
+                    if let Some(next) = next {
+                        self.load_mcp_servers(Some(next));
+                    } else {
+                        self.settings.mcp.loading = false;
+                        self.settings.mcp.last_refresh = Some(Instant::now());
+                        if let Some(id) = &self.settings.mcp.pending_server
+                            && let Some(server) = self
+                                .settings
+                                .mcp
+                                .servers
+                                .iter()
+                                .find(|server| &server.id == id)
+                            && matches!(server.state, ItemState::Healthy | ItemState::Failed)
+                        {
+                            if matches!(server.state, ItemState::Failed) {
+                                self.settings.mcp.error = Some("The MCP server operation failed. Check its configuration and retry.".into());
+                            }
+                            self.settings.mcp.pending_server = None;
+                        }
+                        if let Some(server) = self.settings.mcp.selected.as_ref().and_then(|id| {
+                            self.settings
+                                .mcp
+                                .servers
+                                .iter()
+                                .find(|server| &server.id == id)
+                        }) {
+                            self.load_mcp_capabilities(server.id.clone(), None);
+                        }
+                    }
+                }
+                Err(error) => {
+                    self.settings.mcp.loading = false;
+                    self.settings.mcp.error = Some(error.describe());
+                }
+            },
+            (Slot::McpCapabilities(server, cursor), Reply::Query(q)) => {
+                match ops::mcp_capability_page(q) {
+                    Ok((capabilities, next)) => {
+                        if let Ok(id) = Id::new(server) {
+                            self.settings
+                                .mcp
+                                .loaded_catalog(&id, capabilities, cursor.is_some());
+                            if let Some(next) = next {
+                                self.load_mcp_capabilities(id, Some(next));
+                            }
+                        }
+                    }
+                    Err(error) => self.settings.mcp.error = Some(error.describe()),
+                }
+            }
+            (Slot::McpCommand, Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {
+                if !self.client.as_mut().is_some_and(|client| {
+                    client.command(Slot::McpCommand, "Updating MCP", "mcp.configure", frame)
+                }) {
+                    self.settings.mcp.busy = false;
+                    self.settings.mcp.error =
+                        Some("MCP configuration could not be submitted.".into());
+                }
+            }
+            (Slot::McpCommand, Reply::Task(Err(error))) => {
+                self.settings.mcp.busy = false;
+                self.settings.mcp.pending_server = None;
+                self.settings.mcp.error = Some(error);
+            }
+            (Slot::McpCommand, Reply::Command(c)) => {
+                self.settings.mcp.busy = false;
+                match ops::mcp_command_status(c) {
+                    Ok((message, accepted, configured)) => {
+                        self.settings.mcp.message = Some(message);
+                        self.settings.mcp.error = None;
+                        if let Some(id) = configured {
+                            self.settings.mcp.selected = Some(id);
+                        }
+                        if !accepted {
+                            self.settings.mcp.pending_server = None;
+                        }
+                        self.load_mcp_servers(None);
+                    }
+                    Err(error) => {
+                        self.settings.mcp.pending_server = None;
+                        self.settings.mcp.error = Some(error.describe());
+                    }
+                }
+            }
             (Slot::SettingsExplain(key), Reply::Query(q)) => match ops::settings_chain(q) {
                 Ok(chain) => {
                     if let Some(v) = &mut self.settings.view {
@@ -3182,6 +3273,103 @@ impl Shell {
                 SettingsAction::OpenHelp(topic) => self.open_help_context(&topic),
                 SettingsAction::Connection(a) => self.connection_action(a),
                 SettingsAction::Web(action) => self.web_action(action),
+                SettingsAction::Mcp(action) => self.mcp_action(action),
+            }
+        }
+    }
+
+    fn load_mcp_servers(&mut self, cursor: Option<String>) {
+        if cursor.is_none() {
+            self.settings.mcp.loading = true;
+        }
+        let next = cursor.clone();
+        if !self.query(
+            Slot::McpServers(cursor),
+            "Loading MCP servers",
+            "mcp.servers",
+            move |backend| ops::mcp_servers(backend, next.as_deref()),
+        ) {
+            self.settings.mcp.loading = false;
+        }
+    }
+
+    fn load_mcp_capabilities(&mut self, server_id: Id, cursor: Option<String>) {
+        let Some(server) = self
+            .settings
+            .mcp
+            .servers
+            .iter()
+            .find(|server| server.id == server_id)
+        else {
+            return;
+        };
+        let revision = server.catalog_revision.get();
+        let slot = Slot::McpCapabilities(server_id.as_str().to_owned(), cursor.clone());
+        self.query(
+            slot,
+            "Loading MCP capabilities",
+            "mcp.capabilities",
+            move |backend| ops::mcp_capabilities(backend, &server_id, revision, cursor.as_deref()),
+        );
+    }
+
+    fn mcp_action(&mut self, action: McpAction) {
+        match action {
+            McpAction::Reload => self.load_mcp_servers(None),
+            McpAction::Catalog(id, _revision) => self.load_mcp_capabilities(id, None),
+            other => {
+                let (operation, body, secret, pending_server) = match other {
+                    McpAction::Configure { body, secret } => ("mcp.configure", body, secret, None),
+                    McpAction::Connect(id, revision) => (
+                        "mcp.connect",
+                        serde_json::json!({"serverId":id,"expectedRevision":revision.to_string()}),
+                        None,
+                        Some(id),
+                    ),
+                    McpAction::Discover(id, revision) => (
+                        "mcp.discover",
+                        serde_json::json!({"serverId":id,"expectedCatalogRevision":revision.to_string()}),
+                        None,
+                        Some(id),
+                    ),
+                    McpAction::Select(id, revision, catalog, tools) => (
+                        "mcp.select_tools",
+                        serde_json::json!({"serverId":id,"expectedRevision":revision.to_string(),"expectedCatalogRevision":catalog.to_string(),"toolIds":tools}),
+                        None,
+                        None,
+                    ),
+                    McpAction::Reload | McpAction::Catalog(_, _) => unreachable!(),
+                };
+                let submitted = if let Some(secret) = secret {
+                    self.online().is_ok()
+                        && self.client.as_mut().is_some_and(|client| {
+                            client.task(
+                                Slot::McpCommand,
+                                "Storing MCP credential",
+                                move |backend| {
+                                    let handle = backend.stage_api_key(secret)?;
+                                    let mut body = body;
+                                    body["transport"]["credentialRef"] = serde_json::json!(handle);
+                                    Ok(TaskOutput::Prepared {
+                                        frame: ops::mcp_command(backend, operation, body),
+                                    })
+                                },
+                            )
+                        })
+                } else {
+                    self.command(
+                        Slot::McpCommand,
+                        "Updating MCP",
+                        operation,
+                        move |backend| ops::mcp_command(backend, operation, body),
+                    )
+                };
+                if !submitted {
+                    self.settings.mcp.busy = false;
+                    self.settings.mcp.error = Some("MCP command could not be submitted.".into());
+                } else {
+                    self.settings.mcp.pending_server = pending_server;
+                }
             }
         }
     }
@@ -3376,6 +3564,23 @@ impl Shell {
             self.load_connections();
         }
         ctx.request_repaint_after(CONNECTION_POLL);
+    }
+
+    fn poll_mcp(&mut self, ctx: &egui::Context) {
+        if self.settings.mcp.pending_server.is_none() {
+            return;
+        }
+        let interval = Duration::from_secs(2);
+        if !self.settings.mcp.loading
+            && self
+                .settings
+                .mcp
+                .last_refresh
+                .is_none_or(|last| last.elapsed() >= interval)
+        {
+            self.load_mcp_servers(None);
+        }
+        ctx.request_repaint_after(interval);
     }
 
     // -----------------------------------------------------------------------------------------
@@ -4444,6 +4649,7 @@ impl Shell {
                 self.index_act(index_actions);
                 let ctx = ui.ctx().clone();
                 self.poll_connections(&ctx);
+                self.poll_mcp(&ctx);
             }
             Route::Databases => self.databases_screen(ui),
             Route::Help => self.help_screen(ui),
