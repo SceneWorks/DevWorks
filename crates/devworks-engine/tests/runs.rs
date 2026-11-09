@@ -3491,6 +3491,23 @@ impl ActivationLauncher for Scripted {
 }
 
 #[test]
+fn late_launcher_installation_claims_ready_work_once() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), None);
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let rt = runtime();
+    assert!(rt.block_on(sup.tick()).unwrap().launched.is_empty());
+    let launcher = Arc::new(Scripted::default());
+    sup.install_launcher(launcher.clone()).unwrap();
+    assert!(sup.install_launcher(launcher.clone()).is_err());
+    assert_eq!(rt.block_on(sup.tick()).unwrap().launched.len(), 1);
+    assert_eq!(launcher.launched.lock().unwrap().len(), 1);
+    sup.abort_launches();
+    assert!(sup.install_launcher(launcher).is_err());
+}
+
+#[test]
 fn the_supervisor_launches_signals_a_requested_stop_and_records_each_stage() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
