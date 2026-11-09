@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
-  "date": "2026-11-07",
-  "catalogSha256": "4cb587925523074a21c8537d92690fc915543e1e064d89872ef8499ea76432bc",
+  "date": "2026-11-02",
+  "catalogSha256": "656fbfe7fad62debeae6e06536c88e3c5e95e210a1eed13e7fcdf451e36e3202",
   "familyCount": 49,
-  "operationCount": 364,
-  "concreteInputCandidates": 364,
+  "operationCount": 365,
+  "concreteInputCandidates": 365,
   "domainInputsPending": 0,
   "families": [
     {
@@ -3144,6 +3144,53 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "Durable send/ack lineage. Sender/root/parent/authority are host-derived; cross-root or revoked recipients rejected. Inbox reads are separate and cannot acknowledge delivery.",
+          "familyRules": "Assignment ownership and parent scope are host-derived. Root cap is ten with no global cap. Inbox observation and acknowledgment confer no approval.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 7,
+          "operation": "agents.post",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "agents.post",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "agents.post"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "agents.post"
+          },
+          "resultValueType": "RetainedPostResult",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 7,
+              "inputSchema": "domain-request.r7.schema.json",
+              "resultSchema": "operation-result.r7.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r7.schema.json",
+              "completionSchema": "operation-completion.r7.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Additive retained-source post contract. The gateway-selected command and current principal bind the sender; optional session/project must match current authority. Route, reply resolution, blocking and idempotency are validated by the retained message service.",
           "familyRules": "Assignment ownership and parent scope are host-derived. Root cap is ten with no global cap. Inbox observation and acknowledgment confer no approval.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

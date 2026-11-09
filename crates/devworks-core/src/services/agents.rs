@@ -15,13 +15,14 @@ use crate::ports::{
 };
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
-    AgentMessage, AgentRecord, CheckpointRecord, MessageClass, MessageDirection,
+    AgentMessage, AgentRecord, CheckpointRecord, MessageClass, MessageDirection, RetainedMessage,
+    RetainedMessageKind, RetainedMessageResolution, RetainedMessageState, RetainedPostResult,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{
-    ActorId, AssignmentId, CorrelationId, DomainErrorCode, DomainFault, OperationState, ProjectId,
-    RevisionDimension,
+    ActorId, AssignmentId, CorrelationId, Counter, DomainErrorCode, DomainFault, OperationState,
+    ProjectId, RevisionDimension,
 };
 use crate::services::cursor::CursorBinding;
 use crate::services::runs::substrate::{Fenced, NewRunAssignment};
@@ -908,6 +909,131 @@ impl AgentService {
     }
 }
 
+fn retained_message(row: StoredAgentMessage) -> Result<RetainedMessage, StorageError> {
+    let kind = match row.message_class.as_str() {
+        "Info" => RetainedMessageKind::Info,
+        "Question" => RetainedMessageKind::Question,
+        "Request" => RetainedMessageKind::Request,
+        "Blocker" => RetainedMessageKind::Blocker,
+        "Announcement" => RetainedMessageKind::Announcement,
+        _ => {
+            return Err(StorageError::InvalidRecord(
+                "unknown retained message kind".into(),
+            ));
+        }
+    };
+    let state = row
+        .state
+        .as_deref()
+        .map(|state| match state {
+            "Open" => Ok(RetainedMessageState::Open),
+            "Answered" => Ok(RetainedMessageState::Answered),
+            "Declined" => Ok(RetainedMessageState::Declined),
+            _ => Err(StorageError::InvalidRecord(
+                "unknown retained message state".into(),
+            )),
+        })
+        .transpose()?;
+    Ok(RetainedMessage {
+        id: row.id,
+        project_id: row.project_id,
+        channel: BoundedText(row.channel.to_ascii_lowercase()),
+        kind,
+        from_actor_id: row.from_actor_id,
+        from_session_id: row.sender_session_id,
+        body: BoundedText(row.body),
+        created_at_ms: Counter::new(row.created_at_ms)
+            .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+        state,
+        blocking: row.blocking,
+        to_session_id: row.target_session_id,
+        to_human: row.to_human,
+        item_id: row.target_item_id,
+        feature_id: row.target_feature_id,
+        resource_name: row.resource_name.map(BoundedText),
+        in_reply_to_id: row.in_reply_to_id,
+        resolved_by_actor_id: row.resolved_by_actor_id,
+        resolved_at_ms: row
+            .resolved_at_ms
+            .map(Counter::new)
+            .transpose()
+            .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+        delivery: None,
+        handed_over: None,
+    })
+}
+
+fn post_retained(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    input: &ops::PostInput,
+) -> Result<RetainedPostResult, StorageError> {
+    if input.session_id.as_ref() != ctx.session_id() && input.session_id.is_some() {
+        return Err(denied());
+    }
+    let project = if let Some(project) = input.project_id.as_ref().or(ctx.project_id()) {
+        project.clone()
+    } else if let Some(root) = input.item_id.as_ref().or(input.feature_id.as_ref()) {
+        tx.sessions()
+            .work_root(root)?
+            .ok_or_else(denied)?
+            .project_id
+    } else if let Some(session) = ctx.session_id() {
+        tx.sessions()
+            .session(session)?
+            .ok_or_else(denied)?
+            .project_id
+            .ok_or_else(denied)?
+    } else {
+        return Err(StorageError::InvalidRecord(
+            "retained post needs a project, item or session".into(),
+        ));
+    };
+    let kind = match input
+        .message_kind
+        .as_ref()
+        .unwrap_or(&RetainedMessageKind::Info)
+    {
+        RetainedMessageKind::Info => retained::MessageKind::Info,
+        RetainedMessageKind::Question => retained::MessageKind::Question,
+        RetainedMessageKind::Request => retained::MessageKind::Request,
+        RetainedMessageKind::Blocker => retained::MessageKind::Blocker,
+        RetainedMessageKind::Announcement => retained::MessageKind::Announcement,
+    };
+    let resolves = input.resolves.as_ref().map(|state| match state {
+        RetainedMessageResolution::Answered => retained::Resolution::Answered,
+        RetainedMessageResolution::Declined => retained::Resolution::Declined,
+    });
+    let posted = retained::post_message(
+        tx,
+        ctx,
+        &retained::PostSpec {
+            project,
+            body: input.body.0.clone(),
+            kind,
+            item: input.item_id.clone(),
+            feature: input.feature_id.clone(),
+            resource: input.resource_name.as_ref().map(|value| value.0.clone()),
+            to_session: input.to_session_id.clone(),
+            to_human: input.to_human.unwrap_or(false),
+            blocking: input.blocking.unwrap_or(false),
+            in_reply_to: input.in_reply_to_id.clone(),
+            resolves,
+            idempotency_key: input.idempotency_key.as_ref().map(|value| value.0.clone()),
+        },
+    )?;
+    Ok(RetainedPostResult {
+        created: posted.created,
+        message: retained_message(posted.message)?,
+        recipients: Counter::new(
+            i64::try_from(posted.recipients)
+                .map_err(|_| StorageError::InvalidRecord("too many retained recipients".into()))?,
+        )
+        .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+        resolved: posted.resolved.map(retained_message).transpose()?,
+    })
+}
+
 /// The revision-one assignment send. Gateway receipt replay surrounds this transaction;
 /// storage records and event sequence commit with that receipt.
 pub fn post_assignment(
@@ -1311,6 +1437,18 @@ impl CommandHandler for AgentService {
                 .map(|value| DomainDecision::Applied {
                     result: OperationResult::AgentsMessages { value },
                 }),
+            OperationInput::Agents(ops::Input::Post(input)) => {
+                post_retained(tx, ctx, input).map(|value| {
+                    let result = OperationResult::AgentsPost {
+                        value: value.clone(),
+                    };
+                    if value.created {
+                        DomainDecision::Applied { result }
+                    } else {
+                        DomainDecision::NoChange { result }
+                    }
+                })
+            }
             OperationInput::Agents(ops::Input::Acknowledge(input)) => {
                 acknowledge_assignment(tx, ctx, input).map(|value| {
                     let result = OperationResult::AgentsAcknowledge {

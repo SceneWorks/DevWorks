@@ -140,6 +140,9 @@ pub enum OperationResult {
     AgentsDelegate { value: AgentRecord },
     #[serde(rename = "agents.messages")]
     AgentsMessages { value: AgentMessage },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.post")]
+    AgentsPost { value: RetainedPostResult },
     #[serde(rename = "agents.inbox")]
     AgentsInbox { value: Page<AgentMessage> },
     #[serde(rename = "agents.acknowledge")]
@@ -819,6 +822,7 @@ impl OperationResult {
             Self::AgentsInspect { .. } => "agents.inspect",
             Self::AgentsDelegate { .. } => "agents.delegate",
             Self::AgentsMessages { .. } => "agents.messages",
+            Self::AgentsPost { .. } => "agents.post",
             Self::AgentsInbox { .. } => "agents.inbox",
             Self::AgentsAcknowledge { .. } => "agents.acknowledge",
             Self::AgentsCheckpoint { .. } => "agents.checkpoint",
@@ -1193,6 +1197,7 @@ impl Check for OperationResult {
             Self::AgentsInspect { value } => value.check()?,
             Self::AgentsDelegate { value } => value.check()?,
             Self::AgentsMessages { value } => value.check()?,
+            Self::AgentsPost { value } => value.check()?,
             Self::AgentsInbox { value } => value.check()?,
             Self::AgentsAcknowledge { value } => value.check()?,
             Self::AgentsCheckpoint { value } => value.check()?,
@@ -1688,6 +1693,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AgentsPost { .. } if revision < 7 => {
                 Err("operation result predates its introduction".into())
             }
             Self::ApprovalsReviewQueue { .. } if revision < 3 => {

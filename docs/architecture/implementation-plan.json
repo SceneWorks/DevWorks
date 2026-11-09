@@ -11,25 +11,25 @@
   ],
   "sourceSha256": {
     "implementation-slices.json": "f0f40f1cc6db56465b4e73590a16d5b0744dc9a04346f41093c08f2c87b236bb",
-    "devworks-capability-catalog.json": "4cb587925523074a21c8537d92690fc915543e1e064d89872ef8499ea76432bc",
+    "devworks-capability-catalog.json": "656fbfe7fad62debeae6e06536c88e3c5e95e210a1eed13e7fcdf451e36e3202",
     "devworks-requirements-traceability.json": "23d4eaab9420af10bd850fcafd2025cd99498cd371aec8554aac4db09c4de407",
     "codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "699b15450ba3ab6d938bfbd48259641890e94abca88227e296b7ab25c605961b",
+    "contracts/family-coverage.json": "9c64221fe73546118d2bb9b5475c61b0f0e6d801bcfeb9f14a0dcbfefad60c74",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4"
   },
   "counts": {
     "slices": 79,
     "operationFamilies": 49,
-    "operations": 364,
+    "operations": 365,
     "requirements": 377,
     "requirementsByStatus": {
       "Confirmed": 230,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 364,
+    "inputSchemaCandidates": 365,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -1331,6 +1331,7 @@
         "agents.inspect",
         "agents.delegate",
         "agents.messages",
+        "agents.post",
         "agents.inbox",
         "agents.acknowledge",
         "agents.checkpoint"
@@ -13348,6 +13349,20 @@
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
       "resultValueType": "AgentMessage",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "agents.post",
+      "family": "agents",
+      "serviceOwner": "AgentSupervisor",
+      "primarySlice": "delegation",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "RetainedPostResult",
       "requestModes": [
         "Command"
       ],

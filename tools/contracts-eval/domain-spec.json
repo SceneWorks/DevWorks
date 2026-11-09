@@ -365,6 +365,22 @@
         "Evidence"
       ]
     },
+    "RetainedMessageKind": {
+      "kind": "enum",
+      "values": ["Info", "Question", "Request", "Blocker", "Announcement"]
+    },
+    "RetainedMessageState": {
+      "kind": "enum",
+      "values": ["Open", "Answered", "Declined"]
+    },
+    "RetainedMessageResolution": {
+      "kind": "enum",
+      "values": ["Answered", "Declined"]
+    },
+    "RetainedDeliveryState": {
+      "kind": "enum",
+      "values": ["Pending", "Delivered", "Read", "Answered", "Declined"]
+    },
     "PageRequest": {
       "kind": "record",
       "fields": {
@@ -621,6 +637,40 @@
         "content": "Content",
         "artifact_refs": "Items<ArtifactRef>",
         "acknowledged": "bool"
+      }
+    },
+    "RetainedMessage": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "project_id": "ProjectId",
+        "channel": "Label",
+        "kind": "RetainedMessageKind",
+        "from_actor_id": "ActorId",
+        "from_session_id": "?Id",
+        "body": "Content",
+        "created_at_ms": "Counter",
+        "state": "?RetainedMessageState",
+        "blocking": "bool",
+        "to_session_id": "?Id",
+        "to_human": "bool",
+        "item_id": "?RootId",
+        "feature_id": "?RootId",
+        "resource_name": "?Text",
+        "in_reply_to_id": "?Id",
+        "resolved_by_actor_id": "?ActorId",
+        "resolved_at_ms": "?Counter",
+        "delivery": "?RetainedDeliveryState",
+        "handed_over": "?bool"
+      }
+    },
+    "RetainedPostResult": {
+      "kind": "record",
+      "fields": {
+        "created": "bool",
+        "message": "RetainedMessage",
+        "recipients": "Counter",
+        "resolved": "?RetainedMessage"
       }
     },
     "CheckpointRecord": {
@@ -6932,6 +6982,30 @@
       "authority": "Scoped",
       "rules": "Durable send/ack lineage. Sender/root/parent/authority are host-derived; cross-root or revoked recipients rejected. Inbox reads are separate and cannot acknowledge delivery."
     },
+    "agents.post": {
+      "operation": "agents.post",
+      "mode": "Command",
+      "fields": {
+        "session_id": "?Id",
+        "project_id": "?ProjectId",
+        "body": "Content",
+        "message_kind": "?RetainedMessageKind",
+        "item_id": "?RootId",
+        "feature_id": "?RootId",
+        "resource_name": "?Text",
+        "to_session_id": "?Id",
+        "to_human": "?bool",
+        "blocking": "?bool",
+        "in_reply_to_id": "?Id",
+        "resolves": "?RetainedMessageResolution",
+        "idempotency_key": "?Text"
+      },
+      "result": "RetainedPostResult",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Additive retained-source post contract. The gateway-selected command and current principal bind the sender; optional session/project must match current authority. Route, reply resolution, blocking and idempotency are validated by the retained message service.",
+      "introducedRevision": 7
+    },
     "agents.inbox": {
       "operation": "agents.inbox",
       "mode": "Query",
@@ -11588,6 +11662,9 @@
     ],
     "projects.purge_status": [
       6
+    ],
+    "agents.post": [
+      7
     ],
     "history.command_receipt": [
       1,

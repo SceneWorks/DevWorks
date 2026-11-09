@@ -2,12 +2,141 @@
 mod common;
 
 use common::{Harness, id, principal, seed_root, write};
+use devworks_core::authority::HostAuthority;
 use devworks_core::context::PrincipalKind;
-use devworks_core::protocol::ProjectId;
+use devworks_core::gateway::Gateway;
+use devworks_core::protocol::results::{DomainDecision, OperationResult};
+use devworks_core::protocol::{CommandReply, ProjectId};
+use devworks_core::services::UseCases;
+use devworks_core::services::agents::AgentService;
 use devworks_core::services::agents::retained::{
     AckSelection, MessageKind, PostSpec, Recipient, post_message,
 };
+use devworks_core::services::runs::ControlService;
+use devworks_core::services::runs::scope::ScriptedScope;
 use devworks_engine::agent_inbox::{InboxSelection, RetainedInboxDriver};
+use serde_json::json;
+use std::sync::Arc;
+
+#[test]
+fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
+    let harness = Harness::new();
+    let store = harness.open();
+    seed_root(&harness, "root-a");
+    rusqlite::Connection::open(harness.root.join("workspace.sqlite"))
+        .unwrap()
+        .execute_batch("INSERT INTO work_items VALUES('issue-a','project-a','issue',NULL,NULL,NULL,'Issue',1,0,1,1,1,'{}');")
+        .unwrap();
+    let user = principal(store.as_ref(), "post-user", PrincipalKind::Human);
+    let runs = Arc::new(ControlService::with_scope(
+        harness.ids.clone(),
+        Arc::new(ScriptedScope::new()),
+    ));
+    let cases = UseCases::new().with_agents(Arc::new(AgentService::new(harness.ids.clone(), runs)));
+    let authority = HostAuthority {
+        store: store.as_ref(),
+        clock: harness.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        authority: &authority,
+        store: store.as_ref(),
+        ids: harness.ids.as_ref(),
+    };
+    let frame = json!({
+        "protocol":"1.0-draft.1", "mode":"Command", "schemaRevision":7,
+        "requestKey":"retained-post-key",
+        "body":{"kind":"agents.post","projectId":"project-a","body":"Gateway message",
+            "toHuman":true,"idempotencyKey":"source-post-key"}
+    });
+    let raw = serde_json::to_vec(&frame).unwrap();
+    let first = cases.command(&gateway, &user, "agents.post", &raw).unwrap();
+    let message_id = match &first {
+        CommandReply::Recorded { receipt, .. } => match &receipt.decision {
+            DomainDecision::Applied {
+                result: OperationResult::AgentsPost { value },
+            } => {
+                assert!(value.created);
+                assert_eq!(value.message.body.0, "Gateway message");
+                assert_eq!(value.recipients.get(), 1);
+                value.message.id.clone()
+            }
+            other => panic!("unexpected post decision: {other:?}"),
+        },
+        other => panic!("unexpected post reply: {other:?}"),
+    };
+    let replay = cases.command(&gateway, &user, "agents.post", &raw).unwrap();
+    match replay {
+        CommandReply::Recorded {
+            receipt,
+            replayed: true,
+            ..
+        } => match receipt.decision {
+            DomainDecision::Applied {
+                result: OperationResult::AgentsPost { value },
+            } => assert_eq!(value.message.id, message_id),
+            other => panic!("unexpected replay decision: {other:?}"),
+        },
+        other => panic!("unexpected replay reply: {other:?}"),
+    }
+    let mut second_frame = frame.clone();
+    second_frame["requestKey"] = json!("retained-post-new-request");
+    let second_raw = serde_json::to_vec(&second_frame).unwrap();
+    let duplicate = cases
+        .command(&gateway, &user, "agents.post", &second_raw)
+        .unwrap();
+    match duplicate {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::NoChange {
+                result: OperationResult::AgentsPost { value },
+            } => {
+                assert!(!value.created);
+                assert_eq!(value.message.id, message_id);
+            }
+            other => panic!("unexpected idempotent decision: {other:?}"),
+        },
+        other => panic!("unexpected idempotent reply: {other:?}"),
+    }
+    let mut inferred = frame.clone();
+    inferred["requestKey"] = json!("retained-post-inferred-project");
+    inferred["body"]
+        .as_object_mut()
+        .unwrap()
+        .remove("projectId");
+    inferred["body"]["itemId"] = json!("issue-a");
+    inferred["body"]["idempotencyKey"] = json!("inferred-post-key");
+    let inferred_reply = cases
+        .command(
+            &gateway,
+            &user,
+            "agents.post",
+            &serde_json::to_vec(&inferred).unwrap(),
+        )
+        .unwrap();
+    assert!(
+        matches!(inferred_reply, CommandReply::Recorded { receipt, .. }
+        if matches!(&receipt.decision, DomainDecision::Applied {
+            result: OperationResult::AgentsPost { value }
+        } if value.message.project_id == ProjectId(id("project-a")) && value.message.item_id.as_ref().is_some_and(|item| item.0 == id("issue-a"))))
+    );
+    let mut forged = frame;
+    forged["requestKey"] = json!("retained-post-forged-session");
+    forged["body"]["sessionId"] = json!("another-session");
+    let refused = cases
+        .command(
+            &gateway,
+            &user,
+            "agents.post",
+            &serde_json::to_vec(&forged).unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(refused, CommandReply::Recorded { receipt, .. }
+        if matches!(receipt.decision, DomainDecision::Refused { .. })));
+    let stored = common::read(store.as_ref(), |snapshot| {
+        snapshot.runs().agent_message(&message_id)
+    });
+    assert_eq!(stored.unwrap().body, "Gateway message");
+}
 
 #[tokio::test]
 async fn delivered_message_replays_until_read_acknowledgment() {

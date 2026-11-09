@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 364 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 365 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -119,6 +119,7 @@ All 364 qualified operations have typed input/result candidates. Existing input 
 | `agents.inspect` | **Query**<br>`assignmentId`: `AssignmentId` | `AgentRecord` |
 | `agents.delegate` | **Command**<br>`rootId`: `RootId`<br>`expectedControlRevision`: `Revision`<br>`taskIds`: `Items<Id>`<br>`roleId`: `Id`<br>`instruction`: `Content`<br>`sourceCheckpointId`: `?Id` | `AgentRecord` |
 | `agents.messages` | **Command**<br>`recipientAssignmentId`: `AssignmentId`<br>`messageClass`: `MessageClass`<br>`content`: `Content`<br>`attachments`: `Items<ArtifactRef>` | `AgentMessage` |
+| `agents.post` | **Command**<br>`sessionId`: `?Id`<br>`projectId`: `?ProjectId`<br>`body`: `Content`<br>`messageKind`: `?RetainedMessageKind`<br>`itemId`: `?RootId`<br>`featureId`: `?RootId`<br>`resourceName`: `?Text`<br>`toSessionId`: `?Id`<br>`toHuman`: `?bool`<br>`blocking`: `?bool`<br>`inReplyToId`: `?Id`<br>`resolves`: `?RetainedMessageResolution`<br>`idempotencyKey`: `?Text`<br><br>**Schema revisions** 7 ([revision 7 input](contracts/domain-request.r7.schema.json)) | `RetainedPostResult` |
 | `agents.inbox` | **Query**<br>`assignmentId`: `AssignmentId`<br>`page`: `PageRequest`<br>`unacknowledgedOnly`: `bool`<br>`direction`: `MessageDirection` | `Page<AgentMessage>` |
 | `agents.acknowledge` | **Command**<br>`assignmentId`: `AssignmentId`<br>`messageId`: `Id`<br>`expectedRevision`: `Revision` | `AgentMessage` |
 | `agents.checkpoint` | **Command**<br>`assignmentId`: `AssignmentId`<br>`expectedRevision`: `Revision`<br>`transcriptSequence`: `Counter`<br>`content`: `ArtifactRef` | `CheckpointRecord` |
@@ -873,6 +874,22 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 
 `Instruction`, `Status`, `Question`, `Evidence`.
 
+### RetainedMessageKind
+
+`Info`, `Question`, `Request`, `Blocker`, `Announcement`.
+
+### RetainedMessageState
+
+`Open`, `Answered`, `Declined`.
+
+### RetainedMessageResolution
+
+`Answered`, `Declined`.
+
+### RetainedDeliveryState
+
+`Pending`, `Delivered`, `Read`, `Answered`, `Declined`.
+
 ### PageRequest
 
 | Field | Type |
@@ -1102,6 +1119,40 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `content` | `Content` |
 | `artifactRefs` | `Items<ArtifactRef>` |
 | `acknowledged` | `bool` |
+
+### RetainedMessage
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `projectId` | `ProjectId` |
+| `channel` | `Label` |
+| `kind` | `RetainedMessageKind` |
+| `fromActorId` | `ActorId` |
+| `fromSessionId` | `?Id` |
+| `body` | `Content` |
+| `createdAtMs` | `Counter` |
+| `state` | `?RetainedMessageState` |
+| `blocking` | `bool` |
+| `toSessionId` | `?Id` |
+| `toHuman` | `bool` |
+| `itemId` | `?RootId` |
+| `featureId` | `?RootId` |
+| `resourceName` | `?Text` |
+| `inReplyToId` | `?Id` |
+| `resolvedByActorId` | `?ActorId` |
+| `resolvedAtMs` | `?Counter` |
+| `delivery` | `?RetainedDeliveryState` |
+| `handedOver` | `?bool` |
+
+### RetainedPostResult
+
+| Field | Type |
+| --- | --- |
+| `created` | `bool` |
+| `message` | `RetainedMessage` |
+| `recipients` | `Counter` |
+| `resolved` | `?RetainedMessage` |
 
 ### CheckpointRecord
 

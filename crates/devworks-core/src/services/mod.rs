@@ -200,6 +200,7 @@ impl UseCases {
             "agents.inspect",
             "agents.delegate",
             "agents.messages",
+            "agents.post",
             "agents.inbox",
             "agents.acknowledge",
             "agents.checkpoint",
