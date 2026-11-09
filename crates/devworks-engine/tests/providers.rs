@@ -797,7 +797,17 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
             }
         };
         let app = boot(composition()).await.unwrap();
+        let binding = NativeBinding {
+            connection_id: id("connection"), account_revision: Revision::new(1).unwrap(),
+            endpoint_profile: EndpointProfile::CompatibleChat, model_id: f.model.clone(),
+            context_epoch: Counter::new(0).unwrap(),
+        };
+        let next_binding = NativeBinding { connection_id: id("next-connection"),
+            endpoint_profile: EndpointProfile::AnthropicMessages,
+            context_epoch: Counter::new(1).unwrap(), ..binding.clone() };
         assert!(app.resolved_tool_turn(&f.context, &id("session"), &attempt, 0).is_err());
+        assert!(app.change_provider_epoch(&f.context, &id("session"), &previous,
+            &binding, &next_binding).is_err());
         let revision = read(f.store.as_ref(), |s| Ok(s.sessions().session(&id("session"))?.unwrap().revision));
         let close = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":1,
             "requestKey":"close-pending-tool-turn","body":{"kind":"sessions.end",
@@ -820,12 +830,7 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         let ordered = app.resolved_tool_turn(&f.context, &id("session"), &attempt, 0).unwrap();
         assert_eq!(ordered.iter().map(|r| r.call.call.native_call_id.as_str()).collect::<Vec<_>>(),
             vec!["bad", "good", "missing"]);
-        let binding = NativeBinding {
-            connection_id: id("connection"), account_revision: Revision::new(1).unwrap(),
-            endpoint_profile: EndpointProfile::CompatibleChat, model_id: f.model.clone(),
-            context_epoch: Counter::new(0).unwrap(),
-        };
-        let continuation = app.tool_continuation_context(
+        let mut continuation = app.tool_continuation_context(
             &f.context, &id("session"), &attempt, 0, &binding, &previous).unwrap();
         assert_eq!(continuation.messages.len(), 3);
         assert!(matches!(&continuation.messages[1].content[0], ContentBlock::Text { text, .. }
@@ -855,6 +860,19 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         let foreign = f.bytes(&serde_json::to_vec(&foreign_context).unwrap());
         assert!(app.tool_continuation_context(
             &f.context, &id("session"), &attempt, 0, &binding, &foreign).is_err());
+        continuation.messages.push(Message { role: MessageRole::Assistant,
+            content: vec![ContentBlock::Native { binding: binding.clone(), artifact: previous.clone() }] });
+        let source = f.bytes(&serde_json::to_vec(&continuation).unwrap());
+        let converted_ref = app.change_provider_epoch(&f.context, &id("session"), &source,
+            &binding, &next_binding).unwrap();
+        let converted_bytes = f.artifacts.read_exact(f.store.as_ref(), &f.context,
+            &converted_ref, 1024 * 1024).unwrap().0;
+        let converted: ProviderContext = serde_json::from_slice(&converted_bytes).unwrap();
+        assert_eq!(converted.messages.len(), 3);
+        assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "ContextEpochChanged").count(), 1);
+        let epoch = read(f.store.as_ref(), |s| s.sessions().epoch(&id("session"), 1)).unwrap();
+        assert_eq!(epoch.reason, "ProviderChange");
+        assert_eq!(read(f.store.as_ref(), |s| s.sessions().context_sources(&id("session"), 1, 0, 10)).len(), 1);
         let reference: ArtifactRef = serde_json::from_value(reply("good").body["outcome"]["artifacts"][0].clone()).unwrap();
         let bytes = f.artifacts.read_exact(f.store.as_ref(), &f.context, &reference, 1024 * 1024).unwrap().0;
         let value: Value = serde_json::from_slice(&bytes).unwrap();

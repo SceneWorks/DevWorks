@@ -1640,6 +1640,28 @@ impl Runtime {
         )
     }
 
+    /// Record an explicit provider-change context epoch after all emitted calls have their
+    /// initial responses. Known tool exchanges survive; opaque provider blocks are recorded as
+    /// omitted sources and cannot leak into the next provider's request.
+    pub fn change_provider_epoch(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        previous_context: &devworks_core::protocol::provider::ArtifactRef,
+        previous_binding: &devworks_core::protocol::provider::NativeBinding,
+        next_binding: &devworks_core::protocol::provider::NativeBinding,
+    ) -> Result<devworks_core::protocol::provider::ArtifactRef, StorageError> {
+        crate::context_epoch::provider_change(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            session_id,
+            previous_context,
+            previous_binding,
+            next_binding,
+        )
+    }
+
     pub fn accounting(&self) -> &Arc<crate::usage::UsageRuntime> {
         &self.usage
     }
