@@ -25,6 +25,7 @@ use devworks_core::protocol::{
     Revision, RootId,
 };
 use devworks_core::services::UseCases;
+use devworks_core::services::agents::AgentService;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::process::{LaunchPolicy, LaunchRequest, ProcessSupervisor};
 use devworks_core::services::projects::ProjectService;
@@ -105,6 +106,7 @@ impl Fx {
         let service = Arc::new(ControlService::with_scope(h.ids.clone(), scope.clone()));
         let use_cases = UseCases::new()
             .with_runs(service.clone())
+            .with_agents(Arc::new(AgentService::new(h.ids.clone(), service.clone())))
             .with_projects(Arc::new(ProjectService::new(
                 h.ids.clone(),
                 service.clone(),
@@ -775,6 +777,21 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
             Some(first.assignment_id.clone()),
         )
         .with_activation(activation.id.clone(), epoch);
+    let inspect = |query_id: &str| {
+        json!({"mode":"Query","protocol":PROTOCOL,"queryId":query_id,
+            "body":{"kind":"agents.inspect","assignmentId":first.assignment_id}})
+    };
+    assert!(matches!(
+        fx.query(&agent, "agents.inspect", inspect("inspect-current")),
+        DomainQueryReply::Result { .. }
+    ));
+    let stale_agent = agent
+        .clone()
+        .with_activation(activation.id.clone(), epoch + 1);
+    assert!(matches!(
+        fx.query(&stale_agent, "agents.inspect", inspect("inspect-stale")),
+        DomainQueryReply::Rejected { .. }
+    ));
     let request = devworks_core::operations::agents::DelegateInput {
         root_id: rid("root-i"),
         expected_control_revision: Revision::new(fx.control("root-i").revision).unwrap(),
