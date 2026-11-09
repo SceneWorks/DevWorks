@@ -37,7 +37,7 @@ pub struct InstructionBundle {
     pub sources: Vec<InstructionSource>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstructionStamp {
     pub repository_id: Id,
@@ -46,7 +46,7 @@ pub struct InstructionStamp {
     pub sources: Vec<InstructionSourceStamp>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstructionSourceStamp {
     pub path: String,

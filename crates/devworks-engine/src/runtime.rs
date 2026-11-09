@@ -1662,6 +1662,79 @@ impl Runtime {
         )
     }
 
+    /// Adopt changed repository guidance at an explicit safe context boundary. Unchanged
+    /// source stamps reuse the existing snapshot; a changed bundle creates a new immutable
+    /// context and records any opaque native state that cannot cross the epoch.
+    pub fn adopt_instruction_epoch(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        previous_context: &devworks_core::protocol::provider::ArtifactRef,
+        previous_binding: &devworks_core::protocol::provider::NativeBinding,
+        targets: &[(Id, Vec<String>)],
+    ) -> Result<devworks_core::protocol::provider::ArtifactRef, StorageError> {
+        if ctx.session_id() != Some(session_id) {
+            return Err(StorageError::ScopeDenied);
+        }
+        let previous_epoch = previous_binding.context_epoch.get();
+        devworks_core::ports::storage::read_snapshot(
+            self.store.as_ref(),
+            &devworks_core::ports::storage::ReadOptions::default(),
+            |read| {
+                let session = read
+                    .sessions()
+                    .session(session_id)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                if session.closed() || session.context_epoch != previous_epoch {
+                    return Err(StorageError::ScopeDenied);
+                }
+                Ok(())
+            },
+        )?;
+        let bytes = self
+            .artifacts
+            .read_exact(self.store.as_ref(), ctx, previous_context, 8 * 1024 * 1024)
+            .map_err(|_| StorageError::ScopeDenied)?
+            .0;
+        let mut base: devworks_core::providers::context::ProviderContext =
+            serde_json::from_slice(&bytes)
+                .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+        base.validate()
+            .map_err(|e| StorageError::InvalidRecord(format!("instruction context: {e:?}")))?;
+        let old = std::mem::take(&mut base.instruction_stamps);
+        let old_count: usize = old.iter().map(|stamp| stamp.sources.len()).sum();
+        base.instructions
+            .truncate(base.instructions.len() - old_count);
+        let rebound = self.bind_provider_instructions(ctx, base, targets)?;
+        if rebound.instruction_stamps == old {
+            return Ok(previous_context.clone());
+        }
+        let next_binding = devworks_core::protocol::provider::NativeBinding {
+            context_epoch: devworks_core::protocol::Counter::new(
+                previous_epoch
+                    .checked_add(1)
+                    .ok_or_else(|| StorageError::InvalidRecord("context epoch overflow".into()))?,
+            )
+            .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+            ..previous_binding.clone()
+        };
+        let (converted, omitted) = rebound
+            .converted_for_new_epoch(previous_binding, &next_binding)
+            .map_err(|e| StorageError::InvalidRecord(format!("instruction adoption: {e:?}")))?;
+        crate::context_epoch::publish(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            session_id,
+            crate::context_epoch::EpochChange {
+                previous_epoch,
+                reason: devworks_core::protocol::provider::ContextChangeReason::InstructionAdoption,
+                context: converted,
+                omitted,
+            },
+        )
+    }
+
     pub fn accounting(&self) -> &Arc<crate::usage::UsageRuntime> {
         &self.usage
     }

@@ -1,4 +1,4 @@
-//! Durable, explicit provider changes. The old artifact and transcript remain immutable.
+//! Durable, explicit context changes. The old artifact and transcript remain immutable.
 use devworks_core::{
     context::InvocationContext,
     ports::{IdKind, storage::*},
@@ -19,6 +19,13 @@ use devworks_core::{
 };
 use serde_json::json;
 use std::sync::Arc;
+
+pub(crate) struct EpochChange {
+    pub previous_epoch: i64,
+    pub reason: ContextChangeReason,
+    pub context: ProviderContext,
+    pub omitted: Vec<ArtifactRef>,
+}
 
 pub(crate) fn provider_change(
     store: &dyn ApplicationStore,
@@ -58,6 +65,47 @@ pub(crate) fn provider_change(
     let (converted, omitted) = context
         .converted_for_new_epoch(previous_binding, next_binding)
         .map_err(|e| StorageError::InvalidRecord(format!("provider context conversion: {e:?}")))?;
+    publish(
+        store,
+        artifacts,
+        ctx,
+        session_id,
+        EpochChange {
+            previous_epoch,
+            reason: ContextChangeReason::ProviderChange,
+            context: converted,
+            omitted,
+        },
+    )
+}
+
+pub(crate) fn publish(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    change: EpochChange,
+) -> Result<ArtifactRef, StorageError> {
+    let EpochChange {
+        previous_epoch,
+        reason,
+        context: converted,
+        omitted,
+    } = change;
+    if ctx.session_id() != Some(session_id) || previous_epoch < 0 {
+        return Err(StorageError::ScopeDenied);
+    }
+    let next_epoch = previous_epoch
+        .checked_add(1)
+        .ok_or_else(|| StorageError::InvalidRecord("context epoch overflow".into()))?;
+    converted
+        .validate()
+        .map_err(|e| StorageError::InvalidRecord(format!("context epoch: {e:?}")))?;
+    let reason_name = match &reason {
+        ContextChangeReason::ProviderChange => "ProviderChange",
+        ContextChangeReason::InstructionAdoption => "InstructionAdoption",
+        ContextChangeReason::Compaction => "Compaction",
+    };
     if omitted.len() > 128 {
         return Err(StorageError::InvalidRecord(
             "too many omitted native blocks".into(),
@@ -69,7 +117,7 @@ pub(crate) fn provider_change(
         .stage_host_bytes(
             store,
             &bytes,
-            json!({"kind":"ProviderContextEpoch","reason":"ProviderChange",
+            json!({"kind":"ProviderContextEpoch","reason":reason_name,
             "sessionId":session_id,"previousEpoch":previous_epoch,"nextEpoch":next_epoch,
             "omittedNative":omitted}),
         )?
@@ -87,6 +135,42 @@ pub(crate) fn provider_change(
         if session.closed() || session.context_epoch != previous_epoch {
             return Err(StorageError::ScopeDenied);
         }
+        // A context boundary must not invalidate an admitted native request before its
+        // transport and accounting have become locally quiescent. A later admission against the
+        // old epoch is rejected by the provider send gate after this transaction commits.
+        let filter = UsageAttemptFilter {
+            session_id: Some(session_for_write.clone()),
+            ..Default::default()
+        };
+        let mut after = None;
+        let mut inspected = 0usize;
+        loop {
+            let page = tx
+                .usage()
+                .inference_attempts(&filter, after.as_ref(), 100)?;
+            if page.is_empty() {
+                break;
+            }
+            inspected += page.len();
+            if inspected > 10_000 {
+                return Err(StorageError::InvalidRecord(
+                    "context epoch attempt scan bound".into(),
+                ));
+            }
+            for attempt in &page {
+                if !tx
+                    .usage()
+                    .attempt_balance(&attempt.attempt_id)?
+                    .is_some_and(|balance| balance.local_quiescent)
+                {
+                    return Err(StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "context epoch waits for active inference",
+                    ));
+                }
+            }
+            after = page.last().map(|attempt| attempt.attempt_id.clone());
+        }
         let scope = session
             .project_id
             .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
@@ -96,7 +180,7 @@ pub(crate) fn provider_change(
             HostArtifactPublication {
                 title: "Provider context epoch",
                 media_type: "application/vnd.devworks.provider-context+json",
-                provenance: json!({"kind":"ProviderContextEpoch","reason":"ProviderChange",
+                provenance: json!({"kind":"ProviderContextEpoch","reason":reason_name,
                     "sessionId":session_for_write,"previousEpoch":previous_epoch,
                     "omittedNative":omitted_for_write}),
                 scope,
@@ -114,7 +198,7 @@ pub(crate) fn provider_change(
                     .map_err(|e| StorageError::InvalidRecord(e.into()))?,
                 next_epoch: Counter::new(next_epoch)
                     .map_err(|e| StorageError::InvalidRecord(e.into()))?,
-                reason: ContextChangeReason::ProviderChange,
+                reason: reason.clone(),
                 context: reference.clone(),
             }],
             || tx.new_id(IdKind::TranscriptEntry),

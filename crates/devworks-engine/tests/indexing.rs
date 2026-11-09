@@ -349,6 +349,85 @@ fn provider_instructions_use_current_registered_checkout_and_scope() {
             .effective_instructions(&agent, &id(&found[0]), &targets)
             .is_err()
     );
+    let session_id = id("instruction-session");
+    let host = principal(&*store, "instruction-host", PrincipalKind::Host)
+        .with_session(session_id.clone());
+    let actor = host.principal().clone();
+    let session_for_write = session_id.clone();
+    write(&*store, move |tx| {
+        let now = tx.now_ms();
+        tx.sessions().insert_session(&StoredSession {
+            id: session_for_write,
+            conversation_id: id("instruction-conversation"),
+            agent_id: actor.clone(),
+            project_id: None,
+            root_id: None,
+            title: "Instruction revision".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor,
+            created_at_ms: now,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })
+    })
+    .unwrap();
+    let staged = runtime_
+        .artifacts()
+        .stage_host_bytes(
+            &*store,
+            &serde_json::to_vec(&bound).unwrap(),
+            json!({"fixture":"instruction-context"}),
+        )
+        .unwrap()
+        .unwrap();
+    let file = staged.clone();
+    let artifacts = runtime_.artifacts().clone();
+    let version = write(&*store, move |tx| {
+        artifacts.commit_host_bytes(
+            tx,
+            &file,
+            "Instruction context",
+            "application/vnd.devworks.provider-context+json",
+            json!({"fixture":true}),
+        )
+    })
+    .unwrap();
+    runtime_
+        .artifacts()
+        .settle_host_bytes(&*store, &staged, true);
+    let previous = devworks_core::services::artifacts::version_ref(&version);
+    let binding = devworks_core::protocol::provider::NativeBinding {
+        connection_id: id("provider"),
+        account_revision: devworks_core::protocol::Revision::new(1).unwrap(),
+        endpoint_profile: devworks_core::protocol::provider::EndpointProfile::CompatibleChat,
+        model_id: id("model"),
+        context_epoch: devworks_core::protocol::Counter::new(0).unwrap(),
+    };
+    let selection = [(id(&found[0]), targets.to_vec())];
+    let unchanged = runtime_
+        .adopt_instruction_epoch(&host, &session_id, &previous, &binding, &selection)
+        .unwrap();
+    assert_eq!(unchanged.version_id, previous.version_id);
+    std::fs::write(repo.join("src/CLAUDE.md"), "edited again").unwrap();
+    let adopted = runtime_
+        .adopt_instruction_epoch(&host, &session_id, &previous, &binding, &selection)
+        .unwrap();
+    let epoch = read(&*store, |s| s.sessions().epoch(&session_id, 1)).unwrap();
+    assert_eq!(epoch.reason, "InstructionAdoption");
+    let bytes = runtime_
+        .artifacts()
+        .read_exact(&*store, &host, &adopted, 1024 * 1024)
+        .unwrap()
+        .0;
+    let fresh: ProviderContext = serde_json::from_slice(&bytes).unwrap();
+    assert_ne!(
+        fresh.instruction_stamps[0].revision,
+        bound.instruction_stamps[0].revision
+    );
+    assert_eq!(fresh.instructions[0].text, "role");
     rt.block_on(runtime_.shutdown());
     let _ = std::fs::remove_dir_all(&src);
 }
