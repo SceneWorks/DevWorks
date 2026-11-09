@@ -554,13 +554,15 @@ impl Shell {
             },
             screen.help_topic
         );
-        self.last_coordinator_notice = Some((session.clone(), key));
         let Some(backend) = self.backend() else {
             return;
         };
         match Id::new(session.clone()) {
             Ok(id) => match backend.append_coordinator_notice(&id, screen.id, &context) {
-                Ok(()) => self.load_transcript(&session),
+                Ok(()) => {
+                    self.last_coordinator_notice = Some((session.clone(), key));
+                    self.load_transcript(&session);
+                }
                 Err(error) => self.status = Some(error),
             },
             Err(_) => self.status = Some("Coordinator conversation identity is invalid".into()),
