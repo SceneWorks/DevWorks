@@ -7,9 +7,10 @@ use devworks_core::{
     fingerprint::sha256_hex,
     ports::{IdKind, storage::*},
     protocol::{
-        AttemptId, CONTRACT, CommandReply, Id, RetryAdvice,
+        AttemptId, CONTRACT, CommandReply, Id, OperationId, RetryAdvice,
         provider::{CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody},
-        results::{DomainDecision, DomainQueryReply},
+        results::{DomainCommandReply, DomainDecision, DomainQueryReply},
+        support::DomainErrorCode,
     },
     providers::context::{ContentBlock, Message, MessageRole, ProviderContext, ResultBlock},
     registry::{self, Envelope, Mode, OperationDescriptor, SchemaRevision},
@@ -375,7 +376,10 @@ pub(crate) fn continuation_context(
     let mut results = Vec::new();
     for item in resolved {
         let (content, is_error) = match item.outcome {
-            ToolOutcome::Completed { artifacts: refs } => {
+            ToolOutcome::Completed { artifacts: refs }
+            | ToolOutcome::OperationAccepted {
+                artifacts: refs, ..
+            } => {
                 let mut blocks = Vec::with_capacity(refs.len());
                 for reference in refs {
                     if reference.media_type.starts_with("image/") {
@@ -633,15 +637,7 @@ pub(crate) fn dispatch_one(
                     "tool command receipt purged before outcome reconciliation",
                 ));
             }
-            Ok(reply @ CommandReply::Recorded { .. }) => {
-                if let CommandReply::Recorded { receipt, .. } = &reply
-                    && let DomainDecision::Refused { fault } = &receipt.decision
-                {
-                    failed(&format!("domain_{:?}", fault.code))
-                } else {
-                    completed(serde_json::to_vec(&reply).map_err(invalid)?)
-                }
-            }
+            Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
             Ok(CommandReply::Rejected { code, retry, .. }) => {
                 if matches!(
                     retry,
@@ -694,9 +690,13 @@ pub(crate) fn dispatch_one(
                 provenance: json!({"kind":"ToolResult","sessionId":session_for_write,"call":key_for_write}),
                 scope, owner: ctx_for_write.principal().clone(),
             })?;
-            outcome = ToolOutcome::Completed {
-                artifacts: vec![version_ref(&version)],
-            };
+            match &mut outcome {
+                ToolOutcome::Completed { artifacts }
+                | ToolOutcome::OperationAccepted { artifacts, .. } => {
+                    *artifacts = vec![version_ref(&version)];
+                }
+                _ => return Err(invalid("tool result artifact without successful outcome")),
+            }
         }
         let session = tx
             .sessions()
@@ -724,8 +724,220 @@ pub(crate) fn dispatch_one(
     committed
 }
 
+/// Append a later operation state as a separate fact. The accepted tool receipt and its first
+/// response stay immutable; repeated recovery of the same journal revision is a no-op.
+pub(crate) fn record_operation_update(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    operation_id: &OperationId,
+) -> Result<Option<devworks_core::protocol::provider::ArtifactRef>, StorageError> {
+    if ctx.session_id() != Some(session_id) {
+        return Err(StorageError::ScopeDenied);
+    }
+    // Apply the same current session gate even when the requested revision was already
+    // published and this call will return without appending a batch.
+    pending_calls(store, ctx, session_id)?;
+    let observed = read_snapshot(store, &ReadOptions::default(), |read| {
+        let linked = read.sessions().linked_operations(session_id, 500)?;
+        if linked.len() == 500 {
+            return Err(invalid("linked tool operations exceed scan bound"));
+        }
+        if !linked
+            .iter()
+            .any(|call| call.operation_id.as_ref() == Some(operation_id))
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let operation = read
+            .operations()
+            .operation(operation_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        Ok((operation.state, operation.revision))
+    })?;
+    let bytes = serde_json::to_vec(&json!({
+        "operationId": operation_id,
+        "revision": observed.1,
+        "state": observed.0,
+    }))
+    .map_err(invalid)?;
+    let staged = artifacts
+        .stage_host_bytes(
+            store,
+            &bytes,
+            json!({"kind":"ToolOperationUpdate","sessionId":session_id,
+                "operationId":operation_id,"revision":observed.1}),
+        )?
+        .map_err(invalid)?;
+    let staged_for_write = staged.clone();
+    let artifacts_for_write = artifacts.clone();
+    let ctx_for_write = ctx.clone();
+    let session_for_write = session_id.clone();
+    let operation_for_write = operation_id.clone();
+    let committed = run_write(store, WriteOptions::default(), move |tx| {
+        let session = tx
+            .sessions()
+            .session(&session_for_write)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.closed() {
+            return Err(StorageError::ScopeDenied);
+        }
+        if tx.store().store_id != *ctx_for_write.store_id()
+            || tx.store().restore_epoch != ctx_for_write.restore_epoch().get()
+            || tx.actors().actor_kind(ctx_for_write.principal())?
+                != Some(ctx_for_write.principal_kind())
+            || !matches!(
+                ctx_for_write.principal_kind(),
+                PrincipalKind::Host | PrincipalKind::Agent
+            )
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        if ctx_for_write.principal_kind() == PrincipalKind::Agent {
+            let binding = tx
+                .authority()
+                .principal(ctx_for_write.principal())?
+                .ok_or(StorageError::ScopeDenied)?;
+            if !binding.active
+                || session.agent_id != *ctx_for_write.principal()
+                || binding
+                    .project_id
+                    .as_ref()
+                    .is_some_and(|project| session.project_id.as_ref() != Some(project))
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+        let linked = tx.sessions().linked_operations(&session_for_write, 500)?;
+        if linked.len() == 500 {
+            return Err(invalid("linked tool operations exceed scan bound"));
+        }
+        if !linked
+            .iter()
+            .any(|call| call.operation_id.as_ref() == Some(&operation_for_write))
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let operation = tx
+            .operations()
+            .operation(&operation_for_write)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if (operation.state, operation.revision) != observed {
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "tool operation changed during update publication",
+            ));
+        }
+        let mut position = 0;
+        while position < session.last_durable_sequence() {
+            if position >= 10_000 {
+                return Err(invalid("operation update transcript exceeds scan bound"));
+            }
+            let page = tx.sessions().entries(&session_for_write, position, 500)?;
+            if page.is_empty() {
+                return Err(invalid("operation update transcript gap"));
+            }
+            for entry in page {
+                if entry.sequence != position + 1 {
+                    return Err(invalid("operation update transcript gap"));
+                }
+                position = entry.sequence;
+                if entry.kind != "OperationUpdate" {
+                    continue;
+                }
+                let TranscriptBody::OperationUpdate {
+                    operation_id,
+                    revision,
+                    ..
+                } = serde_json::from_value(entry.body).map_err(invalid)?
+                else {
+                    return Err(invalid("operation update kind mismatch"));
+                };
+                if operation_id == operation_for_write && revision.get() >= observed.1 {
+                    return if revision.get() == observed.1 {
+                        Ok(None)
+                    } else {
+                        Err(invalid("operation update revision regressed"))
+                    };
+                }
+            }
+        }
+        let scope = session
+            .project_id
+            .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+        let version = artifacts_for_write.commit_host_bytes_in_scope(
+            tx,
+            &staged_for_write,
+            HostArtifactPublication {
+                title: "Tool operation update",
+                media_type: "application/json",
+                provenance: json!({"kind":"ToolOperationUpdate","sessionId":session_for_write,
+                    "operationId":operation_for_write,"revision":observed.1}),
+                scope,
+                owner: ctx_for_write.principal().clone(),
+            },
+        )?;
+        let reference = version_ref(&version);
+        let batch = turn::batch_of(
+            &session_for_write,
+            tx.new_id(IdKind::TranscriptBatch),
+            session.context_epoch,
+            session.next_sequence,
+            vec![TranscriptBody::OperationUpdate {
+                operation_id: operation_for_write.clone(),
+                revision: devworks_core::protocol::Revision::new(observed.1).map_err(invalid)?,
+                artifact: reference.clone(),
+            }],
+            || tx.new_id(IdKind::TranscriptEntry),
+        );
+        match SessionWriter::append_in(tx, &ctx_for_write, &SessionBatch::entries(batch))? {
+            BatchOutcome::Accepted(_) => Ok(Some(reference)),
+            BatchOutcome::Replayed(_) => Err(invalid("operation update unexpectedly replayed")),
+            BatchOutcome::Refused(_) => Err(StorageError::ScopeDenied),
+        }
+    });
+    artifacts.settle_host_bytes(store, &staged, matches!(&committed, Ok(Some(_))));
+    committed
+}
+
 fn completed(bytes: Vec<u8>) -> (ToolOutcome, Option<Vec<u8>>) {
     (ToolOutcome::Completed { artifacts: vec![] }, Some(bytes))
+}
+
+fn accepted(bytes: Vec<u8>, operation_id: OperationId) -> (ToolOutcome, Option<Vec<u8>>) {
+    (
+        ToolOutcome::OperationAccepted {
+            operation_id,
+            artifacts: vec![],
+        },
+        Some(bytes),
+    )
+}
+
+fn recorded_command(
+    reply: &DomainCommandReply,
+) -> Result<(ToolOutcome, Option<Vec<u8>>), StorageError> {
+    let CommandReply::Recorded { receipt, .. } = reply else {
+        return Err(invalid("expected recorded tool command"));
+    };
+    Ok(match &receipt.decision {
+        DomainDecision::Refused { fault } if fault.code == DomainErrorCode::OutcomeUnknown => {
+            let operation_id = receipt
+                .operation_id
+                .clone()
+                .ok_or_else(|| invalid("unknown tool effect lacks operation identity"))?;
+            (ToolOutcome::OutcomeUnknown { operation_id }, None)
+        }
+        DomainDecision::Refused { fault } => failed(&format!("domain_{:?}", fault.code)),
+        DomainDecision::Accepted { operation_id } => accepted(
+            serde_json::to_vec(reply).map_err(invalid)?,
+            operation_id.clone(),
+        ),
+        DomainDecision::Applied { .. } | DomainDecision::NoChange { .. } => {
+            completed(serde_json::to_vec(reply).map_err(invalid)?)
+        }
+    })
 }
 
 fn failed(code: &str) -> (ToolOutcome, Option<Vec<u8>>) {
@@ -773,7 +985,9 @@ fn invalid(error: impl ToString) -> StorageError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devworks_core::protocol::{AttemptId, Counter};
+    use devworks_core::protocol::{
+        AttemptId, CommandId, CorrelationId, Counter, Protocol, Receipt, Revision,
+    };
 
     fn key(native: &str) -> ToolCallKey {
         ToolCallKey {
@@ -781,6 +995,63 @@ mod tests {
             native_call_id: native.into(),
             ordinal: Counter::new(0).unwrap(),
         }
+    }
+
+    #[test]
+    fn accepted_command_keeps_its_operation_and_receipt_for_later_updates() {
+        let operation_id = OperationId(Id::new("operation").unwrap());
+        let reply = CommandReply::Recorded {
+            protocol: Protocol::Draft1,
+            receipt: Receipt {
+                command_id: CommandId(Id::new("command").unwrap()),
+                committed_sequence: Revision::new(1).unwrap(),
+                accepted_at_ms: Counter::new(1).unwrap(),
+                request_digest: "a".repeat(64),
+                operation_id: Some(operation_id.clone()),
+                decision: DomainDecision::Accepted {
+                    operation_id: operation_id.clone(),
+                },
+            },
+            replayed: false,
+        };
+        let (outcome, bytes) = recorded_command(&reply).unwrap();
+        assert!(matches!(outcome, ToolOutcome::OperationAccepted {
+            operation_id: id, ref artifacts
+        } if id == operation_id && artifacts.is_empty()));
+        let bytes = bytes.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap()["receipt"]["operationId"],
+            "operation"
+        );
+    }
+
+    #[test]
+    fn unknown_command_effect_keeps_operation_identity() {
+        let operation_id = OperationId(Id::new("operation").unwrap());
+        let fault = devworks_core::services::sessions::Refusal::new(
+            DomainErrorCode::OutcomeUnknown,
+            "operation",
+            Some(operation_id.0.clone()),
+        )
+        .retry(RetryAdvice::ReconcileOperation)
+        .fault(CorrelationId(Id::new("correlation").unwrap()));
+        let reply = CommandReply::Recorded {
+            protocol: Protocol::Draft1,
+            receipt: Receipt {
+                command_id: CommandId(Id::new("command").unwrap()),
+                committed_sequence: Revision::new(1).unwrap(),
+                accepted_at_ms: Counter::new(1).unwrap(),
+                request_digest: "a".repeat(64),
+                operation_id: Some(operation_id.clone()),
+                decision: DomainDecision::Refused { fault },
+            },
+            replayed: false,
+        };
+        let (outcome, bytes) = recorded_command(&reply).unwrap();
+        assert!(matches!(outcome, ToolOutcome::OutcomeUnknown {
+            operation_id: id
+        } if id == operation_id));
+        assert!(bytes.is_none());
     }
 
     #[test]

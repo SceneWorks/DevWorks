@@ -885,10 +885,55 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         let bytes = f.artifacts.read_exact(f.store.as_ref(), &f.context, &reference, 1024 * 1024).unwrap().0;
         let value: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["kind"], "Result");
+        let mut accepted_call: CompleteToolCall = serde_json::from_value(
+            rows.iter().find(|entry| entry.kind == "ToolCallRecorded").unwrap().body["toolCall"].clone()
+        ).unwrap();
+        accepted_call.call.native_call_id = "accepted-operation-call".into();
+        accepted_call.call.ordinal = Counter::new(3).unwrap();
+        let accepted_key = accepted_call.call.clone();
+        let operation_id = devworks_core::protocol::OperationId(id("accepted-operation"));
+        let operation_for_write = operation_id.clone();
+        let context_for_write = f.context.clone();
+        write(f.store.as_ref(), move |tx| {
+            use devworks_core::ports::IdKind;
+            use devworks_core::services::sessions::{transcript::{BatchOutcome, SessionBatch, SessionWriter}, turn};
+            tx.operations().record_intent(NewOperation {
+                id: operation_for_write.clone(), root_id: None, assignment_id: None,
+                capability: "fixture/accepted".into(), schema_version: 1,
+                args_digest: "a".repeat(64), payload: json!({}),
+            })?;
+            let session = tx.sessions().session(&id("session"))?.unwrap();
+            let batch = turn::batch_of(&id("session"), tx.new_id(IdKind::TranscriptBatch),
+                session.context_epoch, session.next_sequence,
+                vec![TranscriptBody::ToolCallRecorded { tool_call: accepted_call },
+                    TranscriptBody::ToolResponseRecorded { call: accepted_key,
+                        outcome: ToolOutcome::OperationAccepted {
+                            operation_id: operation_for_write, artifacts: vec![],
+                        },
+                    }],
+                || tx.new_id(IdKind::TranscriptEntry));
+            assert!(matches!(SessionWriter::append_in(tx, &context_for_write,
+                &SessionBatch::entries(batch))?, BatchOutcome::Accepted(_)));
+            Ok(())
+        }).unwrap();
+        let initial_response = f.transcript().into_iter().find(|entry|
+            entry.kind == "ToolResponseRecorded"
+                && entry.body["call"]["nativeCallId"] == "accepted-operation-call"
+        ).unwrap().body;
+        let updated = app.record_tool_operation_update(&f.context, &id("session"), &operation_id).unwrap();
+        assert!(updated.is_some());
+        assert!(app.record_tool_operation_update(&f.context, &id("session"), &operation_id).unwrap().is_none());
+        assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "OperationUpdate").count(), 1);
+        let retained_response = f.transcript().into_iter().find(|entry|
+            entry.kind == "ToolResponseRecorded"
+                && entry.body["call"]["nativeCallId"] == "accepted-operation-call"
+        ).unwrap().body;
+        assert_eq!(retained_response, initial_response);
         app.shutdown().await;
         let restarted = boot(composition()).await.unwrap();
         assert!(restarted.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap().is_empty());
-        assert_eq!(f.transcript().iter().filter(|e| e.kind == "ToolResponseRecorded").count(), 3);
+        assert_eq!(f.transcript().iter().filter(|e| e.kind == "ToolResponseRecorded").count(), 4);
+        assert!(restarted.record_tool_operation_update(&f.context, &id("session"), &operation_id).unwrap().is_none());
         restarted.shutdown().await;
     });
 }

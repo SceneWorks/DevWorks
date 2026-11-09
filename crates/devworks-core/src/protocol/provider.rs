@@ -439,6 +439,12 @@ pub enum ToolOutcome {
         #[schemars(length(max = 128))]
         artifacts: Vec<ArtifactRef>,
     },
+    /// The command receipt is final, while the accepted operation may complete later.
+    OperationAccepted {
+        operation_id: OperationId,
+        #[schemars(length(max = 128))]
+        artifacts: Vec<ArtifactRef>,
+    },
     Failed {
         code: Id,
     },

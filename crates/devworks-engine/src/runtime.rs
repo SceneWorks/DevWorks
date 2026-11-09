@@ -1606,6 +1606,23 @@ impl Runtime {
         )
     }
 
+    /// Record a newer journal state for an operation linked to this session's accepted tool
+    /// response. The first response remains unchanged; replaying the same revision adds nothing.
+    pub fn record_tool_operation_update(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        operation_id: &devworks_core::protocol::OperationId,
+    ) -> Result<Option<devworks_core::protocol::provider::ArtifactRef>, StorageError> {
+        crate::tool_turn::record_operation_update(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            session_id,
+            operation_id,
+        )
+    }
+
     /// Build the next provider context from the immutable request context and settled native
     /// exchange. The caller publishes the returned material before a new request.
     pub fn tool_continuation_context(

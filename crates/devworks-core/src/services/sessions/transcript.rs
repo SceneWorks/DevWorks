@@ -234,6 +234,9 @@ fn body_kind(body: &TranscriptBody) -> &'static str {
 fn outcome_kind(o: &ToolOutcome) -> (&'static str, Option<&OperationId>) {
     match o {
         ToolOutcome::Completed { .. } => ("Completed", None),
+        ToolOutcome::OperationAccepted { operation_id, .. } => {
+            ("OperationAccepted", Some(operation_id))
+        }
         ToolOutcome::Failed { .. } => ("Failed", None),
         ToolOutcome::ApprovalRequired { operation_id, .. } => {
             ("ApprovalRequired", Some(operation_id))
@@ -296,7 +299,8 @@ fn references(body: &TranscriptBody) -> Vec<(&'static str, &ArtifactRef)> {
             ("native_item", &tool_call.native_item),
         ],
         TranscriptBody::ToolResponseRecorded { outcome, .. } => match outcome {
-            ToolOutcome::Completed { artifacts } => {
+            ToolOutcome::Completed { artifacts }
+            | ToolOutcome::OperationAccepted { artifacts, .. } => {
                 artifacts.iter().map(|a| ("tool_result", a)).collect()
             }
             _ => Vec::new(),
