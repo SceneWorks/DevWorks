@@ -2551,6 +2551,12 @@ impl RunRead for Unsupported {
     ) -> Result<Vec<StoredAgentMessage>, StorageError> {
         nope()
     }
+    fn agent_message_history(
+        &self,
+        _: &AgentMessageHistoryFilter<'_>,
+    ) -> Result<Vec<(i64, StoredAgentMessage)>, StorageError> {
+        nope()
+    }
     fn agent_assignment_thread(
         &self,
         _: &ProjectId,

@@ -6,8 +6,8 @@
 //! record's revision, so a stale writer gets a [`StorageError::RevisionConflict`] and changes
 //! nothing.
 use super::{
-    MAX_PAGE, StorageError, StoredAgentAssignmentContext, StoredAgentDelivery, StoredAgentMessage,
-    StoredAgentMessageEvent,
+    AgentMessageHistoryFilter, MAX_PAGE, StorageError, StoredAgentAssignmentContext,
+    StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
 };
 use crate::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId, RootId};
 use serde_json::Value;
@@ -549,6 +549,10 @@ pub trait RunRead {
         before: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<StoredAgentMessage>, StorageError>;
+    fn agent_message_history(
+        &self,
+        filter: &AgentMessageHistoryFilter<'_>,
+    ) -> Result<Vec<(i64, StoredAgentMessage)>, StorageError>;
     /// Assignment's inbound/outbound message thread, newest first; `before` is the prior page's
     /// final ID. An unacknowledged filter only selects inbound pending/delivered copies.
     fn agent_assignment_thread(

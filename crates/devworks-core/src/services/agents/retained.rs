@@ -2,8 +2,8 @@
 //! long-poll by repeating this pass between transactions; no connection is held during a wait.
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::ports::storage::{
-    StorageError, StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
-    WriteTransaction,
+    AgentMessageHistoryFilter, ReadSnapshot, StorageError, StoredAgentDelivery, StoredAgentMessage,
+    StoredAgentMessageEvent, WriteTransaction,
 };
 use crate::protocol::{AssignmentId, Id, ProjectId, Revision, RevisionDimension};
 use std::collections::HashSet;
@@ -22,6 +22,161 @@ pub struct DeliveredInbox {
     pub items: Vec<(StoredAgentDelivery, StoredAgentMessage)>,
     /// The last delivery sequence returned, or the supplied position when the page is empty.
     pub next_sequence: i64,
+}
+
+pub struct MessageHistoryQuery {
+    pub project: ProjectId,
+    pub channel: Option<String>,
+    pub item: Option<crate::protocol::RootId>,
+    pub feature: Option<crate::protocol::RootId>,
+    pub resource: Option<String>,
+    pub open_only: bool,
+    pub to_human: bool,
+    pub before: Option<i64>,
+    pub limit: u16,
+}
+
+pub struct MessageHistoryPage {
+    pub items: Vec<StoredAgentMessage>,
+    pub next_before: Option<i64>,
+}
+
+pub struct MessageEventPage {
+    pub items: Vec<StoredAgentMessageEvent>,
+    pub next_sequence: i64,
+}
+
+/// The native UI's cursor feed starts at the current head when no cursor is supplied, matching
+/// a new event-stream subscription; a supplied cursor replays later committed events.
+pub fn events(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    project: &ProjectId,
+    after: Option<i64>,
+    limit: u16,
+) -> Result<MessageEventPage, StorageError> {
+    if limit == 0 || limit > 100 || after.is_some_and(|cursor| cursor < 0) {
+        return Err(StorageError::InvalidRecord(
+            "invalid message event cursor or limit".into(),
+        ));
+    }
+    if ctx.principal_kind() != PrincipalKind::Human
+        || ctx.session_id().is_some()
+        || ctx.project_id().is_some_and(|scope| scope != project)
+        || snapshot.actors().actor_kind(ctx.principal())? != Some(PrincipalKind::Human)
+        || !snapshot.sessions().project_exists(project)?
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let head = snapshot.runs().agent_event_head()?;
+    let position = after.unwrap_or(head);
+    if position > head {
+        return Err(StorageError::CursorExpired);
+    }
+    let items = snapshot
+        .runs()
+        .agent_message_events(project, position, limit)?;
+    let next_sequence = items.last().map_or(position, |event| event.sequence);
+    Ok(MessageEventPage {
+        items,
+        next_sequence,
+    })
+}
+
+/// Read-only project history. The posted-event sequence is the message cursor; intervening
+/// delivery/read events leave gaps but cannot reorder messages.
+pub fn history(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    query: &MessageHistoryQuery,
+) -> Result<MessageHistoryPage, StorageError> {
+    if query.limit == 0
+        || query.limit > 200
+        || query.before.is_some_and(|n| n < 0)
+        || query.channel.as_deref().is_some_and(|channel| {
+            !matches!(
+                channel,
+                "Item" | "Project" | "Feature" | "Resource" | "Session" | "Human"
+            )
+        })
+        || query.resource.as_deref().is_some_and(str::is_empty)
+    {
+        return Err(StorageError::InvalidRecord(
+            "invalid message history filter".into(),
+        ));
+    }
+    if ctx
+        .project_id()
+        .is_some_and(|scope| scope != &query.project)
+        || snapshot.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    if !snapshot.sessions().project_exists(&query.project)? {
+        return Err(StorageError::ScopeDenied);
+    }
+    match ctx.principal_kind() {
+        PrincipalKind::Agent => {
+            let id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+            let session = snapshot
+                .sessions()
+                .session(id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let root_project = match &session.root_id {
+                Some(root) => snapshot
+                    .sessions()
+                    .work_root(root)?
+                    .map(|work| work.project_id),
+                None => None,
+            };
+            if session.closed()
+                || session.agent_id != *ctx.principal()
+                || session.project_id.as_ref().is_some_and(|project| {
+                    root_project.as_ref().is_some_and(|root| root != project)
+                })
+                || session.project_id.or(root_project).as_ref() != Some(&query.project)
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+        PrincipalKind::Human if ctx.session_id().is_none() => {}
+        _ => return Err(StorageError::ScopeDenied),
+    }
+    for (target, kind) in [(query.item.as_ref(), false), (query.feature.as_ref(), true)] {
+        if let Some(target) = target {
+            let work = snapshot
+                .sessions()
+                .work_root(target)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if work.project_id != query.project || (work.kind == "feature") != kind {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+    }
+    let mut rows = snapshot
+        .runs()
+        .agent_message_history(&AgentMessageHistoryFilter {
+            project: &query.project,
+            channel: query.channel.as_deref(),
+            item: query.item.as_ref(),
+            feature: query.feature.as_ref(),
+            resource: query.resource.as_deref(),
+            open_only: query.open_only,
+            to_human: query.to_human,
+            before: query.before,
+            limit: query.limit + 1,
+        })?;
+    let more = rows.len() > usize::from(query.limit);
+    rows.truncate(usize::from(query.limit));
+    let next_before = if more {
+        rows.last().map(|(sequence, _)| *sequence)
+    } else {
+        None
+    };
+    Ok(MessageHistoryPage {
+        items: rows.into_iter().map(|(_, message)| message).collect(),
+        next_before,
+    })
 }
 
 pub enum AckSelection {

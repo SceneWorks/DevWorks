@@ -74,3 +74,16 @@ pub struct StoredAgentMessageEvent {
     pub recipient_human: bool,
     pub created_at_ms: i64,
 }
+
+/// Filters the retained project message history in descending Posted-event sequence.
+pub struct AgentMessageHistoryFilter<'a> {
+    pub project: &'a ProjectId,
+    pub channel: Option<&'a str>,
+    pub item: Option<&'a RootId>,
+    pub feature: Option<&'a RootId>,
+    pub resource: Option<&'a str>,
+    pub open_only: bool,
+    pub to_human: bool,
+    pub before: Option<i64>,
+    pub limit: u16,
+}

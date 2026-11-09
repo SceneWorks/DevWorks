@@ -656,6 +656,9 @@ macro_rules! run_reads {
             fn agent_messages(&self, project: &ProjectId, before: Option<&Id>, limit: u16) -> Result<Vec<StoredAgentMessage>, StorageError> {
                 agent_messages::messages(self.conn, project, before, limit)
             }
+            fn agent_message_history(&self, filter: &AgentMessageHistoryFilter<'_>) -> Result<Vec<(i64, StoredAgentMessage)>, StorageError> {
+                agent_messages::message_history(self.conn, filter)
+            }
             fn agent_assignment_thread(&self, project: &ProjectId, assignment: &AssignmentId, direction: &str, unacknowledged_only: bool, before: Option<&Id>, limit: u16) -> Result<Vec<(StoredAgentMessage, Option<StoredAgentDelivery>)>, StorageError> {
                 agent_messages::assignment_thread(self.conn, project, assignment, direction, unacknowledged_only, before, limit)
             }

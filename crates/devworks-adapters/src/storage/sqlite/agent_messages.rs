@@ -1,8 +1,8 @@
 //! SQLite rows for durable agent messages, recipient deliveries and project stream events.
 use super::conn::db;
 use devworks_core::ports::storage::{
-    MAX_PAGE, StorageError, StoredAgentAssignmentContext, StoredAgentDelivery, StoredAgentMessage,
-    StoredAgentMessageEvent,
+    AgentMessageHistoryFilter, MAX_PAGE, StorageError, StoredAgentAssignmentContext,
+    StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
 };
 use devworks_core::protocol::{ActorId, AssignmentId, Id, ProjectId, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -213,6 +213,42 @@ pub(super) fn messages(
         out.push(message_row(row)?);
     }
     Ok(out)
+}
+pub(super) fn message_history(
+    conn: &Connection,
+    filter: &AgentMessageHistoryFilter<'_>,
+) -> Result<Vec<(i64, StoredAgentMessage)>, StorageError> {
+    if filter.limit == 0 || filter.limit > 201 || filter.before.is_some_and(|n| n < 0) {
+        return Err(StorageError::InvalidRecord(
+            "invalid message history page".into(),
+        ));
+    }
+    let mut stmt = db(conn.prepare(
+        "SELECT e.sequence,e.message_id FROM agent_message_events e JOIN agent_messages m ON m.id=e.message_id WHERE e.kind='Posted' AND e.project_id=?1 AND m.project_id=?1 AND (?2 IS NULL OR m.channel=?2) AND (?3 IS NULL OR m.target_item_id=?3) AND (?4 IS NULL OR m.target_feature_id=?4) AND (?5 IS NULL OR m.resource_name=?5) AND (NOT ?6 OR m.state='Open') AND (NOT ?7 OR m.to_human=1) AND (?8 IS NULL OR e.sequence<?8) ORDER BY e.sequence DESC LIMIT ?9",
+    ))?;
+    let mut rows = db(stmt.query(params![
+        filter.project.0.as_str(),
+        filter.channel,
+        filter.item.map(|id| id.0.as_str()),
+        filter.feature.map(|id| id.0.as_str()),
+        filter.resource,
+        filter.open_only,
+        filter.to_human,
+        filter.before,
+        filter.limit,
+    ]))?;
+    let mut ids = Vec::new();
+    while let Some(row) = db(rows.next())? {
+        ids.push((db(row.get::<_, i64>(0))?, id(db(row.get(1))?)?));
+    }
+    drop(rows);
+    drop(stmt);
+    ids.into_iter()
+        .map(|(sequence, id)| {
+            let message = message(conn, &id)?.ok_or_else(|| corrupt("history message"))?;
+            Ok((sequence, message))
+        })
+        .collect()
 }
 pub(super) fn assignment_thread(
     conn: &Connection,

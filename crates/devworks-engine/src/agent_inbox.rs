@@ -5,7 +5,8 @@ use devworks_core::context::InvocationContext;
 use devworks_core::ports::storage::{ApplicationStore, StorageError};
 use devworks_core::protocol::ProjectId;
 use devworks_core::services::agents::retained::{
-    AckSelection, Acknowledged, DeliveredInbox, Recipient, Resolution, acknowledge, deliver_inbox,
+    AckSelection, Acknowledged, DeliveredInbox, MessageEventPage, Recipient, Resolution,
+    acknowledge, deliver_inbox, events,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,5 +75,38 @@ impl RetainedInboxDriver {
             acknowledge(tx, &context, &project, &recipient, selection, resolution)
         })
         .await
+    }
+
+    pub async fn wait_events(
+        &self,
+        context: InvocationContext,
+        project: ProjectId,
+        after: Option<i64>,
+        wait_seconds: u8,
+    ) -> Result<MessageEventPage, StorageError> {
+        if wait_seconds > 55 {
+            return Err(StorageError::InvalidRecord(
+                "wait_seconds exceeds 55".into(),
+            ));
+        }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(u64::from(wait_seconds));
+        let mut cursor = after;
+        loop {
+            let context = context.clone();
+            let project = project.clone();
+            let page = store::read(&self.store, move |snapshot| {
+                events(snapshot, &context, &project, cursor, 100)
+            })
+            .await?;
+            cursor = Some(page.next_sequence);
+            if !page.items.is_empty() || tokio::time::Instant::now() >= deadline {
+                return Ok(page);
+            }
+            tokio::time::sleep_until(std::cmp::min(
+                deadline,
+                tokio::time::Instant::now() + Duration::from_secs(1),
+            ))
+            .await;
+        }
     }
 }

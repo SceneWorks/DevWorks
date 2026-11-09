@@ -565,6 +565,60 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
+    let history_context = ingress.context(
+        ActorId(id("human-a")),
+        PrincipalKind::Human,
+        id("history-invocation"),
+        id("history-ingress"),
+        Counter::new(s.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    read_snapshot(&s, &ReadOptions::default(), |snap| {
+        let mut query = devworks_core::services::agents::retained::MessageHistoryQuery {
+            project: project("project-a"),
+            channel: Some("Session".into()),
+            item: Some(RootId(id("root-a"))),
+            feature: None,
+            resource: None,
+            open_only: false,
+            to_human: false,
+            before: None,
+            limit: 1,
+        };
+        let first =
+            devworks_core::services::agents::retained::history(snap, &history_context, &query)?;
+        assert_eq!(first.items.len(), 1);
+        query.before = first.next_before;
+        assert!(query.before.is_some());
+        let second =
+            devworks_core::services::agents::retained::history(snap, &history_context, &query)?;
+        assert_eq!(second.items.len(), 1);
+        assert_ne!(first.items[0].id, second.items[0].id);
+        query.open_only = true;
+        query.before = None;
+        let open =
+            devworks_core::services::agents::retained::history(snap, &history_context, &query)?;
+        assert_eq!(open.items[0].id, direct.message.id);
+        let fresh = devworks_core::services::agents::retained::events(
+            snap,
+            &history_context,
+            &project("project-a"),
+            None,
+            100,
+        )?;
+        assert!(fresh.items.is_empty());
+        let replay = devworks_core::services::agents::retained::events(
+            snap,
+            &history_context,
+            &project("project-a"),
+            Some(0),
+            100,
+        )?;
+        assert!(replay.items.iter().any(|event| event.kind == "HandedOver"));
+        assert_eq!(replay.next_sequence, fresh.next_sequence);
+        Ok(())
+    })
+    .unwrap();
     run_write(&s, WriteOptions::default(), move |tx| {
         let mut delivery = tx
             .runs()
