@@ -140,7 +140,8 @@ pub(crate) fn current_source(
     let tracked = matches!(
         provenance["derived"]["kind"].as_str(),
         Some(
-            "ProviderTurnContinuation"
+            "ProviderInitialContext"
+                | "ProviderTurnContinuation"
                 | "ProviderToolContinuation"
                 | "ProviderOperationUpdateContext"
                 | "ProviderContextEpoch"

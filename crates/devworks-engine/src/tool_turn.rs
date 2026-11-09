@@ -112,6 +112,138 @@ pub(crate) fn pending_calls(
     })
 }
 
+/// Publish the first request context before inference. This fixes its exact bytes and provider
+/// binding in the session head, so a restarted caller can recover the same prompt and aliases.
+/// Only a fresh epoch-zero session may acquire an initial context; retries return its first
+/// publication when the bytes and binding match.
+pub(crate) fn publish_initial_context(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    binding: &NativeBinding,
+    context: &ProviderContext,
+) -> Result<ArtifactRef, StorageError> {
+    context
+        .validate()
+        .map_err(|error| invalid(format!("initial provider context: {error:?}")))?;
+    if binding.context_epoch.get() != 0
+        || context.messages.iter().any(|message| {
+            !matches!(message.role, MessageRole::User)
+                || message.content.iter().any(|block| {
+                    !matches!(
+                        block,
+                        ContentBlock::Text { .. } | ContentBlock::Image { .. }
+                    )
+                })
+        })
+        || ctx.session_id() != Some(session_id)
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let bytes = serde_json::to_vec(context).map_err(invalid)?;
+    let digest = sha256_hex(&bytes);
+    let staged = artifacts
+        .stage_host_bytes(
+            store,
+            &bytes,
+            json!({"kind":"ProviderInitialContext","sessionId":session_id,
+                "binding":binding,"observedSequence":0}),
+        )?
+        .map_err(invalid)?;
+    let staged_for_write = staged.clone();
+    let service = artifacts.clone();
+    let ctx = ctx.clone();
+    let session_id = session_id.clone();
+    let binding = binding.clone();
+    let committed = run_write(store, WriteOptions::default(), move |tx| {
+        let session = tx
+            .sessions()
+            .session(&session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.closed()
+            || session.context_epoch != 0
+            || session.last_durable_sequence() != 0
+            || tx.store().store_id != *ctx.store_id()
+            || tx.store().restore_epoch != ctx.restore_epoch().get()
+            || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+            || !matches!(
+                ctx.principal_kind(),
+                PrincipalKind::Host | PrincipalKind::Agent
+            )
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        if ctx.principal_kind() == PrincipalKind::Agent {
+            let principal = tx
+                .authority()
+                .principal(ctx.principal())?
+                .ok_or(StorageError::ScopeDenied)?;
+            if !principal.active
+                || session.agent_id != *ctx.principal()
+                || principal
+                    .project_id
+                    .as_ref()
+                    .is_some_and(|project| session.project_id.as_ref() != Some(project))
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+        if let Some(head) = tx.sessions().provider_context_head(&session_id)? {
+            let artifact: ArtifactRef = serde_json::from_value(head.artifact).map_err(invalid)?;
+            let version = tx
+                .artifacts()
+                .version(&artifact.version_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if head.kind == "ProviderInitialContext"
+                && head.context_epoch == 0
+                && head.observed_sequence == 0
+                && head.attempt_id.is_none()
+                && head.binding == json!(binding)
+                && artifact.sha256.as_str() == digest
+                && version.live()
+                && version.version_no == 1
+                && version.artifact_id == artifact.artifact_id
+            {
+                return Ok((artifact, false));
+            }
+            return Err(StorageError::ScopeDenied);
+        }
+        let scope = session
+            .project_id
+            .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+        let version = service.commit_host_bytes_in_scope(
+            tx,
+            &staged_for_write,
+            HostArtifactPublication {
+                title: "Initial provider context",
+                media_type: "application/vnd.devworks.provider-context+json",
+                provenance: json!({"kind":"ProviderInitialContext","sessionId":session_id,
+                    "binding":binding,"observedSequence":0,"epochRoot":null}),
+                scope,
+                owner: ctx.principal().clone(),
+            },
+        )?;
+        let artifact = version_ref(&version);
+        tx.sessions().put_provider_context_head(
+            &StoredProviderContextHead {
+                session_id,
+                context_epoch: 0,
+                observed_sequence: 0,
+                kind: "ProviderInitialContext".into(),
+                attempt_id: None,
+                binding: json!(binding),
+                artifact: json!(artifact),
+                revision: 1,
+            },
+            None,
+        )?;
+        Ok((artifact, true))
+    });
+    artifacts.settle_host_bytes(store, &staged, matches!(&committed, Ok((_, true))));
+    committed.map(|(artifact, _)| artifact)
+}
+
 /// Recover the last published immutable native context after a host restart. A new epoch uses
 /// its durable root until a turn publishes a continuation in that epoch.
 pub(crate) fn recover_context_head(
@@ -191,10 +323,13 @@ pub(crate) fn recover_context_head(
             (kind.as_str(), attempt_id.as_ref()),
             ("ProviderTurnContinuation", Some(_))
                 | (
-                    "ProviderOperationUpdateContext" | "ProviderContextEpoch",
+                    "ProviderInitialContext"
+                        | "ProviderOperationUpdateContext"
+                        | "ProviderContextEpoch",
                     None
                 )
         )
+        || (kind == "ProviderInitialContext" && (epoch != 0 || observed_sequence != 0))
         || head_root
             .as_ref()
             .is_some_and(|root| derived.get("epochRoot") != Some(root))
@@ -829,7 +964,8 @@ pub(crate) fn append_operation_updates(
         || !matches!(
             derived["kind"].as_str(),
             Some(
-                "ProviderTurnContinuation"
+                "ProviderInitialContext"
+                    | "ProviderTurnContinuation"
                     | "ProviderToolContinuation"
                     | "ProviderOperationUpdateContext"
                     | "ProviderContextEpoch"

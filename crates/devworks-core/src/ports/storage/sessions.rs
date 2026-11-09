@@ -140,7 +140,7 @@ pub struct StoredProviderContextHead {
     pub session_id: Id,
     pub context_epoch: i64,
     pub observed_sequence: i64,
-    /// `ProviderTurnContinuation` or `ProviderOperationUpdateContext`.
+    /// `ProviderInitialContext`, `ProviderTurnContinuation` or `ProviderOperationUpdateContext`.
     pub kind: String,
     pub attempt_id: Option<Id>,
     pub binding: Value,

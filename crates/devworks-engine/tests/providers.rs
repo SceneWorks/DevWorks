@@ -788,6 +788,92 @@ fn native_generation_persists_text_usage_and_exact_receipt_replay_without_second
 }
 
 #[test]
+fn initial_native_context_is_durable_idempotent_and_bound_to_first_prompt() {
+    runtime().block_on(async {
+        let f = Fx::new("CompatibleChat", Script::sse("data: [DONE]\n\n"), false);
+        let request = f.generation(vec![]);
+        let source = match &request.input {
+            InferenceInput::Generation { context, .. } => context,
+            _ => unreachable!(),
+        };
+        let bytes = f
+            .artifacts
+            .read_exact(f.store.as_ref(), &f.context, source, 1024 * 1024)
+            .unwrap()
+            .0;
+        let prompt: ProviderContext = serde_json::from_slice(&bytes).unwrap();
+        let binding = NativeBinding {
+            connection_id: id("connection"),
+            account_revision: Revision::new(1).unwrap(),
+            endpoint_profile: EndpointProfile::CompatibleChat,
+            model_id: f.model.clone(),
+            context_epoch: Counter::new(0).unwrap(),
+        };
+        let app = devworks_engine::boot(tool_runtime_composition(&f))
+            .await
+            .unwrap();
+        assert!(
+            app.recover_native_context_head(&f.context, &id("session"))
+                .unwrap()
+                .is_none()
+        );
+        let first = app
+            .publish_initial_native_context(&f.context, &id("session"), &binding, &prompt)
+            .unwrap();
+        let retry = app
+            .publish_initial_native_context(&f.context, &id("session"), &binding, &prompt)
+            .unwrap();
+        assert_eq!(retry.version_id, first.version_id);
+        let head = read(f.store.as_ref(), |snapshot| {
+            snapshot.sessions().provider_context_head(&id("session"))
+        })
+        .unwrap();
+        assert_eq!(head.kind, "ProviderInitialContext");
+        assert_eq!(head.revision, 1);
+        assert_eq!(head.observed_sequence, 0);
+        let (recovered, recovered_binding, cursor) = app
+            .recover_native_context_head(&f.context, &id("session"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.version_id, first.version_id);
+        assert_eq!(recovered_binding, binding);
+        assert_eq!(cursor, 0);
+        let mut different_prompt = prompt.clone();
+        different_prompt.messages.push(Message {
+            role: MessageRole::User,
+            content: vec![ContentBlock::Text {
+                text: "different request".into(),
+                cache: None,
+            }],
+        });
+        assert!(
+            app.publish_initial_native_context(
+                &f.context,
+                &id("session"),
+                &binding,
+                &different_prompt,
+            )
+            .is_err()
+        );
+        app.shutdown().await;
+        let restarted = devworks_engine::boot(tool_runtime_composition(&f))
+            .await
+            .unwrap();
+        assert_eq!(
+            restarted
+                .recover_native_context_head(&f.context, &id("session"))
+                .unwrap()
+                .unwrap()
+                .0
+                .version_id,
+            first.version_id,
+        );
+        assert!(f.http.lock().unwrap().requests.lock().unwrap().is_empty());
+        restarted.shutdown().await;
+    });
+}
+
+#[test]
 fn empty_completed_turn_keeps_a_cursor_and_replays_without_transport() {
     runtime().block_on(async {
         let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";

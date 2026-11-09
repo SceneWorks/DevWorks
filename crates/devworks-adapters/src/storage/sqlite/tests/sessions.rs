@@ -1637,8 +1637,8 @@ fn provider_context_head_is_durable_and_rejects_a_stale_revision() {
         session_id: id("session-a"),
         context_epoch: 0,
         observed_sequence: 0,
-        kind: "ProviderTurnContinuation".into(),
-        attempt_id: Some(id("attempt-a")),
+        kind: "ProviderInitialContext".into(),
+        attempt_id: None,
         binding: binding(),
         artifact: art(),
         revision: 1,
@@ -1650,6 +1650,8 @@ fn provider_context_head_is_durable_and_rejects_a_stale_revision() {
         Some(head.clone())
     );
     head.revision = 2;
+    head.kind = "ProviderTurnContinuation".into();
+    head.attempt_id = Some(id("attempt-a"));
     head.artifact = art_b();
     let mut stale = head.clone();
     stale.revision = 1;

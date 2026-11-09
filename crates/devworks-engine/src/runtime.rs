@@ -1860,6 +1860,25 @@ impl Runtime {
         )
     }
 
+    /// Fix the first provider prompt and binding for a fresh session before its first send.
+    /// A restart recovers this head verbatim; a matching retry does not create another version.
+    pub fn publish_initial_native_context(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        binding: &devworks_core::protocol::provider::NativeBinding,
+        context: &devworks_core::providers::context::ProviderContext,
+    ) -> Result<devworks_core::protocol::provider::ArtifactRef, StorageError> {
+        crate::tool_turn::publish_initial_context(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            session_id,
+            binding,
+            context,
+        )
+    }
+
     /// Build the next provider context from the immutable request context and settled native
     /// exchange. The caller publishes the returned material before a new request.
     pub fn tool_continuation_context(

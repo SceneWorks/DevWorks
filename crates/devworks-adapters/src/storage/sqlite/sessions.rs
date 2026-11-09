@@ -1580,9 +1580,20 @@ impl SessionRepository for Unit<'_> {
             || expected_revision.unwrap_or(0).checked_add(1) != Some(head.revision)
             || !matches!(
                 head.kind.as_str(),
-                "ProviderTurnContinuation" | "ProviderOperationUpdateContext"
+                "ProviderInitialContext"
+                    | "ProviderTurnContinuation"
+                    | "ProviderOperationUpdateContext"
             )
-            || (head.kind == "ProviderTurnContinuation" && head.attempt_id.is_none())
+            || match head.kind.as_str() {
+                "ProviderInitialContext" => {
+                    head.context_epoch != 0
+                        || head.observed_sequence != 0
+                        || head.attempt_id.is_some()
+                }
+                "ProviderTurnContinuation" => head.attempt_id.is_none(),
+                "ProviderOperationUpdateContext" => head.attempt_id.is_some(),
+                _ => true,
+            }
         {
             return Err(invalid("provider context head revision or position"));
         }
