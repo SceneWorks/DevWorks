@@ -1,13 +1,153 @@
 //! The first provider input of a materialized agent turn comes from its durable assignment
 //! context. The agent cannot replace its role text, project or work brief through tool arguments.
 use devworks_core::context::{InvocationContext, PrincipalKind};
+use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::storage::{
     ApplicationStore, AssignmentState, ReadOptions, StorageError, read_snapshot,
 };
-use devworks_core::protocol::records::AgentRecord;
+use devworks_core::ports::usage::{PriceQuery, PriceResolver};
+use devworks_core::protocol::provider::{ArtifactRef, EndpointProfile, NativeBinding};
+use devworks_core::protocol::provider::{
+    Attribution, EffortOption, InferenceInput, InferenceOptions, InferencePurpose,
+    InferenceRequest, ModelSelection,
+};
+use devworks_core::protocol::records::{
+    AgentRecord, EffortName, RouteChoice, RouteIntent, TierName,
+};
+use devworks_core::protocol::results::{DomainDecision, OperationResult};
+use devworks_core::protocol::{CommandReply, Counter, Id, Protocol, Revision};
 use devworks_core::providers::context::{
     ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext, TextBlock,
 };
+use serde_json::{Value, json};
+
+use devworks_core::services::prices::CatalogPriceResolver;
+use devworks_core::services::router::accounting::{AttemptSelection, PinFence, ReportCategory};
+use devworks_core::services::router::{Purpose, RequestAdmission};
+use devworks_core::services::usage::accounting::AttemptRequest;
+use devworks_core::services::usage::auxiliary;
+use devworks_core::services::usage::meter::InputSemantics;
+use devworks_core::services::usage::pricing::PricingContext;
+
+use crate::Runtime;
+use crate::providers::driver::NativeInvocation;
+
+const DEFAULT_OUTPUT_HEADROOM: i64 = 8_192;
+
+fn output_headroom(context_tokens: Option<i64>) -> i64 {
+    context_tokens
+        .map(|window| (window / 4).max(1))
+        .unwrap_or(DEFAULT_OUTPUT_HEADROOM)
+        .min(DEFAULT_OUTPUT_HEADROOM)
+}
+
+/// Route one immutable context head through the ordinary gateway. The request key is stable
+/// while the head and observed pin revision are unchanged. A new head or pin permits fresh
+/// availability assessment.
+pub fn route_context_head(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    context_epoch: i64,
+    head_digest: Option<&str>,
+    tools_required: bool,
+) -> Result<RouteChoice, StorageError> {
+    let (intent, effort, mut required, pin_revision) =
+        read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+            let session = read
+                .sessions()
+                .session(session_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if ctx.principal_kind() != PrincipalKind::Agent
+                || ctx.session_id() != Some(session_id)
+                || session.agent_id != *ctx.principal()
+                || session.closed()
+                || session.context_epoch != context_epoch
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            match read.router().session_pin(session_id)? {
+                Some(pin) => Ok((
+                    serde_json::from_str::<RouteIntent>(&pin.intent)
+                        .map_err(|_| StorageError::InvalidRecord("stored route intent".into()))?,
+                    serde_json::from_value::<EffortName>(Value::String(pin.requested_effort))
+                        .map_err(|_| StorageError::InvalidRecord("stored route effort".into()))?,
+                    pin.required_capabilities,
+                    pin.revision,
+                )),
+                None => Ok((
+                    RouteIntent::Tier {
+                        tier: TierName::High,
+                    },
+                    EffortName::Default,
+                    Vec::new(),
+                    0,
+                )),
+            }
+        })?;
+    if tools_required && !required.iter().any(|capability| capability == "tools") {
+        required.push("tools".into());
+        required.sort();
+    }
+    let key = sha256_hex(
+        format!(
+            "agent-route:{}:{context_epoch}:{pin_revision}:{}:{}",
+            session_id.as_str(),
+            head_digest.unwrap_or("initial"),
+            required.join(",")
+        )
+        .as_bytes(),
+    );
+    let frame = serde_json::to_vec(&json!({
+        "mode": "Command",
+        "protocol": devworks_core::protocol::CONTRACT,
+        "requestKey": format!("agent-route-{key}"),
+        "body": {
+            "kind": "router.route",
+            "sessionId": session_id,
+            "expectedContextEpoch": context_epoch.to_string(),
+            "intent": intent,
+            "effort": effort,
+            "requiredCapabilities": required,
+        }
+    }))
+    .map_err(|error| StorageError::InvalidRecord(format!("route frame: {error}")))?;
+    let reply = runtime
+        .command(ctx, "router.route", &frame)
+        .map_err(|error| StorageError::InvalidRecord(format!("agent route gateway: {error}")))?;
+    let choice = match reply {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Applied {
+                result: OperationResult::RouterRoute { value },
+            }
+            | DomainDecision::NoChange {
+                result: OperationResult::RouterRoute { value },
+            } => Ok(value),
+            DomainDecision::Refused { fault } => Err(StorageError::InvalidRecord(format!(
+                "agent route refused: {fault:?}"
+            ))),
+            _ => Err(StorageError::InvalidRecord("agent route reply".into())),
+        },
+        CommandReply::Rejected { .. } => Err(StorageError::ScopeDenied),
+        CommandReply::CommandStatusUnknown { .. } | CommandReply::ReceiptPurged { .. } => Err(
+            StorageError::InvalidRecord("agent route status unconfirmed".into()),
+        ),
+    }?;
+    read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+        let pin = read
+            .router()
+            .session_pin(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if pin.pin_id != choice.pin_id
+            || pin.revision != choice.pin_revision.get()
+            || pin.model_id != choice.model_id
+            || pin.connection_id != choice.connection_id
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        Ok(choice)
+    })
+}
 
 pub fn initial_context(
     store: &dyn ApplicationStore,
@@ -71,4 +211,328 @@ pub fn initial_context(
         .validate()
         .map_err(|e| StorageError::InvalidRecord(format!("agent provider context: {e:?}")))?;
     Ok(context)
+}
+
+/// Publish a materialized assignment's first bound prompt after the current route resolves.
+/// The immutable role brief, repository instructions and native account binding share the
+/// first durable context head.
+pub fn publish_first_context(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    agent: &AgentRecord,
+    route: &RouteChoice,
+) -> Result<(ArtifactRef, NativeBinding), StorageError> {
+    let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    if runtime
+        .recover_native_context_head(ctx, session_id)?
+        .is_some()
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let (binding, headroom) =
+        read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+            let pin = read
+                .router()
+                .session_pin(session_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let connection = read
+                .router()
+                .connection(&route.connection_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let session = read
+                .sessions()
+                .session(session_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let model = read
+                .router()
+                .route_model(&route.model_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if pin.pin_id != route.pin_id
+                || pin.revision != route.pin_revision.get()
+                || connection.id != pin.connection_id
+                || session.context_epoch != 0
+                || connection.account_revision < 1
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            let endpoint_profile =
+                serde_json::from_value::<EndpointProfile>(Value::String(connection.profile))
+                    .map_err(|_| StorageError::InvalidRecord("route endpoint profile".into()))?;
+            Ok((
+                NativeBinding {
+                    connection_id: pin.connection_id,
+                    account_revision: Revision::new(connection.account_revision)
+                        .map_err(|_| StorageError::ScopeDenied)?,
+                    endpoint_profile,
+                    model_id: pin.model_id,
+                    context_epoch: Counter::new(0).expect("zero epoch"),
+                },
+                output_headroom(model.context_tokens),
+            ))
+        })?;
+    let mut prompt = initial_context(runtime.store().as_ref(), ctx, agent)?;
+    prompt.parameters.max_output_tokens = Some(headroom as u32);
+    let bound = runtime.bind_provider_instructions(ctx, prompt, &[])?;
+    let head = runtime.publish_initial_native_context(ctx, session_id, &binding, &bound)?;
+    Ok((head, binding))
+}
+
+/// Build an attributed native request from the exact published head and routed pin. The driver
+/// rechecks the pin, current owner, price and context before sending anything to a provider.
+pub fn plan_generation(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    binding: &NativeBinding,
+    head: &ArtifactRef,
+) -> Result<NativeInvocation, StorageError> {
+    let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let root_id = ctx.root_id().ok_or(StorageError::ScopeDenied)?;
+    let project_id = ctx.project_id().ok_or(StorageError::ScopeDenied)?;
+    if binding.model_id != route.model_id || binding.connection_id != route.connection_id {
+        return Err(StorageError::ScopeDenied);
+    }
+    let providers = runtime.providers().ok_or(StorageError::ScopeDenied)?;
+    let tools = providers.schemas().selected_builtins(ctx)?;
+    if tools.len() > 256 {
+        return Err(StorageError::InvalidRecord(
+            "selected tool set exceeds provider alias limit".into(),
+        ));
+    }
+    let tool_bytes = serde_json::to_vec(&tools)
+        .map_err(|error| StorageError::InvalidRecord(format!("tool schemas: {error}")))?
+        .len();
+    let input_headroom = head
+        .byte_length
+        .get()
+        .checked_add(i64::try_from(tool_bytes).map_err(|_| StorageError::ScopeDenied)?)
+        .ok_or(StorageError::ScopeDenied)?;
+    let request_id = Id::new(format!(
+        "agent-request-{}",
+        sha256_hex(
+            format!(
+                "{}:{}:{}:{}",
+                session_id.as_str(),
+                head.sha256.as_str(),
+                route.pin_id.as_str(),
+                route.pin_revision.get()
+            )
+            .as_bytes()
+        )
+    ))
+    .map_err(|_| StorageError::ScopeDenied)?;
+    let info = runtime.store().info();
+    let (
+        query,
+        owner,
+        quote,
+        price_generation,
+        override_revision,
+        control,
+        work,
+        headroom,
+        required,
+    ) = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+        let pin = read
+            .router()
+            .session_pin(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let connection = read
+            .router()
+            .connection(&route.connection_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let model = read
+            .router()
+            .route_model(&route.model_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let session = read
+            .sessions()
+            .session(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let control = read
+            .runs()
+            .root_control(root_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let work = read
+            .work()
+            .work(&root_id.0)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if pin.pin_id != route.pin_id
+            || pin.revision != route.pin_revision.get()
+            || pin.model_id != binding.model_id
+            || pin.connection_id != binding.connection_id
+            || connection.account_revision != binding.account_revision.get()
+            || serde_json::from_value::<EndpointProfile>(Value::String(connection.profile.clone()))
+                .ok()
+                .as_ref()
+                != Some(&binding.endpoint_profile)
+            || session.context_epoch != binding.context_epoch.get()
+            || (!tools.is_empty()
+                && !pin
+                    .required_capabilities
+                    .iter()
+                    .any(|capability| capability == "tools"))
+            || work.project_id != *project_id
+            || control.generation < 1
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let query = PriceQuery {
+            catalog_model_id: model.id,
+            provider_model_id: pin.upstream_model_id,
+            connection_id: connection.id,
+            endpoint_profile: connection.profile.clone(),
+            access_mode: if matches!(
+                connection.profile.as_str(),
+                "CodexSubscriptionResponses" | "ClaudeSubscriptionMessages"
+            ) {
+                "Subscription"
+            } else {
+                "Api"
+            }
+            .into(),
+            service_tier: None,
+            input_tokens: None,
+            cache_write_ttl_ms: None,
+            processing_region: None,
+            required_modalities: vec!["Text".into()],
+        };
+        let owner =
+            auxiliary::ownership(read, &info, ctx).map_err(|_| StorageError::ScopeDenied)?;
+        let quote = CatalogPriceResolver.quote(read, &query)?;
+        Ok((
+            query,
+            owner,
+            quote,
+            read.usage().price_revision()?,
+            read.usage().price_override_revision(&route.model_id)?,
+            control,
+            work,
+            output_headroom(model.context_tokens),
+            pin.required_capabilities,
+        ))
+    })?;
+    let revision = |value: i64| Revision::new(value).map_err(|_| StorageError::ScopeDenied);
+    let effort_name =
+        serde_json::to_value(&route.requested_effort).map_err(|_| StorageError::ScopeDenied)?;
+    let effort = effort_name.as_str().ok_or(StorageError::ScopeDenied)?;
+    let inference = InferenceRequest {
+        options: InferenceOptions {
+            selection: ModelSelection::Model {
+                model_id: route.model_id.clone(),
+            },
+            effort: if effort == "Default" {
+                None
+            } else {
+                Some(EffortOption {
+                    value: Id::new(effort).map_err(|_| StorageError::ScopeDenied)?,
+                    required: true,
+                })
+            },
+            output_schema: None,
+            deadline_ms: 120_000,
+        },
+        authority_revision: ctx.policy_revision().clone(),
+        control_generation: revision(control.generation)?,
+        instruction_revision: revision(control.instruction_revision.max(1))?,
+        cancellation_revision: revision(
+            control
+                .stop_epoch
+                .checked_add(1)
+                .ok_or(StorageError::ScopeDenied)?,
+        )?,
+        protocol: Protocol::Draft1,
+        request_id: request_id.clone(),
+        purpose: if owner
+            .dispatch
+            .as_ref()
+            .is_some_and(|dispatch| dispatch.implementation)
+        {
+            InferencePurpose::Implementation
+        } else {
+            InferencePurpose::Planning
+        },
+        attribution: if work.is_feature() {
+            Attribution::Feature {
+                project_id: project_id.clone(),
+                root_id: root_id.clone(),
+                assignment_id: ctx.assignment_id().cloned(),
+                job_run_id: ctx.job_run_id().cloned(),
+            }
+        } else {
+            Attribution::Issue {
+                project_id: project_id.clone(),
+                root_id: root_id.clone(),
+                assignment_id: ctx.assignment_id().cloned(),
+                job_run_id: ctx.job_run_id().cloned(),
+            }
+        },
+        input: InferenceInput::Generation {
+            session_id: session_id.clone(),
+            context: head.clone(),
+            context_epoch: binding.context_epoch.clone(),
+            tools,
+            response_headroom_tokens: revision(headroom)?,
+            requires_images: false,
+            requires_parallel_tools: false,
+        },
+    };
+    let canonical = devworks_core::jcs::canonicalize(
+        &serde_json::to_value(&inference)
+            .map_err(|error| StorageError::InvalidRecord(format!("agent inference: {error}")))?,
+    )
+    .map_err(|error| StorageError::InvalidRecord(format!("agent inference JSON: {error}")))?;
+    let logical = RequestAdmission {
+        request_id: request_id.clone(),
+        purpose: Purpose::Conversation,
+        session_id: Some(session_id.clone()),
+        project_id: Some(project_id.clone()),
+        root_id: Some(root_id.clone()),
+        model_id: route.model_id.clone(),
+        connection_id: route.connection_id.clone(),
+        pin_id: Some(route.pin_id.clone()),
+        args_digest: sha256_hex(canonical.as_bytes()),
+    };
+    let attempt = AttemptRequest {
+        admission_key: request_id.clone(),
+        request_id,
+        actor_id: ctx.principal().clone(),
+        work_id: owner.work_id,
+        job_run_id: owner.job_run_id,
+        role: owner.role,
+        query,
+        quote,
+        price_generation,
+        override_revision,
+        pricing: PricingContext {
+            input_semantics: InputSemantics::Unknown,
+            cache_read_possible: false,
+            cache_write_possible: false,
+            cache_write_ttl_ms: None,
+        },
+        selection: AttemptSelection::Conversation {
+            intent: route.intent.clone(),
+            effort: route.requested_effort.clone(),
+            required_capabilities: required,
+            pin: Some(PinFence {
+                id: route.pin_id.clone(),
+                revision: route.pin_revision.get(),
+            }),
+        },
+        input_tokens: input_headroom,
+        output_headroom: headroom,
+        unit_headroom: vec![],
+        expected_context_epoch: owner.expected_context_epoch,
+        dispatch: owner.dispatch,
+        cache_diagnostics: vec![],
+    };
+    Ok(NativeInvocation {
+        source_fences: Vec::new(),
+        instruction_targets: None,
+        context: ctx.clone(),
+        logical,
+        category: ReportCategory::Assistant,
+        attempt,
+        request: inference,
+    })
 }

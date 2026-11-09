@@ -1099,6 +1099,193 @@ fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
 }
 
 #[test]
+fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
+    struct AgentEntropy;
+    impl devworks_core::ports::http::Entropy for AgentEntropy {
+        fn fill(&self, bytes: &mut [u8]) {
+            bytes.fill(7);
+        }
+    }
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let rt = runtime();
+    rt.block_on(async {
+        let mut composed = composition(&fx, None, Arc::new(FakePower::default()));
+        let connections = Arc::new(
+            devworks_core::services::router::connections::ConnectionService::new(
+                fx.h.ids.clone(),
+                fx.h.clock(),
+                fx.store.clone(),
+                Arc::new(devworks_core::ports::http::NoNetwork),
+                Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+                Arc::new(AgentEntropy),
+            ),
+        );
+        composed.use_cases = UseCases::new()
+            .with_connections(connections.clone())
+            .with_router(Arc::new(
+                devworks_core::services::router::InferenceRouter::new(
+                    fx.h.ids.clone(),
+                    fx.h.clock(),
+                    connections,
+                ),
+            ));
+        composed.config.providers = Some(
+            devworks_engine::providers::driver::ProviderComposition::new(Arc::new(
+                devworks_adapters::provider_stream::NativeStreamingHttp::direct().unwrap(),
+            )),
+        );
+        let app = boot(composed).await.unwrap();
+        applied(&fx.start(&fx.user, "root-i", 1, 1));
+        let activation = fx.launch("coordinator-first-prompt");
+        let host = principal(&*fx.store, "first-prompt-host", PrincipalKind::Host);
+        let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+        let execution_id = activation.id.clone();
+        let epoch = activation.owner_epoch;
+        let primary = fx.tx(move |_, tx| {
+            agents
+                .materialize_primary(tx, &host, &execution_id, epoch)
+                .map_err(|error| StorageError::InvalidRecord(format!("primary: {error:?}")))
+        });
+        let assignment = read(&*fx.store, |snapshot| {
+            snapshot.runs().assignment(&primary.assignment_id)
+        })
+        .unwrap();
+        let session = read(&*fx.store, |snapshot| {
+            snapshot.sessions().session(&assignment.session_id)
+        })
+        .unwrap();
+        let context = devworks_core::context::HostIngress::new(&*fx.store)
+            .context(
+                session.agent_id,
+                PrincipalKind::Agent,
+                id("first-prompt-invocation"),
+                id("first-prompt-ingress"),
+                devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            )
+            .with_session(session.id.clone())
+            .with_lineage(
+                session.project_id.clone(),
+                session.root_id.clone(),
+                Some(primary.assignment_id.clone()),
+            )
+            .with_activation(activation.id.clone(), epoch);
+        let pin = StoredPin {
+            session_id: session.id.clone(),
+            pin_id: id("first-prompt-pin"),
+            revision: 1,
+            model_id: id("first-prompt-model"),
+            connection_id: id("first-prompt-connection"),
+            upstream_model_id: Some("fixture-model".into()),
+            endpoint_profile: Some("CompatibleChat".into()),
+            identity_origin: "Resolved".into(),
+            intent: serde_json::to_string(&devworks_core::protocol::records::RouteIntent::Model {
+                model_id: id("first-prompt-model"),
+            })
+            .unwrap(),
+            requested_effort: "Default".into(),
+            effective_effort: "Default".into(),
+            required_capabilities: vec!["tools".into()],
+            replaced_pin_id: None,
+            reason: "Initial".into(),
+            updated_at_ms: 0,
+        };
+        let route = devworks_core::services::router::choice_of(&pin).unwrap();
+        fx.tx(move |_, tx| {
+            tx.router().put_connection(
+                &StoredConnection {
+                    id: id("first-prompt-connection"),
+                    name: "Fixture".into(),
+                    profile: "CompatibleChat".into(),
+                    endpoint: "http://localhost:11434/v1".into(),
+                    enabled: true,
+                    local_free: true,
+                    open_router: None,
+                    credential_ref: None,
+                    credential_revision: 0,
+                    credential_epoch: None,
+                    lifecycle: "Connected".into(),
+                    state_reason: None,
+                    account_revision: 1,
+                    refresh_operation_id: None,
+                    account_digest: None,
+                    access_expires_at_ms: None,
+                    risk: None,
+                    discovered: None,
+                    discovered_at_ms: None,
+                    healthy: Some(true),
+                    checked_at_ms: Some(0),
+                    revision: 1,
+                    created_at_ms: 0,
+                    updated_at_ms: 0,
+                },
+                None,
+            )?;
+            tx.router().put_route_model(
+                &StoredRouteModel {
+                    id: id("first-prompt-model"),
+                    display_name: "Fixture model".into(),
+                    endpoint_profile: "CompatibleChat".into(),
+                    upstream_model_id: "fixture-model".into(),
+                    enabled: true,
+                    efforts: vec![],
+                    image_input: false,
+                    tools: true,
+                    context_tokens: Some(16_000),
+                    connection_id: Some(id("first-prompt-connection")),
+                    position: 1,
+                    revision: 1,
+                    updated_at_ms: 0,
+                },
+                None,
+            )?;
+            tx.router().put_session_pin(&pin, None)?;
+            Ok(())
+        });
+        let (head, binding) =
+            devworks_engine::agent_turns::publish_first_context(&app, &context, &primary, &route)
+                .unwrap();
+        let (bytes, _) = app
+            .artifacts()
+            .read_exact(app.store().as_ref(), &context, &head, 8 * 1024 * 1024)
+            .unwrap();
+        let prompt: devworks_core::providers::context::ProviderContext =
+            serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(prompt.parameters.max_output_tokens, Some(4_000));
+        let recovered = app
+            .recover_native_context_head(&context, &session.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.0.sha256, head.sha256);
+        assert_eq!(recovered.1, binding);
+        let assignment_id = primary.assignment_id.clone();
+        let turn_session = session.id.clone();
+        let turn_execution = activation.id.clone();
+        fx.tx(move |service, tx| {
+            service
+                .begin_turn(tx, &turn_session, &assignment_id, &turn_execution, epoch)?
+                .map_err(|fence| StorageError::InvalidRecord(format!("turn: {fence:?}")))
+        });
+        let planned =
+            devworks_engine::agent_turns::plan_generation(&app, &context, &route, &binding, &head)
+                .unwrap();
+        assert_eq!(planned.request.request_id, planned.logical.request_id);
+        assert_eq!(planned.attempt.output_headroom, 4_000);
+        assert_eq!(planned.attempt.expected_context_epoch, Some(0));
+        assert!(matches!(
+            planned.request.input,
+            devworks_core::protocol::provider::InferenceInput::Generation { .. }
+        ));
+        assert!(
+            devworks_engine::agent_turns::publish_first_context(&app, &context, &primary, &route)
+                .is_err()
+        );
+        app.shutdown().await;
+    });
+}
+
+#[test]
 fn agent_launcher_runs_a_ready_child_under_the_same_activation() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
