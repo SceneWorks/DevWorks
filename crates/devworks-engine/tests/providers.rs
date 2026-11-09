@@ -866,6 +866,18 @@ fn compaction_result_is_artifact_only_and_does_not_enter_session_transcript() {
         invocation.logical.purpose = Purpose::Conversation;
         assert!(f.driver.produce_cancellable(invocation, None).await.is_err());
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let mut wrong_lane = f.generation(vec![]);
+        wrong_lane.request_id = id("compaction-through-turn");
+        wrong_lane.purpose = InferencePurpose::Compaction;
+        let invocation = f.native_invocation(wrong_lane, PricingContext {
+            input_semantics: InputSemantics::Unknown, cache_read_possible: false,
+            cache_write_possible: false, cache_write_ttl_ms: None,
+        }, vec!["Text".into()], None, None, false);
+        assert!(matches!(app.produce_and_dispatch_native_turn(invocation, None).await,
+            Err(StorageError::ScopeDenied)));
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        assert!(f.transcript().is_empty());
     });
 }
 #[test]

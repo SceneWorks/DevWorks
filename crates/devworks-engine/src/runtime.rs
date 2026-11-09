@@ -1540,6 +1540,14 @@ impl Runtime {
         invocation: crate::providers::driver::NativeInvocation,
         cancellation: Option<devworks_core::ports::storage::Cancellation>,
     ) -> Result<NativeTurnProgress, StorageError> {
+        if matches!(
+            invocation.request.purpose,
+            devworks_core::protocol::provider::InferencePurpose::Compaction
+        ) {
+            // Compaction output is an artifact, not a conversation turn with a transcript
+            // start position or a publishable assistant continuation.
+            return Err(StorageError::ScopeDenied);
+        }
         let ctx = invocation.context.clone();
         let (session_id, previous) = match &invocation.request.input {
             devworks_core::protocol::provider::InferenceInput::Generation {
