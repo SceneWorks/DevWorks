@@ -576,6 +576,40 @@ impl NativeProviders {
                 },
             );
         }
+        if let InferenceInput::Generation { tools, .. } = &request.input {
+            if attempt.cache_diagnostics.len() < 128 {
+                attempt.cache_diagnostics.push(
+                    devworks_core::protocol::records::UsageCacheDiagnostic {
+                        kind: devworks_core::protocol::support::BoundedText(
+                            "InstructionRevision".into(),
+                        ),
+                        inferred: false,
+                        detail: None,
+                        source_revision: Some(request.instruction_revision.clone()),
+                    },
+                );
+            }
+            // This is the requested alias/schema-reference set, not a claim that the provider
+            // reused its materialized prefix or reported a cache hit.
+            let aliases = devworks_core::jcs::canonicalize(
+                &serde_json::to_value(tools).map_err(|_| invalid("tool alias set"))?,
+            )
+            .map_err(|_| invalid("canonical tool alias set"))?;
+            if attempt.cache_diagnostics.len() < 128 {
+                attempt.cache_diagnostics.push(
+                    devworks_core::protocol::records::UsageCacheDiagnostic {
+                        kind: devworks_core::protocol::support::BoundedText(
+                            "RequestedToolAliasDigest".into(),
+                        ),
+                        inferred: false,
+                        detail: Some(devworks_core::protocol::support::BoundedText(sha256_hex(
+                            aliases.as_bytes(),
+                        ))),
+                        source_revision: None,
+                    },
+                );
+            }
+        }
         use devworks_core::services::usage::meter::InputSemantics;
         attempt.pricing.input_semantics = self
             .composition

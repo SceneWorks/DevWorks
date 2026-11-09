@@ -819,10 +819,17 @@ fn native_generation_attributes_observed_context_epoch_change_to_usage() {
             let attempt = s.usage().inference_attempt(&balance.attempt_id)?.unwrap();
             Ok(devworks_core::services::usage::accounting::snapshot(&attempt)?.cache_diagnostics)
         });
-        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics.len(), 3);
         assert_eq!(diagnostics[0].kind.0, "ContextEpochChanged");
         assert_eq!(diagnostics[0].detail.as_ref().unwrap().0, "InstructionAdoption");
         assert!(!diagnostics[0].inferred);
+        assert_eq!(diagnostics[1].kind.0, "InstructionRevision");
+        assert_eq!(diagnostics[1].source_revision.as_ref().unwrap().get(), 1);
+        assert!(!diagnostics[1].inferred);
+        assert_eq!(diagnostics[2].kind.0, "RequestedToolAliasDigest");
+        assert_eq!(diagnostics[2].detail.as_ref().unwrap().0,
+            devworks_core::fingerprint::sha256_hex(b"[]"));
+        assert!(!diagnostics[2].inferred);
     });
 }
 #[test]
@@ -1048,7 +1055,17 @@ fn native_replay_keeps_tool_definitions_stable_across_discovery_order() {
         if let InferenceInput::Generation { tools, .. } = &mut reversed.input {
             tools.reverse();
         }
-        assert!(matches!(f.produce(first).await.unwrap().accounting, DriveOutcome::Settled(_)));
+        let first_outcome = f.produce(first).await.unwrap();
+        let DriveOutcome::Settled(balance) = first_outcome.accounting else {
+            panic!("first request did not settle");
+        };
+        let diagnostics = read(f.store.as_ref(), |s| {
+            let attempt = s.usage().inference_attempt(&balance.attempt_id)?.unwrap();
+            Ok(devworks_core::services::usage::accounting::snapshot(&attempt)?.cache_diagnostics)
+        });
+        assert_eq!(diagnostics[0].kind.0, "InstructionRevision");
+        assert_eq!(diagnostics[1].kind.0, "RequestedToolAliasDigest");
+        assert_eq!(diagnostics[1].detail.as_ref().unwrap().0.len(), 64);
         assert!(matches!(f.produce(reversed).await.unwrap().accounting,
             DriveOutcome::AlreadyDispatched));
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
