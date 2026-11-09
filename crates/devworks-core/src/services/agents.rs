@@ -15,10 +15,10 @@ use crate::ports::{
 };
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
-    AgentMessage, AgentRecord, CheckpointRecord, MessageClass, MessageDirection, RetainedActor,
-    RetainedDeliveryState, RetainedEventPage, RetainedHistoryPage, RetainedItemVersion,
-    RetainedMessage, RetainedMessageEvent, RetainedMessageKind, RetainedMessageLine,
-    RetainedMessageResolution, RetainedMessageState, RetainedPostResult,
+    AgentMessage, AgentRecord, CheckpointRecord, MessageClass, MessageDirection, RetainedAckResult,
+    RetainedActor, RetainedDeliveryState, RetainedEventPage, RetainedHistoryPage,
+    RetainedItemVersion, RetainedMessage, RetainedMessageEvent, RetainedMessageKind,
+    RetainedMessageLine, RetainedMessageResolution, RetainedMessageState, RetainedPostResult,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
@@ -1001,6 +1001,35 @@ fn retained_message(
     })
 }
 
+fn retained_summary(body: &str) -> String {
+    let line = body.split('\n').next().unwrap_or_default().trim();
+    if line.chars().count() <= 160 {
+        line.to_owned()
+    } else {
+        format!("{}…", line.chars().take(159).collect::<String>())
+    }
+}
+
+fn retained_line(
+    message: RetainedMessage,
+    delivery: Option<RetainedDeliveryState>,
+    handed_over: bool,
+) -> RetainedMessageLine {
+    RetainedMessageLine {
+        id: message.id,
+        kind: message.kind,
+        from: message.from.name,
+        summary: BoundedText(retained_summary(&message.body.0)),
+        created_at_ms: message.created_at_ms,
+        from_session_id: message.from_session_id,
+        item_id: message.item_id,
+        state: message.state,
+        blocking: message.blocking.then_some(true),
+        delivery,
+        handed_over: handed_over.then_some(true),
+    }
+}
+
 fn retained_history(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
@@ -1113,18 +1142,12 @@ fn retained_events(
                 )),
             })
             .transpose()?;
-        let line = message.map(|m| RetainedMessageLine {
-            id: m.id,
-            kind: m.kind,
-            from: m.from.name,
-            summary: BoundedText(m.body.0.chars().take(160).collect()),
-            created_at_ms: m.created_at_ms,
-            from_session_id: m.from_session_id,
-            item_id: m.item_id,
-            state: m.state,
-            blocking: Some(m.blocking),
-            delivery: delivery_state,
-            handed_over: delivery.as_ref().map(|row| row.handed_over),
+        let line = message.map(|m| {
+            retained_line(
+                m,
+                delivery_state,
+                delivery.as_ref().is_some_and(|row| row.handed_over),
+            )
         });
         let kind = if event.kind == "HandedOver" {
             "handed_over".to_owned()
@@ -1239,6 +1262,102 @@ fn post_retained(
         item_versions: (!posted.item_versions.is_empty()).then(|| {
             BoundedList(
                 posted
+                    .item_versions
+                    .into_iter()
+                    .map(|item| RetainedItemVersion {
+                        key: item.key,
+                        version: Revision::new(item.version).expect("positive work version"),
+                    })
+                    .collect(),
+            )
+        }),
+    })
+}
+
+fn ack_retained(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    input: &ops::AckInput,
+) -> Result<RetainedAckResult, StorageError> {
+    if input.session_id.is_some() && input.session_id.as_ref() != ctx.session_id() {
+        return Err(denied());
+    }
+    if input.messages.is_some() == input.up_to.is_some()
+        || (input.resolution.is_some() && input.messages.is_none())
+    {
+        return Err(StorageError::InvalidRecord(
+            "ack requires message ids or an inbox cursor; resolution requires ids".into(),
+        ));
+    }
+    let (project, recipient) = if let Some(session_id) = ctx.session_id() {
+        let session = tx.sessions().session(session_id)?.ok_or_else(denied)?;
+        let project = session.project_id.ok_or_else(denied)?;
+        if input
+            .project_id
+            .as_ref()
+            .is_some_and(|named| named != &project)
+        {
+            return Err(denied());
+        }
+        (project, retained::Recipient::Session(session_id.clone()))
+    } else {
+        (
+            input
+                .project_id
+                .clone()
+                .ok_or_else(|| StorageError::InvalidRecord("human ack needs project".into()))?,
+            retained::Recipient::Human,
+        )
+    };
+    let selection = match (&input.messages, &input.up_to) {
+        (Some(ids), None) => retained::AckSelection::Messages(ids.0.clone()),
+        (None, Some(cursor)) => {
+            retained::AckSelection::Through(retained::parse_inbox_cursor(&cursor.0)?)
+        }
+        _ => unreachable!("validated one ack selection"),
+    };
+    let resolution = input.resolution.as_ref().map(|value| match value {
+        RetainedMessageResolution::Answered => retained::Resolution::Answered,
+        RetainedMessageResolution::Declined => retained::Resolution::Declined,
+    });
+    let acked = retained::acknowledge(tx, ctx, &project, &recipient, selection, resolution)
+        .map_err(|error| match error {
+            StorageError::CursorExpired => {
+                StorageError::InvalidRecord("up_to is ahead of inbox head".into())
+            }
+            other => other,
+        })?;
+    let count = acked.changed.len();
+    let mut lines = Vec::new();
+    for (delivery, row) in acked.changed.into_iter().take(50) {
+        let message = retained_message(tx.actors(), row)?;
+        let delivery_state = match delivery.state.as_str() {
+            "Pending" => RetainedDeliveryState::Pending,
+            "Delivered" => RetainedDeliveryState::Delivered,
+            "Read" => RetainedDeliveryState::Read,
+            "Answered" => RetainedDeliveryState::Answered,
+            "Declined" => RetainedDeliveryState::Declined,
+            _ => {
+                return Err(StorageError::InvalidRecord(
+                    "unknown ack delivery state".into(),
+                ));
+            }
+        };
+        lines.push(retained_line(
+            message,
+            Some(delivery_state),
+            delivery.handed_over,
+        ));
+    }
+    Ok(RetainedAckResult {
+        acked: Counter::new(
+            i64::try_from(count).map_err(|_| StorageError::InvalidRecord("ack count".into()))?,
+        )
+        .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+        messages: BoundedList(lines),
+        item_versions: (!acked.item_versions.is_empty()).then(|| {
+            BoundedList(
+                acked
                     .item_versions
                     .into_iter()
                     .map(|item| RetainedItemVersion {
@@ -1668,6 +1787,17 @@ impl CommandHandler for AgentService {
                         value: value.clone(),
                     };
                     if value.created {
+                        DomainDecision::Applied { result }
+                    } else {
+                        DomainDecision::NoChange { result }
+                    }
+                })
+            }
+            OperationInput::Agents(ops::Input::Ack(input)) => {
+                ack_retained(tx, ctx, input).map(|value| {
+                    let changed = value.acked.get() > 0;
+                    let result = OperationResult::AgentsAck { value };
+                    if changed {
                         DomainDecision::Applied { result }
                     } else {
                         DomainDecision::NoChange { result }

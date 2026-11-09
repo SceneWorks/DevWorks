@@ -135,6 +135,35 @@ impl Revisioned for PostInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `agents.ack` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AckInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messages: Option<Items<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub up_to: Option<Cursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<RetainedMessageResolution>,
+}
+impl Check for AckInput {
+    fn check(&self) -> Result<(), String> {
+        self.session_id.check()?;
+        self.project_id.check()?;
+        self.messages.check()?;
+        self.up_to.check()?;
+        self.resolution.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for AckInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// `agents.history` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -272,6 +301,8 @@ pub enum Input {
     Messages(MessagesInput),
     /// `agents.post` (Command).
     Post(PostInput),
+    /// `agents.ack` (Command).
+    Ack(AckInput),
     /// `agents.history` (Query).
     History(HistoryInput),
     /// `agents.events` (Query).
@@ -290,6 +321,7 @@ impl Input {
             Self::Delegate(_) => "agents.delegate",
             Self::Messages(_) => "agents.messages",
             Self::Post(_) => "agents.post",
+            Self::Ack(_) => "agents.ack",
             Self::History(_) => "agents.history",
             Self::Events(_) => "agents.events",
             Self::Inbox(_) => "agents.inbox",
@@ -303,6 +335,7 @@ impl Input {
             Self::Delegate(_) => Mode::Command,
             Self::Messages(_) => Mode::Command,
             Self::Post(_) => Mode::Command,
+            Self::Ack(_) => Mode::Command,
             Self::History(_) => Mode::Query,
             Self::Events(_) => Mode::Query,
             Self::Inbox(_) => Mode::Query,

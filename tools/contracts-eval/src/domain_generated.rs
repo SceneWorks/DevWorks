@@ -1475,6 +1475,27 @@ impl Check for RetainedPostResult {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedAckResult {
+    pub acked: Counter,
+    pub messages: Rows<RetainedMessageLine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_versions: Option<Items<RetainedItemVersion>>,
+}
+impl Check for RetainedAckResult {
+    fn check(&self) -> Result<(), String> {
+        self.acked.check()?;
+        self.messages.check()?;
+        self.item_versions.check()?;
+        super::domain_rules::record(
+            "RetainedAckResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RetainedItemVersion {
     pub key: Id,
     pub version: Revision,
@@ -21085,6 +21106,20 @@ pub enum DomainCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         idempotency_key: Option<Text>,
     },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.ack")]
+    AgentsAck {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<ProjectId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        messages: Option<Items<Id>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        up_to: Option<Cursor>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<RetainedMessageResolution>,
+    },
     #[serde(rename = "agents.acknowledge")]
     AgentsAcknowledge {
         assignment_id: AssignmentId,
@@ -22438,6 +22473,7 @@ impl DomainCommand {
             Self::AgentsDelegate { .. } => "agents.delegate",
             Self::AgentsMessages { .. } => "agents.messages",
             Self::AgentsPost { .. } => "agents.post",
+            Self::AgentsAck { .. } => "agents.ack",
             Self::AgentsAcknowledge { .. } => "agents.acknowledge",
             Self::AgentsCheckpoint { .. } => "agents.checkpoint",
             Self::SessionsStart { .. } => "sessions.start",
@@ -23007,6 +23043,19 @@ impl Check for DomainCommand {
                 in_reply_to_id.check()?;
                 resolves.check()?;
                 idempotency_key.check()?;
+            }
+            Self::AgentsAck {
+                session_id,
+                project_id,
+                messages,
+                up_to,
+                resolution,
+            } => {
+                session_id.check()?;
+                project_id.check()?;
+                messages.check()?;
+                up_to.check()?;
+                resolution.check()?;
             }
             Self::AgentsAcknowledge {
                 assignment_id,
@@ -24841,6 +24890,9 @@ impl Revisioned for DomainCommand {
             Self::AgentsPost { .. } if revision < 7 => {
                 Err("operation predates its introduction".into())
             }
+            Self::AgentsAck { .. } if revision < 7 => {
+                Err("operation predates its introduction".into())
+            }
             Self::NotificationsMarkRead { .. } if revision < 3 => {
                 Err("operation predates its introduction".into())
             }
@@ -25004,6 +25056,9 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 7))]
     #[serde(rename = "agents.post")]
     AgentsPost { value: RetainedPostResult },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.ack")]
+    AgentsAck { value: RetainedAckResult },
     #[schemars(extend("x-since" = 7))]
     #[serde(rename = "agents.history")]
     AgentsHistory { value: RetainedHistoryPage },
@@ -25707,6 +25762,7 @@ impl OperationResult {
             Self::AgentsDelegate { .. } => "agents.delegate",
             Self::AgentsMessages { .. } => "agents.messages",
             Self::AgentsPost { .. } => "agents.post",
+            Self::AgentsAck { .. } => "agents.ack",
             Self::AgentsHistory { .. } => "agents.history",
             Self::AgentsEvents { .. } => "agents.events",
             Self::AgentsInbox { .. } => "agents.inbox",
@@ -26084,6 +26140,7 @@ impl Check for OperationResult {
             Self::AgentsDelegate { value } => value.check()?,
             Self::AgentsMessages { value } => value.check()?,
             Self::AgentsPost { value } => value.check()?,
+            Self::AgentsAck { value } => value.check()?,
             Self::AgentsHistory { value } => value.check()?,
             Self::AgentsEvents { value } => value.check()?,
             Self::AgentsInbox { value } => value.check()?,
@@ -26581,6 +26638,9 @@ impl Revisioned for OperationResult {
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::AgentsPost { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AgentsAck { .. } if revision < 7 => {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsHistory { .. } if revision < 7 => {

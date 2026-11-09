@@ -6,6 +6,7 @@ use crate::ports::storage::{
     StoredAgentMessage, StoredAgentMessageEvent, WriteTransaction,
 };
 use crate::protocol::{AssignmentId, Id, ProjectId, Revision, RevisionDimension, RootId};
+use base64::Engine as _;
 use std::collections::HashSet;
 
 mod post;
@@ -22,6 +23,29 @@ pub struct DeliveredInbox {
     pub items: Vec<(StoredAgentDelivery, StoredAgentMessage)>,
     /// The last delivery sequence returned, or the supplied position when the page is empty.
     pub next_sequence: i64,
+}
+
+/// The retained source's inbox cursor is a base64url `ib:<sequence>` token. It is an
+/// observation position, never authority; every read and acknowledgment rechecks the current
+/// recipient and project before using it.
+pub fn inbox_cursor(sequence: i64) -> Result<String, StorageError> {
+    if sequence < 0 {
+        return Err(StorageError::InvalidRecord("negative inbox cursor".into()));
+    }
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!("ib:{sequence}")))
+}
+
+pub fn parse_inbox_cursor(cursor: &str) -> Result<i64, StorageError> {
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(cursor.trim())
+        .map_err(|_| StorageError::InvalidRecord("not an inbox cursor".into()))?;
+    let value = std::str::from_utf8(&decoded)
+        .ok()
+        .and_then(|text| text.strip_prefix("ib:"))
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| StorageError::InvalidRecord("not an inbox cursor".into()))?;
+    Ok(value)
 }
 
 pub struct MessageHistoryQuery {

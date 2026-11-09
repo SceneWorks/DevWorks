@@ -329,6 +329,13 @@
     "schemaValid": true
   },
   {
+    "id": "input-agents.ack-Command",
+    "entry": "domain-request.r7",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"agents.ack\"},\"schemaRevision\":7}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "input-agents.history-Query",
     "entry": "domain-request.r7",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"agents.history\",\"projectId\":\"project-a\"},\"schemaRevision\":7}",
@@ -2523,6 +2530,13 @@
     "id": "result-agents.post",
     "entry": "operation-result.r7",
     "raw": "{\"kind\":\"agents.post\",\"value\":{\"created\":false,\"message\":{\"id\":\"id-a\",\"projectId\":\"project-a\",\"channel\":\"fixture\",\"kind\":\"Info\",\"fromActorId\":\"actor-a\",\"from\":{\"name\":\"fixture\",\"kind\":\"fixture\"},\"body\":\"Fixture content\",\"createdAtMs\":\"0\",\"blocking\":false,\"toHuman\":false},\"recipients\":\"0\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-agents.ack",
+    "entry": "operation-result.r7",
+    "raw": "{\"kind\":\"agents.ack\",\"value\":{\"acked\":\"0\",\"messages\":[]}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -9177,42 +9191,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1311",
+    "id": "r3-preview-source-13-1313",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1311",
+    "id": "r3-delete-source-13-1313",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1313",
+    "id": "r3-preview-source-15-1315",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1313",
+    "id": "r3-delete-source-15-1315",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1315",
+    "id": "r3-preview-source-256-1317",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1315",
+    "id": "r3-delete-source-256-1317",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,

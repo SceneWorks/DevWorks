@@ -305,6 +305,82 @@ fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
         cases.query(&gateway, &agent, "agents.history", &raw).unwrap(),
         DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::PermissionDenied
     ));
+    let ack = |key: &str, body: serde_json::Value| {
+        let raw = serde_json::to_vec(&json!({
+            "protocol":"1.0-draft.1", "mode":"Command", "schemaRevision":7,
+            "requestKey":key, "body":body
+        }))
+        .unwrap();
+        cases.command(&gateway, &user, "agents.ack", &raw).unwrap()
+    };
+    let third_question = question("blocking-for-ack");
+    let named = json!({
+        "kind":"agents.ack", "projectId":"project-a",
+        "messages":[third_question.message.id], "resolution":"Answered"
+    });
+    match ack("ack-named", named.clone()) {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Applied {
+                result: OperationResult::AgentsAck { value },
+            } => {
+                assert_eq!(value.acked.get(), 1);
+                assert_eq!(value.messages.0.len(), 1);
+                assert_eq!(value.item_versions.unwrap().0[0].version.get(), 5);
+            }
+            other => panic!("unexpected named ack decision: {other:?}"),
+        },
+        other => panic!("unexpected named ack reply: {other:?}"),
+    }
+    assert!(
+        matches!(ack("ack-named-repeat", named), CommandReply::Recorded { receipt, .. }
+        if matches!(&receipt.decision, DomainDecision::NoChange {
+            result: OperationResult::AgentsAck { value }
+        } if value.acked.get() == 0))
+    );
+    let later = blocked(
+        "post-for-cursor",
+        json!({"kind":"agents.post","projectId":"project-a","body":"Read through cursor\nhidden details","toHuman":true}),
+    );
+    let head = common::read(store.as_ref(), |snapshot| {
+        snapshot.runs().agent_delivery_head()
+    });
+    let cursor = devworks_core::services::agents::retained::inbox_cursor(head).unwrap();
+    assert!(matches!(ack("ack-through", json!({
+        "kind":"agents.ack", "projectId":"project-a", "upTo":cursor
+    })), CommandReply::Recorded { receipt, .. }
+        if matches!(&receipt.decision, DomainDecision::Applied {
+            result: OperationResult::AgentsAck { value }
+        } if value.acked.get() > 0 && value.messages.0.iter().any(|line|
+            line.id == later.message.id && line.summary.0 == "Read through cursor"))));
+    for (key, body) in [
+        (
+            "ack-neither",
+            json!({"kind":"agents.ack","projectId":"project-a"}),
+        ),
+        (
+            "ack-both",
+            json!({"kind":"agents.ack","projectId":"project-a","messages":[message_id],"upTo":"aWI6MA"}),
+        ),
+        (
+            "ack-forged-session",
+            json!({"kind":"agents.ack","projectId":"project-a","sessionId":"another-session","messages":[message_id]}),
+        ),
+        (
+            "ack-wrong-cursor",
+            json!({"kind":"agents.ack","projectId":"project-a","upTo":"Zm9v"}),
+        ),
+        (
+            "ack-ahead-cursor",
+            json!({"kind":"agents.ack","projectId":"project-a","upTo":devworks_core::services::agents::retained::inbox_cursor(head + 1).unwrap()}),
+        ),
+    ] {
+        let reply = ack(key, body);
+        assert!(
+            matches!(&reply, CommandReply::Recorded { receipt, .. }
+            if matches!(receipt.decision, DomainDecision::Refused { .. })),
+            "{key}: {reply:?}"
+        );
+    }
 }
 
 #[tokio::test]

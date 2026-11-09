@@ -5690,7 +5690,7 @@
       "attribute": "HttpPost(\"ack\")",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.acknowledge"
+        "agents.ack"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",
@@ -12180,7 +12180,7 @@
       "argumentType": "typeof(AckRequest)",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.acknowledge"
+        "agents.ack"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",

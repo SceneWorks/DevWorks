@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-02",
-  "catalogSha256": "6766f19ed8ba7b473f8861dfe168dcbcabe9894cea5a3b24ed854e8338227994",
+  "catalogSha256": "35cd6be6e0ca74e23e44521ac585c96aebbb4b9a1050686b63e90e377610b10b",
   "familyCount": 49,
-  "operationCount": 367,
-  "concreteInputCandidates": 367,
+  "operationCount": 368,
+  "concreteInputCandidates": 368,
   "domainInputsPending": 0,
   "families": [
     {
@@ -3199,6 +3199,53 @@
         },
         {
           "introducedRevision": 7,
+          "operation": "agents.ack",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "agents.ack",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "agents.ack"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "agents.ack"
+          },
+          "resultValueType": "RetainedAckResult",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 7,
+              "inputSchema": "domain-request.r7.schema.json",
+              "resultSchema": "operation-result.r7.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r7.schema.json",
+              "completionSchema": "operation-completion.r7.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Additive retained-source acknowledgment. Exactly one of message ids or an opaque next_cursor from the addressed inbox; resolution requires named messages. Current principal binds the recipient, and a repeated acknowledgment is a no-op. First/last blocking-question resolution atomically updates affected work versions.",
+          "familyRules": "Assignment ownership and parent scope are host-derived. Root cap is ten with no global cap. Inbox observation and acknowledgment confer no approval.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 7,
           "operation": "agents.history",
           "inputSchema": "domain-request.schema.json",
           "variant": "agents.history",
@@ -3237,7 +3284,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Project-scoped retained message history newest first. Filters and before cursor are checked against current item/feature ownership; the next_before cursor continues the recorded order without a write.",
+          "semanticRules": "Human project-scoped retained message history newest first. Filters and before cursor are checked against current item/feature ownership; the next_before cursor continues the recorded order without a write. Agent sessions read their addressed inbox instead of the full project history.",
           "familyRules": "Assignment ownership and parent scope are host-derived. Root cap is ten with no global cap. Inbox observation and acknowledgment confer no approval.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

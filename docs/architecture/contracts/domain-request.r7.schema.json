@@ -3023,6 +3023,70 @@
         {
           "additionalProperties": false,
           "properties": {
+            "kind": {
+              "const": "agents.ack",
+              "type": "string"
+            },
+            "messages": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/List_Id_0_128"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "projectId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "resolution": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RetainedMessageResolution"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sessionId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "upTo": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Text1To4096"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object",
+          "x-since": 7
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "assignmentId": {
               "$ref": "#/$defs/Id"
             },

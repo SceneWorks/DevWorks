@@ -144,6 +144,9 @@ pub enum OperationResult {
     #[serde(rename = "agents.post")]
     AgentsPost { value: RetainedPostResult },
     #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.ack")]
+    AgentsAck { value: RetainedAckResult },
+    #[schemars(extend("x-since" = 7))]
     #[serde(rename = "agents.history")]
     AgentsHistory { value: RetainedHistoryPage },
     #[schemars(extend("x-since" = 7))]
@@ -829,6 +832,7 @@ impl OperationResult {
             Self::AgentsDelegate { .. } => "agents.delegate",
             Self::AgentsMessages { .. } => "agents.messages",
             Self::AgentsPost { .. } => "agents.post",
+            Self::AgentsAck { .. } => "agents.ack",
             Self::AgentsHistory { .. } => "agents.history",
             Self::AgentsEvents { .. } => "agents.events",
             Self::AgentsInbox { .. } => "agents.inbox",
@@ -1206,6 +1210,7 @@ impl Check for OperationResult {
             Self::AgentsDelegate { value } => value.check()?,
             Self::AgentsMessages { value } => value.check()?,
             Self::AgentsPost { value } => value.check()?,
+            Self::AgentsAck { value } => value.check()?,
             Self::AgentsHistory { value } => value.check()?,
             Self::AgentsEvents { value } => value.check()?,
             Self::AgentsInbox { value } => value.check()?,
@@ -1706,6 +1711,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsPost { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AgentsAck { .. } if revision < 7 => {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsHistory { .. } if revision < 7 => {

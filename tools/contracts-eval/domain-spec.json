@@ -687,6 +687,14 @@
         "item_versions": "?Items<RetainedItemVersion>"
       }
     },
+    "RetainedAckResult": {
+      "kind": "record",
+      "fields": {
+        "acked": "Counter",
+        "messages": "Rows<RetainedMessageLine>",
+        "item_versions": "?Items<RetainedItemVersion>"
+      }
+    },
     "RetainedItemVersion": {
       "kind": "record",
       "fields": {
@@ -7070,6 +7078,22 @@
       "rules": "Additive retained-source post contract. The gateway-selected command and current principal bind the sender; optional session/project must match current authority. Route, reply resolution, blocking and idempotency are validated by the retained message service.",
       "introducedRevision": 7
     },
+    "agents.ack": {
+      "operation": "agents.ack",
+      "mode": "Command",
+      "fields": {
+        "session_id": "?Id",
+        "project_id": "?ProjectId",
+        "messages": "?Items<Id>",
+        "up_to": "?Cursor",
+        "resolution": "?RetainedMessageResolution"
+      },
+      "result": "RetainedAckResult",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Additive retained-source acknowledgment. Exactly one of message ids or an opaque next_cursor from the addressed inbox; resolution requires named messages. Current principal binds the recipient, and a repeated acknowledgment is a no-op. First/last blocking-question resolution atomically updates affected work versions.",
+      "introducedRevision": 7
+    },
     "agents.history": {
       "operation": "agents.history",
       "mode": "Query",
@@ -11762,6 +11786,9 @@
       6
     ],
     "agents.post": [
+      7
+    ],
+    "agents.ack": [
       7
     ],
     "agents.history": [

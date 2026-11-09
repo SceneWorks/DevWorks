@@ -201,6 +201,7 @@ impl UseCases {
             "agents.delegate",
             "agents.messages",
             "agents.post",
+            "agents.ack",
             "agents.history",
             "agents.events",
             "agents.inbox",

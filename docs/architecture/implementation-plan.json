@@ -11,25 +11,25 @@
   ],
   "sourceSha256": {
     "implementation-slices.json": "f0f40f1cc6db56465b4e73590a16d5b0744dc9a04346f41093c08f2c87b236bb",
-    "devworks-capability-catalog.json": "6766f19ed8ba7b473f8861dfe168dcbcabe9894cea5a3b24ed854e8338227994",
+    "devworks-capability-catalog.json": "35cd6be6e0ca74e23e44521ac585c96aebbb4b9a1050686b63e90e377610b10b",
     "devworks-requirements-traceability.json": "23d4eaab9420af10bd850fcafd2025cd99498cd371aec8554aac4db09c4de407",
-    "codegraph-capability-inventory.json": "c7f97fa21b5b553412987f117364033b0e70394adba328f85e7c9916e5680167",
+    "codegraph-capability-inventory.json": "90137fc8377d3a9db70d8ec98d2e6f4afee8671b502e110e0500773a3536feae",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "2a05ac995a046e0981275175f79db908c6b46832e03d771780b3df5af55c8a04",
+    "contracts/family-coverage.json": "8e2fe663ef13480e9ac2b11bd47558f31d635e516aa4c76321f580f653c87056",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4"
   },
   "counts": {
     "slices": 79,
     "operationFamilies": 49,
-    "operations": 367,
+    "operations": 368,
     "requirements": 377,
     "requirementsByStatus": {
       "Confirmed": 230,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 367,
+    "inputSchemaCandidates": 368,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -1332,6 +1332,7 @@
         "agents.delegate",
         "agents.messages",
         "agents.post",
+        "agents.ack",
         "agents.history",
         "agents.events",
         "agents.inbox",
@@ -13371,6 +13372,20 @@
       "acceptanceStatus": "Planned; no production operation acceptance claimed"
     },
     {
+      "operation": "agents.ack",
+      "family": "agents",
+      "serviceOwner": "AgentSupervisor",
+      "primarySlice": "delegation",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "RetainedAckResult",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
       "operation": "agents.history",
       "family": "agents",
       "serviceOwner": "AgentSupervisor",
@@ -24681,13 +24696,13 @@
       "attribute": "HttpPost(\"ack\")",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.acknowledge"
+        "agents.ack"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",
       "acceptanceCase": "CAP-SESSIONS",
       "resolvedOperations": [
-        "agents.acknowledge"
+        "agents.ack"
       ],
       "implementationSlices": [
         "delegation"
@@ -33609,13 +33624,13 @@
       "argumentType": "typeof(AckRequest)",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.acknowledge"
+        "agents.ack"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",
       "acceptanceCase": "CAP-SESSIONS",
       "resolvedOperations": [
-        "agents.acknowledge"
+        "agents.ack"
       ],
       "implementationSlices": [
         "delegation"

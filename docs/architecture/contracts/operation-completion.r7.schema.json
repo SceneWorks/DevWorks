@@ -10665,6 +10665,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_RetainedMessageLine_0_500": {
+      "items": {
+        "$ref": "#/$defs/RetainedMessageLine"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_RetainedMessage_0_500": {
       "items": {
         "$ref": "#/$defs/RetainedMessage"
@@ -12921,6 +12929,24 @@
             },
             "value": {
               "$ref": "#/$defs/RetainedPostResult"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 7
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "agents.ack",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/RetainedAckResult"
             }
           },
           "required": [
@@ -22067,6 +22093,32 @@
         "Project"
       ],
       "type": "string"
+    },
+    "RetainedAckResult": {
+      "additionalProperties": false,
+      "properties": {
+        "acked": {
+          "$ref": "#/$defs/Counter"
+        },
+        "itemVersions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_RetainedItemVersion_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages": {
+          "$ref": "#/$defs/List_RetainedMessageLine_0_500"
+        }
+      },
+      "required": [
+        "acked",
+        "messages"
+      ],
+      "type": "object"
     },
     "RetainedActor": {
       "additionalProperties": false,

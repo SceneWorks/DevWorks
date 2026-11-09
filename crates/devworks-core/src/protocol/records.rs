@@ -1480,6 +1480,27 @@ impl Check for RetainedPostResult {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedAckResult {
+    pub acked: Counter,
+    pub messages: Rows<RetainedMessageLine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_versions: Option<Items<RetainedItemVersion>>,
+}
+impl Check for RetainedAckResult {
+    fn check(&self) -> Result<(), String> {
+        self.acked.check()?;
+        self.messages.check()?;
+        self.item_versions.check()?;
+        crate::protocol::rules::record(
+            "RetainedAckResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RetainedItemVersion {
     pub key: Id,
     pub version: Revision,
