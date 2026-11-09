@@ -1285,6 +1285,9 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
             Ok(())
         }).unwrap();
         let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        // The operation may advance before the first continuation is published.
+        assert!(app.record_tool_operation_update(&f.context, &id("session"), &operation_id)
+            .unwrap().is_some());
         let invoke = f.native_invocation(request, PricingContext {
             input_semantics: InputSemantics::Unknown, cache_read_possible: false,
             cache_write_possible: false, cache_write_ttl_ms: None,
@@ -1293,6 +1296,7 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
         assert!(matches!(progress.provider.accounting, DriveOutcome::AlreadyDispatched));
         let source = progress.continuation.unwrap();
         let first = app.refresh_native_tool_context(&f.context, &id("session"), &source).unwrap();
+        assert_eq!(first.version_id, source.version_id);
         let material: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
             f.store.as_ref(), &f.context, &first, 1024 * 1024).unwrap().0).unwrap();
         assert_eq!(material.messages.len(), 4);

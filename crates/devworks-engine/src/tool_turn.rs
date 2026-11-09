@@ -7,7 +7,7 @@ use devworks_core::{
     fingerprint::sha256_hex,
     ports::{IdKind, storage::*},
     protocol::{
-        AttemptId, CONTRACT, CommandReply, Id, OperationId, RetryAdvice,
+        AttemptId, CONTRACT, CommandReply, Id, OperationId, RetryAdvice, Revision,
         provider::{
             ArtifactRef, CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody,
         },
@@ -303,87 +303,99 @@ pub(crate) fn continuation_context(
     {
         return Err(invalid("foreign native state requires a new context epoch"));
     }
-    let (entries, observed_sequence) = read_snapshot(store, &ReadOptions::default(), |read| {
-        let session = read
-            .sessions()
-            .session(session_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        let attempt = read
-            .usage()
-            .inference_attempt(&attempt_id.0)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if session.closed()
-            || session.context_epoch != binding.context_epoch.get()
-            || attempt.session_id.as_ref() != Some(session_id)
-            || attempt.connection_id != binding.connection_id
-            || attempt.catalog_model_id != binding.model_id
-            || attempt.endpoint_profile != format!("{:?}", binding.endpoint_profile)
-        {
-            return Err(StorageError::ScopeDenied);
-        }
-        let mut position = after_sequence;
-        let mut selected = Vec::new();
-        while position < session.last_durable_sequence() {
-            if position - after_sequence >= 10_000 {
-                return Err(invalid("tool turn exceeds transcript scan bound"));
+    let (entries, updates, observed_sequence) =
+        read_snapshot(store, &ReadOptions::default(), |read| {
+            let session = read
+                .sessions()
+                .session(session_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let attempt = read
+                .usage()
+                .inference_attempt(&attempt_id.0)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if session.closed()
+                || session.context_epoch != binding.context_epoch.get()
+                || attempt.session_id.as_ref() != Some(session_id)
+                || attempt.connection_id != binding.connection_id
+                || attempt.catalog_model_id != binding.model_id
+                || attempt.endpoint_profile != format!("{:?}", binding.endpoint_profile)
+            {
+                return Err(StorageError::ScopeDenied);
             }
-            let page = read.sessions().entries(session_id, position, 500)?;
-            if page.is_empty() {
-                return Err(invalid("tool turn transcript gap"));
-            }
-            for entry in page {
-                if entry.sequence != position + 1 {
+            let mut position = after_sequence;
+            let mut selected = Vec::new();
+            let mut updates = Vec::new();
+            while position < session.last_durable_sequence() {
+                if position - after_sequence >= 10_000 {
+                    return Err(invalid("tool turn exceeds transcript scan bound"));
+                }
+                let page = read.sessions().entries(session_id, position, 500)?;
+                if page.is_empty() {
                     return Err(invalid("tool turn transcript gap"));
                 }
-                position = entry.sequence;
-                let body: TranscriptBody = serde_json::from_value(entry.body).map_err(invalid)?;
-                if matches!(
-                    &body,
-                    TranscriptBody::UserMessage { .. }
-                        | TranscriptBody::HostNotice { .. }
-                        | TranscriptBody::OperationUpdate { .. }
-                ) {
-                    return Err(StorageError::unavailable(
-                        Unavailable::UnsupportedRuntime,
-                        "tool continuation needs redirected context reconstruction",
-                    ));
-                }
-                let belongs = match &body {
-                    TranscriptBody::AssistantAttempt { attempt_id: id, .. } => id == attempt_id,
-                    TranscriptBody::ToolCallRecorded { tool_call } => {
-                        &tool_call.call.attempt_id == attempt_id
+                for entry in page {
+                    if entry.sequence != position + 1 {
+                        return Err(invalid("tool turn transcript gap"));
                     }
-                    TranscriptBody::ToolDispatchStarted { call }
-                    | TranscriptBody::ToolResponseRecorded { call, .. } => {
-                        &call.attempt_id == attempt_id
+                    position = entry.sequence;
+                    let body: TranscriptBody =
+                        serde_json::from_value(entry.body).map_err(invalid)?;
+                    if matches!(
+                        &body,
+                        TranscriptBody::UserMessage { .. } | TranscriptBody::HostNotice { .. }
+                    ) {
+                        return Err(StorageError::unavailable(
+                            Unavailable::UnsupportedRuntime,
+                            "tool continuation needs redirected context reconstruction",
+                        ));
                     }
-                    TranscriptBody::NativeItem { artifact, .. } => {
-                        let row = read
-                            .artifacts()
-                            .artifact(&artifact.artifact_id)?
-                            .ok_or(StorageError::ScopeDenied)?;
-                        row.provenance["derived"]["attemptId"] == attempt_id.0.as_str()
+                    let belongs = match &body {
+                        TranscriptBody::AssistantAttempt { attempt_id: id, .. } => id == attempt_id,
+                        TranscriptBody::ToolCallRecorded { tool_call } => {
+                            &tool_call.call.attempt_id == attempt_id
+                        }
+                        TranscriptBody::ToolDispatchStarted { call }
+                        | TranscriptBody::ToolResponseRecorded { call, .. } => {
+                            &call.attempt_id == attempt_id
+                        }
+                        TranscriptBody::OperationUpdate { .. } => true,
+                        TranscriptBody::NativeItem { artifact, .. } => {
+                            let row = read
+                                .artifacts()
+                                .artifact(&artifact.artifact_id)?
+                                .ok_or(StorageError::ScopeDenied)?;
+                            row.provenance["derived"]["attemptId"] == attempt_id.0.as_str()
+                        }
+                        _ => false,
+                    };
+                    if !belongs {
+                        return Err(StorageError::unavailable(
+                            Unavailable::UnsupportedRuntime,
+                            "tool continuation is stale after another provider turn",
+                        ));
                     }
-                    _ => false,
-                };
-                if !belongs {
-                    return Err(StorageError::unavailable(
-                        Unavailable::UnsupportedRuntime,
-                        "tool continuation is stale after another provider turn",
-                    ));
-                }
-                if matches!(
-                    &body,
-                    TranscriptBody::AssistantAttempt { .. }
-                        | TranscriptBody::ToolCallRecorded { .. }
-                        | TranscriptBody::NativeItem { .. }
-                ) {
-                    selected.push(body);
+                    if matches!(
+                        &body,
+                        TranscriptBody::AssistantAttempt { .. }
+                            | TranscriptBody::ToolCallRecorded { .. }
+                            | TranscriptBody::NativeItem { .. }
+                    ) {
+                        selected.push(body);
+                    } else if let TranscriptBody::OperationUpdate {
+                        operation_id,
+                        revision,
+                        artifact,
+                    } = body
+                    {
+                        updates.push((operation_id, revision, artifact));
+                        if updates.len() > 128 {
+                            return Err(invalid("too many operation updates in turn continuation"));
+                        }
+                    }
                 }
             }
-        }
-        Ok((selected, session.last_durable_sequence()))
-    })?;
+            Ok((selected, updates, session.last_durable_sequence()))
+        })?;
     let mut assistant = Vec::new();
     for entry in entries {
         match entry {
@@ -494,6 +506,23 @@ pub(crate) fn continuation_context(
             content: results,
         });
     }
+    for (operation_id, revision, artifact) in updates {
+        context.messages.push(Message {
+            role: MessageRole::User,
+            content: vec![ContentBlock::Text {
+                text: operation_update_text(
+                    store,
+                    artifacts,
+                    ctx,
+                    session_id,
+                    &operation_id,
+                    &revision,
+                    &artifact,
+                )?,
+                cache: None,
+            }],
+        });
+    }
     context.validate().map_err(|e| invalid(format!("{e:?}")))?;
     Ok(ContinuationMaterial {
         context,
@@ -597,6 +626,48 @@ pub(crate) fn publish_continuation(
     committed
 }
 
+fn operation_update_text(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    operation_id: &OperationId,
+    revision: &Revision,
+    artifact: &ArtifactRef,
+) -> Result<String, StorageError> {
+    let version = read_snapshot(store, &ReadOptions::default(), |read| {
+        read.artifacts()
+            .version(&artifact.version_id)?
+            .ok_or(StorageError::ScopeDenied)
+    })?;
+    if !version.live()
+        || version.artifact_id != artifact.artifact_id
+        || version.source["principalKind"] != "Host"
+        || version.source["producedBy"] != store.info().host_actor.0.as_str()
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let (bytes, provenance) = artifacts
+        .read_exact(store, ctx, artifact, 1024 * 1024)
+        .map_err(|_| StorageError::ScopeDenied)?;
+    if provenance["principalKind"] != "Host"
+        || provenance["derived"]["kind"] != "ToolOperationUpdate"
+        || provenance["derived"]["sessionId"] != session_id.as_str()
+        || provenance["derived"]["operationId"] != operation_id.0.as_str()
+        || provenance["derived"]["revision"] != revision.get()
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let payload: Value = serde_json::from_slice(&bytes).map_err(invalid)?;
+    if payload["operationId"] != operation_id.0.as_str() || payload["revision"] != revision.get() {
+        return Err(StorageError::ScopeDenied);
+    }
+    Ok(format!(
+        "Tool operation update: {}",
+        String::from_utf8(bytes).map_err(invalid)?
+    ))
+}
+
 /// Reconcile later operation facts into an append-only provider context. A provider's first tool
 /// result remains immutable; each subsequent journal revision enters as a separate host-labeled
 /// message. Any other transcript entry requires the caller to rebuild redirected context.
@@ -678,17 +749,6 @@ pub(crate) fn append_operation_updates(
                         "tool context needs redirected transcript reconstruction",
                     ));
                 };
-                let version = read
-                    .artifacts()
-                    .version(&artifact.version_id)?
-                    .ok_or(StorageError::ScopeDenied)?;
-                if !version.live()
-                    || version.artifact_id != artifact.artifact_id
-                    || version.source["principalKind"] != "Host"
-                    || version.source["producedBy"] != store.info().host_actor.0.as_str()
-                {
-                    return Err(StorageError::ScopeDenied);
-                }
                 updates.push((operation_id, revision, artifact));
                 if updates.len() > 128 {
                     return Err(invalid(
@@ -704,28 +764,16 @@ pub(crate) fn append_operation_updates(
     }
     let mut blocks = Vec::with_capacity(updates.len());
     for (operation_id, revision, artifact) in updates {
-        let (bytes, provenance) = artifacts
-            .read_exact(store, ctx, &artifact, 1024 * 1024)
-            .map_err(|_| StorageError::ScopeDenied)?;
-        if provenance["principalKind"] != "Host"
-            || provenance["derived"]["kind"] != "ToolOperationUpdate"
-            || provenance["derived"]["sessionId"] != session_id.as_str()
-            || provenance["derived"]["operationId"] != operation_id.0.as_str()
-            || provenance["derived"]["revision"] != revision.get()
-        {
-            return Err(StorageError::ScopeDenied);
-        }
-        let payload: Value = serde_json::from_slice(&bytes).map_err(invalid)?;
-        if payload["operationId"] != operation_id.0.as_str()
-            || payload["revision"] != revision.get()
-        {
-            return Err(StorageError::ScopeDenied);
-        }
         blocks.push(ContentBlock::Text {
-            text: format!(
-                "Tool operation update: {}",
-                String::from_utf8(bytes).map_err(invalid)?
-            ),
+            text: operation_update_text(
+                store,
+                artifacts,
+                ctx,
+                session_id,
+                &operation_id,
+                &revision,
+                &artifact,
+            )?,
             cache: None,
         });
     }
