@@ -719,7 +719,7 @@ enum Action {
     RefreshMessages,
     OlderMessages,
     PostMessage(MessageDraft),
-    AckMessage(String),
+    AckMessage(String, Option<&'static str>),
     OlderHistory(Option<String>),
     RefreshHistory(Option<String>),
 
@@ -1252,7 +1252,7 @@ impl Shell {
                         self.work.messages.sending = Some(draft);
                     }
                 }
-                Action::AckMessage(id) => {
+                Action::AckMessage(id, resolution) => {
                     let Some(project) = self.selected_project.clone() else {
                         continue;
                     };
@@ -1268,7 +1268,7 @@ impl Shell {
                         Slot::WorkMessageAck(project, id),
                         "Acknowledging message",
                         "agents.ack",
-                        move |be| wops::message_ack(be, &p, &key),
+                        move |be| wops::message_ack(be, &p, &key, resolution),
                     );
                 }
                 Action::OlderHistory(root) => self.older_history(root),
@@ -2770,7 +2770,34 @@ fn message_board(ui: &mut Ui, board: &mut MessageBoard, open: bool, actions: &mu
                 .add_enabled(open, egui::Button::new("Mark read"))
                 .clicked()
             {
-                actions.push(Action::AckMessage(message.id.as_str().to_owned()));
+                actions.push(Action::AckMessage(message.id.as_str().to_owned(), None));
+            }
+            if matches!(
+                message.kind,
+                devworks_core::protocol::records::RetainedMessageKind::Question
+                    | devworks_core::protocol::records::RetainedMessageKind::Request
+            ) && matches!(
+                message.state,
+                Some(devworks_core::protocol::records::RetainedMessageState::Open)
+            ) {
+                if ui
+                    .add_enabled(open, egui::Button::new("Answer question"))
+                    .clicked()
+                {
+                    actions.push(Action::AckMessage(
+                        message.id.as_str().to_owned(),
+                        Some("Answered"),
+                    ));
+                }
+                if ui
+                    .add_enabled(open, egui::Button::new("Decline question"))
+                    .clicked()
+                {
+                    actions.push(Action::AckMessage(
+                        message.id.as_str().to_owned(),
+                        Some("Declined"),
+                    ));
+                }
             }
         });
     }

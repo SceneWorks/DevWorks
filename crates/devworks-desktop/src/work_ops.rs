@@ -72,15 +72,17 @@ pub fn message_posted(outcome: CommandOutcome) -> Result<RetainedPostResult, Fai
     }
 }
 
-pub fn message_ack(backend: &dyn Backend, project: &str, message: &str) -> Vec<u8> {
-    at_revision(
-        command_frame(
-            backend,
-            "agents.ack",
-            json!({"projectId":project,"messages":[message]}),
-        ),
-        MESSAGE_REVISION,
-    )
+pub fn message_ack(
+    backend: &dyn Backend,
+    project: &str,
+    message: &str,
+    resolution: Option<&str>,
+) -> Vec<u8> {
+    let mut body = json!({"projectId":project,"messages":[message]});
+    if let Some(resolution) = resolution {
+        body["resolution"] = json!(resolution);
+    }
+    at_revision(command_frame(backend, "agents.ack", body), MESSAGE_REVISION)
 }
 
 pub fn message_acked(outcome: CommandOutcome) -> Result<RetainedAckResult, Failure> {

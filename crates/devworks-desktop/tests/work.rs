@@ -84,9 +84,13 @@ fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state
         h.state().work.messages.inbox[0].delivery,
         Some(devworks_core::protocol::records::RetainedDeliveryState::Delivered)
     ));
-    click(&mut h, Role::Button, "Mark read");
+    click(&mut h, Role::Button, "Answer question");
     assert!(h.state().work.messages.inbox.is_empty());
     assert_eq!(h.state().work.messages.history.len(), 1);
+    assert!(matches!(
+        h.state().work.messages.history[0].state,
+        Some(devworks_core::protocol::records::RetainedMessageState::Answered)
+    ));
     type_into(&mut h, Role::TextInput, "Message body", "I will check it");
     click(&mut h, Role::CheckBox, "To you");
     click(&mut h, Role::Button, "Post message");
@@ -106,6 +110,8 @@ fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state
             .iter()
             .any(|m| m.body.0 == "I will check it")
     );
+    click(&mut h, Role::Button, "Mark read");
+    assert!(h.state().work.messages.inbox.is_empty());
 }
 
 #[test]
