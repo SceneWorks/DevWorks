@@ -1095,6 +1095,20 @@ impl Shell {
         }
         let history_before = self.work.messages.history_before;
         let event_after = self.work.messages.event_after;
+        // Subscribe from the current event head before reading the initial inbox/history.
+        // Otherwise a post between those reads and the subscription can be missed forever.
+        if event_after.is_none() {
+            if !self.pending(&Slot::WorkMessagesEvents(project.clone())) {
+                let p = project.clone();
+                self.query(
+                    Slot::WorkMessagesEvents(project),
+                    "Reading message changes",
+                    "agents.events",
+                    move |be| wops::message_events(be, &p, None),
+                );
+            }
+            return;
+        }
         if !self.pending(&Slot::WorkMessagesHistory(project.clone())) {
             let p = project.clone();
             self.query(
@@ -1111,15 +1125,6 @@ impl Shell {
                 "Reading inbox",
                 "agents.receive",
                 move |be| wops::message_inbox(be, &p, None),
-            );
-        }
-        if !self.pending(&Slot::WorkMessagesEvents(project.clone())) {
-            let p = project.clone();
-            self.query(
-                Slot::WorkMessagesEvents(project),
-                "Reading message changes",
-                "agents.events",
-                move |be| wops::message_events(be, &p, event_after),
             );
         }
     }
@@ -1776,9 +1781,15 @@ impl Shell {
                         board.error = None;
                         if changed {
                             self.load_messages(true);
+                        } else if !board.history_loaded || !board.inbox_loaded {
+                            self.load_messages(false);
                         }
                     }
-                    Err(error) => self.work.messages.error = Some(error.describe()),
+                    Err(error) => {
+                        self.work.messages.error = Some(error.describe());
+                        self.work.messages.event_poll_at =
+                            Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+                    }
                 }
             }
             (Slot::WorkMessagePost(project), Reply::Command(reply)) => {

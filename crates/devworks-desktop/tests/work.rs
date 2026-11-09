@@ -203,6 +203,86 @@ fn message_event_refresh_keeps_earlier_unread_inbox_entries() {
 }
 
 #[test]
+fn message_subscription_starts_before_the_initial_inbox_snapshot() {
+    let root = Root::new("work-message-subscription");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Subscription order", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let gate = Gate::holding_replies("agents.events");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(backend.clone())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1600.0,
+        1000.0,
+    );
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let _release = Release(gate.clone());
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Messages")
+        .scroll_to_me();
+    h.step();
+    h.get_by_role_and_label(Role::Button, "Messages").click();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !gate.has_waiter() && std::time::Instant::now() < deadline {
+        h.step();
+        std::thread::yield_now();
+    }
+    assert!(
+        gate.has_waiter(),
+        "initial event subscription is in flight; board={:?}",
+        h.state().work.messages.project
+    );
+    assert!(!h.state().work.messages.inbox_loaded);
+    assert!(!h.state().work.messages.history_loaded);
+
+    wops::message_posted(backend.command(
+        "agents.post",
+        &wops::message_post(
+            &*backend,
+            &pid,
+            json!({"body":"Between subscription and snapshot","toHuman":true}),
+        ),
+    ))
+    .unwrap();
+    gate.open();
+    settle(&mut h);
+    assert!(
+        h.state()
+            .work
+            .messages
+            .inbox
+            .iter()
+            .any(|message| message.body.0 == "Between subscription and snapshot")
+    );
+    assert!(
+        h.state()
+            .work
+            .messages
+            .history
+            .iter()
+            .any(|message| message.body.0 == "Between subscription and snapshot")
+    );
+}
+
+#[test]
 fn features_board_issues_and_overview_share_the_agent_operations() {
     let root = Root::new("work-screens");
     let engine = start(&root);
