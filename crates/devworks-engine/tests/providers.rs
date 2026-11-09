@@ -1005,7 +1005,12 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "ContextEpochChanged").count(), 1);
         let epoch = read(f.store.as_ref(), |s| s.sessions().epoch(&id("session"), 1)).unwrap();
         assert_eq!(epoch.reason, "ProviderChange");
-        assert_eq!(read(f.store.as_ref(), |s| s.sessions().context_sources(&id("session"), 1, 0, 10)).len(), 1);
+        let sources = read(f.store.as_ref(), |s| s.sessions().context_sources(&id("session"), 1, 0, 10));
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].kind, "provider_context");
+        assert_eq!(sources[0].disposition, "Included");
+        assert_eq!(sources[1].kind, "provider_native");
+        assert_eq!(sources[1].disposition, "Omitted");
         let reference: ArtifactRef = serde_json::from_value(reply("good").body["outcome"]["artifacts"][0].clone()).unwrap();
         let bytes = f.artifacts.read_exact(f.store.as_ref(), &f.context, &reference, 1024 * 1024).unwrap().0;
         let value: Value = serde_json::from_slice(&bytes).unwrap();

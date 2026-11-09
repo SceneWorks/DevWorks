@@ -24,6 +24,7 @@ pub(crate) struct EpochChange {
     pub previous_epoch: i64,
     pub binding: NativeBinding,
     pub observed_sequence: Option<i64>,
+    pub source: ArtifactRef,
     pub reason: ContextChangeReason,
     pub context: ProviderContext,
     pub omitted: Vec<ArtifactRef>,
@@ -136,6 +137,7 @@ pub(crate) fn provider_change(
             previous_epoch,
             binding: next_binding.clone(),
             observed_sequence: source.observed_sequence,
+            source: source.artifact,
             reason: ContextChangeReason::ProviderChange,
             context: converted,
             omitted,
@@ -154,6 +156,7 @@ pub(crate) fn publish(
         previous_epoch,
         binding,
         observed_sequence,
+        source,
         reason,
         context: converted,
         omitted,
@@ -177,7 +180,7 @@ pub(crate) fn publish(
         ContextChangeReason::InstructionAdoption => "InstructionAdoption",
         ContextChangeReason::Compaction => "Compaction",
     };
-    if omitted.len() > 128 {
+    if omitted.len() > 127 {
         return Err(StorageError::InvalidRecord(
             "too many omitted native blocks".into(),
         ));
@@ -198,6 +201,7 @@ pub(crate) fn publish(
     let ctx_for_write = ctx.clone();
     let session_for_write = session_id.clone();
     let omitted_for_write = omitted.clone();
+    let source_for_write = source.clone();
     let binding_for_write = binding.clone();
     let committed = run_write(store, WriteOptions::default(), move |tx| {
         let session = tx
@@ -210,6 +214,11 @@ pub(crate) fn publish(
         {
             return Err(StorageError::ScopeDenied);
         }
+        let source_version = tx
+            .artifacts()
+            .version(&source_for_write.version_id)?
+            .filter(|version| version.live() && version.artifact_id == source_for_write.artifact_id)
+            .ok_or(StorageError::ScopeDenied)?;
         // A context boundary must not invalidate an admitted native request before its
         // transport and accounting have become locally quiescent. A later admission against the
         // old epoch is rejected by the provider send gate after this transaction commits.
@@ -280,17 +289,24 @@ pub(crate) fn publish(
             || tx.new_id(IdKind::TranscriptEntry),
         );
         let mut record = SessionBatch::entries(batch);
-        record.context_sources = omitted_for_write
-            .iter()
-            .map(|artifact| ContextSourceInput {
-                source_id: artifact.artifact_id.clone(),
-                kind: "provider_native".into(),
-                source_revision: 1,
-                artifact: Some(artifact.clone()),
-                token_estimate: 0,
-                disposition: SourceDisposition::Omitted,
-            })
-            .collect();
+        record.context_sources = std::iter::once(ContextSourceInput {
+            source_id: source_for_write.artifact_id.clone(),
+            kind: "provider_context".into(),
+            source_revision: source_version.version_no,
+            artifact: Some(source_for_write.clone()),
+            token_estimate: source_for_write.byte_length.get() / 4
+                + i64::from(source_for_write.byte_length.get() % 4 != 0),
+            disposition: SourceDisposition::Included,
+        })
+        .chain(omitted_for_write.iter().map(|artifact| ContextSourceInput {
+            source_id: artifact.artifact_id.clone(),
+            kind: "provider_native".into(),
+            source_revision: 1,
+            artifact: Some(artifact.clone()),
+            token_estimate: 0,
+            disposition: SourceDisposition::Omitted,
+        }))
+        .collect();
         match SessionWriter::append_in(tx, &ctx_for_write, &record)? {
             BatchOutcome::Accepted(_) => Ok(reference),
             BatchOutcome::Replayed(_) => Err(StorageError::InvalidRecord(

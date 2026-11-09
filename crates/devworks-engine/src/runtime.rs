@@ -1898,6 +1898,7 @@ impl Runtime {
                 previous_epoch,
                 binding: next_binding,
                 observed_sequence: source.observed_sequence,
+                source: source.artifact,
                 reason: devworks_core::protocol::provider::ContextChangeReason::InstructionAdoption,
                 context: converted,
                 omitted,
