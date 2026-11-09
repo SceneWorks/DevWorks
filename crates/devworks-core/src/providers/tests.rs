@@ -239,6 +239,49 @@ fn explicit_provider_epoch_conversion_preserves_completed_tool_exchange() {
         ProviderError::InvalidInput("unanswered_tool_call")
     );
 }
+
+#[test]
+fn provider_epoch_removes_old_cache_hints_before_responses_encoding() {
+    let previous = binding(EndpointProfile::AnthropicMessages);
+    let next = NativeBinding {
+        endpoint_profile: EndpointProfile::OpenAiResponses,
+        context_epoch: Counter::new(1).unwrap(),
+        ..previous.clone()
+    };
+    let mut source = context();
+    source.instructions[0].cache = Some(CacheBreakpoint { ttl: None });
+    if let ContentBlock::Text { cache, .. } = &mut source.messages[0].content[0] {
+        *cache = Some(CacheBreakpoint { ttl: None });
+    }
+    source.parameters.tool_cache = Some(BTreeMap::from([(
+        "old-tool".into(),
+        CacheBreakpoint { ttl: None },
+    )]));
+    let same_provider = NativeBinding {
+        context_epoch: Counter::new(1).unwrap(),
+        ..previous.clone()
+    };
+    let (adopted, _) = source
+        .clone()
+        .converted_for_new_epoch(&previous, &same_provider)
+        .unwrap();
+    assert!(adopted.instructions[0].cache.is_some());
+    let mut unsupported = source.clone();
+    unsupported.parameters.top_k = Some(20);
+    assert!(matches!(
+        unsupported.converted_for_new_epoch(&previous, &next),
+        Err(ProviderError::Unsupported("epoch_destination_parameters"))
+    ));
+    let (converted, omitted) = source.converted_for_new_epoch(&previous, &next).unwrap();
+    assert!(omitted.is_empty());
+    assert!(converted.instructions[0].cache.is_none());
+    assert!(matches!(
+        converted.messages[0].content[0],
+        ContentBlock::Text { cache: None, .. }
+    ));
+    assert!(converted.parameters.tool_cache.is_none());
+    run(EndpointProfile::OpenAiResponses, &converted);
+}
 fn binding(profile: EndpointProfile) -> NativeBinding {
     NativeBinding {
         connection_id: id("connection"),

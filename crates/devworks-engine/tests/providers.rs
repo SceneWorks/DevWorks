@@ -788,6 +788,106 @@ fn native_generation_persists_text_usage_and_exact_receipt_replay_without_second
 }
 
 #[test]
+fn empty_completed_turn_keeps_a_cursor_and_replays_without_transport() {
+    runtime().block_on(async {
+        let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let f = Fx::new("CompatibleChat", Script::sse(wire), false);
+        let request = f.generation(vec![]);
+        let previous = match &request.input {
+            InferenceInput::Generation { context, .. } => context.clone(),
+            _ => unreachable!(),
+        };
+        let produced = f.produce(request.clone()).await.unwrap();
+        assert_eq!(produced.result.outcome, Some(AttemptEnd::Completed));
+        assert_eq!(produced.result.turn_start_sequence, Some(0));
+        assert!(f.transcript().is_empty());
+        let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let invoke = |request| f.native_invocation(
+            request,
+            PricingContext {
+                input_semantics: InputSemantics::Unknown,
+                cache_read_possible: false,
+                cache_write_possible: false,
+                cache_write_ttl_ms: None,
+            },
+            vec!["Text".into()],
+            None,
+            None,
+            false,
+        );
+        let first = app.produce_and_dispatch_native_turn(invoke(request.clone()), None).await.unwrap();
+        assert!(matches!(first.provider.accounting, DriveOutcome::AlreadyDispatched));
+        let continuation = first.continuation.unwrap();
+        let old = f.artifacts.read_exact(f.store.as_ref(), &f.context, &previous, 1024 * 1024).unwrap().0;
+        let next = f.artifacts.read_exact(f.store.as_ref(), &f.context, &continuation, 1024 * 1024).unwrap().0;
+        assert_eq!(next, old);
+        let replay = app.produce_and_dispatch_native_turn(invoke(request), None).await.unwrap();
+        assert_eq!(replay.continuation.unwrap().sha256, continuation.sha256);
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn provider_epoch_publishes_responses_context_without_old_cache_hints() {
+    runtime().block_on(async {
+        let f = Fx::new("AnthropicMessages", Script::sse("data: [DONE]\n\n"), false);
+        let request = f.generation(vec![]);
+        let reference = match &request.input {
+            InferenceInput::Generation { context, .. } => context,
+            _ => unreachable!(),
+        };
+        let mut context: ProviderContext = serde_json::from_slice(
+            &f.artifacts
+                .read_exact(f.store.as_ref(), &f.context, reference, 1024 * 1024)
+                .unwrap()
+                .0,
+        )
+        .unwrap();
+        context.instructions[0].cache =
+            Some(devworks_core::providers::context::CacheBreakpoint { ttl: None });
+        if let ContentBlock::Text { cache, .. } = &mut context.messages[0].content[0] {
+            *cache = Some(devworks_core::providers::context::CacheBreakpoint { ttl: None });
+        }
+        let source = f.bytes(&serde_json::to_vec(&context).unwrap());
+        let app = devworks_engine::boot(tool_runtime_composition(&f))
+            .await
+            .unwrap();
+        let previous = NativeBinding {
+            connection_id: id("connection"),
+            account_revision: Revision::new(1).unwrap(),
+            endpoint_profile: EndpointProfile::AnthropicMessages,
+            model_id: f.model.clone(),
+            context_epoch: Counter::new(0).unwrap(),
+        };
+        let next = NativeBinding {
+            connection_id: id("responses-connection"),
+            endpoint_profile: EndpointProfile::OpenAiResponses,
+            context_epoch: Counter::new(1).unwrap(),
+            ..previous.clone()
+        };
+        let published = app
+            .change_provider_epoch(&f.context, &id("session"), &source, &previous, &next)
+            .unwrap();
+        let converted: ProviderContext = serde_json::from_slice(
+            &f.artifacts
+                .read_exact(f.store.as_ref(), &f.context, &published, 1024 * 1024)
+                .unwrap()
+                .0,
+        )
+        .unwrap();
+        assert!(converted.instructions[0].cache.is_none());
+        assert!(matches!(
+            converted.messages[0].content[0],
+            ContentBlock::Text { cache: None, .. }
+        ));
+        let epoch = read(f.store.as_ref(), |s| s.sessions().epoch(&id("session"), 1)).unwrap();
+        assert_eq!(epoch.reason, "ProviderChange");
+        app.shutdown().await;
+    });
+}
+
+#[test]
 fn unhandled_external_tool_is_refused_before_native_transport() {
     runtime().block_on(async {
         let f = Fx::new("CompatibleChat", Script::sse("data: [DONE]\n\n"), false);

@@ -484,17 +484,27 @@ impl NativeProviders {
         {
             return Err(StorageError::ScopeDenied);
         }
+        let mut turn_start_sequence = None;
         if let InferenceInput::Generation { session_id, .. } = &request.input {
-            let owner = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
-                read.sessions()
-                    .session(session_id)?
-                    .map(|session| session.agent_id)
-                    .ok_or(StorageError::ScopeDenied)
-            })?;
+            let (owner, observed_sequence) =
+                read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                    read.sessions()
+                        .session(session_id)?
+                        .map(|session| {
+                            let sequence = session.last_durable_sequence();
+                            (session.agent_id, sequence)
+                        })
+                        .ok_or(StorageError::ScopeDenied)
+                })?;
             if owner != *context.principal() || context.session_id() != Some(session_id) {
                 // A host-origin request cannot borrow an agent session to bypass its role and
                 // shared tool selection before the provider sees a tool schema.
                 return Err(StorageError::ScopeDenied);
+            }
+            if !compaction {
+                // Capture before dispatch. Even an empty completion must have a cursor, and a
+                // concurrent redirect must be visible when continuation scans this turn.
+                turn_start_sequence = Some(observed_sequence);
             }
         }
         if let ModelSelection::Model { model_id } = &request.options.selection
@@ -665,6 +675,7 @@ impl NativeProviders {
             instruction_targets,
             shared,
             result: result.clone(),
+            turn_start_sequence,
             inner: None,
         };
         let request_id = logical.request_id.clone();
@@ -1250,6 +1261,7 @@ struct LazySink {
     instruction_targets: Option<InstructionTargets>,
     shared: SharedPrepared,
     result: ResultChannel,
+    turn_start_sequence: Option<i64>,
     inner: Option<ProviderSink>,
 }
 impl LazySink {
@@ -1292,7 +1304,8 @@ impl LazySink {
                 },
                 embedding,
                 self.result.clone(),
-            );
+            )
+            .with_turn_start_sequence(self.turn_start_sequence);
             self.inner = Some(
                 if matches!(self.request.purpose, InferencePurpose::Compaction) {
                     sink.with_compaction()

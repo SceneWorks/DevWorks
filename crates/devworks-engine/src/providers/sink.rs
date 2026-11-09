@@ -139,6 +139,10 @@ impl ProviderSink {
         self.compaction = true;
         self
     }
+    pub(crate) fn with_turn_start_sequence(mut self, sequence: Option<i64>) -> Self {
+        self.turn_start_sequence = sequence;
+        self
+    }
     pub(crate) fn with_live(mut self, live: Arc<super::live::LiveTurns>) -> Self {
         self.live = Some(live);
         self

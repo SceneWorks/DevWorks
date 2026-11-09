@@ -1135,11 +1135,26 @@ pub(crate) fn dispatch_one(
         }
     }
     let (outcome, bytes) = match result {
-        Ok((descriptor, Mode::Query, raw)) => match runtime.query(ctx, descriptor.name, &raw) {
+        Ok((descriptor, Mode::Query, raw)) => match runtime.query_with(
+            ctx,
+            descriptor.name,
+            &raw,
+            &ReadOptions {
+                cancellation: cancellation.cloned(),
+                deadline_ms: None,
+            },
+        ) {
             Ok(reply @ DomainQueryReply::Result { .. }) => {
                 completed(serde_json::to_vec(&reply).map_err(invalid)?)
             }
             Ok(DomainQueryReply::Rejected { fault, .. }) => {
+                if fault.code == DomainErrorCode::Cancelled
+                    && cancellation.is_some_and(Cancellation::is_cancelled)
+                {
+                    // The marker was already durable. Keep this call available for recovery;
+                    // a cancellation cannot retroactively prove no query effect occurred.
+                    return Err(StorageError::Cancelled);
+                }
                 if fault.code == DomainErrorCode::ApprovalRequired {
                     return Err(StorageError::unavailable(
                         Unavailable::UnsupportedRuntime,
