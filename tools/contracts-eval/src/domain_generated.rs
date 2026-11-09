@@ -1420,6 +1420,8 @@ pub struct RetainedPostResult {
     pub recipients: Counter,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved: Option<RetainedMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_versions: Option<Items<RetainedItemVersion>>,
 }
 impl Check for RetainedPostResult {
     fn check(&self) -> Result<(), String> {
@@ -1427,8 +1429,27 @@ impl Check for RetainedPostResult {
         self.message.check()?;
         self.recipients.check()?;
         self.resolved.check()?;
+        self.item_versions.check()?;
         super::domain_rules::record(
             "RetainedPostResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedItemVersion {
+    pub key: Id,
+    pub version: Revision,
+}
+impl Check for RetainedItemVersion {
+    fn check(&self) -> Result<(), String> {
+        self.key.check()?;
+        self.version.check()?;
+        super::domain_rules::record(
+            "RetainedItemVersion",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())

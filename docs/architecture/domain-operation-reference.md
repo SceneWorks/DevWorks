@@ -1153,6 +1153,14 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `message` | `RetainedMessage` |
 | `recipients` | `Counter` |
 | `resolved` | `?RetainedMessage` |
+| `itemVersions` | `?Items<RetainedItemVersion>` |
+
+### RetainedItemVersion
+
+| Field | Type |
+| --- | --- |
+| `key` | `Id` |
+| `version` | `Revision` |
 
 ### CheckpointRecord
 

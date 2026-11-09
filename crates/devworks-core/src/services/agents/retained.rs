@@ -2,10 +2,10 @@
 //! long-poll by repeating this pass between transactions; no connection is held during a wait.
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::ports::storage::{
-    AgentMessageHistoryFilter, ReadSnapshot, StorageError, StoredAgentDelivery, StoredAgentMessage,
-    StoredAgentMessageEvent, WriteTransaction,
+    ANY_QUEUE, AgentMessageHistoryFilter, ReadSnapshot, StorageError, StoredAgentDelivery,
+    StoredAgentMessage, StoredAgentMessageEvent, WriteTransaction,
 };
-use crate::protocol::{AssignmentId, Id, ProjectId, Revision, RevisionDimension};
+use crate::protocol::{AssignmentId, Id, ProjectId, Revision, RevisionDimension, RootId};
 use std::collections::HashSet;
 
 mod post;
@@ -202,6 +202,60 @@ impl Resolution {
 #[derive(Clone, Debug)]
 pub struct Acknowledged {
     pub changed: Vec<(StoredAgentDelivery, StoredAgentMessage)>,
+    pub item_versions: Vec<ItemVersion>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemVersion {
+    pub key: Id,
+    pub version: i64,
+}
+
+/// A message changes work's derived awaiting-human state only at the first open blocker or
+/// last resolved blocker. Keep the item version, queue cursor and work history in that unit.
+pub(super) fn awaiting_human_change(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    item: &RootId,
+    before: bool,
+) -> Result<Option<ItemVersion>, StorageError> {
+    let after = tx.runs().open_blocking_question(item)?;
+    if before == after {
+        return Ok(None);
+    }
+    let mut work = tx.work().work(&item.0)?.ok_or(StorageError::ScopeDenied)?;
+    let statuses = tx.work().statuses(&work.project_id)?;
+    let finished = work
+        .status_id
+        .as_ref()
+        .and_then(|id| crate::services::work::workflow::semantic_of(&statuses, id));
+    if matches!(
+        finished,
+        Some(crate::services::work::workflow::DONE | crate::services::work::workflow::CLOSED)
+    ) {
+        return Ok(None);
+    }
+    let previous = work.revision;
+    work.revision += 1;
+    work.updated_at_ms = tx.now_ms();
+    work.updated_by = Some(ctx.principal().clone());
+    tx.work().update_work(&work, previous)?;
+    tx.work().bump_queue(&work.project_id, &work.queue())?;
+    tx.work().bump_queue(&work.project_id, ANY_QUEUE)?;
+    if after {
+        crate::services::work::allocation::invalidate_work(tx, ctx, &work.id)?;
+    }
+    crate::services::work::event(
+        tx,
+        ctx,
+        &work,
+        "AwaitingHumanChanged",
+        serde_json::json!({"before": before, "after": after}),
+    )?;
+    Ok(Some(ItemVersion {
+        key: work.id,
+        version: work.revision,
+    }))
 }
 
 fn authorize_recipient(
@@ -617,6 +671,7 @@ pub fn acknowledge(
     };
     let now = tx.now_ms();
     let mut changed = Vec::new();
+    let mut item_versions = Vec::new();
     for id in ids {
         let (mut delivery, message) = delivery_for(tx, project, recipient, &id)?;
         if !matches!(delivery.state.as_str(), "Read" | "Answered" | "Declined") {
@@ -644,18 +699,35 @@ pub fn acknowledge(
                 })?;
             changed.push((delivery, message.clone()));
         }
-        if let Some(resolution) = resolution
-            && let Some(updated) =
+        if let Some(resolution) = resolution {
+            let blocking_item = message
+                .blocking
+                .then(|| message.target_item_id.clone())
+                .flatten();
+            let before = blocking_item
+                .as_ref()
+                .map(|item| tx.runs().open_blocking_question(item))
+                .transpose()?;
+            if let Some(updated) =
                 resolve_message(tx, ctx, project, recipient, &message, resolution)?
-        {
-            if let Some(entry) = changed.iter_mut().find(|(_, row)| row.id == message.id) {
-                *entry = updated;
-            } else {
-                changed.push(updated);
+            {
+                if let (Some(item), Some(before)) = (blocking_item.as_ref(), before)
+                    && let Some(version) = awaiting_human_change(tx, ctx, item, before)?
+                {
+                    item_versions.push(version);
+                }
+                if let Some(entry) = changed.iter_mut().find(|(_, row)| row.id == message.id) {
+                    *entry = updated;
+                } else {
+                    changed.push(updated);
+                }
             }
         }
     }
-    Ok(Acknowledged { changed })
+    Ok(Acknowledged {
+        changed,
+        item_versions,
+    })
 }
 
 pub(super) fn resolve_message(

@@ -15,14 +15,15 @@ use crate::ports::{
 };
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
-    AgentMessage, AgentRecord, CheckpointRecord, MessageClass, MessageDirection, RetainedMessage,
-    RetainedMessageKind, RetainedMessageResolution, RetainedMessageState, RetainedPostResult,
+    AgentMessage, AgentRecord, CheckpointRecord, MessageClass, MessageDirection,
+    RetainedItemVersion, RetainedMessage, RetainedMessageKind, RetainedMessageResolution,
+    RetainedMessageState, RetainedPostResult,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{
     ActorId, AssignmentId, CorrelationId, Counter, DomainErrorCode, DomainFault, OperationState,
-    ProjectId, RevisionDimension,
+    ProjectId, Revision, RevisionDimension,
 };
 use crate::services::cursor::CursorBinding;
 use crate::services::runs::substrate::{Fenced, NewRunAssignment};
@@ -1031,6 +1032,18 @@ fn post_retained(
         )
         .map_err(|e| StorageError::InvalidRecord(e.into()))?,
         resolved: posted.resolved.map(retained_message).transpose()?,
+        item_versions: (!posted.item_versions.is_empty()).then(|| {
+            BoundedList(
+                posted
+                    .item_versions
+                    .into_iter()
+                    .map(|item| RetainedItemVersion {
+                        key: item.key,
+                        version: Revision::new(item.version).expect("positive work version"),
+                    })
+                    .collect(),
+            )
+        }),
     })
 }
 

@@ -132,6 +132,64 @@ fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
         .unwrap();
     assert!(matches!(refused, CommandReply::Recorded { receipt, .. }
         if matches!(receipt.decision, DomainDecision::Refused { .. })));
+    let blocked = |key: &str, body: serde_json::Value| {
+        let raw = serde_json::to_vec(&json!({
+            "protocol":"1.0-draft.1", "mode":"Command", "schemaRevision":7,
+            "requestKey":key, "body":body
+        }))
+        .unwrap();
+        let reply = cases.command(&gateway, &user, "agents.post", &raw).unwrap();
+        match reply {
+            CommandReply::Recorded { receipt, .. } => match receipt.decision {
+                DomainDecision::Applied {
+                    result: OperationResult::AgentsPost { value },
+                } => value,
+                other => panic!("unexpected blocking post decision: {other:?}"),
+            },
+            other => panic!("unexpected blocking post reply: {other:?}"),
+        }
+    };
+    let question = |key: &str| {
+        blocked(
+            key,
+            json!({
+                "kind":"agents.post", "projectId":"project-a", "body":"Human decision needed",
+                "messageKind":"Question", "itemId":"issue-a", "toHuman":true, "blocking":true
+            }),
+        )
+    };
+    let first_question = question("blocking-first");
+    assert_eq!(
+        first_question.item_versions.as_ref().unwrap().0[0]
+            .version
+            .get(),
+        2
+    );
+    let second_question = question("blocking-second");
+    assert!(second_question.item_versions.is_none());
+    let answer = |key: &str, message: &devworks_core::protocol::Id| {
+        blocked(
+            key,
+            json!({
+                "kind":"agents.post", "projectId":"project-a", "body":"Answered",
+                "inReplyToId":message, "resolves":"Answered"
+            }),
+        )
+    };
+    let first_answer = answer("answer-first", &first_question.message.id);
+    assert!(first_answer.item_versions.is_none());
+    let last_answer = answer("answer-second", &second_question.message.id);
+    assert_eq!(
+        last_answer.item_versions.as_ref().unwrap().0[0]
+            .version
+            .get(),
+        3
+    );
+    assert!(!common::read(store.as_ref(), |snapshot| {
+        snapshot
+            .runs()
+            .open_blocking_question(&devworks_core::protocol::RootId(id("issue-a")))
+    }));
     let stored = common::read(store.as_ref(), |snapshot| {
         snapshot.runs().agent_message(&message_id)
     });
@@ -245,6 +303,50 @@ async fn delivered_message_replays_until_read_acknowledgment() {
             .items
             .is_empty()
     );
+    rusqlite::Connection::open(harness.root.join("workspace.sqlite"))
+        .unwrap()
+        .execute_batch("INSERT INTO work_items VALUES('issue-b','project-a','issue',NULL,NULL,NULL,'Issue',1,0,1,1,1,'{}');")
+        .unwrap();
+    let blocking_context = user.clone();
+    let blocking_project = project.clone();
+    let question = write(store.as_ref(), move |tx| {
+        post_message(
+            tx,
+            &blocking_context,
+            &PostSpec {
+                project: blocking_project,
+                body: "Need human answer".into(),
+                kind: MessageKind::Question,
+                item: Some(devworks_core::protocol::RootId(id("issue-b"))),
+                feature: None,
+                resource: None,
+                to_session: None,
+                to_human: true,
+                blocking: true,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )
+    })
+    .unwrap();
+    assert_eq!(question.item_versions[0].version, 2);
+    let resolved = driver
+        .acknowledge(
+            user.clone(),
+            project.clone(),
+            Recipient::Human,
+            AckSelection::Messages(vec![question.message.id]),
+            Some(devworks_core::services::agents::retained::Resolution::Answered),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolved.item_versions[0].version, 3);
+    assert!(!common::read(store.as_ref(), |snapshot| {
+        snapshot
+            .runs()
+            .open_blocking_question(&devworks_core::protocol::RootId(id("issue-b")))
+    }));
     assert!(
         driver
             .wait_events(user, project, None, 0)

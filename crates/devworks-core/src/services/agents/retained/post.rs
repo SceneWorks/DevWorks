@@ -1,4 +1,6 @@
-use super::{Recipient, Resolution, authorize_recipient, resolve_message};
+use super::{
+    ItemVersion, Recipient, Resolution, authorize_recipient, awaiting_human_change, resolve_message,
+};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::ports::IdKind;
@@ -51,6 +53,7 @@ pub struct PostedMessage {
     pub message: StoredAgentMessage,
     pub recipients: usize,
     pub resolved: Option<StoredAgentMessage>,
+    pub item_versions: Vec<ItemVersion>,
 }
 
 pub(super) fn session_project(
@@ -268,6 +271,7 @@ pub fn post_message(
             message: existing,
             recipients: count,
             resolved: None,
+            item_versions: Vec::new(),
         });
     }
     let mut item = spec.item.clone();
@@ -347,6 +351,13 @@ pub fn post_message(
         "Project"
     };
     let routed = recipients(tx, ctx, spec, &item, &feature, &to_session, to_human)?;
+    let was_blocked = if spec.blocking {
+        item.as_ref()
+            .map(|item| tx.runs().open_blocking_question(item))
+            .transpose()?
+    } else {
+        None
+    };
     let now = tx.now_ms();
     let message = StoredAgentMessage {
         id: tx.new_id(IdKind::Event),
@@ -411,14 +422,34 @@ pub fn post_message(
             recipient_human: false,
             created_at_ms: now,
         })?;
+    let mut item_versions = Vec::new();
+    if let (Some(item), Some(before)) = (message.target_item_id.as_ref(), was_blocked)
+        && let Some(version) = awaiting_human_change(tx, ctx, item, before)?
+    {
+        item_versions.push(version);
+    }
     let resolved = if let Some(resolution) = spec.resolves {
         let parent = parent.as_ref().expect("validated parent");
         let recipient = match ctx.session_id() {
             Some(id) => Recipient::Session(id.clone()),
             None => Recipient::Human,
         };
-        resolve_message(tx, ctx, &spec.project, &recipient, parent, resolution)?
-            .map(|(_, message)| message)
+        let blocking_item = parent
+            .blocking
+            .then(|| parent.target_item_id.clone())
+            .flatten();
+        let before = blocking_item
+            .as_ref()
+            .map(|item| tx.runs().open_blocking_question(item))
+            .transpose()?;
+        let resolved = resolve_message(tx, ctx, &spec.project, &recipient, parent, resolution)?;
+        if resolved.is_some()
+            && let (Some(item), Some(before)) = (blocking_item.as_ref(), before)
+            && let Some(version) = awaiting_human_change(tx, ctx, item, before)?
+        {
+            item_versions.push(version);
+        }
+        resolved.map(|(_, message)| message)
     } else {
         None
     };
@@ -427,5 +458,6 @@ pub fn post_message(
         message,
         recipients: routed.len(),
         resolved,
+        item_versions,
     })
 }

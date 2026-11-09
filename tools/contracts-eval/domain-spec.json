@@ -670,7 +670,15 @@
         "created": "bool",
         "message": "RetainedMessage",
         "recipients": "Counter",
-        "resolved": "?RetainedMessage"
+        "resolved": "?RetainedMessage",
+        "item_versions": "?Items<RetainedItemVersion>"
+      }
+    },
+    "RetainedItemVersion": {
+      "kind": "record",
+      "fields": {
+        "key": "Id",
+        "version": "Revision"
       }
     },
     "CheckpointRecord": {

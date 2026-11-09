@@ -10721,6 +10721,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_RetainedItemVersion_0_128": {
+      "items": {
+        "$ref": "#/$defs/RetainedItemVersion"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_ReviewFinding_0_500": {
       "items": {
         "$ref": "#/$defs/ReviewFinding"
@@ -22140,6 +22148,22 @@
       ],
       "type": "string"
     },
+    "RetainedItemVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/Id"
+        },
+        "version": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "key",
+        "version"
+      ],
+      "type": "object"
+    },
     "RetainedMessage": {
       "additionalProperties": false,
       "properties": {
@@ -22313,6 +22337,16 @@
       "properties": {
         "created": {
           "type": "boolean"
+        },
+        "itemVersions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_RetainedItemVersion_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "message": {
           "$ref": "#/$defs/RetainedMessage"
