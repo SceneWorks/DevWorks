@@ -40,6 +40,7 @@ use devworks_core::ports::storage::{ApplicationStore, StorageError, WriteOptions
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
 use devworks_core::services::UseCases;
+use devworks_core::services::agents::AgentService;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::history::HistoryService;
@@ -374,6 +375,8 @@ async fn compose(
         Some(artifact_files),
         Arc::new(NoVectorIndex),
     ));
+    let run_control = Arc::new(ControlService::new(id_source.clone()));
+    let agents = Arc::new(AgentService::new(id_source.clone(), run_control.clone()));
     let use_cases = UseCases::new()
         .with_queue()
         .with_settings(settings)
@@ -381,6 +384,7 @@ async fn compose(
             id_source.clone(),
             store.clone(),
         )))
+        .with_agents(agents)
         .with_history(Arc::new(HistoryService::new(id_source.clone())))
         // The router resolves tiers, named models, effort and availability over the provider
         // connections' durable rows (the same unit of work as each route).
@@ -578,7 +582,7 @@ async fn compose(
         process_host: Arc::new(NativeProcessHost),
         // The production run-control service (stored plan approval, no coordinator launcher
         // until the agent supervisor exists): accepted work is held at shutdown and boot.
-        runs: RunComposition::new(Arc::new(ControlService::new(id_source.clone()))),
+        runs: RunComposition::new(run_control),
         power: Arc::new(NativePower),
         diagnostics,
         // Owned browser sessions: discovered or configured Chromium-family browsers, owned
