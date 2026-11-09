@@ -306,6 +306,10 @@ pub fn deliver_inbox(
         return Err(StorageError::CursorExpired);
     }
     authorize_recipient(tx, ctx, project, recipient)?;
+    let now = tx.now_ms();
+    if let Recipient::Session(id) = recipient {
+        tx.sessions().touch_session_activity(id, now)?;
+    }
     let mut rows = match recipient {
         Recipient::Session(id) => {
             tx.runs()
@@ -315,7 +319,6 @@ pub fn deliver_inbox(
             .runs()
             .agent_inbox(project, None, after, include_read, limit)?,
     };
-    let now = tx.now_ms();
     for (delivery, _) in &mut rows {
         if delivery.state == "Pending" {
             let expected = delivery.revision;
@@ -486,6 +489,7 @@ pub fn handover_direct(
                 .sessions()
                 .last_entry_at_ms(holder_id)?
                 .into_iter()
+                .chain(tx.sessions().session_activity_at_ms(holder_id)?)
                 .chain(tx.runs().agent_session_activity_at(holder_id)?)
                 .chain(std::iter::once(holder.created_at_ms))
                 .max()
@@ -501,6 +505,7 @@ pub fn handover_direct(
                 tx.sessions()
                     .last_entry_at_ms(original_id)?
                     .into_iter()
+                    .chain(tx.sessions().session_activity_at_ms(original_id)?)
                     .chain(tx.runs().agent_session_activity_at(original_id)?)
                     .chain(std::iter::once(original.created_at_ms))
                     .max()

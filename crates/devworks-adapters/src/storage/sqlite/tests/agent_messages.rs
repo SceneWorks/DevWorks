@@ -23,7 +23,8 @@ fn project(value: &str) -> ProjectId {
 #[test]
 fn itemless_direct_messages_pass_once_to_same_repository_successor() {
     use devworks_core::services::agents::retained::{
-        AckSelection, MessageKind, PostSpec, Recipient, acknowledge, handover_direct, post_message,
+        AckSelection, MessageKind, PostSpec, Recipient, acknowledge, deliver_inbox,
+        handover_direct, post_message,
     };
     let h = Harness::new();
     drop(SqliteStore::open_with(h.config(), &through(40)).unwrap());
@@ -175,19 +176,59 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         Ok(())
     })
     .unwrap();
+    h.set_now(1_700_000_000_000 + 31 * 60 * 1_000);
+    let polling = ingress
+        .context(
+            ActorId(id("agent-a")),
+            PrincipalKind::Agent,
+            id("empty-poll"),
+            id("test-ingress"),
+            Counter::new(s.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(id("session-next"));
+    run_write(&s, WriteOptions::default(), move |tx| {
+        let head = tx.runs().agent_delivery_head()?;
+        let page = deliver_inbox(
+            tx,
+            &polling,
+            &project("project-a"),
+            &Recipient::Session(id("session-next")),
+            head,
+            false,
+            10,
+        )?;
+        assert!(page.items.is_empty());
+        assert_eq!(
+            tx.sessions().session_activity_at_ms(&id("session-next"))?,
+            Some(1_700_000_000_000 + 31 * 60 * 1_000)
+        );
+        Ok(())
+    })
+    .unwrap();
     h.set_now(1_700_000_000_000 + 32 * 60 * 1_000);
     h.raw().execute_batch(
         r#"INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
            VALUES('session-after-silence','conv-a','agent-a','root-a',0,1,'project-a',1700001920000,'["repo-a"]');"#
     ).unwrap();
     run_write(&s, WriteOptions::default(), move |tx| {
-        assert_eq!(handover_direct(tx, &id("session-after-silence"))?, 1);
+        assert_eq!(handover_direct(tx, &id("session-after-silence"))?, 0);
+        Ok(())
+    })
+    .unwrap();
+    h.set_now(1_700_000_000_000 + 47 * 60 * 1_000);
+    h.raw().execute_batch(
+        r#"INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
+           VALUES('session-inherits-silent','conv-a','agent-a','root-a',0,1,'project-a',1700002820000,'["repo-a"]');"#
+    ).unwrap();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        assert_eq!(handover_direct(tx, &id("session-inherits-silent"))?, 1);
         assert_eq!(
             tx.runs()
                 .agent_session_delivery(&inherited_id, &id("session-next"))?
                 .unwrap()
                 .handed_to_session_id,
-            Some(id("session-after-silence"))
+            Some(id("session-inherits-silent"))
         );
         Ok(())
     })

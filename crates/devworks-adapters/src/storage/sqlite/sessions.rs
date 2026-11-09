@@ -1012,6 +1012,12 @@ macro_rules! session_reads {
                 }
                 Ok(ids)
             }
+            fn session_activity_at_ms(&self, id: &Id) -> Result<Option<i64>, StorageError> {
+                db(self.conn.query_row(
+                    "SELECT last_seen_at FROM sessions WHERE id=?1",
+                    [id.as_str()], |row| row.get(0),
+                ).optional())?.ok_or(StorageError::ScopeDenied)
+            }
             fn sessions(
                 &self,
                 scope: &SessionScope,
@@ -1352,6 +1358,20 @@ impl SessionRepository for Unit<'_> {
                 kind: "session",
                 id: s.id.as_str().to_owned(),
             });
+        }
+        Ok(())
+    }
+
+    fn touch_session_activity(&mut self, id: &Id, at_ms: i64) -> Result<(), StorageError> {
+        if at_ms < 0 {
+            return Err(invalid("negative session activity time"));
+        }
+        let updated = db(self.conn.execute(
+            "UPDATE sessions SET last_seen_at=MAX(COALESCE(last_seen_at, created_at), ?2) WHERE id=?1 AND closed_at IS NULL",
+            params![id.as_str(), at_ms],
+        ))?;
+        if updated != 1 {
+            return Err(StorageError::ScopeDenied);
         }
         Ok(())
     }

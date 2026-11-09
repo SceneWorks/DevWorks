@@ -319,6 +319,8 @@ pub trait SessionRead {
     fn session(&self, id: &Id) -> Result<Option<StoredSession>, StorageError>;
     /// Immutable repository IDs captured when the session was created, in ID order.
     fn session_repository_scope(&self, id: &Id) -> Result<Vec<Id>, StorageError>;
+    /// Last authenticated session activity, including an empty inbox poll.
+    fn session_activity_at_ms(&self, id: &Id) -> Result<Option<i64>, StorageError>;
     /// Sessions in `scope` (optionally only open or closed ones), newest first after `after`, at
     /// most `limit` (1..=500).
     fn sessions(
@@ -459,6 +461,8 @@ pub trait SessionRead {
 }
 
 pub trait SessionRepository: SessionRead {
+    /// Advances the durable activity clock without changing transcript or authority revisions.
+    fn touch_session_activity(&mut self, id: &Id, at_ms: i64) -> Result<(), StorageError>;
     /// Inserts the session and its conversation. The project, root and actors must exist.
     fn insert_session(&mut self, session: &StoredSession) -> Result<(), StorageError>;
     /// Replaces the mutable columns (title, epoch, revision, close, append bookkeeping). The
