@@ -6081,6 +6081,8 @@ pub struct McpServer {
     pub transport: Label,
     pub selected_tool_ids: Items<Id>,
     pub catalog_revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failure: Option<Text>,
 }
 impl Check for McpServer {
     fn check(&self) -> Result<(), String> {
@@ -6091,6 +6093,7 @@ impl Check for McpServer {
         self.transport.check()?;
         self.selected_tool_ids.check()?;
         self.catalog_revision.check()?;
+        self.last_failure.check()?;
         crate::protocol::rules::record(
             "McpServer",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,

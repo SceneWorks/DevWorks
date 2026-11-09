@@ -781,6 +781,9 @@ impl Shell {
             ops::settings_read,
         );
         self.refresh_container_capabilities();
+        if !self.projects.list.loaded && !self.pending(&Slot::ProjectsList) {
+            self.load_projects();
+        }
         self.load_mcp_servers(None);
     }
     fn refresh_container_capabilities(&mut self) {
@@ -2435,7 +2438,8 @@ impl Shell {
                 web.activity_loading = false;
                 web.activity = Some(ops::web_entries(q).map_err(|e| e.describe()));
             }
-            (Slot::McpServers(cursor), Reply::Query(q)) => match ops::mcp_server_page(q) {
+            (Slot::McpServers(scope, _), Reply::Query(_)) if scope != self.mcp_scope_key() => {}
+            (Slot::McpServers(_, cursor), Reply::Query(q)) => match ops::mcp_server_page(q) {
                 Ok((servers, next)) => {
                     self.settings
                         .mcp
@@ -2452,10 +2456,12 @@ impl Shell {
                                 .servers
                                 .iter()
                                 .find(|server| &server.id == id)
-                            && matches!(server.state, ItemState::Healthy | ItemState::Failed)
+                            && !matches!(server.state, ItemState::Unavailable)
                         {
                             if matches!(server.state, ItemState::Failed) {
-                                self.settings.mcp.error = Some("The MCP server operation failed. Check its configuration and retry.".into());
+                                self.settings.mcp.error = Some(server.last_failure.as_ref().map_or_else(
+                                    || "The MCP server operation failed. Check its configuration and retry.".into(),
+                                    |failure| failure.0.clone()));
                             }
                             self.settings.mcp.pending_server = None;
                         }
@@ -2475,7 +2481,9 @@ impl Shell {
                     self.settings.mcp.error = Some(error.describe());
                 }
             },
-            (Slot::McpCapabilities(server, cursor), Reply::Query(q)) => {
+            (Slot::McpCapabilities(scope, _, _), Reply::Query(_))
+                if scope != self.mcp_scope_key() => {}
+            (Slot::McpCapabilities(_, server, cursor), Reply::Query(q)) => {
                 match ops::mcp_capability_page(q) {
                     Ok((capabilities, next)) => {
                         if let Ok(id) = Id::new(server) {
@@ -3278,16 +3286,25 @@ impl Shell {
         }
     }
 
+    fn mcp_scope_key(&self) -> String {
+        self.settings.mcp.project.as_ref().map_or_else(
+            || "workspace".to_owned(),
+            |project| format!("project:{}", project.0.as_str()),
+        )
+    }
+
     fn load_mcp_servers(&mut self, cursor: Option<String>) {
         if cursor.is_none() {
             self.settings.mcp.loading = true;
         }
         let next = cursor.clone();
+        let scope = self.settings.mcp.project.clone();
+        let scope_key = self.mcp_scope_key();
         if !self.query(
-            Slot::McpServers(cursor),
+            Slot::McpServers(scope_key, cursor),
             "Loading MCP servers",
             "mcp.servers",
-            move |backend| ops::mcp_servers(backend, next.as_deref()),
+            move |backend| ops::mcp_servers(backend, scope.as_ref(), next.as_deref()),
         ) {
             self.settings.mcp.loading = false;
         }
@@ -3304,12 +3321,25 @@ impl Shell {
             return;
         };
         let revision = server.catalog_revision.get();
-        let slot = Slot::McpCapabilities(server_id.as_str().to_owned(), cursor.clone());
+        let scope = self.settings.mcp.project.clone();
+        let slot = Slot::McpCapabilities(
+            self.mcp_scope_key(),
+            server_id.as_str().to_owned(),
+            cursor.clone(),
+        );
         self.query(
             slot,
             "Loading MCP capabilities",
             "mcp.capabilities",
-            move |backend| ops::mcp_capabilities(backend, &server_id, revision, cursor.as_deref()),
+            move |backend| {
+                ops::mcp_capabilities(
+                    backend,
+                    scope.as_ref(),
+                    &server_id,
+                    revision,
+                    cursor.as_deref(),
+                )
+            },
         );
     }
 
@@ -3322,19 +3352,19 @@ impl Shell {
                     McpAction::Configure { body, secret } => ("mcp.configure", body, secret, None),
                     McpAction::Connect(id, revision) => (
                         "mcp.connect",
-                        serde_json::json!({"serverId":id,"expectedRevision":revision.to_string()}),
+                        serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string()}),
                         None,
                         Some(id),
                     ),
                     McpAction::Discover(id, revision) => (
                         "mcp.discover",
-                        serde_json::json!({"serverId":id,"expectedCatalogRevision":revision.to_string()}),
+                        serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedCatalogRevision":revision.to_string()}),
                         None,
                         Some(id),
                     ),
                     McpAction::Select(id, revision, catalog, tools) => (
                         "mcp.select_tools",
-                        serde_json::json!({"serverId":id,"expectedRevision":revision.to_string(),"expectedCatalogRevision":catalog.to_string(),"toolIds":tools}),
+                        serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string(),"expectedCatalogRevision":catalog.to_string(),"toolIds":tools}),
                         None,
                         None,
                     ),
@@ -4616,6 +4646,7 @@ impl Shell {
             Route::Settings => {
                 let online = self.online();
                 let mut actions = Vec::new();
+                self.settings.mcp.projects = self.projects.list.items.clone();
                 // Repository indexing sources sit with the repository paths (General).
                 let mut index_actions = Vec::new();
                 let up = online.is_ok();

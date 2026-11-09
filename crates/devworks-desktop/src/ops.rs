@@ -125,7 +125,11 @@ pub fn command_frame(backend: &dyn Backend, operation: &str, mut body: Value) ->
     .into_bytes()
 }
 
-pub fn mcp_servers(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
+pub fn mcp_servers(
+    backend: &dyn Backend,
+    scope: Option<&devworks_core::protocol::ProjectId>,
+    cursor: Option<&str>,
+) -> Vec<u8> {
     let mut page = json!({"limit": 100});
     if let Some(cursor) = cursor {
         page["cursor"] = json!(cursor);
@@ -133,7 +137,7 @@ pub fn mcp_servers(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     query_frame(
         backend,
         "mcp.servers",
-        json!({"scope":{"kind":"Workspace"},"page":page}),
+        json!({"scope":mcp_scope(scope),"page":page}),
     )
 }
 
@@ -156,6 +160,7 @@ pub fn mcp_server_page(
 
 pub fn mcp_capabilities(
     backend: &dyn Backend,
+    scope: Option<&devworks_core::protocol::ProjectId>,
     server: &devworks_core::protocol::Id,
     revision: i64,
     cursor: Option<&str>,
@@ -167,7 +172,14 @@ pub fn mcp_capabilities(
     query_frame(
         backend,
         "mcp.capabilities",
-        json!({"serverId":server,"catalogRevision":revision.to_string(),"page":page}),
+        json!({"scope":mcp_scope(scope),"serverId":server,"catalogRevision":revision.to_string(),"page":page}),
+    )
+}
+
+pub fn mcp_scope(project: Option<&devworks_core::protocol::ProjectId>) -> Value {
+    project.map_or_else(
+        || json!({"kind":"Workspace"}),
+        |id| json!({"kind":"Project","projectId":id}),
     )
 }
 

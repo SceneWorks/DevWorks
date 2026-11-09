@@ -337,8 +337,8 @@ pub enum Slot {
     WebSearch,
     /// The recent web activity record.
     WebActivity,
-    McpServers(Option<String>),
-    McpCapabilities(String, Option<String>),
+    McpServers(String, Option<String>),
+    McpCapabilities(String, String, Option<String>),
     McpCommand,
     /// Active and archived projects.
     ProjectsList,
@@ -643,6 +643,10 @@ pub const COMMANDS: &[&str] = &[
     "router.configure",
     "router.pin",
     "router.route",
+    "mcp.configure",
+    "mcp.connect",
+    "mcp.discover",
+    "mcp.select_tools",
     "projects.create",
     "projects.edit",
     "projects.membership",

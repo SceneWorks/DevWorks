@@ -12,14 +12,14 @@ use devworks_core::ports::mcp::{
     RemoteResource, RemoteTool,
 };
 use devworks_core::ports::storage::{
-    ApplicationStore, AttemptBinding, ConfigScope, OperationRecord, ReadOptions, WriteOptions,
-    read_snapshot, run_write,
+    ApplicationStore, AttemptBinding, ConfigScope, OperationRecord, ReadOptions, StoredProject,
+    WriteOptions, read_snapshot, run_write,
 };
 use devworks_core::protocol::records::McpCapability;
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::support::BoundedText;
 use devworks_core::protocol::{
-    ActorId, CommandReply, Counter, Id, OperationId, OperationState, Revision,
+    ActorId, CommandReply, Counter, Id, OperationId, OperationState, ProjectId, Revision,
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Default)]
-struct RecordedRemote(AtomicUsize);
+struct RecordedRemote(AtomicUsize, bool);
 impl McpRemote for RecordedRemote {
     fn connect(
         &self,
@@ -37,7 +37,11 @@ impl McpRemote for RecordedRemote {
         _endpoint: &McpEndpoint,
     ) -> Result<(), McpRemoteFault> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+        if self.1 {
+            Err(McpRemoteFault::MissingCredential)
+        } else {
+            Ok(())
+        }
     }
 
     fn discover(&self, _server_id: &Id) -> Result<RemoteCatalog, McpRemoteFault> {
@@ -213,7 +217,7 @@ fn capabilities(
         ids: &*h.ids,
     };
     let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"mcp-catalog","body":{
-        "kind":"mcp.capabilities","serverId":server_id,
+        "kind":"mcp.capabilities","scope":{"kind":"Workspace"},"serverId":server_id,
         "catalogRevision":catalog_revision.to_string(),"page":{"limit":10}
     }});
     cases
@@ -224,6 +228,114 @@ fn capabilities(
             frame.to_string().as_bytes(),
         )
         .expect("MCP capabilities registered")
+}
+
+#[test]
+fn project_scoped_server_can_be_managed_from_workspace_context() {
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let project = ProjectId(id("mcp-project"));
+    let project_for_write = project.clone();
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
+        tx.projects().insert_project(&StoredProject {
+            id: project_for_write,
+            name: "MCP project".into(),
+            description: String::new(),
+            lifecycle: "Active".into(),
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            archived_at_ms: None,
+            deleted_at_ms: None,
+            archive_epoch: 0,
+            archive_stop_pending: false,
+        })
+    })
+    .unwrap();
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    service
+        .install_remote(
+            store.clone(),
+            Arc::new(RecordedRemote::default()),
+            Arc::new(JsonSchemaValidator),
+            artifacts(&h),
+        )
+        .unwrap();
+    let cases = UseCases::new().with_mcp(service);
+    let scope = json!({"kind":"Project","projectId":project});
+    let created = command(
+        &h,
+        &store,
+        &cases,
+        "project-create",
+        "mcp.configure",
+        json!({
+            "scope":scope,"name":"Project server",
+            "transport":{"kind":"Http","endpoint":"https://mcp.example.test/mcp"}
+        }),
+    );
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: server },
+    } = created
+    else {
+        panic!("project server configuration failed: {created:?}")
+    };
+    assert!(servers(&h, &store, &cases).is_empty());
+    let connect = command(
+        &h,
+        &store,
+        &cases,
+        "project-connect",
+        "mcp.connect",
+        json!({
+            "scope":scope,"serverId":server.id,"expectedRevision":"1"
+        }),
+    );
+    assert!(matches!(connect, DomainDecision::Accepted { .. }));
+    let select = command(
+        &h,
+        &store,
+        &cases,
+        "project-select",
+        "mcp.select_tools",
+        json!({
+            "scope":scope,"serverId":server.id,"expectedRevision":"2",
+            "expectedCatalogRevision":"1","toolIds":[]
+        }),
+    );
+    assert!(matches!(
+        select,
+        DomainDecision::Applied {
+            result: OperationResult::McpSelectTools { .. }
+        }
+    ));
+    let project_for_write = project.clone();
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        let mut row = tx
+            .projects()
+            .project(&project_for_write)?
+            .expect("project row");
+        row.lifecycle = "Archived".into();
+        row.revision += 1;
+        row.archive_epoch += 1;
+        row.archived_at_ms = Some(2);
+        tx.projects().update_project(&row, 1)
+    })
+    .unwrap();
+    let rejected = command(
+        &h,
+        &store,
+        &cases,
+        "archived-project-connect",
+        "mcp.connect",
+        json!({
+            "scope":scope,"serverId":server.id,"expectedRevision":"3"
+        }),
+    );
+    assert!(matches!(rejected, DomainDecision::Refused { .. }));
 }
 
 #[test]
@@ -263,7 +375,7 @@ fn configuration_is_durable_and_selection_rejects_unknown_tools() {
         &cases,
         "mcp-select",
         "mcp.select_tools",
-        json!({"serverId":server.id,"expectedRevision":"1","expectedCatalogRevision":"1","toolIds":["unknown-tool"]}),
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"1","expectedCatalogRevision":"1","toolIds":["unknown-tool"]}),
     );
     assert!(matches!(selected, DomainDecision::Refused { .. }));
     let read = McpCapability {
@@ -319,7 +431,7 @@ fn configuration_is_durable_and_selection_rejects_unknown_tools() {
         &cases,
         "mcp-select-known",
         "mcp.select_tools",
-        json!({"serverId":server.id,"expectedRevision":"2","expectedCatalogRevision":"2","toolIds":["mcp-read","mcp-write"]}),
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"2","expectedCatalogRevision":"2","toolIds":["mcp-read","mcp-write"]}),
     );
     assert!(matches!(
         selected,
@@ -455,7 +567,7 @@ fn journaled_connect_rechecks_configuration_before_native_io() {
         &cases,
         "journal-connect",
         "mcp.connect",
-        json!({"serverId":server.id,"expectedRevision":"1"}),
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"1"}),
     ) else {
         panic!("connect was not accepted");
     };
@@ -475,7 +587,7 @@ fn journaled_connect_rechecks_configuration_before_native_io() {
         &cases,
         "journal-reconnect",
         "mcp.connect",
-        json!({"serverId":server.id,"expectedRevision":"3"}),
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"3"}),
     ) else {
         panic!("reconnect was not accepted");
     };
@@ -497,6 +609,98 @@ fn journaled_connect_rechecks_configuration_before_native_io() {
         McpEffectOutcome::Failed(_)
     ));
     assert_eq!(remote.0.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn failed_connection_persists_a_safe_diagnostic_for_settings() {
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")
+    })
+    .unwrap();
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    service
+        .install_remote(
+            store.clone(),
+            Arc::new(RecordedRemote(AtomicUsize::new(0), true)),
+            Arc::new(JsonSchemaValidator),
+            artifacts(&h),
+        )
+        .unwrap();
+    let cases = UseCases::new().with_mcp(service.clone());
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: server },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "diagnostic-configure",
+        "mcp.configure",
+        json!({
+            "scope":{"kind":"Workspace"},"name":"Credential server",
+            "transport":{"kind":"Http","endpoint":"https://mcp.example.test/mcp"}
+        }),
+    )
+    else {
+        panic!("server configuration failed")
+    };
+    let DomainDecision::Accepted { operation_id } = command(
+        &h,
+        &store,
+        &cases,
+        "diagnostic-connect",
+        "mcp.connect",
+        json!({
+            "scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"1"
+        }),
+    ) else {
+        panic!("connection was not accepted")
+    };
+    let operation = dispatched(&store, &operation_id);
+    assert!(matches!(
+        service.execute(&operation),
+        McpEffectOutcome::Failed(_)
+    ));
+    let server = servers(&h, &store, &cases).remove(0);
+    assert!(matches!(
+        server.state,
+        devworks_core::protocol::records::ItemState::Failed
+    ));
+    assert_eq!(
+        server.last_failure.expect("failure diagnostic").0,
+        "Connection failed: MissingCredential"
+    );
+    let DomainDecision::Accepted { operation_id } = command(
+        &h,
+        &store,
+        &cases,
+        "diagnostic-reconnect",
+        "mcp.connect",
+        json!({
+            "scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"3"
+        }),
+    ) else {
+        panic!("reconnection was not accepted")
+    };
+    let operation = dispatched(&store, &operation_id);
+    assert!(matches!(
+        service.observe(&operation),
+        McpEffectOutcome::Unknown(_)
+    ));
+    let server = servers(&h, &store, &cases).remove(0);
+    assert!(matches!(
+        server.state,
+        devworks_core::protocol::records::ItemState::Failed
+    ));
+    assert!(
+        server
+            .last_failure
+            .expect("recovery diagnostic")
+            .0
+            .contains("could not be confirmed")
+    );
 }
 
 #[test]
@@ -658,7 +862,7 @@ fn journaled_discovery_publishes_selected_read_only_catalog() {
         &cases,
         "discovery-connect",
         "mcp.connect",
-        json!({"serverId":server.id,"expectedRevision":"1"}),
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"1"}),
     ) else {
         panic!("connect was not accepted");
     };
@@ -673,7 +877,7 @@ fn journaled_discovery_publishes_selected_read_only_catalog() {
         &cases,
         "discovery-command",
         "mcp.discover",
-        json!({"serverId":server.id,"expectedCatalogRevision":"1"}),
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedCatalogRevision":"1"}),
     ) else {
         panic!("discovery was not accepted");
     };
@@ -775,7 +979,7 @@ fn resource_and_prompt_queries_publish_bounded_untrusted_content() {
     };
     let resources = query(
         "mcp.resources",
-        json!({"kind":"mcp.resources","serverId":server.id,
+        json!({"kind":"mcp.resources","scope":{"kind":"Workspace"},"serverId":server.id,
         "catalogRevision":"2","page":{"limit":10}}),
     );
     let DomainQueryReply::Result {
@@ -790,7 +994,7 @@ fn resource_and_prompt_queries_publish_bounded_untrusted_content() {
     let resource = value.items.0[0].content.clone();
     let missing_argument = query(
         "mcp.prompts",
-        json!({"kind":"mcp.prompts","serverId":server.id,
+        json!({"kind":"mcp.prompts","scope":{"kind":"Workspace"},"serverId":server.id,
         "catalogRevision":"2","page":{"limit":10}}),
     );
     assert!(matches!(
@@ -812,7 +1016,7 @@ fn resource_and_prompt_queries_publish_bounded_untrusted_content() {
     };
     let prompts = query(
         "mcp.prompts",
-        json!({"kind":"mcp.prompts","serverId":server.id,
+        json!({"kind":"mcp.prompts","scope":{"kind":"Workspace"},"serverId":server.id,
             "catalogRevision":"2","name":"review",
             "arguments":{"schema":reference,"value":{"change":"example"}},
             "page":{"limit":10}}),

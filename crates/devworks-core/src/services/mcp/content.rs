@@ -27,24 +27,26 @@ impl McpClientService {
         query: &AdmittedQuery,
         env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, DomainFault> {
-        let (server_id, catalog_revision, request, resource_uri, prompt_name) = match query.input()
-        {
-            OperationInput::Mcp(ops::Input::Resources(input)) => (
-                &input.server_id,
-                &input.catalog_revision,
-                &input.page,
-                input.uri.as_ref().map(|uri| uri.0.as_str()),
-                None,
-            ),
-            OperationInput::Mcp(ops::Input::Prompts(input)) => (
-                &input.server_id,
-                &input.catalog_revision,
-                &input.page,
-                None,
-                input.name.as_ref().map(|name| name.0.as_str()),
-            ),
-            _ => return Ok(None),
-        };
+        let (requested_scope, server_id, catalog_revision, request, resource_uri, prompt_name) =
+            match query.input() {
+                OperationInput::Mcp(ops::Input::Resources(input)) => (
+                    &input.scope,
+                    &input.server_id,
+                    &input.catalog_revision,
+                    &input.page,
+                    input.uri.as_ref().map(|uri| uri.0.as_str()),
+                    None,
+                ),
+                OperationInput::Mcp(ops::Input::Prompts(input)) => (
+                    &input.scope,
+                    &input.server_id,
+                    &input.catalog_revision,
+                    &input.page,
+                    None,
+                    input.name.as_ref().map(|name| name.0.as_str()),
+                ),
+                _ => return Ok(None),
+            };
         let native = self.native.get().ok_or_else(|| {
             crate::services::fault(
                 DomainErrorCode::UnsupportedCapability,
@@ -61,26 +63,18 @@ impl McpClientService {
                 {
                     return Err(StorageError::ScopeDenied);
                 }
-                let scopes = ctx
-                    .project_id()
-                    .cloned()
-                    .map(ConfigScope::Project)
+                let scope = active_server_scope(ctx, requested_scope, snapshot.projects())
+                    .map_err(|_| StorageError::ScopeDenied)?;
+                let (version, state) = current(snapshot.configuration(), &scope)?;
+                let server = state
+                    .servers
                     .into_iter()
-                    .chain(std::iter::once(ConfigScope::Workspace));
-                for scope in scopes {
-                    let (version, state) = current(snapshot.configuration(), &scope)?;
-                    if let Some(server) = state
-                        .servers
-                        .into_iter()
-                        .find(|server| &server.public.id == server_id)
-                    {
-                        return Ok((scope, version, server));
-                    }
-                }
-                Err(StorageError::NotFound {
-                    kind: "mcp_server",
-                    id: server_id.as_str().into(),
-                })
+                    .find(|server| &server.public.id == server_id)
+                    .ok_or_else(|| StorageError::NotFound {
+                        kind: "mcp_server",
+                        id: server_id.as_str().into(),
+                    })?;
+                Ok((scope, version, server))
             })
             .map_err(|error| self.fault(error))?;
         if &server.public.catalog_revision != catalog_revision

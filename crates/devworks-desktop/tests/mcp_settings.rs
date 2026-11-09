@@ -2,10 +2,15 @@
 mod common;
 use common::*;
 use devworks_core::ports::secrets::SessionSecrets;
+use devworks_core::ports::storage::{StoredProject, WriteOptions, run_write};
+use devworks_core::protocol::{Id, ProjectId};
 use devworks_core::settings::catalog::Category;
 use devworks_desktop::host::Engine;
 use eframe::egui::accesskit::Role;
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use std::sync::Arc;
 
 fn type_into(h: &mut Harness<'_, devworks_desktop::shell::Shell>, label: &str, text: &str) {
@@ -50,4 +55,84 @@ fn settings_adds_and_lists_an_outgoing_mcp_server() {
     );
     assert!(h.state().settings.mcp.selected.is_some());
     assert_eq!(secrets.len(), 1);
+}
+
+#[test]
+fn settings_can_select_and_configure_a_project_scoped_server() {
+    let _case = native_runtime_case();
+    let root = Root::new("mcp-settings-project");
+    let engine = Engine::start(config(&root.0)).expect("desktop runtime boots");
+    let project = ProjectId(Id::new("mcp-settings-project").unwrap());
+    let project_for_write = project.clone();
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::default(),
+        move |tx| {
+            tx.projects().insert_project(&StoredProject {
+                id: project_for_write,
+                name: "Scope project".into(),
+                description: String::new(),
+                lifecycle: "Active".into(),
+                revision: 1,
+                scope_revision: 1,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+                archived_at_ms: None,
+                deleted_at_ms: None,
+                archive_epoch: 0,
+                archive_stop_pending: false,
+            })
+        },
+    )
+    .unwrap();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1800.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, Category::Tools.label());
+    settle(&mut h);
+    assert!(
+        h.state()
+            .projects
+            .list
+            .items
+            .iter()
+            .any(|p| p.id == project),
+        "Settings project list: {:?}",
+        h.state()
+            .projects
+            .list
+            .items
+            .iter()
+            .map(|p| &p.name.0)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        h.state()
+            .settings
+            .mcp
+            .projects
+            .iter()
+            .any(|p| p.id == project)
+    );
+    h.get_by_role_and_label(Role::ComboBox, "MCP scope")
+        .click_accesskit();
+    h.step();
+    h.step();
+    h.query_all_by_label("Scope project")
+        .find(|node| node.accesskit_node().role() != Role::ComboBox)
+        .expect("project scope option")
+        .click_accesskit();
+    settle(&mut h);
+    assert_eq!(h.state().settings.mcp.project, Some(project.clone()));
+    type_into(&mut h, "MCP server name", "Project server");
+    type_into(
+        &mut h,
+        "MCP HTTPS endpoint",
+        "https://mcp.example.test/project",
+    );
+    click(&mut h, Role::Button, "Add server");
+    settle(&mut h);
+    assert!(has_text(&h, "MCP configuration applied"));
+    assert_eq!(h.state().settings.mcp.servers.len(), 1);
+    assert_eq!(h.state().settings.mcp.servers[0].name.0, "Project server");
 }

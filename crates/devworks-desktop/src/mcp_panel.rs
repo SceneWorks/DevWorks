@@ -1,8 +1,8 @@
 //! Outgoing MCP configuration and effective tool selection in Settings > Agent tools.
 //! All mutations go through the same domain gateway used by agents.
 use devworks_core::ports::secrets::Secret;
-use devworks_core::protocol::Id;
-use devworks_core::protocol::records::{McpCapability, McpServer};
+use devworks_core::protocol::records::{McpCapability, McpServer, ProjectRecord};
+use devworks_core::protocol::{Id, ProjectId};
 use eframe::egui::{self, Ui};
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -19,6 +19,8 @@ pub enum McpAction {
 
 #[derive(Default)]
 pub struct McpPanel {
+    pub projects: Vec<ProjectRecord>,
+    pub project: Option<ProjectId>,
     pub servers: Vec<McpServer>,
     pub capabilities: Vec<McpCapability>,
     pub selected: Option<Id>,
@@ -92,6 +94,34 @@ impl McpPanel {
         if let Some(message) = &self.message {
             ui.label(message);
         }
+        let previous_project = self.project.clone();
+        let scope_name = self
+            .project
+            .as_ref()
+            .and_then(|id| self.projects.iter().find(|p| &p.id == id))
+            .map_or("Workspace".to_owned(), |p| p.name.0.clone());
+        egui::ComboBox::from_id_salt("mcp-scope")
+            .selected_text(scope_name)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut self.project, None, "Workspace");
+                for project in &self.projects {
+                    ui.selectable_value(
+                        &mut self.project,
+                        Some(project.id.clone()),
+                        &project.name.0,
+                    );
+                }
+            })
+            .response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "MCP scope"));
+        if self.project != previous_project {
+            self.selected = None;
+            self.pending_server = None;
+            self.capabilities.clear();
+            self.selection.clear();
+            self.servers.clear();
+            actions.push(McpAction::Reload);
+        }
         let chosen = self
             .selected
             .as_ref()
@@ -134,6 +164,9 @@ impl McpPanel {
                 "Status: {:?} · Transport: {} · Catalog revision: {}",
                 server.state, server.transport.0, catalog_revision
             ));
+            if let Some(failure) = &server.last_failure {
+                ui.colored_label(ui.visuals().error_fg_color, &failure.0);
+            }
             if !server_idle {
                 ui.label("MCP connection or discovery is running…");
             }
@@ -275,8 +308,11 @@ impl McpPanel {
                 }
                 transport
             };
-            let mut body =
-                json!({"scope":{"kind":"Workspace"},"name":self.name.trim(),"transport":transport});
+            let scope = self.project.as_ref().map_or_else(
+                || json!({"kind":"Workspace"}),
+                |id| json!({"kind":"Project","projectId":id}),
+            );
+            let mut body = json!({"scope":scope,"name":self.name.trim(),"transport":transport});
             if self.editing {
                 let Some(server) = self
                     .selected
