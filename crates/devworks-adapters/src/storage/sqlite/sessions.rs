@@ -1300,6 +1300,25 @@ impl SessionRepository for Unit<'_> {
             s.root_id.as_ref().map(|r| r.0.as_str()),
             s.created_at_ms
         ]))?;
+        // A migration-compatibility reader may open an older store before migration 44 added
+        // the immutable repository scope. Its existing sessions still use the historical shape.
+        let schema_version: i64 = db(self.conn.query_row(
+            "SELECT schema_version FROM store_meta WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        ))?;
+        if schema_version < 44 {
+            db(db(self.conn.prepare_cached(
+                "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,pin_json,project_id,title,created_by,created_at,closed_at,closed_by,next_seq,checkpoint_seq) VALUES(?1,?2,?3,?4,?5,?6,NULL,?7,?8,?9,?10,?11,?12,?13,?14)",
+            ))?.execute(params![
+                s.id.as_str(), s.conversation_id.as_str(), s.agent_id.0.as_str(),
+                s.root_id.as_ref().map(|r| r.0.as_str()), s.context_epoch, s.revision,
+                s.project_id.as_ref().map(|p| p.0.as_str()), s.title,
+                s.created_by.0.as_str(), s.created_at_ms, s.closed_at_ms,
+                s.closed_by.as_ref().map(|a| a.0.as_str()), s.next_sequence, s.checkpoint_sequence,
+            ]))?;
+            return Ok(());
+        }
         db(db(self.conn.prepare_cached(
             "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,pin_json,project_id,title,created_by,created_at,closed_at,closed_by,next_seq,checkpoint_seq,repository_ids_json) VALUES(?1,?2,?3,?4,?5,?6,NULL,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
         ))?

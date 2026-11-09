@@ -3308,7 +3308,9 @@ fn purge_migrations_refuse_an_older_reader_before_changing_the_store() {
     let boot_count = super::boots(&h);
     match SqliteStore::open_with(h.config(), &through(35)) {
         Err(StorageError::IncompatibleSchema(message)) => {
-            assert!(message.contains("reader version 38"))
+            let current_floor = MIGRATIONS.iter().map(|m| m.minimum_reader).max().unwrap();
+            assert!(current_floor >= 38);
+            assert!(message.contains(&format!("reader version {current_floor}")))
         }
         _ => panic!("an older reader must not interpret compact purge identities"),
     }
