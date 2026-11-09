@@ -136,6 +136,11 @@ pub(crate) fn recover_context_head(
                 head.kind,
                 head.attempt_id,
                 session.context_epoch,
+                Some(crate::context_epoch::epoch_root(
+                    read.sessions(),
+                    session_id,
+                    session.context_epoch,
+                )?),
             )));
         }
         if session.context_epoch == 0 {
@@ -152,9 +157,18 @@ pub(crate) fn recover_context_head(
             "ProviderContextEpoch".to_owned(),
             None,
             session.context_epoch,
+            None,
         )))
     })?;
-    let Some((artifact_json, stored_binding, observed_sequence, kind, attempt_id, epoch)) = source
+    let Some((
+        artifact_json,
+        stored_binding,
+        observed_sequence,
+        kind,
+        attempt_id,
+        epoch,
+        head_root,
+    )) = source
     else {
         return Ok(None);
     };
@@ -173,7 +187,17 @@ pub(crate) fn recover_context_head(
         || provenance["producedBy"] != store.info().host_actor.0.as_str()
         || derived["kind"] != kind
         || derived["sessionId"] != session_id.as_str()
-        || (kind == "ProviderTurnContinuation" && attempt_id.is_none())
+        || !matches!(
+            (kind.as_str(), attempt_id.as_ref()),
+            ("ProviderTurnContinuation", Some(_))
+                | (
+                    "ProviderOperationUpdateContext" | "ProviderContextEpoch",
+                    None
+                )
+        )
+        || head_root
+            .as_ref()
+            .is_some_and(|root| derived.get("epochRoot") != Some(root))
         || attempt_id
             .as_ref()
             .is_some_and(|id| derived["attemptId"] != id.as_str())
