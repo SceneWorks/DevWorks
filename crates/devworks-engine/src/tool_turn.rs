@@ -318,25 +318,41 @@ pub(crate) fn continuation_context(
     }
     let mut results = Vec::new();
     for item in resolved {
-        let (text, is_error) = match item.outcome {
-            ToolOutcome::Completed { artifacts: refs } if refs.len() == 1 => {
-                let bytes = artifacts
-                    .read_exact(store, ctx, &refs[0], 8 * 1024 * 1024)
-                    .map_err(|_| StorageError::ScopeDenied)?
-                    .0;
-                (String::from_utf8(bytes).map_err(invalid)?, false)
+        let (content, is_error) = match item.outcome {
+            ToolOutcome::Completed { artifacts: refs } => {
+                let mut blocks = Vec::with_capacity(refs.len());
+                for reference in refs {
+                    if reference.media_type.starts_with("image/") {
+                        blocks.push(ResultBlock::Image {
+                            artifact: reference,
+                            detail: None,
+                        });
+                    } else if reference.media_type.starts_with("text/")
+                        || reference.media_type == "application/json"
+                    {
+                        let bytes = artifacts
+                            .read_exact(store, ctx, &reference, 8 * 1024 * 1024)
+                            .map_err(|_| StorageError::ScopeDenied)?
+                            .0;
+                        blocks.push(ResultBlock::Text {
+                            text: String::from_utf8(bytes).map_err(invalid)?,
+                        });
+                    } else {
+                        return Err(invalid("unsupported tool result artifact media type"));
+                    }
+                }
+                (blocks, false)
             }
-            ToolOutcome::Completed { artifacts: refs } if refs.is_empty() => {
-                ("{\"kind\":\"Completed\"}".into(), false)
-            }
-            ToolOutcome::Completed { .. } => {
-                return Err(invalid("unsupported multiple tool result artifacts"));
-            }
-            other => (serde_json::to_string(&other).map_err(invalid)?, true),
+            other => (
+                vec![ResultBlock::Text {
+                    text: serde_json::to_string(&other).map_err(invalid)?,
+                }],
+                true,
+            ),
         };
         results.push(ContentBlock::ToolResult {
             call_id: item.call.call.native_call_id,
-            content: vec![ResultBlock::Text { text }],
+            content,
             is_error,
             cache: None,
         });
