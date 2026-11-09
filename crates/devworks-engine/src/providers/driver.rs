@@ -107,8 +107,12 @@ pub struct NativeProviders {
     live: Arc<super::live::LiveTurns>,
 }
 /// Trusted native producer input. Cancellation is operational ownership, never wire authority.
+pub type InstructionTargets = Vec<(Id, Vec<String>)>;
 pub struct NativeInvocation {
     pub source_fences: Vec<devworks_core::ports::AuthorityFence>,
+    /// Host-selected repository targets for this request. `Some` requires an exact stamped set;
+    /// `None` is only for native callers that have no selected repository target yet.
+    pub instruction_targets: Option<InstructionTargets>,
     pub context: InvocationContext,
     pub logical: RequestAdmission,
     pub category: ReportCategory,
@@ -322,6 +326,7 @@ impl NativeProviders {
         &self,
         ctx: &InvocationContext,
         request: &InferenceRequest,
+        targets: Option<&[(Id, Vec<String>)]>,
     ) -> Result<(), StorageError> {
         let (Some(guard), InferenceInput::Generation { context, .. }) =
             (&self.composition.instruction_guard, &request.input)
@@ -335,7 +340,7 @@ impl NativeProviders {
             .0;
         let material: devworks_core::providers::context::ProviderContext =
             serde_json::from_slice(&bytes).map_err(|_| invalid("provider instruction context"))?;
-        guard.verify(ctx, &material)
+        guard.verify(ctx, &material, targets)
     }
     /// Explicit host-qualified declarations, including Unknown support. Every request still
     /// intersects these with the CURRENT registered model/profile/account and current policy.
@@ -399,6 +404,7 @@ impl NativeProviders {
         self.produce_cancellable(
             NativeInvocation {
                 source_fences: Vec::new(),
+                instruction_targets: None,
                 context,
                 logical,
                 category,
@@ -418,6 +424,7 @@ impl NativeProviders {
     ) -> Result<ProviderInvocation, StorageError> {
         let NativeInvocation {
             source_fences,
+            instruction_targets,
             context,
             mut logical,
             category,
@@ -470,6 +477,7 @@ impl NativeProviders {
             shared: shared.clone(),
             inner: None,
             source_fences: source_fences.clone(),
+            instruction_targets,
         };
         let sink = LazySink {
             owner: self.clone(),
@@ -825,6 +833,7 @@ impl NativeProviders {
         context: &InvocationContext,
         request: &InferenceRequest,
         attempt: &StoredInferenceAttempt,
+        targets: Option<&[(Id, Vec<String>)]>,
     ) -> Result<(PreparedRequest, StoredConnection), StorageError> {
         let bound = devworks_core::services::usage::accounting::snapshot(attempt)?;
         let (connection, model) =
@@ -890,7 +899,7 @@ impl NativeProviders {
             .map(serde_json::from_str)
             .transpose()
             .map_err(|_| invalid("current OpenRouter policy"))?;
-        self.verify_instruction_context(context, request)?;
+        self.verify_instruction_context(context, request, targets)?;
         let materials = OwnedMaterials {
             store: self.store.as_ref(),
             artifacts: self.artifacts.as_ref(),
@@ -921,6 +930,7 @@ struct LazySource {
     shared: SharedPrepared,
     inner: Option<NativeProviderSource>,
     source_fences: Vec<devworks_core::ports::AuthorityFence>,
+    instruction_targets: Option<InstructionTargets>,
 }
 impl OwnedInferenceSource for LazySource {
     fn start(&mut self, attempt: &StoredInferenceAttempt) -> Result<(), StorageError> {
@@ -935,7 +945,12 @@ impl OwnedInferenceSource for LazySource {
             read_snapshot(self.owner.store.as_ref(), &ReadOptions::default(), |s| {
                 s.packages().registry_revision()
             })?;
-        let (prepared, connection) = self.owner.prepare(&self.context, &self.request, attempt)?;
+        let (prepared, connection) = self.owner.prepare(
+            &self.context,
+            &self.request,
+            attempt,
+            self.instruction_targets.as_deref(),
+        )?;
         let limits = StreamLimits {
             max_request_bytes: 32 * 1024 * 1024,
             deadline_ms: u64::from(self.request.options.deadline_ms),
@@ -959,9 +974,14 @@ impl OwnedInferenceSource for LazySource {
         let expected_revision = connection.revision;
         let source_fences = self.source_fences.clone();
         let instruction_request = self.request.clone();
+        let instruction_targets = self.instruction_targets.clone();
         source = source.with_send_gate(Box::new(move || {
             use devworks_core::providers::materialize::SchemaDocuments;
-            owner.verify_instruction_context(&context, &instruction_request)?;
+            owner.verify_instruction_context(
+                &context,
+                &instruction_request,
+                instruction_targets.as_deref(),
+            )?;
             for tool in &publication.tools {
                 owner
                     .schemas

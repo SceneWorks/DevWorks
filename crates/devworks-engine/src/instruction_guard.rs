@@ -23,6 +23,7 @@ impl InstructionGuard {
         &self,
         ctx: &InvocationContext,
         context: &devworks_core::providers::context::ProviderContext,
+        expected: Option<&[(Id, Vec<String>)]>,
     ) -> Result<(), StorageError> {
         context
             .validate()
@@ -46,6 +47,36 @@ impl InstructionGuard {
             return Err(StorageError::InvalidRecord(
                 "too many instruction repositories".into(),
             ));
+        }
+        if let Some(expected) = expected {
+            if expected.len() != context.instruction_stamps.len() {
+                return Err(StorageError::ScopeDenied);
+            }
+            let mut repositories = std::collections::BTreeSet::new();
+            for (repository, paths) in expected {
+                if !repositories.insert(repository.as_str()) {
+                    return Err(StorageError::InvalidRecord(
+                        "duplicate instruction repository".into(),
+                    ));
+                }
+                let targets: Vec<String> = if paths.is_empty() {
+                    vec![".".into()]
+                } else {
+                    paths
+                        .iter()
+                        .cloned()
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .collect()
+                };
+                if !context
+                    .instruction_stamps
+                    .iter()
+                    .any(|stamp| &stamp.repository_id == repository && stamp.targets == targets)
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
+            }
         }
         for repository in &required {
             if !context
