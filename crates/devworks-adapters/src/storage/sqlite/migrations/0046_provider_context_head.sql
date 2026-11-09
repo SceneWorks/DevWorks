@@ -4,7 +4,8 @@ CREATE TABLE session_provider_context_heads (
  session_id TEXT PRIMARY KEY REFERENCES sessions(id),
  context_epoch INTEGER NOT NULL CHECK(context_epoch>=0),
  observed_sequence INTEGER NOT NULL CHECK(observed_sequence>=0),
- attempt_id TEXT NOT NULL,
+ kind TEXT NOT NULL CHECK(kind IN ('ProviderTurnContinuation','ProviderOperationUpdateContext')),
+ attempt_id TEXT,
  binding_json TEXT NOT NULL CHECK(json_valid(binding_json)),
  artifact_json TEXT NOT NULL CHECK(json_valid(artifact_json)),
  revision INTEGER NOT NULL CHECK(revision>0)

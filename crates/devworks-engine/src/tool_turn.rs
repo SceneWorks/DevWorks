@@ -133,7 +133,8 @@ pub(crate) fn recover_context_head(
                 head.artifact,
                 Some(head.binding),
                 head.observed_sequence,
-                Some(head.attempt_id),
+                head.kind,
+                head.attempt_id,
                 session.context_epoch,
             )));
         }
@@ -148,11 +149,13 @@ pub(crate) fn recover_context_head(
             epoch.context,
             None,
             epoch.sequence,
+            "ProviderContextEpoch".to_owned(),
             None,
             session.context_epoch,
         )))
     })?;
-    let Some((artifact_json, stored_binding, observed_sequence, attempt_id, epoch)) = source else {
+    let Some((artifact_json, stored_binding, observed_sequence, kind, attempt_id, epoch)) = source
+    else {
         return Ok(None);
     };
     let artifact: ArtifactRef = serde_json::from_value(artifact_json).map_err(invalid)?;
@@ -168,13 +171,9 @@ pub(crate) fn recover_context_head(
         serde_json::from_value(derived["binding"].clone()).map_err(invalid)?;
     if provenance["principalKind"] != "Host"
         || provenance["producedBy"] != store.info().host_actor.0.as_str()
-        || derived["kind"]
-            != if attempt_id.is_some() {
-                "ProviderTurnContinuation"
-            } else {
-                "ProviderContextEpoch"
-            }
+        || derived["kind"] != kind
         || derived["sessionId"] != session_id.as_str()
+        || (kind == "ProviderTurnContinuation" && attempt_id.is_none())
         || attempt_id
             .as_ref()
             .is_some_and(|id| derived["attemptId"] != id.as_str())
@@ -689,9 +688,10 @@ pub(crate) fn publish_continuation(
             {
                 return Err(StorageError::ScopeDenied);
             }
-            if head.context_epoch == binding.context_epoch.get()
+            if head.kind == "ProviderTurnContinuation"
+                && head.context_epoch == binding.context_epoch.get()
                 && head.observed_sequence == observed_sequence
-                && head.attempt_id == attempt_id.0
+                && head.attempt_id.as_ref() == Some(&attempt_id.0)
                 && head.binding == json!(binding)
             {
                 let artifact = serde_json::from_value(head.artifact.clone()).map_err(invalid)?;
@@ -729,7 +729,8 @@ pub(crate) fn publish_continuation(
                 session_id: session_id.clone(),
                 context_epoch: binding.context_epoch.get(),
                 observed_sequence,
-                attempt_id: attempt_id.0.clone(),
+                kind: "ProviderTurnContinuation".into(),
+                attempt_id: Some(attempt_id.0.clone()),
                 binding: json!(binding),
                 artifact: json!(artifact),
                 revision,
@@ -936,6 +937,7 @@ pub(crate) fn append_operation_updates(
     let ctx_for_write = ctx.clone();
     let session_for_write = session_id.clone();
     let binding_for_write = binding.clone();
+    let source_for_write = source.clone();
     let committed = run_write(store, WriteOptions::default(), move |tx| {
         let session = tx
             .sessions()
@@ -971,6 +973,25 @@ pub(crate) fn append_operation_updates(
                 return Err(StorageError::ScopeDenied);
             }
         }
+        let previous_head = tx.sessions().provider_context_head(&session_for_write)?;
+        if let Some(head) = &previous_head {
+            if head.context_epoch > binding_for_write.context_epoch.get() {
+                return Err(StorageError::ScopeDenied);
+            }
+            if head.context_epoch == binding_for_write.context_epoch.get() {
+                if head.observed_sequence == observed
+                    && head.kind == "ProviderOperationUpdateContext"
+                    && head.binding == json!(binding_for_write)
+                {
+                    let artifact =
+                        serde_json::from_value(head.artifact.clone()).map_err(invalid)?;
+                    return Ok((artifact, false));
+                }
+                if head.observed_sequence != after || head.artifact != json!(source_for_write) {
+                    return Err(StorageError::ScopeDenied);
+                }
+            }
+        }
         let scope = session
             .project_id
             .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
@@ -986,10 +1007,28 @@ pub(crate) fn append_operation_updates(
                     "binding":binding_for_write,"observedSequence":observed,
                     "epochRoot":root}),
                 scope, owner: ctx_for_write.principal().clone() })?;
-        Ok(version_ref(&version))
+        let artifact = version_ref(&version);
+        let revision = previous_head
+            .as_ref()
+            .map_or(Some(1), |head| head.revision.checked_add(1))
+            .ok_or_else(|| invalid("provider context head revision exhausted"))?;
+        tx.sessions().put_provider_context_head(
+            &StoredProviderContextHead {
+                session_id: session_for_write.clone(),
+                context_epoch: binding_for_write.context_epoch.get(),
+                observed_sequence: observed,
+                kind: "ProviderOperationUpdateContext".into(),
+                attempt_id: None,
+                binding: json!(binding_for_write),
+                artifact: json!(artifact),
+                revision,
+            },
+            previous_head.as_ref().map(|head| head.revision),
+        )?;
+        Ok((artifact, true))
     });
-    artifacts.settle_host_bytes(store, &staged, committed.is_ok());
-    committed
+    artifacts.settle_host_bytes(store, &staged, matches!(&committed, Ok((_, true))));
+    committed.map(|(artifact, _)| artifact)
 }
 
 /// Build the exact frame sent to the application gateway for a recorded native call. The

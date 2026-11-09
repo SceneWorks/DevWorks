@@ -823,7 +823,7 @@ fn empty_completed_turn_keeps_a_cursor_and_replays_without_transport() {
         }).unwrap();
         assert_eq!(head.context_epoch, 0);
         assert_eq!(head.observed_sequence, 0);
-        assert_eq!(head.attempt_id, produced.result.attempt_id.as_ref().unwrap().0);
+        assert_eq!(head.attempt_id, Some(produced.result.attempt_id.as_ref().unwrap().0.clone()));
         assert_eq!(head.artifact, json!(continuation));
         assert_eq!(head.revision, 1);
         let old = f.artifacts.read_exact(f.store.as_ref(), &f.context, &previous, 1024 * 1024).unwrap().0;
@@ -1880,6 +1880,18 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
             Ok(())
         }).unwrap();
         let second = app.refresh_native_tool_context(&f.context, &id("session"), &changed).unwrap();
+        let head = read(f.store.as_ref(), |snapshot| snapshot.sessions().provider_context_head(&id("session"))).unwrap();
+        assert_eq!(head.kind, "ProviderOperationUpdateContext");
+        assert_eq!(head.context_epoch, 1);
+        assert_eq!(head.artifact, json!(second));
+        assert_eq!(app.refresh_native_tool_context(&f.context, &id("session"), &changed).unwrap().version_id, second.version_id);
+        let (recovered, recovered_binding, cursor) = app.recover_native_context_head(&f.context, &id("session")).unwrap().unwrap();
+        assert_eq!(recovered.version_id, second.version_id);
+        assert_eq!(recovered_binding, next_binding);
+        assert_eq!(cursor, head.observed_sequence);
+        app.shutdown().await;
+        let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        assert_eq!(app.recover_native_context_head(&f.context, &id("session")).unwrap().unwrap().0.version_id, second.version_id);
         let material: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
             f.store.as_ref(), &f.context, &second, 1024 * 1024).unwrap().0).unwrap();
         assert_eq!(material.messages.len(), 6);

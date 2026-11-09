@@ -466,19 +466,20 @@ fn provider_context_head(
     conn: &Connection,
     session: &Id,
 ) -> Result<Option<StoredProviderContextHead>, StorageError> {
-    type Raw = (i64, i64, String, String, String, i64);
+    type Raw = (i64, i64, String, Option<String>, String, String, i64);
     let raw: Option<Raw> = db(conn.query_row(
-        "SELECT context_epoch,observed_sequence,attempt_id,binding_json,artifact_json,revision FROM session_provider_context_heads WHERE session_id=?1",
+        "SELECT context_epoch,observed_sequence,kind,attempt_id,binding_json,artifact_json,revision FROM session_provider_context_heads WHERE session_id=?1",
         [session.as_str()],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
     ).optional())?;
     raw.map(
-        |(context_epoch, observed_sequence, attempt_id, binding, artifact, revision)| {
+        |(context_epoch, observed_sequence, kind, attempt_id, binding, artifact, revision)| {
             Ok(StoredProviderContextHead {
                 session_id: session.clone(),
                 context_epoch,
                 observed_sequence,
-                attempt_id: id_of(attempt_id)?,
+                kind,
+                attempt_id: attempt_id.map(id_of).transpose()?,
                 binding: json_of(&binding)?,
                 artifact: json_of(&artifact)?,
                 revision,
@@ -1577,6 +1578,11 @@ impl SessionRepository for Unit<'_> {
         if head.context_epoch < 0
             || head.observed_sequence < 0
             || expected_revision.unwrap_or(0).checked_add(1) != Some(head.revision)
+            || !matches!(
+                head.kind.as_str(),
+                "ProviderTurnContinuation" | "ProviderOperationUpdateContext"
+            )
+            || (head.kind == "ProviderTurnContinuation" && head.attempt_id.is_none())
         {
             return Err(invalid("provider context head revision or position"));
         }
@@ -1584,11 +1590,11 @@ impl SessionRepository for Unit<'_> {
         let artifact = json_text(&head.artifact);
         let changed = match expected_revision {
             Some(expected) => db(db(self.conn.prepare_cached(
-                "UPDATE session_provider_context_heads SET context_epoch=?2,observed_sequence=?3,attempt_id=?4,binding_json=?5,artifact_json=?6,revision=?7 WHERE session_id=?1 AND revision=?8",
-            ))?.execute(params![head.session_id.as_str(),head.context_epoch,head.observed_sequence,head.attempt_id.as_str(),binding,artifact,head.revision,expected]))?,
+                "UPDATE session_provider_context_heads SET context_epoch=?2,observed_sequence=?3,kind=?4,attempt_id=?5,binding_json=?6,artifact_json=?7,revision=?8 WHERE session_id=?1 AND revision=?9",
+            ))?.execute(params![head.session_id.as_str(),head.context_epoch,head.observed_sequence,head.kind,head.attempt_id.as_ref().map(Id::as_str),binding,artifact,head.revision,expected]))?,
             None => db(db(self.conn.prepare_cached(
-                "INSERT INTO session_provider_context_heads(session_id,context_epoch,observed_sequence,attempt_id,binding_json,artifact_json,revision) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-            ))?.execute(params![head.session_id.as_str(),head.context_epoch,head.observed_sequence,head.attempt_id.as_str(),binding,artifact,head.revision]))?,
+                "INSERT INTO session_provider_context_heads(session_id,context_epoch,observed_sequence,kind,attempt_id,binding_json,artifact_json,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            ))?.execute(params![head.session_id.as_str(),head.context_epoch,head.observed_sequence,head.kind,head.attempt_id.as_ref().map(Id::as_str),binding,artifact,head.revision]))?,
         };
         if changed != 1 {
             return Err(StorageError::ScopeDenied);
