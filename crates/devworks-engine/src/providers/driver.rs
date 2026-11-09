@@ -448,6 +448,15 @@ impl NativeProviders {
             return Err(StorageError::Cancelled);
         }
         request.validate().map_err(invalid)?;
+        if let InferenceInput::Generation {
+            response_headroom_tokens,
+            ..
+        } = &request.input
+            && attempt.output_headroom < response_headroom_tokens.get()
+        {
+            // The router's reserve must cover the headroom actually sent to the endpoint.
+            return Err(StorageError::ScopeDenied);
+        }
         if let InferenceInput::Generation { tools, .. } = &mut request.input {
             tools.sort_by(|a, b| {
                 a.capability_id
@@ -455,6 +464,18 @@ impl NativeProviders {
                     .cmp(b.capability_id.as_str())
                     .then_with(|| a.wire_name.cmp(&b.wire_name))
             });
+            if tools.iter().any(|tool| {
+                self.schemas
+                    .builtin_binding(&tool.capability_id, &tool.input_schema)
+                    .is_none()
+            }) {
+                // Schema discovery alone does not make a package or MCP invocation durable.
+                // Do not advertise a call the turn dispatcher cannot yet answer.
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "external tool dispatch is unavailable",
+                ));
+            }
         }
         let compaction = matches!(request.purpose, InferencePurpose::Compaction);
         if compaction != (logical.purpose == devworks_core::services::router::Purpose::Compaction)
@@ -1111,10 +1132,6 @@ impl OwnedInferenceSource for LazySource {
         attempt: &StoredInferenceAttempt,
         cancellation: &Cancellation,
     ) -> Result<(), StorageError> {
-        let registry_revision =
-            read_snapshot(self.owner.store.as_ref(), &ReadOptions::default(), |s| {
-                s.packages().registry_revision()
-            })?;
         let (prepared, connection) = self.owner.prepare(
             &self.context,
             &self.request,
@@ -1181,11 +1198,12 @@ impl OwnedInferenceSource for LazySource {
                         .router()
                         .connection(&captured.connection_id)?
                         .ok_or(StorageError::ScopeDenied)?;
+                    // External aliases are refused before admission; an unrelated package
+                    // registry edit cannot change this built-in-only request.
                     if connection.revision != expected_revision
                         || connection.account_revision
                             != publication.identity.binding.account_revision.get()
                         || !connection.enabled
-                        || tx.packages().registry_revision()? != registry_revision
                     {
                         return Err(StorageError::ScopeDenied);
                     }

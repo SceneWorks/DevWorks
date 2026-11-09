@@ -12,10 +12,10 @@ use devworks_core::{
             ArtifactRef, CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody,
         },
         results::{DomainCommandReply, DomainDecision, DomainQueryReply},
-        support::DomainErrorCode,
+        support::{DomainErrorCode, DomainFault},
     },
     providers::context::{ContentBlock, Message, MessageRole, ProviderContext, ResultBlock},
-    registry::{self, Envelope, Mode, OperationDescriptor, SchemaRevision},
+    registry::{Envelope, Mode, OperationDescriptor, SchemaRevision},
     services::{
         artifacts::{ArtifactService, host::HostArtifactPublication, version_ref},
         sessions::{
@@ -1140,7 +1140,9 @@ pub(crate) fn dispatch_one(
                 completed(serde_json::to_vec(&reply).map_err(invalid)?)
             }
             Ok(DomainQueryReply::Rejected { fault, .. }) => {
-                if matches!(
+                if let Some(blocked) = blocked_outcome(&fault)? {
+                    (blocked, None)
+                } else if matches!(
                     fault.retry,
                     RetryAdvice::SameCommand
                         | RetryAdvice::ResolveReceipt
@@ -1150,8 +1152,9 @@ pub(crate) fn dispatch_one(
                         Unavailable::UnsupportedRuntime,
                         "tool query requires retry or reconciliation",
                     ));
+                } else {
+                    failed(&format!("domain_{:?}", fault.code))
                 }
-                failed(&format!("domain_{:?}", fault.code))
             }
             Err(_) => {
                 return Err(StorageError::unavailable(
@@ -1593,7 +1596,10 @@ fn recorded_command(
                 .ok_or_else(|| invalid("unknown tool effect lacks operation identity"))?;
             (ToolOutcome::OutcomeUnknown { operation_id }, None)
         }
-        DomainDecision::Refused { fault } => failed(&format!("domain_{:?}", fault.code)),
+        DomainDecision::Refused { fault } => match blocked_outcome(fault)? {
+            Some(blocked) => (blocked, None),
+            None => failed(&format!("domain_{:?}", fault.code)),
+        },
         DomainDecision::Accepted { operation_id } => accepted(
             serde_json::to_vec(reply).map_err(invalid)?,
             operation_id.clone(),
@@ -1602,6 +1608,21 @@ fn recorded_command(
             completed(serde_json::to_vec(reply).map_err(invalid)?)
         }
     })
+}
+
+fn blocked_outcome(fault: &DomainFault) -> Result<Option<ToolOutcome>, StorageError> {
+    if fault.code != DomainErrorCode::DependencyBlocked || fault.blocker_ids.0.is_empty() {
+        return Ok(None);
+    }
+    if fault.blocker_ids.0.len() > 100 {
+        return Err(StorageError::unavailable(
+            Unavailable::UnsupportedRuntime,
+            "blocked tool response exceeds transcript bound",
+        ));
+    }
+    Ok(Some(ToolOutcome::DependencyBlocked {
+        blocker_ids: fault.blocker_ids.0.clone(),
+    }))
 }
 
 fn failed(code: &str) -> (ToolOutcome, Option<Vec<u8>>) {
@@ -1617,27 +1638,9 @@ fn selected_builtin(
     schemas: &RegisteredSchemas,
     call: &CompleteToolCall,
 ) -> Result<(&'static OperationDescriptor, Mode, SchemaRevision), StorageError> {
-    let revision =
-        SchemaRevision(u32::try_from(call.input_schema.revision.get()).map_err(invalid)?);
-    for descriptor in registry::all() {
-        if call.capability_id.as_str() != format!("devworks/{}", descriptor.name) {
-            continue;
-        }
-        for binding in descriptor.modes {
-            let Ok(registered) =
-                schemas.builtin(descriptor.name, binding.mode, revision, "recorded")
-            else {
-                continue;
-            };
-            if registered.input_schema.schema_id == call.input_schema.schema_id
-                && registered.input_schema.revision == call.input_schema.revision
-                && registered.input_schema.sha256 == call.input_schema.sha256
-            {
-                return Ok((descriptor, binding.mode, revision));
-            }
-        }
-    }
-    Err(StorageError::ScopeDenied)
+    schemas
+        .builtin_binding(&call.capability_id, &call.input_schema)
+        .ok_or(StorageError::ScopeDenied)
 }
 fn static_id(value: &str) -> Id {
     Id::new(value).expect("static tool error code")
@@ -1650,7 +1653,7 @@ fn invalid(error: impl ToString) -> StorageError {
 mod tests {
     use super::*;
     use devworks_core::protocol::{
-        AttemptId, CommandId, CorrelationId, Counter, Protocol, Receipt, Revision,
+        AttemptId, CommandId, CorrelationId, Counter, HoldId, Protocol, Receipt, Revision,
     };
 
     fn key(native: &str) -> ToolCallKey {
@@ -1719,9 +1722,39 @@ mod tests {
     }
 
     #[test]
+    fn blocked_command_keeps_actual_hold_identity() {
+        let hold = HoldId(Id::new("blocked-hold").unwrap());
+        let mut fault = devworks_core::services::sessions::Refusal::new(
+            DomainErrorCode::DependencyBlocked,
+            "root",
+            None,
+        )
+        .retry(RetryAdvice::AfterBlockerClears)
+        .fault(CorrelationId(Id::new("correlation").unwrap()));
+        fault.blocker_ids.0.push(hold.clone());
+        let reply = CommandReply::Recorded {
+            protocol: Protocol::Draft1,
+            receipt: Receipt {
+                command_id: CommandId(Id::new("command").unwrap()),
+                committed_sequence: Revision::new(1).unwrap(),
+                accepted_at_ms: Counter::new(1).unwrap(),
+                request_digest: "a".repeat(64),
+                operation_id: None,
+                decision: DomainDecision::Refused { fault },
+            },
+            replayed: false,
+        };
+        let (outcome, bytes) = recorded_command(&reply).unwrap();
+        assert!(
+            matches!(outcome, ToolOutcome::DependencyBlocked { blocker_ids } if blocker_ids == vec![hold])
+        );
+        assert!(bytes.is_none());
+    }
+
+    #[test]
     fn domain_tool_arguments_cannot_choose_operation_or_replay_identity() {
         let session = Id::new("session").unwrap();
-        let descriptor = registry::find("sessions.get").unwrap();
+        let descriptor = devworks_core::registry::find("sessions.get").unwrap();
         let one = frame(
             &session,
             &key("call-a"),
@@ -1770,7 +1803,7 @@ mod tests {
     #[test]
     fn specialized_tool_identity_is_replaced_and_selector_still_checked() {
         let session = Id::new("session").unwrap();
-        let descriptor = registry::find("runs.inspect").unwrap();
+        let descriptor = devworks_core::registry::find("runs.inspect").unwrap();
         let valid = json!({"protocol":"other","queryId":"provider-chosen",
             "query":{"kind":"runs.inspect","rootId":"root"}});
         let built = frame(

@@ -66,6 +66,29 @@ impl RegisteredSchemas {
             input_schema: reference,
         })
     }
+    /// Only exact registered built-in bindings have a durable turn dispatcher. A package
+    /// declaring a `devworks/` capability ID is still an external tool.
+    pub(crate) fn builtin_binding(
+        &self,
+        capability: &QualifiedId,
+        reference: &SchemaRef,
+    ) -> Option<(&'static registry::OperationDescriptor, Mode, SchemaRevision)> {
+        let operation = capability.as_str().strip_prefix("devworks/")?;
+        let descriptor = registry::find(operation)?;
+        let revision = SchemaRevision(u32::try_from(reference.revision.get()).ok()?);
+        for binding in descriptor.modes {
+            let Ok(registered) = self.builtin(operation, binding.mode, revision, "recorded") else {
+                continue;
+            };
+            if registered.input_schema.schema_id == reference.schema_id
+                && registered.input_schema.revision == reference.revision
+                && registered.input_schema.sha256 == reference.sha256
+            {
+                return Some((descriptor, binding.mode, revision));
+            }
+        }
+        None
+    }
     fn registered(&self, op: &str, mode: Mode) -> bool {
         match mode {
             Mode::Query => self.cases.has_query(op),

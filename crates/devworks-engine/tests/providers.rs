@@ -786,6 +786,61 @@ fn native_generation_persists_text_usage_and_exact_receipt_replay_without_second
     let replay=f.produce(request).await.unwrap();assert!(matches!(replay.accounting,DriveOutcome::AlreadyDispatched));assert_eq!(replay.result.attempt_id,Some(AttemptId(attempt)));assert_eq!(replay.result.binding.unwrap(),binding.clone());assert_eq!(replay.result.turn_start_sequence,Some(0));assert_eq!(replay.result.source_context.as_ref().unwrap().sha256.as_str(),outcome.result.source_context.as_ref().unwrap().sha256.as_str());assert!(replay.result.instruction_targets.is_none());assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(),1);assert!(f.http.lock().unwrap().closed.load(Ordering::SeqCst));
 });
 }
+
+#[test]
+fn unhandled_external_tool_is_refused_before_native_transport() {
+    runtime().block_on(async {
+        let f = Fx::new("CompatibleChat", Script::sse("data: [DONE]\n\n"), false);
+        let mut tool = f
+            .driver
+            .schemas()
+            .builtin(
+                "sessions.get",
+                devworks_core::registry::Mode::Query,
+                devworks_core::registry::SchemaRevision(1),
+                "external",
+            )
+            .unwrap();
+        for capability in ["fixture/tool", "devworks/foreign"] {
+            tool.capability_id = capability.to_string().try_into().unwrap();
+            assert!(matches!(
+                f.produce(f.generation(vec![tool.clone()])).await,
+                Err(StorageError::StorageUnavailable {
+                    cause: Unavailable::UnsupportedRuntime,
+                    ..
+                })
+            ));
+        }
+        assert!(f.http.lock().unwrap().requests.lock().unwrap().is_empty());
+    });
+}
+
+#[test]
+fn native_generation_refuses_unreserved_response_headroom() {
+    runtime().block_on(async {
+        let f = Fx::new("CompatibleChat", Script::sse("data: [DONE]\n\n"), false);
+        let request = f.generation(vec![]);
+        let mut invocation = f.native_invocation(
+            request,
+            PricingContext {
+                input_semantics: InputSemantics::Unknown,
+                cache_read_possible: false,
+                cache_write_possible: false,
+                cache_write_ttl_ms: None,
+            },
+            vec!["Text".into()],
+            None,
+            None,
+            false,
+        );
+        invocation.attempt.output_headroom = 9;
+        assert!(matches!(
+            f.driver.produce_cancellable(invocation, None).await,
+            Err(StorageError::ScopeDenied)
+        ));
+        assert!(f.http.lock().unwrap().requests.lock().unwrap().is_empty());
+    });
+}
 #[test]
 fn native_generation_attributes_observed_context_epoch_change_to_usage() {
     runtime().block_on(async {
