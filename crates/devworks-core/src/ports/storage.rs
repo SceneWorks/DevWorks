@@ -589,8 +589,15 @@ pub trait ReadSnapshot {
 // ---------------------------------------------------------------------------------------------
 // Actors and store identity
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredActor {
+    pub kind: PrincipalKind,
+    pub display_name: String,
+}
+
 pub trait ActorRead {
     fn actor_kind(&self, actor: &ActorId) -> Result<Option<PrincipalKind>, StorageError>;
+    fn actor(&self, actor: &ActorId) -> Result<Option<StoredActor>, StorageError>;
 }
 pub trait ActorRegistry: ActorRead {
     /// Records a host-resolved principal for attribution. Idempotent for the same kind; a

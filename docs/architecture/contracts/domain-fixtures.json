@@ -2508,7 +2508,7 @@
   {
     "id": "result-agents.post",
     "entry": "operation-result.r7",
-    "raw": "{\"kind\":\"agents.post\",\"value\":{\"created\":false,\"message\":{\"id\":\"id-a\",\"projectId\":\"project-a\",\"channel\":\"fixture\",\"kind\":\"Info\",\"fromActorId\":\"actor-a\",\"body\":\"Fixture content\",\"createdAtMs\":\"0\",\"blocking\":false,\"toHuman\":false},\"recipients\":\"0\"}}",
+    "raw": "{\"kind\":\"agents.post\",\"value\":{\"created\":false,\"message\":{\"id\":\"id-a\",\"projectId\":\"project-a\",\"channel\":\"fixture\",\"kind\":\"Info\",\"fromActorId\":\"actor-a\",\"from\":{\"name\":\"fixture\",\"kind\":\"fixture\"},\"body\":\"Fixture content\",\"createdAtMs\":\"0\",\"blocking\":false,\"toHuman\":false},\"recipients\":\"0\"}}",
     "typedValid": true,
     "schemaValid": true
   },

@@ -1130,6 +1130,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `kind` | `RetainedMessageKind` |
 | `fromActorId` | `ActorId` |
 | `fromSessionId` | `?Id` |
+| `from` | `RetainedActor` |
 | `body` | `Content` |
 | `createdAtMs` | `Counter` |
 | `state` | `?RetainedMessageState` |
@@ -1141,9 +1142,21 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `resourceName` | `?Text` |
 | `inReplyToId` | `?Id` |
 | `resolvedByActorId` | `?ActorId` |
+| `resolvedBy` | `?RetainedActor` |
 | `resolvedAtMs` | `?Counter` |
 | `delivery` | `?RetainedDeliveryState` |
 | `handedOver` | `?bool` |
+
+### RetainedActor
+
+| Field | Type |
+| --- | --- |
+| `name` | `Text` |
+| `kind` | `Text` |
+| `sessionId` | `?Id` |
+| `harness` | `?Text` |
+| `model` | `?Text` |
+| `host` | `?Text` |
 
 ### RetainedPostResult
 

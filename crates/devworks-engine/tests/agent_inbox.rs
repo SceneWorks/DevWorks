@@ -58,6 +58,8 @@ fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
             } => {
                 assert!(value.created);
                 assert_eq!(value.message.body.0, "Gateway message");
+                assert_eq!(value.message.from.name.0, "fixture");
+                assert_eq!(value.message.from.kind.0, "user");
                 assert_eq!(value.recipients.get(), 1);
                 value.message.id.clone()
             }
@@ -184,6 +186,18 @@ fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
             .version
             .get(),
         3
+    );
+    assert_eq!(
+        last_answer
+            .resolved
+            .as_ref()
+            .unwrap()
+            .resolved_by
+            .as_ref()
+            .unwrap()
+            .name
+            .0,
+        "fixture"
     );
     assert!(!common::read(store.as_ref(), |snapshot| {
         snapshot

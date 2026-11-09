@@ -302,6 +302,12 @@ macro_rules! mem_reads {
             fn actor_kind(&self, a: &ActorId) -> Result<Option<PrincipalKind>, StorageError> {
                 Ok(self.state.actors.get(a.0.as_str()).copied())
             }
+            fn actor(&self, a: &ActorId) -> Result<Option<StoredActor>, StorageError> {
+                Ok(self.state.actors.get(a.0.as_str()).map(|kind| StoredActor {
+                    kind: *kind,
+                    display_name: a.0.as_str().to_owned(),
+                }))
+            }
         }
         impl CommandLedgerRead for $t {
             fn lookup(&self, i: &ReceiptIdentity) -> Result<Option<LedgerEntry>, StorageError> {

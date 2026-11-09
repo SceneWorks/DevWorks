@@ -1362,6 +1362,7 @@ pub struct RetainedMessage {
     pub from_actor_id: ActorId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_session_id: Option<Id>,
+    pub from: RetainedActor,
     pub body: Content,
     pub created_at_ms: Counter,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1381,6 +1382,8 @@ pub struct RetainedMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_by_actor_id: Option<ActorId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_by: Option<RetainedActor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_at_ms: Option<Counter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<RetainedDeliveryState>,
@@ -1395,6 +1398,7 @@ impl Check for RetainedMessage {
         self.kind.check()?;
         self.from_actor_id.check()?;
         self.from_session_id.check()?;
+        self.from.check()?;
         self.body.check()?;
         self.created_at_ms.check()?;
         self.state.check()?;
@@ -1406,11 +1410,42 @@ impl Check for RetainedMessage {
         self.resource_name.check()?;
         self.in_reply_to_id.check()?;
         self.resolved_by_actor_id.check()?;
+        self.resolved_by.check()?;
         self.resolved_at_ms.check()?;
         self.delivery.check()?;
         self.handed_over.check()?;
         crate::protocol::rules::record(
             "RetainedMessage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedActor {
+    pub name: Text,
+    pub kind: Text,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<Text>,
+}
+impl Check for RetainedActor {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.kind.check()?;
+        self.session_id.check()?;
+        self.harness.check()?;
+        self.model.check()?;
+        self.host.check()?;
+        crate::protocol::rules::record(
+            "RetainedActor",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())

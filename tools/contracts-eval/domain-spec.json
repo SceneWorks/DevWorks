@@ -648,6 +648,7 @@
         "kind": "RetainedMessageKind",
         "from_actor_id": "ActorId",
         "from_session_id": "?Id",
+        "from": "RetainedActor",
         "body": "Content",
         "created_at_ms": "Counter",
         "state": "?RetainedMessageState",
@@ -659,9 +660,21 @@
         "resource_name": "?Text",
         "in_reply_to_id": "?Id",
         "resolved_by_actor_id": "?ActorId",
+        "resolved_by": "?RetainedActor",
         "resolved_at_ms": "?Counter",
         "delivery": "?RetainedDeliveryState",
         "handed_over": "?bool"
+      }
+    },
+    "RetainedActor": {
+      "kind": "record",
+      "fields": {
+        "name": "Text",
+        "kind": "Text",
+        "session_id": "?Id",
+        "harness": "?Text",
+        "model": "?Text",
+        "host": "?Text"
       }
     },
     "RetainedPostResult": {

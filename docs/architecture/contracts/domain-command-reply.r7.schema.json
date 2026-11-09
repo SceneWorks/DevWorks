@@ -22138,6 +22138,62 @@
       ],
       "type": "string"
     },
+    "RetainedActor": {
+      "additionalProperties": false,
+      "properties": {
+        "harness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "sessionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "type": "object"
+    },
     "RetainedDeliveryState": {
       "enum": [
         "Pending",
@@ -22199,6 +22255,9 @@
             }
           ]
         },
+        "from": {
+          "$ref": "#/$defs/RetainedActor"
+        },
         "fromActorId": {
           "$ref": "#/$defs/Id"
         },
@@ -22257,6 +22316,16 @@
             }
           ]
         },
+        "resolvedBy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetainedActor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "resolvedByActorId": {
           "anyOf": [
             {
@@ -22307,6 +22376,7 @@
         "channel",
         "kind",
         "fromActorId",
+        "from",
         "body",
         "createdAtMs",
         "blocking",

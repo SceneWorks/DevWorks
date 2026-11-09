@@ -15,15 +15,15 @@ use crate::ports::{
 };
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
-    AgentMessage, AgentRecord, CheckpointRecord, MessageClass, MessageDirection,
+    AgentMessage, AgentRecord, CheckpointRecord, MessageClass, MessageDirection, RetainedActor,
     RetainedItemVersion, RetainedMessage, RetainedMessageKind, RetainedMessageResolution,
     RetainedMessageState, RetainedPostResult,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{
-    ActorId, AssignmentId, CorrelationId, Counter, DomainErrorCode, DomainFault, OperationState,
-    ProjectId, Revision, RevisionDimension,
+    ActorId, AssignmentId, CorrelationId, Counter, DomainErrorCode, DomainFault, Id,
+    OperationState, ProjectId, Revision, RevisionDimension,
 };
 use crate::services::cursor::CursorBinding;
 use crate::services::runs::substrate::{Fenced, NewRunAssignment};
@@ -910,7 +910,41 @@ impl AgentService {
     }
 }
 
-fn retained_message(row: StoredAgentMessage) -> Result<RetainedMessage, StorageError> {
+fn retained_actor(
+    tx: &mut dyn WriteTransaction,
+    actor: &ActorId,
+    session: Option<Id>,
+) -> Result<RetainedActor, StorageError> {
+    let stored = tx.actors().actor(actor)?.ok_or(StorageError::ScopeDenied)?;
+    let kind = if session.is_some() {
+        "session"
+    } else {
+        match stored.kind {
+            PrincipalKind::Human => "user",
+            PrincipalKind::Agent | PrincipalKind::Package | PrincipalKind::McpClient => "agent",
+            PrincipalKind::Host | PrincipalKind::Schedule => "system",
+        }
+    };
+    Ok(RetainedActor {
+        name: BoundedText(stored.display_name),
+        kind: BoundedText(kind.into()),
+        session_id: session,
+        harness: None,
+        model: None,
+        host: None,
+    })
+}
+
+fn retained_message(
+    tx: &mut dyn WriteTransaction,
+    row: StoredAgentMessage,
+) -> Result<RetainedMessage, StorageError> {
+    let from = retained_actor(tx, &row.from_actor_id, row.sender_session_id.clone())?;
+    let resolved_by = row
+        .resolved_by_actor_id
+        .as_ref()
+        .map(|actor| retained_actor(tx, actor, row.resolved_by_session_id.clone()))
+        .transpose()?;
     let kind = match row.message_class.as_str() {
         "Info" => RetainedMessageKind::Info,
         "Question" => RetainedMessageKind::Question,
@@ -942,6 +976,7 @@ fn retained_message(row: StoredAgentMessage) -> Result<RetainedMessage, StorageE
         kind,
         from_actor_id: row.from_actor_id,
         from_session_id: row.sender_session_id,
+        from,
         body: BoundedText(row.body),
         created_at_ms: Counter::new(row.created_at_ms)
             .map_err(|e| StorageError::InvalidRecord(e.into()))?,
@@ -954,6 +989,7 @@ fn retained_message(row: StoredAgentMessage) -> Result<RetainedMessage, StorageE
         resource_name: row.resource_name.map(BoundedText),
         in_reply_to_id: row.in_reply_to_id,
         resolved_by_actor_id: row.resolved_by_actor_id,
+        resolved_by,
         resolved_at_ms: row
             .resolved_at_ms
             .map(Counter::new)
@@ -1025,13 +1061,16 @@ fn post_retained(
     )?;
     Ok(RetainedPostResult {
         created: posted.created,
-        message: retained_message(posted.message)?,
+        message: retained_message(tx, posted.message)?,
         recipients: Counter::new(
             i64::try_from(posted.recipients)
                 .map_err(|_| StorageError::InvalidRecord("too many retained recipients".into()))?,
         )
         .map_err(|e| StorageError::InvalidRecord(e.into()))?,
-        resolved: posted.resolved.map(retained_message).transpose()?,
+        resolved: posted
+            .resolved
+            .map(|row| retained_message(tx, row))
+            .transpose()?,
         item_versions: (!posted.item_versions.is_empty()).then(|| {
             BoundedList(
                 posted
