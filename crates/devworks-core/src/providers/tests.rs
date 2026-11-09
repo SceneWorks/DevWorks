@@ -4,6 +4,77 @@ use crate::protocol::provider::*;
 use crate::protocol::{Counter, Id, Revision};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+
+#[test]
+fn transcript_context_preserves_every_host_notice_in_order() {
+    use crate::ports::storage::StoredEntry;
+    use crate::protocol::ActorId;
+    let mut material = Material::new();
+    let first = material.put(b"Opened project", "text/plain");
+    let second = material.put(b"Navigated issue", "text/plain");
+    let make_entry = |sequence: i64, body: TranscriptBody| StoredEntry {
+        session_id: id("session"),
+        sequence,
+        entry_id: id(&format!("entry-{sequence}")),
+        batch_id: id(&format!("batch-{sequence}")),
+        context_epoch: 0,
+        actor: ActorId(id("actor")),
+        kind: "transcript".into(),
+        created_at_ms: sequence,
+        body: serde_json::to_value(body).unwrap(),
+    };
+    let entries = vec![
+        make_entry(
+            1,
+            TranscriptBody::HostNotice {
+                source: id("source-1"),
+                artifact: first,
+            },
+        ),
+        make_entry(
+            2,
+            TranscriptBody::UserMessage {
+                content: vec![UserContent::Text {
+                    text: "Do it".into(),
+                }],
+            },
+        ),
+        make_entry(
+            3,
+            TranscriptBody::HostNotice {
+                source: id("source-2"),
+                artifact: second,
+            },
+        ),
+    ];
+    let context = ProviderContext::from_transcript(
+        &entries,
+        vec![],
+        GenerationParameters::default(),
+        |artifact| Ok(String::from_utf8(material.blobs[artifact.sha256.as_str()].clone()).unwrap()),
+        |_| None,
+    )
+    .unwrap();
+    let texts: Vec<_> = context
+        .messages
+        .iter()
+        .map(|message| match &message.content[0] {
+            ContentBlock::Text { text, .. } => text.as_str(),
+            _ => panic!("expected text"),
+        })
+        .collect();
+    assert_eq!(texts, ["Opened project", "Do it", "Navigated issue"]);
+    assert!(
+        ProviderContext::from_transcript(
+            &entries[1..],
+            vec![],
+            GenerationParameters::default(),
+            |_| unreachable!(),
+            |_| None,
+        )
+        .is_err()
+    );
+}
 fn id(s: &str) -> Id {
     Id::new(s).unwrap()
 }

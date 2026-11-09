@@ -1,6 +1,8 @@
 //! Closed V1 material referenced by InferenceInput::Generation.context. No authority or billing.
 use super::{ProviderError, ResponseMode};
+use crate::ports::storage::{StorageError, StoredEntry};
 use crate::protocol::provider::{ArtifactRef, NativeBinding};
+use crate::protocol::provider::{ToolOutcome, TranscriptBody, UserContent};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -119,6 +121,150 @@ pub struct GenerationParameters {
     pub user_id: Option<String>,
 }
 impl ProviderContext {
+    /// Build provider history from immutable transcript entries in sequence order. Artifact text
+    /// and the frozen wire alias are resolved by the host under the current session authority.
+    /// Unsupported epoch transitions are refused rather than silently dropping old context.
+    pub fn from_transcript(
+        entries: &[StoredEntry],
+        instructions: Vec<TextBlock>,
+        parameters: GenerationParameters,
+        mut read_text: impl FnMut(&ArtifactRef) -> Result<String, StorageError>,
+        mut wire_alias: impl FnMut(&crate::protocol::provider::QualifiedId) -> Option<String>,
+    ) -> Result<Self, StorageError> {
+        let mut messages = Vec::new();
+        let mut next = 1;
+        for entry in entries {
+            if entry.sequence != next {
+                return Err(StorageError::InvalidRecord(
+                    "transcript history has a gap".into(),
+                ));
+            }
+            next += 1;
+            let body: TranscriptBody = serde_json::from_value(entry.body.clone())
+                .map_err(|_| StorageError::InvalidRecord("invalid transcript body".into()))?;
+            let (role, content) = match body {
+                TranscriptBody::UserMessage { content } => {
+                    let mut blocks = Vec::new();
+                    for item in content {
+                        blocks.push(match item {
+                            UserContent::Text { text } => ContentBlock::Text { text, cache: None },
+                            UserContent::Attachment { artifact } => {
+                                if !artifact.media_type.starts_with("image/") {
+                                    return Err(StorageError::InvalidRecord(
+                                        "unsupported user attachment".into(),
+                                    ));
+                                }
+                                ContentBlock::Image {
+                                    artifact,
+                                    detail: None,
+                                    cache: None,
+                                }
+                            }
+                        });
+                    }
+                    (MessageRole::User, blocks)
+                }
+                TranscriptBody::AssistantAttempt { visible_text, .. } => (
+                    MessageRole::Assistant,
+                    vec![ContentBlock::Text {
+                        text: visible_text,
+                        cache: None,
+                    }],
+                ),
+                TranscriptBody::HostNotice { artifact, .. } => (
+                    MessageRole::User,
+                    vec![ContentBlock::Text {
+                        text: read_text(&artifact)?,
+                        cache: None,
+                    }],
+                ),
+                TranscriptBody::ToolCallRecorded { tool_call } => {
+                    let wire_name = wire_alias(&tool_call.capability_id).ok_or_else(|| {
+                        StorageError::InvalidRecord("missing frozen tool alias".into())
+                    })?;
+                    (
+                        MessageRole::Assistant,
+                        vec![ContentBlock::ToolCall {
+                            call_id: tool_call.call.native_call_id,
+                            wire_name,
+                            arguments: tool_call.arguments,
+                        }],
+                    )
+                }
+                TranscriptBody::ToolResponseRecorded { call, outcome } => {
+                    let (content, is_error) = match outcome {
+                        ToolOutcome::Completed { artifacts } => {
+                            let mut blocks = Vec::new();
+                            for artifact in artifacts {
+                                blocks.push(if artifact.media_type.starts_with("image/") {
+                                    ResultBlock::Image {
+                                        artifact,
+                                        detail: None,
+                                    }
+                                } else if artifact.media_type.starts_with("text/")
+                                    || artifact.media_type == "application/json"
+                                {
+                                    ResultBlock::Text {
+                                        text: read_text(&artifact)?,
+                                    }
+                                } else {
+                                    return Err(StorageError::InvalidRecord(
+                                        "unsupported tool result artifact".into(),
+                                    ));
+                                });
+                            }
+                            (blocks, false)
+                        }
+                        other => (
+                            vec![ResultBlock::Text {
+                                text: serde_json::to_string(&other).map_err(|_| {
+                                    StorageError::InvalidRecord("invalid tool outcome".into())
+                                })?,
+                            }],
+                            true,
+                        ),
+                    };
+                    (
+                        MessageRole::User,
+                        vec![ContentBlock::ToolResult {
+                            call_id: call.native_call_id,
+                            content,
+                            is_error,
+                            cache: None,
+                        }],
+                    )
+                }
+                TranscriptBody::NativeItem { binding, artifact } => (
+                    MessageRole::Assistant,
+                    vec![ContentBlock::Native { binding, artifact }],
+                ),
+                TranscriptBody::OperationUpdate { artifact, .. } => (
+                    MessageRole::User,
+                    vec![ContentBlock::Text {
+                        text: read_text(&artifact)?,
+                        cache: None,
+                    }],
+                ),
+                TranscriptBody::ContextEpochChanged { .. } => {
+                    return Err(StorageError::InvalidRecord(
+                        "context epoch snapshot required".into(),
+                    ));
+                }
+            };
+            messages.push(Message { role, content });
+        }
+        let context = Self {
+            version: 1,
+            instructions,
+            messages,
+            parameters,
+        };
+        context.validate().map_err(|error| {
+            StorageError::InvalidRecord(format!("invalid provider context: {error:?}"))
+        })?;
+        Ok(context)
+    }
+
     pub fn validate(&self) -> Result<(), ProviderError> {
         if self.version != 1 {
             return Err(ProviderError::InvalidInput("context_version"));
