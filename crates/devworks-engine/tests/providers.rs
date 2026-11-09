@@ -586,6 +586,29 @@ impl Fx {
         auxiliary: (bool, Option<Cancellation>),
     ) -> Result<devworks_engine::providers::driver::ProviderInvocation, StorageError> {
         let (embedding_session, cancellation) = auxiliary;
+        self.driver
+            .produce_cancellable(
+                self.native_invocation(
+                    request,
+                    pricing,
+                    modalities,
+                    service_tier,
+                    processing_region,
+                    embedding_session,
+                ),
+                cancellation,
+            )
+            .await
+    }
+    fn native_invocation(
+        &self,
+        request: InferenceRequest,
+        pricing: PricingContext,
+        modalities: Vec<String>,
+        service_tier: Option<String>,
+        processing_region: Option<String>,
+        embedding_session: bool,
+    ) -> devworks_engine::providers::driver::NativeInvocation {
         let embedding = matches!(request.input, InferenceInput::Embedding { .. });
         let (selection, query) = if embedding {
             self.driver.embedding_selection(&id("space")).unwrap()
@@ -668,20 +691,15 @@ impl Fx {
         };
         let source_fences = self.source_fences.lock().unwrap().clone();
         let instruction_targets = self.instruction_targets.lock().unwrap().clone();
-        self.driver
-            .produce_cancellable(
-                devworks_engine::providers::driver::NativeInvocation {
-                    source_fences,
-                    instruction_targets,
-                    context: self.context.clone(),
-                    logical,
-                    category: ReportCategory::Assistant,
-                    attempt,
-                    request,
-                },
-                cancellation,
-            )
-            .await
+        devworks_engine::providers::driver::NativeInvocation {
+            source_fences,
+            instruction_targets,
+            context: self.context.clone(),
+            logical,
+            category: ReportCategory::Assistant,
+            attempt,
+            request,
+        }
     }
     fn transcript(&self) -> Vec<StoredEntry> {
         read(self.store.as_ref(), |s| {
@@ -689,14 +707,77 @@ impl Fx {
         })
     }
 }
+
+fn tool_runtime_composition(f: &Fx) -> devworks_engine::Composition {
+    let connections = Arc::new(ConnectionService::new(
+        f.h.ids.clone(),
+        f.h.clock(),
+        f.store.clone(),
+        Arc::new(NoNetwork),
+        Arc::new(SessionSecrets::new()),
+        Arc::new(EntropyFixture),
+    ));
+    let router = Arc::new(InferenceRouter::new(
+        f.h.ids.clone(),
+        f.h.clock(),
+        connections.clone(),
+    ));
+    let cases = UseCases::new()
+        .with_router(router)
+        .with_connections(connections)
+        .with_sessions(Arc::new(
+            devworks_core::services::sessions::SessionService::new(
+                f.h.ids.clone(),
+                f.store.clone(),
+            ),
+        ));
+    let mut config = devworks_engine::RuntimeConfig::new(id("tool-dispatcher"));
+    config.providers = Some(ProviderComposition::new(f.http.clone()));
+    config.collect_interval = std::time::Duration::from_secs(3600);
+    devworks_engine::Composition {
+        store: f.store.clone(),
+        clock: f.h.clock(),
+        ids: f.h.ids.clone(),
+        authority: Arc::new(Authority),
+        artifacts: f.artifacts.clone(),
+        resources: Arc::new(devworks_core::services::resources::ResourceService::new(
+            f.h.ids.clone(),
+            f.h.clock(),
+        )),
+        process_host: Arc::new(devworks_adapters::process::NativeProcessHost),
+        runs: devworks_engine::RunComposition::new(Arc::new(ControlService::new(f.h.ids.clone()))),
+        power: Arc::new(devworks_adapters::power::NativePower),
+        diagnostics: Arc::new(
+            devworks_core::services::diagnostics::DiagnosticService::new(
+                f.store.clone(),
+                f.h.ids.clone(),
+                f.h.clock(),
+                None,
+            ),
+        ),
+        git: None,
+        browser: None,
+        packages: None,
+        use_cases: cases,
+        consumers: vec![],
+        indexing: None,
+        config,
+    }
+}
+
 #[test]
 fn native_generation_persists_text_usage_and_exact_receipt_replay_without_second_transport() {
     runtime().block_on(async{
     let f=Fx::new("CompatibleChat",Script::sse("data: {\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n"),false);
     let request=f.generation(vec![]);let outcome=f.produce(request.clone()).await.unwrap();assert_eq!(outcome.result.outcome,Some(AttemptEnd::Completed));assert_eq!(f.transcript().iter().filter(|r|r.kind=="AssistantAttempt").count(),1);assert_eq!(f.transcript()[0].body["visibleText"],"hello");
     let attempt=match outcome.accounting{DriveOutcome::Settled(balance)=>{assert!(balance.local_quiescent);balance.attempt_id},other=>panic!("{other:?}")};
+    assert_eq!(outcome.result.attempt_id, Some(AttemptId(attempt.clone())));
+    assert_eq!(outcome.result.turn_start_sequence, Some(0));
+    let binding = outcome.result.binding.as_ref().expect("durable provider binding");
+    assert_eq!(binding.connection_id, id("connection"));
+    assert_eq!(binding.context_epoch.get(), 0);
     let observations=read(f.store.as_ref(),|s|s.usage().usage_observations(&attempt,None,64));assert_eq!(observations.len(),1);
-    let replay=f.produce(request).await.unwrap();assert!(matches!(replay.accounting,DriveOutcome::AlreadyDispatched));assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(),1);assert!(f.http.lock().unwrap().closed.load(Ordering::SeqCst));
+    let replay=f.produce(request).await.unwrap();assert!(matches!(replay.accounting,DriveOutcome::AlreadyDispatched));assert_eq!(replay.result.attempt_id,Some(AttemptId(attempt)));assert_eq!(replay.result.binding.unwrap(),binding.clone());assert_eq!(replay.result.turn_start_sequence,Some(0));assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(),1);assert!(f.http.lock().unwrap().closed.load(Ordering::SeqCst));
 });
 }
 #[test]
@@ -789,9 +870,6 @@ fn successful_native_end_closes_without_waiting_for_http_eof_and_keeps_tool_argu
 #[test]
 fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_response() {
     runtime().block_on(async {
-        use devworks_adapters::{power::NativePower, process::NativeProcessHost};
-        use devworks_core::services::{diagnostics::DiagnosticService, resources::ResourceService};
-        use devworks_engine::{Composition, RuntimeConfig, RunComposition, boot};
         let event = json!({"choices":[{"index":0,"delta":{"content":"Checking the requested sessions.","tool_calls":[
             {"index":0,"id":"bad","type":"function","function":{"name":"get_session","arguments":"{\"unexpected\":true}"}},
             {"index":1,"id":"good","type":"function","function":{"name":"get_session","arguments":"{\"sessionId\":\"session\"}"}},
@@ -806,37 +884,14 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
             InferenceInput::Generation { context, .. } => context.clone(),
             _ => unreachable!(),
         };
-        let produced = f.produce(request).await.unwrap();
+        let produced = f.produce(request.clone()).await.unwrap();
         assert_eq!(produced.result.outcome, Some(AttemptEnd::ToolCallsReady));
         let attempt = match produced.accounting {
             DriveOutcome::Settled(balance) => AttemptId(balance.attempt_id),
             other => panic!("{other:?}"),
         };
 
-        let composition = || {
-            let connections = Arc::new(ConnectionService::new(
-                f.h.ids.clone(), f.h.clock(), f.store.clone(), Arc::new(NoNetwork),
-                Arc::new(SessionSecrets::new()), Arc::new(EntropyFixture)));
-            let router = Arc::new(InferenceRouter::new(f.h.ids.clone(), f.h.clock(), connections.clone()));
-            let cases = UseCases::new().with_router(router).with_connections(connections)
-                .with_sessions(Arc::new(devworks_core::services::sessions::SessionService::new(
-                    f.h.ids.clone(), f.store.clone())));
-            let mut config = RuntimeConfig::new(id("tool-dispatcher"));
-            config.providers = Some(ProviderComposition::new(f.http.clone()));
-            config.collect_interval = std::time::Duration::from_secs(3600);
-            Composition {
-                store: f.store.clone(), clock: f.h.clock(), ids: f.h.ids.clone(),
-                authority: Arc::new(Authority), artifacts: f.artifacts.clone(),
-                resources: Arc::new(ResourceService::new(f.h.ids.clone(), f.h.clock())),
-                process_host: Arc::new(NativeProcessHost),
-                runs: RunComposition::new(Arc::new(ControlService::new(f.h.ids.clone()))),
-                power: Arc::new(NativePower),
-                diagnostics: Arc::new(DiagnosticService::new(f.store.clone(), f.h.ids.clone(), f.h.clock(), None)),
-                git: None, browser: None, packages: None, use_cases: cases, consumers: vec![],
-                indexing: None, config,
-            }
-        };
-        let app = boot(composition()).await.unwrap();
+        let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
         let binding = NativeBinding {
             connection_id: id("connection"), account_revision: Revision::new(1).unwrap(),
             endpoint_profile: EndpointProfile::CompatibleChat, model_id: f.model.clone(),
@@ -859,7 +914,35 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         let foreign = f.context.clone().with_session(id("other-session"));
         assert!(matches!(app.dispatch_pending_tool_calls(&foreign, &id("session")),
             Err(StorageError::ScopeDenied)));
-        let dispatched = app.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap();
+        let progress = app.produce_and_dispatch_native_turn(
+            f.native_invocation(request.clone(), PricingContext {
+                input_semantics: InputSemantics::Unknown,
+                cache_read_possible: false,
+                cache_write_possible: false,
+                cache_write_ttl_ms: None,
+            }, vec!["Text".into()], None, None, false),
+            None,
+        ).await.unwrap();
+        assert!(matches!(progress.provider.accounting, DriveOutcome::AlreadyDispatched));
+        let continuation_ref = progress.continuation.expect("published native tool continuation");
+        let published: ProviderContext = serde_json::from_slice(
+            &f.artifacts.read_exact(f.store.as_ref(), &f.context, &continuation_ref,
+                1024 * 1024).unwrap().0).unwrap();
+        assert_eq!(published.messages.len(), 3);
+        let replay = app.produce_and_dispatch_native_turn(
+            f.native_invocation(request, PricingContext {
+                input_semantics: InputSemantics::Unknown,
+                cache_read_possible: false,
+                cache_write_possible: false,
+                cache_write_ttl_ms: None,
+            }, vec!["Text".into()], None, None, false),
+            None,
+        ).await.unwrap();
+        assert!(matches!(replay.provider.accounting, DriveOutcome::AlreadyDispatched));
+        assert!(replay.tool_dispatches.is_empty());
+        assert_eq!(replay.continuation.unwrap().sha256.as_str(), continuation_ref.sha256.as_str());
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        let dispatched = progress.tool_dispatches;
         assert_eq!(dispatched.len(), 3);
         assert!(dispatched.iter().all(|d| matches!(d.outcome, Ok(devworks_core::services::sessions::transcript::BatchOutcome::Accepted(_)))));
         let rows = f.transcript();
@@ -1022,7 +1105,7 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "ToolDispatchStarted"
             && entry.body["call"]["nativeCallId"] == "started-before-cancel").count(), 1);
         app.shutdown().await;
-        let restarted = boot(composition()).await.unwrap();
+        let restarted = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
         assert!(restarted.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap().is_empty());
         assert_eq!(f.transcript().iter().filter(|e| e.kind == "ToolResponseRecorded").count(), 6);
         assert!(restarted.record_tool_operation_update(&f.context, &id("session"), &operation_id).unwrap().is_none());
@@ -1045,6 +1128,65 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         assert!(matches!(reply, devworks_core::protocol::CommandReply::Recorded { receipt, .. }
             if matches!(receipt.decision, devworks_core::protocol::results::DomainDecision::Applied { .. })));
         restarted.shutdown().await;
+    });
+}
+
+#[test]
+fn fresh_native_tool_turn_publishes_context_and_holds_on_user_redirection() {
+    runtime().block_on(async {
+        let event = json!({"choices":[{"index":0,"delta":{"tool_calls":[
+            {"index":0,"id":"call-one","type":"function","function":{
+                "name":"get_session","arguments":"{\"sessionId\":\"session\"}"}}
+        ]},"finish_reason":null}]});
+        let wire = format!("data: {event}\n\ndata: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n");
+        let f = Fx::new("CompatibleChat", Script::sse(&wire), false);
+        let tool = f.driver.schemas().builtin("sessions.get", devworks_core::registry::Mode::Query,
+            devworks_core::registry::SchemaRevision(1), "get_session").unwrap();
+        let request = f.generation(vec![tool]);
+        let previous = match &request.input {
+            InferenceInput::Generation { context, .. } => context.clone(),
+            _ => unreachable!(),
+        };
+        let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let invoke = |request| f.native_invocation(request, PricingContext {
+            input_semantics: InputSemantics::Unknown,
+            cache_read_possible: false,
+            cache_write_possible: false,
+            cache_write_ttl_ms: None,
+        }, vec!["Text".into()], None, None, false);
+        let progress = app.produce_and_dispatch_native_turn(invoke(request.clone()), None).await.unwrap();
+        assert!(matches!(progress.provider.accounting, DriveOutcome::Settled(_)));
+        assert_eq!(progress.provider.result.outcome, Some(AttemptEnd::ToolCallsReady));
+        assert_eq!(progress.tool_dispatches.len(), 1);
+        assert!(progress.tool_dispatches[0].outcome.is_ok());
+        let continuation = progress.continuation.expect("published continuation");
+        let bytes = f.artifacts.read_exact(f.store.as_ref(), &f.context, &continuation,
+            1024 * 1024).unwrap().0;
+        let material: ProviderContext = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(material.messages.len(), 3);
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+
+        let ctx = f.context.clone();
+        write(f.store.as_ref(), move |tx| {
+            use devworks_core::services::sessions::{transcript::{BatchOutcome, SessionBatch, SessionWriter}, turn};
+            let session = tx.sessions().session(&id("session"))?.unwrap();
+            let batch = turn::batch_of(&id("session"), tx.new_id(IdKind::TranscriptBatch),
+                session.context_epoch, session.next_sequence,
+                vec![TranscriptBody::UserMessage {
+                    content: vec![UserContent::Text { text: "Change direction".into() }],
+                }],
+                || tx.new_id(IdKind::TranscriptEntry));
+            assert!(matches!(SessionWriter::append_in(tx, &ctx, &SessionBatch::entries(batch))?,
+                BatchOutcome::Accepted(_)));
+            Ok(())
+        }).unwrap();
+        let result = &progress.provider.result;
+        assert!(app.tool_continuation_context(&f.context, &id("session"),
+            result.attempt_id.as_ref().unwrap(), result.turn_start_sequence.unwrap(),
+            result.binding.as_ref().unwrap(), &previous).is_err());
+        assert!(app.produce_and_dispatch_native_turn(invoke(request), None).await.is_err());
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        app.shutdown().await;
     });
 }
 

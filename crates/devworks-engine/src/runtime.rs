@@ -1423,6 +1423,14 @@ pub struct ToolOperationUpdate {
     pub outcome: Result<Option<devworks_core::protocol::provider::ArtifactRef>, StorageError>,
 }
 
+/// One native generation and its independently dispatched tool calls. After `ToolCallsReady`, a
+/// missing continuation means at least one call still needs admission or reconciliation.
+pub struct NativeTurnProgress {
+    pub provider: crate::providers::driver::ProviderInvocation,
+    pub tool_dispatches: Vec<ToolDispatch>,
+    pub continuation: Option<devworks_core::protocol::provider::ArtifactRef>,
+}
+
 impl Runtime {
     /// What boot recovery established.
     pub fn report(&self) -> &BootReport {
@@ -1519,6 +1527,86 @@ impl Runtime {
     }
     pub fn providers(&self) -> Option<&Arc<crate::providers::driver::NativeProviders>> {
         self.providers.as_ref()
+    }
+
+    /// Drive a host-qualified native generation through durable tool dispatch and publish its
+    /// next immutable context. Replaying the same request recovers the saved provider result and
+    /// call identities; it never sends the inference or a gateway command a second time.
+    pub async fn produce_and_dispatch_native_turn(
+        &self,
+        invocation: crate::providers::driver::NativeInvocation,
+        cancellation: Option<devworks_core::ports::storage::Cancellation>,
+    ) -> Result<NativeTurnProgress, StorageError> {
+        let ctx = invocation.context.clone();
+        let (session_id, previous) = match &invocation.request.input {
+            devworks_core::protocol::provider::InferenceInput::Generation {
+                session_id,
+                context,
+                ..
+            } if invocation.logical.session_id.as_ref() == Some(session_id)
+                && ctx.session_id() == Some(session_id) =>
+            {
+                (session_id.clone(), context.clone())
+            }
+            _ => return Err(StorageError::ScopeDenied),
+        };
+        let providers = self.providers.as_ref().ok_or_else(|| {
+            StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "native provider unavailable",
+            )
+        })?;
+        let provider = providers
+            .produce_cancellable(invocation, cancellation)
+            .await?;
+        let mut tool_dispatches = Vec::new();
+        let mut continuation = None;
+        if provider.result.outcome
+            == Some(devworks_core::services::usage::accounting::AttemptEnd::ToolCallsReady)
+        {
+            let attempt_id = provider.result.attempt_id.as_ref().ok_or_else(|| {
+                StorageError::InvalidRecord("tool turn lacks settled attempt identity".into())
+            })?;
+            let binding = provider.result.binding.as_ref().ok_or_else(|| {
+                StorageError::InvalidRecord("tool turn lacks native binding".into())
+            })?;
+            let after_sequence = provider.result.turn_start_sequence.ok_or_else(|| {
+                StorageError::InvalidRecord("tool turn lacks durable start position".into())
+            })?;
+            tool_dispatches = self.dispatch_pending_tool_calls(&ctx, &session_id)?;
+            let unanswered =
+                crate::tool_turn::pending_calls(self.store.as_ref(), &ctx, &session_id)?
+                    .iter()
+                    .any(|call| &call.attempt_id == attempt_id);
+            if !unanswered {
+                let material = crate::tool_turn::continuation_context(
+                    self.store.as_ref(),
+                    &self.artifacts,
+                    &ctx,
+                    crate::tool_turn::TurnSource {
+                        session_id: &session_id,
+                        attempt_id,
+                        after_sequence,
+                    },
+                    binding,
+                    &previous,
+                )?;
+                continuation = Some(crate::tool_turn::publish_continuation(
+                    self.store.as_ref(),
+                    &self.artifacts,
+                    &ctx,
+                    &session_id,
+                    attempt_id,
+                    binding,
+                    material,
+                )?);
+            }
+        }
+        Ok(NativeTurnProgress {
+            provider,
+            tool_dispatches,
+            continuation,
+        })
     }
 
     /// Resume one durable provider call through the shared gateway, recording its single
@@ -1687,6 +1775,7 @@ impl Runtime {
             binding,
             previous,
         )
+        .map(|material| material.context)
     }
 
     /// Record an explicit provider-change context epoch after all emitted calls have their

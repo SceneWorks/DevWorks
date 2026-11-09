@@ -594,6 +594,11 @@ impl NativeProviders {
                         _ => None,
                     };
                     return Ok(ProviderResult {
+                        attempt_id: serde_json::from_value(body["attemptId"].clone())
+                            .map_err(|_| invalid("stored provider attempt identity"))?,
+                        binding: serde_json::from_value(body["binding"].clone())
+                            .map_err(|_| invalid("stored provider binding"))?,
+                        turn_start_sequence: body["turnStartSequence"].as_i64(),
                         vector_artifacts: serde_json::from_value(body["vectorArtifacts"].clone())
                             .map_err(|_| invalid("stored provider vectors"))?,
                         result_artifact: serde_json::from_value(body["resultArtifact"].clone())

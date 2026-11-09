@@ -2,7 +2,7 @@
 use devworks_core::{
     context::InvocationContext,
     ports::{IdKind, storage::*},
-    protocol::{Counter, EventId, Protocol, Revision, provider::*},
+    protocol::{AttemptId, Counter, EventId, Protocol, Revision, provider::*},
     providers::{
         PreparedRequest,
         decode::{DecodedFrame, DecodedToolCall},
@@ -29,6 +29,11 @@ use std::{
 /// masquerade as assistant text or alter a conversation pin.
 #[derive(Clone, Debug, Default)]
 pub struct ProviderResult {
+    pub attempt_id: Option<AttemptId>,
+    pub binding: Option<NativeBinding>,
+    /// Transcript position before this native turn's first durable entry. Replay uses it to
+    /// select only this attempt's exchange, even after other turns append to the session.
+    pub turn_start_sequence: Option<i64>,
     pub vector_artifacts: Vec<ArtifactRef>,
     pub result_artifact: Option<ArtifactRef>,
     pub outcome: Option<AttemptEnd>,
@@ -58,6 +63,7 @@ pub struct ProviderSink {
     live: Option<Arc<super::live::LiveTurns>>,
     live_session: Option<devworks_core::protocol::Id>,
     last_sequence: Option<i64>,
+    turn_start_sequence: Option<i64>,
     sequence: i64,
     embedding: Option<(
         devworks_core::protocol::data::EmbeddingSpace,
@@ -98,6 +104,7 @@ impl ProviderSink {
             live: None,
             live_session: None,
             last_sequence: None,
+            turn_start_sequence: None,
             sequence: 0,
             embedding,
             vectors: BTreeMap::new(),
@@ -202,8 +209,9 @@ impl ProviderSink {
             })
             .map_err(|_| invalid("invalid normalized provider turn"))?;
         let bodies = self.assembler.take();
-        if let Some(sequence) = self.append(attempt, bodies, fence)? {
-            self.last_sequence = Some(sequence);
+        if let Some((before, last)) = self.append(attempt, bodies, fence)? {
+            self.turn_start_sequence.get_or_insert(before);
+            self.last_sequence = Some(last);
         }
         self.sequence = sequence;
         Ok(())
@@ -213,7 +221,7 @@ impl ProviderSink {
         attempt: &StoredInferenceAttempt,
         bodies: Vec<TranscriptBody>,
         fence: &AccountingWriteFence,
-    ) -> Result<Option<i64>, StorageError> {
+    ) -> Result<Option<(i64, i64)>, StorageError> {
         if bodies.is_empty() {
             return Ok(None);
         }
@@ -229,6 +237,11 @@ impl ProviderSink {
                 .session_id
                 .as_ref()
                 .ok_or(StorageError::ScopeDenied)?;
+            let before = tx
+                .sessions()
+                .session(session)?
+                .ok_or(StorageError::ScopeDenied)?
+                .last_durable_sequence();
             for chunk in bodies.chunks(128) {
                 let current = tx
                     .sessions()
@@ -248,12 +261,13 @@ impl ProviderSink {
                     BatchOutcome::Refused(_) => return Err(StorageError::ScopeDenied),
                 }
             }
-            Ok(Some(
+            Ok(Some((
+                before,
                 tx.sessions()
                     .session(session)?
                     .ok_or(StorageError::ScopeDenied)?
                     .last_durable_sequence(),
-            ))
+            )))
         })
     }
     fn artifact(
@@ -654,11 +668,13 @@ impl OwnedInferenceSink for ProviderSink {
         fence: &AccountingWriteFence,
     ) -> Result<(), StorageError> {
         self.finish_output(attempt, outcome, fence)?;
-        let result = self
-            .result
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
+        let result = {
+            let mut result = self.result.lock().unwrap_or_else(|p| p.into_inner());
+            result.attempt_id = Some(AttemptId(attempt.attempt_id.clone()));
+            result.binding = Some(self.prepared.identity.binding.clone());
+            result.turn_start_sequence = self.turn_start_sequence;
+            result.clone()
+        };
         let context = self.context.clone();
         let current = attempt.clone();
         let store = self.store.clone();
@@ -666,7 +682,7 @@ impl OwnedInferenceSink for ProviderSink {
             validate(tx,&context,&current)?;
             let event=EventId(tx.new_id(IdKind::Event));
             tx.history().append(NewEvent {id:event,actor:current.actor_id,project_id:current.project_id,root_id:current.execution_root_id,operation_id:Some(current.operation_id),aggregate_kind:"provider_result".into(),aggregate_id:current.attempt_id.as_str().into(),aggregate_revision:1,kind:"ProviderResultRecorded".into(),
-                payload:json!({"outcome":result.outcome.map(|o|o.label()),"vectorArtifacts":result.vector_artifacts,"resultArtifact":result.result_artifact,"faults":result.faults,"retryAtMs":result.retry_at_ms})})?;
+                payload:json!({"outcome":result.outcome.map(|o|o.label()),"attemptId":result.attempt_id,"binding":result.binding,"turnStartSequence":result.turn_start_sequence,"vectorArtifacts":result.vector_artifacts,"resultArtifact":result.result_artifact,"faults":result.faults,"retryAtMs":result.retry_at_ms})})?;
             Ok(())
         })
     }

@@ -39,6 +39,11 @@ pub(crate) struct TurnSource<'a> {
     pub after_sequence: i64,
 }
 
+pub(crate) struct ContinuationMaterial {
+    pub context: ProviderContext,
+    pub observed_sequence: i64,
+}
+
 fn authorized_session(
     read: &dyn ReadSnapshot,
     ctx: &InvocationContext,
@@ -266,7 +271,7 @@ pub(crate) fn continuation_context(
     source: TurnSource<'_>,
     binding: &NativeBinding,
     previous: &devworks_core::protocol::provider::ArtifactRef,
-) -> Result<ProviderContext, StorageError> {
+) -> Result<ContinuationMaterial, StorageError> {
     let TurnSource {
         session_id,
         attempt_id,
@@ -290,7 +295,7 @@ pub(crate) fn continuation_context(
     {
         return Err(invalid("foreign native state requires a new context epoch"));
     }
-    let entries = read_snapshot(store, &ReadOptions::default(), |read| {
+    let (entries, observed_sequence) = read_snapshot(store, &ReadOptions::default(), |read| {
         let session = read
             .sessions()
             .session(session_id)?
@@ -324,6 +329,17 @@ pub(crate) fn continuation_context(
                 }
                 position = entry.sequence;
                 let body: TranscriptBody = serde_json::from_value(entry.body).map_err(invalid)?;
+                if matches!(
+                    &body,
+                    TranscriptBody::UserMessage { .. }
+                        | TranscriptBody::HostNotice { .. }
+                        | TranscriptBody::OperationUpdate { .. }
+                ) {
+                    return Err(StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "tool continuation needs redirected context reconstruction",
+                    ));
+                }
                 let belongs = match &body {
                     TranscriptBody::AssistantAttempt { attempt_id: id, .. } => id == attempt_id,
                     TranscriptBody::ToolCallRecorded { tool_call } => {
@@ -343,7 +359,7 @@ pub(crate) fn continuation_context(
                 }
             }
         }
-        Ok(selected)
+        Ok((selected, session.last_durable_sequence()))
     })?;
     let mut assistant = Vec::new();
     for entry in entries {
@@ -452,7 +468,106 @@ pub(crate) fn continuation_context(
         content: results,
     });
     context.validate().map_err(|e| invalid(format!("{e:?}")))?;
-    Ok(context)
+    Ok(ContinuationMaterial {
+        context,
+        observed_sequence,
+    })
+}
+
+/// Publish the settled exchange as the next immutable request context. A replay may publish the
+/// same bytes again, but it cannot repeat a tool effect or rewrite the original transcript.
+pub(crate) fn publish_continuation(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    attempt_id: &AttemptId,
+    binding: &NativeBinding,
+    material: ContinuationMaterial,
+) -> Result<devworks_core::protocol::provider::ArtifactRef, StorageError> {
+    let ContinuationMaterial {
+        context,
+        observed_sequence,
+    } = material;
+    context
+        .validate()
+        .map_err(|error| invalid(format!("tool continuation: {error:?}")))?;
+    let bytes = serde_json::to_vec(&context).map_err(invalid)?;
+    let staged = artifacts
+        .stage_host_bytes(
+            store,
+            &bytes,
+            json!({"kind":"ProviderToolContinuation","sessionId":session_id,
+                "attemptId":attempt_id,"binding":binding}),
+        )?
+        .map_err(invalid)?;
+    let staged_for_write = staged.clone();
+    let service = artifacts.clone();
+    let ctx = ctx.clone();
+    let session_id = session_id.clone();
+    let attempt_id = attempt_id.clone();
+    let binding = binding.clone();
+    let committed = run_write(store, WriteOptions::default(), move |tx| {
+        let session = tx
+            .sessions()
+            .session(&session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let attempt = tx
+            .usage()
+            .inference_attempt(&attempt_id.0)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.closed()
+            || session.context_epoch != binding.context_epoch.get()
+            || session.last_durable_sequence() != observed_sequence
+            || attempt.session_id.as_ref() != Some(&session_id)
+            || attempt.connection_id != binding.connection_id
+            || attempt.catalog_model_id != binding.model_id
+            || attempt.endpoint_profile != format!("{:?}", binding.endpoint_profile)
+            || ctx.session_id() != Some(&session_id)
+            || tx.store().store_id != *ctx.store_id()
+            || tx.store().restore_epoch != ctx.restore_epoch().get()
+            || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+            || !matches!(
+                ctx.principal_kind(),
+                PrincipalKind::Host | PrincipalKind::Agent
+            )
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        if ctx.principal_kind() == PrincipalKind::Agent {
+            let principal = tx
+                .authority()
+                .principal(ctx.principal())?
+                .ok_or(StorageError::ScopeDenied)?;
+            if !principal.active
+                || session.agent_id != *ctx.principal()
+                || principal
+                    .project_id
+                    .as_ref()
+                    .is_some_and(|project| session.project_id.as_ref() != Some(project))
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+        let scope = session
+            .project_id
+            .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+        let version = service.commit_host_bytes_in_scope(
+            tx,
+            &staged_for_write,
+            HostArtifactPublication {
+                title: "Provider tool continuation",
+                media_type: "application/vnd.devworks.provider-context+json",
+                provenance: json!({"kind":"ProviderToolContinuation","sessionId":session_id,
+                    "attemptId":attempt_id,"binding":binding}),
+                scope,
+                owner: ctx.principal().clone(),
+            },
+        )?;
+        Ok(version_ref(&version))
+    });
+    artifacts.settle_host_bytes(store, &staged, committed.is_ok());
+    committed
 }
 
 /// Build the exact frame sent to the application gateway for a recorded native call. The
