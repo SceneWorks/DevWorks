@@ -306,6 +306,7 @@ impl ProviderSink {
         let title = title.to_owned();
         let media_type = media_type.to_owned();
         let binding = self.prepared.identity.binding.clone();
+        let source_context = self.source_context.clone();
         let artifact_kind = match kind {
             ArtifactKind::Evidence => "ProviderEvidence",
             ArtifactKind::NativeContinuation => "ProviderNativeContinuation",
@@ -320,7 +321,7 @@ impl ProviderSink {
                 validate(tx,&context,&attempt)?;
                 validate_binding(tx,&binding)?;
                 let scope=attempt.project_id.clone().map_or(ArtifactScope::Workspace,ArtifactScope::Project);
-                let version=service_in.commit_host_bytes_in_scope(tx,&pending, devworks_core::services::artifacts::host::HostArtifactPublication {title:&title,media_type:&media_type,provenance:json!({"kind":artifact_kind,"nativeBinding":binding,"requestId":attempt.request_id,"attemptId":attempt.attempt_id,"actorId":attempt.actor_id,"sessionId":attempt.session_id,"workId":attempt.work_id,"dispatch":accounting::snapshot(&attempt)?.dispatch}),
+                let version=service_in.commit_host_bytes_in_scope(tx,&pending, devworks_core::services::artifacts::host::HostArtifactPublication {title:&title,media_type:&media_type,provenance:json!({"kind":artifact_kind,"nativeBinding":binding,"requestId":attempt.request_id,"attemptId":attempt.attempt_id,"actorId":attempt.actor_id,"sessionId":attempt.session_id,"sourceContext":source_context,"workId":attempt.work_id,"dispatch":accounting::snapshot(&attempt)?.dispatch}),
                     scope,owner:attempt.actor_id.clone()})?;
                 let reference=version_ref(&version);
                 let event=EventId(tx.new_id(IdKind::Event));

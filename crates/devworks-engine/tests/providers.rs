@@ -828,13 +828,18 @@ fn compaction_result_is_artifact_only_and_does_not_enter_session_transcript() {
         let f = Fx::new("CompatibleChat", Script::sse(wire), false);
         let mut request = f.generation(vec![]);
         request.purpose = InferencePurpose::Compaction;
+        let source = match &request.input {
+            InferenceInput::Generation { context, .. } => context.clone(),
+            _ => unreachable!(),
+        };
         let result = f.produce(request.clone()).await.unwrap();
         assert_eq!(result.result.outcome, Some(AttemptEnd::Completed));
         assert!(result.result.turn_start_sequence.is_none());
         let summary = result.result.result_artifact.expect("summary artifact");
-        let bytes = f.artifacts.read_exact(f.store.as_ref(), &f.context, &summary,
-            1024 * 1024).unwrap().0;
+        let (bytes, provenance) = f.artifacts.read_exact(f.store.as_ref(), &f.context, &summary,
+            1024 * 1024).unwrap();
         assert_eq!(bytes, b"Retain the active plan.");
+        assert_eq!(provenance["derived"]["sourceContext"], json!(source));
         assert!(f.transcript().is_empty());
         let replay = f.produce(request).await.unwrap();
         assert!(matches!(replay.accounting, DriveOutcome::AlreadyDispatched));
