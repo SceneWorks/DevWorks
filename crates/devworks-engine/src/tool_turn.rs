@@ -8,7 +8,9 @@ use devworks_core::{
     ports::{IdKind, storage::*},
     protocol::{
         AttemptId, CONTRACT, CommandReply, Id, OperationId, RetryAdvice,
-        provider::{CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody},
+        provider::{
+            ArtifactRef, CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody,
+        },
         results::{DomainCommandReply, DomainDecision, DomainQueryReply},
         support::DomainErrorCode,
     },
@@ -653,7 +655,7 @@ pub(crate) fn dispatch_one(
     session_id: &Id,
     key: &ToolCallKey,
 ) -> Result<BatchOutcome, StorageError> {
-    let call = read_snapshot(store, &ReadOptions::default(), |read| {
+    let (call, started) = read_snapshot(store, &ReadOptions::default(), |read| {
         let session = read
             .sessions()
             .session(session_id)?
@@ -711,8 +713,70 @@ pub(crate) fn dispatch_one(
         {
             return Err(StorageError::ScopeDenied);
         }
-        Ok(tool_call)
+        let started = devworks_core::services::sessions::transcript::tool_dispatch_started(
+            read.sessions(),
+            session_id,
+            key,
+            row.call_sequence,
+            session.last_durable_sequence(),
+        )?;
+        Ok((tool_call, started))
     })?;
+
+    if !started {
+        let (source, targets) = read_snapshot(store, &ReadOptions::default(), |read| {
+            let attempt = read
+                .usage()
+                .inference_attempt(&key.attempt_id.0)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if attempt.session_id.as_ref() != Some(session_id) {
+                return Err(StorageError::ScopeDenied);
+            }
+            let page = read.history().page(
+                &EventFilter::Aggregate {
+                    kind: "provider_result".into(),
+                    id: key.attempt_id.0.as_str().into(),
+                },
+                0,
+                1,
+            )?;
+            let event = page.events.first().ok_or_else(|| {
+                StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "tool dispatch waits for settled provider provenance",
+                )
+            })?;
+            if event.payload["attemptId"] != json!(key.attempt_id) {
+                return Err(StorageError::ScopeDenied);
+            }
+            let binding: NativeBinding = serde_json::from_value(event.payload["binding"].clone())
+                .map_err(|_| StorageError::ScopeDenied)?;
+            if binding.connection_id != attempt.connection_id
+                || binding.model_id != attempt.catalog_model_id
+                || format!("{:?}", binding.endpoint_profile) != attempt.endpoint_profile
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            let source: ArtifactRef =
+                serde_json::from_value(event.payload["sourceContext"].clone()).map_err(|_| {
+                    StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "tool dispatch needs recorded instruction context",
+                    )
+                })?;
+            let targets: Option<Vec<(Id, Vec<String>)>> =
+                serde_json::from_value(event.payload["instructionTargets"].clone())
+                    .map_err(|_| StorageError::ScopeDenied)?;
+            Ok((source, targets))
+        })?;
+        let providers = runtime.providers().ok_or_else(|| {
+            StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "native provider unavailable",
+            )
+        })?;
+        providers.verify_instruction_material(ctx, &source, targets.as_deref())?;
+    }
 
     let result = match selected_builtin(schemas, &call) {
         Ok((descriptor, mode, revision)) => {

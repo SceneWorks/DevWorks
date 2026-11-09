@@ -1,7 +1,7 @@
 //! Native producer composition. Only trusted host configuration can qualify capabilities/spaces.
 use super::{
     schemas::RegisteredSchemas,
-    sink::{ProviderResult, ProviderSink, ResultChannel},
+    sink::{ProviderResult, ProviderSink, ResultChannel, SourceProvenance},
     source::NativeProviderSource,
 };
 use crate::usage::UsageRuntime;
@@ -322,15 +322,13 @@ impl NativeProviders {
             live: Arc::new(super::live::LiveTurns::default()),
         })
     }
-    fn verify_instruction_context(
+    pub(crate) fn verify_instruction_material(
         &self,
         ctx: &InvocationContext,
-        request: &InferenceRequest,
+        context: &devworks_core::protocol::provider::ArtifactRef,
         targets: Option<&[(Id, Vec<String>)]>,
     ) -> Result<(), StorageError> {
-        let (Some(guard), InferenceInput::Generation { context, .. }) =
-            (&self.composition.instruction_guard, &request.input)
-        else {
+        let Some(guard) = &self.composition.instruction_guard else {
             return Ok(());
         };
         let bytes = self
@@ -341,6 +339,18 @@ impl NativeProviders {
         let material: devworks_core::providers::context::ProviderContext =
             serde_json::from_slice(&bytes).map_err(|_| invalid("provider instruction context"))?;
         guard.verify(ctx, &material, targets)
+    }
+    fn verify_instruction_context(
+        &self,
+        ctx: &InvocationContext,
+        request: &InferenceRequest,
+        targets: Option<&[(Id, Vec<String>)]>,
+    ) -> Result<(), StorageError> {
+        if let InferenceInput::Generation { context, .. } = &request.input {
+            self.verify_instruction_material(ctx, context, targets)
+        } else {
+            Ok(())
+        }
     }
     /// Explicit host-qualified declarations, including Unknown support. Every request still
     /// intersects these with the CURRENT registered model/profile/account and current policy.
@@ -515,12 +525,13 @@ impl NativeProviders {
             shared: shared.clone(),
             inner: None,
             source_fences: source_fences.clone(),
-            instruction_targets,
+            instruction_targets: instruction_targets.clone(),
         };
         let sink = LazySink {
             owner: self.clone(),
             context: context.clone(),
             request: request.clone(),
+            instruction_targets,
             shared,
             result: result.clone(),
             inner: None,
@@ -599,6 +610,12 @@ impl NativeProviders {
                         binding: serde_json::from_value(body["binding"].clone())
                             .map_err(|_| invalid("stored provider binding"))?,
                         turn_start_sequence: body["turnStartSequence"].as_i64(),
+                        source_context: serde_json::from_value(body["sourceContext"].clone())
+                            .map_err(|_| invalid("stored provider source context"))?,
+                        instruction_targets: serde_json::from_value(
+                            body["instructionTargets"].clone(),
+                        )
+                        .map_err(|_| invalid("stored provider instruction targets"))?,
                         vector_artifacts: serde_json::from_value(body["vectorArtifacts"].clone())
                             .map_err(|_| invalid("stored provider vectors"))?,
                         result_artifact: serde_json::from_value(body["resultArtifact"].clone())
@@ -1102,6 +1119,7 @@ struct LazySink {
     owner: Arc<NativeProviders>,
     context: InvocationContext,
     request: InferenceRequest,
+    instruction_targets: Option<InstructionTargets>,
     shared: SharedPrepared,
     result: ResultChannel,
     inner: Option<ProviderSink>,
@@ -1138,6 +1156,13 @@ impl LazySink {
                     self.owner.artifacts.clone(),
                     self.context.clone(),
                     prepared,
+                    SourceProvenance {
+                        context: match &self.request.input {
+                            InferenceInput::Generation { context, .. } => Some(context.clone()),
+                            InferenceInput::Embedding { .. } => None,
+                        },
+                        instruction_targets: self.instruction_targets.clone(),
+                    },
                     embedding,
                     self.result.clone(),
                 )

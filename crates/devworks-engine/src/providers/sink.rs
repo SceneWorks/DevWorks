@@ -34,6 +34,9 @@ pub struct ProviderResult {
     /// Transcript position before this native turn's first durable entry. Replay uses it to
     /// select only this attempt's exchange, even after other turns append to the session.
     pub turn_start_sequence: Option<i64>,
+    pub source_context: Option<ArtifactRef>,
+    /// Trusted host-selected instruction targets at the original generation admission.
+    pub instruction_targets: Option<Vec<(devworks_core::protocol::Id, Vec<String>)>>,
     pub vector_artifacts: Vec<ArtifactRef>,
     pub result_artifact: Option<ArtifactRef>,
     pub outcome: Option<AttemptEnd>,
@@ -41,6 +44,11 @@ pub struct ProviderResult {
     pub retry_at_ms: Option<i64>,
 }
 pub type ResultChannel = Arc<Mutex<ProviderResult>>;
+
+pub struct SourceProvenance {
+    pub context: Option<ArtifactRef>,
+    pub instruction_targets: Option<Vec<(devworks_core::protocol::Id, Vec<String>)>>,
+}
 
 const MAX_CONTENT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CONTENT_ITEMS: usize = 65536;
@@ -64,6 +72,8 @@ pub struct ProviderSink {
     live_session: Option<devworks_core::protocol::Id>,
     last_sequence: Option<i64>,
     turn_start_sequence: Option<i64>,
+    source_context: Option<ArtifactRef>,
+    instruction_targets: Option<Vec<(devworks_core::protocol::Id, Vec<String>)>>,
     sequence: i64,
     embedding: Option<(
         devworks_core::protocol::data::EmbeddingSpace,
@@ -86,6 +96,7 @@ impl ProviderSink {
         artifacts: Arc<ArtifactService>,
         context: InvocationContext,
         prepared: PreparedRequest,
+        source: SourceProvenance,
         embedding: Option<(
             devworks_core::protocol::data::EmbeddingSpace,
             Vec<ArtifactRef>,
@@ -105,6 +116,8 @@ impl ProviderSink {
             live_session: None,
             last_sequence: None,
             turn_start_sequence: None,
+            source_context: source.context,
+            instruction_targets: source.instruction_targets,
             sequence: 0,
             embedding,
             vectors: BTreeMap::new(),
@@ -673,6 +686,8 @@ impl OwnedInferenceSink for ProviderSink {
             result.attempt_id = Some(AttemptId(attempt.attempt_id.clone()));
             result.binding = Some(self.prepared.identity.binding.clone());
             result.turn_start_sequence = self.turn_start_sequence;
+            result.source_context = self.source_context.clone();
+            result.instruction_targets = self.instruction_targets.clone();
             result.clone()
         };
         let context = self.context.clone();
@@ -682,7 +697,7 @@ impl OwnedInferenceSink for ProviderSink {
             validate(tx,&context,&current)?;
             let event=EventId(tx.new_id(IdKind::Event));
             tx.history().append(NewEvent {id:event,actor:current.actor_id,project_id:current.project_id,root_id:current.execution_root_id,operation_id:Some(current.operation_id),aggregate_kind:"provider_result".into(),aggregate_id:current.attempt_id.as_str().into(),aggregate_revision:1,kind:"ProviderResultRecorded".into(),
-                payload:json!({"outcome":result.outcome.map(|o|o.label()),"attemptId":result.attempt_id,"binding":result.binding,"turnStartSequence":result.turn_start_sequence,"vectorArtifacts":result.vector_artifacts,"resultArtifact":result.result_artifact,"faults":result.faults,"retryAtMs":result.retry_at_ms})})?;
+                payload:json!({"outcome":result.outcome.map(|o|o.label()),"attemptId":result.attempt_id,"binding":result.binding,"turnStartSequence":result.turn_start_sequence,"sourceContext":result.source_context,"instructionTargets":result.instruction_targets,"vectorArtifacts":result.vector_artifacts,"resultArtifact":result.result_artifact,"faults":result.faults,"retryAtMs":result.retry_at_ms})})?;
             Ok(())
         })
     }

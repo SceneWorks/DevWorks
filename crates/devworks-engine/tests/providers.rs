@@ -5,7 +5,7 @@ use common::*;
 use devworks_adapters::fs::{
     NativeFilesystem, artifacts::NativeArtifactFiles, sources::HostArtifactSources,
 };
-use devworks_adapters::index::NativeSourceTree;
+use devworks_adapters::index::{NativeSourceTree, treesitter::TreeSitterParser};
 use devworks_core::{
     context::{InvocationContext, PrincipalKind},
     ports::{
@@ -773,11 +773,13 @@ fn native_generation_persists_text_usage_and_exact_receipt_replay_without_second
     let attempt=match outcome.accounting{DriveOutcome::Settled(balance)=>{assert!(balance.local_quiescent);balance.attempt_id},other=>panic!("{other:?}")};
     assert_eq!(outcome.result.attempt_id, Some(AttemptId(attempt.clone())));
     assert_eq!(outcome.result.turn_start_sequence, Some(0));
+    assert!(outcome.result.source_context.is_some());
+    assert!(outcome.result.instruction_targets.is_none());
     let binding = outcome.result.binding.as_ref().expect("durable provider binding");
     assert_eq!(binding.connection_id, id("connection"));
     assert_eq!(binding.context_epoch.get(), 0);
     let observations=read(f.store.as_ref(),|s|s.usage().usage_observations(&attempt,None,64));assert_eq!(observations.len(),1);
-    let replay=f.produce(request).await.unwrap();assert!(matches!(replay.accounting,DriveOutcome::AlreadyDispatched));assert_eq!(replay.result.attempt_id,Some(AttemptId(attempt)));assert_eq!(replay.result.binding.unwrap(),binding.clone());assert_eq!(replay.result.turn_start_sequence,Some(0));assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(),1);assert!(f.http.lock().unwrap().closed.load(Ordering::SeqCst));
+    let replay=f.produce(request).await.unwrap();assert!(matches!(replay.accounting,DriveOutcome::AlreadyDispatched));assert_eq!(replay.result.attempt_id,Some(AttemptId(attempt)));assert_eq!(replay.result.binding.unwrap(),binding.clone());assert_eq!(replay.result.turn_start_sequence,Some(0));assert_eq!(replay.result.source_context.as_ref().unwrap().sha256.as_str(),outcome.result.source_context.as_ref().unwrap().sha256.as_str());assert!(replay.result.instruction_targets.is_none());assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(),1);assert!(f.http.lock().unwrap().closed.load(Ordering::SeqCst));
 });
 }
 #[test]
@@ -1267,6 +1269,106 @@ fn native_provider_holds_changed_repository_guidance_before_transport() {
             }
             assert_eq!(f.http.lock().unwrap().reads.load(Ordering::SeqCst), 0);
             assert!(f.transcript().is_empty());
+            f.usage.stop();
+            f.usage.drain().await;
+        }
+    });
+}
+
+#[test]
+fn native_tool_dispatch_rechecks_recorded_guidance_before_first_effect() {
+    runtime().block_on(async {
+        use devworks_core::ports::indexing::SourceTree;
+        use devworks_core::services::indexing::IndexSettings;
+        use devworks_engine::{IndexComposition, indexing::IndexingConfig};
+
+        for started in [false, true] {
+            let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_actual\",\"type\":\"function\",\"function\":{\"name\":\"get_session\",\"arguments\":\"{\\\"sessionId\\\":\\\"session\\\"}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+            let mut f = Fx::new("CompatibleChat", Script::sse(wire), false);
+            let root = f.h.root.join("guidance-repo");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("AGENTS.md"), "first guidance").unwrap();
+            let root = NativeSourceTree::new().canonical_dir(&root).unwrap();
+            let location = root.to_string_lossy().into_owned();
+            write(f.store.as_ref(), move |tx| tx.projects().insert_repository(&StoredRepository {
+                id: id("guidance-repo"), location, name: "Guidance".into(), remote_url: None,
+                primary: true, lifecycle: "Active".into(), languages: vec![], revision: 1,
+                registered_at_ms: 1,
+            })).unwrap();
+            let source = Arc::new(NativeSourceTree::new());
+            let tool = f.driver.schemas().builtin("sessions.get", devworks_core::registry::Mode::Query,
+                devworks_core::registry::SchemaRevision(1), "get_session").unwrap();
+            let schemas = f.driver.schemas().clone();
+            f.driver = NativeProviders::new(
+                f.store.clone(), f.artifacts.clone(), f.connections.clone(), f.usage.clone(),
+                schemas, ProviderComposition::new(f.http.clone())
+                    .with_repository_source(f.store.clone(), source.clone()),
+            );
+            let mut request = f.generation(vec![tool]);
+            let original_context = match &request.input {
+                InferenceInput::Generation { context, .. } => context.clone(),
+                _ => unreachable!(),
+            };
+            let base: ProviderContext = serde_json::from_slice(
+                &f.artifacts.read_exact(f.store.as_ref(), &f.context, &original_context,
+                    1024 * 1024).unwrap().0).unwrap();
+            let targets = vec!["README.md".into()];
+            let bundle = devworks_core::providers::instructions::resolve(
+                source.as_ref(), &root, id("guidance-repo"), &targets,
+            ).unwrap();
+            let bound = devworks_core::providers::instructions::bind_context(base, &[bundle]).unwrap();
+            if let InferenceInput::Generation { context, .. } = &mut request.input {
+                *context = f.bytes(&serde_json::to_vec(&bound).unwrap());
+            }
+            let bound_context = match &request.input {
+                InferenceInput::Generation { context, .. } => context.clone(),
+                _ => unreachable!(),
+            };
+            *f.instruction_targets.lock().unwrap() = Some(vec![(id("guidance-repo"), targets)]);
+            let produced = f.produce(request).await.unwrap();
+            assert_eq!(produced.result.outcome, Some(AttemptEnd::ToolCallsReady));
+            assert_eq!(produced.result.source_context.as_ref().unwrap().sha256.as_str(),
+                bound_context.sha256.as_str());
+            assert_eq!(produced.result.instruction_targets.as_ref().unwrap().len(), 1);
+
+            let mut composition = tool_runtime_composition(&f);
+            composition.indexing = Some(IndexComposition {
+                parser: Arc::new(TreeSitterParser::new()), source,
+                fs: Arc::new(NativeFilesystem::new()), settings: IndexSettings::default(),
+                config: IndexingConfig { discover_at_boot: false, ..IndexingConfig::default() },
+                enrichers: vec![],
+            });
+            let app = devworks_engine::boot(composition).await.unwrap();
+            std::fs::write(root.join("AGENTS.md"), "changed before tool dispatch").unwrap();
+            let held = app.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap();
+            assert_eq!(held.len(), 1);
+            assert!(held[0].outcome.is_err());
+            assert!(f.transcript().iter().all(|entry| entry.kind != "ToolDispatchStarted"
+                && entry.kind != "ToolResponseRecorded"));
+            if started {
+                use devworks_core::services::sessions::{transcript::{BatchOutcome, SessionBatch, SessionWriter}, turn};
+                let call: CompleteToolCall = serde_json::from_value(f.transcript().iter()
+                    .find(|entry| entry.kind == "ToolCallRecorded").unwrap().body["toolCall"].clone()).unwrap();
+                let key = call.call;
+                let ctx = f.context.clone();
+                write(f.store.as_ref(), move |tx| {
+                    let session = tx.sessions().session(&id("session"))?.unwrap();
+                    let batch = turn::batch_of(&id("session"), tx.new_id(IdKind::TranscriptBatch),
+                        session.context_epoch, session.next_sequence,
+                        vec![TranscriptBody::ToolDispatchStarted { call: key }],
+                        || tx.new_id(IdKind::TranscriptEntry));
+                    assert!(matches!(SessionWriter::append_in(tx, &ctx, &SessionBatch::entries(batch))?,
+                        BatchOutcome::Accepted(_)));
+                    Ok(())
+                }).unwrap();
+            } else {
+                std::fs::write(root.join("AGENTS.md"), "first guidance").unwrap();
+            }
+            let recovered = app.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap();
+            assert_eq!(recovered.len(), 1);
+            assert!(recovered[0].outcome.is_ok());
+            assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "ToolResponseRecorded").count(), 1);
+            app.shutdown().await;
             f.usage.stop();
             f.usage.drain().await;
         }
