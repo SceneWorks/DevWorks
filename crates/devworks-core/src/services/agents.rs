@@ -235,6 +235,52 @@ fn agent_record(
     })
 }
 
+fn primary_brief(
+    tx: &mut dyn WriteTransaction,
+    root: &crate::ports::storage::WorkRoot,
+) -> Result<String, StorageError> {
+    let work = tx
+        .work()
+        .work(&root.id.0)?
+        .ok_or(StorageError::ScopeDenied)?;
+    if work.project_id != root.project_id
+        || work.revision != root.revision
+        || !(work.kind == root.kind
+            || root.kind == "issue" && work.kind == crate::ports::storage::TASK)
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let brief = crate::services::work::model::WorkBrief::of(&work)?;
+    let repositories = tx.work().work_repositories(&work.id)?;
+    let prerequisites = tx.work().open_prerequisites(&work.id)?;
+    let approved_plan = if root.kind == "feature" {
+        tx.work()
+            .feature_plan(&work.id)?
+            .and_then(|slot| slot.approved)
+            .map(|value| {
+                serde_json::from_value::<crate::services::work::model::ActivePlan>(value)
+                    .map_err(|_| StorageError::InvalidRecord("stored approved plan".into()))
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    serde_json::to_string(&serde_json::json!({
+        "workId": root.id,
+        "projectId": root.project_id,
+        "kind": root.kind,
+        "revision": root.revision,
+        "title": root.title,
+        "description": brief.description,
+        "goals": brief.goals,
+        "acceptance": brief.acceptance,
+        "repositories": repositories,
+        "openPrerequisites": prerequisites,
+        "approvedPlan": approved_plan,
+    }))
+    .map_err(|_| StorageError::InvalidRecord("coordinator brief serialization".into()))
+}
+
 /// One service for the agent-family gateway; composition registers only qualified operations.
 pub struct AgentService {
     ids: Arc<dyn IdSource>,
@@ -363,6 +409,7 @@ impl AgentService {
                     Refusal::new(refusal.code, refusal.target_kind, refusal.target_id).into()
                 }
             })?;
+            let brief = primary_brief(tx, &root)?;
             tx.runs()
                 .insert_agent_assignment_context(&StoredAgentAssignmentContext {
                     assignment_id: assignment.id.clone(),
@@ -370,7 +417,7 @@ impl AgentService {
                     role_id: crate::protocol::Id::new(role.as_str()).map_err(|_| denied())?,
                     role_instructions: instructions.text,
                     role_revisions: serde_json::json!({"workspace":instructions.revisions.workspace,"project":instructions.revisions.project}),
-                    brief: root.title,
+                    brief,
                     task_ids: serde_json::json!([]),
                     source_checkpoint_id: None,
                     created_at_ms: now,

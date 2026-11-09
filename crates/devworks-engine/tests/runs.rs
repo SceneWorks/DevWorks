@@ -696,7 +696,23 @@ fn standalone_issue_can_register_children_without_replacing_its_primary_owner() 
 fn host_materializes_one_issue_coordinator_for_a_running_activation() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
-    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    fx.tx(|_, tx| {
+        let mut work = tx.work().work(&id("root-i"))?.unwrap();
+        let mut brief = devworks_core::services::work::model::WorkBrief::of(&work)?;
+        brief.description = "Repair the issue without a feature".into();
+        brief.goals = vec!["Preserve existing behavior".into()];
+        brief.acceptance =
+            vec![serde_json::from_value(json!({
+            "id":"acceptance-a","text":"Verified native result","evidenceIds":[],"state":"Unmet"
+        }))
+        .unwrap()];
+        work.brief = brief.value();
+        let revision = work.revision;
+        work.revision += 1;
+        tx.work().update_work(&work, revision)?;
+        Ok(())
+    });
+    applied(&fx.start(&fx.user, "root-i", 2, 1));
     let activation = fx.launch("coordinator-runner");
     let stale_actor = fx.agent.clone();
     let stale_id = activation.id.clone();
@@ -747,6 +763,16 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
     assert_eq!(session.root_id, Some(rid("root-i")));
     assert_eq!(profile.role_id.as_str(), "issueCoordinator");
     assert!(!profile.role_instructions.is_empty());
+    let brief: Value = serde_json::from_str(&profile.brief).unwrap();
+    assert_eq!(brief["kind"], "issue");
+    assert_eq!(brief["workId"], "root-i");
+    assert_eq!(brief["description"], "Repair the issue without a feature");
+    assert_eq!(brief["goals"], json!(["Preserve existing behavior"]));
+    assert_eq!(brief["acceptance"][0]["text"], "Verified native result");
+    assert!(
+        brief["approvedPlan"].is_null(),
+        "an issue needs no feature plan"
+    );
     assert_eq!(binding.role, Some(AgentRole::IssueCoordinator));
     let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
     let agents =
