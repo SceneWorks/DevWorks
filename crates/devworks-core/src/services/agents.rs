@@ -74,9 +74,21 @@ fn source_assignment(
         .session(&assignment.session_id)?
         .ok_or_else(denied)?;
     if assignment.root_id != *root
-        || !assignment.state.is_live()
+        || assignment.state != AssignmentState::Active
         || ctx.session_id() != Some(&assignment.session_id)
         || session.agent_id != *ctx.principal()
+        || session.closed()
+    {
+        return Err(denied());
+    }
+    let execution = assignment.execution_id.as_ref().ok_or_else(denied)?;
+    let activation = tx.runs().activation(execution)?.ok_or_else(denied)?;
+    if activation.root_id != *root
+        || activation.phase != ActivationPhase::Running
+        || tx.store().boot_id.as_ref() != Some(&activation.boot_id)
+        || !activation
+            .lease_until_ms
+            .is_some_and(|until| until > tx.now_ms())
     {
         return Err(denied());
     }

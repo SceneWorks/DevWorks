@@ -956,6 +956,55 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                 Some(assignment(assignment_name)),
             )
     };
+    let stale_sender = context("sender", "session-a", "root-a");
+    assert!(matches!(
+        run_write(&s, WriteOptions::default(), move |tx| {
+            devworks_core::services::agents::post_assignment(
+                tx,
+                &stale_sender,
+                &ops::MessagesInput {
+                    recipient_assignment_id: assignment("recipient"),
+                    message_class: MessageClass::Status,
+                    content: BoundedText("Too early".into()),
+                    attachments: BoundedList(vec![]),
+                },
+            )
+        }),
+        Err(StorageError::ScopeDenied)
+    ));
+    let boot = s.info().boot_id.clone().unwrap();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        let stale = tx.runs().assignment(&assignment("sender"))?.unwrap();
+        assert_eq!(stale.state, AssignmentState::Ready);
+        tx.runs().insert_activation(&StoredActivation {
+            id: id("sender-execution"),
+            root_id: RootId(id("root-a")),
+            boot_id: boot,
+            generation: 1,
+            phase: ActivationPhase::Running,
+            purpose: ActivationPurpose::Implementation,
+            owner: Some(id("test-owner")),
+            lease_until_ms: Some(i64::MAX),
+            owner_epoch: 1,
+            revision: 1,
+            attempts: 1,
+            ready_at_ms: 0,
+            created_at_ms: 0,
+            stop_cause: None,
+            stop_requested_at_ms: None,
+            stop_acknowledged_at_ms: None,
+            stopped_at_ms: None,
+            outcome: None,
+            detail: None,
+            plan_revision: None,
+        })?;
+        let mut running = stale.clone();
+        running.state = AssignmentState::Active;
+        running.execution_id = Some(id("sender-execution"));
+        running.revision += 1;
+        tx.runs().update_assignment(&running, stale.revision)
+    })
+    .unwrap();
     let sender_context = context("sender", "session-a", "root-a");
     let recipient_context = context("recipient", "session-child", "root-a");
     let input = ops::MessagesInput {
@@ -965,6 +1014,12 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         attachments: BoundedList(vec![]),
     };
     let posted = run_write(&s, WriteOptions::default(), move |tx| {
+        let sender = tx.runs().assignment(&assignment("sender"))?.unwrap();
+        let activation = tx.runs().activation(&id("sender-execution"))?.unwrap();
+        assert_eq!(sender.state, AssignmentState::Active);
+        assert_eq!(activation.phase, ActivationPhase::Running);
+        assert_eq!(tx.store().boot_id.as_ref(), Some(&activation.boot_id));
+        assert!(activation.lease_until_ms.unwrap() > tx.now_ms());
         devworks_core::services::agents::post_assignment(tx, &sender_context, &input)
     })
     .unwrap();
@@ -1163,6 +1218,30 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut activation = tx.runs().activation(&id("sender-execution"))?.unwrap();
+        let expected = activation.revision;
+        activation.lease_until_ms = Some(tx.now_ms());
+        activation.revision += 1;
+        tx.runs().update_activation(&activation, expected)
+    })
+    .unwrap();
+    let expired_sender = context("sender", "session-a", "root-a");
+    assert!(matches!(
+        run_write(&s, WriteOptions::default(), move |tx| {
+            devworks_core::services::agents::post_assignment(
+                tx,
+                &expired_sender,
+                &ops::MessagesInput {
+                    recipient_assignment_id: assignment("recipient"),
+                    message_class: MessageClass::Status,
+                    content: BoundedText("Expired lease".into()),
+                    attachments: BoundedList(vec![]),
+                },
+            )
+        }),
+        Err(StorageError::ScopeDenied)
+    ));
 
     let artifacts = Arc::new(devworks_core::services::artifacts::ArtifactService::new(
         Arc::new(crate::fs::artifacts::NativeArtifactFiles::new(
