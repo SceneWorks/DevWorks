@@ -6,6 +6,7 @@ use devworks_core::authority::HostAuthority;
 use devworks_core::context::PrincipalKind;
 use devworks_core::gateway::Gateway;
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
+use devworks_core::protocol::support::DomainErrorCode;
 use devworks_core::protocol::{CommandReply, ProjectId};
 use devworks_core::services::UseCases;
 use devworks_core::services::agents::AgentService;
@@ -293,6 +294,16 @@ fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
             json!({"projectId":"project-a","after":"99999999"})
         ),
         DomainQueryReply::Rejected { .. }
+    ));
+    let agent = principal(store.as_ref(), "history-agent", PrincipalKind::Agent);
+    let raw = serde_json::to_vec(&json!({
+        "protocol":"1.0-draft.1", "mode":"Query", "schemaRevision":7,
+        "queryId":"agent-history", "body":{"kind":"agents.history","projectId":"project-a"}
+    }))
+    .unwrap();
+    assert!(matches!(
+        cases.query(&gateway, &agent, "agents.history", &raw).unwrap(),
+        DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::PermissionDenied
     ));
 }
 

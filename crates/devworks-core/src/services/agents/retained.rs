@@ -105,42 +105,17 @@ pub fn history(
             "invalid message history filter".into(),
         ));
     }
-    if ctx
-        .project_id()
-        .is_some_and(|scope| scope != &query.project)
+    if ctx.principal_kind() != PrincipalKind::Human
+        || ctx.session_id().is_some()
+        || ctx
+            .project_id()
+            .is_some_and(|scope| scope != &query.project)
         || snapshot.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
     {
         return Err(StorageError::ScopeDenied);
     }
     if !snapshot.sessions().project_exists(&query.project)? {
         return Err(StorageError::ScopeDenied);
-    }
-    match ctx.principal_kind() {
-        PrincipalKind::Agent => {
-            let id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
-            let session = snapshot
-                .sessions()
-                .session(id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let root_project = match &session.root_id {
-                Some(root) => snapshot
-                    .sessions()
-                    .work_root(root)?
-                    .map(|work| work.project_id),
-                None => None,
-            };
-            if session.closed()
-                || session.agent_id != *ctx.principal()
-                || session.project_id.as_ref().is_some_and(|project| {
-                    root_project.as_ref().is_some_and(|root| root != project)
-                })
-                || session.project_id.or(root_project).as_ref() != Some(&query.project)
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-        }
-        PrincipalKind::Human if ctx.session_id().is_none() => {}
-        _ => return Err(StorageError::ScopeDenied),
     }
     for (target, kind) in [(query.item.as_ref(), false), (query.feature.as_ref(), true)] {
         if let Some(target) = target {
