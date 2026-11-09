@@ -556,12 +556,12 @@ pub(crate) fn dispatch_one(
                 }
                 failed(&format!("domain_{:?}", fault.code))
             }
-            Err(_) => (
-                ToolOutcome::Failed {
-                    code: static_id("tool_dispatch_failed"),
-                },
-                None,
-            ),
+            Err(_) => {
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "tool query gateway failed before a durable response",
+                ));
+            }
         },
         Ok((descriptor, Mode::Command, raw)) => match runtime.command(ctx, descriptor.name, &raw) {
             Ok(CommandReply::CommandStatusUnknown { .. }) => {
@@ -600,12 +600,12 @@ pub(crate) fn dispatch_one(
                 }
                 failed(&format!("command_{code:?}"))
             }
-            Err(_) => (
-                ToolOutcome::Failed {
-                    code: static_id("tool_dispatch_failed"),
-                },
-                None,
-            ),
+            Err(_) => {
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "tool command gateway failed before receipt reconciliation",
+                ));
+            }
         },
         Err(_) => failed("tool_invalid_arguments"),
     };

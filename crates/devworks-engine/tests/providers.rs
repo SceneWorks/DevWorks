@@ -798,6 +798,14 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         };
         let app = boot(composition()).await.unwrap();
         assert!(app.resolved_tool_turn(&f.context, &id("session"), &attempt, 0).is_err());
+        let revision = read(f.store.as_ref(), |s| Ok(s.sessions().session(&id("session"))?.unwrap().revision));
+        let close = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":1,
+            "requestKey":"close-pending-tool-turn","body":{"kind":"sessions.end",
+            "sessionId":"session","expectedRevision":revision.to_string()}});
+        let close_reply = app.command(&f.context, "sessions.end", &serde_json::to_vec(&close).unwrap()).unwrap();
+        assert!(matches!(close_reply, devworks_core::protocol::CommandReply::Recorded { receipt, .. }
+            if matches!(receipt.decision, devworks_core::protocol::results::DomainDecision::Refused { ref fault }
+                if fault.target_kind.as_ref().is_some_and(|kind| kind.0 == "unresolved_tool_calls"))));
         let dispatched = app.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap();
         assert_eq!(dispatched.len(), 3);
         assert!(dispatched.iter().all(|d| matches!(d.outcome, Ok(devworks_core::services::sessions::transcript::BatchOutcome::Accepted(_)))));

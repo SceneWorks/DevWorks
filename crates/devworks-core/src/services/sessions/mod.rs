@@ -585,7 +585,13 @@ impl SessionService {
                 },
             });
         }
-        let pending = tx.sessions().pending_calls(&session.id, 500)?.len();
+        // A provider call may already be executing an external effect. Keep the session open
+        // until its one initial response is durable, so the result writer cannot lose custody
+        // to a concurrent close after the effect commits.
+        if !tx.sessions().pending_calls(&session.id, 1)?.is_empty() {
+            return Err(append_refusal(&BatchRefusal::UnresolvedToolCalls).into());
+        }
+        let pending = 0;
         session.closed_at_ms = Some(tx.now_ms());
         session.closed_by = Some(ctx.principal().clone());
         session.revision += 1;
