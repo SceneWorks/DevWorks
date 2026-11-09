@@ -932,12 +932,12 @@ pub(crate) fn record_operation_update(
         if linked.len() == 500 {
             return Err(invalid("linked tool operations exceed scan bound"));
         }
-        if !linked
+        let first_response = linked
             .iter()
-            .any(|call| call.operation_id.as_ref() == Some(&operation_for_write))
-        {
-            return Err(StorageError::ScopeDenied);
-        }
+            .filter(|call| call.operation_id.as_ref() == Some(&operation_for_write))
+            .filter_map(|call| call.response_sequence)
+            .min()
+            .ok_or(StorageError::ScopeDenied)?;
         let operation = tx
             .operations()
             .operation(&operation_for_write)?
@@ -948,9 +948,9 @@ pub(crate) fn record_operation_update(
                 "tool operation changed during update publication",
             ));
         }
-        let mut position = 0;
+        let mut position = first_response;
         while position < session.last_durable_sequence() {
-            if position >= 10_000 {
+            if position - first_response >= 10_000 {
                 return Err(invalid("operation update transcript exceeds scan bound"));
             }
             let page = tx.sessions().entries(&session_for_write, position, 500)?;
