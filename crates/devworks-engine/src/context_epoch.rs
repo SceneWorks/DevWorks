@@ -29,6 +29,63 @@ pub(crate) struct EpochChange {
     pub omitted: Vec<ArtifactRef>,
 }
 
+pub(crate) struct EpochSource {
+    pub context: ProviderContext,
+    pub artifact: ArtifactRef,
+    pub observed_sequence: Option<i64>,
+}
+
+/// Bring recorded operation facts into a tracked source before changing its epoch. A later
+/// transcript entry other than an operation update forces redirected context reconstruction.
+pub(crate) fn current_source(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    source: &ArtifactRef,
+    binding: &NativeBinding,
+) -> Result<EpochSource, StorageError> {
+    let (bytes, provenance) = artifacts
+        .read_exact(store, ctx, source, 8 * 1024 * 1024)
+        .map_err(|_| StorageError::ScopeDenied)?;
+    let tracked = matches!(
+        provenance["derived"]["kind"].as_str(),
+        Some(
+            "ProviderTurnContinuation"
+                | "ProviderToolContinuation"
+                | "ProviderOperationUpdateContext"
+                | "ProviderContextEpoch"
+        )
+    );
+    let (bytes, artifact, observed_sequence) = if tracked {
+        let latest =
+            crate::tool_turn::append_operation_updates(store, artifacts, ctx, session_id, source)?;
+        let (bytes, provenance) = artifacts
+            .read_exact(store, ctx, &latest, 8 * 1024 * 1024)
+            .map_err(|_| StorageError::ScopeDenied)?;
+        let derived = &provenance["derived"];
+        if derived["binding"] != json!(binding) {
+            return Err(StorageError::ScopeDenied);
+        }
+        let observed = derived["observedSequence"]
+            .as_i64()
+            .ok_or(StorageError::ScopeDenied)?;
+        (bytes, latest, Some(observed))
+    } else {
+        (bytes, source.clone(), None)
+    };
+    let context: ProviderContext =
+        serde_json::from_slice(&bytes).map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+    context
+        .validate()
+        .map_err(|e| StorageError::InvalidRecord(format!("epoch context: {e:?}")))?;
+    Ok(EpochSource {
+        context,
+        artifact,
+        observed_sequence,
+    })
+}
+
 pub(crate) fn provider_change(
     store: &dyn ApplicationStore,
     artifacts: &Arc<ArtifactService>,
@@ -58,43 +115,16 @@ pub(crate) fn provider_change(
         }
         Ok(())
     })?;
-    let (bytes, provenance) = artifacts
-        .read_exact(store, ctx, previous_context, 8 * 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?;
-    let tracked = matches!(
-        provenance["derived"]["kind"].as_str(),
-        Some(
-            "ProviderTurnContinuation"
-                | "ProviderToolContinuation"
-                | "ProviderOperationUpdateContext"
-                | "ProviderContextEpoch"
-        )
-    );
-    let (bytes, observed_sequence) = if tracked {
-        let latest = crate::tool_turn::append_operation_updates(
-            store,
-            artifacts,
-            ctx,
-            session_id,
-            previous_context,
-        )?;
-        let (bytes, provenance) = artifacts
-            .read_exact(store, ctx, &latest, 8 * 1024 * 1024)
-            .map_err(|_| StorageError::ScopeDenied)?;
-        let derived = &provenance["derived"];
-        if derived["binding"] != json!(previous_binding) {
-            return Err(StorageError::ScopeDenied);
-        }
-        let observed = derived["observedSequence"]
-            .as_i64()
-            .ok_or(StorageError::ScopeDenied)?;
-        (bytes, Some(observed))
-    } else {
-        (bytes, None)
-    };
-    let context: ProviderContext =
-        serde_json::from_slice(&bytes).map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
-    let (converted, omitted) = context
+    let source = current_source(
+        store,
+        artifacts,
+        ctx,
+        session_id,
+        previous_context,
+        previous_binding,
+    )?;
+    let (converted, omitted) = source
+        .context
         .converted_for_new_epoch(previous_binding, next_binding)
         .map_err(|e| StorageError::InvalidRecord(format!("provider context conversion: {e:?}")))?;
     publish(
@@ -105,7 +135,7 @@ pub(crate) fn provider_change(
         EpochChange {
             previous_epoch,
             binding: next_binding.clone(),
-            observed_sequence,
+            observed_sequence: source.observed_sequence,
             reason: ContextChangeReason::ProviderChange,
             context: converted,
             omitted,

@@ -428,6 +428,26 @@ fn provider_instructions_use_current_registered_checkout_and_scope() {
         bound.instruction_stamps[0].revision
     );
     assert_eq!(fresh.instructions[0].text, "role");
+    std::fs::write(repo.join("src/CLAUDE.md"), "third revision").unwrap();
+    let next_binding = devworks_core::protocol::provider::NativeBinding {
+        context_epoch: devworks_core::protocol::Counter::new(1).unwrap(),
+        ..binding
+    };
+    let readopted = runtime_
+        .adopt_instruction_epoch(&host, &session_id, &adopted, &next_binding, &selection)
+        .unwrap();
+    let epoch = read(&*store, |s| s.sessions().epoch(&session_id, 2)).unwrap();
+    assert_eq!(epoch.reason, "InstructionAdoption");
+    let bytes = runtime_
+        .artifacts()
+        .read_exact(&*store, &host, &readopted, 1024 * 1024)
+        .unwrap()
+        .0;
+    let third: ProviderContext = serde_json::from_slice(&bytes).unwrap();
+    assert_ne!(
+        third.instruction_stamps[0].revision,
+        fresh.instruction_stamps[0].revision
+    );
     rt.block_on(runtime_.shutdown());
     let _ = std::fs::remove_dir_all(&src);
 }

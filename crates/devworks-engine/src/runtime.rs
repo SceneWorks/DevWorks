@@ -1860,23 +1860,22 @@ impl Runtime {
                 Ok(())
             },
         )?;
-        let bytes = self
-            .artifacts
-            .read_exact(self.store.as_ref(), ctx, previous_context, 8 * 1024 * 1024)
-            .map_err(|_| StorageError::ScopeDenied)?
-            .0;
-        let mut base: devworks_core::providers::context::ProviderContext =
-            serde_json::from_slice(&bytes)
-                .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
-        base.validate()
-            .map_err(|e| StorageError::InvalidRecord(format!("instruction context: {e:?}")))?;
+        let source = crate::context_epoch::current_source(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            session_id,
+            previous_context,
+            previous_binding,
+        )?;
+        let mut base = source.context;
         let old = std::mem::take(&mut base.instruction_stamps);
         let old_count: usize = old.iter().map(|stamp| stamp.sources.len()).sum();
         base.instructions
             .truncate(base.instructions.len() - old_count);
         let rebound = self.bind_provider_instructions(ctx, base, targets)?;
         if rebound.instruction_stamps == old {
-            return Ok(previous_context.clone());
+            return Ok(source.artifact);
         }
         let next_binding = devworks_core::protocol::provider::NativeBinding {
             context_epoch: devworks_core::protocol::Counter::new(
@@ -1898,7 +1897,7 @@ impl Runtime {
             crate::context_epoch::EpochChange {
                 previous_epoch,
                 binding: next_binding,
-                observed_sequence: None,
+                observed_sequence: source.observed_sequence,
                 reason: devworks_core::protocol::provider::ContextChangeReason::InstructionAdoption,
                 context: converted,
                 omitted,
