@@ -74,6 +74,18 @@ fn transcript_context_preserves_every_host_notice_in_order() {
         )
         .is_err()
     );
+    let mut mixed = entries.clone();
+    mixed[2].session_id = id("foreign-session");
+    assert!(
+        ProviderContext::from_transcript(
+            &mixed,
+            vec![],
+            GenerationParameters::default(),
+            |_| Ok(String::new()),
+            |_| None,
+        )
+        .is_err()
+    );
 }
 fn id(s: &str) -> Id {
     Id::new(s).unwrap()

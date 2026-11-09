@@ -133,10 +133,15 @@ impl ProviderContext {
     ) -> Result<Self, StorageError> {
         let mut messages = Vec::new();
         let mut next = 1;
+        let session = entries.first().map(|entry| &entry.session_id);
+        let epoch = entries.first().map(|entry| entry.context_epoch);
         for entry in entries {
-            if entry.sequence != next {
+            if entry.sequence != next
+                || session != Some(&entry.session_id)
+                || epoch != Some(entry.context_epoch)
+            {
                 return Err(StorageError::InvalidRecord(
-                    "transcript history has a gap".into(),
+                    "transcript history is not one contiguous epoch".into(),
                 ));
             }
             next += 1;
