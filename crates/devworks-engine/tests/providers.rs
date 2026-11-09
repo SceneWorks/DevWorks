@@ -616,20 +616,16 @@ impl Fx {
         let quote = read(self.store.as_ref(), |s| {
             devworks_core::services::prices::CatalogPriceResolver.quote(s, &query)
         });
-        let expected_epoch = if embedding {
-            if embedding_session {
-                Some(
-                    read(self.store.as_ref(), |s| {
-                        s.sessions().session(&id("session"))
-                    })
-                    .unwrap()
-                    .context_epoch,
-                )
-            } else {
-                None
-            }
-        } else {
-            Some(0)
+        let expected_epoch = match &request.input {
+            InferenceInput::Generation { context_epoch, .. } => Some(context_epoch.get()),
+            InferenceInput::Embedding { .. } if embedding_session => Some(
+                read(self.store.as_ref(), |s| {
+                    s.sessions().session(&id("session"))
+                })
+                .unwrap()
+                .context_epoch,
+            ),
+            InferenceInput::Embedding { .. } => None,
         };
         let attempt = AttemptRequest {
             admission_key: id("admission"),
@@ -702,6 +698,45 @@ fn native_generation_persists_text_usage_and_exact_receipt_replay_without_second
     let observations=read(f.store.as_ref(),|s|s.usage().usage_observations(&attempt,None,64));assert_eq!(observations.len(),1);
     let replay=f.produce(request).await.unwrap();assert!(matches!(replay.accounting,DriveOutcome::AlreadyDispatched));assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(),1);assert!(f.http.lock().unwrap().closed.load(Ordering::SeqCst));
 });
+}
+#[test]
+fn native_generation_attributes_observed_context_epoch_change_to_usage() {
+    runtime().block_on(async {
+        let f = Fx::new("CompatibleChat", Script::sse("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n"), false);
+        let mut request = f.generation(vec![]);
+        let InferenceInput::Generation { context, context_epoch, .. } = &mut request.input else {
+            unreachable!()
+        };
+        let published = context.clone();
+        *context_epoch = Counter::new(1).unwrap();
+        let ctx = f.context.clone();
+        write(f.store.as_ref(), move |tx| {
+            use devworks_core::services::sessions::{transcript::{BatchOutcome, SessionBatch, SessionWriter}, turn};
+            let session = tx.sessions().session(&id("session"))?.unwrap();
+            let batch = turn::batch_of(&id("session"), tx.new_id(IdKind::TranscriptBatch),
+                1, session.next_sequence,
+                vec![TranscriptBody::ContextEpochChanged {
+                    previous_epoch: Counter::new(0).unwrap(),
+                    next_epoch: Counter::new(1).unwrap(),
+                    reason: ContextChangeReason::InstructionAdoption,
+                    context: published,
+                }],
+                || tx.new_id(IdKind::TranscriptEntry));
+            assert!(matches!(SessionWriter::append_in(tx, &ctx, &SessionBatch::entries(batch))?,
+                BatchOutcome::Accepted(_)));
+            Ok(())
+        }).unwrap();
+        let result = f.produce(request).await.unwrap();
+        let DriveOutcome::Settled(balance) = result.accounting else { panic!("attempt did not settle") };
+        let diagnostics = read(f.store.as_ref(), |s| {
+            let attempt = s.usage().inference_attempt(&balance.attempt_id)?.unwrap();
+            Ok(devworks_core::services::usage::accounting::snapshot(&attempt)?.cache_diagnostics)
+        });
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].kind.0, "ContextEpochChanged");
+        assert_eq!(diagnostics[0].detail.as_ref().unwrap().0, "InstructionAdoption");
+        assert!(!diagnostics[0].inferred);
+    });
 }
 #[test]
 fn embedding_actual_discovery_fixed_dimensions_durable_vectors_and_no_assistant_turn() {

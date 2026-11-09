@@ -452,6 +452,44 @@ impl NativeProviders {
         if request.request_id != logical.request_id || request.request_id != attempt.request_id {
             return Err(StorageError::ScopeDenied);
         }
+        if let InferenceInput::Generation {
+            session_id,
+            context: request_context,
+            context_epoch,
+            ..
+        } = &request.input
+            && context_epoch.get() > 0
+        {
+            // The epoch is host-published provenance, not a guess from a cache miss. Record
+            // its reason on the attributed attempt without copying prompt or tool material.
+            let epoch = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                read.sessions()
+                    .epoch(session_id, context_epoch.get())?
+                    .ok_or(StorageError::ScopeDenied)
+            })?;
+            let published: devworks_core::protocol::provider::ArtifactRef =
+                serde_json::from_value(epoch.context)
+                    .map_err(|error| invalid(error.to_string()))?;
+            if published.artifact_id != request_context.artifact_id
+                || published.version_id != request_context.version_id
+                || published.sha256 != request_context.sha256
+                || published.byte_length != request_context.byte_length
+                || published.media_type != request_context.media_type
+                || attempt.cache_diagnostics.len() >= 128
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            attempt.cache_diagnostics.push(
+                devworks_core::protocol::records::UsageCacheDiagnostic {
+                    kind: devworks_core::protocol::support::BoundedText(
+                        "ContextEpochChanged".into(),
+                    ),
+                    inferred: false,
+                    detail: Some(devworks_core::protocol::support::BoundedText(epoch.reason)),
+                    source_revision: Some(Revision::new(context_epoch.get()).map_err(invalid)?),
+                },
+            );
+        }
         use devworks_core::services::usage::meter::InputSemantics;
         attempt.pricing.input_semantics = self
             .composition
