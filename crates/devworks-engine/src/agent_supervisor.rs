@@ -141,7 +141,8 @@ impl ActivationLauncher for AgentLauncher {
                     session.project_id,
                     session.root_id,
                     Some(coordinator.assignment_id.clone()),
-                );
+                )
+                .with_activation(activation_id.clone(), epoch);
             let stop_watch = launch.stop.clone();
             let end = executor
                 .run(context, coordinator.clone(), launch.stop)

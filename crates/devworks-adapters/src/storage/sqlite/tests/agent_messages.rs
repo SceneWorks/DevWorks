@@ -955,6 +955,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                 Some(RootId(id(root_name))),
                 Some(assignment(assignment_name)),
             )
+            .with_activation(id("sender-execution"), 1)
     };
     let stale_sender = context("sender", "session-a", "root-a");
     assert!(matches!(
@@ -1005,6 +1006,23 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         tx.runs().update_assignment(&running, stale.revision)
     })
     .unwrap();
+    let stale_epoch_sender =
+        context("sender", "session-a", "root-a").with_activation(id("sender-execution"), 0);
+    assert!(matches!(
+        run_write(&s, WriteOptions::default(), move |tx| {
+            devworks_core::services::agents::post_assignment(
+                tx,
+                &stale_epoch_sender,
+                &ops::MessagesInput {
+                    recipient_assignment_id: assignment("recipient"),
+                    message_class: MessageClass::Status,
+                    content: BoundedText("Old owner".into()),
+                    attachments: BoundedList(vec![]),
+                },
+            )
+        }),
+        Err(StorageError::ScopeDenied)
+    ));
     let sender_context = context("sender", "session-a", "root-a");
     let recipient_context = context("recipient", "session-child", "root-a");
     let input = ops::MessagesInput {

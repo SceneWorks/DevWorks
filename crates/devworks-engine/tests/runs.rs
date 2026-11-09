@@ -773,7 +773,8 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
             Some(ProjectId(id("project-a"))),
             Some(rid("root-i")),
             Some(first.assignment_id.clone()),
-        );
+        )
+        .with_activation(activation.id.clone(), epoch);
     let request = devworks_core::operations::agents::DelegateInput {
         root_id: rid("root-i"),
         expected_control_revision: Revision::new(fx.control("root-i").revision).unwrap(),

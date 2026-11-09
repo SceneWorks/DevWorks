@@ -84,6 +84,7 @@ fn source_assignment(
     let execution = assignment.execution_id.as_ref().ok_or_else(denied)?;
     let activation = tx.runs().activation(execution)?.ok_or_else(denied)?;
     if activation.root_id != *root
+        || ctx.activation() != Some((execution, activation.owner_epoch))
         || activation.phase != ActivationPhase::Running
         || tx.store().boot_id.as_ref() != Some(&activation.boot_id)
         || !activation
