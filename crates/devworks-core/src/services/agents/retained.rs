@@ -394,6 +394,7 @@ pub fn handover_item(
                 read_at_ms: None,
                 recipient_session_id: Some(session_id.clone()),
                 handed_over: true,
+                handed_to_session_id: None,
                 resolved_at_ms: None,
             };
             tx.runs().insert_agent_delivery(&delivery)?;
@@ -417,6 +418,137 @@ pub fn handover_item(
         }
     }
     Ok(handed_over)
+}
+
+const DIRECT_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
+const SILENT_SESSION_MS: i64 = 15 * 60 * 1_000;
+
+fn repository_scope(
+    tx: &mut dyn WriteTransaction,
+    session: &crate::ports::storage::StoredSession,
+) -> Result<Vec<Id>, StorageError> {
+    match &session.root_id {
+        Some(root) => tx.work().work_repositories(&root.0),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Passes an unread or still-open itemless direct message once from an ended or silent holder to
+/// a new session with the same project and repository scope. The original delivery is immutable
+/// to its recipient except for the successor marker; the new copy has its own inbox sequence.
+pub fn handover_direct(
+    tx: &mut dyn WriteTransaction,
+    session_id: &Id,
+) -> Result<usize, StorageError> {
+    let session = tx
+        .sessions()
+        .session(session_id)?
+        .ok_or(StorageError::ScopeDenied)?;
+    if session.closed() {
+        return Err(StorageError::ScopeDenied);
+    }
+    let project = post::session_project(tx, &session)?.ok_or(StorageError::ScopeDenied)?;
+    let repositories = repository_scope(tx, &session)?;
+    let now = tx.now_ms();
+    let retention_start = now.saturating_sub(DIRECT_RETENTION_MS);
+    let stale_before = now.saturating_sub(SILENT_SESSION_MS);
+    let mut after = 0;
+    let mut inherited = 0;
+    loop {
+        let page = tx.runs().unhanded_direct_deliveries(&project, after, 500)?;
+        if page.is_empty() {
+            break;
+        }
+        let page_len = page.len();
+        after = page.last().expect("nonempty page").0.sequence;
+        for (mut source, message) in page {
+            let Some(holder_id) = source.recipient_session_id.as_ref() else {
+                continue;
+            };
+            let Some(original_id) = message.target_session_id.as_ref() else {
+                continue;
+            };
+            if holder_id == session_id
+                || original_id == session_id
+                || (source.read_at_ms.is_some() && message.state.as_deref() != Some("Open"))
+                || tx
+                    .runs()
+                    .agent_session_delivery(&message.id, session_id)?
+                    .is_some()
+            {
+                continue;
+            }
+            let holder = tx
+                .sessions()
+                .session(holder_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let original = tx
+                .sessions()
+                .session(original_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if post::session_project(tx, &holder)?.as_ref() != Some(&project)
+                || post::session_project(tx, &original)?.as_ref() != Some(&project)
+                || repository_scope(tx, &original)? != repositories
+            {
+                continue;
+            }
+            let holder_last = tx
+                .sessions()
+                .last_entry_at_ms(holder_id)?
+                .unwrap_or(holder.created_at_ms);
+            if !holder.closed()
+                && (holder_last > stale_before || post::active_assignment(tx, &holder)?.is_some())
+            {
+                continue;
+            }
+            let original_last = original.closed_at_ms.unwrap_or(
+                tx.sessions()
+                    .last_entry_at_ms(original_id)?
+                    .unwrap_or(original.created_at_ms),
+            );
+            if original_last <= retention_start {
+                continue;
+            }
+            let expected = source.revision;
+            source.revision += 1;
+            source.handed_to_session_id = Some(session_id.clone());
+            tx.runs().update_agent_delivery(&source, expected)?;
+            let delivery_sequence = tx.runs().agent_delivery_head()? + 1;
+            tx.runs().insert_agent_delivery(&StoredAgentDelivery {
+                sequence: delivery_sequence,
+                message_id: message.id.clone(),
+                project_id: project.clone(),
+                recipient_assignment_id: None,
+                recipient_human: false,
+                state: "Pending".into(),
+                revision: 1,
+                delivered_at_ms: None,
+                read_at_ms: None,
+                recipient_session_id: Some(session_id.clone()),
+                handed_over: true,
+                handed_to_session_id: None,
+                resolved_at_ms: None,
+            })?;
+            let event_sequence = tx.runs().agent_event_head()? + 1;
+            tx.runs()
+                .insert_agent_message_event(&StoredAgentMessageEvent {
+                    sequence: event_sequence,
+                    project_id: project.clone(),
+                    message_id: message.id,
+                    kind: "HandedOver".into(),
+                    actor_id: session.agent_id.clone(),
+                    recipient_assignment_id: None,
+                    recipient_session_id: Some(session_id.clone()),
+                    recipient_human: false,
+                    created_at_ms: now,
+                })?;
+            inherited += 1;
+        }
+        if page_len < 500 {
+            break;
+        }
+    }
+    Ok(inherited)
 }
 
 /// Atomically marks the named or cursor-bounded inbox deliveries Read. Repeated acknowledgments
@@ -578,6 +710,7 @@ pub(super) fn resolve_message(
                 Recipient::Human => None,
             },
             handed_over: false,
+            handed_to_session_id: None,
             resolved_at_ms: None,
         };
         tx.runs().insert_agent_delivery(&new)?;

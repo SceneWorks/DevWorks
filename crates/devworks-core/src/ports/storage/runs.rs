@@ -549,6 +549,13 @@ pub trait RunRead {
         before: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<StoredAgentMessage>, StorageError>;
+    /// Direct session deliveries still eligible for one successor, in delivery order.
+    fn unhanded_direct_deliveries(
+        &self,
+        project: &ProjectId,
+        after: i64,
+        limit: u16,
+    ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError>;
     fn agent_message_history(
         &self,
         filter: &AgentMessageHistoryFilter<'_>,

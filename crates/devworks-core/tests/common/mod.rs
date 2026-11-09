@@ -2551,6 +2551,14 @@ impl RunRead for Unsupported {
     ) -> Result<Vec<StoredAgentMessage>, StorageError> {
         nope()
     }
+    fn unhanded_direct_deliveries(
+        &self,
+        _: &ProjectId,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+        nope()
+    }
     fn agent_message_history(
         &self,
         _: &AgentMessageHistoryFilter<'_>,

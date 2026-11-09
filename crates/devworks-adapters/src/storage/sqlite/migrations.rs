@@ -480,6 +480,13 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0042_agent_assignment_context.sql"),
         rebuilds_tables: false,
     },
+    Migration {
+        version: 43,
+        minimum_reader: 43,
+        minimum_writer: 43,
+        sql: include_str!("migrations/0043_direct_message_handover.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

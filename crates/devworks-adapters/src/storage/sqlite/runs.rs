@@ -656,6 +656,9 @@ macro_rules! run_reads {
             fn agent_messages(&self, project: &ProjectId, before: Option<&Id>, limit: u16) -> Result<Vec<StoredAgentMessage>, StorageError> {
                 agent_messages::messages(self.conn, project, before, limit)
             }
+            fn unhanded_direct_deliveries(&self, project: &ProjectId, after: i64, limit: u16) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+                agent_messages::unhanded_direct_deliveries(self.conn, project, after, limit)
+            }
             fn agent_message_history(&self, filter: &AgentMessageHistoryFilter<'_>) -> Result<Vec<(i64, StoredAgentMessage)>, StorageError> {
                 agent_messages::message_history(self.conn, filter)
             }

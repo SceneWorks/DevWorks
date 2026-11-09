@@ -352,6 +352,7 @@ impl AgentService {
                 .map_err(fenced)?
         };
         retained::handover_item(tx, &assignment.id)?;
+        retained::handover_direct(tx, &session.id)?;
         agent_record(tx.runs(), &assignment).map_err(failure)
     }
 
@@ -560,6 +561,7 @@ impl AgentService {
             checkpoint_sequence: 0,
         };
         tx.sessions().insert_session(&session)?;
+        retained::handover_direct(tx, &session.id)?;
         let assignment = self
             .runs
             .register_child_assignment(
@@ -702,6 +704,7 @@ impl AgentService {
                     read_at_ms: None,
                     resolved_at_ms: None,
                     handed_over: false,
+                    handed_to_session_id: None,
                 });
                 wire(&m, &delivery)
             })
@@ -785,6 +788,7 @@ pub fn post_assignment(
         read_at_ms: None,
         resolved_at_ms: None,
         handed_over: false,
+        handed_to_session_id: None,
     };
     let event = StoredAgentMessageEvent {
         sequence: tx.runs().agent_event_head()? + 1,

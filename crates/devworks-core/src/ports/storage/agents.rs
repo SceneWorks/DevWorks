@@ -59,6 +59,8 @@ pub struct StoredAgentDelivery {
     pub read_at_ms: Option<i64>,
     pub recipient_session_id: Option<Id>,
     pub handed_over: bool,
+    /// The one successor that inherited this recipient copy; never set on the inherited copy.
+    pub handed_to_session_id: Option<Id>,
     pub resolved_at_ms: Option<i64>,
 }
 

@@ -2,6 +2,7 @@ use super::{Harness, through};
 use crate::storage::sqlite::{MIGRATIONS, SqliteStore};
 use devworks_core::context::{HostIngress, PrincipalKind};
 use devworks_core::operations::agents as ops;
+use devworks_core::ports::storage::contract::StoreHarness;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::records::MessageClass;
 use devworks_core::protocol::support::{BoundedList, BoundedText};
@@ -17,6 +18,147 @@ fn assignment(value: &str) -> AssignmentId {
 }
 fn project(value: &str) -> ProjectId {
     ProjectId(id(value))
+}
+
+#[test]
+fn itemless_direct_messages_pass_once_to_same_repository_successor() {
+    use devworks_core::services::agents::retained::{
+        AckSelection, MessageKind, PostSpec, Recipient, acknowledge, handover_direct, post_message,
+    };
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(40)).unwrap());
+    h.raw().execute_batch(
+        "INSERT INTO actors VALUES('agent-a','agent','Agent'),('human-a','human','Human');
+         INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
+         INSERT INTO repositories VALUES('repo-a','/a',1),('repo-b','/b',1);
+         INSERT INTO project_repositories VALUES('project-a','repo-a'),('project-a','repo-b');
+         INSERT INTO work_items VALUES('root-a','project-a','issue',NULL,NULL,NULL,'A',1,0,1,1,1,'{}'),
+                                       ('root-b','project-a','issue',NULL,NULL,NULL,'B',1,0,1,1,1,'{}');
+         INSERT INTO work_repositories VALUES('root-a','repo-a'),('root-b','repo-b');
+         INSERT INTO conversations VALUES('conv-a','root-a',0),('conv-b','root-b',0);
+         INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
+           VALUES('session-old','conv-a','agent-a','root-a',0,1,'project-a',1700000000000);"
+    ).unwrap();
+    let s = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+    let ingress = HostIngress::new(&s);
+    let human = ingress.context(
+        ActorId(id("human-a")),
+        PrincipalKind::Human,
+        id("post-direct"),
+        id("test-ingress"),
+        Counter::new(s.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    let (unread, read) = run_write(&s, WriteOptions::default(), move |tx| {
+        let spec = |body: &str| PostSpec {
+            project: project("project-a"),
+            body: body.into(),
+            kind: MessageKind::Info,
+            item: None,
+            feature: None,
+            resource: None,
+            to_session: Some(id("session-old")),
+            to_human: false,
+            blocking: false,
+            in_reply_to: None,
+            resolves: None,
+            idempotency_key: None,
+        };
+        Ok((
+            post_message(tx, &human, &spec("unread"))?.message.id,
+            post_message(tx, &human, &spec("already read"))?.message.id,
+        ))
+    })
+    .unwrap();
+    let agent = ingress
+        .context(
+            ActorId(id("agent-a")),
+            PrincipalKind::Agent,
+            id("ack-direct"),
+            id("test-ingress"),
+            Counter::new(s.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(id("session-old"));
+    run_write(&s, WriteOptions::default(), move |tx| {
+        acknowledge(
+            tx,
+            &agent,
+            &project("project-a"),
+            &Recipient::Session(id("session-old")),
+            AckSelection::Messages(vec![read]),
+            None,
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    h.raw().execute_batch(
+        "UPDATE sessions SET closed_at=1700000000000,closed_by='human-a' WHERE id='session-old';
+         INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
+           VALUES('session-other','conv-b','agent-a','root-b',0,1,'project-a',1700000000000),
+                 ('session-next','conv-a','agent-a','root-a',0,1,'project-a',1700000000000),
+                 ('session-later','conv-a','agent-a','root-a',0,1,'project-a',1700000000000);"
+    ).unwrap();
+    let result = run_write(&s, WriteOptions::default(), move |tx| {
+        assert_eq!(handover_direct(tx, &id("session-other"))?, 0);
+        assert_eq!(handover_direct(tx, &id("session-next"))?, 1);
+        assert_eq!(handover_direct(tx, &id("session-next"))?, 0);
+        assert_eq!(handover_direct(tx, &id("session-later"))?, 0);
+        let original = tx
+            .runs()
+            .agent_session_delivery(&unread, &id("session-old"))?
+            .unwrap();
+        assert_eq!(original.handed_to_session_id, Some(id("session-next")));
+        assert!(!original.handed_over);
+        let successor = tx
+            .runs()
+            .agent_session_delivery(&unread, &id("session-next"))?
+            .unwrap();
+        assert!(successor.handed_over);
+        assert_eq!(successor.state, "Pending");
+        Ok(())
+    });
+    result.unwrap();
+    let human = ingress.context(
+        ActorId(id("human-a")),
+        PrincipalKind::Human,
+        id("post-expiring"),
+        id("test-ingress"),
+        Counter::new(s.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    run_write(&s, WriteOptions::default(), move |tx| {
+        post_message(
+            tx,
+            &human,
+            &PostSpec {
+                project: project("project-a"),
+                body: "expires".into(),
+                kind: MessageKind::Info,
+                item: None,
+                feature: None,
+                resource: None,
+                to_session: Some(id("session-old")),
+                to_human: false,
+                blocking: false,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    h.set_now(1_700_000_000_000 + 8 * 24 * 60 * 60 * 1_000);
+    h.raw().execute_batch(
+        "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
+           VALUES('session-expired','conv-a','agent-a','root-a',0,1,'project-a',1700691200000);"
+    ).unwrap();
+    run_write(&s, WriteOptions::default(), |tx| {
+        assert_eq!(handover_direct(tx, &id("session-expired"))?, 0);
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]
@@ -109,6 +251,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             read_at_ms: None,
             recipient_session_id: None,
             handed_over: false,
+            handed_to_session_id: None,
             resolved_at_ms: None,
         })?;
         let event_sequence = tx.runs().agent_event_head()? + 1;
@@ -155,6 +298,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             read_at_ms: None,
             resolved_at_ms: None,
             handed_over: false,
+            handed_to_session_id: None,
         })?;
         let mut rootless = m.clone();
         rootless.id = id("message-rootless");
@@ -180,6 +324,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             read_at_ms: None,
             resolved_at_ms: None,
             handed_over: false,
+            handed_to_session_id: None,
         })?;
         let mut oversized = m.clone();
         oversized.id = id("message-oversized");

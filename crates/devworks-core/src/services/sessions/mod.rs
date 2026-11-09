@@ -537,6 +537,9 @@ impl SessionService {
             checkpoint_sequence: 0,
         };
         tx.sessions().insert_session(&session)?;
+        if session.project_id.is_some() {
+            crate::services::agents::retained::handover_direct(tx, &session.id)?;
+        }
         let event = session_event(
             tx,
             ctx,

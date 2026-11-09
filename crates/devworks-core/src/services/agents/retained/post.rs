@@ -68,7 +68,7 @@ pub(super) fn session_project(
     Ok(session.project_id.clone().or(root_project))
 }
 
-fn active_assignment(
+pub(super) fn active_assignment(
     tx: &mut dyn WriteTransaction,
     session: &StoredSession,
 ) -> Result<Option<StoredAssignment>, StorageError> {
@@ -403,6 +403,7 @@ pub fn post_message(
                 Recipient::Human => None,
             },
             handed_over: false,
+            handed_to_session_id: None,
             resolved_at_ms: None,
         };
         tx.runs().insert_agent_delivery(&delivery)?;
