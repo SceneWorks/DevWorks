@@ -39,9 +39,9 @@ use crate::fingerprint::sha256_hex;
 use crate::jcs;
 use crate::ports::IdKind;
 use crate::ports::storage::{
-    ApplicationStore, NewEvent, StorageError, StoredBatch, StoredCheckpoint, StoredContextSource,
-    StoredEntry, StoredEpoch, StoredInvocation, StoredLink, StoredSession, StoredToolCall,
-    StoredUsage, WriteOptions, WriteTransaction, run_write,
+    ApplicationStore, NewEvent, SessionRead, StorageError, StoredBatch, StoredCheckpoint,
+    StoredContextSource, StoredEntry, StoredEpoch, StoredInvocation, StoredLink, StoredSession,
+    StoredToolCall, StoredUsage, WriteOptions, WriteTransaction, run_write,
 };
 use crate::protocol::provider::{
     ArtifactRef, ToolOutcome, TranscriptBatch, TranscriptBody, UserContent,
@@ -184,6 +184,8 @@ pub enum BatchRefusal {
     MissingCall,
     /// A second initial response for a call.
     SecondResponse,
+    /// Another dispatch marker, or an attempted predispatch cancellation after the marker.
+    DispatchStarted,
     /// An artifact reference that does not resolve to a live version the session may see.
     UnknownReference(&'static str),
     UnknownOperation(OperationId),
@@ -224,6 +226,7 @@ fn body_kind(body: &TranscriptBody) -> &'static str {
         TranscriptBody::UserMessage { .. } => "UserMessage",
         TranscriptBody::AssistantAttempt { .. } => "AssistantAttempt",
         TranscriptBody::ToolCallRecorded { .. } => "ToolCallRecorded",
+        TranscriptBody::ToolDispatchStarted { .. } => "ToolDispatchStarted",
         TranscriptBody::ToolResponseRecorded { .. } => "ToolResponseRecorded",
         TranscriptBody::HostNotice { .. } => "HostNotice",
         TranscriptBody::NativeItem { .. } => "NativeItem",
@@ -245,6 +248,64 @@ fn outcome_kind(o: &ToolOutcome) -> (&'static str, Option<&OperationId>) {
         ToolOutcome::CancelledBeforeDispatch => ("CancelledBeforeDispatch", None),
         ToolOutcome::OutcomeUnknown { operation_id } => ("OutcomeUnknown", Some(operation_id)),
     }
+}
+
+/// Whether a call has a durable dispatch fence before the given transcript position.
+pub fn tool_dispatch_started<R: SessionRead + ?Sized>(
+    read: &R,
+    session_id: &Id,
+    call: &crate::protocol::provider::ToolCallKey,
+    after_sequence: i64,
+    before_sequence: i64,
+) -> Result<bool, StorageError> {
+    if after_sequence < 0 || after_sequence > before_sequence {
+        return Err(StorageError::InvalidRecord(
+            "invalid dispatch marker range".into(),
+        ));
+    }
+    let mut position = after_sequence;
+    while position < before_sequence {
+        if position - after_sequence >= 10_000 {
+            return Err(StorageError::InvalidRecord(
+                "tool dispatch marker scan bound".into(),
+            ));
+        }
+        let page = read.entries(session_id, position, 500)?;
+        if page.is_empty() {
+            return Err(StorageError::InvalidRecord(
+                "tool dispatch marker gap".into(),
+            ));
+        }
+        for entry in page {
+            if entry.sequence > before_sequence {
+                break;
+            }
+            if entry.sequence != position + 1 {
+                return Err(StorageError::InvalidRecord(
+                    "tool dispatch marker gap".into(),
+                ));
+            }
+            position = entry.sequence;
+            if entry.kind != "ToolDispatchStarted" {
+                continue;
+            }
+            let TranscriptBody::ToolDispatchStarted { call: prior } =
+                serde_json::from_value(entry.body)
+                    .map_err(|e| StorageError::InvalidRecord(e.to_string()))?
+            else {
+                return Err(StorageError::InvalidRecord(
+                    "tool dispatch marker kind mismatch".into(),
+                ));
+            };
+            if prior.attempt_id == call.attempt_id
+                && prior.native_call_id == call.native_call_id
+                && prior.ordinal == call.ordinal
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Whether `reference` names a live artifact version with exactly that identity which work of
@@ -298,6 +359,7 @@ fn references(body: &TranscriptBody) -> Vec<(&'static str, &ArtifactRef)> {
             ("tool_arguments", &tool_call.arguments),
             ("native_item", &tool_call.native_item),
         ],
+        TranscriptBody::ToolDispatchStarted { .. } => Vec::new(),
         TranscriptBody::ToolResponseRecorded { outcome, .. } => match outcome {
             ToolOutcome::Completed { artifacts }
             | ToolOutcome::OperationAccepted { artifacts, .. } => {
@@ -541,6 +603,35 @@ fn write_batch(
                         "ordinal": ordinal, "capabilityId": tool_call.capability_id.as_str()}),
                 ));
             }
+            TranscriptBody::ToolDispatchStarted { call } => {
+                let Some(recorded) = tx.sessions().tool_call(
+                    &session.id,
+                    &call.attempt_id.0,
+                    &call.native_call_id,
+                )?
+                else {
+                    refuse!(BatchRefusal::MissingCall)
+                };
+                if recorded.ordinal != call.ordinal.get() || recorded.response_sequence.is_some() {
+                    refuse!(BatchRefusal::MissingCall)
+                }
+                if tool_dispatch_started(
+                    &*tx.sessions(),
+                    &session.id,
+                    call,
+                    recorded.call_sequence,
+                    sequence - 1,
+                )? {
+                    refuse!(BatchRefusal::DispatchStarted)
+                }
+                pending_links.push((
+                    "tool_dispatch_started",
+                    entry.entry_id.clone(),
+                    format!("Tool dispatch started at transcript {sequence}"),
+                    json!({"sessionId":session.id.as_str(),"attemptId":call.attempt_id.0.as_str(),
+                        "nativeCallId":call.native_call_id,"ordinal":call.ordinal.get()}),
+                ));
+            }
             TranscriptBody::ToolResponseRecorded { call, outcome } => {
                 let Some(mut recorded) = tx.sessions().tool_call(
                     &session.id,
@@ -555,6 +646,17 @@ fn write_batch(
                 }
                 if recorded.response_sequence.is_some() {
                     refuse!(BatchRefusal::SecondResponse)
+                }
+                if matches!(outcome, ToolOutcome::CancelledBeforeDispatch)
+                    && tool_dispatch_started(
+                        &*tx.sessions(),
+                        &session.id,
+                        call,
+                        recorded.call_sequence,
+                        sequence - 1,
+                    )?
+                {
+                    refuse!(BatchRefusal::DispatchStarted)
                 }
                 let (name, operation) = outcome_kind(outcome);
                 if let Some(op) = operation

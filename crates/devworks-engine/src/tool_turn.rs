@@ -597,6 +597,9 @@ pub(crate) fn dispatch_one(
             ));
         }
     };
+    if result.is_ok() {
+        mark_dispatch_started(store, ctx, session_id, key)?;
+    }
     let (outcome, bytes) = match result {
         Ok((descriptor, Mode::Query, raw)) => match runtime.query(ctx, descriptor.name, &raw) {
             Ok(reply @ DomainQueryReply::Result { .. }) => {
@@ -722,6 +725,122 @@ pub(crate) fn dispatch_one(
         artifacts.settle_host_bytes(store, staged, committed.is_ok());
     }
     committed
+}
+
+fn mark_dispatch_started(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    key: &ToolCallKey,
+) -> Result<(), StorageError> {
+    let ctx = ctx.clone();
+    let session_id = session_id.clone();
+    let key = key.clone();
+    run_write(store, WriteOptions::default(), move |tx| {
+        let session = tx
+            .sessions()
+            .session(&session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.closed()
+            || ctx.session_id() != Some(&session_id)
+            || tx.store().store_id != *ctx.store_id()
+            || tx.store().restore_epoch != ctx.restore_epoch().get()
+            || !matches!(
+                ctx.principal_kind(),
+                PrincipalKind::Agent | PrincipalKind::Host
+            )
+            || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        if ctx.principal_kind() == PrincipalKind::Agent {
+            let binding = tx
+                .authority()
+                .principal(ctx.principal())?
+                .ok_or(StorageError::ScopeDenied)?;
+            if !binding.active
+                || session.agent_id != *ctx.principal()
+                || binding
+                    .project_id
+                    .as_ref()
+                    .is_some_and(|project| session.project_id.as_ref() != Some(project))
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+        let row = tx
+            .sessions()
+            .tool_call(&session_id, &key.attempt_id.0, &key.native_call_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if row.ordinal != key.ordinal.get() || row.response_sequence.is_some() {
+            return Err(StorageError::ScopeDenied);
+        }
+        if devworks_core::services::sessions::transcript::tool_dispatch_started(
+            &*tx.sessions(),
+            &session_id,
+            &key,
+            row.call_sequence,
+            session.last_durable_sequence(),
+        )? {
+            return Ok(());
+        }
+        let batch = turn::batch_of(
+            &session_id,
+            tx.new_id(IdKind::TranscriptBatch),
+            session.context_epoch,
+            session.next_sequence,
+            vec![TranscriptBody::ToolDispatchStarted { call: key }],
+            || tx.new_id(IdKind::TranscriptEntry),
+        );
+        match SessionWriter::append_in(tx, &ctx, &SessionBatch::entries(batch))? {
+            BatchOutcome::Accepted(_) => Ok(()),
+            BatchOutcome::Replayed(_) => Err(invalid("tool dispatch marker unexpectedly replayed")),
+            BatchOutcome::Refused(_) => Err(StorageError::ScopeDenied),
+        }
+    })
+}
+
+/// A cancellation is final only when its response commits before the dispatch marker. Once
+/// started, a same-key recovery or explicit effect reconciliation must settle the call.
+pub(crate) fn cancel_before_dispatch(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    key: &ToolCallKey,
+) -> Result<BatchOutcome, StorageError> {
+    let ctx = ctx.clone();
+    let session_id = session_id.clone();
+    let key = key.clone();
+    run_write(store, WriteOptions::default(), move |tx| {
+        let session = tx
+            .sessions()
+            .session(&session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.closed() {
+            return Err(StorageError::ScopeDenied);
+        }
+        let batch = turn::batch_of(
+            &session_id,
+            tx.new_id(IdKind::TranscriptBatch),
+            session.context_epoch,
+            session.next_sequence,
+            vec![TranscriptBody::ToolResponseRecorded {
+                call: key,
+                outcome: ToolOutcome::CancelledBeforeDispatch,
+            }],
+            || tx.new_id(IdKind::TranscriptEntry),
+        );
+        match SessionWriter::append_in(tx, &ctx, &SessionBatch::entries(batch))? {
+            accepted @ BatchOutcome::Accepted(_) => Ok(accepted),
+            BatchOutcome::Refused(
+                devworks_core::services::sessions::transcript::BatchRefusal::DispatchStarted,
+            ) => Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "tool dispatch already started; reconcile effect before cancellation",
+            )),
+            BatchOutcome::Replayed(_) | BatchOutcome::Refused(_) => Err(StorageError::ScopeDenied),
+        }
+    })
 }
 
 /// Append a later operation state as a separate fact. The accepted tool receipt and its first

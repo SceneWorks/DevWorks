@@ -1546,6 +1546,17 @@ impl Runtime {
         )
     }
 
+    /// Record a final cancellation only if this durable call has no dispatch-start marker.
+    /// A call already started requires same-key recovery or effect reconciliation.
+    pub fn cancel_tool_call_before_dispatch(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        call: &devworks_core::protocol::provider::ToolCallKey,
+    ) -> Result<devworks_core::services::sessions::transcript::BatchOutcome, StorageError> {
+        crate::tool_turn::cancel_before_dispatch(self.store.as_ref(), ctx, session_id, call)
+    }
+
     /// Resume the durable unanswered calls of a session. Each call is handled independently:
     /// an approval, status uncertainty or failure leaves the other calls eligible to run.
     pub fn dispatch_pending_tool_calls(

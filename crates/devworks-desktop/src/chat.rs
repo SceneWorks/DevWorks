@@ -832,6 +832,9 @@ fn entry_block(ui: &mut Ui, entry: &TranscriptEntry) {
                 TranscriptBody::ToolCallRecorded { .. } => {
                     ui.label(RichText::new("Tool call recorded").color(theme::MUTED));
                 }
+                TranscriptBody::ToolDispatchStarted { .. } => {
+                    ui.label(RichText::new("Tool dispatch started").color(theme::MUTED));
+                }
                 TranscriptBody::ToolResponseRecorded { .. } => {
                     ui.label(RichText::new("Tool result recorded").color(theme::MUTED));
                 }

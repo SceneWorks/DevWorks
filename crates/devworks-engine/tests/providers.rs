@@ -931,10 +931,51 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
                 && entry.body["call"]["nativeCallId"] == "accepted-operation-call"
         ).unwrap().body;
         assert_eq!(retained_response, initial_response);
+        let append_synthetic_call = |native: &str, ordinal: i64, started: bool| {
+            use devworks_core::services::sessions::{transcript::{BatchOutcome, SessionBatch, SessionWriter}, turn};
+            let mut call: CompleteToolCall = serde_json::from_value(
+                rows.iter().find(|entry| entry.kind == "ToolCallRecorded"
+                    && entry.body["toolCall"]["call"]["nativeCallId"] == "good")
+                    .unwrap().body["toolCall"].clone()
+            ).unwrap();
+            call.call.native_call_id = native.into();
+            call.call.ordinal = Counter::new(ordinal).unwrap();
+            let key = call.call.clone();
+            let key_for_write = key.clone();
+            let ctx = f.context.clone();
+            write(f.store.as_ref(), move |tx| {
+                let session = tx.sessions().session(&id("session"))?.unwrap();
+                let mut bodies = vec![TranscriptBody::ToolCallRecorded { tool_call: call }];
+                if started {
+                    bodies.push(TranscriptBody::ToolDispatchStarted { call: key_for_write });
+                }
+                let batch = turn::batch_of(&id("session"), tx.new_id(IdKind::TranscriptBatch),
+                    session.context_epoch, session.next_sequence, bodies,
+                    || tx.new_id(IdKind::TranscriptEntry));
+                assert!(matches!(SessionWriter::append_in(tx, &ctx, &SessionBatch::entries(batch))?,
+                    BatchOutcome::Accepted(_)));
+                Ok(())
+            }).unwrap();
+            key
+        };
+        let cancelled = append_synthetic_call("cancelled-before-dispatch", 4, false);
+        assert!(matches!(app.cancel_tool_call_before_dispatch(&f.context, &id("session"), &cancelled),
+            Ok(devworks_core::services::sessions::transcript::BatchOutcome::Accepted(_))));
+        assert!(f.transcript().iter().any(|entry| entry.kind == "ToolResponseRecorded"
+            && entry.body["call"]["nativeCallId"] == "cancelled-before-dispatch"
+            && entry.body["outcome"]["kind"] == "CancelledBeforeDispatch"));
+        let started = append_synthetic_call("started-before-cancel", 5, true);
+        assert!(app.cancel_tool_call_before_dispatch(&f.context, &id("session"), &started).is_err());
+        let recovered = app.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert!(matches!(&recovered[0].outcome,
+            Ok(devworks_core::services::sessions::transcript::BatchOutcome::Accepted(_))));
+        assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "ToolDispatchStarted"
+            && entry.body["call"]["nativeCallId"] == "started-before-cancel").count(), 1);
         app.shutdown().await;
         let restarted = boot(composition()).await.unwrap();
         assert!(restarted.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap().is_empty());
-        assert_eq!(f.transcript().iter().filter(|e| e.kind == "ToolResponseRecorded").count(), 4);
+        assert_eq!(f.transcript().iter().filter(|e| e.kind == "ToolResponseRecorded").count(), 6);
         assert!(restarted.record_tool_operation_update(&f.context, &id("session"), &operation_id).unwrap().is_none());
         restarted.shutdown().await;
     });
