@@ -1837,6 +1837,29 @@ impl Runtime {
         )
     }
 
+    /// Recover the exact context last published for this session, including frozen native
+    /// aliases. The returned cursor tells the caller whether later transcript facts need
+    /// reconciliation before another provider request.
+    pub fn recover_native_context_head(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+    ) -> Result<
+        Option<(
+            devworks_core::protocol::provider::ArtifactRef,
+            devworks_core::protocol::provider::NativeBinding,
+            i64,
+        )>,
+        StorageError,
+    > {
+        crate::tool_turn::recover_context_head(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            session_id,
+        )
+    }
+
     /// Build the next provider context from the immutable request context and settled native
     /// exchange. The caller publishes the returned material before a new request.
     pub fn tool_continuation_context(

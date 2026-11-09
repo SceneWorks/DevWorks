@@ -1,0 +1,9 @@
+{
+  "schema": 46,
+  "policy": "dw20-provider-context-head-v1",
+  "additionalTables": [
+    {"table": "session_provider_context_heads", "class": "session_provider_context_head", "disposition": "owned_lineage"}
+  ],
+  "readerFloor": 46,
+  "writerFloor": 46
+}

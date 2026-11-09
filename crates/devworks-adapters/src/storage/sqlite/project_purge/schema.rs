@@ -20,9 +20,9 @@ fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
 pub(super) fn verify(conn: &Connection) -> Result<(), StorageError> {
     // A later build must extend the ownership policy deliberately, rather than
     // blessing a newly migrated owning table merely because it is in MIGRATIONS.
-    if MIGRATIONS.last().map(|migration| migration.version) != Some(45) {
+    if MIGRATIONS.last().map(|migration| migration.version) != Some(46) {
         return Err(StorageError::IncompatibleSchema(
-            "project purge ownership policy requires schema 45".into(),
+            "project purge ownership policy requires schema 46".into(),
         ));
     }
     static EXPECTED: OnceLock<Result<Definitions, String>> = OnceLock::new();

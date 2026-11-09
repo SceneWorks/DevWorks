@@ -43,6 +43,10 @@ const ASSIGNMENT_CONTEXT_EXTENSION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/architecture/validation/project-purge/schema42-extension.json"
 ));
+const PROVIDER_CONTEXT_EXTENSION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/architecture/validation/project-purge/schema46-extension.json"
+));
 pub(super) type Key = (String, String);
 fn invalid() -> StorageError {
     StorageError::IncompatibleSchema("unmapped project purge ownership policy".into())
@@ -113,18 +117,22 @@ fn policies(conn: &Connection) -> Result<BTreeMap<String, (String, String)>, Sto
     }
     let assignment_context_extension: Value =
         serde_json::from_str(ASSIGNMENT_CONTEXT_EXTENSION).map_err(|_| invalid())?;
-    for row in assignment_context_extension["additionalTables"]
-        .as_array()
-        .ok_or_else(invalid)?
-    {
-        let table = row["table"].as_str().ok_or_else(invalid)?;
-        let class = row["class"].as_str().ok_or_else(invalid)?;
-        let disposition = row["disposition"].as_str().ok_or_else(invalid)?;
-        if known
-            .insert(table.into(), (class.into(), disposition.into()))
-            .is_some()
+    let provider_context_extension: Value =
+        serde_json::from_str(PROVIDER_CONTEXT_EXTENSION).map_err(|_| invalid())?;
+    for extension in [&assignment_context_extension, &provider_context_extension] {
+        for row in extension["additionalTables"]
+            .as_array()
+            .ok_or_else(invalid)?
         {
-            return Err(invalid());
+            let table = row["table"].as_str().ok_or_else(invalid)?;
+            let class = row["class"].as_str().ok_or_else(invalid)?;
+            let disposition = row["disposition"].as_str().ok_or_else(invalid)?;
+            if known
+                .insert(table.into(), (class.into(), disposition.into()))
+                .is_some()
+            {
+                return Err(invalid());
+            }
         }
     }
     let mut statement = db(conn.prepare("SELECT name FROM main.sqlite_schema WHERE type='table'"))?;

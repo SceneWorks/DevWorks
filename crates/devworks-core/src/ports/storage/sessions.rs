@@ -132,6 +132,20 @@ pub struct StoredEpoch {
     pub created_at_ms: i64,
 }
 
+/// The latest immutable provider context published for a session. The transcript remains the
+/// authority for conversation facts; this pointer makes exact native aliases and opaque items
+/// recoverable after a host restart without reconstructing them from a changed tool registry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredProviderContextHead {
+    pub session_id: Id,
+    pub context_epoch: i64,
+    pub observed_sequence: i64,
+    pub attempt_id: Id,
+    pub binding: Value,
+    pub artifact: Value,
+    pub revision: i64,
+}
+
 /// A context source the host recorded for one epoch (instruction revisions, retrieved sources,
 /// omissions/truncation).
 #[derive(Clone, Debug, PartialEq)]
@@ -379,6 +393,10 @@ pub trait SessionRead {
         limit: u16,
     ) -> Result<Vec<StoredToolCall>, StorageError>;
     fn epoch(&self, session: &Id, epoch: i64) -> Result<Option<StoredEpoch>, StorageError>;
+    fn provider_context_head(
+        &self,
+        session: &Id,
+    ) -> Result<Option<StoredProviderContextHead>, StorageError>;
     /// Recorded sources of one epoch with ordinal greater than `after`, at most `limit`.
     fn context_sources(
         &self,
@@ -479,6 +497,13 @@ pub trait SessionRepository: SessionRead {
     /// [`StorageError::Duplicate`].
     fn record_response(&mut self, call: &StoredToolCall) -> Result<(), StorageError>;
     fn insert_epoch(&mut self, epoch: &StoredEpoch) -> Result<(), StorageError>;
+    /// Replace the session's provider context pointer after the new artifact is committed in
+    /// this transaction. `expected_revision` is None only for its first publication.
+    fn put_provider_context_head(
+        &mut self,
+        head: &StoredProviderContextHead,
+        expected_revision: Option<i64>,
+    ) -> Result<(), StorageError>;
     fn insert_context_source(&mut self, source: &StoredContextSource) -> Result<(), StorageError>;
     fn insert_checkpoint(&mut self, checkpoint: &StoredCheckpoint) -> Result<(), StorageError>;
     fn insert_usage(&mut self, usage: &StoredUsage) -> Result<(), StorageError>;

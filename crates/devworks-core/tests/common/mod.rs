@@ -1483,6 +1483,12 @@ impl SessionRead for Unsupported {
     fn epoch(&self, _: &Id, _: i64) -> Result<Option<StoredEpoch>, StorageError> {
         nope()
     }
+    fn provider_context_head(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredProviderContextHead>, StorageError> {
+        nope()
+    }
     fn context_sources(
         &self,
         _: &Id,
@@ -1586,6 +1592,13 @@ impl SessionRepository for Unsupported {
         nope()
     }
     fn insert_epoch(&mut self, _: &StoredEpoch) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_provider_context_head(
+        &mut self,
+        _: &StoredProviderContextHead,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
         nope()
     }
     fn insert_context_source(&mut self, _: &StoredContextSource) -> Result<(), StorageError> {

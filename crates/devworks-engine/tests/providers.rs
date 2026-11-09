@@ -818,13 +818,28 @@ fn empty_completed_turn_keeps_a_cursor_and_replays_without_transport() {
         let first = app.produce_and_dispatch_native_turn(invoke(request.clone()), None).await.unwrap();
         assert!(matches!(first.provider.accounting, DriveOutcome::AlreadyDispatched));
         let continuation = first.continuation.unwrap();
+        let head = read(f.store.as_ref(), |snapshot| {
+            snapshot.sessions().provider_context_head(&id("session"))
+        }).unwrap();
+        assert_eq!(head.context_epoch, 0);
+        assert_eq!(head.observed_sequence, 0);
+        assert_eq!(head.attempt_id, produced.result.attempt_id.as_ref().unwrap().0);
+        assert_eq!(head.artifact, json!(continuation));
+        assert_eq!(head.revision, 1);
         let old = f.artifacts.read_exact(f.store.as_ref(), &f.context, &previous, 1024 * 1024).unwrap().0;
         let next = f.artifacts.read_exact(f.store.as_ref(), &f.context, &continuation, 1024 * 1024).unwrap().0;
         assert_eq!(next, old);
         let replay = app.produce_and_dispatch_native_turn(invoke(request), None).await.unwrap();
         assert_eq!(replay.continuation.unwrap().sha256, continuation.sha256);
+        assert_eq!(read(f.store.as_ref(), |snapshot| snapshot.sessions().provider_context_head(&id("session"))).unwrap().revision, 1);
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
         app.shutdown().await;
+        let recovered = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let (artifact, binding, cursor) = recovered.recover_native_context_head(&f.context, &id("session")).unwrap().unwrap();
+        assert_eq!(artifact.sha256, continuation.sha256);
+        assert_eq!(binding.context_epoch.get(), 0);
+        assert_eq!(cursor, 0);
+        recovered.shutdown().await;
     });
 }
 
@@ -884,6 +899,17 @@ fn provider_epoch_publishes_responses_context_without_old_cache_hints() {
         let epoch = read(f.store.as_ref(), |s| s.sessions().epoch(&id("session"), 1)).unwrap();
         assert_eq!(epoch.reason, "ProviderChange");
         app.shutdown().await;
+        let restarted = devworks_engine::boot(tool_runtime_composition(&f))
+            .await
+            .unwrap();
+        let (source, binding, cursor) = restarted
+            .recover_native_context_head(&f.context, &id("session"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(source.sha256, published.sha256);
+        assert_eq!(binding, next);
+        assert_eq!(cursor, epoch.sequence);
+        restarted.shutdown().await;
     });
 }
 

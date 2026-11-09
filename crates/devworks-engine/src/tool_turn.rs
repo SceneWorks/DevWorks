@@ -112,6 +112,82 @@ pub(crate) fn pending_calls(
     })
 }
 
+/// Recover the last published immutable native context after a host restart. A new epoch uses
+/// its durable root until a turn publishes a continuation in that epoch.
+pub(crate) fn recover_context_head(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+) -> Result<Option<(ArtifactRef, NativeBinding, i64)>, StorageError> {
+    let source = read_snapshot(store, &ReadOptions::default(), |read| {
+        let session = authorized_session(read, ctx, session_id)?;
+        let head = read.sessions().provider_context_head(session_id)?;
+        if let Some(head) = head
+            && head.context_epoch == session.context_epoch
+        {
+            if head.observed_sequence > session.last_durable_sequence() {
+                return Err(StorageError::ScopeDenied);
+            }
+            return Ok(Some((
+                head.artifact,
+                Some(head.binding),
+                head.observed_sequence,
+                Some(head.attempt_id),
+                session.context_epoch,
+            )));
+        }
+        if session.context_epoch == 0 {
+            return Ok(None);
+        }
+        let epoch = read
+            .sessions()
+            .epoch(session_id, session.context_epoch)?
+            .ok_or(StorageError::ScopeDenied)?;
+        Ok(Some((
+            epoch.context,
+            None,
+            epoch.sequence,
+            None,
+            session.context_epoch,
+        )))
+    })?;
+    let Some((artifact_json, stored_binding, observed_sequence, attempt_id, epoch)) = source else {
+        return Ok(None);
+    };
+    let artifact: ArtifactRef = serde_json::from_value(artifact_json).map_err(invalid)?;
+    let (bytes, provenance) = artifacts
+        .read_exact(store, ctx, &artifact, 8 * 1024 * 1024)
+        .map_err(|_| StorageError::ScopeDenied)?;
+    let context: ProviderContext = serde_json::from_slice(&bytes).map_err(invalid)?;
+    context
+        .validate()
+        .map_err(|error| invalid(format!("{error:?}")))?;
+    let derived = &provenance["derived"];
+    let binding: NativeBinding =
+        serde_json::from_value(derived["binding"].clone()).map_err(invalid)?;
+    if provenance["principalKind"] != "Host"
+        || provenance["producedBy"] != store.info().host_actor.0.as_str()
+        || derived["kind"]
+            != if attempt_id.is_some() {
+                "ProviderTurnContinuation"
+            } else {
+                "ProviderContextEpoch"
+            }
+        || derived["sessionId"] != session_id.as_str()
+        || attempt_id
+            .as_ref()
+            .is_some_and(|id| derived["attemptId"] != id.as_str())
+        || stored_binding.is_some_and(|value| value != json!(binding))
+        || binding.context_epoch.get() != epoch
+        || derived["binding"] != json!(binding)
+        || derived["observedSequence"] != observed_sequence
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    Ok(Some((artifact, binding, observed_sequence)))
+}
+
 /// Linked operations reconcile independently of unanswered sibling calls. Only the authorized
 /// session's operation identities can be returned.
 pub(crate) fn linked_operations(
@@ -605,6 +681,23 @@ pub(crate) fn publish_continuation(
                 return Err(StorageError::ScopeDenied);
             }
         }
+        let previous_head = tx.sessions().provider_context_head(&session_id)?;
+        if let Some(head) = &previous_head {
+            if head.context_epoch > binding.context_epoch.get()
+                || (head.context_epoch == binding.context_epoch.get()
+                    && head.observed_sequence > observed_sequence)
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            if head.context_epoch == binding.context_epoch.get()
+                && head.observed_sequence == observed_sequence
+                && head.attempt_id == attempt_id.0
+                && head.binding == json!(binding)
+            {
+                let artifact = serde_json::from_value(head.artifact.clone()).map_err(invalid)?;
+                return Ok((artifact, false));
+            }
+        }
         let scope = session
             .project_id
             .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
@@ -626,10 +719,27 @@ pub(crate) fn publish_continuation(
                 owner: ctx.principal().clone(),
             },
         )?;
-        Ok(version_ref(&version))
+        let artifact = version_ref(&version);
+        let revision = previous_head
+            .as_ref()
+            .map_or(Some(1), |head| head.revision.checked_add(1))
+            .ok_or_else(|| invalid("provider context head revision exhausted"))?;
+        tx.sessions().put_provider_context_head(
+            &StoredProviderContextHead {
+                session_id: session_id.clone(),
+                context_epoch: binding.context_epoch.get(),
+                observed_sequence,
+                attempt_id: attempt_id.0.clone(),
+                binding: json!(binding),
+                artifact: json!(artifact),
+                revision,
+            },
+            previous_head.as_ref().map(|head| head.revision),
+        )?;
+        Ok((artifact, true))
     });
-    artifacts.settle_host_bytes(store, &staged, committed.is_ok());
-    committed
+    artifacts.settle_host_bytes(store, &staged, matches!(&committed, Ok((_, true))));
+    committed.map(|(artifact, _)| artifact)
 }
 
 fn operation_update_text(

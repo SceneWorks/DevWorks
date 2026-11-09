@@ -1629,6 +1629,62 @@ fn the_session_migration_is_recorded_and_keeps_the_floors() {
     assert_eq!((m.minimum_reader, m.minimum_writer), (5, 5));
 }
 
+#[test]
+fn provider_context_head_is_durable_and_rejects_a_stale_revision() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let mut head = StoredProviderContextHead {
+        session_id: id("session-a"),
+        context_epoch: 0,
+        observed_sequence: 0,
+        attempt_id: id("attempt-a"),
+        binding: binding(),
+        artifact: art(),
+        revision: 1,
+    };
+    let first = head.clone();
+    fx.write(move |tx| tx.sessions().put_provider_context_head(&first, None));
+    assert_eq!(
+        fx.read(|r| r.sessions().provider_context_head(&id("session-a"))),
+        Some(head.clone())
+    );
+    head.revision = 2;
+    head.artifact = art_b();
+    let mut stale = head.clone();
+    stale.revision = 1;
+    let refused = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+        tx.sessions().put_provider_context_head(&stale, Some(0))
+    });
+    assert!(refused.is_err());
+    assert_eq!(
+        fx.read(|r| r.sessions().provider_context_head(&id("session-a")))
+            .unwrap()
+            .revision,
+        1
+    );
+    let next = head.clone();
+    fx.write(move |tx| tx.sessions().put_provider_context_head(&next, Some(1)));
+    let raw = fx.h.raw();
+    let persisted: (i64, String) = raw.query_row(
+        "SELECT revision,artifact_json FROM session_provider_context_heads WHERE session_id='session-a'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    assert_eq!(persisted.0, 2);
+    assert_eq!(
+        serde_json::from_str::<Value>(&persisted.1).unwrap(),
+        art_b()
+    );
+    let plan = fx
+        .read(|r| r.projects().purge_planning(&project("project-a")))
+        .unwrap();
+    assert!(plan.rows.iter().any(|row| {
+        row.table == "session_provider_context_heads"
+            && row.action == ProjectPurgeRowAction::Delete
+            && row.reason == ProjectPurgeRowReason::OwnedLineage
+    }));
+}
+
 // ---------------------------------------------------------------------------------------------
 // Recorded native scenarios (docs/architecture/contracts/provider-package-scenarios.json)
 
