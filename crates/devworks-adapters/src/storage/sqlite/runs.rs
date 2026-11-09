@@ -668,6 +668,9 @@ macro_rules! run_reads {
             fn agent_recipient_count(&self, message: &Id) -> Result<usize, StorageError> {
                 agent_messages::recipient_count(self.conn, message)
             }
+            fn open_blocking_question(&self, item: &RootId) -> Result<bool, StorageError> {
+                agent_messages::open_blocking_question(self.conn, item)
+            }
             fn agent_inbox(&self, project: &ProjectId, recipient: Option<&AssignmentId>, after: i64, include_read: bool, limit: u16) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
                 agent_messages::inbox(self.conn, project, recipient, after, include_read, limit)
             }

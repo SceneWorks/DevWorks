@@ -425,7 +425,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         resource: None,
         to_session: None,
         to_human: true,
-        blocking: false,
+        blocking: true,
         in_reply_to: None,
         resolves: None,
         idempotency_key: Some("review-request".into()),
@@ -442,6 +442,11 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     assert!(!replay.created);
     assert_eq!(new_message.message.id, replay.message.id);
     assert_eq!(new_message.recipients, 1);
+    read_snapshot(&s, &ReadOptions::default(), |snap| {
+        assert!(snap.runs().open_blocking_question(&RootId(id("root-a")))?);
+        Ok(())
+    })
+    .unwrap();
     let human_context = ingress.context(
         ActorId(id("human-a")),
         PrincipalKind::Human,
@@ -477,6 +482,11 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             Some("Answered")
         );
         Ok(reply)
+    })
+    .unwrap();
+    read_snapshot(&s, &ReadOptions::default(), |snap| {
+        assert!(!snap.runs().open_blocking_question(&RootId(id("root-a")))?);
+        Ok(())
     })
     .unwrap();
     read_snapshot(&s, &ReadOptions::default(), |snap| {

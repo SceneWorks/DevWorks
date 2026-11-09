@@ -1938,6 +1938,73 @@ fn the_production_scope_fails_closed_without_recorded_readiness() {
     assert!(p.eligible);
 }
 
+#[test]
+fn an_open_human_item_question_holds_only_affected_implementation() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let issue = read(&*fx.store, |s| s.sessions().work_root(&rid("root-i"))).unwrap();
+    let other = read(&*fx.store, |s| s.sessions().work_root(&rid("root-b"))).unwrap();
+    let eligibility = |root: &WorkRoot, purpose| {
+        read(&*fx.store, |s| {
+            fx.service.evaluate(s.runs(), root, &Target::Root, purpose)
+        })
+    };
+    assert!(eligibility(&issue, ActivationPurpose::Implementation).eligible);
+    let human = fx.user.principal().clone();
+    write(&*fx.store, move |tx| {
+        let now = tx.now_ms();
+        tx.runs().insert_agent_message(&StoredAgentMessage {
+            id: id("human-question"),
+            project_id: ProjectId(id("project-a")),
+            root_id: Some(rid("root-i")),
+            channel: "Human".into(),
+            from_assignment_id: None,
+            to_assignment_id: None,
+            message_class: "Question".into(),
+            body: "Need a material decision".into(),
+            attachments: json!([]),
+            in_reply_to_id: None,
+            state: Some("Open".into()),
+            blocking: true,
+            idempotency_key: None,
+            revision: 1,
+            created_at_ms: now,
+            resolved_at_ms: None,
+            from_actor_id: human,
+            target_item_id: Some(rid("root-i")),
+            target_feature_id: None,
+            resource_name: None,
+            target_session_id: None,
+            to_human: true,
+            sender_session_id: None,
+            resolved_by_actor_id: None,
+            resolved_by_session_id: None,
+        })
+    })
+    .unwrap();
+    let held = eligibility(&issue, ActivationPurpose::Implementation);
+    assert!(
+        !held.eligible
+            && held
+                .conditions
+                .iter()
+                .any(|c| c.reason.contains("question"))
+    );
+    assert!(eligibility(&issue, ActivationPurpose::Planning).eligible);
+    assert!(eligibility(&other, ActivationPurpose::Implementation).eligible);
+    let human = fx.user.principal().clone();
+    write(&*fx.store, move |tx| {
+        let mut message = tx.runs().agent_message(&id("human-question"))?.unwrap();
+        message.state = Some("Answered".into());
+        message.revision = 2;
+        message.resolved_at_ms = Some(tx.now_ms());
+        message.resolved_by_actor_id = Some(human);
+        tx.runs().resolve_agent_message(&message, 1)
+    })
+    .unwrap();
+    assert!(eligibility(&issue, ActivationPurpose::Implementation).eligible);
+}
+
 // ---------------------------------------------------------------------------------------------
 // CONTROL-03: Stop propagates to owned processes; retained CancelRun behaviour
 

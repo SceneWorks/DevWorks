@@ -571,6 +571,8 @@ pub trait RunRead {
         session: &Id,
     ) -> Result<Option<StoredAgentDelivery>, StorageError>;
     fn agent_recipient_count(&self, message: &Id) -> Result<usize, StorageError>;
+    /// Open questions to a human that hold implementation of exactly this work item.
+    fn open_blocking_question(&self, item: &RootId) -> Result<bool, StorageError>;
     /// Delivery cursor is global, so a session can resume after a crash without reordering.
     fn agent_inbox(
         &self,

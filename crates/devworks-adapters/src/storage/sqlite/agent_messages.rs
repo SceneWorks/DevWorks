@@ -371,6 +371,17 @@ pub(super) fn recipient_count(conn: &Connection, message: &Id) -> Result<usize, 
     ))?;
     usize::try_from(count).map_err(|_| corrupt("negative agent recipient count"))
 }
+pub(super) fn open_blocking_question(
+    conn: &Connection,
+    item: &RootId,
+) -> Result<bool, StorageError> {
+    let exists: i64 = db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM agent_messages WHERE target_item_id=?1 AND to_human=1 AND blocking=1 AND state='Open')",
+        [item.0.as_str()],
+        |row| row.get(0),
+    ))?;
+    Ok(exists != 0)
+}
 pub(super) fn delivery_head(conn: &Connection) -> Result<i64, StorageError> {
     db(conn.query_row(
         "SELECT coalesce(max(sequence),0) FROM agent_message_deliveries",
