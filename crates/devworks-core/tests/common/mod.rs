@@ -2596,6 +2596,9 @@ impl RunRead for Unsupported {
     fn agent_recipient_count(&self, _: &Id) -> Result<usize, StorageError> {
         nope()
     }
+    fn agent_session_activity_at(&self, _: &Id) -> Result<Option<i64>, StorageError> {
+        nope()
+    }
     fn open_blocking_question(&self, _: &RootId) -> Result<bool, StorageError> {
         nope()
     }

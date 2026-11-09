@@ -243,6 +243,16 @@ pub(super) fn unhanded_direct_deliveries(
         })
         .collect()
 }
+pub(super) fn session_activity_at(
+    conn: &Connection,
+    session: &Id,
+) -> Result<Option<i64>, StorageError> {
+    db(conn.query_row(
+        "SELECT max(at) FROM (SELECT created_at AS at FROM agent_messages WHERE sender_session_id=?1 UNION ALL SELECT delivered_at AS at FROM agent_message_deliveries WHERE recipient_session_id=?1 AND delivered_at IS NOT NULL UNION ALL SELECT read_at AS at FROM agent_message_deliveries WHERE recipient_session_id=?1 AND read_at IS NOT NULL)",
+        [session.as_str()],
+        |row| row.get(0),
+    ))
+}
 pub(super) fn message_history(
     conn: &Connection,
     filter: &AgentMessageHistoryFilter<'_>,

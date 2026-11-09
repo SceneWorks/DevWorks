@@ -674,6 +674,9 @@ macro_rules! run_reads {
             fn agent_recipient_count(&self, message: &Id) -> Result<usize, StorageError> {
                 agent_messages::recipient_count(self.conn, message)
             }
+            fn agent_session_activity_at(&self, session: &Id) -> Result<Option<i64>, StorageError> {
+                agent_messages::session_activity_at(self.conn, session)
+            }
             fn open_blocking_question(&self, item: &RootId) -> Result<bool, StorageError> {
                 agent_messages::open_blocking_question(self.conn, item)
             }

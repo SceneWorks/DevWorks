@@ -485,17 +485,27 @@ pub fn handover_direct(
             let holder_last = tx
                 .sessions()
                 .last_entry_at_ms(holder_id)?
-                .unwrap_or(holder.created_at_ms);
+                .into_iter()
+                .chain(tx.runs().agent_session_activity_at(holder_id)?)
+                .chain(std::iter::once(holder.created_at_ms))
+                .max()
+                .expect("created session has an activity timestamp");
             if !holder.closed()
                 && (holder_last > stale_before || post::active_assignment(tx, &holder)?.is_some())
             {
                 continue;
             }
-            let original_last = original.closed_at_ms.unwrap_or(
+            let original_last = if let Some(closed) = original.closed_at_ms {
+                closed
+            } else {
                 tx.sessions()
                     .last_entry_at_ms(original_id)?
-                    .unwrap_or(original.created_at_ms),
-            );
+                    .into_iter()
+                    .chain(tx.runs().agent_session_activity_at(original_id)?)
+                    .chain(std::iter::once(original.created_at_ms))
+                    .max()
+                    .expect("created session has an activity timestamp")
+            };
             if original_last <= retention_start {
                 continue;
             }

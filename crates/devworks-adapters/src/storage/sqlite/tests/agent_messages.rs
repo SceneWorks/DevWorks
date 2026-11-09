@@ -96,8 +96,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         r#"UPDATE sessions SET closed_at=1700000000000,closed_by='human-a' WHERE id='session-old';
          INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
            VALUES('session-other','conv-b','agent-a','root-b',0,1,'project-a',1700000000000,'["repo-b"]'),
-                 ('session-next','conv-a','agent-a','root-a',0,1,'project-a',1700000000000,'["repo-a"]'),
-                 ('session-later','conv-a','agent-a','root-a',0,1,'project-a',1700000000000,'["repo-a"]');"#
+                 ('session-next','conv-a','agent-a','root-a',0,1,'project-a',1700000000000,'["repo-a"]');"#
     ).unwrap();
     h.raw()
         .execute_batch(
@@ -105,6 +104,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
          INSERT INTO work_repositories VALUES('root-a','repo-b');",
         )
         .unwrap();
+    let inherited_id = unread.clone();
     let result = run_write(&s, WriteOptions::default(), move |tx| {
         assert_eq!(
             tx.sessions().session_repository_scope(&id("session-old"))?,
@@ -118,7 +118,6 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         assert_eq!(handover_direct(tx, &id("session-other"))?, 0);
         assert_eq!(handover_direct(tx, &id("session-next"))?, 1);
         assert_eq!(handover_direct(tx, &id("session-next"))?, 0);
-        assert_eq!(handover_direct(tx, &id("session-later"))?, 0);
         let original = tx
             .runs()
             .agent_session_delivery(&unread, &id("session-old"))?
@@ -134,6 +133,65 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         Ok(())
     });
     result.unwrap();
+    h.set_now(1_700_000_000_000 + 16 * 60 * 1_000);
+    let active = ingress
+        .context(
+            ActorId(id("agent-a")),
+            PrincipalKind::Agent,
+            id("still-active"),
+            id("test-ingress"),
+            Counter::new(s.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(id("session-next"));
+    run_write(&s, WriteOptions::default(), move |tx| {
+        post_message(
+            tx,
+            &active,
+            &PostSpec {
+                project: project("project-a"),
+                body: "Still here".into(),
+                kind: MessageKind::Info,
+                item: None,
+                feature: None,
+                resource: None,
+                to_session: None,
+                to_human: true,
+                blocking: false,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    h.raw().execute_batch(
+        r#"INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
+           VALUES('session-later','conv-a','agent-a','root-a',0,1,'project-a',1700000960000,'["repo-a"]');"#
+    ).unwrap();
+    run_write(&s, WriteOptions::default(), |tx| {
+        assert_eq!(handover_direct(tx, &id("session-later"))?, 0);
+        Ok(())
+    })
+    .unwrap();
+    h.set_now(1_700_000_000_000 + 32 * 60 * 1_000);
+    h.raw().execute_batch(
+        r#"INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
+           VALUES('session-after-silence','conv-a','agent-a','root-a',0,1,'project-a',1700001920000,'["repo-a"]');"#
+    ).unwrap();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        assert_eq!(handover_direct(tx, &id("session-after-silence"))?, 1);
+        assert_eq!(
+            tx.runs()
+                .agent_session_delivery(&inherited_id, &id("session-next"))?
+                .unwrap()
+                .handed_to_session_id,
+            Some(id("session-after-silence"))
+        );
+        Ok(())
+    })
+    .unwrap();
     let human = ingress.context(
         ActorId(id("human-a")),
         PrincipalKind::Human,
