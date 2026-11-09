@@ -821,6 +821,9 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         assert!(matches!(close_reply, devworks_core::protocol::CommandReply::Recorded { receipt, .. }
             if matches!(receipt.decision, devworks_core::protocol::results::DomainDecision::Refused { ref fault }
                 if fault.target_kind.as_ref().is_some_and(|kind| kind.0 == "unresolved_tool_calls"))));
+        let foreign = f.context.clone().with_session(id("other-session"));
+        assert!(matches!(app.dispatch_pending_tool_calls(&foreign, &id("session")),
+            Err(StorageError::ScopeDenied)));
         let dispatched = app.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap();
         assert_eq!(dispatched.len(), 3);
         assert!(dispatched.iter().all(|d| matches!(d.outcome, Ok(devworks_core::services::sessions::transcript::BatchOutcome::Accepted(_)))));

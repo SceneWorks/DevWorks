@@ -1547,22 +1547,7 @@ impl Runtime {
         ctx: &InvocationContext,
         session_id: &Id,
     ) -> Result<Vec<ToolDispatch>, StorageError> {
-        let pending = devworks_core::ports::storage::read_snapshot(
-            self.store.as_ref(),
-            &devworks_core::ports::storage::ReadOptions::default(),
-            |read| read.sessions().pending_calls(session_id, 500),
-        )?;
-        let calls: Vec<_> = pending
-            .into_iter()
-            .map(|row| {
-                Ok(devworks_core::protocol::provider::ToolCallKey {
-                    attempt_id: devworks_core::protocol::AttemptId(row.attempt_id),
-                    native_call_id: row.native_call_id,
-                    ordinal: devworks_core::protocol::Counter::new(row.ordinal)
-                        .map_err(|e| StorageError::InvalidRecord(e.into()))?,
-                })
-            })
-            .collect::<Result<_, StorageError>>()?;
+        let calls = crate::tool_turn::pending_calls(self.store.as_ref(), ctx, session_id)?;
         if calls.is_empty() {
             return Ok(Vec::new());
         }
