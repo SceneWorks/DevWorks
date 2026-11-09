@@ -66,6 +66,7 @@ pub struct MessageBoard {
     pub inbox: Vec<RetainedMessage>,
     pub inbox_cursor: Option<String>,
     pub inbox_loaded: bool,
+    pub inbox_has_more: bool,
     pub events: Vec<RetainedMessageEvent>,
     pub event_after: Option<i64>,
     pub event_poll_at: Option<std::time::Instant>,
@@ -719,6 +720,7 @@ impl WorkUi {
 enum Action {
     RefreshMessages,
     PollMessages,
+    MoreInbox,
     OlderMessages,
     PostMessage(MessageDraft),
     AckMessage(String, Option<&'static str>),
@@ -1092,7 +1094,6 @@ impl Shell {
             };
         }
         let history_before = self.work.messages.history_before;
-        let inbox_cursor = self.work.messages.inbox_cursor.clone();
         let event_after = self.work.messages.event_after;
         if !self.pending(&Slot::WorkMessagesHistory(project.clone())) {
             let p = project.clone();
@@ -1109,7 +1110,7 @@ impl Shell {
                 Slot::WorkMessagesInbox(project.clone()),
                 "Reading inbox",
                 "agents.receive",
-                move |be| wops::message_inbox(be, &p, inbox_cursor.as_deref()),
+                move |be| wops::message_inbox(be, &p, None),
             );
         }
         if !self.pending(&Slot::WorkMessagesEvents(project.clone())) {
@@ -1232,6 +1233,27 @@ impl Shell {
         for a in actions {
             match a {
                 Action::RefreshMessages => self.load_messages(true),
+                Action::MoreInbox => {
+                    let Some(project) = self.selected_project.clone() else {
+                        continue;
+                    };
+                    let Some(cursor) = self.work.messages.inbox_cursor.clone() else {
+                        continue;
+                    };
+                    if self.work.messages.project.as_deref() != Some(project.as_str())
+                        || !self.work.messages.inbox_has_more
+                        || self.pending(&Slot::WorkMessagesInbox(project.clone()))
+                    {
+                        continue;
+                    }
+                    let p = project.clone();
+                    self.command(
+                        Slot::WorkMessagesInbox(project),
+                        "Reading more messages",
+                        "agents.receive",
+                        move |be| wops::message_inbox(be, &p, Some(&cursor)),
+                    );
+                }
                 Action::PollMessages => {
                     let Some(project) = self.selected_project.clone() else {
                         continue;
@@ -1714,6 +1736,7 @@ impl Shell {
                 match wops::message_inbox_page(reply) {
                     Ok(page) => {
                         let board = &mut self.work.messages;
+                        board.inbox_has_more = page.items.0.len() == 100;
                         for message in page.items.0 {
                             if let Some(known) =
                                 board.inbox.iter_mut().find(|known| known.id == message.id)
@@ -2802,6 +2825,13 @@ fn message_board(ui: &mut Ui, board: &mut MessageBoard, open: bool, actions: &mu
         widgets::caption(ui, "Loading your messages…");
     } else if board.inbox.is_empty() {
         widgets::caption(ui, "No unread messages.");
+    }
+    if board.inbox_has_more
+        && ui
+            .add_enabled(open, egui::Button::new("Load more inbox messages"))
+            .clicked()
+    {
+        actions.push(Action::MoreInbox);
     }
     for message in &board.inbox {
         ui.group(|ui| {

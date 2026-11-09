@@ -135,6 +135,74 @@ fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state
 }
 
 #[test]
+fn message_event_refresh_keeps_earlier_unread_inbox_entries() {
+    let root = Root::new("work-message-refresh");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Inbox refresh", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let post = |body: &str| {
+        wops::message_posted(backend.command(
+            "agents.post",
+            &wops::message_post(&*backend, &pid, json!({"body":body,"toHuman":true})),
+        ))
+        .unwrap()
+    };
+    post("First unread");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Messages");
+    assert_eq!(h.state().work.messages.inbox.len(), 1);
+
+    post("Second unread");
+    h.state_mut().work.messages.event_poll_at =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    settle(&mut h);
+    let inbox = &h.state().work.messages.inbox;
+    assert_eq!(inbox.len(), 2);
+    assert!(inbox.iter().any(|message| message.body.0 == "First unread"));
+    assert!(
+        inbox
+            .iter()
+            .any(|message| message.body.0 == "Second unread")
+    );
+
+    for n in 0..99 {
+        post(&format!("More {n}"));
+    }
+    h.state_mut().work.messages.event_poll_at =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    settle(&mut h);
+    assert_eq!(h.state().work.messages.inbox.len(), 100);
+    h.state_mut().work.messages.event_poll_at =
+        Some(std::time::Instant::now() + std::time::Duration::from_secs(60));
+    click(&mut h, Role::Button, "Load more inbox messages");
+    assert_eq!(
+        h.state().work.messages.inbox.len(),
+        101,
+        "has_more={} cursor={:?} error={:?}",
+        h.state().work.messages.inbox_has_more,
+        h.state().work.messages.inbox_cursor,
+        h.state().work.messages.error
+    );
+    assert!(
+        h.state()
+            .work
+            .messages
+            .inbox
+            .iter()
+            .any(|message| message.body.0 == "More 98")
+    );
+}
+
+#[test]
 fn features_board_issues_and_overview_share_the_agent_operations() {
     let root = Root::new("work-screens");
     let engine = start(&root);
