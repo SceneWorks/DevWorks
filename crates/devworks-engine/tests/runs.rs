@@ -41,7 +41,7 @@ use devworks_core::services::runs::{ControlService, ResumeBinding, Target};
 use devworks_core::services::sessions::SessionService;
 use devworks_core::services::work::WorkService;
 use devworks_core::settings::catalog::AgentRole;
-use devworks_engine::agent_supervisor::{AgentLauncher, AgentTurnExecutor};
+use devworks_engine::agent_supervisor::{AgentLauncher, AgentTurnExecutor, ChildLaunch};
 use devworks_engine::{
     ActivationLauncher, Composition, Launch, LaunchEnd, LaunchFuture, RunComposition, RunGate,
     RunSupervisor, RunTick, RuntimeConfig, ShutdownStage, boot,
@@ -1069,10 +1069,10 @@ fn agent_launcher_runs_a_ready_child_under_the_same_activation() {
     ));
     assert!(matches!(
         end,
-        LaunchEnd::Finished {
+        ChildLaunch::End(LaunchEnd::Finished {
             outcome: ActivationOutcome::Completed,
             ..
-        }
+        })
     ));
     let seen = turns.0.lock().unwrap();
     assert_eq!(seen.len(), 1);
@@ -1088,6 +1088,203 @@ fn agent_launcher_runs_a_ready_child_under_the_same_activation() {
     })
     .unwrap();
     assert_eq!(seen[0].0, child_session.agent_id);
+}
+
+struct DelegatingCoordinator {
+    store: Arc<dyn ApplicationStore>,
+    ids: Arc<dyn devworks_core::ports::IdSource>,
+    runs: Arc<ControlService>,
+    seen: Mutex<Vec<AssignmentId>>,
+    wait_workers: AtomicBool,
+    delegate_once: AtomicBool,
+}
+impl AgentTurnExecutor for DelegatingCoordinator {
+    fn run(
+        &self,
+        context: InvocationContext,
+        agent: devworks_core::protocol::records::AgentRecord,
+        stop: tokio::sync::watch::Receiver<bool>,
+    ) -> LaunchFuture {
+        self.seen.lock().unwrap().push(agent.assignment_id.clone());
+        if agent.role_id.as_str() == "worker" {
+            let wait = self.wait_workers.load(Ordering::SeqCst);
+            return Box::pin(async move {
+                if wait {
+                    let mut stop = stop;
+                    while !*stop.borrow() {
+                        if stop.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                    LaunchEnd::Finished {
+                        outcome: ActivationOutcome::Cancelled,
+                        detail: None,
+                    }
+                } else {
+                    LaunchEnd::Finished {
+                        outcome: ActivationOutcome::Completed,
+                        detail: None,
+                    }
+                }
+            });
+        }
+        if !self.delegate_once.swap(false, Ordering::SeqCst) {
+            return Box::pin(async {
+                LaunchEnd::Finished {
+                    outcome: ActivationOutcome::Completed,
+                    detail: None,
+                }
+            });
+        }
+        let store = self.store.clone();
+        let agents = AgentService::new(self.ids.clone(), self.runs.clone());
+        Box::pin(async move {
+            if *stop.borrow() {
+                return LaunchEnd::Finished {
+                    outcome: ActivationOutcome::Cancelled,
+                    detail: None,
+                };
+            }
+            let root_id = agent.root_id.clone();
+            let result = write(&*store, move |tx| {
+                let revision =
+                    devworks_core::services::runs::control_of(tx.runs(), &root_id)?.revision;
+                let request = devworks_core::operations::agents::DelegateInput {
+                    root_id,
+                    expected_control_revision: Revision::new(revision).unwrap(),
+                    task_ids: devworks_core::protocol::support::BoundedList(vec![]),
+                    role_id: id("worker"),
+                    instruction: devworks_core::protocol::support::BoundedText(
+                        "Independent child".into(),
+                    ),
+                    source_checkpoint_id: None,
+                };
+                agents
+                    .delegate(tx, &context, &request)
+                    .map_err(|error| StorageError::InvalidRecord(format!("delegate: {error:?}")))
+            });
+            match result {
+                Ok(_) => LaunchEnd::Finished {
+                    outcome: ActivationOutcome::Completed,
+                    detail: None,
+                },
+                Err(error) => {
+                    LaunchEnd::Failed(ActivationFailure::Deterministic(format!("{error:?}")))
+                }
+            }
+        })
+    }
+}
+
+#[test]
+fn root_launcher_schedules_and_waits_for_its_durable_child() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let turns = Arc::new(DelegatingCoordinator {
+        store: fx.store.clone(),
+        ids: fx.h.ids.clone(),
+        runs: fx.service.clone(),
+        seen: Mutex::new(Vec::new()),
+        wait_workers: AtomicBool::new(false),
+        delegate_once: AtomicBool::new(true),
+    });
+    let launcher = Arc::new(AgentLauncher::new(
+        fx.store.clone(),
+        fx.h.ids.clone(),
+        Arc::new(AgentService::new(fx.h.ids.clone(), fx.service.clone())),
+        turns.clone(),
+    ));
+    let (supervisor, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    runtime().block_on(async {
+        supervisor.tick().await.unwrap();
+        within("the root and child settle", async {
+            while !supervisor.launched().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+    });
+    let seen = turns.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    let assignments = fx.inspection("root-i").assignments;
+    assert_eq!(assignments.len(), 2);
+    assert!(
+        assignments
+            .iter()
+            .all(|a| a.state == AssignmentState::Completed)
+    );
+}
+
+#[test]
+fn root_stop_reaches_a_running_child_and_keeps_both_assignments_for_continue() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let turns = Arc::new(DelegatingCoordinator {
+        store: fx.store.clone(),
+        ids: fx.h.ids.clone(),
+        runs: fx.service.clone(),
+        seen: Mutex::new(Vec::new()),
+        wait_workers: AtomicBool::new(true),
+        delegate_once: AtomicBool::new(true),
+    });
+    let launcher = Arc::new(AgentLauncher::new(
+        fx.store.clone(),
+        fx.h.ids.clone(),
+        Arc::new(AgentService::new(fx.h.ids.clone(), fx.service.clone())),
+        turns.clone(),
+    ));
+    let (supervisor, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let rt = runtime();
+    let activation = rt.block_on(supervisor.tick()).unwrap().launched.remove(0);
+    rt.block_on(async {
+        within("the child starts", async {
+            while turns.seen.lock().unwrap().len() < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+    });
+    applied(&fx.pause(&fx.user, "root-i"));
+    rt.block_on(async {
+        supervisor.tick().await.unwrap();
+        within("the root and child settle after pause", async {
+            while !supervisor.launched().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+    });
+    assert_eq!(
+        fx.activation(&activation).outcome,
+        Some(ActivationOutcome::Cancelled)
+    );
+    let assignments = fx.inspection("root-i").assignments;
+    assert_eq!(assignments.len(), 2);
+    assert!(
+        assignments
+            .iter()
+            .all(|a| a.state == AssignmentState::Waiting)
+    );
+    turns.wait_workers.store(false, Ordering::SeqCst);
+    applied(&fx.resume(&fx.user, "root-i"));
+    rt.block_on(async {
+        supervisor.tick().await.unwrap();
+        within("the existing child resumes and completes", async {
+            while !supervisor.launched().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+    });
+    let assignments = fx.inspection("root-i").assignments;
+    assert_eq!(assignments.len(), 2);
+    assert!(
+        assignments
+            .iter()
+            .all(|a| a.state == AssignmentState::Completed)
+    );
 }
 
 struct CompletesOnStop;

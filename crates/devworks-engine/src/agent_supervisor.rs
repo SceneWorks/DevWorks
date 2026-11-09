@@ -3,19 +3,29 @@
 use crate::runs::{ActivationLauncher, Launch, LaunchEnd, LaunchFuture};
 use crate::store;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
-use devworks_core::ports::storage::{ApplicationStore, StorageError, StoredSession};
+use devworks_core::ports::storage::{
+    ActivationOutcome, ApplicationStore, AssignmentPurpose, AssignmentState, StorageError,
+    StoredSession, Unavailable,
+};
 use devworks_core::ports::{IdKind, IdSource};
 use devworks_core::protocol::records::AgentRecord;
-use devworks_core::protocol::{AssignmentId, Counter, Id, Revision};
+use devworks_core::protocol::{AssignmentId, Counter, Id, Revision, RootId};
 use devworks_core::services::agents::AgentService;
-use devworks_core::services::runs::substrate::ActivationFailure;
+use devworks_core::services::runs::root_assignments;
+use devworks_core::services::runs::substrate::{ActivationFailure, Fenced};
 use devworks_core::services::sessions::Failure;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::watch;
+use tokio::task::JoinSet;
 
 /// A turn executor receives an already bound, current coordinator. Its work still passes through
 /// the normal gateway and run dispatch fences; the stop receiver forbids new work after a stop.
-/// It reports Completed only once its child assignments and effects have settled.
+/// It reports Completed only once its own effects have settled. The launcher also waits for child
+/// assignments before completing the root.
 pub trait AgentTurnExecutor: Send + Sync {
     fn run(
         &self,
@@ -25,6 +35,14 @@ pub trait AgentTurnExecutor: Send + Sync {
     ) -> LaunchFuture;
 }
 
+#[derive(Clone, Debug)]
+pub enum ChildLaunch {
+    Fenced(Fenced),
+    End(LaunchEnd),
+}
+pub type ChildLaunchFuture = Pin<Box<dyn Future<Output = ChildLaunch> + Send>>;
+
+#[derive(Clone)]
 pub struct AgentLauncher {
     store: Arc<dyn ApplicationStore>,
     ids: Arc<dyn IdSource>,
@@ -89,14 +107,14 @@ impl AgentLauncher {
         activation_id: Id,
         epoch: i64,
         stop: watch::Receiver<bool>,
-    ) -> LaunchFuture {
+    ) -> ChildLaunchFuture {
         let store = self.store.clone();
         let ids = self.ids.clone();
         let agents = self.agents.clone();
         let executor = self.executor.clone();
         Box::pin(async move {
             if *stop.borrow() {
-                return stopped();
+                return ChildLaunch::End(stopped());
             }
             let host = Self::host_context(&*store, &*ids);
             let child = {
@@ -126,15 +144,11 @@ impl AgentLauncher {
             };
             let (child, session) = match child {
                 Ok(Ok(value)) => value,
-                Ok(Err(fenced)) => {
-                    return failed(StorageError::InvalidRecord(format!(
-                        "child activation fenced: {fenced:?}"
-                    )));
-                }
-                Err(error) => return failed(error),
+                Ok(Err(fenced)) => return ChildLaunch::Fenced(fenced),
+                Err(error) => return ChildLaunch::End(failed(error)),
             };
             if *stop.borrow() {
-                return stopped();
+                return ChildLaunch::End(stopped());
             }
             let context = Self::turn_context(
                 &*store,
@@ -147,7 +161,7 @@ impl AgentLauncher {
             let stop_watch = stop.clone();
             let end = executor.run(context, child.clone(), stop).await;
             if *stop_watch.borrow() {
-                return stopped();
+                return ChildLaunch::End(stopped());
             }
             if let LaunchEnd::Finished {
                 outcome: devworks_core::ports::storage::ActivationOutcome::Completed,
@@ -165,10 +179,10 @@ impl AgentLauncher {
                     .await
                 };
                 if let Err(error) = complete {
-                    return failed(error);
+                    return ChildLaunch::End(failed(error));
                 }
             }
-            end
+            ChildLaunch::End(end)
         })
     }
 }
@@ -197,6 +211,137 @@ fn stopped() -> LaunchEnd {
     LaunchEnd::Finished {
         outcome: devworks_core::ports::storage::ActivationOutcome::Cancelled,
         detail: Some("coordinator stop requested".into()),
+    }
+}
+
+/// Watches the root's durable child queue while its coordinator turn runs and after that turn
+/// ends. A parent completion waits for every child; blockers keep only their affected children
+/// waiting. The root activation's stop signal is shared by every running child turn.
+async fn supervise_children(
+    launcher: AgentLauncher,
+    root: RootId,
+    activation_id: Id,
+    epoch: i64,
+    mut stop: watch::Receiver<bool>,
+    mut parent_done: watch::Receiver<bool>,
+    stop_all: watch::Sender<bool>,
+) -> Result<(), LaunchEnd> {
+    let mut running = HashSet::<AssignmentId>::new();
+    let mut retry_after = HashMap::<AssignmentId, tokio::time::Instant>::new();
+    let mut tasks = JoinSet::<(AssignmentId, ChildLaunch)>::new();
+    let mut fatal = None;
+    let mut tick = tokio::time::interval(Duration::from_millis(500));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        if !*stop.borrow() && fatal.is_none() {
+            let target_root = root.clone();
+            let read = store::read(&launcher.store, move |snapshot| {
+                let work = snapshot
+                    .sessions()
+                    .work_root(&target_root)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                let cap = devworks_core::settings::service::max_subagents(
+                    snapshot.configuration(),
+                    &work.project_id,
+                )?;
+                Ok((root_assignments(snapshot.runs(), &target_root, true)?, cap))
+            })
+            .await;
+            let (assignments, cap) = match read {
+                Ok(result) => result,
+                Err(error) => {
+                    fatal = Some(failed(error));
+                    let _ = stop_all.send(true);
+                    continue;
+                }
+            };
+            let live_children: Vec<_> = assignments
+                .into_iter()
+                .filter(|assignment| assignment.purpose == AssignmentPurpose::Child)
+                .collect();
+            let live_ids: HashSet<_> = live_children.iter().map(|child| child.id.clone()).collect();
+            retry_after.retain(|id, _| live_ids.contains(id));
+            let active = live_children
+                .iter()
+                .filter(|child| child.state == AssignmentState::Active)
+                .count();
+            let launching = live_children
+                .iter()
+                .filter(|child| {
+                    running.contains(&child.id) && child.state != AssignmentState::Active
+                })
+                .count();
+            let mut available = cap.saturating_sub(active + launching);
+            for child in &live_children {
+                if available == 0
+                    || !matches!(
+                        child.state,
+                        AssignmentState::Ready | AssignmentState::Waiting
+                    )
+                    || retry_after
+                        .get(&child.id)
+                        .is_some_and(|until| *until > tokio::time::Instant::now())
+                    || !running.insert(child.id.clone())
+                {
+                    continue;
+                }
+                available -= 1;
+                let worker = launcher.clone();
+                let id = child.id.clone();
+                let activation = activation_id.clone();
+                let child_stop = stop.clone();
+                tasks.spawn(async move {
+                    let end = worker
+                        .launch_child(id.clone(), activation, epoch, child_stop)
+                        .await;
+                    (id, end)
+                });
+            }
+            if *parent_done.borrow() && live_children.is_empty() && tasks.is_empty() {
+                return Ok(());
+            }
+        } else if tasks.is_empty() {
+            return fatal.map_or(Ok(()), Err);
+        }
+        tokio::select! {
+            _ = tick.tick() => {},
+            changed = stop.changed() => {
+                if changed.is_err() && tasks.is_empty() { return fatal.map_or(Ok(()), Err); }
+            },
+            changed = parent_done.changed() => {
+                if changed.is_err() && tasks.is_empty() { return fatal.map_or(Ok(()), Err); }
+            },
+            Some(result) = tasks.join_next(), if !tasks.is_empty() => {
+                match result {
+                    Ok((id, outcome)) => {
+                        running.remove(&id);
+                        let failure = match outcome {
+                            ChildLaunch::End(LaunchEnd::Finished { outcome: ActivationOutcome::Completed, .. }) => None,
+                            ChildLaunch::End(LaunchEnd::Finished { outcome: ActivationOutcome::Cancelled | ActivationOutcome::Interrupted, .. }) if *stop.borrow() => None,
+                            ChildLaunch::Fenced(Fenced::Blocked(_) | Fenced::LeaseLost(_) | Fenced::StopRequested) => {
+                                retry_after.insert(id.clone(), tokio::time::Instant::now() + Duration::from_secs(1));
+                                None
+                            },
+                            ChildLaunch::Fenced(Fenced::NotFound(_)) => None,
+                            ChildLaunch::Fenced(Fenced::Invalid(reason)) if reason.starts_with("the root's subagent allowance") || reason == "the child is not ready under this activation" => {
+                                retry_after.insert(id.clone(), tokio::time::Instant::now() + Duration::from_secs(1));
+                                None
+                            },
+                            ChildLaunch::Fenced(other) => Some(LaunchEnd::Failed(ActivationFailure::Deterministic(format!("child activation fenced: {other:?}")))),
+                            ChildLaunch::End(end) => Some(end),
+                        };
+                        if let Some(failure) = failure {
+                            fatal.get_or_insert(failure);
+                            let _ = stop_all.send(true);
+                        }
+                    }
+                    Err(error) => {
+                        fatal.get_or_insert(LaunchEnd::Failed(ActivationFailure::Transient(format!("child turn task: {error}"))));
+                        let _ = stop_all.send(true);
+                    }
+                }
+            },
+        }
     }
 }
 
@@ -248,12 +393,57 @@ impl ActivationLauncher for AgentLauncher {
                 activation_id.clone(),
                 epoch,
             );
-            let stop_watch = launch.stop.clone();
-            let end = executor
-                .run(context, coordinator.clone(), launch.stop)
-                .await;
-            if *stop_watch.borrow() {
+            let mut external_stop = launch.stop.clone();
+            let (turn_stop_tx, turn_stop) = watch::channel(*external_stop.borrow());
+            let bridge_tx = turn_stop_tx.clone();
+            let bridge = tokio::spawn(async move {
+                while external_stop.changed().await.is_ok() {
+                    if *external_stop.borrow() {
+                        let _ = bridge_tx.send(true);
+                        break;
+                    }
+                }
+            });
+            let (parent_done_tx, parent_done) = watch::channel(false);
+            let children = tokio::spawn(supervise_children(
+                Self {
+                    store: store.clone(),
+                    ids: ids.clone(),
+                    agents: agents.clone(),
+                    executor: executor.clone(),
+                },
+                launch.activation.root_id.clone(),
+                activation_id.clone(),
+                epoch,
+                turn_stop.clone(),
+                parent_done,
+                turn_stop_tx.clone(),
+            ));
+            let end = executor.run(context, coordinator.clone(), turn_stop).await;
+            let _ = parent_done_tx.send(true);
+            if !matches!(
+                end,
+                LaunchEnd::Finished {
+                    outcome: ActivationOutcome::Completed,
+                    ..
+                }
+            ) {
+                let _ = turn_stop_tx.send(true);
+            }
+            let child_result = children.await;
+            bridge.abort();
+            if *launch.stop.borrow() {
                 return stopped();
+            }
+            match child_result {
+                Ok(Ok(())) => {}
+                Ok(Err(end)) => return end,
+                Err(error) => {
+                    return failed(StorageError::unavailable(
+                        Unavailable::HandlerPanicked,
+                        format!("child supervisor: {error}"),
+                    ));
+                }
             }
             if let LaunchEnd::Finished {
                 outcome: devworks_core::ports::storage::ActivationOutcome::Completed,
