@@ -753,7 +753,8 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         use devworks_engine::{Composition, RuntimeConfig, RunComposition, boot};
         let event = json!({"choices":[{"index":0,"delta":{"tool_calls":[
             {"index":0,"id":"bad","type":"function","function":{"name":"get_session","arguments":"{\"unexpected\":true}"}},
-            {"index":1,"id":"good","type":"function","function":{"name":"get_session","arguments":"{\"sessionId\":\"session\"}"}}
+            {"index":1,"id":"good","type":"function","function":{"name":"get_session","arguments":"{\"sessionId\":\"session\"}"}},
+            {"index":2,"id":"missing","type":"function","function":{"name":"get_session","arguments":"{\"sessionId\":\"absent\"}"}}
         ]},"finish_reason":null}]});
         let wire = format!("data: {event}\n\ndata: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n");
         let f = Fx::new("CompatibleChat", Script::sse(&wire), false);
@@ -787,14 +788,16 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         };
         let app = boot(composition()).await.unwrap();
         let dispatched = app.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap();
-        assert_eq!(dispatched.len(), 2);
+        assert_eq!(dispatched.len(), 3);
         assert!(dispatched.iter().all(|d| matches!(d.outcome, Ok(devworks_core::services::sessions::transcript::BatchOutcome::Accepted(_)))));
         let rows = f.transcript();
         let replies: Vec<_> = rows.iter().filter(|e| e.kind == "ToolResponseRecorded").collect();
-        assert_eq!(replies.len(), 2);
+        assert_eq!(replies.len(), 3);
         let reply = |native: &str| replies.iter().find(|e| e.body["call"]["nativeCallId"] == native).unwrap();
         assert_eq!(reply("bad").body["outcome"]["kind"], "Failed");
         assert_eq!(reply("good").body["outcome"]["kind"], "Completed");
+        assert_eq!(reply("missing").body["outcome"]["kind"], "Failed");
+        assert_eq!(reply("missing").body["outcome"]["code"], "domain_NotFound");
         let reference: ArtifactRef = serde_json::from_value(reply("good").body["outcome"]["artifacts"][0].clone()).unwrap();
         let bytes = f.artifacts.read_exact(f.store.as_ref(), &f.context, &reference, 1024 * 1024).unwrap().0;
         let value: Value = serde_json::from_slice(&bytes).unwrap();
@@ -802,7 +805,7 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         app.shutdown().await;
         let restarted = boot(composition()).await.unwrap();
         assert!(restarted.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap().is_empty());
-        assert_eq!(f.transcript().iter().filter(|e| e.kind == "ToolResponseRecorded").count(), 2);
+        assert_eq!(f.transcript().iter().filter(|e| e.kind == "ToolResponseRecorded").count(), 3);
         restarted.shutdown().await;
     });
 }

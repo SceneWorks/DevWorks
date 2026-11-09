@@ -7,8 +7,9 @@ use devworks_core::{
     fingerprint::sha256_hex,
     ports::{IdKind, storage::*},
     protocol::{
-        CONTRACT, CommandReply, Id,
+        CONTRACT, CommandReply, Id, RetryAdvice,
         provider::{CompleteToolCall, ToolCallKey, ToolOutcome, TranscriptBody},
+        results::{DomainDecision, DomainQueryReply},
     },
     registry::{self, Envelope, Mode, OperationDescriptor, SchemaRevision},
     services::{
@@ -180,14 +181,35 @@ pub(crate) fn dispatch_one(
                 Err(_) => Err("invalid tool arguments"),
             }
         }
-        Err(_) => Err("tool binding unavailable"),
+        // A recorded alias whose implementation is not composed here (for example a package
+        // tool) is not a provider argument error. Leave it unanswered for a qualified dispatcher
+        // rather than permanently closing the call with a false failure.
+        Err(_) => {
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "recorded tool binding unavailable",
+            ));
+        }
     };
     let (outcome, bytes) = match result {
         Ok((descriptor, Mode::Query, raw)) => match runtime.query(ctx, descriptor.name, &raw) {
-            Ok(reply) => (
-                ToolOutcome::Completed { artifacts: vec![] },
-                Some(serde_json::to_vec(&reply).map_err(invalid)?),
-            ),
+            Ok(reply @ DomainQueryReply::Result { .. }) => {
+                completed(serde_json::to_vec(&reply).map_err(invalid)?)
+            }
+            Ok(DomainQueryReply::Rejected { fault, .. }) => {
+                if matches!(
+                    fault.retry,
+                    RetryAdvice::SameCommand
+                        | RetryAdvice::ResolveReceipt
+                        | RetryAdvice::ReconcileOperation
+                ) {
+                    return Err(StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "tool query requires retry or reconciliation",
+                    ));
+                }
+                failed(&format!("domain_{:?}", fault.code))
+            }
             Err(_) => (
                 ToolOutcome::Failed {
                     code: static_id("tool_dispatch_failed"),
@@ -203,10 +225,35 @@ pub(crate) fn dispatch_one(
                     "tool command status unknown",
                 ));
             }
-            Ok(reply) => (
-                ToolOutcome::Completed { artifacts: vec![] },
-                Some(serde_json::to_vec(&reply).map_err(invalid)?),
-            ),
+            Ok(CommandReply::ReceiptPurged { .. }) => {
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "tool command receipt purged before outcome reconciliation",
+                ));
+            }
+            Ok(reply @ CommandReply::Recorded { .. }) => {
+                if let CommandReply::Recorded { receipt, .. } = &reply
+                    && let DomainDecision::Refused { fault } = &receipt.decision
+                {
+                    failed(&format!("domain_{:?}", fault.code))
+                } else {
+                    completed(serde_json::to_vec(&reply).map_err(invalid)?)
+                }
+            }
+            Ok(CommandReply::Rejected { code, retry, .. }) => {
+                if matches!(
+                    retry,
+                    RetryAdvice::SameCommand
+                        | RetryAdvice::ResolveReceipt
+                        | RetryAdvice::ReconcileOperation
+                ) {
+                    return Err(StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "tool command rejection requires reconciliation",
+                    ));
+                }
+                failed(&format!("command_{code:?}"))
+            }
             Err(_) => (
                 ToolOutcome::Failed {
                     code: static_id("tool_dispatch_failed"),
@@ -214,12 +261,7 @@ pub(crate) fn dispatch_one(
                 None,
             ),
         },
-        Err(_) => (
-            ToolOutcome::Failed {
-                code: static_id("tool_invalid_arguments"),
-            },
-            None,
-        ),
+        Err(_) => failed("tool_invalid_arguments"),
     };
     let staged =
         if let Some(bytes) = &bytes {
@@ -278,6 +320,19 @@ pub(crate) fn dispatch_one(
         artifacts.settle_host_bytes(store, staged, committed.is_ok());
     }
     committed
+}
+
+fn completed(bytes: Vec<u8>) -> (ToolOutcome, Option<Vec<u8>>) {
+    (ToolOutcome::Completed { artifacts: vec![] }, Some(bytes))
+}
+
+fn failed(code: &str) -> (ToolOutcome, Option<Vec<u8>>) {
+    (
+        ToolOutcome::Failed {
+            code: static_id(code),
+        },
+        None,
+    )
 }
 
 fn selected_builtin(
