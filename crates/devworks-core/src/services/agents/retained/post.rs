@@ -146,7 +146,6 @@ fn recipients(
     spec: &PostSpec,
     item: &Option<RootId>,
     feature: &Option<RootId>,
-    _resource: &Option<String>,
     to_session: &Option<Id>,
     to_human: bool,
 ) -> Result<Vec<Recipient>, StorageError> {
@@ -165,10 +164,10 @@ fn recipients(
             if work.parent_feature_id.as_ref() != Some(feature) {
                 continue;
             }
-        } else if let Some(item) = item {
-            if assignment.work_id != *item {
-                continue;
-            }
+        } else if let Some(item) = item
+            && assignment.work_id != *item
+        {
+            continue;
         }
         selected.push(session.id);
     }
@@ -300,10 +299,10 @@ pub fn post_message(
                     to_human = true;
                 }
                 if to_session.is_none() && !to_human {
-                    if let Some(target) = &parent.target_session_id {
-                        if ctx.session_id() != Some(target) {
-                            to_session = Some(target.clone());
-                        }
+                    if let Some(target) = &parent.target_session_id
+                        && ctx.session_id() != Some(target)
+                    {
+                        to_session = Some(target.clone());
                     }
                     if to_session.is_none() {
                         if parent.to_human && ctx.session_id().is_some() {
@@ -347,16 +346,7 @@ pub fn post_message(
     } else {
         "Project"
     };
-    let routed = recipients(
-        tx,
-        ctx,
-        spec,
-        &item,
-        &feature,
-        &resource,
-        &to_session,
-        to_human,
-    )?;
+    let routed = recipients(tx, ctx, spec, &item, &feature, &to_session, to_human)?;
     let now = tx.now_ms();
     let message = StoredAgentMessage {
         id: tx.new_id(IdKind::Event),

@@ -132,10 +132,9 @@ impl ProviderContext {
         mut wire_alias: impl FnMut(&crate::protocol::provider::QualifiedId) -> Option<String>,
     ) -> Result<Self, StorageError> {
         let mut messages = Vec::new();
-        let mut next = 1;
         let session = entries.first().map(|entry| &entry.session_id);
         let epoch = entries.first().map(|entry| entry.context_epoch);
-        for entry in entries {
+        for (next, entry) in (1..).zip(entries.iter()) {
             if entry.sequence != next
                 || session != Some(&entry.session_id)
                 || epoch != Some(entry.context_epoch)
@@ -144,7 +143,6 @@ impl ProviderContext {
                     "transcript history is not one contiguous epoch".into(),
                 ));
             }
-            next += 1;
             let body: TranscriptBody = serde_json::from_value(entry.body.clone())
                 .map_err(|_| StorageError::InvalidRecord("invalid transcript body".into()))?;
             let (role, content) = match body {

@@ -2107,12 +2107,11 @@ impl Shell {
                                 .notice_texts
                                 .contains_key(artifact.version_id.as_str())
                             && let Some(backend) = self.backend()
+                            && let Ok(text) = backend.read_coordinator_notice(&artifact)
                         {
-                            if let Ok(text) = backend.read_coordinator_notice(&artifact) {
-                                self.chat
-                                    .notice_texts
-                                    .insert(artifact.version_id.as_str().into(), text);
-                            }
+                            self.chat
+                                .notice_texts
+                                .insert(artifact.version_id.as_str().into(), text);
                         }
                         self.chat.reconcile_text_preview();
                         if more {

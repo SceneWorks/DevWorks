@@ -1432,6 +1432,9 @@ impl SessionRead for Unsupported {
     fn session_repository_scope(&self, _: &Id) -> Result<Vec<Id>, StorageError> {
         nope()
     }
+    fn session_activity_at_ms(&self, _: &Id) -> Result<Option<i64>, StorageError> {
+        nope()
+    }
     fn sessions(
         &self,
         _: &SessionScope,
@@ -1555,6 +1558,9 @@ impl SessionRead for Unsupported {
     }
 }
 impl SessionRepository for Unsupported {
+    fn touch_session_activity(&mut self, _: &Id, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
     fn insert_session(&mut self, _: &StoredSession) -> Result<(), StorageError> {
         nope()
     }

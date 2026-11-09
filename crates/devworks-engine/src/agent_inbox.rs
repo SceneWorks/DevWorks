@@ -15,6 +15,14 @@ pub struct RetainedInboxDriver {
     store: Arc<dyn ApplicationStore>,
 }
 
+pub struct InboxSelection {
+    pub recipient: Recipient,
+    pub after: i64,
+    pub include_read: bool,
+    pub limit: u16,
+    pub wait_seconds: u8,
+}
+
 impl RetainedInboxDriver {
     pub fn new(store: Arc<dyn ApplicationStore>) -> Self {
         Self { store }
@@ -24,22 +32,22 @@ impl RetainedInboxDriver {
         &self,
         context: InvocationContext,
         project: ProjectId,
-        recipient: Recipient,
-        after: i64,
-        include_read: bool,
-        limit: u16,
-        wait_seconds: u8,
+        selection: InboxSelection,
     ) -> Result<DeliveredInbox, StorageError> {
-        if wait_seconds > 55 {
+        if selection.wait_seconds > 55 {
             return Err(StorageError::InvalidRecord(
                 "wait_seconds exceeds 55".into(),
             ));
         }
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(u64::from(wait_seconds));
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(u64::from(selection.wait_seconds));
         loop {
             let context = context.clone();
             let project = project.clone();
-            let recipient = recipient.clone();
+            let recipient = selection.recipient.clone();
+            let after = selection.after;
+            let include_read = selection.include_read;
+            let limit = selection.limit;
             let page = store::write(&self.store, move |tx| {
                 deliver_inbox(
                     tx,

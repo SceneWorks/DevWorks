@@ -576,10 +576,10 @@ pub(super) fn insert_message(
             return Err(StorageError::ScopeDenied);
         }
     }
-    if let Some(parent) = &m.in_reply_to_id {
-        if message(conn, parent)?.as_ref().map(|p| &p.project_id) != Some(&m.project_id) {
-            return Err(StorageError::ScopeDenied);
-        }
+    if let Some(parent) = &m.in_reply_to_id
+        && message(conn, parent)?.as_ref().map(|p| &p.project_id) != Some(&m.project_id)
+    {
+        return Err(StorageError::ScopeDenied);
     }
     db(conn.execute(
         "INSERT INTO agent_messages(id,project_id,root_id,channel,from_assignment_id,to_assignment_id,message_class,body,attachments_json,in_reply_to_id,state,blocking,idempotency_key,revision,created_at,resolved_at,from_actor_id,target_item_id,target_feature_id,resource_name,target_session_id,to_human,sender_session_id,resolved_by_actor_id,resolved_by_session_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
@@ -737,13 +737,12 @@ pub(super) fn update_delivery(
         && d.read_at_ms == current.read_at_ms
         && d.resolved_at_ms == current.resolved_at_ms
         && d.handed_over == current.handed_over;
-    if let Some(target) = &d.handed_to_session_id {
-        if d.recipient_session_id.as_ref() == Some(target)
+    if let Some(target) = &d.handed_to_session_id
+        && (d.recipient_session_id.as_ref() == Some(target)
             || session_project(conn, target)?.as_deref() != Some(d.project_id.0.as_str())
-            || (current.handed_to_session_id.is_none() && !handover)
-        {
-            return Err(StorageError::ScopeDenied);
-        }
+            || (current.handed_to_session_id.is_none() && !handover))
+    {
+        return Err(StorageError::ScopeDenied);
     }
     if !(legal || handover)
         || (d.state != "Pending" && d.delivered_at_ms.is_none())
