@@ -821,12 +821,73 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
     let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
     let agents =
         devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
-    let activation_id = activation.id.clone();
-    let assignment_id = first.assignment_id;
+    let execution_id = activation.id.clone();
+    let primary_id = first.assignment_id.clone();
     assert!(fx.tx(move |_, tx| {
         Ok(agents
-            .complete_primary(tx, &host, &assignment_id, &activation_id, epoch)
+            .complete_primary(tx, &host, &primary_id, &execution_id, epoch)
             .is_err())
+    }));
+    let parent_session = read(&*fx.store, |snapshot| {
+        let parent = snapshot
+            .runs()
+            .assignment(&first.assignment_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        snapshot
+            .sessions()
+            .session(&parent.session_id)?
+            .ok_or(StorageError::ScopeDenied)
+    });
+    let agent = devworks_core::context::HostIngress::new(&*fx.store)
+        .context(
+            parent_session.agent_id,
+            PrincipalKind::Agent,
+            id("second-delegate"),
+            id("delegate-ingress"),
+            devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(parent_session.id)
+        .with_lineage(
+            Some(ProjectId(id("project-a"))),
+            Some(rid("root-i")),
+            Some(first.assignment_id.clone()),
+        )
+        .with_activation(activation.id.clone(), epoch);
+    let request = devworks_core::operations::agents::DelegateInput {
+        root_id: rid("root-i"),
+        expected_control_revision: Revision::new(fx.control("root-i").revision).unwrap(),
+        task_ids: devworks_core::protocol::support::BoundedList(vec![]),
+        role_id: id("worker"),
+        instruction: devworks_core::protocol::support::BoundedText("Second child".into()),
+        source_checkpoint_id: None,
+    };
+    let agents =
+        devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let second = fx.tx(move |_, tx| {
+        agents
+            .delegate(tx, &agent, &request)
+            .map_err(|error| StorageError::InvalidRecord(format!("delegate refused: {error:?}")))
+    });
+    let parent_id = first.assignment_id.clone();
+    fx.tx(move |_, tx| {
+        let mut parent = tx.runs().assignment(&parent_id)?.unwrap();
+        let expected = parent.revision;
+        parent.state = AssignmentState::Completed;
+        parent.revision += 1;
+        tx.runs().update_assignment(&parent, expected)
+    });
+    let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
+    let agents =
+        devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let second_id = second.assignment_id;
+    let execution_id = activation.id.clone();
+    assert!(fx.tx(move |_, tx| {
+        Ok(matches!(
+            agents.activate_child(tx, &host, &second_id, &execution_id, epoch),
+            Ok(Err(devworks_core::services::runs::substrate::Fenced::Invalid(reason)))
+                if reason == "the child parent has ended"
+        ))
     }));
 }
 

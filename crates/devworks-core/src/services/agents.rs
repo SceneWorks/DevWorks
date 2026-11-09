@@ -463,6 +463,14 @@ impl AgentService {
                 "the child changed during activation admission".into(),
             )));
         }
+        let parent = current.parent_id.as_ref().ok_or_else(denied)?;
+        if !tx
+            .runs()
+            .assignment(parent)?
+            .is_some_and(|parent| parent.root_id == current.root_id && parent.state.is_live())
+        {
+            return Ok(Err(Fenced::Invalid("the child parent has ended".into())));
+        }
         let active = match self.runs.set_assignment_state(
             tx,
             host.principal(),
