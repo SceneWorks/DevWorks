@@ -920,6 +920,20 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
             entry.kind == "ToolResponseRecorded"
                 && entry.body["call"]["nativeCallId"] == "accepted-operation-call"
         ).unwrap().body;
+        let close_with = |key: &str| {
+            let revision = read(f.store.as_ref(), |s| Ok(s.sessions().session(&id("session"))?.unwrap().revision));
+            json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":1,
+                "requestKey":key,"body":{"kind":"sessions.end",
+                "sessionId":"session","expectedRevision":revision.to_string()}})
+        };
+        let close = close_with("close-active-tool-operation");
+        let reply = app.command(&f.context, "sessions.end", &serde_json::to_vec(&close).unwrap()).unwrap();
+        assert!(matches!(reply, devworks_core::protocol::CommandReply::Recorded { receipt, .. }
+            if matches!(receipt.decision, devworks_core::protocol::results::DomainDecision::Refused { ref fault }
+                if fault.target_kind.as_ref().is_some_and(|kind| kind.0 == "unresolved_tool_operations"))));
+        let foreign_session = f.context.clone().with_session(id("other-session"));
+        assert!(app.reconcile_tool_operations(&foreign_session, &id("session")).is_err());
+        assert!(app.record_tool_operation_update(&foreign_session, &id("session"), &operation_id).is_err());
         let reconciled = app.reconcile_tool_operations(&f.context, &id("session")).unwrap();
         assert_eq!(reconciled.len(), 1);
         assert_eq!(reconciled[0].operation_id, operation_id);
@@ -977,6 +991,24 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         assert!(restarted.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap().is_empty());
         assert_eq!(f.transcript().iter().filter(|e| e.kind == "ToolResponseRecorded").count(), 6);
         assert!(restarted.record_tool_operation_update(&f.context, &id("session"), &operation_id).unwrap().is_none());
+        let operation_for_write = operation_id.clone();
+        write(f.store.as_ref(), move |tx| {
+            use devworks_core::protocol::OperationState;
+            let operation = tx.operations().operation(&operation_for_write)?.unwrap();
+            tx.operations().transition(&operation_for_write, operation.revision, None,
+                OperationState::CancelledBeforeDispatch, None)?;
+            Ok(())
+        }).unwrap();
+        let close = close_with("close-unrecorded-tool-operation");
+        let reply = restarted.command(&f.context, "sessions.end", &serde_json::to_vec(&close).unwrap()).unwrap();
+        assert!(matches!(reply, devworks_core::protocol::CommandReply::Recorded { receipt, .. }
+            if matches!(receipt.decision, devworks_core::protocol::results::DomainDecision::Refused { ref fault }
+                if fault.target_kind.as_ref().is_some_and(|kind| kind.0 == "unresolved_tool_operations"))));
+        assert!(restarted.record_tool_operation_update(&f.context, &id("session"), &operation_id).unwrap().is_some());
+        let close = close_with("close-settled-tool-operation");
+        let reply = restarted.command(&f.context, "sessions.end", &serde_json::to_vec(&close).unwrap()).unwrap();
+        assert!(matches!(reply, devworks_core::protocol::CommandReply::Recorded { receipt, .. }
+            if matches!(receipt.decision, devworks_core::protocol::results::DomainDecision::Applied { .. })));
         restarted.shutdown().await;
     });
 }

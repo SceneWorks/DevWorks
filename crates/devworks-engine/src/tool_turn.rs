@@ -39,6 +39,45 @@ pub(crate) struct TurnSource<'a> {
     pub after_sequence: i64,
 }
 
+fn authorized_session(
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    session_id: &Id,
+) -> Result<StoredSession, StorageError> {
+    let session = read
+        .sessions()
+        .session(session_id)?
+        .ok_or(StorageError::ScopeDenied)?;
+    if ctx.session_id() != Some(session_id)
+        || session.closed()
+        || read.stamp().store_id != *ctx.store_id()
+        || read.stamp().restore_epoch != ctx.restore_epoch().get()
+        || !matches!(
+            ctx.principal_kind(),
+            PrincipalKind::Agent | PrincipalKind::Host
+        )
+        || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    if ctx.principal_kind() == PrincipalKind::Agent {
+        let binding = read
+            .authority()
+            .principal(ctx.principal())?
+            .ok_or(StorageError::ScopeDenied)?;
+        if !binding.active
+            || session.agent_id != *ctx.principal()
+            || binding
+                .project_id
+                .as_ref()
+                .is_some_and(|project| session.project_id.as_ref() != Some(project))
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+    }
+    Ok(session)
+}
+
 /// Enumerate unanswered calls only after checking the current session and principal binding.
 /// The dispatcher must not expose even call identities from a foreign session.
 pub(crate) fn pending_calls(
@@ -47,37 +86,7 @@ pub(crate) fn pending_calls(
     session_id: &Id,
 ) -> Result<Vec<ToolCallKey>, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |read| {
-        let session = read
-            .sessions()
-            .session(session_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if ctx.session_id() != Some(session_id)
-            || session.closed()
-            || read.stamp().store_id != *ctx.store_id()
-            || read.stamp().restore_epoch != ctx.restore_epoch().get()
-            || !matches!(
-                ctx.principal_kind(),
-                PrincipalKind::Agent | PrincipalKind::Host
-            )
-            || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
-        {
-            return Err(StorageError::ScopeDenied);
-        }
-        if ctx.principal_kind() == PrincipalKind::Agent {
-            let binding = read
-                .authority()
-                .principal(ctx.principal())?
-                .ok_or(StorageError::ScopeDenied)?;
-            if !binding.active
-                || session.agent_id != *ctx.principal()
-                || binding
-                    .project_id
-                    .as_ref()
-                    .is_some_and(|project| session.project_id.as_ref() != Some(project))
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-        }
+        authorized_session(read, ctx, session_id)?;
         let pending = read.sessions().pending_calls(session_id, 500)?;
         if pending.len() == 500 {
             return Err(invalid("pending tool calls exceed dispatch scan bound"));
@@ -92,6 +101,23 @@ pub(crate) fn pending_calls(
                 })
             })
             .collect()
+    })
+}
+
+/// Linked operations reconcile independently of unanswered sibling calls. Only the authorized
+/// session's operation identities can be returned.
+pub(crate) fn linked_operations(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    session_id: &Id,
+) -> Result<Vec<StoredToolCall>, StorageError> {
+    read_snapshot(store, &ReadOptions::default(), |read| {
+        authorized_session(read, ctx, session_id)?;
+        let linked = read.sessions().linked_operations(session_id, 500)?;
+        if linked.len() == 500 {
+            return Err(invalid("linked tool operations exceed scan bound"));
+        }
+        Ok(linked)
     })
 }
 
@@ -857,8 +883,8 @@ pub(crate) fn record_operation_update(
     }
     // Apply the same current session gate even when the requested revision was already
     // published and this call will return without appending a batch.
-    pending_calls(store, ctx, session_id)?;
     let observed = read_snapshot(store, &ReadOptions::default(), |read| {
+        authorized_session(read, ctx, session_id)?;
         let linked = read.sessions().linked_operations(session_id, 500)?;
         if linked.len() == 500 {
             return Err(invalid("linked tool operations exceed scan bound"));

@@ -1647,17 +1647,7 @@ impl Runtime {
         ctx: &InvocationContext,
         session_id: &Id,
     ) -> Result<Vec<ToolOperationUpdate>, StorageError> {
-        crate::tool_turn::pending_calls(self.store.as_ref(), ctx, session_id)?;
-        let linked = devworks_core::ports::storage::read_snapshot(
-            self.store.as_ref(),
-            &devworks_core::ports::storage::ReadOptions::default(),
-            |read| read.sessions().linked_operations(session_id, 500),
-        )?;
-        if linked.len() == 500 {
-            return Err(StorageError::InvalidRecord(
-                "linked tool operations exceed scan bound".into(),
-            ));
-        }
+        let linked = crate::tool_turn::linked_operations(self.store.as_ref(), ctx, session_id)?;
         let mut operations: Vec<_> = linked
             .into_iter()
             .filter_map(|call| call.operation_id)

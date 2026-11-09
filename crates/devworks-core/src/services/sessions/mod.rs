@@ -368,6 +368,10 @@ pub fn append_refusal(r: &BatchRefusal) -> Refusal {
             .retry(RetryAdvice::RefreshAndNewRequest),
         BatchRefusal::UnresolvedToolCalls => Refusal::new(Conflict, "unresolved_tool_calls", None)
             .retry(RetryAdvice::AfterBlockerClears),
+        BatchRefusal::UnresolvedToolOperations => {
+            Refusal::new(Conflict, "unresolved_tool_operations", None)
+                .retry(RetryAdvice::AfterBlockerClears)
+        }
         _ => Refusal::new(InvalidArgument, "transcript_batch", None),
     }
 }
@@ -590,6 +594,73 @@ impl SessionService {
         // to a concurrent close after the effect commits.
         if !tx.sessions().pending_calls(&session.id, 1)?.is_empty() {
             return Err(append_refusal(&BatchRefusal::UnresolvedToolCalls).into());
+        }
+        // A linked operation can settle after its initial provider response. Keep the writer
+        // open until the terminal journal revision is a separate durable transcript fact.
+        let linked = tx.sessions().linked_operations(&session.id, 500)?;
+        if linked.len() == 500 {
+            return Err(StorageError::InvalidRecord(
+                "linked tool operations exceed session close scan bound".into(),
+            )
+            .into());
+        }
+        let mut expected = std::collections::HashMap::new();
+        let mut first_response = session.next_sequence;
+        for call in linked {
+            let Some(operation_id) = call.operation_id else {
+                continue;
+            };
+            first_response = first_response.min(call.response_sequence.ok_or_else(|| {
+                StorageError::InvalidRecord("linked operation lacks initial response".into())
+            })?);
+            let operation = tx
+                .operations()
+                .operation(&operation_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if !crate::ports::storage::is_terminal(operation.state) {
+                return Err(append_refusal(&BatchRefusal::UnresolvedToolOperations).into());
+            }
+            expected.insert(operation_id, operation.revision);
+        }
+        if !expected.is_empty() {
+            let mut observed = std::collections::HashMap::new();
+            let mut position = first_response;
+            while position < session.last_durable_sequence() {
+                let page = tx.sessions().entries(&session.id, position, 500)?;
+                if page.is_empty() {
+                    return Err(StorageError::InvalidRecord("session transcript gap".into()).into());
+                }
+                for entry in page {
+                    if entry.sequence != position + 1 {
+                        return Err(
+                            StorageError::InvalidRecord("session transcript gap".into()).into()
+                        );
+                    }
+                    position = entry.sequence;
+                    if entry.kind != "OperationUpdate" {
+                        continue;
+                    }
+                    let TranscriptBody::OperationUpdate {
+                        operation_id,
+                        revision,
+                        ..
+                    } = serde_json::from_value(entry.body)
+                        .map_err(|error| StorageError::InvalidRecord(error.to_string()))?
+                    else {
+                        return Err(StorageError::InvalidRecord(
+                            "operation update entry kind mismatch".into(),
+                        )
+                        .into());
+                    };
+                    observed.insert(operation_id, revision.get());
+                }
+            }
+            if expected
+                .iter()
+                .any(|(operation_id, revision)| observed.get(operation_id) != Some(revision))
+            {
+                return Err(append_refusal(&BatchRefusal::UnresolvedToolOperations).into());
+            }
         }
         let pending = 0;
         session.closed_at_ms = Some(tx.now_ms());

@@ -177,6 +177,9 @@ pub enum BatchRefusal {
     /// A context boundary while emitted tool calls still lack their initial response: compaction
     /// or a provider change must not cut an unresolved tool exchange.
     UnresolvedToolCalls,
+    /// A linked operation is still active, or its latest journal revision has not been
+    /// recorded in the transcript. Closing now would discard its later outcome.
+    UnresolvedToolOperations,
     DuplicateEntry(Id),
     /// The `(attempt, native call)` key or its ordinal is already recorded.
     DuplicateCall,
