@@ -1493,6 +1493,117 @@ impl Check for RetainedItemVersion {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedHistoryPage {
+    pub items: Rows<RetainedMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_before: Option<Counter>,
+}
+impl Check for RetainedHistoryPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_before.check()?;
+        super::domain_rules::record(
+            "RetainedHistoryPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedMessageLine {
+    pub id: Id,
+    pub kind: RetainedMessageKind,
+    pub from: Text,
+    pub summary: Text,
+    pub created_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<RetainedMessageState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<RetainedDeliveryState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed_over: Option<bool>,
+}
+impl Check for RetainedMessageLine {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.kind.check()?;
+        self.from.check()?;
+        self.summary.check()?;
+        self.created_at_ms.check()?;
+        self.from_session_id.check()?;
+        self.item_id.check()?;
+        self.state.check()?;
+        self.blocking.check()?;
+        self.delivery.check()?;
+        self.handed_over.check()?;
+        super::domain_rules::record(
+            "RetainedMessageLine",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedMessageEvent {
+    pub sequence: Counter,
+    pub project_id: ProjectId,
+    pub message_id: Id,
+    pub kind: Text,
+    pub actor: RetainedActor,
+    pub created_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<RetainedMessageLine>,
+}
+impl Check for RetainedMessageEvent {
+    fn check(&self) -> Result<(), String> {
+        self.sequence.check()?;
+        self.project_id.check()?;
+        self.message_id.check()?;
+        self.kind.check()?;
+        self.actor.check()?;
+        self.created_at_ms.check()?;
+        self.recipient.check()?;
+        self.message.check()?;
+        super::domain_rules::record(
+            "RetainedMessageEvent",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedEventPage {
+    pub items: Rows<RetainedMessageEvent>,
+    pub next_sequence: Counter,
+}
+impl Check for RetainedEventPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_sequence.check()?;
+        super::domain_rules::record(
+            "RetainedEventPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CheckpointRecord {
     pub id: Id,
     pub revision: Revision,
@@ -17536,6 +17647,36 @@ pub enum DomainQuery {
     NextWorkInspectClaim { claim_id: Id },
     #[serde(rename = "agents.inspect")]
     AgentsInspect { assignment_id: AssignmentId },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.history")]
+    AgentsHistory {
+        project_id: ProjectId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<Text>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_id: Option<RootId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feature_id: Option<RootId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource_name: Option<Text>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        open_only: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_human: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<Counter>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<Revision>,
+    },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.events")]
+    AgentsEvents {
+        project_id: ProjectId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<Counter>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<Revision>,
+    },
     #[serde(rename = "agents.inbox")]
     AgentsInbox {
         assignment_id: AssignmentId,
@@ -18796,6 +18937,8 @@ impl DomainQuery {
             Self::WorkflowsList { .. } => "workflows.list",
             Self::NextWorkInspectClaim { .. } => "next_work.inspect_claim",
             Self::AgentsInspect { .. } => "agents.inspect",
+            Self::AgentsHistory { .. } => "agents.history",
+            Self::AgentsEvents { .. } => "agents.events",
             Self::AgentsInbox { .. } => "agents.inbox",
             Self::SessionsList { .. } => "sessions.list",
             Self::SessionsGet { .. } => "sessions.get",
@@ -19028,6 +19171,36 @@ impl Check for DomainQuery {
             }
             Self::AgentsInspect { assignment_id } => {
                 assignment_id.check()?;
+            }
+            Self::AgentsHistory {
+                project_id,
+                channel,
+                item_id,
+                feature_id,
+                resource_name,
+                open_only,
+                to_human,
+                before,
+                limit,
+            } => {
+                project_id.check()?;
+                channel.check()?;
+                item_id.check()?;
+                feature_id.check()?;
+                resource_name.check()?;
+                open_only.check()?;
+                to_human.check()?;
+                before.check()?;
+                limit.check()?;
+            }
+            Self::AgentsEvents {
+                project_id,
+                after,
+                limit,
+            } => {
+                project_id.check()?;
+                after.check()?;
+                limit.check()?;
             }
             Self::AgentsInbox {
                 assignment_id,
@@ -20465,6 +20638,12 @@ impl Revisioned for DomainQuery {
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
+            Self::AgentsHistory { .. } if revision < 7 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation predates its introduction".into())
+            }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {
                 Err("operation predates its introduction".into())
             }
@@ -24825,6 +25004,12 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 7))]
     #[serde(rename = "agents.post")]
     AgentsPost { value: RetainedPostResult },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.history")]
+    AgentsHistory { value: RetainedHistoryPage },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.events")]
+    AgentsEvents { value: RetainedEventPage },
     #[serde(rename = "agents.inbox")]
     AgentsInbox { value: Page<AgentMessage> },
     #[serde(rename = "agents.acknowledge")]
@@ -25522,6 +25707,8 @@ impl OperationResult {
             Self::AgentsDelegate { .. } => "agents.delegate",
             Self::AgentsMessages { .. } => "agents.messages",
             Self::AgentsPost { .. } => "agents.post",
+            Self::AgentsHistory { .. } => "agents.history",
+            Self::AgentsEvents { .. } => "agents.events",
             Self::AgentsInbox { .. } => "agents.inbox",
             Self::AgentsAcknowledge { .. } => "agents.acknowledge",
             Self::AgentsCheckpoint { .. } => "agents.checkpoint",
@@ -25897,6 +26084,8 @@ impl Check for OperationResult {
             Self::AgentsDelegate { value } => value.check()?,
             Self::AgentsMessages { value } => value.check()?,
             Self::AgentsPost { value } => value.check()?,
+            Self::AgentsHistory { value } => value.check()?,
+            Self::AgentsEvents { value } => value.check()?,
             Self::AgentsInbox { value } => value.check()?,
             Self::AgentsAcknowledge { value } => value.check()?,
             Self::AgentsCheckpoint { value } => value.check()?,
@@ -26392,6 +26581,12 @@ impl Revisioned for OperationResult {
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::AgentsPost { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AgentsHistory { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AgentsEvents { .. } if revision < 7 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {

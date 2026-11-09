@@ -143,6 +143,12 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 7))]
     #[serde(rename = "agents.post")]
     AgentsPost { value: RetainedPostResult },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.history")]
+    AgentsHistory { value: RetainedHistoryPage },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.events")]
+    AgentsEvents { value: RetainedEventPage },
     #[serde(rename = "agents.inbox")]
     AgentsInbox { value: Page<AgentMessage> },
     #[serde(rename = "agents.acknowledge")]
@@ -823,6 +829,8 @@ impl OperationResult {
             Self::AgentsDelegate { .. } => "agents.delegate",
             Self::AgentsMessages { .. } => "agents.messages",
             Self::AgentsPost { .. } => "agents.post",
+            Self::AgentsHistory { .. } => "agents.history",
+            Self::AgentsEvents { .. } => "agents.events",
             Self::AgentsInbox { .. } => "agents.inbox",
             Self::AgentsAcknowledge { .. } => "agents.acknowledge",
             Self::AgentsCheckpoint { .. } => "agents.checkpoint",
@@ -1198,6 +1206,8 @@ impl Check for OperationResult {
             Self::AgentsDelegate { value } => value.check()?,
             Self::AgentsMessages { value } => value.check()?,
             Self::AgentsPost { value } => value.check()?,
+            Self::AgentsHistory { value } => value.check()?,
+            Self::AgentsEvents { value } => value.check()?,
             Self::AgentsInbox { value } => value.check()?,
             Self::AgentsAcknowledge { value } => value.check()?,
             Self::AgentsCheckpoint { value } => value.check()?,
@@ -1696,6 +1706,12 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsPost { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AgentsHistory { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AgentsEvents { .. } if revision < 7 => {
                 Err("operation result predates its introduction".into())
             }
             Self::ApprovalsReviewQueue { .. } if revision < 3 => {

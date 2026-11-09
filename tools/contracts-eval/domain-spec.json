@@ -694,6 +694,49 @@
         "version": "Revision"
       }
     },
+    "RetainedHistoryPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<RetainedMessage>",
+        "next_before": "?Counter"
+      }
+    },
+    "RetainedMessageLine": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "kind": "RetainedMessageKind",
+        "from": "Text",
+        "summary": "Text",
+        "created_at_ms": "Counter",
+        "from_session_id": "?Id",
+        "item_id": "?RootId",
+        "state": "?RetainedMessageState",
+        "blocking": "?bool",
+        "delivery": "?RetainedDeliveryState",
+        "handed_over": "?bool"
+      }
+    },
+    "RetainedMessageEvent": {
+      "kind": "record",
+      "fields": {
+        "sequence": "Counter",
+        "project_id": "ProjectId",
+        "message_id": "Id",
+        "kind": "Text",
+        "actor": "RetainedActor",
+        "created_at_ms": "Counter",
+        "recipient": "?Text",
+        "message": "?RetainedMessageLine"
+      }
+    },
+    "RetainedEventPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<RetainedMessageEvent>",
+        "next_sequence": "Counter"
+      }
+    },
     "CheckpointRecord": {
       "kind": "record",
       "fields": {
@@ -7027,6 +7070,40 @@
       "rules": "Additive retained-source post contract. The gateway-selected command and current principal bind the sender; optional session/project must match current authority. Route, reply resolution, blocking and idempotency are validated by the retained message service.",
       "introducedRevision": 7
     },
+    "agents.history": {
+      "operation": "agents.history",
+      "mode": "Query",
+      "fields": {
+        "project_id": "ProjectId",
+        "channel": "?Text",
+        "item_id": "?RootId",
+        "feature_id": "?RootId",
+        "resource_name": "?Text",
+        "open_only": "?bool",
+        "to_human": "?bool",
+        "before": "?Counter",
+        "limit": "?Revision"
+      },
+      "result": "RetainedHistoryPage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Project-scoped retained message history newest first. Filters and before cursor are checked against current item/feature ownership; the next_before cursor continues the recorded order without a write.",
+      "introducedRevision": 7
+    },
+    "agents.events": {
+      "operation": "agents.events",
+      "mode": "Query",
+      "fields": {
+        "project_id": "ProjectId",
+        "after": "?Counter",
+        "limit": "?Revision"
+      },
+      "result": "RetainedEventPage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Human project message event cursor. An absent cursor starts at the current head; an explicit cursor resumes committed later events in order, and an ahead cursor refuses after restore. Streaming callers repeat the query without holding a connection.",
+      "introducedRevision": 7
+    },
     "agents.inbox": {
       "operation": "agents.inbox",
       "mode": "Query",
@@ -11685,6 +11762,12 @@
       6
     ],
     "agents.post": [
+      7
+    ],
+    "agents.history": [
+      7
+    ],
+    "agents.events": [
       7
     ],
     "history.command_receipt": [

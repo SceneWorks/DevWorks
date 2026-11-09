@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 365 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 367 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -120,6 +120,8 @@ All 365 qualified operations have typed input/result candidates. Existing input 
 | `agents.delegate` | **Command**<br>`rootId`: `RootId`<br>`expectedControlRevision`: `Revision`<br>`taskIds`: `Items<Id>`<br>`roleId`: `Id`<br>`instruction`: `Content`<br>`sourceCheckpointId`: `?Id` | `AgentRecord` |
 | `agents.messages` | **Command**<br>`recipientAssignmentId`: `AssignmentId`<br>`messageClass`: `MessageClass`<br>`content`: `Content`<br>`attachments`: `Items<ArtifactRef>` | `AgentMessage` |
 | `agents.post` | **Command**<br>`sessionId`: `?Id`<br>`projectId`: `?ProjectId`<br>`body`: `Content`<br>`messageKind`: `?RetainedMessageKind`<br>`itemId`: `?RootId`<br>`featureId`: `?RootId`<br>`resourceName`: `?Text`<br>`toSessionId`: `?Id`<br>`toHuman`: `?bool`<br>`blocking`: `?bool`<br>`inReplyToId`: `?Id`<br>`resolves`: `?RetainedMessageResolution`<br>`idempotencyKey`: `?Text`<br><br>**Schema revisions** 7 ([revision 7 input](contracts/domain-request.r7.schema.json)) | `RetainedPostResult` |
+| `agents.history` | **Query**<br>`projectId`: `ProjectId`<br>`channel`: `?Text`<br>`itemId`: `?RootId`<br>`featureId`: `?RootId`<br>`resourceName`: `?Text`<br>`openOnly`: `?bool`<br>`toHuman`: `?bool`<br>`before`: `?Counter`<br>`limit`: `?Revision`<br><br>**Schema revisions** 7 ([revision 7 input](contracts/domain-request.r7.schema.json)) | `RetainedHistoryPage` |
+| `agents.events` | **Query**<br>`projectId`: `ProjectId`<br>`after`: `?Counter`<br>`limit`: `?Revision`<br><br>**Schema revisions** 7 ([revision 7 input](contracts/domain-request.r7.schema.json)) | `RetainedEventPage` |
 | `agents.inbox` | **Query**<br>`assignmentId`: `AssignmentId`<br>`page`: `PageRequest`<br>`unacknowledgedOnly`: `bool`<br>`direction`: `MessageDirection` | `Page<AgentMessage>` |
 | `agents.acknowledge` | **Command**<br>`assignmentId`: `AssignmentId`<br>`messageId`: `Id`<br>`expectedRevision`: `Revision` | `AgentMessage` |
 | `agents.checkpoint` | **Command**<br>`assignmentId`: `AssignmentId`<br>`expectedRevision`: `Revision`<br>`transcriptSequence`: `Counter`<br>`content`: `ArtifactRef` | `CheckpointRecord` |
@@ -1174,6 +1176,49 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | --- | --- |
 | `key` | `Id` |
 | `version` | `Revision` |
+
+### RetainedHistoryPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<RetainedMessage>` |
+| `nextBefore` | `?Counter` |
+
+### RetainedMessageLine
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `kind` | `RetainedMessageKind` |
+| `from` | `Text` |
+| `summary` | `Text` |
+| `createdAtMs` | `Counter` |
+| `fromSessionId` | `?Id` |
+| `itemId` | `?RootId` |
+| `state` | `?RetainedMessageState` |
+| `blocking` | `?bool` |
+| `delivery` | `?RetainedDeliveryState` |
+| `handedOver` | `?bool` |
+
+### RetainedMessageEvent
+
+| Field | Type |
+| --- | --- |
+| `sequence` | `Counter` |
+| `projectId` | `ProjectId` |
+| `messageId` | `Id` |
+| `kind` | `Text` |
+| `actor` | `RetainedActor` |
+| `createdAtMs` | `Counter` |
+| `recipient` | `?Text` |
+| `message` | `?RetainedMessageLine` |
+
+### RetainedEventPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<RetainedMessageEvent>` |
+| `nextSequence` | `Counter` |
 
 ### CheckpointRecord
 

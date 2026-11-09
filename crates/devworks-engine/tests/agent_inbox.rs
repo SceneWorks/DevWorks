@@ -5,7 +5,7 @@ use common::{Harness, id, principal, seed_root, write};
 use devworks_core::authority::HostAuthority;
 use devworks_core::context::PrincipalKind;
 use devworks_core::gateway::Gateway;
-use devworks_core::protocol::results::{DomainDecision, OperationResult};
+use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::{CommandReply, ProjectId};
 use devworks_core::services::UseCases;
 use devworks_core::services::agents::AgentService;
@@ -208,6 +208,92 @@ fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
         snapshot.runs().agent_message(&message_id)
     });
     assert_eq!(stored.unwrap().body, "Gateway message");
+    let query = |kind: &str, fields: serde_json::Value| {
+        let mut body = fields.as_object().unwrap().clone();
+        body.insert("kind".into(), json!(kind));
+        let raw = serde_json::to_vec(&json!({
+            "protocol":"1.0-draft.1", "mode":"Query", "schemaRevision":7,
+            "queryId":"retained-query", "body":body
+        }))
+        .unwrap();
+        cases.query(&gateway, &user, kind, &raw).unwrap()
+    };
+    match query(
+        "agents.history",
+        json!({"projectId":"project-a","itemId":"issue-a"}),
+    ) {
+        DomainQueryReply::Result {
+            result: OperationResult::AgentsHistory { value },
+            ..
+        } => {
+            assert!(
+                value
+                    .items
+                    .0
+                    .iter()
+                    .any(|row| row.id == first_question.message.id)
+            );
+            assert!(
+                value
+                    .items
+                    .0
+                    .iter()
+                    .any(|row| row.id == second_question.message.id)
+            );
+            assert!(value.items.0.iter().all(|row| {
+                row.item_id
+                    .as_ref()
+                    .is_some_and(|item| item.0 == id("issue-a"))
+            }));
+        }
+        other => panic!("unexpected history reply: {other:?}"),
+    }
+    match query("agents.events", json!({"projectId":"project-a"})) {
+        DomainQueryReply::Result {
+            result: OperationResult::AgentsEvents { value },
+            ..
+        } => assert!(value.items.0.is_empty()),
+        other => panic!("unexpected live event reply: {other:?}"),
+    }
+    match query(
+        "agents.events",
+        json!({"projectId":"project-a","after":"0"}),
+    ) {
+        DomainQueryReply::Result {
+            result: OperationResult::AgentsEvents { value },
+            ..
+        } => {
+            assert!(
+                value
+                    .items
+                    .0
+                    .iter()
+                    .any(|event| event.message_id == message_id)
+            );
+            assert!(
+                value
+                    .items
+                    .0
+                    .iter()
+                    .all(|event| event.project_id == ProjectId(id("project-a")))
+            );
+        }
+        other => panic!("unexpected replay event reply: {other:?}"),
+    }
+    assert!(matches!(
+        query(
+            "agents.events",
+            json!({"projectId":"project-b","after":"0"})
+        ),
+        DomainQueryReply::Rejected { .. }
+    ));
+    assert!(matches!(
+        query(
+            "agents.events",
+            json!({"projectId":"project-a","after":"99999999"})
+        ),
+        DomainQueryReply::Rejected { .. }
+    ));
 }
 
 #[tokio::test]

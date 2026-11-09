@@ -10657,6 +10657,22 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_RetainedMessageEvent_0_500": {
+      "items": {
+        "$ref": "#/$defs/RetainedMessageEvent"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_RetainedMessage_0_500": {
+      "items": {
+        "$ref": "#/$defs/RetainedMessage"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_ReviewFinding_0_500": {
       "items": {
         "$ref": "#/$defs/ReviewFinding"
@@ -15864,6 +15880,44 @@
       ],
       "type": "string"
     },
+    "RetainedEventPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "$ref": "#/$defs/List_RetainedMessageEvent_0_500"
+        },
+        "nextSequence": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "items",
+        "nextSequence"
+      ],
+      "type": "object"
+    },
+    "RetainedHistoryPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "$ref": "#/$defs/List_RetainedMessage_0_500"
+        },
+        "nextBefore": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
     "RetainedItemVersion": {
       "additionalProperties": false,
       "properties": {
@@ -16044,6 +16098,58 @@
       ],
       "type": "object"
     },
+    "RetainedMessageEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/RetainedActor"
+        },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "kind": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetainedMessageLine"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messageId": {
+          "$ref": "#/$defs/Id"
+        },
+        "projectId": {
+          "$ref": "#/$defs/Id"
+        },
+        "recipient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sequence": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "sequence",
+        "projectId",
+        "messageId",
+        "kind",
+        "actor",
+        "createdAtMs"
+      ],
+      "type": "object"
+    },
     "RetainedMessageKind": {
       "enum": [
         "Info",
@@ -16053,6 +16159,86 @@
         "Announcement"
       ],
       "type": "string"
+    },
+    "RetainedMessageLine": {
+      "additionalProperties": false,
+      "properties": {
+        "blocking": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetainedDeliveryState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "from": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "fromSessionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "handedOver": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "itemId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/RetainedMessageKind"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetainedMessageState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "$ref": "#/$defs/Text1To4096"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "from",
+        "summary",
+        "createdAtMs"
+      ],
+      "type": "object"
     },
     "RetainedMessageState": {
       "enum": [
@@ -20997,6 +21183,42 @@
         },
         "value": {
           "$ref": "#/$defs/RetainedPostResult"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object",
+      "x-since": 7
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "agents.history",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/RetainedHistoryPage"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object",
+      "x-since": 7
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "agents.events",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/RetainedEventPage"
         }
       },
       "required": [

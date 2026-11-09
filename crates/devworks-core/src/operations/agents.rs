@@ -135,6 +135,68 @@ impl Revisioned for PostInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `agents.history` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HistoryInput {
+    pub project_id: ProjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_name: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_only: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_human: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<Revision>,
+}
+impl Check for HistoryInput {
+    fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
+        self.channel.check()?;
+        self.item_id.check()?;
+        self.feature_id.check()?;
+        self.resource_name.check()?;
+        self.open_only.check()?;
+        self.to_human.check()?;
+        self.before.check()?;
+        self.limit.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for HistoryInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `agents.events` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EventsInput {
+    pub project_id: ProjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<Revision>,
+}
+impl Check for EventsInput {
+    fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
+        self.after.check()?;
+        self.limit.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for EventsInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// `agents.inbox` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -210,6 +272,10 @@ pub enum Input {
     Messages(MessagesInput),
     /// `agents.post` (Command).
     Post(PostInput),
+    /// `agents.history` (Query).
+    History(HistoryInput),
+    /// `agents.events` (Query).
+    Events(EventsInput),
     /// `agents.inbox` (Query).
     Inbox(InboxInput),
     /// `agents.acknowledge` (Command).
@@ -224,6 +290,8 @@ impl Input {
             Self::Delegate(_) => "agents.delegate",
             Self::Messages(_) => "agents.messages",
             Self::Post(_) => "agents.post",
+            Self::History(_) => "agents.history",
+            Self::Events(_) => "agents.events",
             Self::Inbox(_) => "agents.inbox",
             Self::Acknowledge(_) => "agents.acknowledge",
             Self::Checkpoint(_) => "agents.checkpoint",
@@ -235,6 +303,8 @@ impl Input {
             Self::Delegate(_) => Mode::Command,
             Self::Messages(_) => Mode::Command,
             Self::Post(_) => Mode::Command,
+            Self::History(_) => Mode::Query,
+            Self::Events(_) => Mode::Query,
             Self::Inbox(_) => Mode::Query,
             Self::Acknowledge(_) => Mode::Command,
             Self::Checkpoint(_) => Mode::Command,

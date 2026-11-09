@@ -827,6 +827,8 @@
         "delegate",
         "messages",
         "post",
+        "history",
+        "events",
         "inbox",
         "acknowledge",
         "checkpoint"

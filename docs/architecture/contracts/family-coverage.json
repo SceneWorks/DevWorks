@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-02",
-  "catalogSha256": "656fbfe7fad62debeae6e06536c88e3c5e95e210a1eed13e7fcdf451e36e3202",
+  "catalogSha256": "6766f19ed8ba7b473f8861dfe168dcbcabe9894cea5a3b24ed854e8338227994",
   "familyCount": 49,
-  "operationCount": 365,
-  "concreteInputCandidates": 365,
+  "operationCount": 367,
+  "concreteInputCandidates": 367,
   "domainInputsPending": 0,
   "families": [
     {
@@ -3191,6 +3191,100 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "Additive retained-source post contract. The gateway-selected command and current principal bind the sender; optional session/project must match current authority. Route, reply resolution, blocking and idempotency are validated by the retained message service.",
+          "familyRules": "Assignment ownership and parent scope are host-derived. Root cap is ten with no global cap. Inbox observation and acknowledgment confer no approval.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 7,
+          "operation": "agents.history",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "agents.history",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "agents.history"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "agents.history"
+          },
+          "resultValueType": "RetainedHistoryPage",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 7,
+              "inputSchema": "domain-request.r7.schema.json",
+              "resultSchema": "operation-result.r7.schema.json",
+              "queryReplySchema": "domain-query-reply.r7.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Project-scoped retained message history newest first. Filters and before cursor are checked against current item/feature ownership; the next_before cursor continues the recorded order without a write.",
+          "familyRules": "Assignment ownership and parent scope are host-derived. Root cap is ten with no global cap. Inbox observation and acknowledgment confer no approval.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 7,
+          "operation": "agents.events",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "agents.events",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "agents.events"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "agents.events"
+          },
+          "resultValueType": "RetainedEventPage",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 7,
+              "inputSchema": "domain-request.r7.schema.json",
+              "resultSchema": "operation-result.r7.schema.json",
+              "queryReplySchema": "domain-query-reply.r7.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Human project message event cursor. An absent cursor starts at the current head; an explicit cursor resumes committed later events in order, and an ahead cursor refuses after restore. Streaming callers repeat the query without holding a connection.",
           "familyRules": "Assignment ownership and parent scope are host-derived. Root cap is ten with no global cap. Inbox observation and acknowledgment confer no approval.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

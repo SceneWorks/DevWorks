@@ -6,8 +6,8 @@ use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::OperationInput;
 use crate::operations::agents as ops;
 use crate::ports::storage::{
-    ActivationPhase, AssignmentState, BlockerFilter, NewPrincipalBinding, ReadSnapshot, RunRead,
-    StorageError, StoredAgentAssignmentContext, StoredAgentDelivery, StoredAgentMessage,
+    ActivationPhase, ActorRead, AssignmentState, BlockerFilter, NewPrincipalBinding, ReadSnapshot,
+    RunRead, StorageError, StoredAgentAssignmentContext, StoredAgentDelivery, StoredAgentMessage,
     StoredAgentMessageEvent, StoredAssignment, StoredSession, WriteTransaction,
 };
 use crate::ports::{
@@ -16,8 +16,9 @@ use crate::ports::{
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
     AgentMessage, AgentRecord, CheckpointRecord, MessageClass, MessageDirection, RetainedActor,
-    RetainedItemVersion, RetainedMessage, RetainedMessageKind, RetainedMessageResolution,
-    RetainedMessageState, RetainedPostResult,
+    RetainedDeliveryState, RetainedEventPage, RetainedHistoryPage, RetainedItemVersion,
+    RetainedMessage, RetainedMessageEvent, RetainedMessageKind, RetainedMessageLine,
+    RetainedMessageResolution, RetainedMessageState, RetainedPostResult,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
@@ -911,11 +912,11 @@ impl AgentService {
 }
 
 fn retained_actor(
-    tx: &mut dyn WriteTransaction,
+    actors: &dyn ActorRead,
     actor: &ActorId,
     session: Option<Id>,
 ) -> Result<RetainedActor, StorageError> {
-    let stored = tx.actors().actor(actor)?.ok_or(StorageError::ScopeDenied)?;
+    let stored = actors.actor(actor)?.ok_or(StorageError::ScopeDenied)?;
     let kind = if session.is_some() {
         "session"
     } else {
@@ -936,14 +937,14 @@ fn retained_actor(
 }
 
 fn retained_message(
-    tx: &mut dyn WriteTransaction,
+    actors: &dyn ActorRead,
     row: StoredAgentMessage,
 ) -> Result<RetainedMessage, StorageError> {
-    let from = retained_actor(tx, &row.from_actor_id, row.sender_session_id.clone())?;
+    let from = retained_actor(actors, &row.from_actor_id, row.sender_session_id.clone())?;
     let resolved_by = row
         .resolved_by_actor_id
         .as_ref()
-        .map(|actor| retained_actor(tx, actor, row.resolved_by_session_id.clone()))
+        .map(|actor| retained_actor(actors, actor, row.resolved_by_session_id.clone()))
         .transpose()?;
     let kind = match row.message_class.as_str() {
         "Info" => RetainedMessageKind::Info,
@@ -998,6 +999,170 @@ fn retained_message(
         delivery: None,
         handed_over: None,
     })
+}
+
+fn retained_history(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    input: &ops::HistoryInput,
+) -> Result<(RetainedHistoryPage, i64), StorageError> {
+    let channel = input
+        .channel
+        .as_ref()
+        .map(|value| match value.0.to_ascii_lowercase().as_str() {
+            "item" => Ok("Item"),
+            "project" => Ok("Project"),
+            "feature" => Ok("Feature"),
+            "resource" => Ok("Resource"),
+            "session" => Ok("Session"),
+            "human" => Ok("Human"),
+            _ => Err(StorageError::InvalidRecord(
+                "unknown message channel".into(),
+            )),
+        })
+        .transpose()?;
+    let limit = u16::try_from(input.limit.as_ref().map_or(50, Revision::get))
+        .map_err(|_| StorageError::InvalidRecord("message history limit".into()))?;
+    let page = retained::history(
+        snapshot,
+        ctx,
+        &retained::MessageHistoryQuery {
+            project: input.project_id.clone(),
+            channel: channel.map(str::to_owned),
+            item: input.item_id.clone(),
+            feature: input.feature_id.clone(),
+            resource: input.resource_name.as_ref().map(|v| v.0.clone()),
+            open_only: input.open_only.unwrap_or(false),
+            to_human: input.to_human.unwrap_or(false),
+            before: input.before.as_ref().map(Counter::get),
+            limit,
+        },
+    )?;
+    let scope = snapshot
+        .projects()
+        .project(&input.project_id)?
+        .ok_or(StorageError::ScopeDenied)?
+        .scope_revision;
+    Ok((
+        RetainedHistoryPage {
+            items: BoundedList(
+                page.items
+                    .into_iter()
+                    .map(|row| retained_message(snapshot.actors(), row))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+            next_before: page
+                .next_before
+                .map(Counter::new)
+                .transpose()
+                .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+        },
+        scope,
+    ))
+}
+
+fn retained_events(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    input: &ops::EventsInput,
+) -> Result<(RetainedEventPage, i64), StorageError> {
+    let limit = u16::try_from(input.limit.as_ref().map_or(100, Revision::get))
+        .map_err(|_| StorageError::InvalidRecord("message event limit".into()))?;
+    let page = retained::events(
+        snapshot,
+        ctx,
+        &input.project_id,
+        input.after.as_ref().map(Counter::get),
+        limit,
+    )?;
+    let mut items = Vec::with_capacity(page.items.len());
+    for event in page.items {
+        let message = snapshot
+            .runs()
+            .agent_message(&event.message_id)?
+            .map(|row| retained_message(snapshot.actors(), row))
+            .transpose()?;
+        let actor_session = match event.kind.as_str() {
+            "Posted" => message.as_ref().and_then(|m| m.from_session_id.clone()),
+            "Answered" | "Declined" => message.as_ref().and_then(|m| {
+                m.resolved_by
+                    .as_ref()
+                    .and_then(|actor| actor.session_id.clone())
+            }),
+            _ => event.recipient_session_id.clone(),
+        };
+        let delivery = if event.recipient_human {
+            snapshot.runs().agent_delivery(&event.message_id, None)?
+        } else if let Some(session) = event.recipient_session_id.as_ref() {
+            snapshot
+                .runs()
+                .agent_session_delivery(&event.message_id, session)?
+        } else {
+            None
+        };
+        let delivery_state = delivery
+            .as_ref()
+            .map(|row| match row.state.as_str() {
+                "Pending" => Ok(RetainedDeliveryState::Pending),
+                "Delivered" => Ok(RetainedDeliveryState::Delivered),
+                "Read" => Ok(RetainedDeliveryState::Read),
+                "Answered" => Ok(RetainedDeliveryState::Answered),
+                "Declined" => Ok(RetainedDeliveryState::Declined),
+                _ => Err(StorageError::InvalidRecord(
+                    "unknown retained delivery state".into(),
+                )),
+            })
+            .transpose()?;
+        let line = message.map(|m| RetainedMessageLine {
+            id: m.id,
+            kind: m.kind,
+            from: m.from.name,
+            summary: BoundedText(m.body.0.chars().take(160).collect()),
+            created_at_ms: m.created_at_ms,
+            from_session_id: m.from_session_id,
+            item_id: m.item_id,
+            state: m.state,
+            blocking: Some(m.blocking),
+            delivery: delivery_state,
+            handed_over: delivery.as_ref().map(|row| row.handed_over),
+        });
+        let kind = if event.kind == "HandedOver" {
+            "handed_over".to_owned()
+        } else {
+            event.kind.to_ascii_lowercase()
+        };
+        items.push(RetainedMessageEvent {
+            sequence: Counter::new(event.sequence)
+                .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+            project_id: event.project_id,
+            message_id: event.message_id,
+            kind: BoundedText(kind),
+            actor: retained_actor(snapshot.actors(), &event.actor_id, actor_session)?,
+            created_at_ms: Counter::new(event.created_at_ms)
+                .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+            recipient: if event.recipient_human {
+                Some(BoundedText("human".into()))
+            } else {
+                event
+                    .recipient_session_id
+                    .map(|id| BoundedText(id.as_str().to_owned()))
+            },
+            message: line,
+        });
+    }
+    let scope = snapshot
+        .projects()
+        .project(&input.project_id)?
+        .ok_or(StorageError::ScopeDenied)?
+        .scope_revision;
+    Ok((
+        RetainedEventPage {
+            items: BoundedList(items),
+            next_sequence: Counter::new(page.next_sequence)
+                .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+        },
+        scope,
+    ))
 }
 
 fn post_retained(
@@ -1061,7 +1226,7 @@ fn post_retained(
     )?;
     Ok(RetainedPostResult {
         created: posted.created,
-        message: retained_message(tx, posted.message)?,
+        message: retained_message(tx.actors(), posted.message)?,
         recipients: Counter::new(
             i64::try_from(posted.recipients)
                 .map_err(|_| StorageError::InvalidRecord("too many retained recipients".into()))?,
@@ -1069,7 +1234,7 @@ fn post_retained(
         .map_err(|e| StorageError::InvalidRecord(e.into()))?,
         resolved: posted
             .resolved
-            .map(|row| retained_message(tx, row))
+            .map(|row| retained_message(tx.actors(), row))
             .transpose()?,
         item_versions: (!posted.item_versions.is_empty()).then(|| {
             BoundedList(
@@ -1444,6 +1609,14 @@ impl QueryHandler for AgentService {
             OperationInput::Agents(ops::Input::Inspect(input)) => self
                 .inspect(snapshot, ctx, input)
                 .map(|(value, scope)| (OperationResult::AgentsInspect { value }, scope)),
+            OperationInput::Agents(ops::Input::History(input)) => {
+                retained_history(snapshot, ctx, input)
+                    .map(|(value, scope)| (OperationResult::AgentsHistory { value }, scope))
+            }
+            OperationInput::Agents(ops::Input::Events(input)) => {
+                retained_events(snapshot, ctx, input)
+                    .map(|(value, scope)| (OperationResult::AgentsEvents { value }, scope))
+            }
             _ => {
                 return Err(Refusal::new(
                     DomainErrorCode::UnsupportedCapability,

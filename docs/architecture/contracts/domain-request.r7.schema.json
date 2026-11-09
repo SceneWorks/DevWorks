@@ -7600,6 +7600,134 @@
         {
           "additionalProperties": false,
           "properties": {
+            "before": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Counter"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "channel": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Text1To4096"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "featureId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "itemId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "agents.history",
+              "type": "string"
+            },
+            "limit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Revision"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "openOnly": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            },
+            "resourceName": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Text1To4096"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "toHuman": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "projectId"
+          ],
+          "type": "object",
+          "x-since": 7
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Counter"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "agents.events",
+              "type": "string"
+            },
+            "limit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Revision"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "projectId"
+          ],
+          "type": "object",
+          "x-since": 7
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "assignmentId": {
               "$ref": "#/$defs/Id"
             },
