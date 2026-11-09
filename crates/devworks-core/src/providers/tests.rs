@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 #[test]
-fn transcript_context_preserves_every_host_notice_in_order() {
+fn transcript_context_preserves_notices_and_skips_durable_dispatch_markers() {
     use crate::ports::storage::StoredEntry;
     use crate::protocol::ActorId;
     let mut material = Material::new();
@@ -41,6 +41,16 @@ fn transcript_context_preserves_every_host_notice_in_order() {
         ),
         make_entry(
             3,
+            TranscriptBody::ToolDispatchStarted {
+                call: ToolCallKey {
+                    attempt_id: AttemptId(id("attempt")),
+                    native_call_id: "recorded-call".into(),
+                    ordinal: Counter::new(1).unwrap(),
+                },
+            },
+        ),
+        make_entry(
+            4,
             TranscriptBody::HostNotice {
                 source: id("source-2"),
                 artifact: second,
