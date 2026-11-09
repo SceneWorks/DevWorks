@@ -431,6 +431,11 @@ pub enum Slot {
     WorkCards(String),
     /// The project change feed (Activity) of a project.
     WorkActivity(String, Option<String>, u64),
+    WorkMessagesHistory(String),
+    WorkMessagesInbox(String),
+    WorkMessagesEvents(String),
+    WorkMessagePost(String),
+    WorkMessageAck(String, String),
     /// One work item's current record (readiness included).
     WorkDetail(String),
     WorkGit(String),

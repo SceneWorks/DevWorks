@@ -51,6 +51,64 @@ fn click_row(h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>, 
 }
 
 #[test]
+fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state() {
+    let root = Root::new("work-message-board");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Messages", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let posted = wops::message_posted(backend.command(
+        "agents.post",
+        &wops::message_post(
+            &*backend,
+            &pid,
+            json!({"body":"Please review the build","messageKind":"Question","toHuman":true}),
+        ),
+    ))
+    .unwrap();
+    assert!(posted.created);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid));
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Messages");
+    assert!(has_text(&h, "Please review the build"));
+    assert_eq!(h.state().work.messages.inbox.len(), 1);
+    assert_eq!(h.state().work.messages.history.len(), 1);
+    assert!(matches!(
+        h.state().work.messages.inbox[0].delivery,
+        Some(devworks_core::protocol::records::RetainedDeliveryState::Delivered)
+    ));
+    click(&mut h, Role::Button, "Mark read");
+    assert!(h.state().work.messages.inbox.is_empty());
+    assert_eq!(h.state().work.messages.history.len(), 1);
+    type_into(&mut h, Role::TextInput, "Message body", "I will check it");
+    click(&mut h, Role::CheckBox, "To you");
+    click(&mut h, Role::Button, "Post message");
+    assert!(
+        h.state()
+            .work
+            .messages
+            .history
+            .iter()
+            .any(|m| m.body.0 == "I will check it")
+    );
+    assert!(
+        h.state()
+            .work
+            .messages
+            .inbox
+            .iter()
+            .any(|m| m.body.0 == "I will check it")
+    );
+}
+
+#[test]
 fn features_board_issues_and_overview_share_the_agent_operations() {
     let root = Root::new("work-screens");
     let engine = start(&root);

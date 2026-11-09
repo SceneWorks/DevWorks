@@ -22,8 +22,8 @@ use crate::work_ops as wops;
 use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::records::{
     AcceptanceCriterion, ApprovalState, CriterionState, FindingState, LifeState,
-    ReadinessDisposition, ReadinessFreshness, RequirementItem, RequirementStatus, RootSnapshot,
-    WorkKind, WorkRecord,
+    ReadinessDisposition, ReadinessFreshness, RequirementItem, RequirementStatus, RetainedMessage,
+    RetainedMessageEvent, RootSnapshot, WorkKind, WorkRecord,
 };
 use devworks_core::protocol::{DomainErrorCode, Event, EventSubject, Id};
 use devworks_core::services::work::deps::MAX_PREREQUISITES;
@@ -41,7 +41,37 @@ use workflow::{WorkflowAction, WorkflowUi};
 /// Feature list tabs and Issues tabs.
 pub const FEATURE_TABS: [&str; 2] = ["List", "Board"];
 pub const ISSUE_TABS: [&str; 2] = ["List", "History"];
-pub const OVERVIEW_TABS: [&str; 2] = ["Summary", "Activity"];
+pub const OVERVIEW_TABS: [&str; 3] = ["Summary", "Activity", "Messages"];
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MessageDraft {
+    pub body: String,
+    pub kind: usize,
+    pub to_session: String,
+    pub to_human: bool,
+    pub item: String,
+    pub feature: String,
+    pub resource: String,
+    pub blocking: bool,
+    pub reply_to: String,
+    pub resolution: usize,
+}
+
+#[derive(Default)]
+pub struct MessageBoard {
+    pub project: Option<String>,
+    pub history: Vec<RetainedMessage>,
+    pub history_before: Option<i64>,
+    pub history_loaded: bool,
+    pub inbox: Vec<RetainedMessage>,
+    pub inbox_cursor: Option<String>,
+    pub inbox_loaded: bool,
+    pub events: Vec<RetainedMessageEvent>,
+    pub event_after: Option<i64>,
+    pub draft: MessageDraft,
+    pub sending: Option<MessageDraft>,
+    pub error: Option<String>,
+}
 
 /// One board column: a status of the project workflow.
 #[derive(Clone, Debug)]
@@ -497,6 +527,7 @@ impl Activity {
 
 #[derive(Default)]
 pub struct WorkUi {
+    pub messages: MessageBoard,
     pub histories: BTreeMap<String, Activity>,
     history_serial: u64,
 
@@ -564,6 +595,9 @@ impl WorkUi {
         scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
     ) {
         let project = scope.project_id.0.as_str();
+        if self.messages.project.as_deref() == Some(project) {
+            self.messages = MessageBoard::default();
+        }
         let owned = |id: &str| scope.work_ids.iter().any(|i| i.as_str() == id);
         self.histories.retain(|id, _| !owned(id));
         self.workflows.remove(project);
@@ -682,6 +716,10 @@ impl WorkUi {
 /// What the screens ask the shell to do.
 #[derive(Clone, Debug)]
 enum Action {
+    RefreshMessages,
+    OlderMessages,
+    PostMessage(MessageDraft),
+    AckMessage(String),
     OlderHistory(Option<String>),
     RefreshHistory(Option<String>),
 
@@ -1026,6 +1064,78 @@ impl Shell {
     fn load_activity(&mut self) {
         self.refresh_history(None);
     }
+    fn load_messages(&mut self, reset: bool) {
+        let Some(project) = self.selected_project.clone() else {
+            return;
+        };
+        if reset || self.work.messages.project.as_deref() != Some(project.as_str()) {
+            let same_project = self.work.messages.project.as_deref() == Some(project.as_str());
+            let (draft, events, event_after) = if same_project {
+                (
+                    self.work.messages.draft.clone(),
+                    std::mem::take(&mut self.work.messages.events),
+                    self.work.messages.event_after,
+                )
+            } else {
+                (MessageDraft::default(), Vec::new(), None)
+            };
+            self.work.messages = MessageBoard {
+                project: Some(project.clone()),
+                draft,
+                events,
+                event_after,
+                ..MessageBoard::default()
+            };
+        }
+        let history_before = self.work.messages.history_before;
+        let inbox_cursor = self.work.messages.inbox_cursor.clone();
+        let event_after = Some(self.work.messages.event_after.unwrap_or(0));
+        if !self.pending(&Slot::WorkMessagesHistory(project.clone())) {
+            let p = project.clone();
+            self.query(
+                Slot::WorkMessagesHistory(project.clone()),
+                "Reading messages",
+                "agents.history",
+                move |be| wops::message_history(be, &p, history_before),
+            );
+        }
+        if !self.pending(&Slot::WorkMessagesInbox(project.clone())) {
+            let p = project.clone();
+            self.command(
+                Slot::WorkMessagesInbox(project.clone()),
+                "Reading inbox",
+                "agents.receive",
+                move |be| wops::message_inbox(be, &p, inbox_cursor.as_deref()),
+            );
+        }
+        if !self.pending(&Slot::WorkMessagesEvents(project.clone())) {
+            let p = project.clone();
+            self.query(
+                Slot::WorkMessagesEvents(project),
+                "Reading message changes",
+                "agents.events",
+                move |be| wops::message_events(be, &p, event_after),
+            );
+        }
+    }
+    fn older_messages(&mut self) {
+        let Some(project) = self.selected_project.clone() else {
+            return;
+        };
+        let Some(before) = self.work.messages.history_before else {
+            return;
+        };
+        if self.pending(&Slot::WorkMessagesHistory(project.clone())) {
+            return;
+        }
+        let p = project.clone();
+        self.query(
+            Slot::WorkMessagesHistory(project),
+            "Reading older messages",
+            "agents.history",
+            move |be| wops::message_history(be, &p, Some(before)),
+        );
+    }
     fn load_detail(&mut self, w: &WorkRecord) {
         if !self
             .work
@@ -1117,6 +1227,50 @@ impl Shell {
     fn work_act(&mut self, actions: Vec<Action>) {
         for a in actions {
             match a {
+                Action::RefreshMessages => self.load_messages(true),
+                Action::OlderMessages => self.older_messages(),
+                Action::PostMessage(draft) => {
+                    let Some(project) = self.selected_project.clone() else {
+                        continue;
+                    };
+                    if self.work.messages.project.as_deref() != Some(project.as_str()) {
+                        continue;
+                    }
+                    if draft.body.trim().is_empty()
+                        || self.pending(&Slot::WorkMessagePost(project.clone()))
+                    {
+                        continue;
+                    }
+                    let body = message_post_body(&draft);
+                    let p = project.clone();
+                    if self.command(
+                        Slot::WorkMessagePost(project),
+                        "Posting message",
+                        "agents.post",
+                        move |be| wops::message_post(be, &p, body),
+                    ) {
+                        self.work.messages.sending = Some(draft);
+                    }
+                }
+                Action::AckMessage(id) => {
+                    let Some(project) = self.selected_project.clone() else {
+                        continue;
+                    };
+                    if self.work.messages.project.as_deref() != Some(project.as_str()) {
+                        continue;
+                    }
+                    if self.pending(&Slot::WorkMessageAck(project.clone(), id.clone())) {
+                        continue;
+                    }
+                    let p = project.clone();
+                    let key = id.clone();
+                    self.command(
+                        Slot::WorkMessageAck(project, id),
+                        "Acknowledging message",
+                        "agents.ack",
+                        move |be| wops::message_ack(be, &p, &key),
+                    );
+                }
                 Action::OlderHistory(root) => self.older_history(root),
                 Action::RefreshHistory(root) => self.refresh_history(root),
 
@@ -1507,6 +1661,106 @@ impl Shell {
     pub(super) fn apply_work(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
         let (slot, reply) = self.apply_workflow(slot, reply)?;
         match (slot, reply) {
+            (Slot::WorkMessagesHistory(project), Reply::Query(reply)) => {
+                if self.work.messages.project.as_deref() != Some(project.as_str()) {
+                    return None;
+                }
+                match wops::message_history_page(reply) {
+                    Ok(page) => {
+                        let board = &mut self.work.messages;
+                        if !board.history_loaded {
+                            board.history.clear();
+                        }
+                        for message in page.items.0 {
+                            if !board.history.iter().any(|known| known.id == message.id) {
+                                board.history.push(message);
+                            }
+                        }
+                        board.history_before = page.next_before.map(|before| before.get());
+                        board.history_loaded = true;
+                        board.error = None;
+                    }
+                    Err(error) => self.work.messages.error = Some(error.describe()),
+                }
+            }
+            (Slot::WorkMessagesInbox(project), Reply::Command(reply)) => {
+                if self.work.messages.project.as_deref() != Some(project.as_str()) {
+                    return None;
+                }
+                match wops::message_inbox_page(reply) {
+                    Ok(page) => {
+                        let board = &mut self.work.messages;
+                        for message in page.items.0 {
+                            if let Some(known) =
+                                board.inbox.iter_mut().find(|known| known.id == message.id)
+                            {
+                                *known = message;
+                            } else {
+                                board.inbox.push(message);
+                            }
+                        }
+                        board.inbox_cursor = Some(page.next_cursor.0);
+                        board.inbox_loaded = true;
+                        board.error = None;
+                    }
+                    Err(error) => self.work.messages.error = Some(error.describe()),
+                }
+            }
+            (Slot::WorkMessagesEvents(project), Reply::Query(reply)) => {
+                if self.work.messages.project.as_deref() != Some(project.as_str()) {
+                    return None;
+                }
+                match wops::message_events_page(reply) {
+                    Ok(page) => {
+                        let board = &mut self.work.messages;
+                        for event in page.items.0 {
+                            if !board
+                                .events
+                                .iter()
+                                .any(|known| known.sequence == event.sequence)
+                            {
+                                board.events.push(event);
+                            }
+                        }
+                        board.event_after = Some(page.next_sequence.get());
+                        board.error = None;
+                    }
+                    Err(error) => self.work.messages.error = Some(error.describe()),
+                }
+            }
+            (Slot::WorkMessagePost(project), Reply::Command(reply)) => {
+                if self.work.messages.project.as_deref() != Some(project.as_str()) {
+                    return None;
+                }
+                match wops::message_posted(reply) {
+                    Ok(_) => {
+                        if self.work.messages.sending.as_ref() == Some(&self.work.messages.draft) {
+                            self.work.messages.draft = MessageDraft::default();
+                        }
+                        self.work.messages.sending = None;
+                        self.load_messages(true);
+                    }
+                    Err(error) => {
+                        self.work.messages.sending = None;
+                        self.work.messages.error = Some(error.describe());
+                    }
+                }
+            }
+            (Slot::WorkMessageAck(project, id), Reply::Command(reply)) => {
+                if self.work.messages.project.as_deref() != Some(project.as_str()) {
+                    return None;
+                }
+                match wops::message_acked(reply) {
+                    Ok(_) => {
+                        self.work
+                            .messages
+                            .inbox
+                            .retain(|message| message.id.as_str() != id);
+                        self.load_messages(true);
+                    }
+                    Err(error) => self.work.messages.error = Some(error.describe()),
+                }
+            }
             (Slot::WorkFeatures(p) | Slot::WorkCards(p), Reply::Query(_))
                 if self.work.of.as_deref() != Some(p.as_str()) => {}
             (Slot::WorkFeatures(_) | Slot::WorkCards(_), Reply::Query(_))
@@ -1969,6 +2223,7 @@ impl Shell {
             .map(|workflow| columns(&workflow.rows))
             .unwrap_or_default();
         let user = devworks_desktop_user();
+        let messages_tab = mem.tab.min(2) == 2;
         let work = &mut self.work;
         let (_, tab) = widgets::pane(
             ui,
@@ -1976,12 +2231,16 @@ impl Shell {
                 title: screen.title,
                 summary: screen.summary,
                 tabs: &OVERVIEW_TABS,
-                tab: mem.tab.min(1),
+                tab: mem.tab.min(2),
             },
             &mut actions,
             |ui, actions| {
                 if widgets::secondary_button(ui, "Refresh").clicked() {
-                    actions.push(Action::Reload);
+                    actions.push(if messages_tab {
+                        Action::RefreshMessages
+                    } else {
+                        Action::Reload
+                    });
                 }
             },
             |ui, actions, tab| {
@@ -2061,11 +2320,20 @@ impl Shell {
                             status_name(&cols, w.status_id.as_str())
                         ));
                     }
-                } else {
+                } else if tab == 1 {
                     activity(ui, work, &cols, &user, actions);
+                } else {
+                    if work.messages.project.as_deref() == project.as_deref() {
+                        message_board(ui, &mut work.messages, open, actions);
+                    } else {
+                        widgets::caption(ui, "Loading this project's messages…");
+                    }
                 }
             },
         );
+        if tab == 2 && self.work.messages.project.as_deref() != project.as_deref() {
+            actions.push(Action::RefreshMessages);
+        }
         mem.tab = tab;
         self.routes.insert(Route::Overview, mem);
         self.workflow_dialog(ui.ctx(), &mut actions);
@@ -2440,6 +2708,202 @@ impl Shell {
 /// The desktop user's actor (the host binds it), for "You" in Activity.
 fn devworks_desktop_user() -> String {
     crate::host::USER_ACTOR.to_owned()
+}
+
+fn message_post_body(draft: &MessageDraft) -> Value {
+    let kind = ["Info", "Question", "Request", "Blocker", "Announcement"]
+        .get(draft.kind)
+        .copied()
+        .unwrap_or("Info");
+    let mut body = json!({"body":draft.body,"messageKind":kind});
+    for (name, value) in [
+        ("toSessionId", &draft.to_session),
+        ("itemId", &draft.item),
+        ("featureId", &draft.feature),
+        ("resourceName", &draft.resource),
+        ("inReplyToId", &draft.reply_to),
+    ] {
+        if !value.trim().is_empty() {
+            body[name] = json!(value.trim());
+        }
+    }
+    if draft.to_human {
+        body["toHuman"] = json!(true);
+    }
+    if draft.blocking {
+        body["blocking"] = json!(true);
+    }
+    if !draft.reply_to.trim().is_empty() {
+        let resolution = match draft.resolution {
+            1 => Some("Answered"),
+            2 => Some("Declined"),
+            _ => None,
+        };
+        if let Some(resolution) = resolution {
+            body["resolves"] = json!(resolution);
+        }
+    }
+    body
+}
+
+fn message_board(ui: &mut Ui, board: &mut MessageBoard, open: bool, actions: &mut Vec<Action>) {
+    if let Some(error) = &board.error {
+        chip(ui, error.clone(), Tone::Bad);
+    }
+    ui.heading("Your inbox");
+    if !board.inbox_loaded {
+        widgets::caption(ui, "Loading your messages…");
+    } else if board.inbox.is_empty() {
+        widgets::caption(ui, "No unread messages.");
+    }
+    for message in &board.inbox {
+        ui.group(|ui| {
+            ui.label(format!("{:?} · {}", message.kind, message.from.name.0));
+            ui.label(&message.body.0);
+            if let Some(item) = &message.item_id {
+                widgets::caption(ui, format!("Work: {}", item.0.as_str()));
+            }
+            if message.blocking {
+                chip(ui, "Blocking", Tone::Attention);
+            }
+            if ui
+                .add_enabled(open, egui::Button::new("Mark read"))
+                .clicked()
+            {
+                actions.push(Action::AckMessage(message.id.as_str().to_owned()));
+            }
+        });
+    }
+    ui.add_space(10.0);
+    ui.heading("Project messages");
+    if !board.history_loaded {
+        widgets::caption(ui, "Loading message history…");
+    } else if board.history.is_empty() {
+        widgets::caption(ui, "No project messages yet.");
+    }
+    for message in &board.history {
+        ui.group(|ui| {
+            ui.label(format!("{:?} · {}", message.kind, message.from.name.0));
+            ui.label(&message.body.0);
+            let mut meta = Vec::new();
+            if let Some(item) = &message.item_id {
+                meta.push(format!("work {}", item.0.as_str()));
+            }
+            if let Some(feature) = &message.feature_id {
+                meta.push(format!("feature {}", feature.0.as_str()));
+            }
+            if let Some(resource) = &message.resource_name {
+                meta.push(format!("resource {}", resource.0));
+            }
+            if let Some(state) = &message.state {
+                meta.push(format!("{state:?}"));
+            }
+            if !meta.is_empty() {
+                widgets::caption(ui, meta.join(" · "));
+            }
+        });
+    }
+    if board.history_before.is_some() && widgets::secondary_button(ui, "Older messages").clicked() {
+        actions.push(Action::OlderMessages);
+    }
+    ui.add_space(10.0);
+    ui.heading("Post a message");
+    let draft = &mut board.draft;
+    ui.horizontal(|ui| {
+        ui.label("Kind");
+        egui::ComboBox::from_id_salt("project-message-kind")
+            .selected_text(
+                ["Info", "Question", "Request", "Blocker", "Announcement"]
+                    .get(draft.kind)
+                    .copied()
+                    .unwrap_or("Info"),
+            )
+            .show_ui(ui, |ui| {
+                for (index, kind) in ["Info", "Question", "Request", "Blocker", "Announcement"]
+                    .iter()
+                    .enumerate()
+                {
+                    ui.selectable_value(&mut draft.kind, index, *kind);
+                }
+            })
+            .response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Message kind"));
+    });
+    ui.add(
+        egui::TextEdit::multiline(&mut draft.body)
+            .desired_rows(3)
+            .hint_text("Message"),
+    )
+    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Message body"));
+    ui.horizontal(|ui| {
+        ui.label("To session");
+        ui.text_edit_singleline(&mut draft.to_session)
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "To session"));
+        ui.checkbox(&mut draft.to_human, "To you");
+    });
+    ui.horizontal(|ui| {
+        ui.label("Work item");
+        ui.text_edit_singleline(&mut draft.item)
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Work item"));
+        ui.label("Feature");
+        ui.text_edit_singleline(&mut draft.feature)
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Feature"));
+    });
+    ui.horizontal(|ui| {
+        ui.label("Resource");
+        ui.text_edit_singleline(&mut draft.resource)
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Resource"));
+        ui.checkbox(&mut draft.blocking, "Blocks work");
+    });
+    ui.horizontal(|ui| {
+        ui.label("Reply to message");
+        ui.text_edit_singleline(&mut draft.reply_to)
+            .widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Reply to message")
+            });
+        egui::ComboBox::from_id_salt("project-message-resolution")
+            .selected_text(
+                ["No resolution", "Answered", "Declined"]
+                    .get(draft.resolution)
+                    .copied()
+                    .unwrap_or("No resolution"),
+            )
+            .show_ui(ui, |ui| {
+                for (index, resolution) in
+                    ["No resolution", "Answered", "Declined"].iter().enumerate()
+                {
+                    ui.selectable_value(&mut draft.resolution, index, *resolution);
+                }
+            })
+            .response
+            .widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Message resolution")
+            });
+    });
+    if ui
+        .add_enabled(
+            open && !draft.body.trim().is_empty(),
+            egui::Button::new("Post message"),
+        )
+        .clicked()
+    {
+        actions.push(Action::PostMessage(draft.clone()));
+    }
+    if !board.events.is_empty() {
+        ui.add_space(10.0);
+        ui.heading("Recent message changes");
+        for event in board.events.iter().rev().take(25) {
+            widgets::caption(
+                ui,
+                format!(
+                    "{} · {} · {}",
+                    event.kind.0,
+                    event.actor.name.0,
+                    event.message_id.as_str()
+                ),
+            );
+        }
+    }
 }
 
 fn activity(
