@@ -801,14 +801,20 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
     let stale_execution = activation_id.clone();
     let stale_child = child_id.clone();
     assert!(fx.tx(move |_, tx| {
-        Ok(stale_agents
-            .activate_child(tx, &stale_host, &stale_child, &stale_execution, epoch + 1)
-            .is_err())
+        Ok(!matches!(
+            stale_agents.activate_child(tx, &stale_host, &stale_child, &stale_execution, epoch + 1),
+            Ok(Ok(_))
+        ))
     }));
     let active_child = fx.tx(move |_, tx| {
         agents
             .activate_child(tx, &host, &child_id, &activation_id, epoch)
             .map_err(|error| StorageError::InvalidRecord(format!("child refused: {error:?}")))
+            .and_then(|result| {
+                result.map_err(|fenced| {
+                    StorageError::InvalidRecord(format!("child fenced: {fenced:?}"))
+                })
+            })
     });
     assert_eq!(active_child.state, OperationState::Dispatching);
     assert_eq!(active_child.role_id.as_str(), "worker");

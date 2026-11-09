@@ -423,7 +423,7 @@ impl AgentService {
         assignment_id: &AssignmentId,
         activation_id: &crate::protocol::Id,
         owner_epoch: i64,
-    ) -> Result<AgentRecord, Failure> {
+    ) -> Result<Result<AgentRecord, Fenced>, Failure> {
         if host.principal_kind() != PrincipalKind::Host {
             return Err(Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into());
         }
@@ -435,39 +435,48 @@ impl AgentService {
             )
             || assignment.execution_id.as_ref() != Some(activation_id)
         {
-            return Err(Refusal::new(
-                DomainErrorCode::Conflict,
-                "assignment",
-                Some(assignment_id.0.clone()),
-            )
-            .into());
+            return Ok(Err(Fenced::Invalid(
+                "the child is not ready under this activation".into(),
+            )));
         }
-        self.runs
-            .begin_dispatch(
-                tx,
-                &crate::services::runs::substrate::DispatchRequest {
-                    root: assignment.root_id.clone(),
-                    execution_id: activation_id.clone(),
-                    owner_epoch,
-                    target: crate::services::runs::Target::Assignment(assignment_id.clone()),
-                    purpose: crate::ports::storage::ActivationPurpose::Planning,
-                },
-            )?
-            .map_err(fenced)?;
+        if let Err(fenced) = self.runs.begin_dispatch(
+            tx,
+            &crate::services::runs::substrate::DispatchRequest {
+                root: assignment.root_id.clone(),
+                execution_id: activation_id.clone(),
+                owner_epoch,
+                target: crate::services::runs::Target::Assignment(assignment_id.clone()),
+                purpose: crate::ports::storage::ActivationPurpose::Planning,
+            },
+        )? {
+            return Ok(Err(fenced));
+        }
+        let current = tx.runs().assignment(assignment_id)?.ok_or_else(denied)?;
+        if current.purpose != crate::ports::storage::AssignmentPurpose::Child
+            || !matches!(
+                current.state,
+                AssignmentState::Ready | AssignmentState::Waiting
+            )
+            || current.execution_id.as_ref() != Some(activation_id)
+        {
+            return Ok(Err(Fenced::Invalid(
+                "the child changed during activation admission".into(),
+            )));
+        }
+        let active = match self.runs.set_assignment_state(
+            tx,
+            host.principal(),
+            assignment_id,
+            current.revision,
+            AssignmentState::Active,
+            None,
+        )? {
+            Ok(active) => active,
+            Err(fenced) => return Ok(Err(fenced)),
+        };
         bind_child_authority(tx, host, assignment_id)?;
-        let active = self
-            .runs
-            .set_assignment_state(
-                tx,
-                host.principal(),
-                assignment_id,
-                assignment.revision,
-                AssignmentState::Active,
-                None,
-            )?
-            .map_err(fenced)?;
         retained::handover_item(tx, assignment_id)?;
-        agent_record(tx.runs(), &active).map_err(failure)
+        Ok(Ok(agent_record(tx.runs(), &active).map_err(failure)?))
     }
 
     fn inspect(
