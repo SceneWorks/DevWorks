@@ -68,6 +68,7 @@ pub struct MessageBoard {
     pub inbox_loaded: bool,
     pub events: Vec<RetainedMessageEvent>,
     pub event_after: Option<i64>,
+    pub event_poll_at: Option<std::time::Instant>,
     pub draft: MessageDraft,
     pub sending: Option<MessageDraft>,
     pub error: Option<String>,
@@ -717,6 +718,7 @@ impl WorkUi {
 #[derive(Clone, Debug)]
 enum Action {
     RefreshMessages,
+    PollMessages,
     OlderMessages,
     PostMessage(MessageDraft),
     AckMessage(String, Option<&'static str>),
@@ -1070,26 +1072,28 @@ impl Shell {
         };
         if reset || self.work.messages.project.as_deref() != Some(project.as_str()) {
             let same_project = self.work.messages.project.as_deref() == Some(project.as_str());
-            let (draft, events, event_after) = if same_project {
+            let (draft, events, event_after, event_poll_at) = if same_project {
                 (
                     self.work.messages.draft.clone(),
                     std::mem::take(&mut self.work.messages.events),
                     self.work.messages.event_after,
+                    self.work.messages.event_poll_at,
                 )
             } else {
-                (MessageDraft::default(), Vec::new(), None)
+                (MessageDraft::default(), Vec::new(), None, None)
             };
             self.work.messages = MessageBoard {
                 project: Some(project.clone()),
                 draft,
                 events,
                 event_after,
+                event_poll_at,
                 ..MessageBoard::default()
             };
         }
         let history_before = self.work.messages.history_before;
         let inbox_cursor = self.work.messages.inbox_cursor.clone();
-        let event_after = Some(self.work.messages.event_after.unwrap_or(0));
+        let event_after = self.work.messages.event_after;
         if !self.pending(&Slot::WorkMessagesHistory(project.clone())) {
             let p = project.clone();
             self.query(
@@ -1228,6 +1232,26 @@ impl Shell {
         for a in actions {
             match a {
                 Action::RefreshMessages => self.load_messages(true),
+                Action::PollMessages => {
+                    let Some(project) = self.selected_project.clone() else {
+                        continue;
+                    };
+                    if self.work.messages.project.as_deref() != Some(project.as_str())
+                        || self.pending(&Slot::WorkMessagesEvents(project.clone()))
+                    {
+                        continue;
+                    }
+                    self.work.messages.event_poll_at =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+                    let p = project.clone();
+                    let after = self.work.messages.event_after;
+                    self.query(
+                        Slot::WorkMessagesEvents(project),
+                        "Reading message changes",
+                        "agents.events",
+                        move |be| wops::message_events(be, &p, after),
+                    );
+                }
                 Action::OlderMessages => self.older_messages(),
                 Action::PostMessage(draft) => {
                     let Some(project) = self.selected_project.clone() else {
@@ -1713,6 +1737,7 @@ impl Shell {
                 match wops::message_events_page(reply) {
                     Ok(page) => {
                         let board = &mut self.work.messages;
+                        let changed = !page.items.0.is_empty();
                         for event in page.items.0 {
                             if !board
                                 .events
@@ -1723,7 +1748,12 @@ impl Shell {
                             }
                         }
                         board.event_after = Some(page.next_sequence.get());
+                        board.event_poll_at =
+                            Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
                         board.error = None;
+                        if changed {
+                            self.load_messages(true);
+                        }
                     }
                     Err(error) => self.work.messages.error = Some(error.describe()),
                 }
@@ -1733,7 +1763,10 @@ impl Shell {
                     return None;
                 }
                 match wops::message_posted(reply) {
-                    Ok(_) => {
+                    Ok(result) => {
+                        if result.item_versions.is_some() {
+                            self.load_work();
+                        }
                         if self.work.messages.sending.as_ref() == Some(&self.work.messages.draft) {
                             self.work.messages.draft = MessageDraft::default();
                         }
@@ -1751,7 +1784,10 @@ impl Shell {
                     return None;
                 }
                 match wops::message_acked(reply) {
-                    Ok(_) => {
+                    Ok(result) => {
+                        if result.item_versions.is_some() {
+                            self.load_work();
+                        }
                         self.work
                             .messages
                             .inbox
@@ -2333,6 +2369,17 @@ impl Shell {
         );
         if tab == 2 && self.work.messages.project.as_deref() != project.as_deref() {
             actions.push(Action::RefreshMessages);
+        } else if tab == 2 {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs(1));
+            if self
+                .work
+                .messages
+                .event_poll_at
+                .is_some_and(|at| at <= std::time::Instant::now())
+            {
+                actions.push(Action::PollMessages);
+            }
         }
         mem.tab = tab;
         self.routes.insert(Route::Overview, mem);

@@ -73,7 +73,7 @@ fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state
     assert!(posted.created);
     let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
     settle(&mut h);
-    h.state_mut().select_project(Some(pid));
+    h.state_mut().select_project(Some(pid.clone()));
     h.state_mut().navigate(Route::Overview);
     settle(&mut h);
     click(&mut h, Role::Button, "Messages");
@@ -112,6 +112,26 @@ fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state
     );
     click(&mut h, Role::Button, "Mark read");
     assert!(h.state().work.messages.inbox.is_empty());
+    wops::message_posted(backend.command(
+        "agents.post",
+        &wops::message_post(
+            &*backend,
+            &pid,
+            json!({"body":"External update","toHuman":true}),
+        ),
+    ))
+    .unwrap();
+    h.state_mut().work.messages.event_poll_at =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    settle(&mut h);
+    assert!(
+        h.state()
+            .work
+            .messages
+            .inbox
+            .iter()
+            .any(|m| m.body.0 == "External update")
+    );
 }
 
 #[test]
