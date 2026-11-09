@@ -4427,6 +4427,83 @@ struct HeldAuthority {
     entered: Mutex<std::sync::mpsc::Sender<()>>,
     release: Mutex<std::sync::mpsc::Receiver<()>>,
 }
+
+struct ReceiveSignalAuthority(Mutex<std::sync::mpsc::Sender<()>>);
+impl devworks_core::ports::AuthorityPort for ReceiveSignalAuthority {
+    fn authorize(
+        &self,
+        ctx: &InvocationContext,
+        request: &devworks_core::ports::AuthorityRequest<'_>,
+    ) -> Result<devworks_core::ports::Authorization, devworks_core::ports::AuthorityDenial> {
+        if request.descriptor.name == "agents.receive" {
+            let _ = self.0.lock().unwrap().send(());
+        }
+        Authority.authorize(ctx, request)
+    }
+}
+
+#[test]
+fn shutdown_does_not_wait_for_a_retained_receive_long_poll() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let (entered_tx, entered) = std::sync::mpsc::channel();
+    let rt = runtime();
+    let mut composed = composition_with(
+        &fx,
+        None,
+        Arc::new(FakePower::default()),
+        Arc::new(ReceiveSignalAuthority(Mutex::new(entered_tx))),
+        Arc::new(FakeHost::default()),
+    );
+    composed.use_cases = fx.use_cases.clone();
+    let app = rt
+        .block_on(boot(composed))
+        .unwrap_or_else(|e| panic!("boot: {e:?}"));
+    let raw = serde_json::to_vec(&json!({
+        "protocol": PROTOCOL, "mode":"Command", "schemaRevision":7,
+        "requestKey":"shutdown-receive",
+        "body":{"kind":"agents.receive","projectId":"project-a","waitSeconds":55}
+    }))
+    .unwrap();
+    let cancellation = Cancellation::new();
+    std::thread::scope(|scope| {
+        let stop = cancellation.clone();
+        let app_ref = &app;
+        let user_ref = &fx.user;
+        let waiting = scope.spawn(move || {
+            app_ref
+                .command_with(
+                    user_ref,
+                    "agents.receive",
+                    &raw,
+                    WriteOptions {
+                        cancellation: Some(stop),
+                        ..WriteOptions::default()
+                    },
+                )
+                .unwrap()
+        });
+        entered.recv_timeout(Duration::from_secs(3)).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !waiting.is_finished(),
+            "receive did not enter its long poll"
+        );
+        let shutdown = rt.block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), app.shutdown()).await
+        });
+        cancellation.cancel();
+        assert!(matches!(
+            waiting.join().unwrap(),
+            CommandReply::Rejected { .. }
+        ));
+        assert!(
+            shutdown.is_ok(),
+            "a long inbox wait held the admission fence"
+        );
+    });
+}
+
 impl devworks_core::ports::AuthorityPort for HeldAuthority {
     fn authorize(
         &self,

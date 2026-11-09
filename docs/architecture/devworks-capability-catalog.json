@@ -121,6 +121,7 @@
         "delegate",
         "messages",
         "post",
+        "receive",
         "ack",
         "history",
         "events",

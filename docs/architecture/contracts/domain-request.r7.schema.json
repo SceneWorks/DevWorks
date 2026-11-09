@@ -3023,6 +3023,73 @@
         {
           "additionalProperties": false,
           "properties": {
+            "cursor": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Text1To4096"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "includeRead": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "agents.receive",
+              "type": "string"
+            },
+            "limit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Revision"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "projectId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sessionId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "waitSeconds": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object",
+          "x-since": 7
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "kind": {
               "const": "agents.ack",
               "type": "string"

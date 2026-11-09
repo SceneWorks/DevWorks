@@ -5665,7 +5665,7 @@
       "attribute": "HttpPost(\"messages\")",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.messages"
+        "agents.post"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",
@@ -5715,7 +5715,7 @@
       "attribute": "HttpGet(\"inbox\")",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.inbox"
+        "agents.receive"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",
@@ -12142,7 +12142,7 @@
       "argumentType": "typeof(PostRequest)",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.messages"
+        "agents.post"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",
@@ -12161,7 +12161,7 @@
       "argumentType": "typeof(InboxRequest)",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.inbox"
+        "agents.receive"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",

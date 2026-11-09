@@ -40,7 +40,7 @@ pub mod web;
 pub mod work;
 
 use crate::context::InvocationContext;
-use crate::gateway::{CommandOutcome, Gateway, GatewayFailure, QueryOutcome};
+use crate::gateway::{CommandOutcome, Gateway, GatewayFailure, PreparedReceive, QueryOutcome};
 use crate::ports::storage::{ReadOptions, WriteOptions};
 use crate::ports::{CommandHandler, QueryHandler};
 use crate::protocol::support::BoundedList;
@@ -201,6 +201,7 @@ impl UseCases {
             "agents.delegate",
             "agents.messages",
             "agents.post",
+            "agents.receive",
             "agents.ack",
             "agents.history",
             "agents.events",
@@ -502,5 +503,27 @@ impl UseCases {
             Some(handler) => gateway.command_with(ctx, operation, raw, handler.clone(), options),
             None => Err(GatewayFailure::NoUseCase(operation.to_owned())),
         }
+    }
+
+    pub fn prepare_receive(
+        &self,
+        gateway: &Gateway<'_>,
+        ctx: &InvocationContext,
+        raw: &[u8],
+        options: WriteOptions,
+    ) -> Result<PreparedReceive, CommandOutcome> {
+        match self.commands.get("agents.receive") {
+            Some(handler) => gateway.prepare_receive(ctx, raw, handler.clone(), options),
+            None => Err(Err(GatewayFailure::NoUseCase("agents.receive".into()))),
+        }
+    }
+
+    pub fn finish_receive(
+        &self,
+        gateway: &Gateway<'_>,
+        ctx: &InvocationContext,
+        prepared: PreparedReceive,
+    ) -> CommandOutcome {
+        gateway.finish_receive(ctx, prepared)
     }
 }

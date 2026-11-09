@@ -13014,6 +13014,24 @@
           "additionalProperties": false,
           "properties": {
             "kind": {
+              "const": "agents.receive",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/RetainedInboxResult"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 7
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
               "const": "agents.ack",
               "type": "string"
             },
@@ -22343,6 +22361,22 @@
       },
       "required": [
         "items"
+      ],
+      "type": "object"
+    },
+    "RetainedInboxResult": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "$ref": "#/$defs/List_RetainedMessage_0_500"
+        },
+        "nextCursor": {
+          "$ref": "#/$defs/Text1To4096"
+        }
+      },
+      "required": [
+        "items",
+        "nextCursor"
       ],
       "type": "object"
     },

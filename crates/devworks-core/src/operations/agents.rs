@@ -135,6 +135,38 @@ impl Revisioned for PostInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `agents.receive` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReceiveInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Cursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_read: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_seconds: Option<i32>,
+}
+impl Check for ReceiveInput {
+    fn check(&self) -> Result<(), String> {
+        self.session_id.check()?;
+        self.project_id.check()?;
+        self.cursor.check()?;
+        self.include_read.check()?;
+        self.limit.check()?;
+        self.wait_seconds.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for ReceiveInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// `agents.ack` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -301,6 +333,8 @@ pub enum Input {
     Messages(MessagesInput),
     /// `agents.post` (Command).
     Post(PostInput),
+    /// `agents.receive` (Command).
+    Receive(ReceiveInput),
     /// `agents.ack` (Command).
     Ack(AckInput),
     /// `agents.history` (Query).
@@ -321,6 +355,7 @@ impl Input {
             Self::Delegate(_) => "agents.delegate",
             Self::Messages(_) => "agents.messages",
             Self::Post(_) => "agents.post",
+            Self::Receive(_) => "agents.receive",
             Self::Ack(_) => "agents.ack",
             Self::History(_) => "agents.history",
             Self::Events(_) => "agents.events",
@@ -335,6 +370,7 @@ impl Input {
             Self::Delegate(_) => Mode::Command,
             Self::Messages(_) => Mode::Command,
             Self::Post(_) => Mode::Command,
+            Self::Receive(_) => Mode::Command,
             Self::Ack(_) => Mode::Command,
             Self::History(_) => Mode::Query,
             Self::Events(_) => Mode::Query,

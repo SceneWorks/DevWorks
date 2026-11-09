@@ -1480,6 +1480,24 @@ impl Check for RetainedPostResult {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedInboxResult {
+    pub items: Rows<RetainedMessage>,
+    pub next_cursor: Cursor,
+}
+impl Check for RetainedInboxResult {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        crate::protocol::rules::record(
+            "RetainedInboxResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RetainedAckResult {
     pub acked: Counter,
     pub messages: Rows<RetainedMessageLine>,

@@ -5,7 +5,7 @@ use common::{Harness, id, principal, seed_root, write};
 use devworks_core::authority::HostAuthority;
 use devworks_core::context::PrincipalKind;
 use devworks_core::gateway::Gateway;
-use devworks_core::ports::storage::{Cancellation, StorageError};
+use devworks_core::ports::storage::{Cancellation, StorageError, WriteOptions};
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::support::DomainErrorCode;
 use devworks_core::protocol::{CommandReply, ProjectId};
@@ -435,6 +435,232 @@ fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
             "{key}: {reply:?}"
         );
     }
+}
+
+#[test]
+fn selected_receive_waits_replays_and_acknowledges_through_the_native_gateway() {
+    let harness = Harness::new();
+    let store = harness.open();
+    seed_root(&harness, "root-a");
+    let user = principal(store.as_ref(), "receive-user", PrincipalKind::Human);
+    let runs = Arc::new(ControlService::with_scope(
+        harness.ids.clone(),
+        Arc::new(ScriptedScope::new()),
+    ));
+    let cases = UseCases::new().with_agents(Arc::new(AgentService::new(harness.ids.clone(), runs)));
+    let authority = HostAuthority {
+        store: store.as_ref(),
+        clock: harness.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        authority: &authority,
+        store: store.as_ref(),
+        ids: harness.ids.as_ref(),
+    };
+    let command = |operation: &str, key: &str, body: serde_json::Value| {
+        let raw = serde_json::to_vec(&json!({
+            "protocol":"1.0-draft.1", "mode":"Command", "schemaRevision":7,
+            "requestKey":key, "body":body
+        }))
+        .unwrap();
+        cases.command(&gateway, &user, operation, &raw).unwrap()
+    };
+    let empty = command(
+        "agents.receive",
+        "receive-empty",
+        json!({"kind":"agents.receive","projectId":"project-a","waitSeconds":1}),
+    );
+    assert!(
+        matches!(&empty, CommandReply::Recorded { receipt, .. }
+        if matches!(&receipt.decision, DomainDecision::NoChange {
+            result: OperationResult::AgentsReceive { value }
+        } if value.items.0.is_empty() && value.next_cursor.0 == "aWI6MA")),
+        "{empty:?}"
+    );
+    let receive = json!({"kind":"agents.receive","projectId":"project-a","waitSeconds":2});
+    let (posted, first) = std::thread::scope(|scope| {
+        let waiting = scope.spawn(|| command("agents.receive", "receive-first", receive.clone()));
+        std::thread::sleep(Duration::from_millis(100));
+        let posted = command(
+            "agents.post",
+            "receive-post",
+            json!({"kind":"agents.post","projectId":"project-a","body":"Durable inbox body","toHuman":true}),
+        );
+        (posted, waiting.join().unwrap())
+    });
+    let message_id = match posted {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Applied {
+                result: OperationResult::AgentsPost { value },
+            } => value.message.id,
+            other => panic!("unexpected post decision: {other:?}"),
+        },
+        other => panic!("unexpected post reply: {other:?}"),
+    };
+    let cursor = match &first {
+        CommandReply::Recorded { receipt, .. } => match &receipt.decision {
+            DomainDecision::Applied {
+                result: OperationResult::AgentsReceive { value },
+            } => {
+                assert_eq!(value.items.0.len(), 1);
+                assert_eq!(value.items.0[0].id, message_id);
+                assert_eq!(value.items.0[0].body.0, "Durable inbox body");
+                assert!(matches!(
+                    value.items.0[0].delivery,
+                    Some(devworks_core::protocol::records::RetainedDeliveryState::Delivered)
+                ));
+                value.next_cursor.0.clone()
+            }
+            other => panic!("unexpected receive decision: {other:?}"),
+        },
+        other => panic!("unexpected receive reply: {other:?}"),
+    };
+    let replay_start = std::time::Instant::now();
+    assert!(matches!(
+        command("agents.receive", "receive-first", receive.clone()),
+        CommandReply::Recorded { replayed: true, .. }
+    ));
+    assert!(replay_start.elapsed() < Duration::from_secs(1));
+    assert!(
+        matches!(command("agents.receive", "receive-again", receive),
+        CommandReply::Recorded { receipt, .. }
+        if matches!(&receipt.decision, DomainDecision::Applied {
+            result: OperationResult::AgentsReceive { value }
+        } if value.items.0.len() == 1 && value.items.0[0].id == message_id))
+    );
+    assert!(matches!(command("agents.ack", "receive-ack", json!({
+        "kind":"agents.ack","projectId":"project-a","upTo":cursor
+    })), CommandReply::Recorded { receipt, .. }
+        if matches!(&receipt.decision, DomainDecision::Applied {
+            result: OperationResult::AgentsAck { value }
+        } if value.acked.get() == 1)));
+    assert!(
+        matches!(command("agents.receive", "receive-after-ack", json!({
+        "kind":"agents.receive","projectId":"project-a"
+    })), CommandReply::Recorded { receipt, .. }
+        if matches!(&receipt.decision, DomainDecision::NoChange {
+            result: OperationResult::AgentsReceive { value }
+        } if value.items.0.is_empty()))
+    );
+    for (key, body) in [
+        (
+            "receive-bad-wait",
+            json!({"kind":"agents.receive","projectId":"project-a","waitSeconds":56}),
+        ),
+        (
+            "receive-bad-cursor",
+            json!({"kind":"agents.receive","projectId":"project-a","cursor":"Zm9v","waitSeconds":1}),
+        ),
+        (
+            "receive-forged-session",
+            json!({"kind":"agents.receive","projectId":"project-a","sessionId":"another-session","waitSeconds":1}),
+        ),
+    ] {
+        assert!(
+            matches!(command("agents.receive", key, body), CommandReply::Recorded { receipt, .. }
+            if matches!(receipt.decision, DomainDecision::Refused { .. })),
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn selected_receive_cancellation_keeps_the_request_key_retryable() {
+    let harness = Harness::new();
+    let store = harness.open();
+    seed_root(&harness, "root-a");
+    let user = principal(store.as_ref(), "receive-cancel-user", PrincipalKind::Human);
+    let runs = Arc::new(ControlService::with_scope(
+        harness.ids.clone(),
+        Arc::new(ScriptedScope::new()),
+    ));
+    let cases = UseCases::new().with_agents(Arc::new(AgentService::new(harness.ids.clone(), runs)));
+    let authority = HostAuthority {
+        store: store.as_ref(),
+        clock: harness.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        authority: &authority,
+        store: store.as_ref(),
+        ids: harness.ids.as_ref(),
+    };
+    let raw = serde_json::to_vec(&json!({
+        "protocol":"1.0-draft.1", "mode":"Command", "schemaRevision":7,
+        "requestKey":"receive-cancel-retry",
+        "body":{"kind":"agents.receive","projectId":"project-a","waitSeconds":55}
+    }))
+    .unwrap();
+    let cancellation = Cancellation::new();
+    std::thread::scope(|scope| {
+        let stop = cancellation.clone();
+        let cases_ref = &cases;
+        let gateway_ref = &gateway;
+        let user_ref = &user;
+        let raw_ref = &raw;
+        let started = std::time::Instant::now();
+        let waiting = scope.spawn(move || {
+            cases_ref
+                .command_with(
+                    gateway_ref,
+                    user_ref,
+                    "agents.receive",
+                    raw_ref,
+                    WriteOptions {
+                        cancellation: Some(stop),
+                        ..WriteOptions::default()
+                    },
+                )
+                .unwrap()
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            write(store.as_ref(), |tx| tx.runs().agent_delivery_head()).unwrap(),
+            0
+        );
+        cancellation.cancel();
+        assert!(matches!(
+            waiting.join().unwrap(),
+            CommandReply::Rejected { .. }
+        ));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    });
+    let deadline_start = std::time::Instant::now();
+    assert!(matches!(
+        cases
+            .command_with(
+                &gateway,
+                &user,
+                "agents.receive",
+                &raw,
+                WriteOptions {
+                    deadline_ms: Some(harness.now() - 1),
+                    ..WriteOptions::default()
+                },
+            )
+            .unwrap(),
+        CommandReply::Rejected { .. }
+    ));
+    assert!(deadline_start.elapsed() < Duration::from_secs(1));
+    let post = serde_json::to_vec(&json!({
+        "protocol":"1.0-draft.1", "mode":"Command", "schemaRevision":7,
+        "requestKey":"receive-cancel-post",
+        "body":{"kind":"agents.post","projectId":"project-a","body":"After cancellation","toHuman":true}
+    })).unwrap();
+    assert!(matches!(
+        cases
+            .command(&gateway, &user, "agents.post", &post)
+            .unwrap(),
+        CommandReply::Recorded { .. }
+    ));
+    assert!(
+        matches!(cases.command(&gateway, &user, "agents.receive", &raw).unwrap(),
+        CommandReply::Recorded { receipt, replayed: false, .. }
+        if matches!(&receipt.decision, DomainDecision::Applied {
+            result: OperationResult::AgentsReceive { value }
+        } if value.items.0.len() == 1 && value.items.0[0].body.0 == "After cancellation"))
+    );
 }
 
 #[tokio::test]

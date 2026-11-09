@@ -11,14 +11,16 @@ use crate::ports::storage::{
     StoredAgentMessageEvent, StoredAssignment, StoredSession, WriteTransaction,
 };
 use crate::ports::{
-    CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
+    CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, QueryAnswer,
+    QueryHandler,
 };
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
     AgentMessage, AgentRecord, CheckpointRecord, MessageClass, MessageDirection, RetainedAckResult,
     RetainedActor, RetainedDeliveryState, RetainedEventPage, RetainedHistoryPage,
-    RetainedItemVersion, RetainedMessage, RetainedMessageEvent, RetainedMessageKind,
-    RetainedMessageLine, RetainedMessageResolution, RetainedMessageState, RetainedPostResult,
+    RetainedInboxResult, RetainedItemVersion, RetainedMessage, RetainedMessageEvent,
+    RetainedMessageKind, RetainedMessageLine, RetainedMessageResolution, RetainedMessageState,
+    RetainedPostResult,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
@@ -32,6 +34,7 @@ use crate::services::runs::{self, ControlService};
 use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
 use crate::settings::catalog::AgentRole;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 fn denied() -> StorageError {
     StorageError::ScopeDenied
@@ -1274,6 +1277,93 @@ fn post_retained(
     })
 }
 
+fn receive_selection(input: &ops::ReceiveInput) -> Result<(i64, u16, u64), StorageError> {
+    let after = input
+        .cursor
+        .as_ref()
+        .map(|cursor| retained::parse_inbox_cursor(&cursor.0))
+        .transpose()?
+        .unwrap_or(0);
+    let limit = u16::try_from(input.limit.as_ref().map_or(10, Revision::get))
+        .map_err(|_| StorageError::InvalidRecord("inbox limit".into()))?;
+    if !(1..=100).contains(&limit) {
+        return Err(StorageError::InvalidRecord("inbox limit".into()));
+    }
+    let wait = input.wait_seconds.unwrap_or(0);
+    if !(0..=55).contains(&wait) {
+        return Err(StorageError::InvalidRecord("inbox wait_seconds".into()));
+    }
+    Ok((after, limit, wait as u64))
+}
+
+fn receive_retained(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    input: &ops::ReceiveInput,
+) -> Result<(RetainedInboxResult, bool), StorageError> {
+    if input.session_id.is_some() && input.session_id.as_ref() != ctx.session_id() {
+        return Err(denied());
+    }
+    let (after, limit, _) = receive_selection(input)?;
+    let (project, recipient) = if let Some(session_id) = ctx.session_id() {
+        let session = tx.sessions().session(session_id)?.ok_or_else(denied)?;
+        let project = session.project_id.ok_or_else(denied)?;
+        if input
+            .project_id
+            .as_ref()
+            .is_some_and(|named| named != &project)
+        {
+            return Err(denied());
+        }
+        (project, retained::Recipient::Session(session_id.clone()))
+    } else {
+        (
+            input
+                .project_id
+                .clone()
+                .ok_or_else(|| StorageError::InvalidRecord("human inbox needs project".into()))?,
+            retained::Recipient::Human,
+        )
+    };
+    let page = retained::deliver_inbox(
+        tx,
+        ctx,
+        &project,
+        &recipient,
+        after,
+        input.include_read.unwrap_or(false),
+        limit,
+    )
+    .map_err(|error| match error {
+        StorageError::CursorExpired => {
+            StorageError::InvalidRecord("cursor is ahead of inbox head".into())
+        }
+        other => other,
+    })?;
+    let changed = !page.items.is_empty();
+    let mut items = Vec::with_capacity(page.items.len());
+    for (delivery, row) in page.items {
+        let mut message = retained_message(tx.actors(), row)?;
+        message.delivery = Some(match delivery.state.as_str() {
+            "Pending" => RetainedDeliveryState::Pending,
+            "Delivered" => RetainedDeliveryState::Delivered,
+            "Read" => RetainedDeliveryState::Read,
+            "Answered" => RetainedDeliveryState::Answered,
+            "Declined" => RetainedDeliveryState::Declined,
+            _ => return Err(StorageError::InvalidRecord("inbox delivery state".into())),
+        });
+        message.handed_over = delivery.handed_over.then_some(true);
+        items.push(message);
+    }
+    Ok((
+        RetainedInboxResult {
+            items: BoundedList(items),
+            next_cursor: BoundedText(retained::inbox_cursor(page.next_sequence)?),
+        },
+        changed,
+    ))
+}
+
 fn ack_retained(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
@@ -1762,6 +1852,112 @@ impl QueryHandler for AgentService {
 }
 
 impl CommandHandler for AgentService {
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+        env: &Preparation<'_>,
+    ) -> Result<Option<crate::ports::Prepared>, StorageError> {
+        let OperationInput::Agents(ops::Input::Receive(input)) = command.input() else {
+            return Ok(None);
+        };
+        let Ok((after, limit, wait)) = receive_selection(input) else {
+            return Ok(None);
+        };
+        if wait == 0 {
+            return Ok(None);
+        }
+        let deadline = Instant::now() + Duration::from_secs(wait);
+        loop {
+            if env.cancellation.is_some_and(|token| token.is_cancelled()) {
+                return Err(StorageError::Cancelled);
+            }
+            let available = env.read(|snapshot| {
+                if snapshot.receipts().lookup(command.identity())?.is_some() {
+                    return Ok(true);
+                }
+                if input.session_id.is_some() && input.session_id.as_ref() != ctx.session_id() {
+                    return Err(denied());
+                }
+                if snapshot.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind()) {
+                    return Err(denied());
+                }
+                let (project, recipient) = if let Some(session_id) = ctx.session_id() {
+                    if ctx.principal_kind() != PrincipalKind::Agent {
+                        return Err(denied());
+                    }
+                    let session = snapshot
+                        .sessions()
+                        .session(session_id)?
+                        .ok_or_else(denied)?;
+                    if session.closed() || session.agent_id != *ctx.principal() {
+                        return Err(denied());
+                    }
+                    let project = session.project_id.ok_or_else(denied)?;
+                    if input
+                        .project_id
+                        .as_ref()
+                        .is_some_and(|named| named != &project)
+                    {
+                        return Err(denied());
+                    }
+                    (project, retained::Recipient::Session(session_id.clone()))
+                } else {
+                    if ctx.principal_kind() != PrincipalKind::Human {
+                        return Err(denied());
+                    }
+                    let project = input.project_id.clone().ok_or_else(|| {
+                        StorageError::InvalidRecord("human inbox needs project".into())
+                    })?;
+                    (project, retained::Recipient::Human)
+                };
+                if ctx.project_id().is_some_and(|scope| scope != &project)
+                    || snapshot.projects().project(&project)?.is_none()
+                {
+                    return Err(denied());
+                }
+                if after > snapshot.runs().agent_delivery_head()? {
+                    return Err(StorageError::CursorExpired);
+                }
+                let rows = match recipient {
+                    retained::Recipient::Session(ref session_id) => {
+                        snapshot.runs().agent_session_inbox(
+                            &project,
+                            session_id,
+                            after,
+                            input.include_read.unwrap_or(false),
+                            limit,
+                        )?
+                    }
+                    retained::Recipient::Human => snapshot.runs().agent_inbox(
+                        &project,
+                        None,
+                        after,
+                        input.include_read.unwrap_or(false),
+                        limit,
+                    )?,
+                };
+                Ok(!rows.is_empty())
+            });
+            let available = match available {
+                Ok(available) => available,
+                Err(
+                    StorageError::ScopeDenied
+                    | StorageError::InvalidRecord(_)
+                    | StorageError::CursorExpired,
+                ) => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            if available || Instant::now() >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(std::cmp::min(
+                Duration::from_millis(500),
+                deadline.saturating_duration_since(Instant::now()),
+            ));
+        }
+    }
+
     fn decide(
         &self,
         ctx: &InvocationContext,
@@ -1793,6 +1989,15 @@ impl CommandHandler for AgentService {
                     }
                 })
             }
+            OperationInput::Agents(ops::Input::Receive(input)) => receive_retained(tx, ctx, input)
+                .map(|(value, changed)| {
+                    let result = OperationResult::AgentsReceive { value };
+                    if changed {
+                        DomainDecision::Applied { result }
+                    } else {
+                        DomainDecision::NoChange { result }
+                    }
+                }),
             OperationInput::Agents(ops::Input::Ack(input)) => {
                 ack_retained(tx, ctx, input).map(|value| {
                     let changed = value.acked.get() > 0;

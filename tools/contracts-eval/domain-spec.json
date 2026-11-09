@@ -687,6 +687,13 @@
         "item_versions": "?Items<RetainedItemVersion>"
       }
     },
+    "RetainedInboxResult": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<RetainedMessage>",
+        "next_cursor": "Cursor"
+      }
+    },
     "RetainedAckResult": {
       "kind": "record",
       "fields": {
@@ -7078,6 +7085,23 @@
       "rules": "Additive retained-source post contract. The gateway-selected command and current principal bind the sender; optional session/project must match current authority. Route, reply resolution, blocking and idempotency are validated by the retained message service.",
       "introducedRevision": 7
     },
+    "agents.receive": {
+      "operation": "agents.receive",
+      "mode": "Command",
+      "fields": {
+        "session_id": "?Id",
+        "project_id": "?ProjectId",
+        "cursor": "?Cursor",
+        "include_read": "?bool",
+        "limit": "?Revision",
+        "wait_seconds": "?i32"
+      },
+      "result": "RetainedInboxResult",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Additive retained-source receive. The current principal selects its own session or the project's human inbox; cursor is an opaque inbox position, default zero, and unacknowledged deliveries replay. At most 55 seconds of polling in separate short snapshots precedes one transactional delivery and command receipt; cancellation leaves no receipt.",
+      "introducedRevision": 7
+    },
     "agents.ack": {
       "operation": "agents.ack",
       "mode": "Command",
@@ -11786,6 +11810,9 @@
       6
     ],
     "agents.post": [
+      7
+    ],
+    "agents.receive": [
       7
     ],
     "agents.ack": [

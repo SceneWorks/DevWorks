@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
-  "date": "2026-11-02",
-  "catalogSha256": "35cd6be6e0ca74e23e44521ac585c96aebbb4b9a1050686b63e90e377610b10b",
+  "date": "2026-11-09",
+  "catalogSha256": "8714599ea1a066c303665e012145cd7e51e92dc259ef31975bd9a73924dcf172",
   "familyCount": 49,
-  "operationCount": 368,
-  "concreteInputCandidates": 368,
+  "operationCount": 369,
+  "concreteInputCandidates": 369,
   "domainInputsPending": 0,
   "families": [
     {
@@ -3191,6 +3191,53 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "Additive retained-source post contract. The gateway-selected command and current principal bind the sender; optional session/project must match current authority. Route, reply resolution, blocking and idempotency are validated by the retained message service.",
+          "familyRules": "Assignment ownership and parent scope are host-derived. Root cap is ten with no global cap. Inbox observation and acknowledgment confer no approval.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 7,
+          "operation": "agents.receive",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "agents.receive",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "agents.receive"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "agents.receive"
+          },
+          "resultValueType": "RetainedInboxResult",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 7,
+              "inputSchema": "domain-request.r7.schema.json",
+              "resultSchema": "operation-result.r7.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r7.schema.json",
+              "completionSchema": "operation-completion.r7.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Additive retained-source receive. The current principal selects its own session or the project's human inbox; cursor is an opaque inbox position, default zero, and unacknowledged deliveries replay. At most 55 seconds of polling in separate short snapshots precedes one transactional delivery and command receipt; cancellation leaves no receipt.",
           "familyRules": "Assignment ownership and parent scope are host-derived. Root cap is ten with no global cap. Inbox observation and acknowledgment confer no approval.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
