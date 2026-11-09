@@ -1898,6 +1898,7 @@ impl Runtime {
             crate::context_epoch::EpochChange {
                 previous_epoch,
                 binding: next_binding,
+                observed_sequence: None,
                 reason: devworks_core::protocol::provider::ContextChangeReason::InstructionAdoption,
                 context: converted,
                 omitted,

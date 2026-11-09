@@ -1307,6 +1307,15 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
         let prior_binding = progress.provider.result.binding.unwrap();
         app.shutdown().await;
         let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let operation_for_write = operation_id.clone();
+        write(f.store.as_ref(), move |tx| {
+            let operation = tx.operations().operation(&operation_for_write)?.unwrap();
+            tx.operations().begin_attempt(&operation_for_write, operation.revision,
+                AttemptBinding::default())?;
+            Ok(())
+        }).unwrap();
+        assert!(app.record_tool_operation_update(&f.context, &id("session"), &operation_id)
+            .unwrap().is_some());
         let next_binding = NativeBinding {
             connection_id: id("next-connection"),
             endpoint_profile: EndpointProfile::AnthropicMessages,
@@ -1315,19 +1324,25 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
         };
         let changed = app.change_provider_epoch(&f.context, &id("session"), &first,
             &prior_binding, &next_binding).unwrap();
+        let changed_context: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
+            f.store.as_ref(), &f.context, &changed, 1024 * 1024).unwrap().0).unwrap();
+        assert_eq!(changed_context.messages.len(), 5);
+        assert!(matches!(&changed_context.messages[4].content[0], ContentBlock::Text { text, .. }
+            if text.contains("Preflighted")));
         let operation_for_write = operation_id.clone();
         write(f.store.as_ref(), move |tx| {
             use devworks_core::protocol::OperationState;
             let operation = tx.operations().operation(&operation_for_write)?.unwrap();
-            tx.operations().transition(&operation_for_write, operation.revision, None,
+            let fence = operation.latest_attempt().unwrap().fence();
+            tx.operations().transition(&operation_for_write, operation.revision, Some(&fence),
                 OperationState::CancelledBeforeDispatch, None)?;
             Ok(())
         }).unwrap();
         let second = app.refresh_native_tool_context(&f.context, &id("session"), &changed).unwrap();
         let material: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
             f.store.as_ref(), &f.context, &second, 1024 * 1024).unwrap().0).unwrap();
-        assert_eq!(material.messages.len(), 5);
-        assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "OperationUpdate").count(), 2);
+        assert_eq!(material.messages.len(), 6);
+        assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "OperationUpdate").count(), 3);
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
         let ctx = f.context.clone();
         write(f.store.as_ref(), move |tx| {

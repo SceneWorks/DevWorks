@@ -23,6 +23,7 @@ use std::sync::Arc;
 pub(crate) struct EpochChange {
     pub previous_epoch: i64,
     pub binding: NativeBinding,
+    pub observed_sequence: Option<i64>,
     pub reason: ContextChangeReason,
     pub context: ProviderContext,
     pub omitted: Vec<ArtifactRef>,
@@ -57,10 +58,40 @@ pub(crate) fn provider_change(
         }
         Ok(())
     })?;
-    let bytes = artifacts
+    let (bytes, provenance) = artifacts
         .read_exact(store, ctx, previous_context, 8 * 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?
-        .0;
+        .map_err(|_| StorageError::ScopeDenied)?;
+    let tracked = matches!(
+        provenance["derived"]["kind"].as_str(),
+        Some(
+            "ProviderTurnContinuation"
+                | "ProviderToolContinuation"
+                | "ProviderOperationUpdateContext"
+                | "ProviderContextEpoch"
+        )
+    );
+    let (bytes, observed_sequence) = if tracked {
+        let latest = crate::tool_turn::append_operation_updates(
+            store,
+            artifacts,
+            ctx,
+            session_id,
+            previous_context,
+        )?;
+        let (bytes, provenance) = artifacts
+            .read_exact(store, ctx, &latest, 8 * 1024 * 1024)
+            .map_err(|_| StorageError::ScopeDenied)?;
+        let derived = &provenance["derived"];
+        if derived["binding"] != json!(previous_binding) {
+            return Err(StorageError::ScopeDenied);
+        }
+        let observed = derived["observedSequence"]
+            .as_i64()
+            .ok_or(StorageError::ScopeDenied)?;
+        (bytes, Some(observed))
+    } else {
+        (bytes, None)
+    };
     let context: ProviderContext =
         serde_json::from_slice(&bytes).map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
     let (converted, omitted) = context
@@ -74,6 +105,7 @@ pub(crate) fn provider_change(
         EpochChange {
             previous_epoch,
             binding: next_binding.clone(),
+            observed_sequence,
             reason: ContextChangeReason::ProviderChange,
             context: converted,
             omitted,
@@ -91,6 +123,7 @@ pub(crate) fn publish(
     let EpochChange {
         previous_epoch,
         binding,
+        observed_sequence,
         reason,
         context: converted,
         omitted,
@@ -141,7 +174,10 @@ pub(crate) fn publish(
             .sessions()
             .session(&session_for_write)?
             .ok_or(StorageError::ScopeDenied)?;
-        if session.closed() || session.context_epoch != previous_epoch {
+        if session.closed()
+            || session.context_epoch != previous_epoch
+            || observed_sequence.is_some_and(|sequence| session.last_durable_sequence() != sequence)
+        {
             return Err(StorageError::ScopeDenied);
         }
         // A context boundary must not invalidate an admitted native request before its
