@@ -58,6 +58,7 @@ fn authorized_session(
         .ok_or(StorageError::ScopeDenied)?;
     if ctx.session_id() != Some(session_id)
         || session.closed()
+        || session.agent_id != *ctx.principal()
         || read.stamp().store_id != *ctx.store_id()
         || read.stamp().restore_epoch != ctx.restore_epoch().get()
         || !matches!(
@@ -74,7 +75,6 @@ fn authorized_session(
             .principal(ctx.principal())?
             .ok_or(StorageError::ScopeDenied)?;
         if !binding.active
-            || session.agent_id != *ctx.principal()
             || binding
                 .project_id
                 .as_ref()
@@ -975,6 +975,7 @@ pub(crate) fn dispatch_one(
                 .ok_or(StorageError::ScopeDenied)?;
             if ctx.session_id() != Some(session_id)
                 || session.closed()
+                || session.agent_id != *ctx.principal()
                 || read.stamp().store_id != *ctx.store_id()
                 || read.stamp().restore_epoch != ctx.restore_epoch().get()
                 || !matches!(
@@ -991,7 +992,6 @@ pub(crate) fn dispatch_one(
                     .principal(ctx.principal())?
                     .ok_or(StorageError::ScopeDenied)?;
                 if !binding.active
-                    || session.agent_id != *ctx.principal()
                     || binding
                         .project_id
                         .as_ref()
@@ -1285,6 +1285,7 @@ fn mark_dispatch_started(
             .ok_or(StorageError::ScopeDenied)?;
         if session.closed()
             || ctx.session_id() != Some(&session_id)
+            || session.agent_id != *ctx.principal()
             || tx.store().store_id != *ctx.store_id()
             || tx.store().restore_epoch != ctx.restore_epoch().get()
             || !matches!(
@@ -1301,7 +1302,6 @@ fn mark_dispatch_started(
                 .principal(ctx.principal())?
                 .ok_or(StorageError::ScopeDenied)?;
             if !binding.active
-                || session.agent_id != *ctx.principal()
                 || binding
                     .project_id
                     .as_ref()
@@ -1358,7 +1358,10 @@ pub(crate) fn cancel_before_dispatch(
             .sessions()
             .session(&session_id)?
             .ok_or(StorageError::ScopeDenied)?;
-        if session.closed() {
+        if session.closed()
+            || ctx.session_id() != Some(&session_id)
+            || session.agent_id != *ctx.principal()
+        {
             return Err(StorageError::ScopeDenied);
         }
         let batch = turn::batch_of(

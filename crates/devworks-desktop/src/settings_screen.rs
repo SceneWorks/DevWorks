@@ -864,6 +864,66 @@ fn self_editor(
                 )
             })
         }
+        ValueKind::ToolOverrides => {
+            let mut choices = shown.as_object().cloned().unwrap_or_default();
+            let mut changed = false;
+            ui.collapsing("Built-in tools", |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Select all").clicked() {
+                        for tool in devworks_core::registry::all() {
+                            choices.insert(format!("devworks/{}", tool.name), json!(true));
+                        }
+                        changed = true;
+                    }
+                    if ui.button("Deselect all").clicked() {
+                        for tool in devworks_core::registry::all() {
+                            choices.insert(format!("devworks/{}", tool.name), json!(false));
+                        }
+                        changed = true;
+                    }
+                });
+                for tool in devworks_core::registry::all() {
+                    let key = format!("devworks/{}", tool.name);
+                    let mut selected = choices.get(&key).and_then(Value::as_bool).unwrap_or(true);
+                    if ui.checkbox(&mut selected, tool.name).changed() {
+                        choices.insert(key, json!(selected));
+                        changed = true;
+                    }
+                }
+            });
+            ui.label("Package and MCP tools use their exact capability IDs after discovery.");
+            let mut remove = None;
+            for (key, value) in &mut choices {
+                if key.starts_with("devworks/") {
+                    continue;
+                }
+                ui.horizontal(|ui| {
+                    let mut selected = value.as_bool().unwrap_or(false);
+                    if ui.checkbox(&mut selected, key.as_str()).changed() {
+                        *value = json!(selected);
+                        changed = true;
+                    }
+                    if ui.button("Remove").clicked() {
+                        remove = Some(key.clone());
+                    }
+                });
+            }
+            if let Some(key) = remove {
+                choices.remove(&key);
+                changed = true;
+            }
+            let buffer = buffers.entry(d.key).or_default();
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(buffer).hint_text("package/id or mcp/server.tool"),
+                );
+                if ui.button("Add tool").clicked() && !buffer.is_empty() {
+                    choices.insert(std::mem::take(buffer), json!(true));
+                    changed = true;
+                }
+            });
+            changed.then_some(Value::Object(choices))
+        }
         ValueKind::PackageIndexSources => {
             // One row per source with its own location and key fields: a location (a directory
             // path may contain spaces) is never split from its key by a delimiter.

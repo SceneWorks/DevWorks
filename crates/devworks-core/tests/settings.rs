@@ -127,6 +127,17 @@ fn values_are_validated_by_type_and_credentials_are_refused() {
     let tiers = descriptor("routing.tierMax.members").unwrap();
     assert_eq!(check_value(tiers, &json!(["a", "a"]))[0].code, codes::TYPE);
     assert!(check_value(tiers, &json!(["fable", "custom-1"])).is_empty());
+    let tools = descriptor("tools.overrides").unwrap();
+    assert!(
+        check_value(
+            tools,
+            &json!({"devworks/sessions.get": false,
+        "mcp/server.read": true})
+        )
+        .is_empty()
+    );
+    assert!(!check_value(tools, &json!({"devworks/sessions.get": "false"})).is_empty());
+    assert!(!check_value(tools, &json!({"bad capability": true})).is_empty());
 
     let secret = descriptor("github.credential").unwrap();
     for raw in [

@@ -6,6 +6,7 @@ use devworks_adapters::fs::{
     NativeFilesystem, artifacts::NativeArtifactFiles, sources::HostArtifactSources,
 };
 use devworks_adapters::index::{NativeSourceTree, treesitter::TreeSitterParser};
+use devworks_core::authority::service::bind_principal;
 use devworks_core::{
     context::{InvocationContext, PrincipalKind},
     ports::{
@@ -20,6 +21,7 @@ use devworks_core::{
     providers::{
         capabilities::{Capabilities, EmbeddingDimensions, Support},
         context::*,
+        materialize::SchemaDocuments,
     },
     services::{
         UseCases,
@@ -879,6 +881,119 @@ fn compaction_result_is_artifact_only_and_does_not_enter_session_transcript() {
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
         assert!(f.transcript().is_empty());
     });
+}
+#[test]
+fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
+    let f = Fx::new("CompatibleChat", Script::aggregate("{}"), false);
+    let human = principal(f.store.as_ref(), "tool-selector", PrincipalKind::Human);
+    let agent = principal(f.store.as_ref(), "selected-worker", PrincipalKind::Agent);
+    let binding = NewPrincipalBinding {
+        actor: ActorId(id("selected-worker")),
+        kind: PrincipalKind::Agent,
+        role: Some(devworks_core::settings::catalog::AgentRole::Worker),
+        project_id: None,
+        tool_families: None,
+        bound_by: ActorId(id("tool-selector")),
+    };
+    write(f.store.as_ref(), move |tx| {
+        bind_principal(tx, &human, binding, None)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    })
+    .unwrap();
+    let alias = f
+        .driver
+        .schemas()
+        .builtin(
+            "sessions.get",
+            devworks_core::registry::Mode::Query,
+            devworks_core::registry::SchemaRevision(1),
+            "get_session",
+        )
+        .unwrap();
+    assert!(f.driver.schemas().tool(&agent, &alias).is_ok());
+    let descriptor = devworks_core::settings::catalog::descriptor("tools.overrides").unwrap();
+    let schema = descriptor.schema_ref();
+    write(f.store.as_ref(), move |tx| {
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            "settings",
+            1,
+            1,
+            json!({"values": {"tools.overrides": {"schema":schema,
+                "value":{"devworks/sessions.get":false}}}}),
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(f.driver.schemas().tool(&agent, &alias).is_err());
+    let policy = read(f.store.as_ref(), |s| {
+        devworks_core::authority::policy::resolve_policy(s.configuration(), None)
+    });
+    assert!(!policy.tool_selected("devworks/sessions.get", true));
+    let visible = read(f.store.as_ref(), |s| {
+        let binding = s.authority().principal(agent.principal())?.unwrap();
+        let operation = devworks_core::registry::find("sessions.get").unwrap();
+        let selected = operation
+            .binding(devworks_core::registry::Mode::Query)
+            .unwrap();
+        Ok(
+            devworks_core::authority::policy::registered_tool_visibility(
+                &agent,
+                Some(&binding),
+                &policy,
+                operation,
+                selected,
+                selected.effect,
+            ),
+        )
+    });
+    assert!(matches!(
+        visible,
+        devworks_core::authority::Verdict::Deny(
+            devworks_core::authority::DenialReason::ToolNotSelected
+        )
+    ));
+    write(f.store.as_ref(), |tx| {
+        let mut session = tx.sessions().session(&id("session"))?.unwrap();
+        session.id = id("agent-session");
+        session.conversation_id = id("agent-conversation");
+        session.agent_id = ActorId(id("selected-worker"));
+        tx.sessions().insert_session(&session)
+    })
+    .unwrap();
+    let mut request = f.generation(vec![]);
+    if let InferenceInput::Generation { session_id, .. } = &mut request.input {
+        *session_id = id("agent-session");
+    }
+    let mut invocation = f.native_invocation(
+        request,
+        PricingContext {
+            input_semantics: InputSemantics::Unknown,
+            cache_read_possible: false,
+            cache_write_possible: false,
+            cache_write_ttl_ms: None,
+        },
+        vec!["Text".into()],
+        None,
+        None,
+        false,
+    );
+    invocation.context = f.context.clone().with_session(id("agent-session"));
+    assert!(
+        runtime()
+            .block_on(f.driver.produce_cancellable(invocation, None))
+            .is_err()
+    );
+    assert!(f.http.lock().unwrap().requests.lock().unwrap().is_empty());
+    let app = runtime()
+        .block_on(devworks_engine::boot(tool_runtime_composition(&f)))
+        .unwrap();
+    let foreign = f.context.clone().with_session(id("agent-session"));
+    assert!(
+        app.dispatch_pending_tool_calls(&foreign, &id("agent-session"))
+            .is_err()
+    );
+    runtime().block_on(app.shutdown());
 }
 #[test]
 fn positive_epoch_accepts_host_continuation_but_rejects_unrelated_copy() {

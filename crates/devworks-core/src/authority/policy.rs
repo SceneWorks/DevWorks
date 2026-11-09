@@ -16,8 +16,9 @@ use crate::ports::storage::{
 use crate::protocol::ProjectId;
 use crate::protocol::data::{GitCommand, PushMode};
 use crate::registry::{AuthorityClass, EffectClass, Mode};
-use crate::settings::catalog::{AgentRole, descriptor};
+use crate::settings::catalog::{AgentRole, TOOL_OVERRIDES_KEY, descriptor};
 use crate::settings::model::{chain, current_chain, scope_of};
+use std::collections::BTreeMap;
 
 /// Setting that selects the access profile (Full is the initial default for new projects).
 pub const ACCESS_PROFILE_KEY: &str = "safety.accessProfile";
@@ -132,17 +133,25 @@ pub struct EffectivePolicy {
     pub web_tools: bool,
     /// The shared web fetch tool.
     pub web_fetch: bool,
+    /// Explicit shared choices. An invalid stored value refuses agent tools until repaired.
+    pub tool_overrides: Option<BTreeMap<String, bool>>,
 }
 impl EffectivePolicy {
+    pub fn tool_selected(&self, capability: &str, default: bool) -> bool {
+        self.tool_overrides
+            .as_ref()
+            .is_some_and(|choices| choices.get(capability).copied().unwrap_or(default))
+    }
     /// Stable digest of every value that changes an authorization; a fence compares it.
     pub fn digest(&self) -> String {
         sha256_hex(
             format!(
-                "{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}",
                 self.profile.map_or("unsupported", AccessProfile::as_str),
                 self.shell_tools,
                 self.web_tools,
-                self.web_fetch
+                self.web_fetch,
+                serde_json::to_string(&self.tool_overrides).expect("tool choices serialize")
             )
             .as_bytes(),
         )
@@ -183,6 +192,18 @@ pub fn resolve_policy(
         shell_tools: flag(SHELL_TOOLS_KEY),
         web_tools: flag(WEB_TOOLS_KEY),
         web_fetch: flag(WEB_FETCH_TOOLS_KEY),
+        tool_overrides: effective(TOOL_OVERRIDES_KEY).and_then(|entry| {
+            let value = entry.value.value.0;
+            let descriptor = descriptor(TOOL_OVERRIDES_KEY).expect("catalog key");
+            if crate::settings::validate::check_value(descriptor, &value)
+                .iter()
+                .any(|issue| issue.blocking)
+            {
+                None
+            } else {
+                serde_json::from_value(value).ok()
+            }
+        }),
     })
 }
 
@@ -414,6 +435,9 @@ pub fn registered_tool_visibility(
     if let Some(selected) = &binding.tool_families
         && !selected.iter().any(|f| f == fam)
     {
+        return Verdict::Deny(DenialReason::ToolNotSelected);
+    }
+    if kind == PrincipalKind::Agent && !policy.tool_selected(&format!("devworks/{op}"), true) {
         return Verdict::Deny(DenialReason::ToolNotSelected);
     }
     let read_only_role = role.is_some_and(AgentRole::read_only);

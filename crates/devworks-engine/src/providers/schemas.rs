@@ -372,6 +372,20 @@ impl SchemaDocuments for RegisteredSchemas {
                 (schema, Some(description))
             }
             None => {
+                if ctx.principal_kind() == devworks_core::context::PrincipalKind::Agent {
+                    read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                        current_context(read, ctx)?;
+                        let selected =
+                            policy::resolve_policy(read.configuration(), ctx.project_id())?
+                                .tool_selected(alias.capability_id.as_str(), false);
+                        if selected {
+                            Ok(())
+                        } else {
+                            Err(StorageError::ScopeDenied)
+                        }
+                    })
+                    .map_err(|_| ProviderError::MaterialUnavailable)?;
+                }
                 let package = alias
                     .capability_id
                     .as_str()

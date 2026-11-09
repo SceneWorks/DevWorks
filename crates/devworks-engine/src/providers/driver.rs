@@ -455,6 +455,19 @@ impl NativeProviders {
         {
             return Err(StorageError::ScopeDenied);
         }
+        if let InferenceInput::Generation { session_id, .. } = &request.input {
+            let owner = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                read.sessions()
+                    .session(session_id)?
+                    .map(|session| session.agent_id)
+                    .ok_or(StorageError::ScopeDenied)
+            })?;
+            if owner != *context.principal() || context.session_id() != Some(session_id) {
+                // A host-origin request cannot borrow an agent session to bypass its role and
+                // shared tool selection before the provider sees a tool schema.
+                return Err(StorageError::ScopeDenied);
+            }
+        }
         if let ModelSelection::Model { model_id } = &request.options.selection
             && model_id != &attempt.query.catalog_model_id
         {
