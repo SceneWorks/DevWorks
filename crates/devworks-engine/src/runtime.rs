@@ -553,6 +553,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 store.clone(),
                 (composition.factory)(supervisor.clone(), tokio::runtime::Handle::current()),
                 composition.validator.clone(),
+                artifacts.clone(),
             )
             .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))?;
         consumers.push(crate::mcp::consumer(service));

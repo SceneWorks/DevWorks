@@ -1,11 +1,15 @@
 use super::Harness;
+use crate::fs::NativeFilesystem;
+use crate::fs::artifacts::NativeArtifactFiles;
+use crate::fs::sources::HostArtifactSources;
 use crate::packages::JsonSchemaValidator;
 use crate::storage::sqlite::SqliteStore;
 use devworks_core::authority::HostAuthority;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::mcp::{
-    McpEndpoint, McpRemote, McpRemoteFault, RemoteCatalog, RemoteTool,
+    McpEndpoint, McpRemote, McpRemoteFault, RemoteCatalog, RemotePrompt, RemotePromptArgument,
+    RemoteResource, RemoteTool,
 };
 use devworks_core::ports::storage::{
     ApplicationStore, AttemptBinding, ConfigScope, OperationRecord, ReadOptions, WriteOptions,
@@ -18,6 +22,7 @@ use devworks_core::protocol::{
     ActorId, CommandReply, Counter, Id, OperationId, OperationState, Revision,
 };
 use devworks_core::services::UseCases;
+use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::mcp::{McpClientService, McpEffectOutcome};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -78,6 +83,19 @@ impl McpRemote for RecordedRemote {
 
 fn id(value: &str) -> Id {
     Id::new(value).unwrap()
+}
+
+fn artifacts(h: &Harness) -> Arc<ArtifactService> {
+    Arc::new(ArtifactService::new(
+        Arc::new(NativeArtifactFiles::new(
+            h.root.0.clone(),
+            h.root.0.with_extension("cache"),
+        )),
+        Arc::new(HostArtifactSources::new(h.clock.clone(), h.ids.clone())),
+        Arc::new(NativeFilesystem::new()),
+        h.clock.clone(),
+        h.ids.clone(),
+    ))
 }
 
 fn dispatched(store: &SqliteStore, id: &OperationId) -> OperationRecord {
@@ -407,7 +425,12 @@ fn journaled_connect_rechecks_configuration_before_native_io() {
     let service = Arc::new(McpClientService::new(h.ids.clone()));
     let remote = Arc::new(RecordedRemote::default());
     service
-        .install_remote(store.clone(), remote.clone(), Arc::new(JsonSchemaValidator))
+        .install_remote(
+            store.clone(),
+            remote.clone(),
+            Arc::new(JsonSchemaValidator),
+            artifacts(&h),
+        )
         .unwrap();
     let cases = UseCases::new().with_mcp(service.clone());
     let DomainDecision::Applied {
@@ -605,7 +628,12 @@ fn journaled_discovery_publishes_selected_read_only_catalog() {
     let service = Arc::new(McpClientService::new(h.ids.clone()));
     let remote = Arc::new(RecordedRemote::default());
     service
-        .install_remote(store.clone(), remote, Arc::new(JsonSchemaValidator))
+        .install_remote(
+            store.clone(),
+            remote,
+            Arc::new(JsonSchemaValidator),
+            artifacts(&h),
+        )
         .unwrap();
     let cases = UseCases::new().with_mcp(service.clone());
     let DomainDecision::Applied {
@@ -660,4 +688,159 @@ fn journaled_discovery_publishes_selected_read_only_catalog() {
     assert!(
         matches!(capabilities(&h, &store, &cases, &server.id, 2), DomainQueryReply::Result { result: OperationResult::McpCapabilities { value }, .. } if value.items.0.len() == 1)
     );
+}
+
+#[test]
+fn resource_and_prompt_queries_publish_bounded_untrusted_content() {
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
+        Ok(())
+    })
+    .unwrap();
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    service
+        .install_remote(
+            store.clone(),
+            Arc::new(RecordedRemote::default()),
+            Arc::new(JsonSchemaValidator),
+            artifacts(&h),
+        )
+        .unwrap();
+    let cases = UseCases::new().with_mcp(service.clone());
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: server },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "content-server",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"name":"Content server",
+            "transport":{"kind":"Http","endpoint":"https://mcp.example.test/mcp"}}),
+    )
+    else {
+        panic!("MCP server configuration failed");
+    };
+    let server_id = server.id.clone();
+    let service_for_write = service.clone();
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        service_for_write.publish_remote_catalog(
+            tx,
+            &ConfigScope::Workspace,
+            &server_id,
+            &Revision::new(1).unwrap(),
+            RemoteCatalog {
+                tools: vec![],
+                resources: vec![RemoteResource {
+                    uri: "mcp://example/readme".into(),
+                    name: "Readme".into(),
+                    description: "A test resource".into(),
+                }],
+                prompts: vec![RemotePrompt {
+                    name: "review".into(),
+                    description: "Review a change".into(),
+                    arguments: vec![RemotePromptArgument {
+                        name: "change".into(),
+                        required: true,
+                    }],
+                }],
+            },
+        )
+    })
+    .unwrap();
+    let authority = HostAuthority {
+        store: &*store,
+        clock: &*h.clock,
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*store,
+        ids: &*h.ids,
+    };
+    let query = |operation: &str, body: Value| {
+        let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"mcp-content-read",
+            "body":body});
+        cases
+            .query(
+                &gateway,
+                &context(&store),
+                operation,
+                frame.to_string().as_bytes(),
+            )
+            .unwrap()
+    };
+    let resources = query(
+        "mcp.resources",
+        json!({"kind":"mcp.resources","serverId":server.id,
+        "catalogRevision":"2","page":{"limit":10}}),
+    );
+    let DomainQueryReply::Result {
+        result: OperationResult::McpResources { value },
+        ..
+    } = resources
+    else {
+        panic!("MCP resource read failed: {resources:?}");
+    };
+    assert_eq!(value.items.0.len(), 1);
+    assert_eq!(value.items.0[0].uri.0, "mcp://example/readme");
+    let resource = value.items.0[0].content.clone();
+    let missing_argument = query(
+        "mcp.prompts",
+        json!({"kind":"mcp.prompts","serverId":server.id,
+        "catalogRevision":"2","page":{"limit":10}}),
+    );
+    assert!(matches!(
+        missing_argument,
+        DomainQueryReply::Rejected { .. }
+    ));
+    let reference = match capabilities(&h, &store, &cases, &server.id, 2) {
+        DomainQueryReply::Result {
+            result: OperationResult::McpCapabilities { value },
+            ..
+        } => value
+            .items
+            .0
+            .into_iter()
+            .find(|capability| capability.kind.0 == "prompt")
+            .and_then(|capability| capability.input_schema)
+            .expect("prompt schema"),
+        other => panic!("MCP prompt schema unavailable: {other:?}"),
+    };
+    let prompts = query(
+        "mcp.prompts",
+        json!({"kind":"mcp.prompts","serverId":server.id,
+            "catalogRevision":"2","name":"review",
+            "arguments":{"schema":reference,"value":{"change":"example"}},
+            "page":{"limit":10}}),
+    );
+    let DomainQueryReply::Result {
+        result: OperationResult::McpPrompts { value },
+        ..
+    } = prompts
+    else {
+        panic!("MCP prompt read failed: {prompts:?}");
+    };
+    assert_eq!(value.items.0.len(), 1);
+    assert_eq!(value.items.0[0].name.0, "review");
+    let prompt = value.items.0[0].messages.clone();
+    read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+        assert!(
+            snapshot
+                .artifacts()
+                .version(&resource.version_id)?
+                .is_some_and(|v| v.live())
+        );
+        assert!(
+            snapshot
+                .artifacts()
+                .version(&prompt.version_id)?
+                .is_some_and(|v| v.live())
+        );
+        Ok(())
+    })
+    .unwrap();
 }

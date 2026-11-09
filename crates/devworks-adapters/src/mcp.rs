@@ -267,6 +267,15 @@ impl McpRemote for NativeMcpClients {
                 .map(|p| RemotePrompt {
                     name: p.name,
                     description: p.description.unwrap_or_default(),
+                    arguments: p
+                        .arguments
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|argument| devworks_core::ports::mcp::RemotePromptArgument {
+                            name: argument.name,
+                            required: argument.required.unwrap_or(false),
+                        })
+                        .collect(),
                 })
                 .collect(),
         })

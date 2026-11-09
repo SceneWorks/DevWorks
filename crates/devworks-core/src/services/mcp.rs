@@ -24,21 +24,25 @@ use crate::protocol::{
     ActorId, CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId,
     OperationState, ProjectId, RetryAdvice, Revision, RevisionDimension,
 };
+use crate::services::artifacts::ArtifactService;
 use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
+mod content;
 
 const NAMESPACE: &str = "outgoing_mcp";
 const SCHEMA_VERSION: i64 = 1;
-pub const OPERATIONS: [&str; 6] = [
+pub const OPERATIONS: [&str; 8] = [
     "mcp.servers",
     "mcp.configure",
     "mcp.connect",
     "mcp.discover",
     "mcp.select_tools",
     "mcp.capabilities",
+    "mcp.resources",
+    "mcp.prompts",
 ];
 pub const EFFECT_CONSUMER: &str = "mcp_effects";
 
@@ -54,6 +58,8 @@ struct StoredServer {
     capabilities: Vec<McpCapability>,
     #[serde(default)]
     schemas: BTreeMap<String, Value>,
+    #[serde(default)]
+    resource_uris: BTreeMap<String, String>,
     #[serde(default)]
     auto_select_read_only: bool,
 }
@@ -144,6 +150,7 @@ struct Native {
     store: Arc<dyn ApplicationStore>,
     remote: Arc<dyn McpRemote>,
     validator: Arc<dyn SchemaValidator>,
+    artifacts: Arc<ArtifactService>,
 }
 impl McpClientService {
     pub fn new(ids: Arc<dyn IdSource>) -> Self {
@@ -160,12 +167,14 @@ impl McpClientService {
         store: Arc<dyn ApplicationStore>,
         remote: Arc<dyn McpRemote>,
         validator: Arc<dyn SchemaValidator>,
+        artifacts: Arc<ArtifactService>,
     ) -> Result<(), &'static str> {
         self.native
             .set(Native {
                 store,
                 remote,
                 validator,
+                artifacts,
             })
             .map_err(|_| "outgoing MCP remote already installed")
     }
@@ -1083,6 +1092,7 @@ impl McpClientService {
             expected_catalog_revision,
             capabilities,
             BTreeMap::new(),
+            BTreeMap::new(),
         )
     }
 
@@ -1108,6 +1118,7 @@ impl McpClientService {
             })?;
         let mut capabilities = Vec::new();
         let mut schemas = BTreeMap::new();
+        let mut resource_uris = BTreeMap::new();
         for tool in catalog.tools {
             let id = capability_id(server_id, "tool", &tool.name)?;
             let input_schema =
@@ -1135,6 +1146,12 @@ impl McpClientService {
         }
         for resource in catalog.resources {
             let id = capability_id(server_id, "resource", &resource.uri)?;
+            if resource.uri.is_empty() || resource.uri.len() > 4096 {
+                return Err(StorageError::InvalidRecord(
+                    "invalid MCP resource URI".into(),
+                ));
+            }
+            resource_uris.insert(id.as_str().to_owned(), resource.uri);
             capabilities.push(capability(
                 previous,
                 id,
@@ -1149,6 +1166,32 @@ impl McpClientService {
         }
         for prompt in catalog.prompts {
             let id = capability_id(server_id, "prompt", &prompt.name)?;
+            if prompt.arguments.len() > 100 {
+                return Err(StorageError::InvalidRecord(
+                    "MCP prompt has too many arguments".into(),
+                ));
+            }
+            let mut properties = serde_json::Map::new();
+            let mut required = Vec::new();
+            for argument in prompt.arguments {
+                if argument.name.is_empty()
+                    || argument.name.len() > 128
+                    || properties
+                        .insert(argument.name.clone(), json!({"type":"string"}))
+                        .is_some()
+                {
+                    return Err(StorageError::InvalidRecord(
+                        "invalid MCP prompt argument".into(),
+                    ));
+                }
+                if argument.required {
+                    required.push(argument.name);
+                }
+            }
+            let schema = json!({"type":"object","properties":properties,
+                "required":required,"additionalProperties":false});
+            let input_schema = schema_ref(server_id, "prompt", &prompt.name, "input", &schema)?;
+            schemas.insert(input_schema.schema_id.as_str().into(), schema);
             capabilities.push(capability(
                 previous,
                 id,
@@ -1156,7 +1199,7 @@ impl McpClientService {
                 "prompt",
                 prompt.name,
                 prompt.description,
-                None,
+                Some(input_schema),
                 None,
                 false,
             )?);
@@ -1168,9 +1211,11 @@ impl McpClientService {
             expected_catalog_revision,
             capabilities,
             schemas,
+            resource_uris,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn write_catalog(
         &self,
         tx: &mut dyn WriteTransaction,
@@ -1179,6 +1224,7 @@ impl McpClientService {
         expected_catalog_revision: &Revision,
         capabilities: Vec<McpCapability>,
         schemas: BTreeMap<String, Value>,
+        resource_uris: BTreeMap<String, String>,
     ) -> Result<McpServer, StorageError> {
         let (version, mut state) = current(tx.configuration(), scope)?;
         let server = state
@@ -1245,6 +1291,7 @@ impl McpClientService {
         }
         server.capabilities = capabilities;
         server.schemas = schemas;
+        server.resource_uris = resource_uris;
         server.auto_select_read_only = false;
         server.public.selected_tool_ids = BoundedList(selected);
         server.public.catalog_revision = rev(server.public.catalog_revision.get() + 1);
@@ -1329,6 +1376,7 @@ impl McpClientService {
                 transport: input.transport.clone(),
                 capabilities: Vec::new(),
                 schemas: BTreeMap::new(),
+                resource_uris: BTreeMap::new(),
                 auto_select_read_only: true,
             });
             public
@@ -1717,12 +1765,24 @@ pub enum McpEffectOutcome {
 }
 
 impl QueryHandler for McpClientService {
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        query: &AdmittedQuery,
+        env: &crate::ports::Preparation<'_>,
+    ) -> Result<Option<crate::ports::Prepared>, DomainFault> {
+        self.prepare_content(ctx, query, env)
+    }
+
     fn query(
         &self,
         ctx: &InvocationContext,
         query: &AdmittedQuery,
         snapshot: &dyn ReadSnapshot,
     ) -> Result<QueryAnswer, DomainFault> {
+        if let Some(answer) = self.content_answer(ctx, query, snapshot)? {
+            return Ok(answer);
+        }
         let result = match query.input() {
             OperationInput::Mcp(ops::Input::Servers(input)) => {
                 let scope =

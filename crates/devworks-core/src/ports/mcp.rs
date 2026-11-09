@@ -31,6 +31,12 @@ pub struct RemoteResource {
 pub struct RemotePrompt {
     pub name: String,
     pub description: String,
+    pub arguments: Vec<RemotePromptArgument>,
+}
+
+pub struct RemotePromptArgument {
+    pub name: String,
+    pub required: bool,
 }
 
 pub struct RemoteCatalog {
