@@ -888,6 +888,11 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         };
         let produced = f.produce(request.clone()).await.unwrap();
         assert_eq!(produced.result.outcome, Some(AttemptEnd::ToolCallsReady));
+        let mut skipped = f.generation(vec![]);
+        skipped.request_id = id("new-request-before-tool-results");
+        let held = f.produce(skipped).await;
+        assert!(matches!(held, Err(ref error) if format!("{error:?}").contains("unanswered tool calls")));
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
         let attempt = match produced.accounting {
             DriveOutcome::Settled(balance) => AttemptId(balance.attempt_id),
             other => panic!("{other:?}"),

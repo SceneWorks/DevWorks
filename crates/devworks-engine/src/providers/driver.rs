@@ -462,6 +462,41 @@ impl NativeProviders {
         if request.request_id != logical.request_id || request.request_id != attempt.request_id {
             return Err(StorageError::ScopeDenied);
         }
+        if let InferenceInput::Generation { session_id, .. } = &request.input
+            && !crate::tool_turn::pending_calls(self.store.as_ref(), &context, session_id)?
+                .is_empty()
+        {
+            // A fresh generation cannot skip an earlier unanswered tool call by supplying a
+            // context that omits it. The original request remains replayable so its durable
+            // calls can be dispatched and reconciled after a restart.
+            let replay = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                let Some(route) = read.router().route_request(&request.request_id)? else {
+                    return Ok(false);
+                };
+                let operation = read
+                    .operations()
+                    .operation(&route.operation_id)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                for journal in &operation.attempts {
+                    if let Some(stored) = read.usage().inference_attempt(&journal.id.0)?
+                        && stored.request_id == request.request_id
+                        && stored.session_id.as_ref() == Some(session_id)
+                        && devworks_core::services::usage::accounting::snapshot(&stored)?
+                            .admission_key
+                            == attempt.admission_key
+                    {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            })?;
+            if !replay {
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "new generation waits for earlier unanswered tool calls",
+                ));
+            }
+        }
         if let InferenceInput::Generation {
             session_id,
             context: request_context,

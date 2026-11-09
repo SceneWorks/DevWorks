@@ -854,73 +854,74 @@ pub(crate) fn dispatch_one(
     session_id: &Id,
     key: &ToolCallKey,
 ) -> Result<BatchOutcome, StorageError> {
-    let (call, started) = read_snapshot(store, &ReadOptions::default(), |read| {
-        let session = read
-            .sessions()
-            .session(session_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if ctx.session_id() != Some(session_id)
-            || session.closed()
-            || read.stamp().store_id != *ctx.store_id()
-            || read.stamp().restore_epoch != ctx.restore_epoch().get()
-            || !matches!(
-                ctx.principal_kind(),
-                PrincipalKind::Agent | PrincipalKind::Host
-            )
-            || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
-        {
-            return Err(StorageError::ScopeDenied);
-        }
-        if ctx.principal_kind() == PrincipalKind::Agent {
-            let binding = read
-                .authority()
-                .principal(ctx.principal())?
+    let (call, started, call_sequence, context_epoch) =
+        read_snapshot(store, &ReadOptions::default(), |read| {
+            let session = read
+                .sessions()
+                .session(session_id)?
                 .ok_or(StorageError::ScopeDenied)?;
-            if !binding.active
-                || session.agent_id != *ctx.principal()
-                || binding
-                    .project_id
-                    .as_ref()
-                    .is_some_and(|p| session.project_id.as_ref() != Some(p))
+            if ctx.session_id() != Some(session_id)
+                || session.closed()
+                || read.stamp().store_id != *ctx.store_id()
+                || read.stamp().restore_epoch != ctx.restore_epoch().get()
+                || !matches!(
+                    ctx.principal_kind(),
+                    PrincipalKind::Agent | PrincipalKind::Host
+                )
+                || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
             {
                 return Err(StorageError::ScopeDenied);
             }
-        }
-        let row = read
-            .sessions()
-            .tool_call(session_id, &key.attempt_id.0, &key.native_call_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if row.ordinal != key.ordinal.get() || row.response_sequence.is_some() {
-            return Err(StorageError::ScopeDenied);
-        }
-        let entry = read
-            .sessions()
-            .entries(session_id, row.call_sequence - 1, 1)?
-            .into_iter()
-            .next()
-            .filter(|e| e.sequence == row.call_sequence)
-            .ok_or(StorageError::ScopeDenied)?;
-        let TranscriptBody::ToolCallRecorded { tool_call } =
-            serde_json::from_value(entry.body).map_err(|_| StorageError::ScopeDenied)?
-        else {
-            return Err(StorageError::ScopeDenied);
-        };
-        if tool_call.call.attempt_id != key.attempt_id
-            || tool_call.call.native_call_id != key.native_call_id
-            || tool_call.call.ordinal != key.ordinal
-            || tool_call.capability_id.as_str() != row.capability_id
-        {
-            return Err(StorageError::ScopeDenied);
-        }
-        let started = devworks_core::services::sessions::transcript::tool_dispatch_started(
-            read.sessions(),
-            session_id,
-            key,
-            row.call_sequence,
-            session.last_durable_sequence(),
-        )?;
-        Ok((tool_call, started))
-    })?;
+            if ctx.principal_kind() == PrincipalKind::Agent {
+                let binding = read
+                    .authority()
+                    .principal(ctx.principal())?
+                    .ok_or(StorageError::ScopeDenied)?;
+                if !binding.active
+                    || session.agent_id != *ctx.principal()
+                    || binding
+                        .project_id
+                        .as_ref()
+                        .is_some_and(|p| session.project_id.as_ref() != Some(p))
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
+            }
+            let row = read
+                .sessions()
+                .tool_call(session_id, &key.attempt_id.0, &key.native_call_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if row.ordinal != key.ordinal.get() || row.response_sequence.is_some() {
+                return Err(StorageError::ScopeDenied);
+            }
+            let entry = read
+                .sessions()
+                .entries(session_id, row.call_sequence - 1, 1)?
+                .into_iter()
+                .next()
+                .filter(|e| e.sequence == row.call_sequence)
+                .ok_or(StorageError::ScopeDenied)?;
+            let TranscriptBody::ToolCallRecorded { tool_call } =
+                serde_json::from_value(entry.body).map_err(|_| StorageError::ScopeDenied)?
+            else {
+                return Err(StorageError::ScopeDenied);
+            };
+            if tool_call.call.attempt_id != key.attempt_id
+                || tool_call.call.native_call_id != key.native_call_id
+                || tool_call.call.ordinal != key.ordinal
+                || tool_call.capability_id.as_str() != row.capability_id
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            let started = devworks_core::services::sessions::transcript::tool_dispatch_started(
+                read.sessions(),
+                session_id,
+                key,
+                row.call_sequence,
+                session.last_durable_sequence(),
+            )?;
+            Ok((tool_call, started, row.call_sequence, session.context_epoch))
+        })?;
 
     if !started {
         let (source, targets) = read_snapshot(store, &ReadOptions::default(), |read| {
@@ -928,7 +929,7 @@ pub(crate) fn dispatch_one(
                 .usage()
                 .inference_attempt(&key.attempt_id.0)?
                 .ok_or(StorageError::ScopeDenied)?;
-            if attempt.session_id.as_ref() != Some(session_id) {
+            if attempt.session_id.as_ref() != Some(session_id) || attempt.state != "Settled" {
                 return Err(StorageError::ScopeDenied);
             }
             let page = read.history().page(
@@ -945,7 +946,13 @@ pub(crate) fn dispatch_one(
                     "tool dispatch waits for settled provider provenance",
                 )
             })?;
-            if event.payload["attemptId"] != json!(key.attempt_id) {
+            if event.kind != "ProviderResultRecorded"
+                || event.payload["attemptId"] != json!(key.attempt_id)
+                || event.payload["outcome"] != "ToolCallsReady"
+                || event.payload["turnStartSequence"]
+                    .as_i64()
+                    .is_none_or(|start| start < 0 || start >= call_sequence)
+            {
                 return Err(StorageError::ScopeDenied);
             }
             let binding: NativeBinding = serde_json::from_value(event.payload["binding"].clone())
@@ -953,6 +960,7 @@ pub(crate) fn dispatch_one(
             if binding.connection_id != attempt.connection_id
                 || binding.model_id != attempt.catalog_model_id
                 || format!("{:?}", binding.endpoint_profile) != attempt.endpoint_profile
+                || binding.context_epoch.get() != context_epoch
             {
                 return Err(StorageError::ScopeDenied);
             }
