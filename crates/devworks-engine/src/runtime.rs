@@ -21,7 +21,9 @@ use devworks_core::gateway::{CommandOutcome, Gateway, QueryOutcome};
 use devworks_core::ports::files::FileFault;
 use devworks_core::ports::os_notifications::{OsNotificationPermission, OsNotificationPort};
 use devworks_core::ports::process::{PowerPort, ProcessHost};
-use devworks_core::ports::storage::{ApplicationStore, StorageError, Unavailable, WriteOptions};
+use devworks_core::ports::storage::{
+    ApplicationStore, Cancellation, StorageError, Unavailable, WriteOptions,
+};
 use devworks_core::ports::{AuthorityPort, Clock, IdSource};
 use devworks_core::protocol::records::EvalSuiteSnapshot;
 use devworks_core::protocol::results::DomainDecision;
@@ -1557,6 +1559,7 @@ impl Runtime {
                 "native provider unavailable",
             )
         })?;
+        let tool_cancellation = cancellation.clone();
         let provider = providers
             .produce_cancellable(invocation, cancellation)
             .await?;
@@ -1581,7 +1584,11 @@ impl Runtime {
                 StorageError::InvalidRecord("tool turn lacks durable start position".into())
             })?;
             if has_tools {
-                tool_dispatches = self.dispatch_pending_tool_calls(&ctx, &session_id)?;
+                tool_dispatches = self.dispatch_pending_tool_calls_cancellable(
+                    &ctx,
+                    &session_id,
+                    tool_cancellation.as_ref(),
+                )?;
             }
             let unanswered =
                 !crate::tool_turn::pending_calls(self.store.as_ref(), &ctx, &session_id)?
@@ -1626,6 +1633,16 @@ impl Runtime {
         session_id: &Id,
         call: &devworks_core::protocol::provider::ToolCallKey,
     ) -> Result<devworks_core::services::sessions::transcript::BatchOutcome, StorageError> {
+        self.dispatch_tool_call_cancellable(ctx, session_id, call, None)
+    }
+
+    fn dispatch_tool_call_cancellable(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        call: &devworks_core::protocol::provider::ToolCallKey,
+        cancellation: Option<&Cancellation>,
+    ) -> Result<devworks_core::services::sessions::transcript::BatchOutcome, StorageError> {
         let providers = self.providers.as_ref().ok_or_else(|| {
             StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
@@ -1640,6 +1657,7 @@ impl Runtime {
             ctx,
             session_id,
             call,
+            cancellation,
         )
     }
 
@@ -1660,6 +1678,17 @@ impl Runtime {
         &self,
         ctx: &InvocationContext,
         session_id: &Id,
+    ) -> Result<Vec<ToolDispatch>, StorageError> {
+        self.dispatch_pending_tool_calls_cancellable(ctx, session_id, None)
+    }
+
+    /// A stopped turn cancels calls that have not started. Started calls retain their durable
+    /// marker and must reconcile under the same identity when work resumes.
+    pub fn dispatch_pending_tool_calls_cancellable(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        cancellation: Option<&Cancellation>,
     ) -> Result<Vec<ToolDispatch>, StorageError> {
         let calls = crate::tool_turn::pending_calls(self.store.as_ref(), ctx, session_id)?;
         if calls.is_empty() {
@@ -1683,7 +1712,21 @@ impl Runtime {
                     loop {
                         let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(call) = calls.get(index) else { break };
-                        let outcome = self.dispatch_tool_call(ctx, session_id, call);
+                        let outcome = if cancellation.is_some_and(Cancellation::is_cancelled) {
+                            self.cancel_tool_call_before_dispatch(ctx, session_id, call)
+                        } else {
+                            match self.dispatch_tool_call_cancellable(
+                                ctx,
+                                session_id,
+                                call,
+                                cancellation,
+                            ) {
+                                Err(StorageError::Cancelled) => {
+                                    self.cancel_tool_call_before_dispatch(ctx, session_id, call)
+                                }
+                                other => other,
+                            }
+                        };
                         results.lock().unwrap_or_else(|p| p.into_inner())[index] =
                             Some(ToolDispatch {
                                 call: call.clone(),

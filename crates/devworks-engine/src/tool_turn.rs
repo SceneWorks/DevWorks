@@ -923,6 +923,7 @@ pub(crate) fn frame(
 /// Execute one durable, unanswered provider call through the same gateway used by UI and agent
 /// tools. The call's recorded schema chooses the operation; provider arguments never choose it.
 /// Command retries reuse the host key, so a lost reply cannot repeat the effect.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_one(
     runtime: &Runtime,
     store: &dyn ApplicationStore,
@@ -931,6 +932,7 @@ pub(crate) fn dispatch_one(
     ctx: &InvocationContext,
     session_id: &Id,
     key: &ToolCallKey,
+    cancellation: Option<&Cancellation>,
 ) -> Result<BatchOutcome, StorageError> {
     let (call, started, call_sequence, context_epoch) =
         read_snapshot(store, &ReadOptions::default(), |read| {
@@ -1063,6 +1065,9 @@ pub(crate) fn dispatch_one(
         providers.verify_instruction_material(ctx, &source, targets.as_deref())?;
     }
 
+    if cancellation.is_some_and(Cancellation::is_cancelled) {
+        return Err(StorageError::Cancelled);
+    }
     let result = match selected_builtin(schemas, &call) {
         Ok((descriptor, mode, revision)) => {
             // Missing or unreadable input material is a recovery hold. It must not become a
@@ -1087,8 +1092,14 @@ pub(crate) fn dispatch_one(
             ));
         }
     };
+    if cancellation.is_some_and(Cancellation::is_cancelled) {
+        return Err(StorageError::Cancelled);
+    }
     if result.is_ok() {
-        mark_dispatch_started(store, ctx, session_id, key)?;
+        mark_dispatch_started(store, ctx, session_id, key, cancellation)?;
+        if cancellation.is_some_and(Cancellation::is_cancelled) {
+            return Err(StorageError::Cancelled);
+        }
     }
     let (outcome, bytes) = match result {
         Ok((descriptor, Mode::Query, raw)) => match runtime.query(ctx, descriptor.name, &raw) {
@@ -1222,11 +1233,19 @@ fn mark_dispatch_started(
     ctx: &InvocationContext,
     session_id: &Id,
     key: &ToolCallKey,
+    cancellation: Option<&Cancellation>,
 ) -> Result<(), StorageError> {
     let ctx = ctx.clone();
     let session_id = session_id.clone();
     let key = key.clone();
+    let cancellation = cancellation.cloned();
     run_write(store, WriteOptions::default(), move |tx| {
+        if cancellation
+            .as_ref()
+            .is_some_and(Cancellation::is_cancelled)
+        {
+            return Err(StorageError::Cancelled);
+        }
         let session = tx
             .sessions()
             .session(&session_id)?

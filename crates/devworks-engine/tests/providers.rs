@@ -1367,6 +1367,32 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
 }
 
 #[test]
+fn cancelled_native_tool_dispatch_records_only_predispatch_responses() {
+    runtime().block_on(async {
+        use devworks_core::services::sessions::transcript::BatchOutcome;
+        let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"cancelled-call\",\"type\":\"function\",\"function\":{\"name\":\"get_session\",\"arguments\":\"{\\\"sessionId\\\":\\\"session\\\"}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
+        let f = Fx::new("CompatibleChat", Script::sse(wire), false);
+        let tool = f.driver.schemas().builtin("sessions.get", devworks_core::registry::Mode::Query,
+            devworks_core::registry::SchemaRevision(1), "get_session").unwrap();
+        assert_eq!(f.produce(f.generation(vec![tool])).await.unwrap().result.outcome,
+            Some(AttemptEnd::ToolCallsReady));
+        let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let token = Cancellation::new();
+        token.cancel();
+        let dispatches = app.dispatch_pending_tool_calls_cancellable(
+            &f.context, &id("session"), Some(&token)).unwrap();
+        assert_eq!(dispatches.len(), 1);
+        assert!(matches!(&dispatches[0].outcome, Ok(BatchOutcome::Accepted(_))));
+        assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "ToolDispatchStarted").count(), 0);
+        assert!(f.transcript().iter().any(|entry| entry.kind == "ToolResponseRecorded"
+            && entry.body["outcome"]["kind"] == "CancelledBeforeDispatch"));
+        assert!(app.dispatch_pending_tool_calls(&f.context, &id("session")).unwrap().is_empty());
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        app.shutdown().await;
+    });
+}
+
+#[test]
 fn native_provider_holds_changed_repository_guidance_before_transport() {
     runtime().block_on(async {
         use devworks_core::ports::indexing::SourceTree;
