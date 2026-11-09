@@ -1752,6 +1752,27 @@ impl Runtime {
             .collect())
     }
 
+    /// On a session wake, record the current states of linked tool operations and append their
+    /// new facts to the previous native continuation. A redirect or epoch change requires the
+    /// caller to rebuild context before requesting more inference.
+    pub fn refresh_native_tool_context(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        previous: &devworks_core::protocol::provider::ArtifactRef,
+    ) -> Result<devworks_core::protocol::provider::ArtifactRef, StorageError> {
+        for update in self.reconcile_tool_operations(ctx, session_id)? {
+            update.outcome?;
+        }
+        crate::tool_turn::append_operation_updates(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            session_id,
+            previous,
+        )
+    }
+
     /// Build the next provider context from the immutable request context and settled native
     /// exchange. The caller publishes the returned material before a new request.
     pub fn tool_continuation_context(

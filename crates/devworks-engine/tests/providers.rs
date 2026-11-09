@@ -1193,6 +1193,97 @@ fn fresh_native_tool_turn_publishes_context_and_holds_on_user_redirection() {
 }
 
 #[test]
+fn later_operation_revisions_append_to_native_context_once_per_cursor() {
+    runtime().block_on(async {
+        use devworks_core::services::sessions::{transcript::{BatchOutcome, SessionBatch, SessionWriter}, turn};
+        let event = json!({"choices":[{"index":0,"delta":{"tool_calls":[
+            {"index":0,"id":"call-one","type":"function","function":{
+                "name":"get_session","arguments":"{\"sessionId\":\"session\"}"}}
+        ]},"finish_reason":null}]});
+        let wire = format!("data: {event}\n\ndata: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n");
+        let f = Fx::new("CompatibleChat", Script::sse(&wire), false);
+        let tool = f.driver.schemas().builtin("sessions.get", devworks_core::registry::Mode::Query,
+            devworks_core::registry::SchemaRevision(1), "get_session").unwrap();
+        let request = f.generation(vec![tool]);
+        assert_eq!(f.produce(request.clone()).await.unwrap().result.outcome,
+            Some(AttemptEnd::ToolCallsReady));
+        let mut accepted_call: CompleteToolCall = serde_json::from_value(f.transcript().iter()
+            .find(|entry| entry.kind == "ToolCallRecorded").unwrap().body["toolCall"].clone()).unwrap();
+        accepted_call.call.native_call_id = "accepted-operation-call".into();
+        accepted_call.call.ordinal = Counter::new(1).unwrap();
+        let operation_id = devworks_core::protocol::OperationId(id("accepted-operation"));
+        let ctx = f.context.clone();
+        let operation_for_write = operation_id.clone();
+        write(f.store.as_ref(), move |tx| {
+            tx.operations().record_intent(NewOperation {
+                id: operation_for_write.clone(), root_id: None, assignment_id: None,
+                capability: "fixture/accepted".into(), schema_version: 1,
+                args_digest: "a".repeat(64), payload: json!({}),
+            })?;
+            let session = tx.sessions().session(&id("session"))?.unwrap();
+            let key = accepted_call.call.clone();
+            let batch = turn::batch_of(&id("session"), tx.new_id(IdKind::TranscriptBatch),
+                session.context_epoch, session.next_sequence,
+                vec![TranscriptBody::ToolCallRecorded { tool_call: accepted_call },
+                    TranscriptBody::ToolResponseRecorded { call: key,
+                        outcome: ToolOutcome::OperationAccepted {
+                            operation_id: operation_for_write, artifacts: vec![],
+                        } }],
+                || tx.new_id(IdKind::TranscriptEntry));
+            assert!(matches!(SessionWriter::append_in(tx, &ctx, &SessionBatch::entries(batch))?,
+                BatchOutcome::Accepted(_)));
+            Ok(())
+        }).unwrap();
+        let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let invoke = f.native_invocation(request, PricingContext {
+            input_semantics: InputSemantics::Unknown, cache_read_possible: false,
+            cache_write_possible: false, cache_write_ttl_ms: None,
+        }, vec!["Text".into()], None, None, false);
+        let progress = app.produce_and_dispatch_native_turn(invoke, None).await.unwrap();
+        assert!(matches!(progress.provider.accounting, DriveOutcome::AlreadyDispatched));
+        let source = progress.continuation.unwrap();
+        let first = app.refresh_native_tool_context(&f.context, &id("session"), &source).unwrap();
+        let material: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
+            f.store.as_ref(), &f.context, &first, 1024 * 1024).unwrap().0).unwrap();
+        assert_eq!(material.messages.len(), 4);
+        assert!(matches!(&material.messages[3].content[0], ContentBlock::Text { text, .. }
+            if text.contains("Tool operation update:") && text.contains("accepted-operation")));
+        let replay = app.refresh_native_tool_context(&f.context, &id("session"), &first).unwrap();
+        assert_eq!(replay.version_id, first.version_id);
+        app.shutdown().await;
+        let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let operation_for_write = operation_id.clone();
+        write(f.store.as_ref(), move |tx| {
+            use devworks_core::protocol::OperationState;
+            let operation = tx.operations().operation(&operation_for_write)?.unwrap();
+            tx.operations().transition(&operation_for_write, operation.revision, None,
+                OperationState::CancelledBeforeDispatch, None)?;
+            Ok(())
+        }).unwrap();
+        let second = app.refresh_native_tool_context(&f.context, &id("session"), &first).unwrap();
+        let material: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
+            f.store.as_ref(), &f.context, &second, 1024 * 1024).unwrap().0).unwrap();
+        assert_eq!(material.messages.len(), 5);
+        assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "OperationUpdate").count(), 2);
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        let ctx = f.context.clone();
+        write(f.store.as_ref(), move |tx| {
+            let session = tx.sessions().session(&id("session"))?.unwrap();
+            let batch = turn::batch_of(&id("session"), tx.new_id(IdKind::TranscriptBatch),
+                session.context_epoch, session.next_sequence,
+                vec![TranscriptBody::UserMessage {
+                    content: vec![UserContent::Text { text: "Redirect".into() }],
+                }], || tx.new_id(IdKind::TranscriptEntry));
+            assert!(matches!(SessionWriter::append_in(tx, &ctx, &SessionBatch::entries(batch))?,
+                BatchOutcome::Accepted(_)));
+            Ok(())
+        }).unwrap();
+        assert!(app.refresh_native_tool_context(&f.context, &id("session"), &second).is_err());
+        app.shutdown().await;
+    });
+}
+
+#[test]
 fn native_provider_holds_changed_repository_guidance_before_transport() {
     runtime().block_on(async {
         use devworks_core::ports::indexing::SourceTree;

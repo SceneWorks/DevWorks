@@ -500,7 +500,7 @@ pub(crate) fn publish_continuation(
             store,
             &bytes,
             json!({"kind":"ProviderToolContinuation","sessionId":session_id,
-                "attemptId":attempt_id,"binding":binding}),
+                "attemptId":attempt_id,"binding":binding,"observedSequence":observed_sequence}),
         )?
         .map_err(invalid)?;
     let staged_for_write = staged.clone();
@@ -561,11 +561,210 @@ pub(crate) fn publish_continuation(
                 title: "Provider tool continuation",
                 media_type: "application/vnd.devworks.provider-context+json",
                 provenance: json!({"kind":"ProviderToolContinuation","sessionId":session_id,
-                    "attemptId":attempt_id,"binding":binding}),
+                    "attemptId":attempt_id,"binding":binding,"observedSequence":observed_sequence}),
                 scope,
                 owner: ctx.principal().clone(),
             },
         )?;
+        Ok(version_ref(&version))
+    });
+    artifacts.settle_host_bytes(store, &staged, committed.is_ok());
+    committed
+}
+
+/// Reconcile later operation facts into an append-only provider context. A provider's first tool
+/// result remains immutable; each subsequent journal revision enters as a separate host-labeled
+/// message. Any other transcript entry requires the caller to rebuild redirected context.
+pub(crate) fn append_operation_updates(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    source: &ArtifactRef,
+) -> Result<ArtifactRef, StorageError> {
+    let (bytes, provenance) = artifacts
+        .read_exact(store, ctx, source, 8 * 1024 * 1024)
+        .map_err(|_| StorageError::ScopeDenied)?;
+    let derived = &provenance["derived"];
+    if provenance["principalKind"] != "Host"
+        || provenance["producedBy"] != store.info().host_actor.0.as_str()
+        || derived["sessionId"] != session_id.as_str()
+        || !matches!(
+            derived["kind"].as_str(),
+            Some("ProviderToolContinuation" | "ProviderOperationUpdateContext")
+        )
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let binding: NativeBinding =
+        serde_json::from_value(derived["binding"].clone()).map_err(invalid)?;
+    let after = derived["observedSequence"]
+        .as_i64()
+        .ok_or_else(|| invalid("context source lacks transcript cursor"))?;
+    let mut context: ProviderContext = serde_json::from_slice(&bytes).map_err(invalid)?;
+    context
+        .validate()
+        .map_err(|error| invalid(format!("{error:?}")))?;
+    let (updates, observed) = read_snapshot(store, &ReadOptions::default(), |read| {
+        let session = authorized_session(read, ctx, session_id)?;
+        let version = read
+            .artifacts()
+            .version(&source.version_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.context_epoch != binding.context_epoch.get()
+            || after < 0
+            || after > session.last_durable_sequence()
+            || !version.live()
+            || version.artifact_id != source.artifact_id
+            || version.source["principalKind"] != "Host"
+            || version.source["producedBy"] != store.info().host_actor.0.as_str()
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let mut position = after;
+        let mut updates = Vec::new();
+        while position < session.last_durable_sequence() {
+            if position - after >= 10_000 {
+                return Err(invalid(
+                    "operation update context exceeds transcript scan bound",
+                ));
+            }
+            let page = read.sessions().entries(session_id, position, 500)?;
+            if page.is_empty() {
+                return Err(invalid("operation update transcript gap"));
+            }
+            for entry in page {
+                if entry.sequence != position + 1 {
+                    return Err(invalid("operation update transcript gap"));
+                }
+                position = entry.sequence;
+                let TranscriptBody::OperationUpdate {
+                    operation_id,
+                    revision,
+                    artifact,
+                } = serde_json::from_value(entry.body).map_err(invalid)?
+                else {
+                    return Err(StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "tool context needs redirected transcript reconstruction",
+                    ));
+                };
+                let version = read
+                    .artifacts()
+                    .version(&artifact.version_id)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                if !version.live()
+                    || version.artifact_id != artifact.artifact_id
+                    || version.source["principalKind"] != "Host"
+                    || version.source["producedBy"] != store.info().host_actor.0.as_str()
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
+                updates.push((operation_id, revision, artifact));
+                if updates.len() > 128 {
+                    return Err(invalid(
+                        "too many operation updates for one context revision",
+                    ));
+                }
+            }
+        }
+        Ok((updates, position))
+    })?;
+    if updates.is_empty() {
+        return Ok(source.clone());
+    }
+    let mut blocks = Vec::with_capacity(updates.len());
+    for (operation_id, revision, artifact) in updates {
+        let (bytes, provenance) = artifacts
+            .read_exact(store, ctx, &artifact, 1024 * 1024)
+            .map_err(|_| StorageError::ScopeDenied)?;
+        if provenance["principalKind"] != "Host"
+            || provenance["derived"]["kind"] != "ToolOperationUpdate"
+            || provenance["derived"]["sessionId"] != session_id.as_str()
+            || provenance["derived"]["operationId"] != operation_id.0.as_str()
+            || provenance["derived"]["revision"] != revision.get()
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let payload: Value = serde_json::from_slice(&bytes).map_err(invalid)?;
+        if payload["operationId"] != operation_id.0.as_str()
+            || payload["revision"] != revision.get()
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        blocks.push(ContentBlock::Text {
+            text: format!(
+                "Tool operation update: {}",
+                String::from_utf8(bytes).map_err(invalid)?
+            ),
+            cache: None,
+        });
+    }
+    context.messages.push(Message {
+        role: MessageRole::User,
+        content: blocks,
+    });
+    context
+        .validate()
+        .map_err(|error| invalid(format!("{error:?}")))?;
+    let bytes = serde_json::to_vec(&context).map_err(invalid)?;
+    let staged = artifacts
+        .stage_host_bytes(
+            store,
+            &bytes,
+            json!({"kind":"ProviderOperationUpdateContext",
+        "sessionId":session_id,"binding":binding,"observedSequence":observed}),
+        )?
+        .map_err(invalid)?;
+    let staged_for_write = staged.clone();
+    let artifacts_for_write = artifacts.clone();
+    let ctx_for_write = ctx.clone();
+    let session_for_write = session_id.clone();
+    let binding_for_write = binding.clone();
+    let committed = run_write(store, WriteOptions::default(), move |tx| {
+        let session = tx
+            .sessions()
+            .session(&session_for_write)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.context_epoch != binding_for_write.context_epoch.get()
+            || session.last_durable_sequence() != observed
+            || ctx_for_write.session_id() != Some(&session_for_write)
+            || tx.store().store_id != *ctx_for_write.store_id()
+            || tx.store().restore_epoch != ctx_for_write.restore_epoch().get()
+            || tx.actors().actor_kind(ctx_for_write.principal())?
+                != Some(ctx_for_write.principal_kind())
+            || !matches!(
+                ctx_for_write.principal_kind(),
+                PrincipalKind::Host | PrincipalKind::Agent
+            )
+            || session.closed()
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        if ctx_for_write.principal_kind() == PrincipalKind::Agent {
+            let principal = tx
+                .authority()
+                .principal(ctx_for_write.principal())?
+                .ok_or(StorageError::ScopeDenied)?;
+            if !principal.active
+                || session.agent_id != *ctx_for_write.principal()
+                || principal
+                    .project_id
+                    .as_ref()
+                    .is_some_and(|project| session.project_id.as_ref() != Some(project))
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+        let scope = session
+            .project_id
+            .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+        let version = artifacts_for_write.commit_host_bytes_in_scope(tx, &staged_for_write,
+            HostArtifactPublication { title: "Provider operation update context",
+                media_type: "application/vnd.devworks.provider-context+json",
+                provenance: json!({"kind":"ProviderOperationUpdateContext","sessionId":session_for_write,
+                    "binding":binding_for_write,"observedSequence":observed}),
+                scope, owner: ctx_for_write.principal().clone() })?;
         Ok(version_ref(&version))
     });
     artifacts.settle_host_bytes(store, &staged, committed.is_ok());
