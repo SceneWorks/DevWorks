@@ -1423,8 +1423,9 @@ pub struct ToolOperationUpdate {
     pub outcome: Result<Option<devworks_core::protocol::provider::ArtifactRef>, StorageError>,
 }
 
-/// One native generation and its independently dispatched tool calls. After `ToolCallsReady`, a
-/// missing continuation means at least one call still needs admission or reconciliation.
+/// One native generation and its independently dispatched tool calls. A completed turn publishes
+/// its next context; after `ToolCallsReady`, a missing continuation means at least one call still
+/// needs admission or reconciliation.
 pub struct NativeTurnProgress {
     pub provider: crate::providers::driver::ProviderInvocation,
     pub tool_dispatches: Vec<ToolDispatch>,
@@ -1530,8 +1531,8 @@ impl Runtime {
     }
 
     /// Drive a host-qualified native generation through durable tool dispatch and publish its
-    /// next immutable context. Replaying the same request recovers the saved provider result and
-    /// call identities; it never sends the inference or a gateway command a second time.
+    /// next immutable context, including an ordinary completed assistant turn. Replaying the
+    /// same request recovers saved results; it never sends inference or a gateway command twice.
     pub async fn produce_and_dispatch_native_turn(
         &self,
         invocation: crate::providers::driver::NativeInvocation,
@@ -1561,9 +1562,15 @@ impl Runtime {
             .await?;
         let mut tool_dispatches = Vec::new();
         let mut continuation = None;
-        if provider.result.outcome
-            == Some(devworks_core::services::usage::accounting::AttemptEnd::ToolCallsReady)
-        {
+        if matches!(
+            provider.result.outcome,
+            Some(
+                devworks_core::services::usage::accounting::AttemptEnd::ToolCallsReady
+                    | devworks_core::services::usage::accounting::AttemptEnd::Completed
+            )
+        ) {
+            let has_tools = provider.result.outcome
+                == Some(devworks_core::services::usage::accounting::AttemptEnd::ToolCallsReady);
             let attempt_id = provider.result.attempt_id.as_ref().ok_or_else(|| {
                 StorageError::InvalidRecord("tool turn lacks settled attempt identity".into())
             })?;
@@ -1573,11 +1580,12 @@ impl Runtime {
             let after_sequence = provider.result.turn_start_sequence.ok_or_else(|| {
                 StorageError::InvalidRecord("tool turn lacks durable start position".into())
             })?;
-            tool_dispatches = self.dispatch_pending_tool_calls(&ctx, &session_id)?;
+            if has_tools {
+                tool_dispatches = self.dispatch_pending_tool_calls(&ctx, &session_id)?;
+            }
             let unanswered =
-                crate::tool_turn::pending_calls(self.store.as_ref(), &ctx, &session_id)?
-                    .iter()
-                    .any(|call| &call.attempt_id == attempt_id);
+                !crate::tool_turn::pending_calls(self.store.as_ref(), &ctx, &session_id)?
+                    .is_empty();
             if !unanswered {
                 let material = crate::tool_turn::continuation_context(
                     self.store.as_ref(),
@@ -1587,6 +1595,7 @@ impl Runtime {
                         session_id: &session_id,
                         attempt_id,
                         after_sequence,
+                        has_tools,
                     },
                     binding,
                     &previous,
@@ -1792,6 +1801,7 @@ impl Runtime {
                 session_id,
                 attempt_id,
                 after_sequence,
+                has_tools: true,
             },
             binding,
             previous,

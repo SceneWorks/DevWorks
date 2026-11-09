@@ -39,6 +39,7 @@ pub(crate) struct TurnSource<'a> {
     pub session_id: &'a Id,
     pub attempt_id: &'a AttemptId,
     pub after_sequence: i64,
+    pub has_tools: bool,
 }
 
 pub(crate) struct ContinuationMaterial {
@@ -278,8 +279,13 @@ pub(crate) fn continuation_context(
         session_id,
         attempt_id,
         after_sequence,
+        has_tools,
     } = source;
-    let resolved = resolved_turn(store, ctx, session_id, attempt_id, after_sequence)?;
+    let resolved = if has_tools {
+        resolved_turn(store, ctx, session_id, attempt_id, after_sequence)?
+    } else {
+        Vec::new()
+    };
     let base = artifacts
         .read_exact(store, ctx, previous, 8 * 1024 * 1024)
         .map_err(|_| StorageError::ScopeDenied)?
@@ -347,6 +353,10 @@ pub(crate) fn continuation_context(
                     TranscriptBody::ToolCallRecorded { tool_call } => {
                         &tool_call.call.attempt_id == attempt_id
                     }
+                    TranscriptBody::ToolDispatchStarted { call }
+                    | TranscriptBody::ToolResponseRecorded { call, .. } => {
+                        &call.attempt_id == attempt_id
+                    }
                     TranscriptBody::NativeItem { artifact, .. } => {
                         let row = read
                             .artifacts()
@@ -356,7 +366,18 @@ pub(crate) fn continuation_context(
                     }
                     _ => false,
                 };
-                if belongs {
+                if !belongs {
+                    return Err(StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "tool continuation is stale after another provider turn",
+                    ));
+                }
+                if matches!(
+                    &body,
+                    TranscriptBody::AssistantAttempt { .. }
+                        | TranscriptBody::ToolCallRecorded { .. }
+                        | TranscriptBody::NativeItem { .. }
+                ) {
                     selected.push(body);
                 }
             }
@@ -414,7 +435,7 @@ pub(crate) fn continuation_context(
             _ => return Err(invalid("unexpected selected tool turn entry")),
         }
     }
-    if assistant.is_empty() {
+    if assistant.is_empty() && has_tools {
         return Err(invalid("empty assistant tool turn"));
     }
     let mut results = Vec::new();
@@ -461,14 +482,18 @@ pub(crate) fn continuation_context(
             cache: None,
         });
     }
-    context.messages.push(Message {
-        role: MessageRole::Assistant,
-        content: assistant,
-    });
-    context.messages.push(Message {
-        role: MessageRole::User,
-        content: results,
-    });
+    if !assistant.is_empty() {
+        context.messages.push(Message {
+            role: MessageRole::Assistant,
+            content: assistant,
+        });
+    }
+    if !results.is_empty() {
+        context.messages.push(Message {
+            role: MessageRole::User,
+            content: results,
+        });
+    }
     context.validate().map_err(|e| invalid(format!("{e:?}")))?;
     Ok(ContinuationMaterial {
         context,
@@ -499,7 +524,7 @@ pub(crate) fn publish_continuation(
         .stage_host_bytes(
             store,
             &bytes,
-            json!({"kind":"ProviderToolContinuation","sessionId":session_id,
+            json!({"kind":"ProviderTurnContinuation","sessionId":session_id,
                 "attemptId":attempt_id,"binding":binding,"observedSequence":observed_sequence}),
         )?
         .map_err(invalid)?;
@@ -558,9 +583,9 @@ pub(crate) fn publish_continuation(
             tx,
             &staged_for_write,
             HostArtifactPublication {
-                title: "Provider tool continuation",
+                title: "Provider turn continuation",
                 media_type: "application/vnd.devworks.provider-context+json",
-                provenance: json!({"kind":"ProviderToolContinuation","sessionId":session_id,
+                provenance: json!({"kind":"ProviderTurnContinuation","sessionId":session_id,
                     "attemptId":attempt_id,"binding":binding,"observedSequence":observed_sequence}),
                 scope,
                 owner: ctx.principal().clone(),
@@ -591,7 +616,11 @@ pub(crate) fn append_operation_updates(
         || derived["sessionId"] != session_id.as_str()
         || !matches!(
             derived["kind"].as_str(),
-            Some("ProviderToolContinuation" | "ProviderOperationUpdateContext")
+            Some(
+                "ProviderTurnContinuation"
+                    | "ProviderToolContinuation"
+                    | "ProviderOperationUpdateContext"
+            )
         )
     {
         return Err(StorageError::ScopeDenied);

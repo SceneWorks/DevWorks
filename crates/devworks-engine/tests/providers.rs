@@ -1198,6 +1198,51 @@ fn fresh_native_tool_turn_publishes_context_and_holds_on_user_redirection() {
 }
 
 #[test]
+fn completed_native_turn_publishes_replayable_assistant_context() {
+    runtime().block_on(async {
+        let f = Fx::new("CompatibleChat", Script::sse("data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"retained native state\",\"content\":\"Answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"), false);
+        let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let request = f.generation(vec![]);
+        let invoke = |request| f.native_invocation(request, PricingContext {
+            input_semantics: InputSemantics::Unknown, cache_read_possible: false,
+            cache_write_possible: false, cache_write_ttl_ms: None,
+        }, vec!["Text".into()], None, None, false);
+        let progress = app.produce_and_dispatch_native_turn(invoke(request.clone()), None).await.unwrap();
+        assert_eq!(progress.provider.result.outcome, Some(AttemptEnd::Completed));
+        assert!(progress.tool_dispatches.is_empty());
+        let source = progress.continuation.expect("completed turn continuation");
+        let material: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
+            f.store.as_ref(), &f.context, &source, 1024 * 1024).unwrap().0).unwrap();
+        assert_eq!(material.messages.len(), 2);
+        assert!(material.messages[1].content.iter().any(|block|
+            matches!(block, ContentBlock::Text { text, .. } if text == "Answer")));
+        assert!(material.messages[1].content.iter().any(|block|
+            matches!(block, ContentBlock::Native { .. })));
+        let replay = app.produce_and_dispatch_native_turn(invoke(request.clone()), None).await.unwrap();
+        assert!(matches!(replay.provider.accounting, DriveOutcome::AlreadyDispatched));
+        assert_eq!(replay.continuation.unwrap().sha256.as_str(), source.sha256.as_str());
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        f.http.lock().unwrap().body = VecDeque::from([
+            b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Second answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec(),
+        ]);
+        let mut next = f.generation(vec![]);
+        next.request_id = id("next-completed-request");
+        if let InferenceInput::Generation { context, .. } = &mut next.input {
+            *context = source.clone();
+        }
+        let second = app.produce_and_dispatch_native_turn(invoke(next), None).await.unwrap();
+        assert_eq!(second.provider.result.outcome, Some(AttemptEnd::Completed));
+        let second_context: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
+            f.store.as_ref(), &f.context, &second.continuation.unwrap(), 1024 * 1024).unwrap().0).unwrap();
+        assert_eq!(second_context.messages.len(), 3);
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 2);
+        assert!(app.produce_and_dispatch_native_turn(invoke(request), None).await.is_err());
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 2);
+        app.shutdown().await;
+    });
+}
+
+#[test]
 fn later_operation_revisions_append_to_native_context_once_per_cursor() {
     runtime().block_on(async {
         use devworks_core::services::sessions::{transcript::{BatchOutcome, SessionBatch, SessionWriter}, turn};
