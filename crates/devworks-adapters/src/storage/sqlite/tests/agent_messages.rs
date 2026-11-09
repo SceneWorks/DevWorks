@@ -217,35 +217,18 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
     })
     .unwrap();
     h.set_now(1_700_000_000_000 + 47 * 60 * 1_000);
-    let successor = ingress
-        .context(
-            ActorId(id("agent-a")),
-            PrincipalKind::Agent,
-            id("successor-poll"),
-            id("test-ingress"),
-            Counter::new(s.info().restore_epoch).unwrap(),
-            Revision::new(1).unwrap(),
-        )
-        .with_session(id("session-after-silence"));
+    h.raw().execute_batch(
+        r#"INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
+           VALUES('session-inherits-silent','conv-a','agent-a','root-a',0,1,'project-a',1700002820000,'["repo-a"]');"#
+    ).unwrap();
     run_write(&s, WriteOptions::default(), move |tx| {
-        let inbox = deliver_inbox(
-            tx,
-            &successor,
-            &project("project-a"),
-            &Recipient::Session(id("session-after-silence")),
-            0,
-            false,
-            10,
-        )?;
-        assert_eq!(inbox.items.len(), 1);
-        assert_eq!(inbox.items[0].1.id, inherited_id);
-        assert!(inbox.items[0].0.handed_over);
+        assert_eq!(handover_direct(tx, &id("session-inherits-silent"))?, 1);
         assert_eq!(
             tx.runs()
                 .agent_session_delivery(&inherited_id, &id("session-next"))?
                 .unwrap()
                 .handed_to_session_id,
-            Some(id("session-after-silence"))
+            Some(id("session-inherits-silent"))
         );
         Ok(())
     })

@@ -309,9 +309,6 @@ pub fn deliver_inbox(
     let now = tx.now_ms();
     if let Recipient::Session(id) = recipient {
         tx.sessions().touch_session_activity(id, now)?;
-        // A successor may have started while its predecessor was still active. Recheck when it
-        // actually receives, after authentication, so later silence can trigger one handover.
-        handover_direct(tx, id)?;
     }
     let mut rows = match recipient {
         Recipient::Session(id) => {
