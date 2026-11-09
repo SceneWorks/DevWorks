@@ -210,6 +210,7 @@ pub mod evals;
 pub mod git;
 pub mod help;
 pub mod indexing;
+mod instruction_guard;
 pub mod jobs;
 pub mod knowledge;
 pub mod notifications;

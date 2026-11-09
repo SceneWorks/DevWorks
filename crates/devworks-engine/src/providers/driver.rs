@@ -42,6 +42,7 @@ pub struct ProviderComposition {
     pub embedding_spaces: Vec<EmbeddingRegistration>,
     pub usage_semantics:
         std::collections::BTreeMap<String, devworks_core::services::usage::meter::InputSemantics>,
+    pub(crate) instruction_guard: Option<Arc<crate::instruction_guard::InstructionGuard>>,
 }
 impl std::fmt::Debug for ProviderComposition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -58,7 +59,15 @@ impl ProviderComposition {
             capabilities: Vec::new(),
             embedding_spaces: Vec::new(),
             usage_semantics: Default::default(),
+            instruction_guard: None,
         }
+    }
+    pub(crate) fn with_instruction_guard(
+        mut self,
+        guard: Arc<crate::instruction_guard::InstructionGuard>,
+    ) -> Self {
+        self.instruction_guard = Some(guard);
+        self
     }
 }
 #[derive(Clone, Debug)]
@@ -295,6 +304,25 @@ impl NativeProviders {
             composition,
             live: Arc::new(super::live::LiveTurns::default()),
         })
+    }
+    fn verify_instruction_context(
+        &self,
+        ctx: &InvocationContext,
+        request: &InferenceRequest,
+    ) -> Result<(), StorageError> {
+        let (Some(guard), InferenceInput::Generation { context, .. }) =
+            (&self.composition.instruction_guard, &request.input)
+        else {
+            return Ok(());
+        };
+        let bytes = self
+            .artifacts
+            .read_exact(self.store.as_ref(), ctx, context, 8 * 1024 * 1024)
+            .map_err(|_| StorageError::ScopeDenied)?
+            .0;
+        let material: devworks_core::providers::context::ProviderContext =
+            serde_json::from_slice(&bytes).map_err(|_| invalid("provider instruction context"))?;
+        guard.verify(ctx, &material)
     }
     /// Explicit host-qualified declarations, including Unknown support. Every request still
     /// intersects these with the CURRENT registered model/profile/account and current policy.
@@ -849,6 +877,7 @@ impl NativeProviders {
             .map(serde_json::from_str)
             .transpose()
             .map_err(|_| invalid("current OpenRouter policy"))?;
+        self.verify_instruction_context(context, request)?;
         let materials = OwnedMaterials {
             store: self.store.as_ref(),
             artifacts: self.artifacts.as_ref(),
@@ -916,8 +945,10 @@ impl OwnedInferenceSource for LazySource {
         let publication = prepared.clone();
         let expected_revision = connection.revision;
         let source_fences = self.source_fences.clone();
+        let instruction_request = self.request.clone();
         source = source.with_send_gate(Box::new(move || {
             use devworks_core::providers::materialize::SchemaDocuments;
+            owner.verify_instruction_context(&context, &instruction_request)?;
             for tool in &publication.tools {
                 owner
                     .schemas
