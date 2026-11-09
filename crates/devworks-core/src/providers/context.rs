@@ -121,6 +121,61 @@ pub struct GenerationParameters {
     pub user_id: Option<String>,
 }
 impl ProviderContext {
+    /// Construct the immutable snapshot for an explicit context-epoch boundary. Generic text,
+    /// images and completed tool exchanges remain in order; provider-owned opaque state cannot
+    /// cross the boundary. The caller records the omitted references with ContextEpochChanged.
+    pub fn converted_for_new_epoch(
+        mut self,
+        previous: &NativeBinding,
+        next: &NativeBinding,
+    ) -> Result<(Self, Vec<ArtifactRef>), ProviderError> {
+        self.validate()?;
+        if previous.context_epoch.get().checked_add(1) != Some(next.context_epoch.get()) {
+            return Err(ProviderError::InvalidInput("context_epoch_boundary"));
+        }
+        let mut outstanding = std::collections::BTreeSet::<String>::new();
+        let mut omitted = Vec::new();
+        let mut messages = Vec::with_capacity(self.messages.len());
+        for mut message in self.messages {
+            let mut content = Vec::with_capacity(message.content.len());
+            for block in message.content {
+                match block {
+                    ContentBlock::Native { binding, artifact } if &binding == previous => {
+                        omitted.push(artifact);
+                    }
+                    ContentBlock::Native { .. } => return Err(ProviderError::ForeignNative),
+                    ContentBlock::ToolCall { ref call_id, .. } => {
+                        if !matches!(&message.role, MessageRole::Assistant)
+                            || !outstanding.insert(call_id.clone())
+                        {
+                            return Err(ProviderError::InvalidInput("tool_call_order"));
+                        }
+                        content.push(block);
+                    }
+                    ContentBlock::ToolResult { ref call_id, .. } => {
+                        if !matches!(&message.role, MessageRole::User)
+                            || !outstanding.remove(call_id)
+                        {
+                            return Err(ProviderError::InvalidInput("tool_result_order"));
+                        }
+                        content.push(block);
+                    }
+                    _ => content.push(block),
+                }
+            }
+            if !content.is_empty() {
+                message.content = content;
+                messages.push(message);
+            }
+        }
+        if !outstanding.is_empty() {
+            return Err(ProviderError::InvalidInput("unanswered_tool_call"));
+        }
+        self.messages = messages;
+        self.validate()?;
+        Ok((self, omitted))
+    }
+
     pub fn validate(&self) -> Result<(), ProviderError> {
         if self.version != 1 {
             return Err(ProviderError::InvalidInput("context_version"));
@@ -133,6 +188,10 @@ impl ProviderContext {
                 .instruction_stamps
                 .iter()
                 .any(|stamp| !stamp.validate())
+            || !super::instructions::stamps_match_context(
+                &self.instructions,
+                &self.instruction_stamps,
+            )
         {
             return Err(ProviderError::InvalidInput("instruction_stamps"));
         }

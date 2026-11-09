@@ -99,6 +99,97 @@ fn context() -> ProviderContext {
         parameters: GenerationParameters::default(),
     }
 }
+
+#[test]
+fn explicit_provider_epoch_conversion_preserves_completed_tool_exchange() {
+    let mut material = Material::new();
+    let native = material.put(b"opaque", "application/json");
+    let arguments = material.put(b"{}", "application/json");
+    let previous = binding(EndpointProfile::OpenAiResponses);
+    let next = NativeBinding {
+        connection_id: id("other-connection"),
+        endpoint_profile: EndpointProfile::AnthropicMessages,
+        context_epoch: Counter::new(1).unwrap(),
+        ..previous.clone()
+    };
+    let mut current = context();
+    current.messages.push(Message {
+        role: MessageRole::Assistant,
+        content: vec![
+            ContentBlock::Text {
+                text: "Looked it up".into(),
+                cache: None,
+            },
+            ContentBlock::Native {
+                binding: previous.clone(),
+                artifact: native.clone(),
+            },
+            ContentBlock::ToolCall {
+                call_id: "call-1".into(),
+                wire_name: "get_record".into(),
+                arguments,
+            },
+        ],
+    });
+    current.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![ContentBlock::ToolResult {
+            call_id: "call-1".into(),
+            content: vec![ResultBlock::Text {
+                text: "found".into(),
+            }],
+            is_error: false,
+            cache: None,
+        }],
+    });
+    let (converted, omitted) = current.converted_for_new_epoch(&previous, &next).unwrap();
+    assert_eq!(omitted[0].sha256, native.sha256);
+    assert_eq!(converted.messages.len(), 3);
+    assert_eq!(converted.messages[1].content.len(), 2);
+    assert!(matches!(
+        converted.messages[1].content[1],
+        ContentBlock::ToolCall { .. }
+    ));
+    assert!(matches!(
+        converted.messages[2].content[0],
+        ContentBlock::ToolResult { .. }
+    ));
+    let mut request_material = Material::new();
+    request_material.put(b"{}", "application/json");
+    let mut converted_request = request(&mut request_material, &converted);
+    if let InferenceInput::Generation { context_epoch, .. } = &mut converted_request.input {
+        *context_epoch = Counter::new(1).unwrap();
+    }
+    let encoded = prepare(
+        identity(next.clone()),
+        &converted_request,
+        &caps(next.clone()),
+        &request_material,
+        None,
+        &limits(),
+    )
+    .unwrap();
+    assert_eq!(
+        body(&encoded)["messages"][1]["content"][1]["type"],
+        "tool_use"
+    );
+
+    let mut unanswered = context();
+    unanswered.messages.push(Message {
+        role: MessageRole::Assistant,
+        content: vec![ContentBlock::ToolCall {
+            call_id: "call-2".into(),
+            wire_name: "get_record".into(),
+            arguments: native,
+        }],
+    });
+    assert_eq!(
+        unanswered
+            .converted_for_new_epoch(&previous, &next)
+            .unwrap_err(),
+        ProviderError::InvalidInput("unanswered_tool_call")
+    );
+}
 fn binding(profile: EndpointProfile) -> NativeBinding {
     NativeBinding {
         connection_id: id("connection"),
