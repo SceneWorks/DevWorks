@@ -2,6 +2,7 @@
 //! and `blockers` (migration 1, extended by migration 11), `run_instructions` and
 //! `session_turns` (migration 11), `stop_coverage` (migration 16), plus the read-only views run
 //! control needs of `feature_plans`, `projects`, `work_items` and `queue_entries`.
+use super::agent_messages;
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use devworks_core::ports::storage::*;
@@ -418,7 +419,7 @@ fn state_name(s: BlockerState) -> &'static str {
 // ---------------------------------------------------------------------------------------------
 // Assignments
 
-const ASSIGNMENT_COLUMNS: &str = "id,root_id,work_id,parent_id,session_id,execution_id,state,generation,slot_held,revision,checkpoint_json,scope_key,scope_digest,plan_revision,instruction_revision,created_at";
+const ASSIGNMENT_COLUMNS: &str = "id,root_id,work_id,parent_id,session_id,execution_id,state,generation,slot_held,revision,checkpoint_json,scope_key,scope_digest,plan_revision,instruction_revision,created_at,purpose";
 type AssignmentRaw = (
     (
         String,
@@ -439,6 +440,7 @@ type AssignmentRaw = (
         Option<i64>,
         i64,
         i64,
+        String,
     ),
 );
 fn assignment_of(r: &Row<'_>) -> rusqlite::Result<AssignmentRaw> {
@@ -462,14 +464,17 @@ fn assignment_of(r: &Row<'_>) -> rusqlite::Result<AssignmentRaw> {
             r.get(13)?,
             r.get(14)?,
             r.get(15)?,
+            r.get(16)?,
         ),
     ))
 }
 fn assignment(raw: AssignmentRaw) -> Result<StoredAssignment, StorageError> {
     let ((id, root, work, parent, session, execution, state, generation), b) = raw;
-    let (slot, revision, checkpoint, key, digest, plan, instr, created) = b;
+    let (slot, revision, checkpoint, key, digest, plan, instr, created, purpose) = b;
     Ok(StoredAssignment {
         id: AssignmentId(id_of(id)?),
+        purpose: AssignmentPurpose::parse(&purpose)
+            .ok_or_else(|| corrupt(format!("stored assignment purpose {purpose}")))?,
         root_id: RootId(id_of(root)?),
         work_id: RootId(id_of(work)?),
         parent_id: opt_id(parent)?.map(AssignmentId),
@@ -639,6 +644,57 @@ const LIVE_ASSIGNMENT: &str = "state IN ('Ready','Active','Waiting')";
 macro_rules! run_reads {
     ($t:ty) => {
         impl RunRead for $t {
+            fn agent_assignment_context(&self, assignment: &AssignmentId) -> Result<Option<StoredAgentAssignmentContext>, StorageError> {
+                agent_messages::agent_assignment_context(self.conn, assignment)
+            }
+            fn agent_message(&self, id: &Id) -> Result<Option<StoredAgentMessage>, StorageError> {
+                agent_messages::message(self.conn, id)
+            }
+            fn agent_message_by_key(&self, project: &ProjectId, sender: &ActorId, key: &str) -> Result<Option<StoredAgentMessage>, StorageError> {
+                agent_messages::by_key(self.conn, project, sender, key)
+            }
+            fn agent_messages(&self, project: &ProjectId, before: Option<&Id>, limit: u16) -> Result<Vec<StoredAgentMessage>, StorageError> {
+                agent_messages::messages(self.conn, project, before, limit)
+            }
+            fn unhanded_direct_deliveries(&self, project: &ProjectId, after: i64, limit: u16) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+                agent_messages::unhanded_direct_deliveries(self.conn, project, after, limit)
+            }
+            fn agent_message_history(&self, filter: &AgentMessageHistoryFilter<'_>) -> Result<Vec<(i64, StoredAgentMessage)>, StorageError> {
+                agent_messages::message_history(self.conn, filter)
+            }
+            fn agent_assignment_thread(&self, project: &ProjectId, assignment: &AssignmentId, direction: &str, unacknowledged_only: bool, before: Option<&Id>, limit: u16) -> Result<Vec<(StoredAgentMessage, Option<StoredAgentDelivery>)>, StorageError> {
+                agent_messages::assignment_thread(self.conn, project, assignment, direction, unacknowledged_only, before, limit)
+            }
+            fn agent_delivery(&self, message: &Id, recipient: Option<&AssignmentId>) -> Result<Option<StoredAgentDelivery>, StorageError> {
+                agent_messages::delivery(self.conn, message, recipient)
+            }
+            fn agent_session_delivery(&self, message: &Id, session: &Id) -> Result<Option<StoredAgentDelivery>, StorageError> {
+                agent_messages::session_delivery(self.conn, message, session)
+            }
+            fn agent_recipient_count(&self, message: &Id) -> Result<usize, StorageError> {
+                agent_messages::recipient_count(self.conn, message)
+            }
+            fn agent_session_activity_at(&self, session: &Id) -> Result<Option<i64>, StorageError> {
+                agent_messages::session_activity_at(self.conn, session)
+            }
+            fn open_blocking_question(&self, item: &RootId) -> Result<bool, StorageError> {
+                agent_messages::open_blocking_question(self.conn, item)
+            }
+            fn agent_inbox(&self, project: &ProjectId, recipient: Option<&AssignmentId>, after: i64, include_read: bool, limit: u16) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+                agent_messages::inbox(self.conn, project, recipient, after, include_read, limit)
+            }
+            fn agent_session_inbox(&self, project: &ProjectId, session: &Id, after: i64, include_read: bool, limit: u16) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+                agent_messages::session_inbox(self.conn, project, session, after, include_read, limit)
+            }
+            fn agent_delivery_head(&self) -> Result<i64, StorageError> {
+                agent_messages::delivery_head(self.conn)
+            }
+            fn agent_message_events(&self, project: &ProjectId, after: i64, limit: u16) -> Result<Vec<StoredAgentMessageEvent>, StorageError> {
+                agent_messages::events(self.conn, project, after, limit)
+            }
+            fn agent_event_head(&self) -> Result<i64, StorageError> {
+                agent_messages::event_head(self.conn)
+            }
             fn root_control(
                 &self,
                 root: &RootId,
@@ -749,7 +805,7 @@ macro_rules! run_reads {
                 inherited_requirements(self.conn,work)
             }
             fn live_assignment_for_work(&self,work:&RootId)->Result<Option<StoredAssignment>,StorageError>{
-                Ok(assignments(self.conn,&format!("work_id=?1 AND {LIVE_ASSIGNMENT} LIMIT 1"),[work.0.as_str()])?.into_iter().next())
+                Ok(assignments(self.conn,&format!("work_id=?1 AND purpose='Primary' AND {LIVE_ASSIGNMENT} LIMIT 1"),[work.0.as_str()])?.into_iter().next())
             }
             fn assignment(
                 &self,
@@ -975,6 +1031,41 @@ fn root_exists(conn: &Connection, root: &RootId) -> Result<(), StorageError> {
 }
 
 impl RunRepository for Unit<'_> {
+    fn insert_agent_assignment_context(
+        &mut self,
+        context: &StoredAgentAssignmentContext,
+    ) -> Result<(), StorageError> {
+        agent_messages::insert_agent_assignment_context(self.conn, context)
+    }
+    fn insert_agent_message(&mut self, message: &StoredAgentMessage) -> Result<(), StorageError> {
+        agent_messages::insert_message(self.conn, message)
+    }
+    fn resolve_agent_message(
+        &mut self,
+        message: &StoredAgentMessage,
+        expected_revision: i64,
+    ) -> Result<(), StorageError> {
+        agent_messages::resolve_message(self.conn, message, expected_revision)
+    }
+    fn insert_agent_delivery(
+        &mut self,
+        delivery: &StoredAgentDelivery,
+    ) -> Result<(), StorageError> {
+        agent_messages::insert_delivery(self.conn, delivery)
+    }
+    fn update_agent_delivery(
+        &mut self,
+        delivery: &StoredAgentDelivery,
+        expected_revision: i64,
+    ) -> Result<(), StorageError> {
+        agent_messages::update_delivery(self.conn, delivery, expected_revision)
+    }
+    fn insert_agent_message_event(
+        &mut self,
+        event: &StoredAgentMessageEvent,
+    ) -> Result<(), StorageError> {
+        agent_messages::insert_event(self.conn, event)
+    }
     fn insert_root_control(&mut self, c: &StoredRootControl) -> Result<(), StorageError> {
         if c.revision < 1 || c.generation < 0 {
             return Err(invalid("root control revision or generation out of range"));
@@ -1181,11 +1272,14 @@ impl RunRepository for Unit<'_> {
         if a.revision < 1 || a.generation < 0 || a.instruction_revision < 0 {
             return Err(invalid("assignment revision or counters out of range"));
         }
+        if a.purpose == AssignmentPurpose::Child && a.parent_id.is_none() {
+            return Err(invalid("a child assignment requires a parent"));
+        }
         if let Some(k) = &a.scope_key {
             bounded("scope key", k, 256)?;
         }
         db(self.conn.execute(
-            &format!("INSERT INTO assignments({ASSIGNMENT_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)"),
+            &format!("INSERT INTO assignments({ASSIGNMENT_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)"),
             params![
                 a.id.0.as_str(),
                 a.root_id.0.as_str(),
@@ -1203,6 +1297,7 @@ impl RunRepository for Unit<'_> {
                 a.plan_revision,
                 a.instruction_revision,
                 a.created_at_ms,
+                a.purpose.as_str(),
             ],
         ))
         .map(|_| ())
@@ -1231,6 +1326,7 @@ impl RunRepository for Unit<'_> {
         if current.root_id != a.root_id
             || current.work_id != a.work_id
             || current.parent_id != a.parent_id
+            || current.purpose != a.purpose
             || !current.state.is_live()
             || a.revision <= expected
             || a.generation < current.generation

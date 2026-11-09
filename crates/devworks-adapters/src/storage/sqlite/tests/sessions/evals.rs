@@ -331,9 +331,35 @@ fn recorded_nonbinary_outcomes_stay_out_of_the_pass_rate_and_incomplete_never_pa
         bodies.push(json!({"kind":"ToolCallRecorded","toolCall":call(&native,ordinal as u32)}));
         bodies.push(json!({"kind":"ToolResponseRecorded","call":key(&native,ordinal as u32),"outcome":status}));
     }
-    // A literal-text check on a valid non-text variant is an explicit grader error.
-    bodies.push(json!({"kind":"HostNotice","source":"host-notice","artifact":art()}));
     append_values(&fx, "outcomes", bodies, vec![]);
+    // A literal-text check on a valid non-text variant is an explicit grader error. Host
+    // notices are host-authored; a worker can no longer forge one in its batch.
+    let info = fx.store.info();
+    let host = HostIngress::new(&*fx.store)
+        .context(
+            info.host_actor,
+            PrincipalKind::Host,
+            id("notice-invocation"),
+            id("host-ui"),
+            Counter::new(info.restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(id("session-a"));
+    let next = fx.session("session-a").next_sequence;
+    accepted(fx.append(
+        &host,
+        SessionBatch::entries(tbatch(
+            "notice",
+            "session-a",
+            0,
+            next,
+            vec![entry(
+                "notice-entry",
+                next,
+                json!({"kind":"HostNotice","source":"host-notice","artifact":art()}),
+            )],
+        )),
+    ));
     let report = grade(
         &fx,
         &suite(vec![

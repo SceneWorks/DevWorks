@@ -199,6 +199,8 @@
 //!
 //! Nothing here establishes product acceptance: tests run the real SQLite adapter with injected
 //! clocks and scripted handlers, without inference, network or containers.
+pub mod agent_inbox;
+pub mod agent_supervisor;
 pub mod approvals;
 pub mod browser;
 mod context_epoch;

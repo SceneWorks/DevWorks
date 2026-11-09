@@ -14,9 +14,10 @@ use super::{
 };
 use crate::ports::IdKind;
 use crate::ports::storage::{
-    ActivationFilter, ActivationOutcome, ActivationPhase, ActivationPurpose, AssignmentState,
-    BlockerFilter, DesiredExecution, HoldCause, InstructionStage, StopCause, StorageError,
-    StoredActivation, StoredAssignment, StoredInstruction, StoredTurn, WorkRoot, WriteTransaction,
+    ActivationFilter, ActivationOutcome, ActivationPhase, ActivationPurpose, AssignmentPurpose,
+    AssignmentState, BlockerFilter, DesiredExecution, HoldCause, InstructionStage, StopCause,
+    StorageError, StoredActivation, StoredAssignment, StoredInstruction, StoredTurn, WorkRoot,
+    WriteTransaction,
 };
 use crate::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId, RootId};
 use serde_json::{Value, json};
@@ -403,13 +404,15 @@ impl ControlService {
             bound.generation += 1;
             bound.revision += 1;
             tx.runs().update_assignment(&bound, asg.revision)?;
-            crate::services::work::allocation::transfer(
-                tx,
-                &bound.work_id.0,
-                &a.id,
-                Some(&bound.session_id),
-                &actor,
-            )?;
+            if bound.purpose == AssignmentPurpose::Primary {
+                crate::services::work::allocation::transfer(
+                    tx,
+                    &bound.work_id.0,
+                    &a.id,
+                    Some(&bound.session_id),
+                    &actor,
+                )?;
+            }
         }
         let mut running = a.clone();
         running.phase = ActivationPhase::Running;
@@ -753,6 +756,32 @@ impl ControlService {
         actor: &ActorId,
         new: NewRunAssignment,
     ) -> Gate<StoredAssignment> {
+        self.register_assignment_with_purpose(tx, actor, new, AssignmentPurpose::Primary)
+    }
+
+    /// Registers a scoped descendant without taking the root issue's primary work ownership.
+    /// The caller must supply a live parent and a fresh session of the same root.
+    pub fn register_child_assignment(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        actor: &ActorId,
+        new: NewRunAssignment,
+    ) -> Gate<StoredAssignment> {
+        if new.parent.is_none() {
+            return Ok(Err(Fenced::Invalid(
+                "a child assignment needs a parent".into(),
+            )));
+        }
+        self.register_assignment_with_purpose(tx, actor, new, AssignmentPurpose::Child)
+    }
+
+    fn register_assignment_with_purpose(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        actor: &ActorId,
+        new: NewRunAssignment,
+        purpose: AssignmentPurpose,
+    ) -> Gate<StoredAssignment> {
         let Some(root) = work_root(tx, &new.root)? else {
             return Ok(Err(Fenced::NotFound("root")));
         };
@@ -818,6 +847,7 @@ impl ControlService {
             .map(|a| a.id);
         let a = StoredAssignment {
             id: AssignmentId(tx.new_id(IdKind::Link)),
+            purpose,
             root_id: root.id.clone(),
             work_id: work.id.clone(),
             parent_id: new.parent.clone(),
@@ -841,12 +871,14 @@ impl ControlService {
             Ok(()) => {}
             Err(StorageError::Duplicate { .. }) => {
                 return Ok(Err(Fenced::Invalid(
-                    "the root already has a live coordinator or the work a live assignment".into(),
+                    "the root already has a live primary owner or the assignment conflicts".into(),
                 )));
             }
             Err(e) => return Err(e),
         }
-        if let Some(execution) = &a.execution_id {
+        if a.purpose == AssignmentPurpose::Primary
+            && let Some(execution) = &a.execution_id
+        {
             crate::services::work::allocation::transfer(
                 tx,
                 &a.work_id.0,
@@ -866,6 +898,7 @@ impl ControlService {
             "AssignmentRegistered",
             json!({
                 "workId": a.work_id.0.as_str(),
+                "purpose": a.purpose.as_str(),
                 "parentId": a.parent_id.as_ref().map(|p| p.0.as_str()),
                 "sessionId": a.session_id.as_str(),
                 "scopeKey": a.scope_key,
@@ -903,7 +936,26 @@ impl ControlService {
         };
         let mut after = a.clone();
         after.state = state;
-        if state != AssignmentState::Active {
+        if state == AssignmentState::Active && a.parent_id.is_some() {
+            if a.state != AssignmentState::Active {
+                let limit =
+                    crate::settings::service::max_subagents(tx.configuration(), &root.project_id)?;
+                let occupied = root_assignments(tx.runs(), &root.id, true)?
+                    .into_iter()
+                    .filter(|other| {
+                        other.id != a.id
+                            && other.parent_id.is_some()
+                            && other.state == AssignmentState::Active
+                    })
+                    .count();
+                if occupied >= limit {
+                    return Ok(Err(Fenced::Invalid(format!(
+                        "the root's subagent allowance ({limit}) is occupied"
+                    ))));
+                }
+            }
+            after.slot_held = true;
+        } else if state != AssignmentState::Active {
             after.slot_held = false;
         }
         after.revision += 1;

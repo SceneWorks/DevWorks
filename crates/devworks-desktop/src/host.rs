@@ -40,6 +40,7 @@ use devworks_core::ports::storage::{ApplicationStore, StorageError, WriteOptions
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
 use devworks_core::services::UseCases;
+use devworks_core::services::agents::AgentService;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::history::HistoryService;
@@ -374,6 +375,8 @@ async fn compose(
         Some(artifact_files),
         Arc::new(NoVectorIndex),
     ));
+    let run_control = Arc::new(ControlService::new(id_source.clone()));
+    let agents = Arc::new(AgentService::new(id_source.clone(), run_control.clone()));
     let use_cases = UseCases::new()
         .with_queue()
         .with_settings(settings)
@@ -381,6 +384,7 @@ async fn compose(
             id_source.clone(),
             store.clone(),
         )))
+        .with_agents(agents)
         .with_history(Arc::new(HistoryService::new(id_source.clone())))
         // The router resolves tiers, named models, effort and availability over the provider
         // connections' durable rows (the same unit of work as each route).
@@ -578,7 +582,7 @@ async fn compose(
         process_host: Arc::new(NativeProcessHost),
         // The production run-control service (stored plan approval, no coordinator launcher
         // until the agent supervisor exists): accepted work is held at shutdown and boot.
-        runs: RunComposition::new(Arc::new(ControlService::new(id_source.clone()))),
+        runs: RunComposition::new(run_control),
         power: Arc::new(NativePower),
         diagnostics,
         // Owned browser sessions: discovered or configured Chromium-family browsers, owned
@@ -915,6 +919,49 @@ pub struct DesktopBackend {
     host: Arc<Host>,
 }
 impl Backend for DesktopBackend {
+    fn read_coordinator_notice(
+        &self,
+        reference: &devworks_core::protocol::provider::ArtifactRef,
+    ) -> Result<String, String> {
+        let (bytes, _) = self
+            .host
+            .runtime
+            .artifacts()
+            .read_exact(
+                &**self.host.runtime.store(),
+                &self.host.ctx,
+                reference,
+                8_000,
+            )
+            .map_err(|error| format!("coordinator context read: {error:?}"))?;
+        String::from_utf8(bytes).map_err(|_| "coordinator context is not UTF-8".into())
+    }
+    fn append_coordinator_notice(
+        &self,
+        session: &Id,
+        screen: &str,
+        context: &str,
+    ) -> Result<(), String> {
+        let store = self.host.runtime.store();
+        let info = store.info();
+        let host = HostIngress::new(&**store).context(
+            info.host_actor,
+            PrincipalKind::Host,
+            self.host.ids.next_id(IdKind::Correlation),
+            self.host.ids.next_id(IdKind::Invocation),
+            Counter::new(info.restore_epoch).map_err(|e| e.to_string())?,
+            Revision::new(1).map_err(|e| e.to_string())?,
+        );
+        devworks_core::services::sessions::notice::append_screen_context(
+            &**store,
+            self.host.runtime.artifacts(),
+            &host,
+            session,
+            screen,
+            context,
+        )
+        .map_err(|e| format!("coordinator context notice: {e:?}"))
+    }
     fn purge_client_acknowledge(
         &self,
         scope: &devworks_core::ports::storage::ProjectPurgeClientScope,

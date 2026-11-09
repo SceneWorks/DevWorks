@@ -14,11 +14,11 @@ use crate::theme;
 use crate::virtual_list::{self, Scrolls};
 use crate::web_panel::WebAction;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
-use devworks_core::protocol::DomainErrorCode;
 use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::records::{
     ArtifactRecord, BrowserSession, ConnectionLifecycle, ItemState, ResourceRecord,
 };
+use devworks_core::protocol::{DomainErrorCode, Id};
 use devworks_core::settings::validate::codes;
 use devworks_core::settings::view::Health;
 use eframe::egui::{
@@ -182,6 +182,8 @@ pub struct Shell {
     route: Route,
     intelligence_open: bool,
     coordinator_open: bool,
+    /// Last screen context attempted for one selected conversation while the sidebar is open.
+    last_coordinator_notice: Option<(String, String)>,
     routes: BTreeMap<Route, RouteMemory>,
     pub chat: Chat,
     pub settings: SettingsScreen,
@@ -340,6 +342,7 @@ impl Shell {
             intelligence_open: memory.intelligence_open,
             // The sidebar never reopens on its own on the Home screen (UI-13).
             coordinator_open: memory.coordinator_open && memory.route != Route::Chat,
+            last_coordinator_notice: None,
             routes: memory.routes.clone(),
             chat,
             settings,
@@ -472,7 +475,97 @@ impl Shell {
         }
         self.coordinator_open = !self.coordinator_open;
         if self.coordinator_open {
+            self.last_coordinator_notice = None;
             self.ensure_conversation_loaded();
+        }
+    }
+
+    fn append_coordinator_context_if_changed(&mut self) {
+        if !self.coordinator_open || self.route == Route::Chat || self.online().is_err() {
+            return;
+        }
+        let Some(session) = self.chat.selected.clone() else {
+            return;
+        };
+        let screen = self.route.screen();
+        let (board, card) = if matches!(
+            self.route,
+            Route::Features | Route::Issues | Route::Overview
+        ) {
+            (self.work.board.as_deref(), self.work.card.as_deref())
+        } else {
+            (None, None)
+        };
+        let tab = match self.route {
+            Route::Approvals => self.decisions.tab,
+            Route::Knowledge => self.knowledge.tab,
+            Route::Databases => self.graph.tab,
+            Route::Usage => self.usage.tab,
+            _ => self.routes.get(&self.route).map_or(0, |view| view.tab),
+        };
+        let selection = match self.route {
+            Route::Approvals => self.decisions.selected.as_ref().map(|v| v.id.as_str()),
+            Route::Knowledge => self.knowledge.selected.as_ref().map(Id::as_str),
+            Route::Databases => self.graph.selected.as_ref().map(|v| v.node_id.as_str()),
+            Route::Jobs => self.jobs.selected.as_deref(),
+            Route::AddOns => self.addons.selected.as_deref(),
+            Route::Help => self.help.selected.as_ref().map(|(_, topic)| topic.as_str()),
+            _ => self
+                .routes
+                .get(&self.route)
+                .and_then(|view| view.selection.as_deref()),
+        };
+        let selection = selection.unwrap_or("");
+        let knowledge_project = if self.route == Route::Knowledge {
+            self.knowledge.project.as_deref().unwrap_or("")
+        } else {
+            ""
+        };
+        let key = format!(
+            "{}|{}|{}|{}|{}|{}|{}",
+            screen.id,
+            self.selected_project.as_deref().unwrap_or(""),
+            board.unwrap_or(""),
+            card.unwrap_or(""),
+            tab,
+            selection,
+            knowledge_project
+        );
+        if self.last_coordinator_notice.as_ref() == Some(&(session.clone(), key.clone())) {
+            return;
+        }
+        let context = format!(
+            "Current screen: {}. {}\nProject: {}\nFeature: {}\nItem: {}\nSubview: {}\nSelection: {}\nKnowledge scope: {}\nLocal Help topic: {}",
+            screen.title,
+            screen.summary,
+            self.selected_project.as_deref().unwrap_or("workspace"),
+            board.unwrap_or("none"),
+            card.unwrap_or("none"),
+            screen.subviews.get(tab).copied().unwrap_or("default"),
+            if selection.is_empty() {
+                "none"
+            } else {
+                selection
+            },
+            if knowledge_project.is_empty() {
+                "workspace"
+            } else {
+                knowledge_project
+            },
+            screen.help_topic
+        );
+        let Some(backend) = self.backend() else {
+            return;
+        };
+        match Id::new(session.clone()) {
+            Ok(id) => match backend.append_coordinator_notice(&id, screen.id, &context) {
+                Ok(()) => {
+                    self.last_coordinator_notice = Some((session.clone(), key));
+                    self.load_transcript(&session);
+                }
+                Err(error) => self.status = Some(error),
+            },
+            Err(_) => self.status = Some("Coordinator conversation identity is invalid".into()),
         }
     }
 
@@ -1996,25 +2089,44 @@ impl Shell {
                     }
                 }
             }
-            (Slot::Transcript(id), Reply::Query(q)) => match ops::transcript_page(q) {
-                Ok(page) => {
-                    let more = self
-                        .chat
-                        .transcripts
-                        .entry(id.clone())
-                        .or_default()
-                        .apply(page);
-                    self.chat.reconcile_text_preview();
-                    if more {
-                        self.load_transcript(&id);
+            (Slot::Transcript(id), Reply::Query(q)) => {
+                match ops::transcript_page(q) {
+                    Ok(page) => {
+                        let more = self
+                            .chat
+                            .transcripts
+                            .entry(id.clone())
+                            .or_default()
+                            .apply(page);
+                        let latest_notice=self.chat.transcripts.get(&id).and_then(|transcript|
+                        transcript.entries.iter().rev().find_map(|entry|match &entry.body {
+                            devworks_core::protocol::provider::TranscriptBody::HostNotice{artifact,..}=>Some(artifact.clone()),
+                            _=>None,
+                        }));
+                        if let Some(artifact) = latest_notice
+                            && !self
+                                .chat
+                                .notice_texts
+                                .contains_key(artifact.version_id.as_str())
+                            && let Some(backend) = self.backend()
+                            && let Ok(text) = backend.read_coordinator_notice(&artifact)
+                        {
+                            self.chat
+                                .notice_texts
+                                .insert(artifact.version_id.as_str().into(), text);
+                        }
+                        self.chat.reconcile_text_preview();
+                        if more {
+                            self.load_transcript(&id);
+                        }
+                    }
+                    Err(e) => {
+                        let t = self.chat.transcripts.entry(id).or_default();
+                        t.loading = false;
+                        t.error = Some(e.describe());
                     }
                 }
-                Err(e) => {
-                    let t = self.chat.transcripts.entry(id).or_default();
-                    t.loading = false;
-                    t.error = Some(e.describe());
-                }
-            },
+            }
             (Slot::TextPreview(id, generation), Reply::Task(result)) => {
                 self.apply_live_text(&id, generation, result);
             }
@@ -3705,6 +3817,7 @@ impl Shell {
             self.poll_live_text(&ctx);
         }
         if self.lifecycle == Lifecycle::Open {
+            self.append_coordinator_context_if_changed();
             self.route_status_due(&ctx);
         }
         if self.purge.frozen {

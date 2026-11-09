@@ -1429,6 +1429,12 @@ impl SessionRead for Unsupported {
     fn session(&self, _: &Id) -> Result<Option<StoredSession>, StorageError> {
         nope()
     }
+    fn session_repository_scope(&self, _: &Id) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn session_activity_at_ms(&self, _: &Id) -> Result<Option<i64>, StorageError> {
+        nope()
+    }
     fn sessions(
         &self,
         _: &SessionScope,
@@ -1552,6 +1558,9 @@ impl SessionRead for Unsupported {
     }
 }
 impl SessionRepository for Unsupported {
+    fn touch_session_activity(&mut self, _: &Id, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
     fn insert_session(&mut self, _: &StoredSession) -> Result<(), StorageError> {
         nope()
     }
@@ -2526,6 +2535,113 @@ impl ResourceRepository for Unsupported {
     }
 }
 impl RunRead for Unsupported {
+    fn agent_assignment_context(
+        &self,
+        _: &AssignmentId,
+    ) -> Result<Option<StoredAgentAssignmentContext>, StorageError> {
+        nope()
+    }
+    fn agent_message(&self, _: &Id) -> Result<Option<StoredAgentMessage>, StorageError> {
+        nope()
+    }
+    fn agent_message_by_key(
+        &self,
+        _: &ProjectId,
+        _: &ActorId,
+        _: &str,
+    ) -> Result<Option<StoredAgentMessage>, StorageError> {
+        nope()
+    }
+    fn agent_messages(
+        &self,
+        _: &ProjectId,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredAgentMessage>, StorageError> {
+        nope()
+    }
+    fn unhanded_direct_deliveries(
+        &self,
+        _: &ProjectId,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+        nope()
+    }
+    fn agent_message_history(
+        &self,
+        _: &AgentMessageHistoryFilter<'_>,
+    ) -> Result<Vec<(i64, StoredAgentMessage)>, StorageError> {
+        nope()
+    }
+    fn agent_assignment_thread(
+        &self,
+        _: &ProjectId,
+        _: &AssignmentId,
+        _: &str,
+        _: bool,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<(StoredAgentMessage, Option<StoredAgentDelivery>)>, StorageError> {
+        nope()
+    }
+    fn agent_delivery(
+        &self,
+        _: &Id,
+        _: Option<&AssignmentId>,
+    ) -> Result<Option<StoredAgentDelivery>, StorageError> {
+        nope()
+    }
+    fn agent_session_delivery(
+        &self,
+        _: &Id,
+        _: &Id,
+    ) -> Result<Option<StoredAgentDelivery>, StorageError> {
+        nope()
+    }
+    fn agent_recipient_count(&self, _: &Id) -> Result<usize, StorageError> {
+        nope()
+    }
+    fn agent_session_activity_at(&self, _: &Id) -> Result<Option<i64>, StorageError> {
+        nope()
+    }
+    fn open_blocking_question(&self, _: &RootId) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn agent_inbox(
+        &self,
+        _: &ProjectId,
+        _: Option<&AssignmentId>,
+        _: i64,
+        _: bool,
+        _: u16,
+    ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+        nope()
+    }
+    fn agent_session_inbox(
+        &self,
+        _: &ProjectId,
+        _: &Id,
+        _: i64,
+        _: bool,
+        _: u16,
+    ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+        nope()
+    }
+    fn agent_delivery_head(&self) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn agent_message_events(
+        &self,
+        _: &ProjectId,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredAgentMessageEvent>, StorageError> {
+        nope()
+    }
+    fn agent_event_head(&self) -> Result<i64, StorageError> {
+        nope()
+    }
     fn inference_quiescent(&self, _root: &RootId) -> Result<bool, StorageError> {
         nope()
     }
@@ -2641,6 +2757,38 @@ impl RunRead for Unsupported {
     }
 }
 impl RunRepository for Unsupported {
+    fn insert_agent_assignment_context(
+        &mut self,
+        _: &StoredAgentAssignmentContext,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_agent_message(&mut self, _: &StoredAgentMessage) -> Result<(), StorageError> {
+        nope()
+    }
+    fn resolve_agent_message(
+        &mut self,
+        _: &StoredAgentMessage,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_agent_delivery(&mut self, _: &StoredAgentDelivery) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_agent_delivery(
+        &mut self,
+        _: &StoredAgentDelivery,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_agent_message_event(
+        &mut self,
+        _: &StoredAgentMessageEvent,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
     fn reparent_assignment(
         &mut self,
         _: &StoredAssignment,

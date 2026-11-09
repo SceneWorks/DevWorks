@@ -459,6 +459,48 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0039_owned_containers.sql"),
         rebuilds_tables: false,
     },
+    Migration {
+        version: 40,
+        minimum_reader: 40,
+        minimum_writer: 40,
+        sql: include_str!("migrations/0040_assignment_purpose.sql"),
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 41,
+        minimum_reader: 41,
+        minimum_writer: 41,
+        sql: include_str!("migrations/0041_agent_messages.sql"),
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 42,
+        minimum_reader: 42,
+        minimum_writer: 42,
+        sql: include_str!("migrations/0042_agent_assignment_context.sql"),
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 43,
+        minimum_reader: 43,
+        minimum_writer: 43,
+        sql: include_str!("migrations/0043_direct_message_handover.sql"),
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 44,
+        minimum_reader: 44,
+        minimum_writer: 44,
+        sql: include_str!("migrations/0044_session_repository_scope.sql"),
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 45,
+        minimum_reader: 45,
+        minimum_writer: 45,
+        sql: include_str!("migrations/0045_session_activity.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

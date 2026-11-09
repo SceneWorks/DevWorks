@@ -871,6 +871,15 @@ impl ControlService {
         // its work: a manual Done label is not verified completion.
         if purpose == ActivationPurpose::Implementation {
             prerequisite_gate(runs, &root.id, root_subject.clone(), &mut c)?;
+            if runs.open_blocking_question(&root.id)? {
+                c.push(derived(
+                    "human-question",
+                    root_subject.clone(),
+                    control.revision,
+                    HoldCause::Dependency,
+                    "an open blocking question awaits the project's human",
+                ));
+            }
         }
         let mut readiness_revision = None;
         let assignment = match target {
@@ -952,6 +961,15 @@ impl ControlService {
                     ));
                 }
                 if purpose == ActivationPurpose::Implementation {
+                    if runs.open_blocking_question(&a.work_id)? {
+                        c.push(derived(
+                            "human-question",
+                            subject.clone(),
+                            a.revision,
+                            HoldCause::Dependency,
+                            "an open blocking question awaits the project's human",
+                        ));
+                    }
                     if is_feature(root) {
                         repository_gate(runs, &root.id, &a.work_id, subject.clone(), &mut c)?;
                         inherited_scope_gate(runs, &plan, &a.work_id, subject.clone(), &mut c)?;

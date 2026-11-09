@@ -2235,6 +2235,7 @@ fn a_cards_assignment_is_fenced_by_its_holds_membership_findings_and_prerequisit
             checkpoint_sequence: 0,
         })?;
         let a = StoredAssignment {
+            purpose: devworks_core::ports::storage::AssignmentPurpose::Primary,
             id: devworks_core::protocol::AssignmentId(id("assignment-c")),
             root_id: RootId(fid),
             work_id: RootId(cid),
@@ -2412,6 +2413,7 @@ fn assign_under(
             checkpoint_sequence: 0,
         })?;
         let a = StoredAssignment {
+            purpose: devworks_core::ports::storage::AssignmentPurpose::Primary,
             id: devworks_core::protocol::AssignmentId(id(&format!("assignment-{n}"))),
             root_id: RootId(root),
             work_id: RootId(work),

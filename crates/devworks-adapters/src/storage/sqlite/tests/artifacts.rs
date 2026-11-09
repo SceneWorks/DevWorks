@@ -5117,6 +5117,7 @@ fn purge_planning_kept_artifact_subjects_retain_minimal_assignment_resource_and_
             checkpoint_sequence: 0,
         })?;
         tx.runs().insert_assignment(&StoredAssignment {
+            purpose: devworks_core::ports::storage::AssignmentPurpose::Primary,
             id: devworks_core::protocol::AssignmentId(id("kept-assignment")),
             root_id: RootId(id("root-a")),
             work_id: RootId(id("task-a")),

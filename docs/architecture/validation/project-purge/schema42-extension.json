@@ -1,0 +1,9 @@
+{
+  "schema": 42,
+  "policy": "dw15-agent-assignment-context-v1",
+  "additionalTables": [
+    {"table": "agent_assignment_context", "class": "agent_assignment_context", "disposition": "project_owner"}
+  ],
+  "readerFloor": 42,
+  "writerFloor": 42
+}

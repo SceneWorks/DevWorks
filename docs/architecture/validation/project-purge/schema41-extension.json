@@ -1,0 +1,11 @@
+{
+  "schema": 41,
+  "policy": "dw15-agent-messages-v1",
+  "additionalTables": [
+    {"table": "agent_messages", "class": "work_lineage", "disposition": "project_owner"},
+    {"table": "agent_message_deliveries", "class": "message_delivery", "disposition": "project_owner"},
+    {"table": "agent_message_events", "class": "message_event", "disposition": "project_owner"}
+  ],
+  "readerFloor": 41,
+  "writerFloor": 41
+}
