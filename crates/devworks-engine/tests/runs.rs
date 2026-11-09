@@ -785,11 +785,33 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
     };
     let agents =
         devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
-    fx.tx(move |_, tx| {
+    let child = fx.tx(move |_, tx| {
         agents
             .delegate(tx, &agent, &request)
             .map_err(|error| StorageError::InvalidRecord(format!("delegate refused: {error:?}")))
     });
+    let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
+    let agents =
+        devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let activation_id = activation.id.clone();
+    let child_id = child.assignment_id.clone();
+    let stale_host = host.clone();
+    let stale_agents =
+        devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let stale_execution = activation_id.clone();
+    let stale_child = child_id.clone();
+    assert!(fx.tx(move |_, tx| {
+        Ok(stale_agents
+            .activate_child(tx, &stale_host, &stale_child, &stale_execution, epoch + 1)
+            .is_err())
+    }));
+    let active_child = fx.tx(move |_, tx| {
+        agents
+            .activate_child(tx, &host, &child_id, &activation_id, epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("child refused: {error:?}")))
+    });
+    assert_eq!(active_child.state, OperationState::Dispatching);
+    assert_eq!(active_child.role_id.as_str(), "worker");
     let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
     let agents =
         devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
