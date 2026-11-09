@@ -276,7 +276,7 @@ impl SettingDescriptor {
             }),
             ValueKind::ToolOverrides => json!({
                 "type": "object", "maxProperties": 4096,
-                "patternProperties": {"^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+){1,3}$": {"type": "boolean"}},
+                "patternProperties": {"^[A-Za-z0-9_.-]{1,128}(/[A-Za-z0-9_.-]{1,128}){1,3}$": {"type": "boolean"}},
                 "additionalProperties": false
             }),
             ValueKind::PackageIndexSources => json!({
