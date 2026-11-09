@@ -2,7 +2,7 @@
 use devworks_core::{
     context::InvocationContext,
     ports::{IdKind, storage::*},
-    protocol::{Counter, EventId, Protocol, Revision, provider::*},
+    protocol::{AttemptId, Counter, EventId, Protocol, Revision, provider::*},
     providers::{
         PreparedRequest,
         decode::{DecodedFrame, DecodedToolCall},
@@ -29,6 +29,14 @@ use std::{
 /// masquerade as assistant text or alter a conversation pin.
 #[derive(Clone, Debug, Default)]
 pub struct ProviderResult {
+    pub attempt_id: Option<AttemptId>,
+    pub binding: Option<NativeBinding>,
+    /// Transcript position before this native turn's first durable entry. Replay uses it to
+    /// select only this attempt's exchange, even after other turns append to the session.
+    pub turn_start_sequence: Option<i64>,
+    pub source_context: Option<ArtifactRef>,
+    /// Trusted host-selected instruction targets at the original generation admission.
+    pub instruction_targets: Option<Vec<(devworks_core::protocol::Id, Vec<String>)>>,
     pub vector_artifacts: Vec<ArtifactRef>,
     pub result_artifact: Option<ArtifactRef>,
     pub outcome: Option<AttemptEnd>,
@@ -37,18 +45,25 @@ pub struct ProviderResult {
 }
 pub type ResultChannel = Arc<Mutex<ProviderResult>>;
 
+pub struct SourceProvenance {
+    pub context: Option<ArtifactRef>,
+    pub instruction_targets: Option<Vec<(devworks_core::protocol::Id, Vec<String>)>>,
+}
+
 const MAX_CONTENT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CONTENT_ITEMS: usize = 65536;
 
 enum ArtifactKind {
     Evidence,
     NativeContinuation,
+    CompactionSummary,
 }
 pub struct ProviderSink {
     store: Arc<dyn ApplicationStore>,
     artifacts: Arc<ArtifactService>,
     context: InvocationContext,
     prepared: PreparedRequest,
+    compaction: bool,
     assembler: TurnAssembler,
     /// Private content slots use provider item/sub-block positions, independently of when
     /// completion evidence becomes releasable. No placeholder enters the transcript.
@@ -58,6 +73,9 @@ pub struct ProviderSink {
     live: Option<Arc<super::live::LiveTurns>>,
     live_session: Option<devworks_core::protocol::Id>,
     last_sequence: Option<i64>,
+    turn_start_sequence: Option<i64>,
+    source_context: Option<ArtifactRef>,
+    instruction_targets: Option<Vec<(devworks_core::protocol::Id, Vec<String>)>>,
     sequence: i64,
     embedding: Option<(
         devworks_core::protocol::data::EmbeddingSpace,
@@ -80,6 +98,7 @@ impl ProviderSink {
         artifacts: Arc<ArtifactService>,
         context: InvocationContext,
         prepared: PreparedRequest,
+        source: SourceProvenance,
         embedding: Option<(
             devworks_core::protocol::data::EmbeddingSpace,
             Vec<ArtifactRef>,
@@ -91,6 +110,7 @@ impl ProviderSink {
             artifacts,
             context,
             prepared,
+            compaction: false,
             assembler: TurnAssembler::positioned(),
             content: BTreeMap::new(),
             content_bytes: 0,
@@ -98,6 +118,9 @@ impl ProviderSink {
             live: None,
             live_session: None,
             last_sequence: None,
+            turn_start_sequence: None,
+            source_context: source.context,
+            instruction_targets: source.instruction_targets,
             sequence: 0,
             embedding,
             vectors: BTreeMap::new(),
@@ -111,6 +134,14 @@ impl ProviderSink {
             evidence: Vec::new(),
             evidence_bytes: 0,
         }
+    }
+    pub(crate) fn with_compaction(mut self) -> Self {
+        self.compaction = true;
+        self
+    }
+    pub(crate) fn with_turn_start_sequence(mut self, sequence: Option<i64>) -> Self {
+        self.turn_start_sequence = sequence;
+        self
     }
     pub(crate) fn with_live(mut self, live: Arc<super::live::LiveTurns>) -> Self {
         self.live = Some(live);
@@ -202,8 +233,9 @@ impl ProviderSink {
             })
             .map_err(|_| invalid("invalid normalized provider turn"))?;
         let bodies = self.assembler.take();
-        if let Some(sequence) = self.append(attempt, bodies, fence)? {
-            self.last_sequence = Some(sequence);
+        if let Some((before, last)) = self.append(attempt, bodies, fence)? {
+            self.turn_start_sequence.get_or_insert(before);
+            self.last_sequence = Some(last);
         }
         self.sequence = sequence;
         Ok(())
@@ -213,7 +245,7 @@ impl ProviderSink {
         attempt: &StoredInferenceAttempt,
         bodies: Vec<TranscriptBody>,
         fence: &AccountingWriteFence,
-    ) -> Result<Option<i64>, StorageError> {
+    ) -> Result<Option<(i64, i64)>, StorageError> {
         if bodies.is_empty() {
             return Ok(None);
         }
@@ -229,6 +261,11 @@ impl ProviderSink {
                 .session_id
                 .as_ref()
                 .ok_or(StorageError::ScopeDenied)?;
+            let before = tx
+                .sessions()
+                .session(session)?
+                .ok_or(StorageError::ScopeDenied)?
+                .last_durable_sequence();
             for chunk in bodies.chunks(128) {
                 let current = tx
                     .sessions()
@@ -248,12 +285,13 @@ impl ProviderSink {
                     BatchOutcome::Refused(_) => return Err(StorageError::ScopeDenied),
                 }
             }
-            Ok(Some(
+            Ok(Some((
+                before,
                 tx.sessions()
                     .session(session)?
                     .ok_or(StorageError::ScopeDenied)?
                     .last_durable_sequence(),
-            ))
+            )))
         })
     }
     fn artifact(
@@ -272,9 +310,11 @@ impl ProviderSink {
         let title = title.to_owned();
         let media_type = media_type.to_owned();
         let binding = self.prepared.identity.binding.clone();
+        let source_context = self.source_context.clone();
         let artifact_kind = match kind {
             ArtifactKind::Evidence => "ProviderEvidence",
             ArtifactKind::NativeContinuation => "ProviderNativeContinuation",
+            ArtifactKind::CompactionSummary => "ProviderCompactionSummary",
         };
         fence.publication(|| {
             // Existing artifact staging journals and file publication run off the DB writer.
@@ -285,7 +325,7 @@ impl ProviderSink {
                 validate(tx,&context,&attempt)?;
                 validate_binding(tx,&binding)?;
                 let scope=attempt.project_id.clone().map_or(ArtifactScope::Workspace,ArtifactScope::Project);
-                let version=service_in.commit_host_bytes_in_scope(tx,&pending, devworks_core::services::artifacts::host::HostArtifactPublication {title:&title,media_type:&media_type,provenance:json!({"kind":artifact_kind,"nativeBinding":binding,"requestId":attempt.request_id,"attemptId":attempt.attempt_id,"actorId":attempt.actor_id,"sessionId":attempt.session_id,"workId":attempt.work_id,"dispatch":accounting::snapshot(&attempt)?.dispatch}),
+                let version=service_in.commit_host_bytes_in_scope(tx,&pending, devworks_core::services::artifacts::host::HostArtifactPublication {title:&title,media_type:&media_type,provenance:json!({"kind":artifact_kind,"nativeBinding":binding,"requestId":attempt.request_id,"attemptId":attempt.attempt_id,"actorId":attempt.actor_id,"sessionId":attempt.session_id,"sourceContext":source_context,"workId":attempt.work_id,"dispatch":accounting::snapshot(&attempt)?.dispatch}),
                     scope,owner:attempt.actor_id.clone()})?;
                 let reference=version_ref(&version);
                 let event=EventId(tx.new_id(IdKind::Event));
@@ -303,6 +343,9 @@ impl ProviderSink {
         call: DecodedToolCall,
         fence: &AccountingWriteFence,
     ) -> Result<(), StorageError> {
+        if self.compaction {
+            return Err(invalid("compaction cannot emit tool calls"));
+        }
         let tool = self
             .prepared
             .tools
@@ -566,7 +609,7 @@ impl OwnedInferenceSink for ProviderSink {
                             .or(self.retry_at);
                 }
                 self.evidence(attempt,json!({"kind":observation.kind,"ordinal":observation.ordinal,"rawJson":observation.raw_json,"replay":format!("{:?}",observation.replay)}),fence)?;
-                if let Some(value) = observation.continuation {
+                if let Some(value) = observation.continuation.filter(|_| !self.compaction) {
                     let bytes = serde_json::to_vec(&value)
                         .map_err(|_| invalid("native continuation JSON"))?;
                     let artifact = self.artifact(
@@ -654,11 +697,15 @@ impl OwnedInferenceSink for ProviderSink {
         fence: &AccountingWriteFence,
     ) -> Result<(), StorageError> {
         self.finish_output(attempt, outcome, fence)?;
-        let result = self
-            .result
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
+        let result = {
+            let mut result = self.result.lock().unwrap_or_else(|p| p.into_inner());
+            result.attempt_id = Some(AttemptId(attempt.attempt_id.clone()));
+            result.binding = Some(self.prepared.identity.binding.clone());
+            result.turn_start_sequence = self.turn_start_sequence;
+            result.source_context = self.source_context.clone();
+            result.instruction_targets = self.instruction_targets.clone();
+            result.clone()
+        };
         let context = self.context.clone();
         let current = attempt.clone();
         let store = self.store.clone();
@@ -666,7 +713,7 @@ impl OwnedInferenceSink for ProviderSink {
             validate(tx,&context,&current)?;
             let event=EventId(tx.new_id(IdKind::Event));
             tx.history().append(NewEvent {id:event,actor:current.actor_id,project_id:current.project_id,root_id:current.execution_root_id,operation_id:Some(current.operation_id),aggregate_kind:"provider_result".into(),aggregate_id:current.attempt_id.as_str().into(),aggregate_revision:1,kind:"ProviderResultRecorded".into(),
-                payload:json!({"outcome":result.outcome.map(|o|o.label()),"vectorArtifacts":result.vector_artifacts,"resultArtifact":result.result_artifact,"faults":result.faults,"retryAtMs":result.retry_at_ms})})?;
+                payload:json!({"outcome":result.outcome.map(|o|o.label()),"attemptId":result.attempt_id,"binding":result.binding,"turnStartSequence":result.turn_start_sequence,"sourceContext":result.source_context,"instructionTargets":result.instruction_targets,"vectorArtifacts":result.vector_artifacts,"resultArtifact":result.result_artifact,"faults":result.faults,"retryAtMs":result.retry_at_ms})})?;
             Ok(())
         })
     }
@@ -792,6 +839,39 @@ impl ProviderSink {
                     .unwrap_or_else(|p| p.into_inner())
                     .outcome = Some(outcome);
             }
+            return Ok(());
+        }
+        if self.compaction {
+            if outcome == AttemptEnd::Completed {
+                let mut summary = String::new();
+                for (_, bodies) in std::mem::take(&mut self.content) {
+                    for body in bodies {
+                        let ProviderBody::TextDelta { text, .. } = body else {
+                            return Err(invalid("compaction emitted non-text content"));
+                        };
+                        summary.push_str(&text);
+                    }
+                }
+                if summary.trim().is_empty() {
+                    return Err(invalid("empty compaction summary"));
+                }
+                let artifact = self.artifact(
+                    attempt,
+                    summary.as_bytes(),
+                    "Provider compaction summary",
+                    "text/plain; charset=utf-8",
+                    ArtifactKind::CompactionSummary,
+                    fence,
+                )?;
+                self.result
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .result_artifact = Some(artifact);
+            }
+            self.result
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .outcome = Some(outcome);
             return Ok(());
         }
         let terminal = match outcome {

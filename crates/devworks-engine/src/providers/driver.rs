@@ -1,7 +1,7 @@
 //! Native producer composition. Only trusted host configuration can qualify capabilities/spaces.
 use super::{
     schemas::RegisteredSchemas,
-    sink::{ProviderResult, ProviderSink, ResultChannel},
+    sink::{ProviderResult, ProviderSink, ResultChannel, SourceProvenance},
     source::NativeProviderSource,
 };
 use crate::usage::UsageRuntime;
@@ -42,6 +42,7 @@ pub struct ProviderComposition {
     pub embedding_spaces: Vec<EmbeddingRegistration>,
     pub usage_semantics:
         std::collections::BTreeMap<String, devworks_core::services::usage::meter::InputSemantics>,
+    pub(crate) instruction_guard: Option<Arc<crate::instruction_guard::InstructionGuard>>,
 }
 impl std::fmt::Debug for ProviderComposition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -58,7 +59,28 @@ impl ProviderComposition {
             capabilities: Vec::new(),
             embedding_spaces: Vec::new(),
             usage_semantics: Default::default(),
+            instruction_guard: None,
         }
+    }
+    /// Host-composed repository source used by direct native provider owners. Boot installs
+    /// its registered indexing source automatically.
+    pub fn with_repository_source(
+        mut self,
+        store: Arc<dyn ApplicationStore>,
+        source: Arc<dyn devworks_core::ports::indexing::SourceTree>,
+    ) -> Self {
+        self.instruction_guard = Some(Arc::new(crate::instruction_guard::InstructionGuard::new(
+            store,
+            Some(source),
+        )));
+        self
+    }
+    pub(crate) fn with_instruction_guard(
+        mut self,
+        guard: Arc<crate::instruction_guard::InstructionGuard>,
+    ) -> Self {
+        self.instruction_guard = Some(guard);
+        self
     }
 }
 #[derive(Clone, Debug)]
@@ -85,8 +107,12 @@ pub struct NativeProviders {
     live: Arc<super::live::LiveTurns>,
 }
 /// Trusted native producer input. Cancellation is operational ownership, never wire authority.
+pub type InstructionTargets = Vec<(Id, Vec<String>)>;
 pub struct NativeInvocation {
     pub source_fences: Vec<devworks_core::ports::AuthorityFence>,
+    /// Host-selected repository targets for this request. `Some` requires an exact stamped set;
+    /// `None` is only for native callers that have no selected repository target yet.
+    pub instruction_targets: Option<InstructionTargets>,
     pub context: InvocationContext,
     pub logical: RequestAdmission,
     pub category: ReportCategory,
@@ -296,6 +322,36 @@ impl NativeProviders {
             live: Arc::new(super::live::LiveTurns::default()),
         })
     }
+    pub(crate) fn verify_instruction_material(
+        &self,
+        ctx: &InvocationContext,
+        context: &devworks_core::protocol::provider::ArtifactRef,
+        targets: Option<&[(Id, Vec<String>)]>,
+    ) -> Result<(), StorageError> {
+        let Some(guard) = &self.composition.instruction_guard else {
+            return Ok(());
+        };
+        let bytes = self
+            .artifacts
+            .read_exact(self.store.as_ref(), ctx, context, 8 * 1024 * 1024)
+            .map_err(|_| StorageError::ScopeDenied)?
+            .0;
+        let material: devworks_core::providers::context::ProviderContext =
+            serde_json::from_slice(&bytes).map_err(|_| invalid("provider instruction context"))?;
+        guard.verify(ctx, &material, targets)
+    }
+    fn verify_instruction_context(
+        &self,
+        ctx: &InvocationContext,
+        request: &InferenceRequest,
+        targets: Option<&[(Id, Vec<String>)]>,
+    ) -> Result<(), StorageError> {
+        if let InferenceInput::Generation { context, .. } = &request.input {
+            self.verify_instruction_material(ctx, context, targets)
+        } else {
+            Ok(())
+        }
+    }
     /// Explicit host-qualified declarations, including Unknown support. Every request still
     /// intersects these with the CURRENT registered model/profile/account and current policy.
     pub fn capability_registrations(&self) -> &[Capabilities] {
@@ -358,6 +414,7 @@ impl NativeProviders {
         self.produce_cancellable(
             NativeInvocation {
                 source_fences: Vec::new(),
+                instruction_targets: None,
                 context,
                 logical,
                 category,
@@ -377,11 +434,12 @@ impl NativeProviders {
     ) -> Result<ProviderInvocation, StorageError> {
         let NativeInvocation {
             source_fences,
+            instruction_targets,
             context,
             mut logical,
             category,
             mut attempt,
-            request,
+            mut request,
         } = invocation;
         if cancellation
             .as_ref()
@@ -390,6 +448,65 @@ impl NativeProviders {
             return Err(StorageError::Cancelled);
         }
         request.validate().map_err(invalid)?;
+        if let InferenceInput::Generation {
+            response_headroom_tokens,
+            ..
+        } = &request.input
+            && attempt.output_headroom < response_headroom_tokens.get()
+        {
+            // The router's reserve must cover the headroom actually sent to the endpoint.
+            return Err(StorageError::ScopeDenied);
+        }
+        if let InferenceInput::Generation { tools, .. } = &mut request.input {
+            tools.sort_by(|a, b| {
+                a.capability_id
+                    .as_str()
+                    .cmp(b.capability_id.as_str())
+                    .then_with(|| a.wire_name.cmp(&b.wire_name))
+            });
+            if tools.iter().any(|tool| {
+                self.schemas
+                    .builtin_binding(&tool.capability_id, &tool.input_schema)
+                    .is_none()
+            }) {
+                // Schema discovery alone does not make a package or MCP invocation durable.
+                // Do not advertise a call the turn dispatcher cannot yet answer.
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "external tool dispatch is unavailable",
+                ));
+            }
+        }
+        let compaction = matches!(request.purpose, InferencePurpose::Compaction);
+        if compaction != (logical.purpose == devworks_core::services::router::Purpose::Compaction)
+            || (compaction
+                && !matches!(&request.input, InferenceInput::Generation { tools, .. } if tools.is_empty()))
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let mut turn_start_sequence = None;
+        if let InferenceInput::Generation { session_id, .. } = &request.input {
+            let (owner, observed_sequence) =
+                read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                    read.sessions()
+                        .session(session_id)?
+                        .map(|session| {
+                            let sequence = session.last_durable_sequence();
+                            (session.agent_id, sequence)
+                        })
+                        .ok_or(StorageError::ScopeDenied)
+                })?;
+            if owner != *context.principal() || context.session_id() != Some(session_id) {
+                // A host-origin request cannot borrow an agent session to bypass its role and
+                // shared tool selection before the provider sees a tool schema.
+                return Err(StorageError::ScopeDenied);
+            }
+            if !compaction {
+                // Capture before dispatch. Even an empty completion must have a cursor, and a
+                // concurrent redirect must be visible when continuation scans this turn.
+                turn_start_sequence = Some(observed_sequence);
+            }
+        }
         if let ModelSelection::Model { model_id } = &request.options.selection
             && model_id != &attempt.query.catalog_model_id
         {
@@ -403,6 +520,126 @@ impl NativeProviders {
         logical.args_digest = sha256_hex(canonical.as_bytes());
         if request.request_id != logical.request_id || request.request_id != attempt.request_id {
             return Err(StorageError::ScopeDenied);
+        }
+        if let InferenceInput::Generation { session_id, .. } = &request.input
+            && !crate::tool_turn::pending_calls(self.store.as_ref(), &context, session_id)?
+                .is_empty()
+        {
+            // A fresh generation cannot skip an earlier unanswered tool call by supplying a
+            // context that omits it. The original request remains replayable so its durable
+            // calls can be dispatched and reconciled after a restart.
+            let replay = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                let Some(route) = read.router().route_request(&request.request_id)? else {
+                    return Ok(false);
+                };
+                let operation = read
+                    .operations()
+                    .operation(&route.operation_id)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                for journal in &operation.attempts {
+                    if let Some(stored) = read.usage().inference_attempt(&journal.id.0)?
+                        && stored.request_id == request.request_id
+                        && stored.session_id.as_ref() == Some(session_id)
+                        && devworks_core::services::usage::accounting::snapshot(&stored)?
+                            .admission_key
+                            == attempt.admission_key
+                    {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            })?;
+            if !replay {
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "new generation waits for earlier unanswered tool calls",
+                ));
+            }
+        }
+        if let InferenceInput::Generation {
+            session_id,
+            context: request_context,
+            context_epoch,
+            ..
+        } = &request.input
+            && context_epoch.get() > 0
+        {
+            // The epoch is host-published provenance, not a guess from a cache miss. Record
+            // its reason on the attributed attempt without copying prompt or tool material.
+            let epoch = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                read.sessions()
+                    .epoch(session_id, context_epoch.get())?
+                    .ok_or(StorageError::ScopeDenied)
+            })?;
+            let published: devworks_core::protocol::provider::ArtifactRef =
+                serde_json::from_value(epoch.context)
+                    .map_err(|error| invalid(error.to_string()))?;
+            if published.artifact_id != request_context.artifact_id
+                || published.version_id != request_context.version_id
+                || published.sha256 != request_context.sha256
+                || published.byte_length != request_context.byte_length
+                || published.media_type != request_context.media_type
+            {
+                crate::context_epoch::verify_descendant(
+                    self.store.as_ref(),
+                    &self.artifacts,
+                    &context,
+                    session_id,
+                    request_context,
+                    &published,
+                    context_epoch.get(),
+                    &attempt.query.connection_id,
+                    &attempt.query.catalog_model_id,
+                    &attempt.query.endpoint_profile,
+                )?;
+            }
+            if attempt.cache_diagnostics.len() >= 128 {
+                return Err(StorageError::ScopeDenied);
+            }
+            attempt.cache_diagnostics.push(
+                devworks_core::protocol::records::UsageCacheDiagnostic {
+                    kind: devworks_core::protocol::support::BoundedText(
+                        "ContextEpochChanged".into(),
+                    ),
+                    inferred: false,
+                    detail: Some(devworks_core::protocol::support::BoundedText(epoch.reason)),
+                    source_revision: Some(Revision::new(context_epoch.get()).map_err(invalid)?),
+                },
+            );
+        }
+        if let InferenceInput::Generation { tools, .. } = &request.input {
+            if attempt.cache_diagnostics.len() < 128 {
+                attempt.cache_diagnostics.push(
+                    devworks_core::protocol::records::UsageCacheDiagnostic {
+                        kind: devworks_core::protocol::support::BoundedText(
+                            "InstructionRevision".into(),
+                        ),
+                        inferred: false,
+                        detail: None,
+                        source_revision: Some(request.instruction_revision.clone()),
+                    },
+                );
+            }
+            // This is the requested alias/schema-reference set, not a claim that the provider
+            // reused its materialized prefix or reported a cache hit.
+            let aliases = devworks_core::jcs::canonicalize(
+                &serde_json::to_value(tools).map_err(|_| invalid("tool alias set"))?,
+            )
+            .map_err(|_| invalid("canonical tool alias set"))?;
+            if attempt.cache_diagnostics.len() < 128 {
+                attempt.cache_diagnostics.push(
+                    devworks_core::protocol::records::UsageCacheDiagnostic {
+                        kind: devworks_core::protocol::support::BoundedText(
+                            "RequestedToolAliasDigest".into(),
+                        ),
+                        inferred: false,
+                        detail: Some(devworks_core::protocol::support::BoundedText(sha256_hex(
+                            aliases.as_bytes(),
+                        ))),
+                        source_revision: None,
+                    },
+                );
+            }
         }
         use devworks_core::services::usage::meter::InputSemantics;
         attempt.pricing.input_semantics = self
@@ -429,13 +666,16 @@ impl NativeProviders {
             shared: shared.clone(),
             inner: None,
             source_fences: source_fences.clone(),
+            instruction_targets: instruction_targets.clone(),
         };
         let sink = LazySink {
             owner: self.clone(),
             context: context.clone(),
             request: request.clone(),
+            instruction_targets,
             shared,
             result: result.clone(),
+            turn_start_sequence,
             inner: None,
         };
         let request_id = logical.request_id.clone();
@@ -507,6 +747,17 @@ impl NativeProviders {
                         _ => None,
                     };
                     return Ok(ProviderResult {
+                        attempt_id: serde_json::from_value(body["attemptId"].clone())
+                            .map_err(|_| invalid("stored provider attempt identity"))?,
+                        binding: serde_json::from_value(body["binding"].clone())
+                            .map_err(|_| invalid("stored provider binding"))?,
+                        turn_start_sequence: body["turnStartSequence"].as_i64(),
+                        source_context: serde_json::from_value(body["sourceContext"].clone())
+                            .map_err(|_| invalid("stored provider source context"))?,
+                        instruction_targets: serde_json::from_value(
+                            body["instructionTargets"].clone(),
+                        )
+                        .map_err(|_| invalid("stored provider instruction targets"))?,
                         vector_artifacts: serde_json::from_value(body["vectorArtifacts"].clone())
                             .map_err(|_| invalid("stored provider vectors"))?,
                         result_artifact: serde_json::from_value(body["resultArtifact"].clone())
@@ -784,6 +1035,7 @@ impl NativeProviders {
         context: &InvocationContext,
         request: &InferenceRequest,
         attempt: &StoredInferenceAttempt,
+        targets: Option<&[(Id, Vec<String>)]>,
     ) -> Result<(PreparedRequest, StoredConnection), StorageError> {
         let bound = devworks_core::services::usage::accounting::snapshot(attempt)?;
         let (connection, model) =
@@ -849,6 +1101,7 @@ impl NativeProviders {
             .map(serde_json::from_str)
             .transpose()
             .map_err(|_| invalid("current OpenRouter policy"))?;
+        self.verify_instruction_context(context, request, targets)?;
         let materials = OwnedMaterials {
             store: self.store.as_ref(),
             artifacts: self.artifacts.as_ref(),
@@ -879,6 +1132,7 @@ struct LazySource {
     shared: SharedPrepared,
     inner: Option<NativeProviderSource>,
     source_fences: Vec<devworks_core::ports::AuthorityFence>,
+    instruction_targets: Option<InstructionTargets>,
 }
 impl OwnedInferenceSource for LazySource {
     fn start(&mut self, attempt: &StoredInferenceAttempt) -> Result<(), StorageError> {
@@ -889,11 +1143,12 @@ impl OwnedInferenceSource for LazySource {
         attempt: &StoredInferenceAttempt,
         cancellation: &Cancellation,
     ) -> Result<(), StorageError> {
-        let registry_revision =
-            read_snapshot(self.owner.store.as_ref(), &ReadOptions::default(), |s| {
-                s.packages().registry_revision()
-            })?;
-        let (prepared, connection) = self.owner.prepare(&self.context, &self.request, attempt)?;
+        let (prepared, connection) = self.owner.prepare(
+            &self.context,
+            &self.request,
+            attempt,
+            self.instruction_targets.as_deref(),
+        )?;
         let limits = StreamLimits {
             max_request_bytes: 32 * 1024 * 1024,
             deadline_ms: u64::from(self.request.options.deadline_ms),
@@ -916,8 +1171,15 @@ impl OwnedInferenceSource for LazySource {
         let publication = prepared.clone();
         let expected_revision = connection.revision;
         let source_fences = self.source_fences.clone();
+        let instruction_request = self.request.clone();
+        let instruction_targets = self.instruction_targets.clone();
         source = source.with_send_gate(Box::new(move || {
             use devworks_core::providers::materialize::SchemaDocuments;
+            owner.verify_instruction_context(
+                &context,
+                &instruction_request,
+                instruction_targets.as_deref(),
+            )?;
             for tool in &publication.tools {
                 owner
                     .schemas
@@ -947,11 +1209,12 @@ impl OwnedInferenceSource for LazySource {
                         .router()
                         .connection(&captured.connection_id)?
                         .ok_or(StorageError::ScopeDenied)?;
+                    // External aliases are refused before admission; an unrelated package
+                    // registry edit cannot change this built-in-only request.
                     if connection.revision != expected_revision
                         || connection.account_revision
                             != publication.identity.binding.account_revision.get()
                         || !connection.enabled
-                        || tx.packages().registry_revision()? != registry_revision
                     {
                         return Err(StorageError::ScopeDenied);
                     }
@@ -995,8 +1258,10 @@ struct LazySink {
     owner: Arc<NativeProviders>,
     context: InvocationContext,
     request: InferenceRequest,
+    instruction_targets: Option<InstructionTargets>,
     shared: SharedPrepared,
     result: ResultChannel,
+    turn_start_sequence: Option<i64>,
     inner: Option<ProviderSink>,
 }
 impl LazySink {
@@ -1025,16 +1290,28 @@ impl LazySink {
                 }
                 _ => None,
             };
+            let sink = ProviderSink::new(
+                self.owner.store.clone(),
+                self.owner.artifacts.clone(),
+                self.context.clone(),
+                prepared,
+                SourceProvenance {
+                    context: match &self.request.input {
+                        InferenceInput::Generation { context, .. } => Some(context.clone()),
+                        InferenceInput::Embedding { .. } => None,
+                    },
+                    instruction_targets: self.instruction_targets.clone(),
+                },
+                embedding,
+                self.result.clone(),
+            )
+            .with_turn_start_sequence(self.turn_start_sequence);
             self.inner = Some(
-                ProviderSink::new(
-                    self.owner.store.clone(),
-                    self.owner.artifacts.clone(),
-                    self.context.clone(),
-                    prepared,
-                    embedding,
-                    self.result.clone(),
-                )
-                .with_live(self.owner.live.clone()),
+                if matches!(self.request.purpose, InferencePurpose::Compaction) {
+                    sink.with_compaction()
+                } else {
+                    sink.with_live(self.owner.live.clone())
+                },
             );
         }
         Ok(self.inner.as_mut())

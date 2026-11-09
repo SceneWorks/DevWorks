@@ -201,6 +201,7 @@
 //! clocks and scripted handlers, without inference, network or containers.
 pub mod approvals;
 pub mod browser;
+mod context_epoch;
 pub mod conventions;
 pub mod desktop;
 pub mod diagnostics;
@@ -209,6 +210,7 @@ pub mod evals;
 pub mod git;
 pub mod help;
 pub mod indexing;
+mod instruction_guard;
 pub mod jobs;
 pub mod knowledge;
 pub mod notifications;
@@ -219,6 +221,8 @@ pub mod resources;
 pub mod runs;
 pub mod runtime;
 mod store;
+mod tool_turn;
+pub use tool_turn::ResolvedToolCall;
 pub mod usage;
 
 pub use dispatch::{

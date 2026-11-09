@@ -439,6 +439,12 @@ pub enum ToolOutcome {
         #[schemars(length(max = 128))]
         artifacts: Vec<ArtifactRef>,
     },
+    /// The command receipt is final, while the accepted operation may complete later.
+    OperationAccepted {
+        operation_id: OperationId,
+        #[schemars(length(max = 128))]
+        artifacts: Vec<ArtifactRef>,
+    },
     Failed {
         code: Id,
     },
@@ -482,6 +488,11 @@ pub enum TranscriptBody {
     },
     ToolCallRecorded {
         tool_call: CompleteToolCall,
+    },
+    /// Durable fence before the gateway sees a call; cancellation cannot claim no dispatch
+    /// after this marker, even if the process crashes before the gateway returns.
+    ToolDispatchStarted {
+        call: ToolCallKey,
     },
     ToolResponseRecorded {
         call: ToolCallKey,
@@ -545,6 +556,7 @@ impl TranscriptBatch {
             expected = expected.checked_add(1).ok_or("sequence exhausted")?;
             match &entry.body {
                 TranscriptBody::ToolCallRecorded { tool_call } => tool_call.call.validate()?,
+                TranscriptBody::ToolDispatchStarted { call } => call.validate()?,
                 TranscriptBody::ToolResponseRecorded { call, .. } => call.validate()?,
                 _ => {}
             }

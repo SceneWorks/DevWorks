@@ -131,6 +131,8 @@ pub enum ValueKind {
     Instructions,
     /// Ordered unique model IDs.
     ModelList,
+    /// Explicit per-capability agent tool overrides. Missing IDs use their origin's default.
+    ToolOverrides,
     /// Signed package index sources: at most 16 `{"location", "publicKey"}` objects, the
     /// location an `https://` index URL or an absolute local directory, the key 64 hex digits
     /// of an Ed25519 public key.
@@ -272,6 +274,11 @@ impl SettingDescriptor {
                 "type": "array", "maxItems": 32, "uniqueItems": true,
                 "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
             }),
+            ValueKind::ToolOverrides => json!({
+                "type": "object", "maxProperties": 4096,
+                "patternProperties": {"^[A-Za-z0-9_.-]{1,128}(/[A-Za-z0-9_.-]{1,128}){1,3}$": {"type": "boolean"}},
+                "additionalProperties": false
+            }),
             ValueKind::PackageIndexSources => json!({
                 "type": "array", "maxItems": 16,
                 "items": {"type": "object", "required": ["location", "publicKey"],
@@ -406,6 +413,16 @@ fn build() -> Vec<SettingDescriptor> {
             ValueKind::ModelList,
             ["haiku-latest", "luna-latest"],
             NextAdmission
+        ),
+        setting!(
+            TOOL_OVERRIDES_KEY,
+            "Selected agent tools",
+            "Explicit per-tool choices shared by agents. Missing tools use their origin's default; reviewer read-only rules and other safety controls still apply.",
+            Tools,
+            WORKSPACE,
+            ValueKind::ToolOverrides,
+            serde_json::Map::<String, Value>::new(),
+            NextSafeStep
         ),
         setting!(
             "tools.webSearch",
@@ -847,6 +864,8 @@ pub const OVERLAY_RECORD_RETENTION_DAYS_KEY: &str = "indexing.overlayRecordReten
 pub const OVERLAY_RECORDS_KEPT_KEY: &str = "indexing.overlayRecordsKept";
 /// Whether agents may use the shared web fetch tool.
 pub const WEB_FETCH_TOOLS_KEY: &str = "tools.webFetch";
+/// Explicit shared per-tool choices; missing IDs use origin-specific defaults.
+pub const TOOL_OVERRIDES_KEY: &str = "tools.overrides";
 /// The configured external search provider (`none` or a provider ID).
 pub const WEB_SEARCH_PROVIDER_KEY: &str = "web.searchProvider";
 /// The secret-store reference of the search provider's credential.

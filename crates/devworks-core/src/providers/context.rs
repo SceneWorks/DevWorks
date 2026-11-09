@@ -1,12 +1,14 @@
 //! Closed V1 material referenced by InferenceInput::Generation.context. No authority or billing.
 use super::{ProviderError, ResponseMode};
-use crate::protocol::provider::{ArtifactRef, NativeBinding};
+use crate::protocol::provider::{ArtifactRef, EndpointProfile, NativeBinding};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderContext {
     pub version: u32,
     pub instructions: Vec<TextBlock>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instruction_stamps: Vec<super::instructions::InstructionStamp>,
     pub messages: Vec<Message>,
     pub parameters: GenerationParameters,
 }
@@ -119,12 +121,116 @@ pub struct GenerationParameters {
     pub user_id: Option<String>,
 }
 impl ProviderContext {
+    /// Construct the immutable snapshot for an explicit context-epoch boundary. Generic text,
+    /// images and completed tool exchanges remain in order; provider-owned opaque state cannot
+    /// cross the boundary. The caller records the omitted references with ContextEpochChanged.
+    pub fn converted_for_new_epoch(
+        mut self,
+        previous: &NativeBinding,
+        next: &NativeBinding,
+    ) -> Result<(Self, Vec<ArtifactRef>), ProviderError> {
+        self.validate()?;
+        if previous.context_epoch.get().checked_add(1) != Some(next.context_epoch.get()) {
+            return Err(ProviderError::InvalidInput("context_epoch_boundary"));
+        }
+        let mut omitted = Vec::new();
+        let mut messages = Vec::with_capacity(self.messages.len());
+        for mut message in self.messages {
+            let mut content = Vec::with_capacity(message.content.len());
+            for block in message.content {
+                match block {
+                    ContentBlock::Native { binding, artifact } if &binding == previous => {
+                        omitted.push(artifact);
+                    }
+                    ContentBlock::Native { .. } => return Err(ProviderError::ForeignNative),
+                    _ => content.push(block),
+                }
+            }
+            if !content.is_empty() {
+                message.content = content;
+                messages.push(message);
+            }
+        }
+        self.messages = messages;
+        let provider_changed = previous.connection_id != next.connection_id
+            || previous.account_revision != next.account_revision
+            || previous.endpoint_profile != next.endpoint_profile
+            || previous.model_id != next.model_id;
+        if provider_changed {
+            // Cache breakpoints describe the old upstream's prefix, not conversation meaning.
+            // Remove them at the epoch boundary before publishing the destination context.
+            for instruction in &mut self.instructions {
+                instruction.cache = None;
+            }
+            for message in &mut self.messages {
+                for block in &mut message.content {
+                    match block {
+                        ContentBlock::Text { cache, .. }
+                        | ContentBlock::Image { cache, .. }
+                        | ContentBlock::ToolResult { cache, .. } => *cache = None,
+                        _ => {}
+                    }
+                }
+            }
+            self.parameters.tool_cache = None;
+        }
+        let p = &self.parameters;
+        let incompatible = match next.endpoint_profile {
+            EndpointProfile::CodexSubscriptionResponses => {
+                p.temperature.is_some()
+                    || p.top_p.is_some()
+                    || p.top_k.is_some()
+                    || p.stop.is_some()
+                    || p.max_output_tokens.is_some()
+                    || p.user_id.is_some()
+            }
+            EndpointProfile::OpenAiResponses => p.top_k.is_some() || p.stop.is_some(),
+            EndpointProfile::AnthropicMessages | EndpointProfile::ClaudeSubscriptionMessages => {
+                p.temperature.is_some_and(|value| value > 1.0)
+                    || p.prompt_cache_key.is_some()
+                    || p.prompt_cache_retention.is_some()
+            }
+            EndpointProfile::CompatibleChat | EndpointProfile::OpenRouterChat => p.top_k.is_some(),
+            EndpointProfile::Embedding => true,
+        } || (p.anthropic_betas.is_some()
+            && !matches!(
+                next.endpoint_profile,
+                EndpointProfile::AnthropicMessages | EndpointProfile::ClaudeSubscriptionMessages
+            ))
+            || (p.thinking.is_some()
+                && !matches!(
+                    (&next.endpoint_profile, &p.thinking),
+                    (
+                        EndpointProfile::AnthropicMessages
+                            | EndpointProfile::ClaudeSubscriptionMessages,
+                        _
+                    ) | (EndpointProfile::OpenRouterChat, Some(Thinking::Adaptive))
+                ));
+        if provider_changed && incompatible {
+            return Err(ProviderError::Unsupported("epoch_destination_parameters"));
+        }
+        self.validate()?;
+        Ok((self, omitted))
+    }
+
     pub fn validate(&self) -> Result<(), ProviderError> {
         if self.version != 1 {
             return Err(ProviderError::InvalidInput("context_version"));
         }
         if self.messages.is_empty() || self.messages.len() > 4096 || self.instructions.len() > 256 {
             return Err(ProviderError::InvalidInput("context_messages"));
+        }
+        if self.instruction_stamps.len() > 64
+            || self
+                .instruction_stamps
+                .iter()
+                .any(|stamp| !stamp.validate())
+            || !super::instructions::stamps_match_context(
+                &self.instructions,
+                &self.instruction_stamps,
+            )
+        {
+            return Err(ProviderError::InvalidInput("instruction_stamps"));
         }
         let p = &self.parameters;
         if p.temperature
@@ -145,6 +251,36 @@ impl ProviderContext {
             .any(|m| m.content.is_empty() || m.content.len() > 4096)
         {
             return Err(ProviderError::InvalidInput("context_blocks"));
+        }
+        let mut outstanding = std::collections::BTreeSet::<String>::new();
+        for message in &self.messages {
+            for block in &message.content {
+                match block {
+                    ContentBlock::ToolCall {
+                        call_id, wire_name, ..
+                    } => {
+                        if !matches!(message.role, MessageRole::Assistant)
+                            || call_id.is_empty()
+                            || call_id.len() > 1024
+                            || wire_name.is_empty()
+                            || wire_name.len() > 128
+                            || !outstanding.insert(call_id.clone())
+                        {
+                            return Err(ProviderError::InvalidInput("tool_call_order"));
+                        }
+                    }
+                    ContentBlock::ToolResult { call_id, .. }
+                        if matches!(message.role, MessageRole::User)
+                            && outstanding.remove(call_id) => {}
+                    ContentBlock::ToolResult { .. } => {
+                        return Err(ProviderError::InvalidInput("tool_result_order"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if !outstanding.is_empty() {
+            return Err(ProviderError::InvalidInput("unanswered_tool_call"));
         }
         Ok(())
     }

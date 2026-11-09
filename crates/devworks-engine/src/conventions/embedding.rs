@@ -357,6 +357,7 @@ impl NativeEmbeddings {
         };
         Ok(NativeInvocation {
             source_fences: Vec::new(),
+            instruction_targets: None,
             context: ctx.clone(),
             logical,
             category: ReportCategory::Other,

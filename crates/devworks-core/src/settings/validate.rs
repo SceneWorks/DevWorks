@@ -121,6 +121,25 @@ pub fn check_value(d: &SettingDescriptor, v: &Value) -> Vec<Issue> {
             }
             None => out.push(ty("a list of model IDs")),
         },
+        ValueKind::ToolOverrides => match v.as_object() {
+            Some(entries)
+                if entries.len() <= 4096
+                    && entries.iter().all(|(id, enabled)| {
+                        let parts = id.split('/').collect::<Vec<_>>();
+                        (2..=4).contains(&parts.len())
+                            && parts.iter().all(|part| {
+                                !part.is_empty()
+                                    && part.len() <= 128
+                                    && part.bytes().all(|b| {
+                                        b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.')
+                                    })
+                            })
+                            && enabled.is_boolean()
+                    }) => {}
+            _ => out.push(ty(
+                "at most 4096 qualified tool IDs with true or false choices",
+            )),
+        },
         ValueKind::PackageIndexSources => match v.as_array() {
             Some(items) if items.len() <= 16 => {
                 for (i, item) in items.iter().enumerate() {

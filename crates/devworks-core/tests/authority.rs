@@ -1,16 +1,41 @@
 //! Pure authority contracts: shell/declared-effect recognition, redaction, provider disclosure
 //! and the access-profile catalog. Real-store and real-filesystem cases live in
 //! `devworks-adapters`.
-use devworks_core::authority::AccessProfile;
 use devworks_core::authority::destructive::{DestructiveKind, InputNeeded};
 use devworks_core::authority::disclosure::{Candidate, ContentKind, Exclusion, disclose};
 use devworks_core::authority::redact::{REDACTED, Redactor, SecretRef};
 use devworks_core::authority::shell::{
     DeclaredEffect, ShellAssessment, assess_command, assess_command_with, assess_declared,
 };
+use devworks_core::authority::{AccessProfile, EffectivePolicy};
 use devworks_core::ports::storage::GrantKind;
 use devworks_core::settings::catalog::{AgentRole, descriptor};
 use serde_json::json;
+use std::collections::BTreeMap;
+
+#[test]
+fn shared_tool_choice_defaults_and_policy_digest_are_explicit() {
+    let mut policy = EffectivePolicy {
+        profile: Some(AccessProfile::Full),
+        profile_source: None,
+        shell_tools: true,
+        web_tools: true,
+        web_fetch: true,
+        tool_overrides: Some(BTreeMap::new()),
+    };
+    assert!(policy.tool_selected("devworks/sessions.get", true));
+    assert!(!policy.tool_selected("package/example.read", false));
+    let before = policy.digest();
+    policy
+        .tool_overrides
+        .as_mut()
+        .unwrap()
+        .insert("devworks/sessions.get".into(), false);
+    assert!(!policy.tool_selected("devworks/sessions.get", true));
+    assert_ne!(before, policy.digest());
+    policy.tool_overrides = None;
+    assert!(!policy.tool_selected("devworks/sessions.get", true));
+}
 
 fn argv(a: &[&str]) -> Vec<String> {
     a.iter().map(|s| (*s).to_owned()).collect()

@@ -62,6 +62,42 @@ fn registered_provider_tools_use_verified_active_package_schema_metadata_and_leg
         Some(service.clone()),
         app.app().artifacts().clone(),
     );
+    // An installed package does not select its tools for agents. The user's workspace
+    // choice is required before its schema can be presented to the provider.
+    assert!(registry.tool(&app.agent, &tool).is_err());
+    let selected_tool = tool.capability_id.as_str().to_owned();
+    write(app.store.as_ref(), move |tx| {
+        let current = devworks_core::settings::model::current_layer(
+            tx.configuration(),
+            &ConfigScope::Workspace,
+        )?;
+        let descriptor = devworks_core::settings::catalog::descriptor(
+            devworks_core::settings::catalog::TOOL_OVERRIDES_KEY,
+        )
+        .unwrap();
+        let assignment = serde_json::from_value(json!({
+            "key": descriptor.key,
+            "value": {"schema": descriptor.schema_ref(),
+                "value": {(selected_tool): true}}
+        }))
+        .unwrap();
+        let plan = devworks_core::settings::model::plan(&current, &[assignment]);
+        let body = devworks_core::settings::model::body(
+            &plan,
+            &ActorId(id("user-a")),
+            tx.now_ms(),
+            json!({"kind": "test"}),
+        );
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            devworks_core::settings::model::NAMESPACE,
+            current.revision,
+            devworks_core::settings::model::BODY_SCHEMA_VERSION,
+            body,
+        )?;
+        Ok(())
+    })
+    .unwrap();
     let resolved = registry.tool(&app.agent, &tool).unwrap();
     assert_eq!(resolved.schema, document);
     assert!(

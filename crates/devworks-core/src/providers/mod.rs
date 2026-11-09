@@ -5,6 +5,7 @@ pub mod context;
 pub mod decode;
 pub mod effort;
 pub mod encode;
+pub mod instructions;
 pub mod limits;
 pub mod materialize;
 pub mod sse;

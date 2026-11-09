@@ -88,6 +88,7 @@ fn context() -> ProviderContext {
             text: "Rules".into(),
             cache: None,
         }],
+        instruction_stamps: vec![],
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![ContentBlock::Text {
@@ -97,6 +98,189 @@ fn context() -> ProviderContext {
         }],
         parameters: GenerationParameters::default(),
     }
+}
+
+#[test]
+fn provider_context_requires_ordered_completed_tool_exchanges() {
+    let mut material = Material::new();
+    let arguments = material.put(b"{}", "application/json");
+    let call = || ContentBlock::ToolCall {
+        call_id: "call".into(),
+        wire_name: "lookup".into(),
+        arguments: arguments.clone(),
+    };
+    let result = || ContentBlock::ToolResult {
+        call_id: "call".into(),
+        content: vec![ResultBlock::Text { text: "ok".into() }],
+        is_error: false,
+        cache: None,
+    };
+    let mut unmatched = context();
+    unmatched.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![result()],
+    });
+    assert!(matches!(
+        unmatched.validate(),
+        Err(ProviderError::InvalidInput("tool_result_order"))
+    ));
+
+    let mut pending = context();
+    pending.messages.push(Message {
+        role: MessageRole::Assistant,
+        content: vec![call()],
+    });
+    assert!(matches!(
+        pending.validate(),
+        Err(ProviderError::InvalidInput("unanswered_tool_call"))
+    ));
+    pending.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![result()],
+    });
+    assert!(pending.validate().is_ok());
+    pending.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![result()],
+    });
+    assert!(matches!(
+        pending.validate(),
+        Err(ProviderError::InvalidInput("tool_result_order"))
+    ));
+}
+
+#[test]
+fn explicit_provider_epoch_conversion_preserves_completed_tool_exchange() {
+    let mut material = Material::new();
+    let native = material.put(b"opaque", "application/json");
+    let arguments = material.put(b"{}", "application/json");
+    let previous = binding(EndpointProfile::OpenAiResponses);
+    let next = NativeBinding {
+        connection_id: id("other-connection"),
+        endpoint_profile: EndpointProfile::AnthropicMessages,
+        context_epoch: Counter::new(1).unwrap(),
+        ..previous.clone()
+    };
+    let mut current = context();
+    current.messages.push(Message {
+        role: MessageRole::Assistant,
+        content: vec![
+            ContentBlock::Text {
+                text: "Looked it up".into(),
+                cache: None,
+            },
+            ContentBlock::Native {
+                binding: previous.clone(),
+                artifact: native.clone(),
+            },
+            ContentBlock::ToolCall {
+                call_id: "call-1".into(),
+                wire_name: "get_record".into(),
+                arguments,
+            },
+        ],
+    });
+    current.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![ContentBlock::ToolResult {
+            call_id: "call-1".into(),
+            content: vec![ResultBlock::Text {
+                text: "found".into(),
+            }],
+            is_error: false,
+            cache: None,
+        }],
+    });
+    let (converted, omitted) = current.converted_for_new_epoch(&previous, &next).unwrap();
+    assert_eq!(omitted[0].sha256, native.sha256);
+    assert_eq!(converted.messages.len(), 3);
+    assert_eq!(converted.messages[1].content.len(), 2);
+    assert!(matches!(
+        converted.messages[1].content[1],
+        ContentBlock::ToolCall { .. }
+    ));
+    assert!(matches!(
+        converted.messages[2].content[0],
+        ContentBlock::ToolResult { .. }
+    ));
+    let mut request_material = Material::new();
+    request_material.put(b"{}", "application/json");
+    let mut converted_request = request(&mut request_material, &converted);
+    if let InferenceInput::Generation { context_epoch, .. } = &mut converted_request.input {
+        *context_epoch = Counter::new(1).unwrap();
+    }
+    let encoded = prepare(
+        identity(next.clone()),
+        &converted_request,
+        &caps(next.clone()),
+        &request_material,
+        None,
+        &limits(),
+    )
+    .unwrap();
+    assert_eq!(
+        body(&encoded)["messages"][1]["content"][1]["type"],
+        "tool_use"
+    );
+
+    let mut unanswered = context();
+    unanswered.messages.push(Message {
+        role: MessageRole::Assistant,
+        content: vec![ContentBlock::ToolCall {
+            call_id: "call-2".into(),
+            wire_name: "get_record".into(),
+            arguments: native,
+        }],
+    });
+    assert_eq!(
+        unanswered
+            .converted_for_new_epoch(&previous, &next)
+            .unwrap_err(),
+        ProviderError::InvalidInput("unanswered_tool_call")
+    );
+}
+
+#[test]
+fn provider_epoch_removes_old_cache_hints_before_responses_encoding() {
+    let previous = binding(EndpointProfile::AnthropicMessages);
+    let next = NativeBinding {
+        endpoint_profile: EndpointProfile::OpenAiResponses,
+        context_epoch: Counter::new(1).unwrap(),
+        ..previous.clone()
+    };
+    let mut source = context();
+    source.instructions[0].cache = Some(CacheBreakpoint { ttl: None });
+    if let ContentBlock::Text { cache, .. } = &mut source.messages[0].content[0] {
+        *cache = Some(CacheBreakpoint { ttl: None });
+    }
+    source.parameters.tool_cache = Some(BTreeMap::from([(
+        "old-tool".into(),
+        CacheBreakpoint { ttl: None },
+    )]));
+    let same_provider = NativeBinding {
+        context_epoch: Counter::new(1).unwrap(),
+        ..previous.clone()
+    };
+    let (adopted, _) = source
+        .clone()
+        .converted_for_new_epoch(&previous, &same_provider)
+        .unwrap();
+    assert!(adopted.instructions[0].cache.is_some());
+    let mut unsupported = source.clone();
+    unsupported.parameters.top_k = Some(20);
+    assert!(matches!(
+        unsupported.converted_for_new_epoch(&previous, &next),
+        Err(ProviderError::Unsupported("epoch_destination_parameters"))
+    ));
+    let (converted, omitted) = source.converted_for_new_epoch(&previous, &next).unwrap();
+    assert!(omitted.is_empty());
+    assert!(converted.instructions[0].cache.is_none());
+    assert!(matches!(
+        converted.messages[0].content[0],
+        ContentBlock::Text { cache: None, .. }
+    ));
+    assert!(converted.parameters.tool_cache.is_none());
+    run(EndpointProfile::OpenAiResponses, &converted);
 }
 fn binding(profile: EndpointProfile) -> NativeBinding {
     NativeBinding {
@@ -325,6 +509,17 @@ fn exact_native_bindings_and_tool_argument_bytes_survive() {
                 arguments: args,
             },
         ],
+    });
+    c.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![ContentBlock::ToolResult {
+            call_id: "call-a".into(),
+            content: vec![ResultBlock::Text {
+                text: "found".into(),
+            }],
+            is_error: false,
+            cache: None,
+        }],
     });
     let r = request(&mut m, &c);
     let p = prepare(
@@ -632,6 +827,65 @@ fn current_registered_tool_metadata_is_required_and_descriptions_reach_each_prof
         materialize::tools(&Bare, &[alias], |_| Ok(())),
         Err(ProviderError::MaterialUnavailable)
     ));
+}
+#[test]
+fn tool_definition_order_is_stable_across_discovery_orders() {
+    let mut materials = Material::new();
+    let base = request(&mut materials, &context());
+    let aliases = [
+        ToolSchema {
+            capability_id: "package/zeta".to_owned().try_into().unwrap(),
+            wire_name: "zeta".into(),
+            input_schema: materials.schema_ref(),
+        },
+        ToolSchema {
+            capability_id: "devworks/alpha".to_owned().try_into().unwrap(),
+            wire_name: "alpha".into(),
+            input_schema: materials.schema_ref(),
+        },
+    ];
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::OpenAiResponses,
+        EndpointProfile::CompatibleChat,
+    ] {
+        let mut first = base.clone();
+        let mut second = base.clone();
+        if let InferenceInput::Generation { tools, .. } = &mut first.input {
+            *tools = aliases.to_vec();
+        }
+        if let InferenceInput::Generation { tools, .. } = &mut second.input {
+            *tools = aliases.iter().rev().cloned().collect();
+        }
+        let binding = binding(profile);
+        let first = prepare(
+            identity(binding.clone()),
+            &first,
+            &caps(binding.clone()),
+            &materials,
+            None,
+            &limits(),
+        )
+        .unwrap();
+        let second = prepare(
+            identity(binding.clone()),
+            &second,
+            &caps(binding),
+            &materials,
+            None,
+            &limits(),
+        )
+        .unwrap();
+        assert_eq!(first.body, second.body);
+        assert_eq!(
+            first
+                .tools
+                .iter()
+                .map(|tool| tool.wire_name.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "zeta"]
+        );
+    }
 }
 #[test]
 fn fixed_embedding_models_omit_dimensions_and_unknown_support_never_guesses() {
@@ -1270,6 +1524,19 @@ fn repeated_native_and_tool_json_artifacts_share_the_request_expansion_budget() 
                     }],
                 })
                 .collect();
+            if !native {
+                context.messages.push(Message {
+                    role: MessageRole::User,
+                    content: (0..512)
+                        .map(|i| ContentBlock::ToolResult {
+                            call_id: format!("call-{i}"),
+                            content: vec![ResultBlock::Text { text: "ok".into() }],
+                            is_error: false,
+                            cache: None,
+                        })
+                        .collect(),
+                });
+            }
             let request = request(&mut materials, &context);
             let result = prepare(
                 identity(binding.clone()),

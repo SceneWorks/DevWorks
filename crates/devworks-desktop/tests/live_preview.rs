@@ -4,6 +4,7 @@ mod common;
 use common::*;
 use devworks_core::{
     ports::{
+        IdKind,
         http::HttpRequest,
         provider_http::*,
         storage::*,
@@ -112,17 +113,23 @@ fn write<T: Send + 'static>(
 fn start_producer(engine: &Engine, session: Id) -> std::thread::JoinHandle<()> {
     let runtime = engine.host().runtime().clone();
     let store = runtime.store().clone();
-    // The provider output writer is the existing registered host, while the native viewer
-    // remains the real Human context and reauthorizes sessions.get on every read.
+    // The preview producer acts as the recorded session owner; the Human viewer is its creator.
+    let agent = read_snapshot(store.as_ref(), &ReadOptions::default(), |read| {
+        read.sessions()
+            .session(&session)?
+            .map(|row| row.agent_id)
+            .ok_or(StorageError::ScopeDenied)
+    })
+    .unwrap();
     let info = store.info();
     let ctx = devworks_core::context::HostIngress::new(store.as_ref())
         .context(
-            info.host_actor,
-            devworks_core::context::PrincipalKind::Host,
+            agent,
+            devworks_core::context::PrincipalKind::Agent,
             id("provider-invocation"),
             id("provider-output"),
             Counter::new(info.restore_epoch).unwrap(),
-            Revision::new(1).unwrap(),
+            engine.host().user().policy_revision().clone(),
         )
         .with_session(session.clone());
     write(store.as_ref(), move |tx| {
@@ -181,6 +188,7 @@ fn start_producer(engine: &Engine, session: Id) -> std::thread::JoinHandle<()> {
     let context = ProviderContext {
         version: 1,
         instructions: vec![],
+        instruction_stamps: vec![],
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![ContentBlock::Text {
@@ -265,7 +273,7 @@ fn start_producer(engine: &Engine, session: Id) -> std::thread::JoinHandle<()> {
         actor_id: ctx.principal().clone(),
         work_id: None,
         job_run_id: None,
-        role: "Host".into(),
+        role: "WorkspaceCoordinator".into(),
         query,
         quote,
         price_generation: generation,
@@ -348,6 +356,50 @@ fn until(
         std::thread::yield_now();
     }
 }
+fn agent_session(engine: &Engine) -> Id {
+    let store = engine.host().runtime().store().clone();
+    let user = engine.host().user().clone();
+    let agent = devworks_core::protocol::ActorId(id("preview-agent"));
+    write(store.as_ref(), move |tx| {
+        tx.actors().register(
+            &agent,
+            devworks_core::context::PrincipalKind::Agent,
+            "Preview agent",
+        )?;
+        devworks_core::authority::service::bind_principal(
+            tx,
+            &user,
+            devworks_core::ports::storage::NewPrincipalBinding {
+                actor: agent.clone(),
+                kind: devworks_core::context::PrincipalKind::Agent,
+                role: Some(devworks_core::settings::catalog::AgentRole::WorkspaceCoordinator),
+                project_id: None,
+                tool_families: None,
+                bound_by: user.principal().clone(),
+            },
+            None,
+        )
+        .map_err(|error| StorageError::InvalidRecord(format!("{error:?}")))?;
+        let session = StoredSession {
+            id: tx.new_id(IdKind::Session),
+            conversation_id: tx.new_id(IdKind::Conversation),
+            agent_id: agent,
+            project_id: None,
+            root_id: None,
+            title: "Streaming chat".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: user.principal().clone(),
+            created_at_ms: tx.now_ms(),
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        };
+        tx.sessions().insert_session(&session)?;
+        Ok(session.id)
+    })
+}
 #[test]
 fn native_stream_is_visible_before_close_and_replaced_once_by_canonical_history() {
     let root = Root::new("live-preview");
@@ -358,10 +410,7 @@ fn native_stream_is_visible_before_close_and_replaced_once_by_canonical_history(
     let engine = Engine::start(cfg).unwrap();
     let _release = Release(gate.clone());
     let b = engine.backend();
-    let session =
-        ops::started(b.command("sessions.start", &ops::session_start(&*b, "Streaming chat")))
-            .unwrap()
-            .id;
+    let session = agent_session(&engine);
     let other = ops::started(b.command("sessions.start", &ops::session_start(&*b, "Other chat")))
         .unwrap()
         .id;
