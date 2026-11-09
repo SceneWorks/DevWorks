@@ -1318,6 +1318,36 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
+    let persisted = read_snapshot(&s, &ReadOptions::default(), |snapshot| {
+        snapshot.sessions().entries(&id("session-home"), 0, 10)
+    })
+    .unwrap();
+    let material = devworks_core::providers::context::ProviderContext::from_transcript(
+        &persisted,
+        vec![],
+        devworks_core::providers::context::GenerationParameters::default(),
+        |reference| {
+            let (bytes, _) = artifacts
+                .read_exact(&s, &host, reference, 8_000)
+                .map_err(|_| StorageError::ScopeDenied)?;
+            String::from_utf8(bytes)
+                .map_err(|_| StorageError::InvalidRecord("invalid notice text".into()))
+        },
+        |_| None,
+    )
+    .unwrap();
+    let notice_text: Vec<&str> = material
+        .messages
+        .iter()
+        .map(|message| match message.content.as_slice() {
+            [devworks_core::providers::context::ContentBlock::Text { text, .. }] => text.as_str(),
+            _ => panic!("screen notices must remain provider text blocks"),
+        })
+        .collect();
+    assert_eq!(
+        notice_text,
+        ["Viewing feature board", "Viewing project issues"]
+    );
     let notice = read_snapshot(&s, &ReadOptions::default(), |snapshot| {
         let entry = snapshot
             .sessions()
