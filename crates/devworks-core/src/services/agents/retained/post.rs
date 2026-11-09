@@ -3,8 +3,9 @@ use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::ports::IdKind;
 use crate::ports::storage::{
-    SessionPosition, SessionScope, StorageError, StoredAgentDelivery, StoredAgentMessage,
-    StoredAgentMessageEvent, WriteTransaction,
+    ActivationPhase, AssignmentState, SessionPosition, SessionScope, StorageError,
+    StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent, StoredAssignment,
+    StoredSession, WriteTransaction,
 };
 use crate::protocol::{Id, ProjectId, RootId};
 use std::collections::HashSet;
@@ -67,10 +68,50 @@ pub(super) fn session_project(
     Ok(session.project_id.clone().or(root_project))
 }
 
+fn active_assignment(
+    tx: &mut dyn WriteTransaction,
+    session: &StoredSession,
+) -> Result<Option<StoredAssignment>, StorageError> {
+    let Some(root) = &session.root_id else {
+        return Ok(None);
+    };
+    let mut after = None;
+    loop {
+        let page = tx.runs().assignments(root, true, after.as_ref(), 500)?;
+        if page.is_empty() {
+            return Ok(None);
+        }
+        after = page.last().map(|assignment| assignment.id.clone());
+        let len = page.len();
+        for assignment in page {
+            if assignment.session_id != session.id || assignment.state != AssignmentState::Active {
+                continue;
+            }
+            let Some(execution) = &assignment.execution_id else {
+                continue;
+            };
+            let Some(activation) = tx.runs().activation(execution)? else {
+                continue;
+            };
+            if activation.phase == ActivationPhase::Running
+                && tx.store().boot_id.as_ref() == Some(&activation.boot_id)
+                && activation
+                    .lease_until_ms
+                    .is_some_and(|until| until > tx.now_ms())
+            {
+                return Ok(Some(assignment));
+            }
+        }
+        if len < 500 {
+            return Ok(None);
+        }
+    }
+}
+
 fn project_sessions(
     tx: &mut dyn WriteTransaction,
     project: &ProjectId,
-) -> Result<Vec<crate::ports::storage::StoredSession>, StorageError> {
+) -> Result<Vec<(StoredSession, StoredAssignment)>, StorageError> {
     let mut after: Option<SessionPosition> = None;
     let mut sessions = Vec::new();
     loop {
@@ -86,8 +127,10 @@ fn project_sessions(
         });
         let len = page.len();
         for session in page {
-            if session_project(tx, &session)?.as_ref() == Some(project) {
-                sessions.push(session);
+            if session_project(tx, &session)?.as_ref() == Some(project)
+                && let Some(assignment) = active_assignment(tx, &session)?
+            {
+                sessions.push((session, assignment));
             }
         }
         if len < 500 {
@@ -103,7 +146,7 @@ fn recipients(
     spec: &PostSpec,
     item: &Option<RootId>,
     feature: &Option<RootId>,
-    resource: &Option<String>,
+    _resource: &Option<String>,
     to_session: &Option<Id>,
     to_human: bool,
 ) -> Result<Vec<Recipient>, StorageError> {
@@ -114,40 +157,20 @@ fn recipients(
         return Ok(vec![Recipient::Session(session.clone())]);
     }
     let mut selected = Vec::new();
-    if let Some(item) = item {
-        if feature.is_none() && resource.is_none() {
-            if let Some(assignment) = tx.runs().live_assignment_for_work(item)?
-                && assignment.state.is_live()
-            {
-                selected.push(assignment.session_id);
+    for (session, assignment) in project_sessions(tx, &spec.project)? {
+        if let Some(feature) = feature {
+            let Some(work) = tx.sessions().work_root(&assignment.work_id)? else {
+                continue;
+            };
+            if work.parent_feature_id.as_ref() != Some(feature) {
+                continue;
+            }
+        } else if let Some(item) = item {
+            if assignment.work_id != *item {
+                continue;
             }
         }
-    }
-    if feature.is_some() || resource.is_some() || item.is_none() {
-        for session in project_sessions(tx, &spec.project)? {
-            if let Some(feature) = feature {
-                let Some(root) = &session.root_id else {
-                    continue;
-                };
-                let Some(work) = tx.sessions().work_root(root)? else {
-                    continue;
-                };
-                if work.parent_feature_id.as_ref() != Some(feature) {
-                    continue;
-                }
-                if tx
-                    .runs()
-                    .live_assignment_for_work(root)?
-                    .as_ref()
-                    .is_none_or(|assignment| {
-                        assignment.session_id != session.id || !assignment.state.is_live()
-                    })
-                {
-                    continue;
-                }
-            }
-            selected.push(session.id);
-        }
+        selected.push(session.id);
     }
     let mut seen = HashSet::new();
     Ok(selected

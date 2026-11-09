@@ -523,6 +523,25 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             devworks_core::services::agents::retained::handover_item(tx, &assignment("recipient"))?,
             0
         );
+        let broadcast = devworks_core::services::agents::retained::post_message(
+            tx,
+            &human_context,
+            &devworks_core::services::agents::retained::PostSpec {
+                project: project("project-a"),
+                body: "Project update".into(),
+                kind: devworks_core::services::agents::retained::MessageKind::Announcement,
+                item: None,
+                feature: None,
+                resource: None,
+                to_session: None,
+                to_human: false,
+                blocking: false,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )?;
+        assert_eq!(broadcast.recipients, 0);
         Ok(posted)
     })
     .unwrap();
