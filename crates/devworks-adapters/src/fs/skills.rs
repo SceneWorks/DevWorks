@@ -40,7 +40,7 @@ fn valid_segment(s: &str) -> bool {
 }
 
 /// Copies every entry under `from` that skill capture does not record (a name starting with
-/// `.`, a link, or anything but a regular file/directory) to the same place under `to`, unless
+/// `.` or not valid UTF-8, a link, or anything but a regular file/directory) to the same place under `to`, unless
 /// the new tree already has that path.
 fn preserve_uncaptured(from: &Path, to: &Path) -> io::Result<()> {
     for entry in fs::read_dir(from)? {
@@ -49,7 +49,9 @@ fn preserve_uncaptured(from: &Path, to: &Path) -> io::Result<()> {
         let source = entry.path();
         let target = to.join(&name);
         let kind = fs::symlink_metadata(&source)?.file_type();
-        let hidden = name.to_string_lossy().starts_with('.');
+        // Names capture cannot represent (not UTF-8) are never listed, so never captured: they
+        // are kept like hidden entries rather than pruned with the old tree.
+        let hidden = name.to_str().is_none_or(|n| n.starts_with('.'));
         if kind.is_dir() && !hidden {
             preserve_uncaptured_into(&source, &target)?;
         } else if (hidden || !(kind.is_file() || kind.is_dir()))
@@ -66,7 +68,10 @@ fn preserve_uncaptured_into(from: &Path, to: &Path) -> io::Result<()> {
     for entry in fs::read_dir(from)? {
         let entry = entry?;
         let kind = fs::symlink_metadata(entry.path())?.file_type();
-        let hidden = entry.file_name().to_string_lossy().starts_with('.');
+        let hidden = entry
+            .file_name()
+            .to_str()
+            .is_none_or(|n| n.starts_with('.'));
         if hidden || !kind.is_file() {
             kept = true;
             break;
@@ -290,6 +295,24 @@ mod tests {
             fs::read_link(root.join("demo/link.md")).unwrap(),
             Path::new("SKILL.md")
         );
+        // Linux allows non-UTF-8 names (APFS and NTFS do not): they are kept too.
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let odd = std::ffi::OsStr::from_bytes(b"notes-\xff");
+            fs::write(root.join("demo").join(odd), b"odd").unwrap();
+            files
+                .materialize(
+                    "demo",
+                    &[SkillFile {
+                        path: "SKILL.md".into(),
+                        bytes: b"four".to_vec(),
+                        executable: false,
+                    }],
+                )
+                .unwrap();
+            assert_eq!(fs::read(root.join("demo").join(odd)).unwrap(), b"odd");
+        }
         let leftovers: Vec<_> = fs::read_dir(&root)
             .unwrap()
             .map(|e| e.unwrap().file_name())
