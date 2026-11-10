@@ -9,7 +9,7 @@ use devworks_core::ports::storage::{
 };
 use devworks_core::ports::{IdKind, IdSource};
 use devworks_core::protocol::records::AgentRecord;
-use devworks_core::protocol::{AssignmentId, Counter, Id, Revision, RootId};
+use devworks_core::protocol::{AssignmentId, Counter, DomainErrorCode, Id, Revision, RootId};
 use devworks_core::services::agents::AgentService;
 use devworks_core::services::runs::root_assignments;
 use devworks_core::services::runs::substrate::{ActivationFailure, Fenced};
@@ -169,51 +169,46 @@ impl AgentLauncher {
             } = &end
             {
                 let assignment_id = child.assignment_id;
-                let mut waiting = false;
                 loop {
                     let agents_for_write = agents.clone();
                     let host_for_write = host.clone();
                     let assignment_for_write = assignment_id.clone();
                     let activation_for_write = activation_id.clone();
                     let complete = store::write(&store, move |tx| {
+                        match agents_for_write.complete_child(
+                            tx,
+                            &host_for_write,
+                            &assignment_for_write,
+                            &activation_for_write,
+                            epoch,
+                        ) {
+                            Ok(()) => return Ok(true),
+                            Err(Failure::Refused(refusal))
+                                if refusal.code == DomainErrorCode::Conflict
+                                    && refusal.target_kind == "assignment" => {}
+                            Err(error) => return Err(failure(error)),
+                        }
+                        // The completion check and waiting transition share one write owner.
+                        // A descendant cannot finish between these two decisions.
                         agents_for_write
-                            .complete_child(
+                            .wait_for_descendants(
                                 tx,
                                 &host_for_write,
                                 &assignment_for_write,
                                 &activation_for_write,
                                 epoch,
                             )
-                            .map_err(failure)
+                            .map_err(failure)?;
+                        Ok(false)
                     })
                     .await;
-                    if complete.is_ok() {
-                        break;
+                    match complete {
+                        Ok(true) => break,
+                        Ok(false) => {}
+                        Err(error) => return ChildLaunch::End(failed(error)),
                     }
                     if *stop_watch.borrow() {
                         return ChildLaunch::End(stopped());
-                    }
-                    if !waiting {
-                        let agents_for_write = agents.clone();
-                        let host_for_write = host.clone();
-                        let assignment_for_write = assignment_id.clone();
-                        let activation_for_write = activation_id.clone();
-                        if let Err(error) = store::write(&store, move |tx| {
-                            agents_for_write
-                                .wait_for_descendants(
-                                    tx,
-                                    &host_for_write,
-                                    &assignment_for_write,
-                                    &activation_for_write,
-                                    epoch,
-                                )
-                                .map_err(failure)
-                        })
-                        .await
-                        {
-                            return ChildLaunch::End(failed(error));
-                        }
-                        waiting = true;
                     }
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }

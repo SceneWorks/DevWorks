@@ -22,7 +22,8 @@ use devworks_core::protocol::{
     AttemptId, CommandReply, Counter, Id, OperationState, Protocol, Revision,
 };
 use devworks_core::providers::context::{
-    ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext, TextBlock,
+    ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext, ResultBlock,
+    TextBlock,
 };
 use serde_json::{Value, json};
 use std::sync::{Arc, Weak};
@@ -219,7 +220,17 @@ async fn run_native_loop(
                     .schemas()
                     .selected_agent_tools(ctx)?
                     .is_empty();
-                let route = route_context_head(runtime, ctx, session_id, 0, None, tools_required)?;
+                let needs_images =
+                    context_has_images(&initial_context(runtime.store().as_ref(), ctx, agent)?);
+                let route = route_context_head(
+                    runtime,
+                    ctx,
+                    session_id,
+                    0,
+                    None,
+                    tools_required,
+                    needs_images,
+                )?;
                 let (head, binding) = publish_first_context(runtime, ctx, agent, &route)?;
                 (head, binding, 0)
             }
@@ -235,6 +246,7 @@ async fn run_native_loop(
                 UnpublishedTurn::Interrupted {
                     attempt_id,
                     sequence,
+                    facts,
                 } => {
                     let bytes = runtime
                         .artifacts()
@@ -250,6 +262,17 @@ async fn run_native_loop(
                             cache: None,
                         }],
                     });
+                    for fact in facts {
+                        context
+                            .messages
+                            .push(crate::tool_turn::context_fact_message(
+                                runtime.store().as_ref(),
+                                runtime.artifacts(),
+                                ctx,
+                                session_id,
+                                fact,
+                            )?);
+                    }
                     crate::tool_turn::publish_continuation(
                         runtime.store().as_ref(),
                         runtime.artifacts(),
@@ -311,6 +334,7 @@ async fn run_native_loop(
         let tools_required = selected_count != 0;
         let windows = tool_window_count(selected_count);
         window %= windows;
+        let needs_images = context_head_has_images(runtime, ctx, &head)?;
         let route = route_context_head(
             runtime,
             ctx,
@@ -318,6 +342,7 @@ async fn run_native_loop(
             binding.context_epoch.get(),
             Some(head.sha256.as_str()),
             tools_required,
+            needs_images,
         )?;
         let next = binding_for_route(runtime, &route, binding.context_epoch.get())?;
         if next.connection_id != binding.connection_id
@@ -459,6 +484,7 @@ enum UnpublishedTurn {
     Interrupted {
         attempt_id: AttemptId,
         sequence: i64,
+        facts: Vec<TranscriptBody>,
     },
 }
 
@@ -480,6 +506,7 @@ fn unpublished_turn(
         let mut attempt = None;
         let mut has_tools = false;
         let mut interrupted = false;
+        let mut facts = Vec::new();
         while position < session.last_durable_sequence() {
             if position - after_sequence >= 10_000 {
                 return Err(StorageError::InvalidRecord(
@@ -525,6 +552,9 @@ fn unpublished_turn(
                         attempt = Some(call_attempt);
                         has_tools = true;
                     }
+                    fact @ (TranscriptBody::UserMessage { .. }
+                    | TranscriptBody::HostNotice { .. }
+                    | TranscriptBody::OperationUpdate { .. }) => facts.push(fact),
                     _ => {}
                 }
             }
@@ -544,6 +574,7 @@ fn unpublished_turn(
                 UnpublishedTurn::Interrupted {
                     attempt_id,
                     sequence: position,
+                    facts,
                 }
             } else {
                 UnpublishedTurn::Settled {
@@ -612,6 +643,7 @@ pub fn route_context_head(
     context_epoch: i64,
     head_digest: Option<&str>,
     tools_required: bool,
+    needs_images: bool,
 ) -> Result<RouteChoice, StorageError> {
     let (intent, effort, mut required, pin_revision, reviewer) =
         read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
@@ -658,8 +690,11 @@ pub fn route_context_head(
         })?;
     if tools_required && !required.iter().any(|capability| capability == "tools") {
         required.push("tools".into());
-        required.sort();
     }
+    if needs_images && !required.iter().any(|capability| capability == "vision") {
+        required.push("vision".into());
+    }
+    required.sort();
     let key = sha256_hex(
         format!(
             "agent-route:{}:{context_epoch}:{pin_revision}:{}:{}",
@@ -744,6 +779,35 @@ pub fn route_context_head(
         }
         Ok(choice)
     })
+}
+
+fn context_has_images(context: &ProviderContext) -> bool {
+    context
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .any(|block| match block {
+            ContentBlock::Image { .. } => true,
+            ContentBlock::ToolResult { content, .. } => content
+                .iter()
+                .any(|result| matches!(result, ResultBlock::Image { .. })),
+            _ => false,
+        })
+}
+
+fn context_head_has_images(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    head: &ArtifactRef,
+) -> Result<bool, StorageError> {
+    let bytes = runtime
+        .artifacts()
+        .read_exact(runtime.store().as_ref(), ctx, head, 32 * 1024 * 1024)
+        .map_err(|_| StorageError::ScopeDenied)?
+        .0;
+    let context: ProviderContext = serde_json::from_slice(&bytes)
+        .map_err(|error| StorageError::InvalidRecord(format!("agent route context: {error}")))?;
+    Ok(context_has_images(&context))
 }
 
 pub fn initial_context(
@@ -990,6 +1054,7 @@ pub fn plan_generation_window(
         .map_err(|error| StorageError::InvalidRecord(format!("agent context read: {error:?}")))?;
     let provider_context: ProviderContext = serde_json::from_slice(&context_bytes)
         .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?;
+    let requires_images = context_has_images(&provider_context);
     let instruction_targets = provider_context
         .instruction_stamps
         .iter()
@@ -1088,7 +1153,11 @@ pub fn plan_generation_window(
             input_tokens: None,
             cache_write_ttl_ms: None,
             processing_region: None,
-            required_modalities: vec!["Text".into()],
+            required_modalities: if requires_images {
+                vec!["Text".into(), "Image".into()]
+            } else {
+                vec!["Text".into()]
+            },
         };
         let owner =
             auxiliary::ownership(read, &info, ctx).map_err(|_| StorageError::ScopeDenied)?;
@@ -1166,7 +1235,7 @@ pub fn plan_generation_window(
             context_epoch: binding.context_epoch.clone(),
             tools,
             response_headroom_tokens: revision(headroom)?,
-            requires_images: false,
+            requires_images,
             requires_parallel_tools: false,
         },
     };
