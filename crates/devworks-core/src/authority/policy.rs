@@ -238,6 +238,8 @@ pub enum DenialReason {
     WebFetchDisabled,
     /// The invocation is outside the principal's bound project.
     OutOfProjectScope,
+    /// A bound agent requested work outside its root or delegated task references.
+    OutOfAssignmentScope,
     /// Project scope has no qualified confined launcher for native execution.
     EnforcementUnavailable,
     /// Force-pushing main/master is never allowed.
@@ -266,6 +268,7 @@ impl DenialReason {
             Self::WebToolsDisabled => "WebToolsDisabled",
             Self::WebFetchDisabled => "WebFetchDisabled",
             Self::OutOfProjectScope => "OutOfProjectScope",
+            Self::OutOfAssignmentScope => "OutOfAssignmentScope",
             Self::EnforcementUnavailable => "EnforcementUnavailable",
             Self::ProtectedBranch => "ProtectedBranch",
             Self::ApprovalRequired => "ApprovalRequired",
@@ -297,6 +300,7 @@ impl DenialReason {
             Self::WebToolsDisabled => "Web search is turned off in Agent tools settings.",
             Self::WebFetchDisabled => "Web page fetching is turned off in Agent tools settings.",
             Self::OutOfProjectScope => "The request is outside the agent's project.",
+            Self::OutOfAssignmentScope => "The request is outside this agent's assigned work.",
             Self::EnforcementUnavailable => {
                 "Project scope cannot confine native execution here; grant a bounded native exception to run it with your user rights."
             }
@@ -385,6 +389,14 @@ pub fn registered_tool_visibility(
     let fam = family(op);
     let class = selected.authority;
     let command = selected.mode == Mode::Command;
+    // Project-wide listings cannot be narrowed by a selected operation's input. Agents use
+    // addressed get calls for their root and delegated task references instead.
+    if kind == PrincipalKind::Agent
+        && ctx.root_id().is_some()
+        && matches!(op, "features.list" | "issues.list" | "tasks.list")
+    {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
     // Project-wide message views belong to the human UI. Agent sessions use their addressed
     // inbox; never advertise a project history or event feed they cannot read.
     if matches!(op, "agents.history" | "agents.events") && kind != PrincipalKind::Human {

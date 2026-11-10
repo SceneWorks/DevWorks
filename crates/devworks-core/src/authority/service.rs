@@ -5,6 +5,7 @@ use super::policy::{
     self, AccessProfile, DenialReason, EffectivePolicy, Provenance, Verdict, resolve_policy,
 };
 use crate::context::{InvocationContext, PrincipalKind};
+use crate::operations::{OperationInput, features, issues, runs, tasks};
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
     GrantState, NewAuthorityGrant, NewEvent, NewPrincipalBinding, PrincipalBinding, ReadOptions,
@@ -267,6 +268,134 @@ fn bound(
     }
 }
 
+/// A project binding does not grant a running agent authority over sibling roots. Check the
+/// selected typed input here so direct gateway callers have the same boundary as advertised tools.
+fn agent_assignment_scope(
+    s: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    request: &AuthorityRequest<'_>,
+) -> Result<(), DenialReason> {
+    if ctx.principal_kind() != PrincipalKind::Agent {
+        return Ok(());
+    }
+    let Some(root) = ctx.root_id() else {
+        return Ok(());
+    };
+    let assignment_id = ctx
+        .assignment_id()
+        .ok_or(DenialReason::OutOfAssignmentScope)?;
+    let assignment = s
+        .runs()
+        .assignment(assignment_id)
+        .map_err(|_| DenialReason::AuthorityUnavailable)?
+        .ok_or(DenialReason::OutOfAssignmentScope)?;
+    if &assignment.root_id != root || ctx.session_id() != Some(&assignment.session_id) {
+        return Err(DenialReason::OutOfAssignmentScope);
+    }
+    let context = s
+        .runs()
+        .agent_assignment_context(assignment_id)
+        .map_err(|_| DenialReason::AuthorityUnavailable)?
+        .ok_or(DenialReason::OutOfAssignmentScope)?;
+    let task_ids: Vec<Id> =
+        serde_json::from_value(context.task_ids).map_err(|_| DenialReason::AuthorityUnavailable)?;
+    let coordinator = assignment.parent_id.is_none();
+    let scoped = |id: &Id| -> Result<bool, DenialReason> {
+        if id == &root.0 || id == &assignment.work_id.0 || task_ids.contains(id) {
+            return Ok(true);
+        }
+        if coordinator {
+            return Ok(s
+                .work()
+                .work(id)
+                .map_err(|_| DenialReason::AuthorityUnavailable)?
+                .is_some_and(|w| w.parent_feature_id.as_ref() == Some(&root.0)));
+        }
+        Ok(false)
+    };
+    let allowed = match request.input {
+        OperationInput::Tasks(input) => match input {
+            tasks::Input::List(_) => false,
+            tasks::Input::Get(i) => scoped(&i.work_id)?,
+            tasks::Input::Edit(i) => scoped(&i.work_id)?,
+            tasks::Input::Move(i) => scoped(&i.task_id)?,
+            tasks::Input::AcceptanceEvidence(i) => scoped(&i.task_id)?,
+            tasks::Input::Assign(i) => {
+                scoped(&i.task_id)?
+                    && match &i.assignment_id {
+                        Some(id) => s
+                            .runs()
+                            .assignment(id)
+                            .map_err(|_| DenialReason::AuthorityUnavailable)?
+                            .is_some_and(|a| a.root_id == *root),
+                        None => true,
+                    }
+            }
+            tasks::Input::Create(i) => coordinator && i.parent_id.as_ref() == Some(root),
+            tasks::Input::SyncPlan(i) => {
+                coordinator
+                    && &i.feature_id == root
+                    && i.project_plan.is_none()
+                    && i.staged_project_plan.is_none()
+            }
+            tasks::Input::SetFeature(i) => {
+                scoped(&i.task_id)? && !i.clear_feature && i.feature_id.as_ref() == Some(root)
+            }
+            tasks::Input::Prioritize(_) | tasks::Input::DependencyLinks(_) => false,
+        },
+        OperationInput::Features(input) => match input {
+            features::Input::List(_)
+            | features::Input::Create(_)
+            | features::Input::Prioritize(_)
+            | features::Input::Dependencies(_) => false,
+            features::Input::Get(i) => scoped(&i.work_id)?,
+            features::Input::Edit(i) => scoped(&i.work_id)?,
+            features::Input::EditPlan(i) => coordinator && &i.feature_id == root,
+            features::Input::RequestPlanApproval(i) => coordinator && &i.feature_id == root,
+        },
+        OperationInput::Issues(input) => match input {
+            issues::Input::List(_) | issues::Input::Create(_) | issues::Input::Prioritize(_) => {
+                false
+            }
+            issues::Input::Get(i) => scoped(&i.work_id)?,
+            issues::Input::Edit(i) => scoped(&i.work_id)?,
+            issues::Input::Publish(i) => scoped(&i.issue_id.0)?,
+            issues::Input::Link(i) => scoped(&i.issue_id.0)?,
+        },
+        OperationInput::Runs(input) => match input {
+            runs::Input::Start(i) | runs::Input::Pause(i) | runs::Input::Continue(i) => {
+                match &i.command {
+                    crate::protocol::RootCommand::Start { root_id, .. }
+                    | crate::protocol::RootCommand::Pause { root_id, .. }
+                    | crate::protocol::RootCommand::Continue { root_id, .. } => {
+                        coordinator && root_id == root
+                    }
+                }
+            }
+            runs::Input::Redirect(i) => coordinator && &i.root_id == root,
+            runs::Input::Stop(i) => coordinator && &i.root_id == root,
+            runs::Input::Inspect(i) | runs::Input::Eligibility(i) => match &i.query {
+                crate::protocol::Query::Root { root_id } => root_id == root,
+                crate::protocol::Query::Eligibility { target, .. } => match target {
+                    crate::protocol::EligibilityTarget::Root(id) => id == root,
+                    crate::protocol::EligibilityTarget::Assignment(id) => s
+                        .runs()
+                        .assignment(id)
+                        .map_err(|_| DenialReason::AuthorityUnavailable)?
+                        .is_some_and(|a| a.root_id == *root),
+                },
+                _ => false,
+            },
+        },
+        _ => true,
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(DenialReason::OutOfAssignmentScope)
+    }
+}
+
 pub(crate) fn decide_in(
     s: &dyn ReadSnapshot,
     ctx: &InvocationContext,
@@ -289,6 +418,9 @@ pub(crate) fn decide_in(
     let binding = bound(s, ctx).map_err(unavailable)?;
     let policy = resolve_policy(s.configuration(), ctx.project_id()).map_err(unavailable)?;
     let mut verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, protected_branches);
+    if matches!(verdict, Verdict::Allow | Verdict::NeedsGrant { .. }) {
+        agent_assignment_scope(s, ctx, request).map_err(deny)?;
+    }
     if let Some(reviewed) = ctx.reviewed_operation()
         && (reviewed.operation() != request.descriptor.name
             || reviewed.request_digest() != request.fingerprint.as_str()

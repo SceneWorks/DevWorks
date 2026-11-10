@@ -1364,7 +1364,7 @@ fn only_the_session_owner_routes_it_at_its_current_epoch() {
     assert_eq!(fault.code, DomainErrorCode::NotFound);
     let unbound = fx.agent("agent-a", "project-a", "s1");
     let fault = refused(fx.route_as(&unbound, "work-a", tier("Low"), "Default", &[]));
-    assert_eq!(fault.code, DomainErrorCode::PermissionDenied);
+    assert_eq!(fault.code, DomainErrorCode::NotFound);
     // A stale context epoch is refused for refresh.
     let fault = refused(fx.command(
         &fx.user(),
