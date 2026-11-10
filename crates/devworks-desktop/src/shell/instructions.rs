@@ -1,0 +1,517 @@
+//! Settings → Roles and skills: the `skills.*` / `roles.*` gateway operations, text reads
+//! through `artifacts.read`, and draft text stored through `artifacts.save` before the draft
+//! command. Commands keep their exact frames; an unknown outcome is settled by Confirm outcomes.
+use super::Shell;
+use crate::{
+    backend::{Reply, Slot, TaskOutput, is_unknown},
+    instructions_ops::{self as iop, Kind, TaskResult},
+    instructions_screen::{InstructionAction, InstructionsPanel, Pending, Stage},
+    ops,
+    route::Route,
+    widgets::Tone,
+};
+use devworks_core::settings::catalog::AgentRole;
+
+const UNKNOWN: &str = "The outcome is not confirmed yet. Use Confirm outcomes; the exact \
+                       request is resubmitted and nothing is applied twice.";
+
+impl Shell {
+    pub(super) fn instruction_action(&mut self, action: InstructionAction) {
+        match action {
+            InstructionAction::Load => self.load_instructions(),
+            InstructionAction::LoadDetail => self.load_instruction_detail(),
+            InstructionAction::View(revision) => self.view_instruction_revision(revision),
+            InstructionAction::Save {
+                kind,
+                target,
+                name,
+                text,
+            } => self.save_instruction(kind, target, name, text),
+            InstructionAction::Restore {
+                kind,
+                id,
+                expected,
+                target,
+            } => self.restore_instruction(kind, id, expected, target),
+            InstructionAction::OpenApprovals => self.navigate(Route::Approvals),
+        }
+    }
+
+    fn panel(&mut self) -> &mut InstructionsPanel {
+        &mut self.settings.instructions
+    }
+
+    fn load_instructions(&mut self) {
+        let p = self.panel();
+        p.requested = true;
+        p.skills_generation = p.skills_generation.wrapping_add(1);
+        p.skills_gathering.clear();
+        let generation = p.skills_generation;
+        if p.skills.as_ref().is_some_and(|s| s.is_err()) {
+            p.skills = None;
+        }
+        self.discover_page(generation, None);
+        for role in AgentRole::ALL {
+            let id = iop::role_id(role);
+            let submitted = self.query(
+                Slot::InstructionRole(id.clone()),
+                "Reading role instructions",
+                "roles.read",
+                {
+                    let id = id.clone();
+                    move |b| iop::query(b, "roles.read", iop::read_body(&id, None))
+                },
+            );
+            if !submitted {
+                self.panel()
+                    .roles
+                    .insert(id, Err("Not requested: DevWorks is offline.".into()));
+            }
+        }
+        if self.panel().selected.is_some() {
+            self.load_instruction_detail();
+        }
+    }
+
+    fn discover_page(&mut self, generation: u64, cursor: Option<String>) {
+        if !self.query(
+            Slot::InstructionSkills(generation),
+            "Discovering skills",
+            "skills.discover",
+            move |b| iop::query(b, "skills.discover", iop::discover_body(cursor.as_deref())),
+        ) {
+            self.panel().skills = Some(Err("Not requested: DevWorks is offline.".into()));
+        }
+    }
+
+    fn load_instruction_detail(&mut self) {
+        let Some(sel) = self.panel().selected.clone() else {
+            return;
+        };
+        let p = self.panel();
+        p.detail.generation = p.detail.generation.wrapping_add(1);
+        let generation = p.detail.generation;
+        p.detail.history = None;
+        p.detail.history_gathering.clear();
+        p.detail.resources = None;
+        p.detail.resources_gathering.clear();
+        p.detail.text = None;
+        p.detail.shown = Some(sel.record.revision.get());
+        self.history_page(sel.kind, sel.id.clone(), generation, None);
+        self.load_instruction_text(generation, sel.record.content.clone());
+        if sel.kind == Kind::Skill {
+            self.resources_page(sel.id, sel.record.revision.get(), generation, None);
+        }
+    }
+
+    fn history_page(&mut self, kind: Kind, id: String, generation: u64, cursor: Option<String>) {
+        let op = kind.history_op();
+        if !self.query(
+            Slot::InstructionHistory(generation),
+            "Reading instruction history",
+            op,
+            move |b| iop::query(b, op, iop::history_body(&id, cursor.as_deref())),
+        ) {
+            self.panel().detail.history = Some(Err("Not requested: DevWorks is offline.".into()));
+        }
+    }
+
+    fn resources_page(
+        &mut self,
+        id: String,
+        revision: i64,
+        generation: u64,
+        cursor: Option<String>,
+    ) {
+        if !self.query(
+            Slot::InstructionResources(generation),
+            "Reading skill resources",
+            "skills.resources",
+            move |b| {
+                iop::query(
+                    b,
+                    "skills.resources",
+                    iop::resources_body(&id, revision, cursor.as_deref()),
+                )
+            },
+        ) {
+            self.panel().detail.resources = Some(Err("Not requested: DevWorks is offline.".into()));
+        }
+    }
+
+    fn load_instruction_text(
+        &mut self,
+        generation: u64,
+        content: devworks_core::protocol::provider::ArtifactRef,
+    ) {
+        let submitted = self.online().is_ok()
+            && self.client.as_mut().is_some_and(|c| {
+                c.task(
+                    Slot::InstructionText(generation),
+                    "Reading instruction text",
+                    move |b| iop::load_text(b, &content),
+                )
+            });
+        if !submitted {
+            self.panel().detail.text = Some(Err("Not requested: DevWorks is offline.".into()));
+        }
+    }
+
+    fn view_instruction_revision(&mut self, revision: i64) {
+        let record = match &self.panel().detail.history {
+            Some(Ok(h)) => h.iter().find(|r| r.revision.get() == revision).cloned(),
+            _ => None,
+        };
+        let Some(record) = record else {
+            return;
+        };
+        let p = self.panel();
+        p.detail.generation = p.detail.generation.wrapping_add(1);
+        let generation = p.detail.generation;
+        // History and resources stay as loaded; only the text slot moves to this generation.
+        p.detail.shown = Some(revision);
+        p.detail.text = None;
+        p.editor = None;
+        self.load_instruction_text(generation, record.content);
+    }
+
+    fn save_instruction(
+        &mut self,
+        kind: Kind,
+        target: Option<(String, i64)>,
+        name: String,
+        text: String,
+    ) {
+        if self.panel().pending.is_some() || !iop::savable_text(&text) {
+            return;
+        }
+        let token = self.panel().next_token();
+        let title = format!("{name} instructions");
+        let submitted = self.online().is_ok()
+            && self.client.as_mut().is_some_and(|c| {
+                c.task(
+                    Slot::InstructionPrepare(token),
+                    "Preparing instruction text",
+                    move |b| iop::prepare_save(b, &title, &text),
+                )
+            });
+        let p = self.panel();
+        if submitted {
+            p.pending = Some(Pending {
+                token,
+                kind,
+                draft: Some((target, name)),
+                stage: Stage::Preparing,
+                staged: None,
+            });
+            p.message = None;
+        } else {
+            p.message = Some((Tone::Attention, "Not saved: DevWorks is offline.".into()));
+        }
+    }
+
+    fn restore_instruction(&mut self, kind: Kind, id: String, expected: i64, target: i64) {
+        if self.panel().pending.is_some() {
+            return;
+        }
+        let token = self.panel().next_token();
+        let op = kind.rollback_op();
+        let submitted = self.command(
+            Slot::InstructionCommand(token),
+            "Restoring an instruction revision",
+            op,
+            move |b| iop::command(b, op, iop::rollback_body(&id, expected, target)),
+        );
+        let p = self.panel();
+        if submitted {
+            p.pending = Some(Pending {
+                token,
+                kind,
+                draft: None,
+                stage: Stage::Saving,
+                staged: None,
+            });
+            p.message = None;
+        } else {
+            p.message = Some((Tone::Attention, "Not restored: DevWorks is offline.".into()));
+        }
+    }
+
+    fn pending_for(&mut self, token: u64) -> Option<Pending> {
+        self.panel().pending.clone().filter(|p| p.token == token)
+    }
+
+    fn fail_instruction(&mut self, token: u64, text: String) {
+        if let Some(p) = self.pending_for(token) {
+            self.remove_owned(p.staged.as_deref());
+            self.panel().pending = None;
+        }
+        self.panel().message = Some((Tone::Bad, text));
+    }
+
+    pub(super) fn apply_instructions(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
+        match (slot, reply) {
+            (Slot::InstructionSkills(generation), Reply::Query(q)) => {
+                if generation != self.panel().skills_generation {
+                    return None;
+                }
+                match iop::records_page(q) {
+                    Ok(page) => {
+                        let p = self.panel();
+                        p.skills_gathering.extend(page.items);
+                        match page.next {
+                            Some(next) => self.discover_page(generation, Some(next)),
+                            None => {
+                                let mut all = std::mem::take(&mut p.skills_gathering);
+                                all.sort_by(|a, b| {
+                                    a.name
+                                        .0
+                                        .cmp(&b.name.0)
+                                        .then(a.id.as_str().cmp(b.id.as_str()))
+                                });
+                                // Keep the selection's record current.
+                                if let Some(sel) = &mut p.selected
+                                    && sel.kind == Kind::Skill
+                                    && let Some(r) = all.iter().find(|r| r.id.as_str() == sel.id)
+                                {
+                                    sel.record = r.clone();
+                                }
+                                p.skills = Some(Ok(all));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let p = self.panel();
+                        p.skills_gathering.clear();
+                        p.skills = Some(Err(e.describe()));
+                    }
+                }
+            }
+            (Slot::InstructionRole(id), Reply::Query(q)) => {
+                let result = iop::record(q).map_err(|e| e.describe());
+                let p = self.panel();
+                if let (Ok(r), Some(sel)) = (&result, &mut p.selected)
+                    && sel.kind == Kind::Role
+                    && sel.id == id
+                {
+                    sel.record = r.clone();
+                }
+                p.roles.insert(id, result);
+            }
+            (Slot::InstructionHistory(generation), Reply::Query(q)) => {
+                if generation != self.panel().detail.generation {
+                    return None;
+                }
+                match iop::records_page(q) {
+                    Ok(page) => {
+                        self.panel().detail.history_gathering.extend(page.items);
+                        match page.next {
+                            Some(next) => {
+                                if let Some(sel) = self.panel().selected.clone() {
+                                    self.history_page(sel.kind, sel.id, generation, Some(next));
+                                }
+                            }
+                            None => {
+                                let d = &mut self.panel().detail;
+                                let mut all = std::mem::take(&mut d.history_gathering);
+                                all.sort_by_key(|r| std::cmp::Reverse(r.revision.get()));
+                                d.history = Some(Ok(all));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let d = &mut self.panel().detail;
+                        d.history_gathering.clear();
+                        d.history = Some(Err(e.describe()));
+                    }
+                }
+            }
+            (Slot::InstructionResources(generation), Reply::Query(q)) => {
+                if generation != self.panel().detail.generation {
+                    return None;
+                }
+                match iop::resources(q) {
+                    Ok(page) => {
+                        self.panel().detail.resources_gathering.extend(page.items);
+                        match page.next {
+                            Some(next) => {
+                                if let Some(sel) = self.panel().selected.clone() {
+                                    let revision = sel.record.revision.get();
+                                    self.resources_page(sel.id, revision, generation, Some(next));
+                                }
+                            }
+                            None => {
+                                let d = &mut self.panel().detail;
+                                d.resources = Some(Ok(std::mem::take(&mut d.resources_gathering)));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let d = &mut self.panel().detail;
+                        d.resources_gathering.clear();
+                        d.resources = Some(Err(e.describe()));
+                    }
+                }
+            }
+            (Slot::InstructionText(generation), Reply::Task(result)) => {
+                let d = &mut self.panel().detail;
+                if generation != d.generation {
+                    return None;
+                }
+                d.text = Some(match result {
+                    Ok(TaskOutput::Instruction(TaskResult::Text(text))) => Ok(text),
+                    Ok(_) => Err("The text reply did not match this request.".into()),
+                    Err(e) => Err(e),
+                });
+            }
+            (Slot::InstructionPrepare(token), Reply::Task(result)) => {
+                let Some(_) = self.pending_for(token) else {
+                    // Prepared for a change no longer pending: release its staged file.
+                    if let Ok(TaskOutput::Instruction(TaskResult::Prepared { staged, .. })) = result
+                    {
+                        self.remove_owned(Some(&staged));
+                    }
+                    return None;
+                };
+                match result {
+                    Ok(TaskOutput::Instruction(TaskResult::Prepared { frame, staged })) => {
+                        if let Some(p) = &mut self.panel().pending {
+                            p.staged = Some(staged);
+                            p.stage = Stage::Storing;
+                        }
+                        if !self.command(
+                            Slot::InstructionArtifact(token),
+                            "Storing instruction text",
+                            "artifacts.save",
+                            move |_| frame,
+                        ) {
+                            self.fail_instruction(token, "Not saved: DevWorks is offline.".into());
+                        }
+                    }
+                    Ok(_) => self.fail_instruction(
+                        token,
+                        "The prepared text did not match this change.".into(),
+                    ),
+                    Err(e) => self.fail_instruction(token, e),
+                }
+            }
+            (Slot::InstructionArtifact(token), Reply::Command(outcome)) => {
+                let Some(pending) = self.pending_for(token) else {
+                    // A restored, confirmed text save without its draft (after a restart).
+                    if !is_unknown(&outcome) {
+                        self.panel().message = Some((
+                            Tone::Attention,
+                            "An earlier instruction text save was confirmed, but its draft was \
+                             not kept. Edit and save again to apply it."
+                                .into(),
+                        ));
+                    }
+                    return None;
+                };
+                if is_unknown(&outcome) {
+                    if let Some(p) = &mut self.panel().pending {
+                        p.stage = Stage::Unknown;
+                    }
+                    self.panel().message = Some((Tone::Attention, UNKNOWN.into()));
+                    return None;
+                }
+                self.remove_owned(pending.staged.as_deref());
+                if let Some(p) = &mut self.panel().pending {
+                    p.staged = None;
+                }
+                match ops::saved_artifact(outcome) {
+                    Ok(record) => {
+                        let Some((target, name)) = pending.draft else {
+                            self.fail_instruction(token, "No draft to save.".into());
+                            return None;
+                        };
+                        let op = pending.kind.draft_op();
+                        let content = record.artifact;
+                        if let Some(p) = &mut self.panel().pending {
+                            p.stage = Stage::Saving;
+                        }
+                        if !self.command(
+                            Slot::InstructionCommand(token),
+                            "Saving instructions",
+                            op,
+                            move |b| {
+                                let target = target.as_ref().map(|(id, r)| (id.as_str(), *r));
+                                iop::command(b, op, iop::draft_body(target, &name, &content))
+                            },
+                        ) {
+                            self.fail_instruction(token, "Not saved: DevWorks is offline.".into());
+                        }
+                    }
+                    Err(e) => self.fail_instruction(
+                        token,
+                        format!("The text was not stored: {}", e.describe()),
+                    ),
+                }
+            }
+            (Slot::InstructionCommand(token), Reply::Command(outcome)) => {
+                let pending = self.pending_for(token);
+                let known = pending.is_some();
+                let restore = pending.as_ref().is_some_and(|p| p.draft.is_none());
+                if is_unknown(&outcome) {
+                    if let Some(p) = &mut self.panel().pending
+                        && p.token == token
+                    {
+                        p.stage = Stage::Unknown;
+                    }
+                    self.panel().message = Some((Tone::Attention, UNKNOWN.into()));
+                    return None;
+                }
+                if known {
+                    self.panel().pending = None;
+                }
+                match iop::changed(outcome) {
+                    Ok(record) => {
+                        let p = self.panel();
+                        p.editor = None;
+                        p.new_skill = None;
+                        p.message = Some((
+                            Tone::Good,
+                            format!(
+                                "{} revision {} of {}. Running agents adopt it at their next \
+                                 safe step.",
+                                if restore { "Restored" } else { "Saved" },
+                                record.revision.get(),
+                                record.name.0
+                            ),
+                        ));
+                        let kind = if record.id.as_str().starts_with("role-") {
+                            Kind::Role
+                        } else {
+                            Kind::Skill
+                        };
+                        // A shared skill's draft lands on its harness override: select it.
+                        if kind == Kind::Skill {
+                            p.select(InstructionsPanel::skill_selection(&record));
+                        } else if let Some(role) = AgentRole::ALL
+                            .into_iter()
+                            .find(|r| iop::role_id(*r) == record.id.as_str())
+                        {
+                            p.select(InstructionsPanel::role_selection(role, &record));
+                        }
+                        self.load_instructions();
+                    }
+                    Err(e) if iop::is_conflict(&e) => {
+                        self.panel().message = Some((
+                            Tone::Attention,
+                            "This item changed since it was loaded (stale revision). It was \
+                             refreshed; your edit is kept — review and save again."
+                                .into(),
+                        ));
+                        self.load_instructions();
+                    }
+                    Err(e) => {
+                        self.panel().message =
+                            Some((Tone::Bad, format!("Not saved. {}", e.describe())));
+                    }
+                }
+            }
+            (slot, reply) => return Some((slot, reply)),
+        }
+        None
+    }
+}

@@ -450,6 +450,22 @@ pub enum Slot {
     EmbeddingSpaces(u64),
     /// One `router.configure` submission from the connections panel (its sequence number).
     Configure(u64),
+    /// Settings → Roles and skills: a discovery page (load generation).
+    InstructionSkills(u64),
+    /// The active record of one role (role item ID).
+    InstructionRole(String),
+    /// A history page of the selected item (detail generation).
+    InstructionHistory(u64),
+    /// The text of the shown revision (detail generation).
+    InstructionText(u64),
+    /// A resources page of the selected skill (detail generation).
+    InstructionResources(u64),
+    /// Staging a draft's text (change token).
+    InstructionPrepare(u64),
+    /// The draft text's `artifacts.save` (change token).
+    InstructionArtifact(u64),
+    /// The `*.draft` / `*.rollback` command (change token).
+    InstructionCommand(u64),
 }
 
 /// A finished request.
@@ -488,6 +504,8 @@ pub enum TaskOutput {
     TextPreview(Option<devworks_engine::providers::live::LiveTurn>),
     /// A bounded convention editor or transfer task.
     Convention(crate::conventions_ops::TaskResult),
+    /// Instruction text read or a staged draft (Roles and skills).
+    Instruction(crate::instructions_ops::TaskResult),
     /// Package runtimes and indexes were refreshed.
     Refreshed,
 }

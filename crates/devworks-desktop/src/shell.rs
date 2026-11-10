@@ -36,6 +36,7 @@ pub mod decisions;
 pub mod graph;
 pub mod help;
 pub mod indexing;
+mod instructions;
 pub mod jobs;
 mod live_text;
 mod project_purge;
@@ -1783,6 +1784,9 @@ impl Shell {
         let Some((slot, reply)) = self.apply_conventions(slot, reply) else {
             return;
         };
+        let Some((slot, reply)) = self.apply_instructions(slot, reply) else {
+            return;
+        };
         let Some((slot, reply)) = self.apply_databases(slot, reply) else {
             return;
         };
@@ -2105,7 +2109,8 @@ impl Shell {
                         | TaskOutput::PackagePrepared { .. }
                         | TaskOutput::Refreshed
                         | TaskOutput::TextPreview(_)
-                        | TaskOutput::Convention(_),
+                        | TaskOutput::Convention(_)
+                        | TaskOutput::Instruction(_),
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
                 };
@@ -2169,7 +2174,8 @@ impl Shell {
                             | TaskOutput::PackagePrepared { .. }
                             | TaskOutput::Refreshed
                             | TaskOutput::TextPreview(_)
-                            | TaskOutput::Convention(_),
+                            | TaskOutput::Convention(_)
+                            | TaskOutput::Instruction(_),
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }
@@ -3070,6 +3076,7 @@ impl Shell {
                 SettingsAction::OpenHelp(topic) => self.open_help_context(&topic),
                 SettingsAction::Connection(a) => self.connection_action(a),
                 SettingsAction::Web(action) => self.web_action(action),
+                SettingsAction::Instructions(action) => self.instruction_action(action),
             }
         }
     }
