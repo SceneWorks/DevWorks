@@ -1726,7 +1726,7 @@ impl Shell {
                 }
                 if self.work.messages.history_refresh_pending {
                     self.work.messages.history_refresh_pending = false;
-                    self.load_messages(true);
+                    self.load_messages(false);
                     return None;
                 }
                 match wops::message_history_page(reply) {
@@ -1753,7 +1753,7 @@ impl Shell {
                 }
                 if self.work.messages.inbox_refresh_pending {
                     self.work.messages.inbox_refresh_pending = false;
-                    self.load_messages(true);
+                    self.load_messages(false);
                     return None;
                 }
                 match wops::message_inbox_page(reply) {

@@ -2191,7 +2191,13 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
                 BatchOutcome::Accepted(_)));
             Ok(())
         }).unwrap();
-        assert!(app.refresh_native_tool_context(&f.context, &id("session"), &second).is_err());
+        let redirected = app.refresh_native_tool_context(&f.context, &id("session"), &second).unwrap();
+        let redirected_context: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
+            f.store.as_ref(), &f.context, &redirected, 1024 * 1024).unwrap().0).unwrap();
+        assert!(matches!(&redirected_context.messages.last().unwrap().content[0],
+            ContentBlock::Text { text, .. } if text == "Redirect"));
+        assert_eq!(app.refresh_native_tool_context(&f.context, &id("session"), &redirected)
+            .unwrap().version_id, redirected.version_id);
         app.shutdown().await;
     });
 }

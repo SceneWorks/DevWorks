@@ -242,6 +242,25 @@ pub fn post_message(
             "blocking requires a human item question".into(),
         ));
     }
+    if spec.blocking && ctx.principal_kind() == PrincipalKind::Agent {
+        let own_root = ctx.root_id().ok_or(StorageError::ScopeDenied)?;
+        let target = spec.item.as_ref().ok_or(StorageError::ScopeDenied)?;
+        if target != own_root {
+            let target_work = tx
+                .sessions()
+                .work_root(target)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let own_work = tx
+                .sessions()
+                .work_root(own_root)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if own_work.kind != "feature"
+                || target_work.parent_feature_id.as_ref() != Some(own_root)
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+    }
     if spec.resolves.is_some() && spec.in_reply_to.is_none() {
         return Err(StorageError::InvalidRecord(
             "resolution requires in_reply_to".into(),

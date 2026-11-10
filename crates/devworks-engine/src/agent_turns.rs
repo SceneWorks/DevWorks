@@ -115,6 +115,37 @@ async fn drive_agent_turn(
     };
     let activation_id = activation_id.clone();
     let control = runtime.runs().service().clone();
+    let root_id = coordinator.root_id.clone();
+    let coordinator_assignment = assignment_id.clone();
+    let execution = activation_id.clone();
+    let ack = store::write(runtime.store(), move |tx| {
+        let assignment = tx
+            .runs()
+            .assignment(&coordinator_assignment)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if assignment.parent_id.is_some() {
+            return Ok(Ok(()));
+        }
+        let revision = tx
+            .runs()
+            .root_control(&root_id)?
+            .ok_or(StorageError::ScopeDenied)?
+            .instruction_revision;
+        control
+            .acknowledge_instructions(tx, &execution, epoch, revision)
+            .map(|result| result.map(|_| ()))
+    })
+    .await;
+    match ack {
+        Ok(Ok(())) => {}
+        Ok(Err(fenced)) => {
+            return LaunchEnd::Failed(ActivationFailure::Transient(format!(
+                "agent instruction acknowledgement fenced: {fenced:?}"
+            )));
+        }
+        Err(error) => return turn_failure(error),
+    }
+    let control = runtime.runs().service().clone();
     let session = session_id.clone();
     let turn = match store::write(runtime.store(), move |tx| {
         control.begin_turn(tx, &session, &assignment_id, &activation_id, epoch)
@@ -191,9 +222,48 @@ async fn run_native_loop(
                 (head, binding, 0)
             }
         };
-        if let Some((attempt_id, has_tools)) =
+        if let Some(unpublished) =
             unpublished_turn(runtime.store().as_ref(), ctx, session_id, observed_sequence)?
         {
+            let (attempt_id, has_tools) = match unpublished {
+                UnpublishedTurn::Settled {
+                    attempt_id,
+                    has_tools,
+                } => (attempt_id, has_tools),
+                UnpublishedTurn::Interrupted {
+                    attempt_id,
+                    sequence,
+                } => {
+                    let bytes = runtime
+                        .artifacts()
+                        .read_exact(runtime.store().as_ref(), ctx, &head, 8 * 1024 * 1024)
+                        .map_err(|_| StorageError::ScopeDenied)?
+                        .0;
+                    let mut context: ProviderContext =
+                        serde_json::from_slice(&bytes).map_err(|_| StorageError::ScopeDenied)?;
+                    context.messages.push(Message {
+                        role: MessageRole::User,
+                        content: vec![ContentBlock::Text {
+                            text: "Host notice: The previous assistant response was interrupted before completion. Continue from the last completed step; do not assume the partial response was applied.".into(),
+                            cache: None,
+                        }],
+                    });
+                    crate::tool_turn::publish_continuation(
+                        runtime.store().as_ref(),
+                        runtime.artifacts(),
+                        ctx,
+                        session_id,
+                        &attempt_id,
+                        &binding,
+                        crate::tool_turn::ContinuationMaterial {
+                            context,
+                            observed_sequence: sequence,
+                        },
+                    )?;
+                    recovered = runtime.recover_native_context_head(ctx, session_id)?;
+                    continue;
+                }
+            };
             if has_tools {
                 runtime.dispatch_pending_tool_calls_cancellable(
                     ctx,
@@ -317,12 +387,23 @@ async fn run_native_loop(
 
 /// A provider exchange can be durable before its next context head is published. Recover that
 /// exchange from the transcript cursor first; a refresh only accepts operation updates.
+enum UnpublishedTurn {
+    Settled {
+        attempt_id: AttemptId,
+        has_tools: bool,
+    },
+    Interrupted {
+        attempt_id: AttemptId,
+        sequence: i64,
+    },
+}
+
 fn unpublished_turn(
     store: &dyn ApplicationStore,
     ctx: &InvocationContext,
     session_id: &Id,
     after_sequence: i64,
-) -> Result<Option<(AttemptId, bool)>, StorageError> {
+) -> Result<Option<UnpublishedTurn>, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |read| {
         let session = read
             .sessions()
@@ -334,6 +415,7 @@ fn unpublished_turn(
         let mut position = after_sequence;
         let mut attempt = None;
         let mut has_tools = false;
+        let mut interrupted = false;
         while position < session.last_durable_sequence() {
             if position - after_sequence >= 10_000 {
                 return Err(StorageError::InvalidRecord(
@@ -356,14 +438,29 @@ fn unpublished_turn(
                 match serde_json::from_value::<TranscriptBody>(entry.body)
                     .map_err(|_| StorageError::ScopeDenied)?
                 {
-                    TranscriptBody::AssistantAttempt { attempt_id, .. } => {
-                        if attempt.replace(attempt_id).is_some() {
+                    TranscriptBody::AssistantAttempt {
+                        attempt_id,
+                        interrupted: ended,
+                        ..
+                    } => {
+                        if attempt.as_ref().is_some_and(|known| known != &attempt_id) {
                             return Err(StorageError::InvalidRecord(
                                 "multiple unpublished turns".into(),
                             ));
                         }
+                        attempt = Some(attempt_id);
+                        interrupted = ended;
                     }
-                    TranscriptBody::ToolCallRecorded { .. } => has_tools = true,
+                    TranscriptBody::ToolCallRecorded { tool_call } => {
+                        let call_attempt = tool_call.call.attempt_id;
+                        if attempt.as_ref().is_some_and(|known| known != &call_attempt) {
+                            return Err(StorageError::InvalidRecord(
+                                "multiple unpublished turns".into(),
+                            ));
+                        }
+                        attempt = Some(call_attempt);
+                        has_tools = true;
+                    }
                     _ => {}
                 }
             }
@@ -373,7 +470,24 @@ fn unpublished_turn(
                 "tool call lacks provider attempt".into(),
             ));
         }
-        Ok(attempt.map(|attempt| (attempt, has_tools)))
+        if interrupted && has_tools {
+            return Err(StorageError::InvalidRecord(
+                "interrupted turn contains tool calls".into(),
+            ));
+        }
+        Ok(attempt.map(|attempt_id| {
+            if interrupted {
+                UnpublishedTurn::Interrupted {
+                    attempt_id,
+                    sequence: position,
+                }
+            } else {
+                UnpublishedTurn::Settled {
+                    attempt_id,
+                    has_tools,
+                }
+            }
+        }))
     })
 }
 
@@ -573,41 +687,59 @@ pub fn initial_context(
     ctx: &InvocationContext,
     agent: &AgentRecord,
 ) -> Result<ProviderContext, StorageError> {
-    let (role, brief, tasks) = read_snapshot(store, &ReadOptions::default(), |snapshot| {
-        let assignment = snapshot
-            .runs()
-            .assignment(&agent.assignment_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        let session = snapshot
-            .sessions()
-            .session(&assignment.session_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        let source = snapshot
-            .runs()
-            .agent_assignment_context(&assignment.id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if ctx.principal_kind() != PrincipalKind::Agent
-            || snapshot.stamp().store_id != *ctx.store_id()
-            || snapshot.stamp().restore_epoch != ctx.restore_epoch().get()
-            || snapshot.actors().actor_kind(ctx.principal())? != Some(PrincipalKind::Agent)
-            || ctx.session_id() != Some(&session.id)
-            || ctx.assignment_id() != Some(&assignment.id)
-            || ctx.root_id() != Some(&assignment.root_id)
-            || ctx.project_id() != Some(&source.project_id)
-            || session.agent_id != *ctx.principal()
-            || session.closed()
-            || session.context_epoch != 0
-            || assignment.state != AssignmentState::Active
-            || agent.root_id != assignment.root_id
-            || agent.role_id != source.role_id
-            || source.assignment_id != assignment.id
-        {
-            return Err(StorageError::ScopeDenied);
-        }
-        let tasks: Vec<Id> = serde_json::from_value(source.task_ids)
-            .map_err(|_| StorageError::InvalidRecord("stored task references".into()))?;
-        Ok((source.role_instructions, source.brief, tasks))
-    })?;
+    let (role, brief, tasks, unlinked) =
+        read_snapshot(store, &ReadOptions::default(), |snapshot| {
+            let assignment = snapshot
+                .runs()
+                .assignment(&agent.assignment_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let session = snapshot
+                .sessions()
+                .session(&assignment.session_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let source = snapshot
+                .runs()
+                .agent_assignment_context(&assignment.id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if ctx.principal_kind() != PrincipalKind::Agent
+                || snapshot.stamp().store_id != *ctx.store_id()
+                || snapshot.stamp().restore_epoch != ctx.restore_epoch().get()
+                || snapshot.actors().actor_kind(ctx.principal())? != Some(PrincipalKind::Agent)
+                || ctx.session_id() != Some(&session.id)
+                || ctx.assignment_id() != Some(&assignment.id)
+                || ctx.root_id() != Some(&assignment.root_id)
+                || ctx.project_id() != Some(&source.project_id)
+                || session.agent_id != *ctx.principal()
+                || session.closed()
+                || session.context_epoch != 0
+                || assignment.state != AssignmentState::Active
+                || agent.root_id != assignment.root_id
+                || agent.role_id != source.role_id
+                || source.assignment_id != assignment.id
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            let tasks: Vec<Id> = serde_json::from_value(source.task_ids)
+                .map_err(|_| StorageError::InvalidRecord("stored task references".into()))?;
+            let mut unlinked = Vec::new();
+            let mut after = 0;
+            loop {
+                let page = snapshot
+                    .runs()
+                    .instructions(&assignment.root_id, after, 500)?;
+                let more = page.len() == 500;
+                for instruction in page {
+                    after = instruction.seq;
+                    if instruction.session_id.as_ref() != Some(&session.id) {
+                        unlinked.push(instruction);
+                    }
+                }
+                if !more {
+                    break;
+                }
+            }
+            Ok((source.role_instructions, source.brief, tasks, unlinked))
+        })?;
     let brief = if tasks.is_empty() {
         brief
     } else {
@@ -616,7 +748,7 @@ pub fn initial_context(
             tasks.iter().map(Id::as_str).collect::<Vec<_>>().join(", ")
         )
     };
-    let context = ProviderContext {
+    let mut context = ProviderContext {
         version: 1,
         instructions: if role.is_empty() {
             Vec::new()
@@ -636,6 +768,39 @@ pub fn initial_context(
         }],
         parameters: GenerationParameters::default(),
     };
+    for instruction in unlinked {
+        let mut content = Vec::new();
+        if !instruction.message.is_empty() {
+            content.push(ContentBlock::Text {
+                text: instruction.message,
+                cache: None,
+            });
+        }
+        let attachments: Vec<ArtifactRef> = serde_json::from_value(instruction.attachments)
+            .map_err(|_| StorageError::InvalidRecord("stored redirect attachments".into()))?;
+        for artifact in attachments {
+            if artifact.media_type.starts_with("image/") {
+                content.push(ContentBlock::Image {
+                    artifact,
+                    detail: None,
+                    cache: None,
+                });
+            } else {
+                content.push(ContentBlock::Text {
+                    text: format!(
+                        "User attachment: {} ({})",
+                        artifact.artifact_id.as_str(),
+                        artifact.media_type
+                    ),
+                    cache: None,
+                });
+            }
+        }
+        context.messages.push(Message {
+            role: MessageRole::User,
+            content,
+        });
+    }
     context
         .validate()
         .map_err(|e| StorageError::InvalidRecord(format!("agent provider context: {e:?}")))?;

@@ -1,0 +1,9 @@
+{
+  "schema": 47,
+  "policy": "dw15-agent-message-sequence-heads-v1",
+  "additionalTables": [
+    {"table": "agent_message_sequence_heads", "class": "global_cursor_high_water", "disposition": "preserve_independent"}
+  ],
+  "readerFloor": 46,
+  "writerFloor": 47
+}

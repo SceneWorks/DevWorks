@@ -263,7 +263,7 @@ pub(super) fn message_history(
         ));
     }
     let mut stmt = db(conn.prepare(
-        "SELECT e.sequence,e.message_id FROM agent_message_events e JOIN agent_messages m ON m.id=e.message_id WHERE e.kind='Posted' AND e.project_id=?1 AND m.project_id=?1 AND (?2 IS NULL OR m.channel=?2) AND (?3 IS NULL OR m.target_item_id=?3) AND (?4 IS NULL OR m.target_feature_id=?4) AND (?5 IS NULL OR m.resource_name=?5) AND (NOT ?6 OR m.state='Open') AND (NOT ?7 OR m.to_human=1) AND (?8 IS NULL OR e.sequence<?8) ORDER BY e.sequence DESC LIMIT ?9",
+        "SELECT e.sequence,e.message_id FROM agent_message_events e JOIN agent_messages m ON m.id=e.message_id WHERE e.kind='Posted' AND e.project_id=?1 AND m.project_id=?1 AND m.message_class IN ('Info','Question','Request','Blocker','Announcement') AND (?2 IS NULL OR m.channel=?2) AND (?3 IS NULL OR m.target_item_id=?3) AND (?4 IS NULL OR m.target_feature_id=?4) AND (?5 IS NULL OR m.resource_name=?5) AND (NOT ?6 OR m.state='Open') AND (NOT ?7 OR m.to_human=1) AND (?8 IS NULL OR e.sequence<?8) ORDER BY e.sequence DESC LIMIT ?9",
     ))?;
     let mut rows = db(stmt.query(params![
         filter.project.0.as_str(),

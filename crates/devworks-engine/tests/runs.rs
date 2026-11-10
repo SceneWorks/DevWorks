@@ -882,6 +882,16 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
         instruction: devworks_core::protocol::support::BoundedText("Investigate".into()),
         source_checkpoint_id: None,
     };
+    let mut elevated = request.clone();
+    elevated.role_id = id("workspaceCoordinator");
+    let rejecting =
+        devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let agent_for_rejection = agent.clone();
+    assert!(fx.tx(move |_, tx| {
+        Ok(rejecting
+            .delegate(tx, &agent_for_rejection, &elevated)
+            .is_err())
+    }));
     let agents =
         devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
     let child = fx.tx(move |_, tx| {
@@ -1232,6 +1242,7 @@ fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
     ));
     let (supervisor, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher));
     applied(&fx.start(&fx.user, "root-i", 1, 1));
+    applied(&fx.redirect(&fx.user, "root-i", "Use the redirected layout"));
     let rt = runtime();
     rt.block_on(async {
         supervisor.tick().await.unwrap();
@@ -1261,6 +1272,9 @@ fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
     .unwrap();
     assert_eq!(seen[0].2.instructions.len(), 1);
     assert_eq!(seen[0].2.instructions[0].text, source.role_instructions);
+    assert!(matches!(&seen[0].2.messages[1].content[0],
+        devworks_core::providers::context::ContentBlock::Text { text, .. }
+        if text == "Use the redirected layout"));
     let brief = &seen[0].2.messages[0].content;
     assert!(
         matches!(&brief[0], devworks_core::providers::context::ContentBlock::Text { text, .. }

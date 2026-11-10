@@ -188,7 +188,6 @@ pub(crate) fn publish_initial_context(
             .ok_or(StorageError::ScopeDenied)?;
         if session.closed()
             || session.context_epoch != 0
-            || session.last_durable_sequence() != 0
             || tx.store().store_id != *ctx.store_id()
             || tx.store().restore_epoch != ctx.restore_epoch().get()
             || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
@@ -599,7 +598,7 @@ pub(crate) fn continuation_context(
     {
         return Err(invalid("foreign native state requires a new context epoch"));
     }
-    let (entries, updates, observed_sequence) =
+    let (entries, updates, redirects, observed_sequence) =
         read_snapshot(store, &ReadOptions::default(), |read| {
             let session = read
                 .sessions()
@@ -621,6 +620,7 @@ pub(crate) fn continuation_context(
             let mut position = after_sequence;
             let mut selected = Vec::new();
             let mut updates = Vec::new();
+            let mut redirects = Vec::new();
             while position < session.last_durable_sequence() {
                 if position - after_sequence >= 10_000 {
                     return Err(invalid("tool turn exceeds transcript scan bound"));
@@ -636,10 +636,7 @@ pub(crate) fn continuation_context(
                     position = entry.sequence;
                     let body: TranscriptBody =
                         serde_json::from_value(entry.body).map_err(invalid)?;
-                    if matches!(
-                        &body,
-                        TranscriptBody::UserMessage { .. } | TranscriptBody::HostNotice { .. }
-                    ) {
+                    if matches!(&body, TranscriptBody::HostNotice { .. }) {
                         return Err(StorageError::unavailable(
                             Unavailable::UnsupportedRuntime,
                             "tool continuation needs redirected context reconstruction",
@@ -655,6 +652,7 @@ pub(crate) fn continuation_context(
                             &call.attempt_id == attempt_id
                         }
                         TranscriptBody::OperationUpdate { .. } => true,
+                        TranscriptBody::UserMessage { .. } => true,
                         TranscriptBody::NativeItem { artifact, .. } => {
                             let row = read
                                 .artifacts()
@@ -677,6 +675,8 @@ pub(crate) fn continuation_context(
                             | TranscriptBody::NativeItem { .. }
                     ) {
                         selected.push(body);
+                    } else if let TranscriptBody::UserMessage { content } = body {
+                        redirects.push(content);
                     } else if let TranscriptBody::OperationUpdate {
                         operation_id,
                         revision,
@@ -690,7 +690,12 @@ pub(crate) fn continuation_context(
                     }
                 }
             }
-            Ok((selected, updates, session.last_durable_sequence()))
+            Ok((
+                selected,
+                updates,
+                redirects,
+                session.last_durable_sequence(),
+            ))
         })?;
     let mut assistant = Vec::new();
     for entry in entries {
@@ -817,6 +822,39 @@ pub(crate) fn continuation_context(
                 )?,
                 cache: None,
             }],
+        });
+    }
+    for content in redirects {
+        let blocks = content
+            .into_iter()
+            .map(|item| match item {
+                devworks_core::protocol::provider::UserContent::Text { text } => {
+                    ContentBlock::Text { text, cache: None }
+                }
+                devworks_core::protocol::provider::UserContent::Attachment { artifact }
+                    if artifact.media_type.starts_with("image/") =>
+                {
+                    ContentBlock::Image {
+                        artifact,
+                        detail: None,
+                        cache: None,
+                    }
+                }
+                devworks_core::protocol::provider::UserContent::Attachment { artifact } => {
+                    ContentBlock::Text {
+                        text: format!(
+                            "User attachment: {} ({})",
+                            artifact.artifact_id.as_str(),
+                            artifact.media_type
+                        ),
+                        cache: None,
+                    }
+                }
+            })
+            .collect();
+        context.messages.push(Message {
+            role: MessageRole::User,
+            content: blocks,
         });
     }
     context.validate().map_err(|e| invalid(format!("{e:?}")))?;
@@ -1099,18 +1137,17 @@ pub(crate) fn append_operation_updates(
                     return Err(invalid("operation update transcript gap"));
                 }
                 position = entry.sequence;
-                let TranscriptBody::OperationUpdate {
-                    operation_id,
-                    revision,
-                    artifact,
-                } = serde_json::from_value(entry.body).map_err(invalid)?
-                else {
+                let body: TranscriptBody = serde_json::from_value(entry.body).map_err(invalid)?;
+                if !matches!(
+                    body,
+                    TranscriptBody::OperationUpdate { .. } | TranscriptBody::UserMessage { .. }
+                ) {
                     return Err(StorageError::unavailable(
                         Unavailable::UnsupportedRuntime,
-                        "tool context needs redirected transcript reconstruction",
+                        "tool context needs a settled transcript turn",
                     ));
-                };
-                updates.push((operation_id, revision, artifact));
+                }
+                updates.push(body);
                 if updates.len() > 128 {
                     return Err(invalid(
                         "too many operation updates for one context revision",
@@ -1123,25 +1160,58 @@ pub(crate) fn append_operation_updates(
     if updates.is_empty() {
         return Ok(source.clone());
     }
-    let mut blocks = Vec::with_capacity(updates.len());
-    for (operation_id, revision, artifact) in updates {
-        blocks.push(ContentBlock::Text {
-            text: operation_update_text(
-                store,
-                artifacts,
-                ctx,
-                session_id,
-                &operation_id,
-                &revision,
-                &artifact,
-            )?,
-            cache: None,
+    for update in updates {
+        let blocks = match update {
+            TranscriptBody::OperationUpdate {
+                operation_id,
+                revision,
+                artifact,
+            } => vec![ContentBlock::Text {
+                text: operation_update_text(
+                    store,
+                    artifacts,
+                    ctx,
+                    session_id,
+                    &operation_id,
+                    &revision,
+                    &artifact,
+                )?,
+                cache: None,
+            }],
+            TranscriptBody::UserMessage { content } => content
+                .into_iter()
+                .map(|item| match item {
+                    devworks_core::protocol::provider::UserContent::Text { text } => {
+                        ContentBlock::Text { text, cache: None }
+                    }
+                    devworks_core::protocol::provider::UserContent::Attachment { artifact }
+                        if artifact.media_type.starts_with("image/") =>
+                    {
+                        ContentBlock::Image {
+                            artifact,
+                            detail: None,
+                            cache: None,
+                        }
+                    }
+                    devworks_core::protocol::provider::UserContent::Attachment { artifact } => {
+                        ContentBlock::Text {
+                            text: format!(
+                                "User attachment: {} ({})",
+                                artifact.artifact_id.as_str(),
+                                artifact.media_type
+                            ),
+                            cache: None,
+                        }
+                    }
+                })
+                .collect(),
+            _ => unreachable!(),
+        };
+        context.messages.push(Message {
+            role: MessageRole::User,
+            content: blocks,
         });
     }
-    context.messages.push(Message {
-        role: MessageRole::User,
-        content: blocks,
-    });
     context
         .validate()
         .map_err(|error| invalid(format!("{error:?}")))?;
