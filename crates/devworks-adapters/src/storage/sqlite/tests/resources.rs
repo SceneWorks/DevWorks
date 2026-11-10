@@ -29,7 +29,7 @@ use devworks_core::services::UseCases;
 use devworks_core::services::power::{KEEP_AWAKE_KEY, KeepAwake, KeepAwakeStatus};
 use devworks_core::services::resources::{
     DESKTOP, DispatchFailure, DispatchRefusal, MachineResource, ReconcileCause, ResourceService,
-    desktop, register_machine, required_resource,
+    register_machine, required_resource,
 };
 use devworks_core::settings::catalog::{AgentRole, descriptor};
 use devworks_core::settings::model;
@@ -49,6 +49,14 @@ fn project(s: &str) -> ProjectId {
 }
 fn root(s: &str) -> RootId {
     RootId(id(s))
+}
+fn shared_machine() -> MachineResource {
+    MachineResource {
+        name: "machine".into(),
+        capacity: 1,
+        physical: true,
+        labels: vec!["shared".into()],
+    }
 }
 
 #[test]
@@ -912,17 +920,17 @@ fn definition_conflicts_and_bounds_are_refused() {
 #[test]
 fn machine_resources_are_one_canonical_identity_enforced_at_dispatch() {
     let fx = Fx::new();
-    fx.register(desktop());
+    fx.register(shared_machine());
     // Registration is idempotent.
-    let r = fx.register(desktop());
+    let r = fx.register(shared_machine());
     assert_eq!((r.revision, r.capacity, r.physical), (1, 1, true));
     assert_eq!(required_resource("desktop.input"), Some(DESKTOP));
     assert_eq!(required_resource("desktop.capture"), None);
     let a = fx.agent("agent-a", "project-a", "s-a");
     let b = fx.agent("agent-b", "project-b", "s-b");
-    // Two projects race for the one desktop: one is granted, the other waits.
-    let la = lease(fx.acquire(&a, "Desktop", json!({"purpose": "UI test"})));
-    let lb = lease(fx.acquire(&b, "desktop", json!({"purpose": "Screenshot"})));
+    // Two projects race for one machine resource: one is granted, the other waits.
+    let la = lease(fx.acquire(&a, "Machine", json!({"purpose": "UI test"})));
+    let lb = lease(fx.acquire(&b, "machine", json!({"purpose": "Screenshot"})));
     assert_eq!((st(&la), st(&lb)), ("Held", "Waiting"));
     assert_eq!(
         fx.stored(&la).resource_id,
@@ -930,22 +938,22 @@ fn machine_resources_are_one_canonical_identity_enforced_at_dispatch() {
         "one canonical resource"
     );
     // Both see its holder and waiter.
-    assert_eq!(fx.holders(&b, "desktop").items.0[0].id, la.id);
-    assert_eq!(fx.waiters(&a, "desktop", 10, None).items.0[0].id, lb.id);
+    assert_eq!(fx.holders(&b, "machine").items.0[0].id, la.id);
+    assert_eq!(fx.waiters(&a, "machine", 10, None).items.0[0].id, lb.id);
     // Dispatch: only the holder, with its fence.
     let ticket = fx
-        .dispatch(&a, "desktop", &la, 1)
+        .dispatch(&a, "machine", &la, 1)
         .expect("holder dispatches");
     assert!(matches!(
-        fx.dispatch(&b, "desktop", &lb, 0),
+        fx.dispatch(&b, "machine", &lb, 0),
         Err(DispatchFailure::Refused(DispatchRefusal::LeaseLost))
     ));
     assert!(matches!(
-        fx.dispatch(&b, "desktop", &la, 1),
+        fx.dispatch(&b, "machine", &la, 1),
         Err(DispatchFailure::Refused(DispatchRefusal::NotOwner))
     ));
     assert!(matches!(
-        fx.dispatch(&a, "desktop", &la, 2),
+        fx.dispatch(&a, "machine", &la, 2),
         Err(DispatchFailure::Refused(DispatchRefusal::LeaseLost))
     ));
     assert!(matches!(
@@ -962,7 +970,7 @@ fn machine_resources_are_one_canonical_identity_enforced_at_dispatch() {
     // An expired lease does not dispatch.
     fx.h.set_now(T0 + 61_000);
     assert!(matches!(
-        fx.dispatch(&a, "desktop", &la, 1),
+        fx.dispatch(&a, "machine", &la, 1),
         Err(DispatchFailure::Refused(
             DispatchRefusal::LeaseLost | DispatchRefusal::Expired
         ))
@@ -1143,10 +1151,10 @@ fn boot_recovery_reconciles_leases_of_earlier_boots() {
 #[test]
 fn pause_wake_and_shutdown_reconciliation_is_recorded() {
     let fx = Fx::new();
-    fx.register(desktop());
+    fx.register(shared_machine());
     let a = fx.agent("agent-a", "project-a", "s-a");
     let held = lease(fx.acquire(&a, "suite", json!({"leaseMs": "1000"})));
-    let desk = lease(fx.acquire(&a, "desktop", json!({})));
+    let machine = lease(fx.acquire(&a, "machine", json!({})));
     let paused = fx.reconcile(ReconcileCause::Pause(root("root-a")));
     assert_eq!(paused.paused, 2);
     assert_eq!(
@@ -1165,7 +1173,7 @@ fn pause_wake_and_shutdown_reconciliation_is_recorded() {
         "nothing of this boot was still running"
     );
     assert_eq!(
-        fx.stored(&desk).end_reason,
+        fx.stored(&machine).end_reason,
         Some(LeaseEndReason::Reconciled)
     );
     let causes: Vec<String> = fx
