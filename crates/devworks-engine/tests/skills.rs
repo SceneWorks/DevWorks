@@ -350,11 +350,22 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
         "notaskill",
         &[("README.md", "no SKILL.md here")],
     );
+    // A resource name the harness directory could never be written with is not captured.
+    write_skill(
+        &fx.shared,
+        "colon",
+        &[("SKILL.md", "colon"), ("notes:today.md", "x")],
+    );
     let shared_before = tree(&fx.shared);
     runtime().block_on(async {
-        let (user, agent, _) = fx.principals();
+        let (user, agent, reviewer) = fx.principals();
         let app = boot(fx.composition()).await.unwrap();
-        assert!(app.instruction_boot_sync().unwrap().as_ref().unwrap().failures.is_empty());
+        let boot_sync = app.instruction_boot_sync().unwrap().as_ref().unwrap();
+        assert!(boot_sync.failures.is_empty());
+        assert!(
+            boot_sync.skipped.iter().any(|(n, reason)| n == "colon" && reason.contains("unsupported file name")),
+            "{boot_sync:?}"
+        );
         let page = discover(&fx, &app, &agent);
         assert_eq!(page["items"].as_array().unwrap().len(), 3, "{page}");
         let alpha = find(&page, "alpha", "shared");
@@ -377,6 +388,24 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
             devworks_core::fingerprint::sha256_hex(b"reference"),
             devworks_core::fingerprint::sha256_hex(b"#!/bin/sh\necho alpha\n"),
         ]);
+        // Agents adopting a skill can read its text and resources, even a workspace code
+        // reviewer that is not the workspace coordinator.
+        let read_artifact = |ctx: &InvocationContext, r: &Value| {
+            let frame = serde_json::to_vec(&json!({"protocol":"1.0-draft.1","queryId":"read",
+                "query":{"kind":"Read","artifactId":r["artifactId"],"versionId":r["versionId"]},"limit":1})).unwrap();
+            serde_json::to_value(app.query(ctx, "artifacts.read", &frame).unwrap()).unwrap()
+        };
+        let text = read_artifact(&reviewer, &alpha["content"]);
+        assert!(text.to_string().contains("Do alpha."), "{text}");
+        let resource = read_artifact(&reviewer, &resources["items"][0]);
+        assert!(resource.to_string().contains("reference"), "{resource}");
+        // Ordinary host artifacts do not become readable through this rule.
+        let staged = fx.artifacts.stage_host_bytes(&*fx.store, b"private host text", json!({"kind":"Test"})).unwrap().unwrap();
+        let (artifacts, s1) = (fx.artifacts.clone(), staged.clone());
+        let host_only = write(&*fx.store, move |tx| artifacts.commit_host_bytes(tx, &s1, "Host only", "text/plain", json!({"note":"x"}))).unwrap();
+        fx.artifacts.settle_host_bytes(&*fx.store, &staged, true);
+        let hidden = read_artifact(&reviewer, &serde_json::to_value(devworks_core::services::artifacts::version_ref(&host_only)).unwrap());
+        assert!(!hidden.to_string().contains("private host text"), "{hidden}");
         let first = app.effective_skills().unwrap();
         assert_eq!(first.skills.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["alpha", "beta"]);
         assert_eq!(first.skills[1].root_id, "skills-harness");

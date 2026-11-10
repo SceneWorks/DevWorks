@@ -76,6 +76,12 @@ pub fn valid_name(name: &str) -> bool {
         && !name.chars().any(char::is_control)
 }
 
+/// A resource name the harness skill directory can be written with on every supported platform
+/// (the rule the skill file adapter enforces on materialization).
+pub fn materializable(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':', '\0'])
+}
+
 /// Whole-revision digest: the instruction bytes plus every resource path, digest and execute
 /// permission.
 pub fn revision_digest(instruction_sha256: &str, resources: &[(String, String, bool)]) -> String {
@@ -200,6 +206,18 @@ pub fn scan_skill(
         for entry in entries {
             if entry.name.starts_with('.') {
                 continue;
+            }
+            // Only names every supported platform can write back when the skill is
+            // materialized (no `:` or `\\`); otherwise the revision could never be applied.
+            if !materializable(&entry.name) {
+                return Err(format!(
+                    "{}: unsupported file name for a skill",
+                    if relative.is_empty() {
+                        entry.name.clone()
+                    } else {
+                        format!("{relative}/{}", entry.name)
+                    }
+                ));
             }
             let path = if relative.is_empty() {
                 entry.name.clone()

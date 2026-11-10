@@ -443,6 +443,18 @@ pub(crate) fn visible_in(
             }
         });
     }
+    // A host-captured skill or role version is the content of an instruction its scope's agents
+    // adopt: readable by every authorized principal of that scope (and only there). No other
+    // host artifact gains visibility, and public saves can never mint this provenance.
+    if instruction_capture(artifact) {
+        return Ok(match (&viewer.authorized, &artifact.scope, project) {
+            (None, _, _) => false,
+            (Some(_), ArtifactScope::Workspace, _) => true,
+            (Some(_), ArtifactScope::Project(owner), Some(p)) => owner == p,
+            (Some(AuthorizedScope::Workspace), ArtifactScope::Project(_), None) => true,
+            (Some(AuthorizedScope::Project(p)), ArtifactScope::Project(owner), None) => owner == p,
+        });
+    }
     if matches!(artifact.scope, ArtifactScope::Project(_))
         && artifact.owner.is_some()
         && !viewer.sees_owned(artifact.owner.as_ref())
@@ -462,6 +474,16 @@ pub(crate) fn visible_in(
                 || read.repository_text_readers(&artifact.id)?.contains(p)
         }
     })
+}
+
+/// A skill/role version captured by the host for the instruction owner.
+fn instruction_capture(artifact: &StoredArtifact) -> bool {
+    artifact.provenance["principalKind"] == "Host"
+        && artifact.provenance["derived"]["kind"] == "Instruction"
+        && artifact
+            .owner
+            .as_ref()
+            .is_some_and(|o| artifact.provenance["producedBy"].as_str() == Some(o.0.as_str()))
 }
 
 /// Shares the artifact of `reference` with `project` for a workspace-authorized caller that
