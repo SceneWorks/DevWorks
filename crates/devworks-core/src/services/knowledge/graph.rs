@@ -351,8 +351,12 @@ fn select(
     for claim in seed_claims {
         let wire = claim_wire(c.k, &claim, c.th)?;
         seen.insert(claim.id.clone());
-        // Seeds obey the request's filters like every other claim.
+        // Seeds obey the request's filters and claim budget like every other claim.
         if filter.admits(&claim, &wire) {
+            if claims.len() >= bounds.claims {
+                truncated = true;
+                continue;
+            }
             claims.push((claim, wire, 100));
         }
     }
@@ -737,7 +741,7 @@ impl KnowledgeService {
             "knowledge.subgraph"
                 if q.entity_ids.0.is_empty() && q.claim_ids.0.is_empty() && q.text.is_none() =>
             {
-                Read::Bundle(full_graph(&c, ctx, q, revision)?)
+                Read::Bundle(full_graph(&c, ctx, q, revision, &filter)?)
             }
             "knowledge.subgraph" => {
                 let (e, cl) = seeds(&c, q, clamp(q.entity_limit.get(), 1, 10))?;
@@ -889,22 +893,30 @@ impl KnowledgeService {
                     let center = c
                         .entity(id)?
                         .ok_or_else(|| not_found("knowledge_entity", id))?;
-                    let (found, more) = c.edges(&center.id, edges)?;
+                    let (found, mut more) = c.edges(&center.id, edges)?;
                     let mut entities: Vec<(StoredEntity, u32, i64)> =
                         vec![(center.clone(), 0, 100)];
                     let mut claims = Vec::new();
                     for claim in found {
+                        let wire = claim_wire(k, &claim, &th)?;
+                        if !filter.admits(&claim, &wire) {
+                            continue;
+                        }
                         let other = if claim.subject_id == center.id {
                             claim.object_id.clone().expect("edge claims have an object")
                         } else {
                             claim.subject_id.clone()
                         };
-                        if !entities.iter().any(|(e, _, _)| e.id == other)
-                            && let Some(e) = c.entity(&other)?
-                        {
-                            entities.push((e, 1, entity_score(1, false)));
+                        if !entities.iter().any(|(e, _, _)| e.id == other) {
+                            // The bundle holds at most the store page, center included.
+                            if entities.len() >= MAX_ROWS as usize {
+                                more = true;
+                                continue;
+                            }
+                            if let Some(e) = c.entity(&other)? {
+                                entities.push((e, 1, entity_score(1, false)));
+                            }
                         }
-                        let wire = claim_wire(k, &claim, &th)?;
                         claims.push((claim, wire, claim_score(1, false)));
                     }
                     let s = Selection {
@@ -950,6 +962,13 @@ fn additions(mut s: Selection, entity_seeds: &[Id], claim_seeds: &[Id], limit: u
     }
     nodes.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
     let over = nodes.len() > limit;
+    // Additions that lose the ranking stay reachable: their entities become frontier entries.
+    let ranked_out: Vec<Id> = nodes
+        .iter()
+        .skip(limit)
+        .filter(|n| n.3)
+        .map(|n| s.entities[n.4].0.id.clone())
+        .collect();
     nodes.truncate(limit);
     let keep_e: HashSet<usize> = nodes.iter().filter(|n| n.3).map(|n| n.4).collect();
     let keep_c: HashSet<usize> = nodes.iter().filter(|n| !n.3).map(|n| n.4).collect();
@@ -967,6 +986,11 @@ fn additions(mut s: Selection, entity_seeds: &[Id], claim_seeds: &[Id], limit: u
         .collect();
     let added: HashSet<Id> = s.entities.iter().map(|(e, _, _)| e.id.clone()).collect();
     s.frontier.retain(|id| added.contains(id));
+    for id in ranked_out {
+        if !s.frontier.contains(&id) {
+            s.frontier.push(id);
+        }
+    }
     s.truncated |= over;
     s
 }
@@ -978,10 +1002,21 @@ fn full_graph(
     ctx: &InvocationContext,
     q: &KnowledgeQuery,
     revision: i64,
+    filter: &ClaimFilter,
 ) -> Result<KnowledgeBundle, Failure> {
     let limit = clamp(q.page.limit.get(), 1, 500);
-    let keys = c.keys.join(",");
-    let binding = CursorBinding::new(ctx, "knowledge.subgraph", &[&keys], revision);
+    // Bound to every readable scope's revision: a change to any of them expires the cursor.
+    let mut parts = Vec::new();
+    for scope in &c.scoped.readable {
+        parts.push(format!(
+            "{}={}",
+            scope.key(),
+            c.k.knowledge_scope_revision(scope)?
+        ));
+    }
+    parts.push(format!("{filter:?}"));
+    let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
+    let binding = CursorBinding::new(ctx, "knowledge.subgraph", &parts, revision);
     let after = match &q.page.cursor {
         None => None,
         Some(cursor) => {
@@ -1031,6 +1066,9 @@ fn full_graph(
                     break;
                 }
                 let wire = claim_wire(c.k, &claim, c.th)?;
+                if !filter.admits(&claim, &wire) {
+                    continue;
+                }
                 claims.push((claim, wire, 60));
             }
         }

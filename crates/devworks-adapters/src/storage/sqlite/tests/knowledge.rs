@@ -5780,3 +5780,110 @@ fn whole_graph_pages_continue_at_the_store_maximum_and_cap_page_claims() {
     assert_eq!(g.entities.0.len(), 32);
     assert!(g.claims.0.len() <= 500 && g.truncated);
 }
+
+#[test]
+fn graph_reads_keep_continuations_budgets_filters_and_fresh_cursors() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let edge = |s: &str, o: &str, confidence: f64| {
+        json!({"kind": "Fact", "subjectId": s,
+        "predicate": "calls", "objectId": o, "confidence": confidence, "evidenceIds": [], "tags": []})
+    };
+    let written = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+            "entities": [
+                {"clientId": "a", "label": "Hub A", "entityType": "service", "aliases": []},
+                {"clientId": "b", "label": "Hub B", "entityType": "service", "aliases": []},
+                {"clientId": "c", "label": "Hub C", "entityType": "service", "aliases": []}],
+            "evidence": [],
+            "claims": [edge("a", "b", 0.9), edge("b", "c", 0.2),
+                with(draft("Fact", "one"), json!({"subjectId": "a"})),
+                with(draft("Fact", "two"), json!({"subjectId": "a"}))]}),
+    ));
+    let [a, b] = [0, 1].map(|i| written.entity_ids.0[i].clone());
+    let [one, two] = [2, 3].map(|i| written.claim_ids.0[i].clone());
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    // An addition that loses the ranking is still a continuation point.
+    let grown = q(
+        "knowledge.expand_frontier",
+        json!({"entityIds": [a], "maxDepth": 1, "neighborLimit": 1}),
+    );
+    assert!(grown.truncated);
+    assert!(grown.frontier.0.contains(&b), "{:?}", grown.frontier);
+    // Seed claims count against the claim budget.
+    let seeded = q(
+        "knowledge.subgraph",
+        json!({"claimIds": [one, two], "claimLimit": 1, "maxDepth": 0}),
+    );
+    assert_eq!(seeded.claims.0.len(), 1);
+    assert!(seeded.truncated);
+    // Direct graph reads apply the claim filters.
+    let graph = q(
+        "knowledge.entity_graph",
+        json!({"entityIds": [b], "confidenceMin": 0.5}),
+    );
+    assert_eq!(entity_labels(&graph), ["Hub A", "Hub B"]);
+    let page = q(
+        "knowledge.subgraph",
+        json!({"confidenceMin": 0.5, "page": {"limit": 10}}),
+    );
+    assert!(page.claims.0.iter().all(|c| c.confidence.get() >= 0.5));
+    // A whole-graph cursor expires when any readable scope (here the workspace) changes.
+    let first = q("knowledge.subgraph", json!({"page": {"limit": 1}}));
+    let cursor = first.next_cursor.expect("more").0;
+    fx.fact(&user, ws(), "General", draft("Fact", "general"));
+    let stale = query_fault(fx.q(
+        &user,
+        "knowledge.subgraph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"page": {"limit": 1, "cursor": cursor}}))}),
+    ));
+    assert_eq!(stale.code, DomainErrorCode::CursorExpired);
+}
+
+#[test]
+fn an_entity_graph_bundle_fits_its_row_budget_with_the_center() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let first = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [{"clientId": "hub", "label": "Hub", "entityType": "node", "aliases": []}],
+        "evidence": [], "claims": [with(draft("Fact", "hub"), json!({"subjectId": "hub"}))]}),
+    ));
+    let hub = first.entity_ids.0[0].clone();
+    for batch in 0..5 {
+        let entities: Vec<Value> = (0..100)
+            .map(|i| json!({"clientId": format!("n{i}"), "label": format!("N{batch}-{i}"), "entityType": "node", "aliases": []}))
+            .collect();
+        let claims: Vec<Value> = (0..100)
+            .map(|i| {
+                json!({"kind": "Fact", "subjectId": hub, "predicate": "links",
+                "objectId": format!("n{i}"), "confidence": 0.9, "evidenceIds": [], "tags": []})
+            })
+            .collect();
+        receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": entities, "evidence": [], "claims": claims}),
+        ));
+    }
+    let g = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.entity_graph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"entityIds": [hub], "neighborLimit": 500}))}),
+    ));
+    assert_eq!(g.entities.0.len(), 500, "center plus 499 neighbors");
+    assert!(g.truncated);
+    assert_eq!(g.frontier.0, std::slice::from_ref(&hub));
+}
