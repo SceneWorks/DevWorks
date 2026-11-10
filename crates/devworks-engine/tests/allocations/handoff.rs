@@ -237,10 +237,31 @@ fn moving_a_secondary_delegated_task_fences_the_worker_without_moving_its_primar
         json!({"taskId":"secondary","expectedRevision":revision.to_string(),"featureId":"feature-b","clearFeature":false}),
     ));
     assert_eq!(m.assignment().state, AssignmentState::Superseded);
+    let secondary_holds = || {
+        read(&*m.f.store, |s| {
+            devworks_core::services::runs::active_blockers(
+                s.runs(),
+                &BlockerFilter::RootLevel(RootId(id("secondary"))),
+            )
+        })
+    };
+    assert!(secondary_holds().iter().any(|hold| {
+        hold.origin_id == m.worker.id.0.as_str() && hold.clearance["membershipHandoff"] == true
+    }));
+    m.reconcile();
+    assert!(
+        !secondary_holds().is_empty(),
+        "the old turn is still active"
+    );
     m.settle();
     m.reconcile();
+    assert!(
+        secondary_holds().is_empty(),
+        "quiescence releases the moved task"
+    );
     let after = m.assignment();
     assert_eq!(after.state, AssignmentState::Superseded);
+    assert_eq!(after.checkpoint, m.worker.checkpoint);
     assert_eq!(after.root_id, RootId(id("feature-a")));
     assert_eq!(after.work_id, RootId(id("moving")));
     assert_eq!(
@@ -475,14 +496,7 @@ fn a_closed_session_retires_its_pending_handoff_and_allows_a_fresh_destination_w
     m.reconcile();
     let retired = m.assignment();
     assert_eq!(retired.state, AssignmentState::Superseded);
-    assert!(
-        retired
-            .checkpoint
-            .as_ref()
-            .unwrap()
-            .get("membershipHandoff")
-            .is_some()
-    );
+    assert_eq!(retired.checkpoint, m.worker.checkpoint);
     let replacement = m.f.session(&id("feature-b"));
     let service = m.f.control.clone();
     let parent = m.coordinator_b.id.clone();

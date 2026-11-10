@@ -2816,6 +2816,9 @@ impl RunRepository for Unsupported {
     ) -> Result<(), StorageError> {
         nope()
     }
+    fn retire_membership_handoff(&mut self, _: &AssignmentId, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
     fn insert_root_control(&mut self, _: &StoredRootControl) -> Result<(), StorageError> {
         nope()
     }

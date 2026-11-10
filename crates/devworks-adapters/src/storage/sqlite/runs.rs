@@ -1363,6 +1363,13 @@ impl RunRepository for Unit<'_> {
     ) -> Result<(), StorageError> {
         super::handoff::reparent(self, a, expected_assignment, expected_session_revision)
     }
+    fn retire_membership_handoff(
+        &mut self,
+        assignment: &AssignmentId,
+        expected_revision: i64,
+    ) -> Result<(), StorageError> {
+        super::handoff::retire(self, assignment, expected_revision)
+    }
     fn insert_instruction(&mut self, i: &StoredInstruction) -> Result<(), StorageError> {
         bounded("instruction", &i.message, 65_536)?;
         if !i.attachments.is_array() || i.seq < 1 || i.revision < 1 {
