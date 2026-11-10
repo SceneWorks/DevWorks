@@ -2186,7 +2186,7 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
                 Some(&fence), OperationState::Dispatching, None)?;
             tx.operations().transition(&operation_for_write, dispatched.revision, Some(&fence),
                 OperationState::ObservedComplete, Some(json!({"effect":{"outcome":"completed",
-                    "evidence":{"content":[{"type":"text","text":"remote answer"}]}}})))?;
+                    "evidence":{"content":[{"type":"text","text":"x".repeat(1_100_000)}]}}})))?;
             Ok(())
         }).unwrap();
         let second = app.refresh_native_tool_context(&f.context, &id("session"), &changed).unwrap();
@@ -2206,7 +2206,14 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
             f.store.as_ref(), &f.context, &second, 1024 * 1024).unwrap().0).unwrap();
         assert_eq!(material.messages.len(), 6);
         assert!(matches!(&material.messages[5].content[0], ContentBlock::Text { text, .. }
-            if text.contains("untrustedRemoteContent") && text.contains("remote answer")));
+            if text.contains("full result in artifact") && text.contains("artifactId")));
+        let update: devworks_core::protocol::provider::ArtifactRef = serde_json::from_value(
+            f.transcript().iter().rfind(|entry| entry.kind == "OperationUpdate")
+                .unwrap().body["artifact"].clone()).unwrap();
+        let full = f.artifacts.read_exact(f.store.as_ref(), &f.context, &update,
+            2 * 1024 * 1024).unwrap().0;
+        assert!(full.len() > 1_000_000);
+        assert!(String::from_utf8(full).unwrap().contains(&"x".repeat(100)));
         assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "OperationUpdate").count(), 3);
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
         let ctx = f.context.clone();

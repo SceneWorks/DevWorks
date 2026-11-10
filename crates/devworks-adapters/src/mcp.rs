@@ -26,7 +26,7 @@ use rmcp::{RoleClient, serve_client};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// A connected wire session. The owner is retained so callers can stop an app-launched server
@@ -123,6 +123,7 @@ impl NativeMcpClients {
         &self,
         context: &InvocationContext,
         endpoint: &McpEndpoint,
+        timeout: Duration,
     ) -> Result<McpWireSession, McpRemoteFault> {
         match &endpoint.transport {
             McpTransport::Http {
@@ -147,10 +148,11 @@ impl NativeMcpClients {
                     .transpose()?;
                 let bearer = mcp_bearer(secret.as_ref())?;
                 self.runtime
-                    .block_on(McpWireSession::http(
-                        &endpoint.0,
-                        bearer.as_ref().map(|s| s.expose()),
+                    .block_on(tokio::time::timeout(
+                        timeout,
+                        McpWireSession::http(&endpoint.0, bearer.as_ref().map(|s| s.expose())),
                     ))
+                    .map_err(|_| McpRemoteFault::Deadline)?
                     .map_err(map_connect_fault)
             }
             McpTransport::Stdio { process } => {
@@ -173,12 +175,11 @@ impl NativeMcpClients {
                     protected_branches: &self.protected_branches,
                 };
                 self.runtime
-                    .block_on(McpWireSession::stdio(
-                        self.supervisor.clone(),
-                        context,
-                        native,
-                        &policy,
+                    .block_on(tokio::time::timeout(
+                        timeout,
+                        McpWireSession::stdio(self.supervisor.clone(), context, native, &policy),
                     ))
+                    .map_err(|_| McpRemoteFault::Deadline)?
                     .map_err(map_connect_fault)
             }
         }
@@ -229,6 +230,22 @@ impl McpRemote for NativeMcpClients {
         context: &InvocationContext,
         endpoint: &McpEndpoint,
     ) -> Result<(), McpRemoteFault> {
+        self.connect_with_timeout(context, endpoint, CONNECT_DEADLINE)
+    }
+
+    fn connect_with_timeout(
+        &self,
+        context: &InvocationContext,
+        endpoint: &McpEndpoint,
+        timeout: Duration,
+    ) -> Result<(), McpRemoteFault> {
+        let deadline = Instant::now() + timeout.min(CONNECT_DEADLINE);
+        let remaining = || {
+            let left = deadline.saturating_duration_since(Instant::now());
+            (!left.is_zero())
+                .then_some(left)
+                .ok_or(McpRemoteFault::Deadline)
+        };
         let key = serde_json::to_vec(&(endpoint.scope.key(), &endpoint.transport))
             .map_err(|_| McpRemoteFault::InvalidConfiguration)?;
         let slot = self
@@ -240,7 +257,10 @@ impl McpRemote for NativeMcpClients {
             .clone();
         // Keep the same slot across reconnects. Concurrent callers either reuse this endpoint
         // or wait for the changed endpoint to finish replacing its session.
-        let mut guard = self.runtime.block_on(slot.lock());
+        let mut guard = self
+            .runtime
+            .block_on(tokio::time::timeout(remaining()?, slot.lock()))
+            .map_err(|_| McpRemoteFault::Deadline)?;
         if guard
             .as_ref()
             .is_some_and(|connected| connected.key == key && !connected.wire.client.is_closed())
@@ -251,10 +271,11 @@ impl McpRemote for NativeMcpClients {
             && !old.wire.client.is_closed()
         {
             self.runtime
-                .block_on(old.wire.close())
+                .block_on(tokio::time::timeout(remaining()?, old.wire.close()))
+                .map_err(|_| McpRemoteFault::Deadline)?
                 .map_err(map_connect_fault)?;
         }
-        let session = self.connect_wire(context, endpoint)?;
+        let session = self.connect_wire(context, endpoint, remaining()?)?;
         *guard = Some(ConnectedSession { key, wire: session });
         Ok(())
     }
@@ -357,6 +378,15 @@ impl McpRemote for NativeMcpClients {
         server_id: &Id,
         uri: &str,
     ) -> Result<serde_json::Value, McpRemoteFault> {
+        self.read_resource_with_timeout(server_id, uri, CALL_DEADLINE)
+    }
+
+    fn read_resource_with_timeout(
+        &self,
+        server_id: &Id,
+        uri: &str,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, McpRemoteFault> {
         let slot = self
             .sessions
             .lock()
@@ -365,13 +395,17 @@ impl McpRemote for NativeMcpClients {
             .cloned()
             .ok_or(McpRemoteFault::Unreachable)?;
         self.runtime.block_on(async {
-            let guard = slot.lock().await;
-            let session = guard.as_ref().ok_or(McpRemoteFault::Unreachable)?;
-            session
-                .wire
-                .read_resource(uri)
-                .await
-                .map_err(map_connect_fault)
+            tokio::time::timeout(timeout.min(CALL_DEADLINE), async {
+                let guard = slot.lock().await;
+                let session = guard.as_ref().ok_or(McpRemoteFault::Unreachable)?;
+                session
+                    .wire
+                    .read_resource(uri)
+                    .await
+                    .map_err(map_connect_fault)
+            })
+            .await
+            .map_err(|_| McpRemoteFault::Deadline)?
         })
     }
 
@@ -380,6 +414,16 @@ impl McpRemote for NativeMcpClients {
         server_id: &Id,
         name: &str,
         arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, McpRemoteFault> {
+        self.get_prompt_with_timeout(server_id, name, arguments, CALL_DEADLINE)
+    }
+
+    fn get_prompt_with_timeout(
+        &self,
+        server_id: &Id,
+        name: &str,
+        arguments: serde_json::Value,
+        timeout: Duration,
     ) -> Result<serde_json::Value, McpRemoteFault> {
         let serde_json::Value::Object(arguments) = arguments else {
             return Err(McpRemoteFault::InvalidConfiguration);
@@ -392,13 +436,17 @@ impl McpRemote for NativeMcpClients {
             .cloned()
             .ok_or(McpRemoteFault::Unreachable)?;
         self.runtime.block_on(async {
-            let guard = slot.lock().await;
-            let session = guard.as_ref().ok_or(McpRemoteFault::Unreachable)?;
-            session
-                .wire
-                .get_prompt(name, arguments)
-                .await
-                .map_err(map_connect_fault)
+            tokio::time::timeout(timeout.min(CALL_DEADLINE), async {
+                let guard = slot.lock().await;
+                let session = guard.as_ref().ok_or(McpRemoteFault::Unreachable)?;
+                session
+                    .wire
+                    .get_prompt(name, arguments)
+                    .await
+                    .map_err(map_connect_fault)
+            })
+            .await
+            .map_err(|_| McpRemoteFault::Deadline)?
         })
     }
 

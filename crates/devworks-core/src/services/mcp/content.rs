@@ -2,6 +2,7 @@ use super::*;
 use crate::ports::{Preparation, Prepared};
 use crate::protocol::records::{McpPrompt, McpResource};
 use crate::services::artifacts::observed::{Observed, ObservedFailure};
+use std::time::{Duration, Instant};
 
 enum ContentAnswer {
     Resources {
@@ -82,6 +83,17 @@ impl McpClientService {
         {
             return Err(self.fault(StorageError::ScopeDenied));
         }
+        let deadline = env
+            .deadline_ms
+            .map(|until| {
+                let now = env.write(|tx| Ok(tx.now_ms()))?;
+                Ok::<_, StorageError>(Instant::now().checked_add(Duration::from_millis(
+                    until.saturating_sub(now).max(0) as u64,
+                )))
+            })
+            .transpose()
+            .map_err(|error| self.fault(error))?
+            .flatten();
         if let OperationInput::Mcp(ops::Input::Prompts(input)) = query.input()
             && input.arguments.is_some()
             && prompt_name.is_none()
@@ -140,24 +152,32 @@ impl McpClientService {
         if matches!(query.input(), OperationInput::Mcp(ops::Input::Resources(_))) {
             let mut items = Vec::new();
             for cap in cap_page.items.0 {
-                if env
-                    .cancellation
-                    .is_some_and(crate::ports::storage::Cancellation::is_cancelled)
-                {
-                    return Err(self.fault(StorageError::Cancelled));
-                }
+                self.content_budget(env, deadline)?;
                 let uri = server.resource_uris.get(cap.id.as_str()).ok_or_else(|| {
                     self.fault(StorageError::InvalidRecord(
                         "MCP resource URI missing".into(),
                     ))
                 })?;
-                let content =
-                    self.read_with_reconnect(ctx, query, native, &scope, &server, &cap, || {
-                        native.remote.read_resource(server_id, uri)
-                    })?;
+                let content = self.read_with_reconnect(
+                    ctx,
+                    query,
+                    env,
+                    deadline,
+                    native,
+                    &scope,
+                    &server,
+                    &cap,
+                    |timeout| {
+                        native
+                            .remote
+                            .read_resource_with_timeout(server_id, uri, timeout)
+                    },
+                )?;
                 charge(&content)?;
-                let reference =
-                    self.publish_content(ctx, query, native, &scope, &server, &cap, uri, content)?;
+                self.content_budget(env, deadline)?;
+                let reference = self.publish_content(
+                    ctx, query, env, deadline, native, &scope, &server, &cap, uri, content,
+                )?;
                 items.push(McpResource {
                     server_id: server_id.clone(),
                     uri: BoundedText(uri.clone()),
@@ -187,12 +207,7 @@ impl McpClientService {
                 _ => unreachable!(),
             };
             for cap in cap_page.items.0 {
-                if env
-                    .cancellation
-                    .is_some_and(crate::ports::storage::Cancellation::is_cancelled)
-                {
-                    return Err(self.fault(StorageError::Cancelled));
-                }
+                self.content_budget(env, deadline)?;
                 let reference = cap.input_schema.as_ref().ok_or_else(|| {
                     self.fault(StorageError::InvalidRecord(
                         "MCP prompt schema missing".into(),
@@ -226,16 +241,31 @@ impl McpClientService {
                         &CorrelationId(self.ids.next_id(IdKind::Correlation)),
                     )
                 })?;
-                let content =
-                    self.read_with_reconnect(ctx, query, native, &scope, &server, &cap, || {
-                        native
-                            .remote
-                            .get_prompt(server_id, &cap.name.0, args.clone())
-                    })?;
+                let content = self.read_with_reconnect(
+                    ctx,
+                    query,
+                    env,
+                    deadline,
+                    native,
+                    &scope,
+                    &server,
+                    &cap,
+                    |timeout| {
+                        native.remote.get_prompt_with_timeout(
+                            server_id,
+                            &cap.name.0,
+                            args.clone(),
+                            timeout,
+                        )
+                    },
+                )?;
                 charge(&content)?;
+                self.content_budget(env, deadline)?;
                 let reference = self.publish_content(
                     ctx,
                     query,
+                    env,
+                    deadline,
                     native,
                     &scope,
                     &server,
@@ -278,40 +308,58 @@ impl McpClientService {
         )
     }
 
+    fn content_budget(
+        &self,
+        env: &Preparation<'_>,
+        deadline: Option<Instant>,
+    ) -> Result<Duration, DomainFault> {
+        env.read(|_| Ok(())).map_err(|error| self.fault(error))?;
+        let remaining = deadline.map_or(Duration::from_secs(15), |until| {
+            until.saturating_duration_since(Instant::now())
+        });
+        if remaining.is_zero() {
+            return Err(self.fault(StorageError::Cancelled));
+        }
+        Ok(remaining.min(Duration::from_secs(15)))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn read_with_reconnect(
         &self,
         ctx: &InvocationContext,
         query: &AdmittedQuery,
+        env: &Preparation<'_>,
+        deadline: Option<Instant>,
         native: &Native,
         scope: &ConfigScope,
         server: &StoredServer,
         cap: &McpCapability,
-        read: impl Fn() -> Result<Value, McpRemoteFault>,
+        read: impl Fn(Duration) -> Result<Value, McpRemoteFault>,
     ) -> Result<Value, DomainFault> {
-        read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
-            self.content_authorized(snapshot, ctx, query, scope, server, cap)
-        })
-        .map_err(|error| self.fault(error))?;
-        match read() {
+        env.read(|snapshot| self.content_authorized(snapshot, ctx, query, scope, server, cap))
+            .map_err(|error| self.fault(error))?;
+        match read(self.content_budget(env, deadline)?) {
             Ok(value) => Ok(value),
             Err(McpRemoteFault::Unreachable) => {
+                self.content_budget(env, deadline)?;
                 native
                     .remote
-                    .connect(
+                    .connect_with_timeout(
                         ctx,
                         &McpEndpoint {
                             server_id: server.public.id.clone(),
                             scope: scope.clone(),
                             transport: server.transport.clone(),
                         },
+                        self.content_budget(env, deadline)?,
                     )
                     .map_err(|fault| self.remote_content_fault(fault))?;
-                read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
+                env.read(|snapshot| {
                     self.content_authorized(snapshot, ctx, query, scope, server, cap)
                 })
                 .map_err(|error| self.fault(error))?;
-                read().map_err(|fault| self.remote_content_fault(fault))
+                read(self.content_budget(env, deadline)?)
+                    .map_err(|fault| self.remote_content_fault(fault))
             }
             Err(fault) => Err(self.remote_content_fault(fault)),
         }
@@ -368,6 +416,8 @@ impl McpClientService {
         &self,
         ctx: &InvocationContext,
         query: &AdmittedQuery,
+        env: &Preparation<'_>,
+        deadline: Option<Instant>,
         native: &Native,
         scope: &ConfigScope,
         server: &StoredServer,
@@ -385,6 +435,8 @@ impl McpClientService {
         let server_revision = server.public.revision.clone();
         let catalog_revision = server.public.catalog_revision.clone();
         let capability_id = cap.id.clone();
+        let cancellation = env.cancellation.cloned();
+        let deadline_ms = env.deadline_ms;
         let observed = Observed {
             project: ctx
                 .project_id()
@@ -405,6 +457,14 @@ impl McpClientService {
                 observed,
                 &bytes,
                 move |tx, _| {
+                    if cancellation
+                        .as_ref()
+                        .is_some_and(crate::ports::storage::Cancellation::is_cancelled)
+                        || deadline.is_some_and(|until| Instant::now() >= until)
+                        || deadline_ms.is_some_and(|until| tx.now_ms() >= until)
+                    {
+                        return Err(StorageError::Cancelled);
+                    }
                     let (_, state) = current(tx.configuration(), &scope_for_write)?;
                     let current_server = state
                         .servers

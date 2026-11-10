@@ -5,6 +5,7 @@ use crate::ports::storage::ConfigScope;
 use crate::protocol::Id;
 use crate::protocol::records::McpTransport;
 use serde_json::Value;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct McpEndpoint {
@@ -65,6 +66,14 @@ pub trait McpRemote: Send + Sync {
         context: &InvocationContext,
         endpoint: &McpEndpoint,
     ) -> Result<(), McpRemoteFault>;
+    fn connect_with_timeout(
+        &self,
+        context: &InvocationContext,
+        endpoint: &McpEndpoint,
+        _timeout: Duration,
+    ) -> Result<(), McpRemoteFault> {
+        self.connect(context, endpoint)
+    }
     /// Reads a bounded complete catalog from a connected server.
     fn discover(&self, server_id: &Id) -> Result<RemoteCatalog, McpRemoteFault>;
     /// One selected tool call. The core service records the effect before invoking this port.
@@ -75,12 +84,29 @@ pub trait McpRemote: Send + Sync {
         arguments: Value,
     ) -> Result<Value, McpRemoteFault>;
     fn read_resource(&self, server_id: &Id, uri: &str) -> Result<Value, McpRemoteFault>;
+    fn read_resource_with_timeout(
+        &self,
+        server_id: &Id,
+        uri: &str,
+        _timeout: Duration,
+    ) -> Result<Value, McpRemoteFault> {
+        self.read_resource(server_id, uri)
+    }
     fn get_prompt(
         &self,
         server_id: &Id,
         name: &str,
         arguments: Value,
     ) -> Result<Value, McpRemoteFault>;
+    fn get_prompt_with_timeout(
+        &self,
+        server_id: &Id,
+        name: &str,
+        arguments: Value,
+        _timeout: Duration,
+    ) -> Result<Value, McpRemoteFault> {
+        self.get_prompt(server_id, name, arguments)
+    }
     /// Drops a connection and stops its app-owned process tree when present.
     fn disconnect(&self, server_id: &Id) -> Result<(), McpRemoteFault>;
 }

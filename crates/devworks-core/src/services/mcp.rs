@@ -1150,19 +1150,30 @@ impl McpClientService {
                             "MCP server changed during failed discovery".into(),
                         )
                     })?;
-                server.public.revision = rev(pending_revision + 1);
-                server.public.state = ItemState::Failed;
-                server.public.last_failure = Some(BoundedText(failure));
-                let body = serde_json::to_value(state).map_err(|_| {
-                    StorageError::InvalidRecord("outgoing MCP configuration".into())
-                })?;
-                tx.configuration().append_revision(
-                    &scope,
-                    NAMESPACE,
-                    version,
-                    SCHEMA_VERSION,
-                    body,
-                )?;
+                let same_failure = matches!(server.public.state, ItemState::Failed)
+                    && server
+                        .public
+                        .last_failure
+                        .as_ref()
+                        .is_some_and(|last| last.0 == failure);
+                let result_revision = if same_failure {
+                    pending_revision
+                } else {
+                    server.public.revision = rev(pending_revision + 1);
+                    server.public.state = ItemState::Failed;
+                    server.public.last_failure = Some(BoundedText(failure));
+                    let body = serde_json::to_value(state).map_err(|_| {
+                        StorageError::InvalidRecord("outgoing MCP configuration".into())
+                    })?;
+                    tx.configuration().append_revision(
+                        &scope,
+                        NAMESPACE,
+                        version,
+                        SCHEMA_VERSION,
+                        body,
+                    )?;
+                    pending_revision + 1
+                };
                 let actor = tx.store().host_actor.clone();
                 let event_id = EventId(tx.new_id(IdKind::Event));
                 tx.history().append(NewEvent {
@@ -1173,7 +1184,7 @@ impl McpClientService {
                     operation_id: Some(operation),
                     aggregate_kind: "mcp_server".into(),
                     aggregate_id: server_id.as_str().into(),
-                    aggregate_revision: pending_revision + 1,
+                    aggregate_revision: result_revision,
                     kind: event_kind.into(),
                     payload: json!({"serverId":server_id,"scope":scope.key()}),
                 })?;
@@ -1397,6 +1408,13 @@ impl McpClientService {
                 "MCP catalog exceeds page bound".into(),
             ));
         }
+        let catalog_bytes = serde_json::to_vec(&(&capabilities, &schemas, &resource_uris))
+            .map_err(|_| StorageError::InvalidRecord("MCP catalog serialization".into()))?;
+        if catalog_bytes.len() > 1024 * 1024 {
+            return Err(StorageError::InvalidRecord(
+                "MCP catalog exceeds byte bound".into(),
+            ));
+        }
         let mut names = std::collections::HashSet::new();
         let mut wire_names = std::collections::HashSet::new();
         if capabilities.iter().any(|capability| {
@@ -1430,6 +1448,16 @@ impl McpClientService {
             return Err(StorageError::InvalidRecord(
                 "MCP tool selection exceeds contract bound".into(),
             ));
+        }
+        if matches!(server.public.state, ItemState::Healthy)
+            && server.public.last_failure.is_none()
+            && server.public.selected_tool_ids.0 == selected
+            && serde_json::to_value(&server.capabilities).ok()
+                == serde_json::to_value(&capabilities).ok()
+            && server.schemas == schemas
+            && server.resource_uris == resource_uris
+        {
+            return Ok(server.public.clone());
         }
         server.capabilities = capabilities;
         server.schemas = schemas;
@@ -1734,10 +1762,10 @@ impl McpClientService {
             );
         }
         let scope = active_server_scope(ctx, &input.scope, tx.projects())?;
-        let (version, mut state) = current(tx.configuration(), &scope)?;
+        let (_, state) = current(tx.configuration(), &scope)?;
         let server = state
             .servers
-            .iter_mut()
+            .iter()
             .find(|server| server.public.id == input.server_id)
             .ok_or_else(|| {
                 Refusal::new(
@@ -1756,14 +1784,7 @@ impl McpClientService {
             }))
             .into());
         }
-        server.public.revision = rev(server.public.revision.get() + 1);
-        server.public.state = ItemState::Unavailable;
-        server.public.last_failure = None;
         let pending_revision = server.public.revision.get();
-        let body = serde_json::to_value(state)
-            .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
-        tx.configuration()
-            .append_revision(&scope, NAMESPACE, version, SCHEMA_VERSION, body)?;
         let operation = OperationId(tx.new_id(IdKind::Operation));
         let event = EventId(tx.new_id(IdKind::Event));
         tx.operations().record_intent(NewOperation {

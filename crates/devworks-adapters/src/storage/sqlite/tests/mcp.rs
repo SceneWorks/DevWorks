@@ -29,7 +29,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Default)]
-struct RecordedRemote(AtomicUsize, bool);
+struct RecordedRemote(
+    AtomicUsize,
+    bool,
+    Option<Arc<super::TestClock>>,
+    AtomicUsize,
+);
 impl McpRemote for RecordedRemote {
     fn connect(
         &self,
@@ -68,6 +73,11 @@ impl McpRemote for RecordedRemote {
     }
 
     fn read_resource(&self, _server_id: &Id, _uri: &str) -> Result<Value, McpRemoteFault> {
+        if self.3.fetch_add(1, Ordering::SeqCst) == 0
+            && let Some(clock) = &self.2
+        {
+            clock.0.store(super::T0 + 10_000, Ordering::SeqCst);
+        }
         Ok(json!({"contents":[]}))
     }
 
@@ -620,7 +630,12 @@ fn failed_connection_persists_a_safe_diagnostic_for_settings() {
     service
         .install_remote(
             store.clone(),
-            Arc::new(RecordedRemote(AtomicUsize::new(0), true)),
+            Arc::new(RecordedRemote(
+                AtomicUsize::new(0),
+                true,
+                None,
+                AtomicUsize::new(0),
+            )),
             Arc::new(JsonSchemaValidator),
             artifacts(&h),
         )
@@ -807,7 +822,9 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
         second.selected_tool_ids.0,
         selected_server.selected_tool_ids.0
     );
-    let second_cap = match capabilities(&h, &store, &cases, &server.id, 3) {
+    assert_eq!(second.revision, selected_server.revision);
+    assert_eq!(second.catalog_revision, selected_server.catalog_revision);
+    let second_cap = match capabilities(&h, &store, &cases, &server.id, 2) {
         DomainQueryReply::Result {
             result: OperationResult::McpCapabilities { value },
             ..
@@ -827,13 +844,39 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
                 tx,
                 &ConfigScope::Workspace,
                 &server_id,
-                &Revision::new(3).unwrap(),
+                &Revision::new(2).unwrap(),
                 catalog(json!({"type":"object","properties":{"key":{"type":"number"}}})),
             )
         })
         .unwrap()
     };
     assert!(changed.selected_tool_ids.0.is_empty());
+    let oversized = {
+        let service = service.clone();
+        let server_id = server.id.clone();
+        run_write(&*store, WriteOptions::default(), move |tx| {
+            service.publish_remote_catalog(
+                tx,
+                &ConfigScope::Workspace,
+                &server_id,
+                &Revision::new(3).unwrap(),
+                RemoteCatalog {
+                    tools: (0..20)
+                        .map(|index| RemoteTool {
+                            name: format!("large-{index}"),
+                            description: "x".repeat(65_000),
+                            input_schema: json!({"type":"object"}),
+                            output_schema: None,
+                            read_only_hint: false,
+                        })
+                        .collect(),
+                    resources: vec![],
+                    prompts: vec![],
+                },
+            )
+        })
+    };
+    assert!(oversized.is_err(), "oversized catalog was retained");
 }
 
 #[test]
@@ -906,6 +949,41 @@ fn journaled_discovery_does_not_select_untrusted_read_only_hints() {
     let published = servers(&h, &store, &cases).pop().unwrap();
     assert_eq!(published.catalog_revision.get(), 2);
     assert!(published.selected_tool_ids.0.is_empty());
+    let before = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+        Ok(snapshot
+            .configuration()
+            .current(&ConfigScope::Workspace, "outgoing_mcp")?
+            .unwrap()
+            .revision)
+    })
+    .unwrap();
+    let DomainDecision::Accepted { operation_id } = command(
+        &h,
+        &store,
+        &cases,
+        "discovery-unchanged",
+        "mcp.discover",
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedCatalogRevision":"2"}),
+    ) else {
+        panic!("repeat discovery was not accepted");
+    };
+    let operation = dispatched(&store, &operation_id);
+    assert!(matches!(
+        service.execute(&operation),
+        McpEffectOutcome::Completed(_)
+    ));
+    let after = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+        Ok(snapshot
+            .configuration()
+            .current(&ConfigScope::Workspace, "outgoing_mcp")?
+            .unwrap()
+            .revision)
+    })
+    .unwrap();
+    assert_eq!(
+        after, before,
+        "unchanged discovery retained a full snapshot"
+    );
     let selected = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
         service.selected_tool_materials(&context(&store), snapshot)
     })
@@ -1069,4 +1147,96 @@ fn resource_and_prompt_queries_publish_bounded_untrusted_content() {
         Ok(())
     })
     .unwrap();
+}
+
+#[test]
+fn resource_query_stops_when_deadline_expires_during_a_remote_read() {
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
+        Ok(())
+    })
+    .unwrap();
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    let remote = Arc::new(RecordedRemote(
+        AtomicUsize::new(0),
+        false,
+        Some(h.clock.clone()),
+        AtomicUsize::new(0),
+    ));
+    service
+        .install_remote(
+            store.clone(),
+            remote.clone(),
+            Arc::new(JsonSchemaValidator),
+            artifacts(&h),
+        )
+        .unwrap();
+    let cases = UseCases::new().with_mcp(service.clone());
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: server },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "deadline-server",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"name":"Deadline server",
+            "transport":{"kind":"Http","endpoint":"https://mcp.example.test/mcp"}}),
+    )
+    else {
+        panic!("MCP server configuration failed");
+    };
+    let server_id = server.id.clone();
+    let service_for_write = service.clone();
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        service_for_write.publish_remote_catalog(
+            tx,
+            &ConfigScope::Workspace,
+            &server_id,
+            &Revision::new(1).unwrap(),
+            RemoteCatalog {
+                tools: vec![],
+                resources: ["mcp://example/one", "mcp://example/two"]
+                    .into_iter()
+                    .map(|uri| RemoteResource {
+                        uri: uri.into(),
+                        name: uri.into(),
+                        description: String::new(),
+                    })
+                    .collect(),
+                prompts: vec![],
+            },
+        )
+    })
+    .unwrap();
+    let authority = HostAuthority {
+        store: &*store,
+        clock: &*h.clock,
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*store,
+        ids: &*h.ids,
+    };
+    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"deadline-read",
+        "body":{"kind":"mcp.resources","scope":{"kind":"Workspace"},
+            "serverId":server.id,"catalogRevision":"2","page":{"limit":10}}});
+    let reply = gateway
+        .query_with(
+            &context(&store),
+            "mcp.resources",
+            frame.to_string().as_bytes(),
+            service.as_ref(),
+            ReadOptions {
+                deadline_ms: Some(super::T0 + 5_000),
+                ..ReadOptions::default()
+            },
+        )
+        .unwrap();
+    assert!(matches!(reply, DomainQueryReply::Rejected { .. }));
+    assert_eq!(remote.3.load(Ordering::SeqCst), 1);
 }

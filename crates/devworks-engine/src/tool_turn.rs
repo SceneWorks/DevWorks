@@ -1028,11 +1028,27 @@ fn operation_update_text(
             .ok_or(StorageError::ScopeDenied)
     })?;
     if !version.live()
+        || version.id != artifact.version_id
         || version.artifact_id != artifact.artifact_id
+        || version.blob_digest != artifact.sha256.as_str()
+        || version.byte_count != artifact.byte_length.get()
+        || version.media_type != artifact.media_type
         || version.source["principalKind"] != "Host"
         || version.source["producedBy"] != store.info().host_actor.0.as_str()
+        || version.source["source"]["kind"] != "ToolOperationUpdate"
+        || version.source["source"]["sessionId"] != session_id.as_str()
+        || version.source["source"]["operationId"] != operation_id.0.as_str()
+        || version.source["source"]["revision"] != revision.get()
     {
         return Err(StorageError::ScopeDenied);
+    }
+    if artifact.byte_length.get() > 1024 * 1024 {
+        // The update artifact holds the complete result. Keep the provider continuation bounded
+        // and give the agent its exact reference instead of failing a 1 MiB context read.
+        return Ok(format!(
+            "Tool operation update: full result in artifact {}",
+            serde_json::to_string(artifact).map_err(invalid)?
+        ));
     }
     let (bytes, provenance) = artifacts
         .read_exact(store, ctx, artifact, 1024 * 1024)
