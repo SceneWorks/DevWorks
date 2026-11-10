@@ -245,9 +245,15 @@ impl InstructionService {
                 }
             }
             let path = canonical.as_ref().expect("scanned root");
+            let name = skill.name.clone();
             match self.observe_skill(origin, path, item, skill) {
                 Ok(()) => report.observed += 1,
-                Err(e) => report.failures.push(e.to_string()),
+                // Named by origin like a scan failure: a capture that could not be recorded
+                // (an artifact write failed) leaves the directory changed but unrecorded, so a
+                // replacement of that root is refused until it is captured.
+                Err(e) => report
+                    .failures
+                    .push(format!("{}: {name}: {e}", origin.as_str().to_lowercase())),
             }
         }
         for item in existing.values() {

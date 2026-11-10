@@ -237,7 +237,24 @@ fn recover_swaps(root: &Path) -> io::Result<()> {
         sync_dir(root)?;
         fs::remove_file(entry.path())?;
     }
-    Ok(())
+    // A process that stopped while writing its staging tree had not journaled it yet: the live
+    // tree never moved, so the staging tree (and any retired tree without a journal) is a
+    // leftover. Left in place, it would count against the root's entry bound.
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let file = entry.file_name();
+        let Some(tag) = file.to_str().and_then(|f| {
+            f.strip_prefix(".skill.new-")
+                .or_else(|| f.strip_prefix(".skill.old-"))
+        }) else {
+            continue;
+        };
+        if tag.starts_with(&own) || root.join(format!("{JOURNAL}{tag}")).exists() {
+            continue;
+        }
+        remove_entry(&entry.path())?;
+    }
+    sync_dir(root)
 }
 
 impl SkillFiles for NativeSkillFiles {
@@ -408,6 +425,16 @@ mod tests {
         assert_eq!(fs::read(base.join("alpha/.env")).unwrap(), b"secret");
         assert_eq!(fs::read(base.join("alpha/SKILL.md")).unwrap(), b"two");
         assert_eq!(fs::read(base.join("beta/SKILL.md")).unwrap(), b"b");
+        let mut left: Vec<String> = fs::read_dir(&base)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["alpha", "beta"]);
+        // A process that died while writing its staging tree, before journaling it.
+        fs::create_dir_all(base.join(".skill.new-0-9/scripts")).unwrap();
+        fs::write(base.join(".skill.new-0-9/SKILL.md"), b"partial").unwrap();
+        files.root().unwrap();
         let mut left: Vec<String> = fs::read_dir(&base)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

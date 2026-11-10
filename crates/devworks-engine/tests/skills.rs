@@ -545,6 +545,18 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
             );
             assert_eq!(std::fs::read(fx.harness.join("beta/notes.md")).unwrap(), b"edited again");
             std::fs::remove_file(fx.harness.join("beta/link.md")).unwrap();
+            // Nor while an edit was scanned but its capture could not be recorded (the artifact
+            // store refuses the write): a restore would replace the unrecorded edit.
+            let beta = find(&discover(&fx, &app, &user), "beta", "harness").clone();
+            use std::os::unix::fs::PermissionsExt;
+            let staging = fx.h.root.join("staging");
+            std::fs::create_dir_all(&staging).unwrap();
+            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o555)).unwrap();
+            std::fs::write(fx.harness.join("beta/notes.md"), "edited a third time").unwrap();
+            let restore = fx.command(&app, &user, "skills.rollback", json!({"instructionId":beta["id"],"expectedRevision":beta["revision"],"targetRevision":"1"}));
+            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(refused(restore), "SourceChanged");
+            assert_eq!(std::fs::read(fx.harness.join("beta/notes.md")).unwrap(), b"edited a third time");
         }
         // A new harness skill whose name differs only in case from an existing one would share
         // its directory on case-insensitive filesystems: refused, never an unchecked overwrite.
