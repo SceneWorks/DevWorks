@@ -281,6 +281,15 @@ fn agent_assignment_scope(
     let Some(root) = ctx.root_id() else {
         return Ok(());
     };
+    if !matches!(
+        request.input,
+        OperationInput::Tasks(_)
+            | OperationInput::Features(_)
+            | OperationInput::Issues(_)
+            | OperationInput::Runs(_)
+    ) {
+        return Ok(());
+    }
     let assignment_id = ctx
         .assignment_id()
         .ok_or(DenialReason::OutOfAssignmentScope)?;
