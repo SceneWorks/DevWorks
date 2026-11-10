@@ -5,17 +5,18 @@ use super::policy::{
     self, AccessProfile, DenialReason, EffectivePolicy, Provenance, Verdict, resolve_policy,
 };
 use crate::context::{InvocationContext, PrincipalKind};
-use crate::operations::{OperationInput, features, issues, next_work, runs, tasks};
+use crate::operations::{OperationInput, artifacts, features, issues, next_work, runs, tasks};
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
-    GrantState, NewAuthorityGrant, NewEvent, NewPrincipalBinding, PrincipalBinding, ReadOptions,
-    ReadSnapshot, StorageError, WriteTransaction, read_snapshot,
+    GrantState, LinkPurpose, NewAuthorityGrant, NewEvent, NewPrincipalBinding, PrincipalBinding,
+    ReadOptions, ReadSnapshot, StorageError, WriteTransaction, read_snapshot,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityFence, AuthorityPort, AuthorityRequest, Authorization, Clock,
     GrantUse, IdKind,
 };
-use crate::protocol::{ActorId, EventId, Id, ProjectId, RootId};
+use crate::protocol::data::{ArtifactCommand, ArtifactDeletion, ArtifactQuery};
+use crate::protocol::{ActorId, EventId, Id, ProjectId, RootId, Subject};
 use crate::registry::{self, Mode};
 use crate::settings::catalog::AgentRole;
 use crate::settings::service::PrincipalRoles;
@@ -284,11 +285,17 @@ fn agent_assignment_scope(
     if !matches!(
         request.input,
         OperationInput::Tasks(_)
+            | OperationInput::Artifacts(_)
             | OperationInput::Features(_)
             | OperationInput::Issues(_)
             | OperationInput::NextWork(_)
             | OperationInput::Runs(_)
     ) {
+        return Ok(());
+    }
+    // A root lineage without a delegated assignment retains the pre-existing project artifact
+    // policy. New coordinator/Worker turns carry an assignment and are narrowed below.
+    if matches!(request.input, OperationInput::Artifacts(_)) && ctx.assignment_id().is_none() {
         return Ok(());
     }
     let assignment_id = ctx
@@ -299,7 +306,10 @@ fn agent_assignment_scope(
         .assignment(assignment_id)
         .map_err(|_| DenialReason::AuthorityUnavailable)?
         .ok_or(DenialReason::OutOfAssignmentScope)?;
-    if &assignment.root_id != root || ctx.session_id() != Some(&assignment.session_id) {
+    if !assignment.state.is_live()
+        || &assignment.root_id != root
+        || ctx.session_id() != Some(&assignment.session_id)
+    {
         return Err(DenialReason::OutOfAssignmentScope);
     }
     let context = s
@@ -323,7 +333,102 @@ fn agent_assignment_scope(
         }
         Ok(false)
     };
+    let owned_artifact = |id: &Id| -> Result<bool, DenialReason> {
+        let artifact = s
+            .artifacts()
+            .artifact(id)
+            .map_err(|_| DenialReason::AuthorityUnavailable)?;
+        Ok(artifact.is_some_and(|a| {
+            a.origin_work_id.as_ref() == Some(root)
+                && (coordinator
+                    || a.provenance["assignmentId"].as_str() == Some(assignment_id.0.as_str()))
+        }))
+    };
+    let readable_artifact = |id: &Id, version: &Id| -> Result<bool, DenialReason> {
+        if owned_artifact(id)? {
+            return Ok(true);
+        }
+        let links = s
+            .artifacts()
+            .links(id)
+            .map_err(|_| DenialReason::AuthorityUnavailable)?;
+        for link in links {
+            if link.purpose != LinkPurpose::Reference || &link.version_id != version {
+                continue;
+            }
+            if link.subject.kind == "root" && scoped(&link.subject.id)?
+                || link.subject.kind == "assignment"
+                    && (link.subject.id == assignment_id.0
+                        || coordinator
+                            && s.runs()
+                                .assignment(&crate::protocol::AssignmentId(link.subject.id))
+                                .map_err(|_| DenialReason::AuthorityUnavailable)?
+                                .is_some_and(|a| a.root_id == *root))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
     let allowed = match request.input {
+        OperationInput::Artifacts(input) => match input {
+            artifacts::Input::List(_) => false,
+            artifacts::Input::Read(req)
+            | artifacts::Input::Preview(req)
+            | artifacts::Input::Export(req) => match &req.query {
+                ArtifactQuery::Read {
+                    artifact_id,
+                    version_id,
+                }
+                | ArtifactQuery::Preview {
+                    artifact_id,
+                    version_id,
+                }
+                | ArtifactQuery::Export {
+                    artifact_id,
+                    version_id,
+                } => readable_artifact(artifact_id, version_id)?,
+                _ => false,
+            },
+            artifacts::Input::Save(req) | artifacts::Input::Reference(req) => match &req.command {
+                ArtifactCommand::Save { project_id, .. } => project_id.as_ref() == ctx.project_id(),
+                ArtifactCommand::Reference {
+                    artifact_id,
+                    version_id,
+                    subject,
+                    ..
+                } => {
+                    let subject_scoped = match subject {
+                        Subject::Root(id) => scoped(&id.0)?,
+                        Subject::Assignment(id) => {
+                            id == assignment_id
+                                || coordinator
+                                    && s.runs()
+                                        .assignment(id)
+                                        .map_err(|_| DenialReason::AuthorityUnavailable)?
+                                        .is_some_and(|a| a.root_id == *root)
+                        }
+                        _ => false,
+                    };
+                    subject_scoped && readable_artifact(artifact_id, version_id)?
+                }
+                ArtifactCommand::Replace { artifact_id, .. }
+                | ArtifactCommand::DeleteVersion { artifact_id, .. }
+                | ArtifactCommand::DisableRetrieval { artifact_id, .. }
+                | ArtifactCommand::RemoveIndex { artifact_id, .. } => owned_artifact(artifact_id)?,
+                ArtifactCommand::DetachProject { .. }
+                | ArtifactCommand::Share { .. }
+                | ArtifactCommand::Move { .. } => false,
+            },
+            artifacts::Input::Delete(req) => match &req.deletion {
+                ArtifactDeletion::DeleteVersion { artifact_id, .. }
+                | ArtifactDeletion::DeleteArtifact { artifact_id, .. } => {
+                    owned_artifact(artifact_id)?
+                }
+                ArtifactDeletion::DetachProject { .. } => false,
+            },
+            artifacts::Input::Tag(input) => owned_artifact(&input.artifact_id)?,
+        },
         OperationInput::Tasks(input) => match input {
             tasks::Input::List(_) => false,
             tasks::Input::Get(i) => scoped(&i.work_id)?,
