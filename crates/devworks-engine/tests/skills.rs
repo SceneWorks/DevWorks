@@ -471,6 +471,13 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
             b"---\nname: alpha\ndescription: Alpha skill\n---\nDo alpha."
         );
         assert_eq!(std::fs::read(fx.harness.join("alpha/docs/ref.md")).unwrap(), b"reference");
+        // A second shared restore cannot replace that override: the shared item's revision does
+        // not guard it, so it is refused and the override's files stay as they are.
+        assert_eq!(
+            refused(fx.command(&app, &user, "skills.rollback", json!({"instructionId":alpha2["id"],"expectedRevision":"2","targetRevision":"1"}))),
+            "Conflict"
+        );
+        assert_eq!(std::fs::read(fx.harness.join("alpha/docs/ref.md")).unwrap(), b"reference");
         let restored_set = app.effective_skills().unwrap();
         let alpha_now = restored_set.skills.iter().find(|s| s.name == "alpha").unwrap();
         assert_eq!(alpha_now.root_id, "skills-harness");
@@ -507,6 +514,15 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
             refused(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"BETA","content":fx.upload(&user, "other beta")}))),
             "Conflict"
         );
+        // A harness directory that is not a discovered skill (no SKILL.md) holds uncaptured
+        // files: a new skill of that name is refused rather than replacing them.
+        std::fs::create_dir_all(fx.harness.join("gamma")).unwrap();
+        std::fs::write(fx.harness.join("gamma/notes.md"), "keep me").unwrap();
+        assert_eq!(
+            refused(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"gamma","content":fx.upload(&user, "new gamma")}))),
+            "Conflict"
+        );
+        assert_eq!(std::fs::read(fx.harness.join("gamma/notes.md")).unwrap(), b"keep me");
         // Captured skill versions stay out of artifact listings; other host artifacts remain.
         let staged = fx.artifacts.stage_host_bytes(&*fx.store, b"repository summary", json!({"kind":"Test"})).unwrap().unwrap();
         let (artifacts, s2) = (fx.artifacts.clone(), staged.clone());

@@ -11,6 +11,7 @@ use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::gateway::AdmittedCommand;
 use crate::operations::{OperationInput, roles as role_ops, skills as skill_ops};
+use crate::ports::indexing::SourceFault;
 use crate::ports::storage::{
     ConfigScope, InstructionFilter, InstructionKind, InstructionOrigin, InstructionRevisionState,
     StorageError, StoredInstructionItem, StoredInstructionRevision, WriteTransaction,
@@ -447,6 +448,12 @@ impl InstructionService {
             .files
             .root()
             .unwrap_or_else(|_| self.roots.harness.clone());
+        // Materializing a new item replaces its directory: one that already exists without a
+        // discovered skill (no SKILL.md, or unreadable) holds files history never captured.
+        match self.source.canonical_dir(&root.join(name)) {
+            Err(SourceFault::Missing) => {}
+            _ => return Err(refusal(DomainErrorCode::Conflict, "skill_directory", None)),
+        }
         let item = StoredInstructionItem {
             id: tx.new_id(IdKind::Operation),
             kind: InstructionKind::Skill,
@@ -710,11 +717,16 @@ impl InstructionService {
         target: &StoredInstructionRevision,
     ) -> Result<DomainDecision, Failure> {
         let now = tx.now_ms();
-        let existing = harness_named(tx, &shared.name)?;
-        let mut item = match existing {
-            Some(item) => item,
-            None => self.new_harness_item(tx, &shared.name, now)?,
-        };
+        // The rollback's expected revision belongs to the shared item, so it cannot guard an
+        // existing override: that override is restored through its own identity and revision.
+        if let Some(existing) = harness_named(tx, &shared.name)? {
+            return Err(refusal(
+                DomainErrorCode::Conflict,
+                "skill_override",
+                Some(&existing.id),
+            ));
+        }
+        let mut item = self.new_harness_item(tx, &shared.name, now)?;
         let revision = StoredInstructionRevision {
             instruction_id: item.id.clone(),
             revision: item.latest_revision + 1,
