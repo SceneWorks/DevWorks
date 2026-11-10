@@ -480,12 +480,14 @@ fn the_runtime_discovers_indexes_and_publishes_through_its_supervisor() {
     assert_eq!(found.len(), 1);
     let run = index(&runtime_, &ctx, &found[0], "key-1");
     rt.block_on(within("the run publishes", async {
-        while run_state(&store, &run).state != RUN_SUCCEEDED {
-            assert!(
-                !run_terminal(&run_state(&store, &run).state),
-                "{:?}",
-                run_state(&store, &run)
-            );
+        // One read per pass: a second read could see the run finish after the first saw it
+        // still running, and report that success as a terminal failure.
+        loop {
+            let state = run_state(&store, &run);
+            if state.state == RUN_SUCCEEDED {
+                break;
+            }
+            assert!(!run_terminal(&state.state), "{state:?}");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }));
