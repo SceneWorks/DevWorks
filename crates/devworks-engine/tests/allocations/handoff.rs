@@ -360,8 +360,28 @@ fn a_split_delegated_scope_retires_instead_of_blocking_the_destination_forever()
     })
     .unwrap();
     m.change(Some("feature-b"));
+    let secondary_holds = || {
+        read(&*m.f.store, |s| {
+            devworks_core::services::runs::active_blockers(
+                s.runs(),
+                &BlockerFilter::RootLevel(RootId(id("secondary"))),
+            )
+        })
+    };
+    assert!(secondary_holds().iter().any(|hold| {
+        hold.origin_id == m.worker.id.0.as_str() && hold.clearance["membershipHandoff"] == true
+    }));
+    m.reconcile();
+    assert!(
+        !secondary_holds().is_empty(),
+        "the old turn is still active"
+    );
     m.settle();
     m.reconcile();
+    assert!(
+        secondary_holds().is_empty(),
+        "quiescence clears the secondary hold"
+    );
     let retired = m.assignment();
     assert_eq!(retired.state, AssignmentState::Superseded);
     assert_eq!(retired.root_id, RootId(id("feature-a")));

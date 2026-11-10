@@ -398,7 +398,9 @@ fn link_unlinked_redirect_attachments(
                     host,
                     Some(project),
                     &artifact,
-                )? {
+                )? || host.principal_kind() == PrincipalKind::Agent
+                    && !sender_can_read_attachment(tx, host.assignment_id(), root, &artifact)?
+                {
                     return Err(denied());
                 }
                 crate::services::artifacts::reference_from_host_owner(
@@ -994,13 +996,20 @@ impl AgentService {
             )?
             .map_err(fenced)?;
         tx.runs().insert_agent_assignment_context(&StoredAgentAssignmentContext {
-            assignment_id:assignment.id.clone(),project_id:root.project_id,
+            assignment_id:assignment.id.clone(),project_id:root.project_id.clone(),
             role_id,role_instructions:instructions.text,
             role_revisions:serde_json::json!({"workspace":instructions.revisions.workspace,"project":instructions.revisions.project}),
             brief:input.instruction.0.clone(),
             task_ids:serde_json::to_value(&input.task_ids.0).map_err(|_|StorageError::InvalidRecord("task references".into()))?,
             source_checkpoint_id:input.source_checkpoint_id.clone(),created_at_ms:now,
         })?;
+        link_unlinked_redirect_attachments(
+            tx,
+            ctx,
+            &root.id,
+            &root.project_id,
+            &assignment.session_id,
+        )?;
         retained::handover_item(tx, &assignment.id)?;
         agent_record(tx.runs(), &assignment).map_err(failure)
     }

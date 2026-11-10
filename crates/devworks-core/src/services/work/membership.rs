@@ -89,6 +89,17 @@ fn fence(
             break;
         }
     }
+    let mut guarded = HashSet::from([RootId(after.id.clone())]);
+    for child in assignments.iter().filter(|child| tree.contains(&child.id)) {
+        guarded.insert(child.work_id.clone());
+        if let Some(context) = tx.runs().agent_assignment_context(&child.id)? {
+            let tasks: Vec<Id> = serde_json::from_value(context.task_ids)
+                .map_err(|_| StorageError::InvalidRecord("assignment task scope".into()))?;
+            guarded.extend(tasks.into_iter().map(RootId));
+        }
+    }
+    let mut guarded: Vec<_> = guarded.into_iter().collect();
+    guarded.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
     // Retired descendants remain attributable to their original root; no old-root child
     // can become runnable merely because its parent follows the moved task.
     for child in assignments
@@ -102,46 +113,24 @@ fn fence(
         fenced.slot_held = false;
         if child.id == a.id {
             fenced.checkpoint = Some(
-                json!({"kind":"DevWorksMembershipHandoff","version":1,"membershipHandoff":{"workId":after.id,"secondaryTaskId":(child.work_id.0 != after.id).then_some(&after.id),"fromRoot":root,"toFeature":after.parent_feature_id,"hadCheckpoint":child.checkpoint.is_some(),"previousCheckpoint":child.checkpoint,"subtree":tree.iter().map(|id|id.0.as_str()).collect::<Vec<_>>()}}),
+                json!({"kind":"DevWorksMembershipHandoff","version":1,"membershipHandoff":{"workId":after.id,"secondaryTaskId":(child.work_id.0 != after.id).then_some(&after.id),"fromRoot":root,"toFeature":after.parent_feature_id,"hadCheckpoint":child.checkpoint.is_some(),"previousCheckpoint":child.checkpoint,"subtree":tree.iter().map(|id|id.0.as_str()).collect::<Vec<_>>(),"guardedTaskIds":guarded.iter().map(|id|id.0.as_str()).collect::<Vec<_>>()}}),
             );
         }
         tx.runs().update_assignment(&fenced, child.revision)?;
     }
-    let mut guarded = HashSet::new();
-    if a.work_id.0 != after.id {
-        let secondary = RootId(after.id.clone());
-        guarded.insert(secondary.clone());
+    for guarded_id in guarded {
         let work = tx
             .sessions()
-            .work_root(&secondary)?
+            .work_root(&guarded_id)?
             .ok_or_else(|| StorageError::NotFound {
                 kind: "work",
-                id: after.id.as_str().into(),
+                id: guarded_id.0.as_str().into(),
             })?;
-        crate::services::runs::ensure_control(tx, &work.id)?;
-        raise_blocker(
-            tx,
-            actor,
-            &work,
-            HoldSubject::default(),
-            HoldCause::Policy,
-            a.id.0.as_str(),
-            after.revision,
-            "existing worker subtree is quiescing before its membership handoff",
-            json!({"membershipHandoff":true,"assignmentId":a.id.0,"fromRoot":root,"workId":after.id}),
-        )?;
-    }
-    for child in assignments.iter().filter(|child| tree.contains(&child.id)) {
-        if !guarded.insert(child.work_id.clone()) {
-            continue;
+        if work.project_id != after.project_id {
+            return Err(StorageError::InvalidRecord(
+                "assignment task project".into(),
+            ));
         }
-        let work =
-            tx.sessions()
-                .work_root(&child.work_id)?
-                .ok_or_else(|| StorageError::NotFound {
-                    kind: "work",
-                    id: child.work_id.0.as_str().into(),
-                })?;
         crate::services::runs::ensure_control(tx, &work.id)?;
         raise_blocker(
             tx,
@@ -168,6 +157,19 @@ fn subtree(a: &StoredAssignment) -> Result<HashSet<AssignmentId>, StorageError> 
     let ids: Vec<Id> = serde_json::from_value(value)
         .map_err(|_| StorageError::InvalidRecord("membership handoff subtree".into()))?;
     Ok(ids.into_iter().map(AssignmentId).collect())
+}
+fn guarded_tasks(a: &StoredAssignment) -> Result<Vec<RootId>, StorageError> {
+    let Some(value) = a
+        .checkpoint
+        .as_ref()
+        .and_then(|c| c.get(MARKER))
+        .and_then(|m| m.get("guardedTaskIds"))
+    else {
+        return Ok(Vec::new());
+    };
+    let ids: Vec<Id> = serde_json::from_value(value.clone())
+        .map_err(|_| StorageError::InvalidRecord("membership guarded tasks".into()))?;
+    Ok(ids.into_iter().map(RootId).collect())
 }
 fn previous_checkpoint(a: &StoredAssignment) -> Option<Value> {
     a.checkpoint
@@ -331,6 +333,11 @@ pub fn reconcile_project(
                 .filter(|child| tree.contains(&child.id) && child.id != a.id)
             {
                 clear_handoff_hold(tx, &actor, &child.work_id, &a.id)?;
+            }
+            for guarded in guarded_tasks(&a)? {
+                if guarded != a.work_id {
+                    clear_handoff_hold(tx, &actor, &guarded, &a.id)?;
+                }
             }
             if !tx.runs().assignment_handoff_quiescent(&a.id)? {
                 continue;
