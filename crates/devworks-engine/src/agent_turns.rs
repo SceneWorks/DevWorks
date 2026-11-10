@@ -1048,12 +1048,88 @@ pub fn ensure_membership_context(
             let binding: NativeBinding =
                 serde_json::from_value(provenance["derived"]["binding"].clone())
                     .map_err(|_| StorageError::ScopeDenied)?;
+            let observed = provenance["derived"]["observedSequence"]
+                .as_i64()
+                .ok_or(StorageError::ScopeDenied)?;
             if binding.context_epoch.get() != epoch - 1 {
                 return Err(StorageError::ScopeDenied);
             }
-            Ok((context, binding))
+            if observed < 0 || observed > sequence {
+                return Err(StorageError::ScopeDenied);
+            }
+            Ok((context, binding, observed, reference))
         })
         .transpose()?;
+    let previous = match previous {
+        Some((mut context, binding, observed, reference)) => {
+            if observed < sequence {
+                match unpublished_turn(runtime.store().as_ref(), ctx, session_id, observed)? {
+                    Some(UnpublishedTurn::Settled {
+                        attempt_id,
+                        has_tools,
+                    }) => {
+                        let material = crate::tool_turn::handoff_continuation_context(
+                            runtime.store().as_ref(),
+                            runtime.artifacts(),
+                            ctx,
+                            crate::tool_turn::TurnSource {
+                                session_id,
+                                attempt_id: &attempt_id,
+                                after_sequence: observed,
+                                has_tools,
+                            },
+                            &binding,
+                            &reference,
+                        )?;
+                        if material.observed_sequence != sequence {
+                            return Err(StorageError::ScopeDenied);
+                        }
+                        context = material.context;
+                    }
+                    Some(UnpublishedTurn::Interrupted {
+                        sequence: interrupted_at,
+                        facts,
+                        ..
+                    }) => {
+                        if interrupted_at != sequence {
+                            return Err(StorageError::ScopeDenied);
+                        }
+                        context.messages.push(Message {
+                            role: MessageRole::User,
+                            content: vec![ContentBlock::Text {
+                                text: "Host notice: The previous assistant response was interrupted before completion. Continue from the last completed step; do not assume the partial response was applied.".into(),
+                                cache: None,
+                            }],
+                        });
+                        for fact in facts {
+                            context
+                                .messages
+                                .push(crate::tool_turn::context_fact_message(
+                                    runtime.store().as_ref(),
+                                    runtime.artifacts(),
+                                    ctx,
+                                    session_id,
+                                    fact,
+                                )?);
+                        }
+                    }
+                    None => context.messages.extend(handoff_fact_messages(
+                        runtime, ctx, session_id, observed, sequence,
+                    )?),
+                }
+            }
+            Some((context, binding))
+        }
+        None => None,
+    };
+    let missing_head_facts = if source.is_none() && sequence > 0 {
+        if unpublished_turn(runtime.store().as_ref(), ctx, session_id, 0)?.is_some() {
+            return Err(StorageError::ScopeDenied);
+        }
+        handoff_fact_messages(runtime, ctx, session_id, 0, sequence)?
+    } else {
+        Vec::new()
+    };
     let tools_required = !runtime
         .providers()
         .ok_or(StorageError::ScopeDenied)?
@@ -1079,7 +1155,9 @@ pub fn ensure_membership_context(
             .converted_for_new_epoch(&old_binding, &binding)
             .map_err(|error| StorageError::InvalidRecord(format!("handoff context: {error:?}")))?
     } else {
-        (fresh.clone(), Vec::new())
+        let mut context = fresh.clone();
+        context.messages.extend(missing_head_facts);
+        (context, Vec::new())
     };
     context.instructions = fresh.instructions;
     context.instruction_stamps.clear();
@@ -1175,6 +1253,60 @@ pub fn ensure_membership_context(
         .artifacts()
         .settle_host_bytes(runtime.store().as_ref(), &staged, committed.is_ok());
     committed
+}
+
+fn handoff_fact_messages(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    after: i64,
+    sequence: i64,
+) -> Result<Vec<Message>, StorageError> {
+    let facts = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+        let mut position = after;
+        let mut facts = Vec::new();
+        while position < sequence {
+            if position - after >= 10_000 {
+                return Err(StorageError::InvalidRecord(
+                    "handoff transcript exceeds scan bound".into(),
+                ));
+            }
+            let page = read.sessions().entries(session_id, position, 500)?;
+            if page.is_empty() {
+                return Err(StorageError::InvalidRecord("handoff transcript gap".into()));
+            }
+            for entry in page {
+                if entry.sequence != position + 1 || entry.sequence > sequence {
+                    return Err(StorageError::InvalidRecord("handoff transcript gap".into()));
+                }
+                position = entry.sequence;
+                let body: TranscriptBody =
+                    serde_json::from_value(entry.body).map_err(|_| StorageError::ScopeDenied)?;
+                if !matches!(
+                    body,
+                    TranscriptBody::UserMessage { .. }
+                        | TranscriptBody::HostNotice { .. }
+                        | TranscriptBody::OperationUpdate { .. }
+                ) {
+                    return Err(StorageError::ScopeDenied);
+                }
+                facts.push(body);
+            }
+        }
+        Ok(facts)
+    })?;
+    facts
+        .into_iter()
+        .map(|fact| {
+            crate::tool_turn::context_fact_message(
+                runtime.store().as_ref(),
+                runtime.artifacts(),
+                ctx,
+                session_id,
+                fact,
+            )
+        })
+        .collect()
 }
 
 /// Publish a materialized assignment's first bound prompt after the current route resolves.

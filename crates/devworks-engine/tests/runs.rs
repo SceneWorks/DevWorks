@@ -1701,6 +1701,32 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             )
             .unwrap();
         assert_eq!(converted_context.parameters.max_output_tokens, None);
+        let append_context = context.clone();
+        let append_session = session.id.clone();
+        fx.tx(move |_, tx| {
+            use devworks_core::services::sessions::{
+                transcript::{BatchOutcome, SessionBatch, SessionWriter},
+                turn,
+            };
+            let session = tx.sessions().session(&append_session)?.unwrap();
+            let batch = turn::batch_of(
+                &append_session,
+                tx.new_id(devworks_core::ports::IdKind::TranscriptBatch),
+                session.context_epoch,
+                session.next_sequence,
+                vec![devworks_core::protocol::provider::TranscriptBody::UserMessage {
+                    content: vec![devworks_core::protocol::provider::UserContent::Text {
+                        text: "Preserve this unissued handoff fact".into(),
+                    }],
+                }],
+                || tx.new_id(devworks_core::ports::IdKind::TranscriptEntry),
+            );
+            assert!(matches!(
+                SessionWriter::append_in(tx, &append_context, &SessionBatch::entries(batch))?,
+                BatchOutcome::Accepted(_)
+            ));
+            Ok(())
+        });
         // A membership handoff commits the new root and epoch before a destination agent
         // resumes. The storage transition is exercised by allocations/handoff.rs; here the
         // provider recovery path starts from that committed shape.
@@ -1754,8 +1780,18 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             .0;
         let moved_prompt: devworks_core::providers::context::ProviderContext =
             serde_json::from_slice(&moved_bytes).unwrap();
+        devworks_engine::agent_turns::ensure_membership_context(&app, &moved_context, &moved_agent)
+            .unwrap();
+        let (same_head, _, _) = app
+            .recover_native_context_head(&moved_context, &session.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(same_head.version_id, moved_head.version_id);
         assert!(moved_prompt.messages.iter().any(|message| message.content.iter().any(|part| {
             matches!(part, devworks_core::providers::context::ContentBlock::Text { text, .. } if text.contains("moved to root root-f"))
+        })));
+        assert!(moved_prompt.messages.iter().any(|message| message.content.iter().any(|part| {
+            matches!(part, devworks_core::providers::context::ContentBlock::Text { text, .. } if text == "Preserve this unissued handoff fact")
         })));
         app.shutdown().await;
     });
@@ -2307,6 +2343,53 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
         send(None, None, Some(other_session.id)),
         Err(StorageError::ScopeDenied)
     ));
+    // A secondary delegated task can move independently of this worker's primary task.
+    // Its old assignment-context ID must no longer receive or inherit task messages.
+    rusqlite::Connection::open(fx.h.root.join("workspace.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE work_items SET parent_feature_id='root-g' WHERE id='task-f2'",
+            [],
+        )
+        .unwrap();
+    let human = fx.user.clone();
+    let stale = fx.tx(move |_, tx| {
+        devworks_core::services::agents::retained::post_message(
+            tx,
+            &human,
+            &devworks_core::services::agents::retained::PostSpec {
+                project: ProjectId(id("project-a")),
+                body: "Moved secondary task".into(),
+                kind: devworks_core::services::agents::retained::MessageKind::Question,
+                item: Some(rid("task-f2")),
+                feature: None,
+                resource: None,
+                to_session: None,
+                to_human: false,
+                blocking: false,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )
+    });
+    assert_eq!(stale.recipients, 0);
+    let child_id = child.assignment_id.clone();
+    assert_eq!(
+        fx.tx(move |_, tx| {
+            devworks_core::services::agents::retained::handover_item(tx, &child_id)
+        }),
+        0
+    );
+    assert!(
+        read(&*fx.store, |snapshot| snapshot
+            .runs()
+            .agent_session_delivery(
+                &stale.message.id,
+                &assignment.session_id
+            ))
+        .is_none()
+    );
 }
 
 #[test]

@@ -406,7 +406,28 @@ pub(super) fn delegated_item_ids(
     if !tasks.contains(&assignment.work_id.0) {
         return Ok(Vec::new());
     }
-    Ok(tasks.into_iter().map(RootId).collect())
+    let root = tx
+        .sessions()
+        .work_root(&assignment.root_id)?
+        .ok_or(StorageError::ScopeDenied)?;
+    let mut current = Vec::new();
+    for task in tasks {
+        let id = RootId(task);
+        let Some(work) = tx.sessions().work_root(&id)? else {
+            continue;
+        };
+        if work.project_id == root.project_id
+            && work.kind != "feature"
+            && (if root.kind == "feature" {
+                work.parent_feature_id.as_ref() == Some(&root.id)
+            } else {
+                work.id == root.id
+            })
+        {
+            current.push(id);
+        }
+    }
+    Ok(current)
 }
 
 pub fn handover_item(
