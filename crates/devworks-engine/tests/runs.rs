@@ -2026,6 +2026,7 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
     assert!(!read(&*fx.store, |s| s
         .runs()
         .open_blocking_question(&rid("task-f3"))));
+    let cross_root_agent = child_agent_for_post.clone();
     fx.tx(move |_, tx| {
         devworks_core::services::agents::retained::post_message(
             tx,
@@ -2060,6 +2061,66 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
             && matches!(&c.subject, devworks_core::protocol::Subject::Root(id) if id == &rid("task-f2"))
     }));
     assert!(!eligibility.eligible);
+
+    applied(&fx.start(&fx.user, "root-g", 1, 1));
+    let other_activation = fx.launch("other-root-runner");
+    let host = principal(&*fx.store, "other-root-host", PrincipalKind::Host);
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let execution = other_activation.id.clone();
+    let other_primary = fx.tx(move |_, tx| {
+        agents
+            .materialize_primary(tx, &host, &execution, other_activation.owner_epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("primary: {error:?}")))
+    });
+    let other_session = read(&*fx.store, |snapshot| {
+        let assignment = snapshot
+            .runs()
+            .assignment(&other_primary.assignment_id)?
+            .unwrap();
+        snapshot.sessions().session(&assignment.session_id)
+    })
+    .unwrap();
+    let send = |feature: Option<RootId>, resource: Option<String>, to_session: Option<Id>| {
+        let sender = cross_root_agent.clone();
+        write(&*fx.store, move |tx| {
+            devworks_core::services::agents::retained::post_message(
+                tx,
+                &sender,
+                &devworks_core::services::agents::retained::PostSpec {
+                    project: ProjectId(id("project-a")),
+                    body: "Child scoped message".into(),
+                    kind: devworks_core::services::agents::retained::MessageKind::Info,
+                    item: None,
+                    feature,
+                    resource,
+                    to_session,
+                    to_human: false,
+                    blocking: false,
+                    in_reply_to: None,
+                    resolves: None,
+                    idempotency_key: None,
+                },
+            )
+        })
+    };
+    let broad = send(None, None, None).unwrap();
+    let resource = send(None, Some("shared-name".into()), None).unwrap();
+    assert_eq!(broad.recipients, 1);
+    assert_eq!(resource.recipients, 1);
+    for message in [&broad.message.id, &resource.message.id] {
+        assert!(read(&*fx.store, |snapshot| {
+            snapshot.runs().agent_session_delivery(message, &other_session.id)
+        })
+        .is_none());
+    }
+    assert!(matches!(
+        send(Some(rid("root-g")), None, None),
+        Err(StorageError::ScopeDenied)
+    ));
+    assert!(matches!(
+        send(None, None, Some(other_session.id)),
+        Err(StorageError::ScopeDenied)
+    ));
 }
 
 #[test]

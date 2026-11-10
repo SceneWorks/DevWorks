@@ -405,10 +405,10 @@ pub fn reconcile_project(
             changed += 1;
         }
     }
-    changed += acquire_destination_slots(tx, control, project)?;
+    changed += release_destination_capacity_holds(tx, control, project)?;
     Ok(changed)
 }
-fn acquire_destination_slots(
+fn release_destination_capacity_holds(
     tx: &mut dyn WriteTransaction,
     control: &ControlService,
     project: &ProjectId,
@@ -482,11 +482,16 @@ fn acquire_destination_slots(
                 {
                     continue;
                 }
-                let mut active = assignment.clone();
-                active.state = AssignmentState::Active;
-                active.slot_held = true;
-                active.revision += 1;
-                tx.runs().update_assignment(&active, assignment.revision)?;
+                if assignment.purpose != crate::ports::storage::AssignmentPurpose::Child {
+                    // Legacy primary worker assignments are resumed by their existing
+                    // coordinator path rather than the child supervisor.
+                    let mut active = assignment.clone();
+                    active.state = AssignmentState::Active;
+                    active.slot_held = true;
+                    active.revision += 1;
+                    tx.runs().update_assignment(&active, assignment.revision)?;
+                }
+                // A Child must remain Waiting until the destination supervisor launches it.
                 for hold in holds {
                     clear_blocker(
                         tx,

@@ -14,6 +14,9 @@ struct MovedWorker {
 }
 impl MovedWorker {
     fn new() -> Self {
+        Self::new_with_child(false)
+    }
+    fn new_with_child(child: bool) -> Self {
         let f = Fx::new();
         for name in ["feature-a", "feature-b"] {
             f.seed(name, None, "feature", 1);
@@ -95,19 +98,19 @@ impl MovedWorker {
                         },
                     )?
                     .unwrap();
-                let worker = service
-                    .register_assignment(
-                        tx,
-                        &actor,
-                        NewRunAssignment {
-                            root: RootId(id("feature-a")),
-                            work: RootId(id("moving")),
-                            parent: Some(coordinator_a.id),
-                            session: sid.clone(),
-                            scope_key: Some("E1".into()),
-                        },
-                    )?
-                    .unwrap();
+                let request = NewRunAssignment {
+                    root: RootId(id("feature-a")),
+                    work: RootId(id("moving")),
+                    parent: Some(coordinator_a.id),
+                    session: sid.clone(),
+                    scope_key: Some("E1".into()),
+                };
+                let worker = if child {
+                    service.register_child_assignment(tx, &actor, request)?
+                } else {
+                    service.register_assignment(tx, &actor, request)?
+                }
+                .unwrap();
                 let worker = service
                     .set_assignment_state(
                         tx,
@@ -184,6 +187,19 @@ impl MovedWorker {
         })
         .unwrap()
     }
+}
+
+#[test]
+fn transferred_child_remains_schedulable_until_destination_launch() {
+    let m = MovedWorker::new_with_child(true);
+    m.change(Some("feature-b"));
+    m.settle();
+    m.reconcile();
+    let moved = m.assignment();
+    assert_eq!(moved.root_id, RootId(id("feature-b")));
+    assert_eq!(moved.execution_id, Some(m.activation_b.id));
+    assert_eq!(moved.state, AssignmentState::Waiting);
+    assert!(!moved.slot_held);
 }
 
 #[test]

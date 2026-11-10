@@ -160,6 +160,11 @@ fn recipients(
     }
     let mut selected = Vec::new();
     for (session, assignment) in project_sessions(tx, &spec.project)? {
+        if ctx.principal_kind() == PrincipalKind::Agent
+            && ctx.root_id() != Some(&assignment.root_id)
+        {
+            continue;
+        }
         if let Some(feature) = feature {
             let Some(work) = tx.sessions().work_root(&assignment.work_id)? else {
                 continue;
@@ -376,6 +381,17 @@ pub fn post_message(
         if session_project(tx, &session)?.as_ref() != Some(&spec.project) {
             return Err(StorageError::ScopeDenied);
         }
+        if ctx.principal_kind() == PrincipalKind::Agent && ctx.root_id() != session.root_id.as_ref()
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+    }
+    if ctx.principal_kind() == PrincipalKind::Agent
+        && feature
+            .as_ref()
+            .is_some_and(|target| ctx.root_id() != Some(target))
+    {
+        return Err(StorageError::ScopeDenied);
     }
     let channel = if to_human {
         "Human"
