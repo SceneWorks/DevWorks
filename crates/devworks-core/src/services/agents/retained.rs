@@ -495,6 +495,16 @@ pub fn handover_direct(
     }
     let project = post::session_project(tx, &session)?.ok_or(StorageError::ScopeDenied)?;
     let repositories = tx.sessions().session_repository_scope(session_id)?;
+    let primary_sessions: HashSet<Id> = match &session.root_id {
+        Some(root) => crate::services::runs::root_assignments(tx.runs(), root, false)?
+            .into_iter()
+            .filter(|assignment| {
+                assignment.purpose == crate::ports::storage::AssignmentPurpose::Primary
+            })
+            .map(|assignment| assignment.session_id)
+            .collect(),
+        None => HashSet::new(),
+    };
     let now = tx.now_ms();
     let retention_start = now.saturating_sub(DIRECT_RETENTION_MS);
     let stale_before = now.saturating_sub(SILENT_SESSION_MS);
@@ -535,6 +545,18 @@ pub fn handover_direct(
             if post::session_project(tx, &holder)?.as_ref() != Some(&project)
                 || post::session_project(tx, &original)?.as_ref() != Some(&project)
                 || tx.sessions().session_repository_scope(original_id)? != repositories
+            {
+                continue;
+            }
+            // Repository equality is an audience constraint, not proof of succession. A
+            // continuing conversation or a new primary coordinator of the same root is the
+            // only lineage this store can verify; a delegated child has neither identity.
+            if session.root_id.is_none()
+                || session.root_id != original.root_id
+                || !((session.conversation_id == original.conversation_id
+                    && session.agent_id == original.agent_id)
+                    || (primary_sessions.contains(session_id)
+                        && primary_sessions.contains(original_id)))
             {
                 continue;
             }

@@ -726,6 +726,25 @@ impl AgentService {
                 Some(input.role_id.clone()),
             )
         })?;
+        let parent_context = tx
+            .runs()
+            .agent_assignment_context(&parent)?
+            .ok_or_else(denied)?;
+        let parent_role = AgentRole::parse(parent_context.role_id.as_str()).ok_or_else(denied)?;
+        let allowed = matches!(role, AgentRole::Worker | AgentRole::CodeReviewer)
+            && matches!(
+                parent_role,
+                AgentRole::FeatureCoordinator | AgentRole::IssueCoordinator | AgentRole::Worker
+            );
+        if !allowed {
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "role_id",
+                Some(input.role_id.clone()),
+            )
+            .into());
+        }
+        let role_id = crate::protocol::Id::new(role.as_str()).map_err(|_| denied())?;
         if input.instruction.0.trim().is_empty() {
             return Err(Refusal::new(DomainErrorCode::InvalidArgument, "instruction", None).into());
         }
@@ -818,7 +837,7 @@ impl AgentService {
             .map_err(fenced)?;
         tx.runs().insert_agent_assignment_context(&StoredAgentAssignmentContext {
             assignment_id:assignment.id.clone(),project_id:root.project_id,
-            role_id:input.role_id.clone(),role_instructions:instructions.text,
+            role_id,role_instructions:instructions.text,
             role_revisions:serde_json::json!({"workspace":instructions.revisions.workspace,"project":instructions.revisions.project}),
             brief:input.instruction.0.clone(),
             task_ids:serde_json::to_value(&input.task_ids.0).map_err(|_|StorageError::InvalidRecord("task references".into()))?,
@@ -1150,9 +1169,16 @@ fn retained_events(
     )?;
     let mut items = Vec::with_capacity(page.items.len());
     for event in page.items {
-        let message = snapshot
-            .runs()
-            .agent_message(&event.message_id)?
+        let row = snapshot.runs().agent_message(&event.message_id)?;
+        if row.as_ref().is_some_and(|row| {
+            !matches!(
+                row.message_class.as_str(),
+                "Info" | "Question" | "Request" | "Blocker" | "Announcement"
+            )
+        }) {
+            continue;
+        }
+        let message = row
             .map(|row| retained_message(snapshot.actors(), row))
             .transpose()?;
         let actor_session = match event.kind.as_str() {

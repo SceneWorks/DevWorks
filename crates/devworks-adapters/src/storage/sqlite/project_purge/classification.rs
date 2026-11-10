@@ -47,6 +47,10 @@ const PROVIDER_CONTEXT_EXTENSION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/architecture/validation/project-purge/schema46-extension.json"
 ));
+const MESSAGE_HEAD_EXTENSION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/architecture/validation/project-purge/schema47-extension.json"
+));
 pub(super) type Key = (String, String);
 fn invalid() -> StorageError {
     StorageError::IncompatibleSchema("unmapped project purge ownership policy".into())
@@ -119,7 +123,13 @@ fn policies(conn: &Connection) -> Result<BTreeMap<String, (String, String)>, Sto
         serde_json::from_str(ASSIGNMENT_CONTEXT_EXTENSION).map_err(|_| invalid())?;
     let provider_context_extension: Value =
         serde_json::from_str(PROVIDER_CONTEXT_EXTENSION).map_err(|_| invalid())?;
-    for extension in [&assignment_context_extension, &provider_context_extension] {
+    let message_head_extension: Value =
+        serde_json::from_str(MESSAGE_HEAD_EXTENSION).map_err(|_| invalid())?;
+    for extension in [
+        &assignment_context_extension,
+        &provider_context_extension,
+        &message_head_extension,
+    ] {
         for row in extension["additionalTables"]
             .as_array()
             .ok_or_else(invalid)?

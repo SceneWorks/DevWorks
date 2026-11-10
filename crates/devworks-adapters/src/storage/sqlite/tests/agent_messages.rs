@@ -29,14 +29,14 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
     let h = Harness::new();
     drop(SqliteStore::open_with(h.config(), &through(40)).unwrap());
     h.raw().execute_batch(
-        "INSERT INTO actors VALUES('agent-a','agent','Agent'),('human-a','human','Human');
+        "INSERT INTO actors VALUES('agent-a','agent','Agent'),('agent-b','agent','Agent'),('human-a','human','Human');
          INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
          INSERT INTO repositories VALUES('repo-a','/a',1),('repo-b','/b',1);
          INSERT INTO project_repositories VALUES('project-a','repo-a'),('project-a','repo-b');
          INSERT INTO work_items VALUES('root-a','project-a','issue',NULL,NULL,NULL,'A',1,0,1,1,1,'{}'),
                                        ('root-b','project-a','issue',NULL,NULL,NULL,'B',1,0,1,1,1,'{}');
          INSERT INTO work_repositories VALUES('root-a','repo-a'),('root-b','repo-b');
-         INSERT INTO conversations VALUES('conv-a','root-a',0),('conv-b','root-b',0);
+         INSERT INTO conversations VALUES('conv-a','root-a',0),('conv-b','root-b',0),('conv-c','root-a',0);
          INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
            VALUES('session-old','conv-a','agent-a','root-a',0,1,'project-a',1700000000000);"
     ).unwrap();
@@ -81,6 +81,33 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
             Revision::new(1).unwrap(),
         )
         .with_session(id("session-old"));
+    let cross_root =
+        agent
+            .clone()
+            .with_lineage(Some(project("project-a")), Some(RootId(id("root-a"))), None);
+    run_write(&s, WriteOptions::default(), move |tx| {
+        let result = post_message(
+            tx,
+            &cross_root,
+            &PostSpec {
+                project: project("project-a"),
+                body: "Block unrelated work".into(),
+                kind: MessageKind::Question,
+                item: Some(RootId(id("root-b"))),
+                feature: None,
+                resource: None,
+                to_session: None,
+                to_human: true,
+                blocking: true,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        );
+        assert!(matches!(result, Err(StorageError::ScopeDenied)));
+        Ok(())
+    })
+    .unwrap();
     run_write(&s, WriteOptions::default(), move |tx| {
         acknowledge(
             tx,
@@ -97,7 +124,8 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
         r#"UPDATE sessions SET closed_at=1700000000000,closed_by='human-a' WHERE id='session-old';
          INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at,repository_ids_json)
            VALUES('session-other','conv-b','agent-a','root-b',0,1,'project-a',1700000000000,'["repo-b"]'),
-                 ('session-next','conv-a','agent-a','root-a',0,1,'project-a',1700000000000,'["repo-a"]');"#
+                 ('session-next','conv-a','agent-a','root-a',0,1,'project-a',1700000000000,'["repo-a"]'),
+                 ('session-unrelated','conv-c','agent-b','root-a',0,1,'project-a',1700000000000,'["repo-a"]');"#
     ).unwrap();
     h.raw()
         .execute_batch(
@@ -117,6 +145,7 @@ fn itemless_direct_messages_pass_once_to_same_repository_successor() {
             vec![id("repo-a")]
         );
         assert_eq!(handover_direct(tx, &id("session-other"))?, 0);
+        assert_eq!(handover_direct(tx, &id("session-unrelated"))?, 0);
         assert_eq!(handover_direct(tx, &id("session-next"))?, 1);
         assert_eq!(handover_direct(tx, &id("session-next"))?, 0);
         let original = tx
@@ -319,6 +348,9 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             tx.runs().insert_agent_assignment_context(&foreign),
             Err(StorageError::ScopeDenied)
         ));
+        foreign.project_id = project("project-a");
+        foreign.role_id = id("issueCoordinator");
+        tx.runs().insert_agent_assignment_context(&foreign)?;
         Ok(())
     })
     .unwrap();
