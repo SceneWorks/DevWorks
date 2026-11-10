@@ -341,6 +341,7 @@ fn agent_assignment_scope(
             | OperationInput::Approvals(_)
             | OperationInput::Git(git::Input::Commit(_) | git::Input::PullRequest(_))
             | OperationInput::Browser(browser::Input::Navigate(_) | browser::Input::Upload(_))
+            | OperationInput::Sessions(sessions::Input::AppendMessage(_))
     ) && assignment.is_none()
     {
         return Ok(());
