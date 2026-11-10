@@ -23,7 +23,7 @@ fn call(ordinal: u8, text: &str) -> SamplingCall {
     }
 }
 
-fn pin(revision: i64) -> StoredPin {
+fn pin(profile: &str, revision: i64) -> StoredPin {
     StoredPin {
         session_id: id("agent-session"),
         pin_id: id("agent-pin"),
@@ -31,7 +31,7 @@ fn pin(revision: i64) -> StoredPin {
         model_id: id("model"),
         connection_id: id("connection"),
         upstream_model_id: Some("fixture-model".into()),
-        endpoint_profile: Some("CompatibleChat".into()),
+        endpoint_profile: Some(profile.into()),
         identity_origin: "Resolved".into(),
         intent: serde_json::to_string(&devworks_core::protocol::records::RouteIntent::Model {
             model_id: id("model"),
@@ -52,6 +52,7 @@ pub(super) fn agent_session(f: &Fx) -> (InvocationContext, i64) {
     let agent = principal(f.store.as_ref(), "sampling-agent", PrincipalKind::Agent)
         .with_session(id("agent-session"));
     let head = f.bytes(b"{\"published\":\"head\"}");
+    let profile = f.profile.clone();
     let revision = write(f.store.as_ref(), move |tx| {
         let binding = bind_principal(
             tx,
@@ -83,7 +84,7 @@ pub(super) fn agent_session(f: &Fx) -> (InvocationContext, i64) {
             next_sequence: 1,
             checkpoint_sequence: 0,
         })?;
-        tx.router().put_session_pin(&pin(1), None)?;
+        tx.router().put_session_pin(&pin(&profile, 1), None)?;
         tx.sessions().put_provider_context_head(
             &StoredProviderContextHead {
                 session_id: id("agent-session"),
@@ -250,7 +251,8 @@ fn sampling_runs_in_the_agent_session_as_mcp_usage_without_transcript_or_head_ch
         // A pin change after planning is refused at admission, before transport.
         let planned = sampling.plan(&grant, &call(2, "Second")).unwrap();
         write(f.store.as_ref(), |tx| {
-            tx.router().put_session_pin(&pin(2), Some(1))?;
+            tx.router()
+                .put_session_pin(&pin("CompatibleChat", 2), Some(1))?;
             Ok(())
         })
         .unwrap();
@@ -358,6 +360,35 @@ fn sampling_with_changed_authority_or_an_unroutable_pin_is_refused_before_transp
             sampling.sample(&grant, &call(3, "Unrouted"), None).await,
             Err(SamplingRefusal::Failed(_))
         ));
+        assert_eq!(requests(&f), 0);
+    });
+}
+
+#[test]
+fn sampling_is_refused_before_transport_on_a_profile_that_cannot_enforce_max_tokens() {
+    runtime().block_on(async {
+        let f = Fx::new("CodexSubscriptionResponses", Script::sse(WIRE), false);
+        let grant = agent_call(&f);
+        let router = Arc::new(InferenceRouter::new(
+            f.h.ids.clone(),
+            f.h.clock(),
+            f.connections.clone(),
+        ));
+        let sampling = McpSampling::new(
+            f.store.clone(),
+            f.artifacts.clone(),
+            f.driver.clone(),
+            router,
+        );
+        assert_eq!(
+            sampling
+                .sample(&grant, &call(1, "Bounded"), None)
+                .await
+                .err(),
+            Some(SamplingRefusal::Failed(
+                "the routed model cannot enforce maxTokens"
+            ))
+        );
         assert_eq!(requests(&f), 0);
     });
 }

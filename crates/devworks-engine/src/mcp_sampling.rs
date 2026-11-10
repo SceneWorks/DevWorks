@@ -175,6 +175,11 @@ impl McpSampling {
             }) else {
                 return Ok(Err("the calling session's routed model is unavailable"));
             };
+            // The subscription Responses endpoint accepts no output limit, so it could exceed
+            // the requested maxTokens and the attempt's reservation.
+            if route.endpoint_profile == "CodexSubscriptionResponses" {
+                return Ok(Err("the routed model cannot enforce maxTokens"));
+            }
             let model = read
                 .router()
                 .route_model(&route.model_id)?
@@ -271,7 +276,6 @@ impl McpSampling {
             });
         let material = context_material(
             call,
-            &route.query.endpoint_profile,
             qualified.is_some_and(|caps| caps.sampling.supported()),
             qualified.is_some_and(|caps| caps.stop.supported()),
         );
@@ -396,7 +400,7 @@ impl McpSampling {
         let Some(source) = source else {
             return false;
         };
-        let fresh = context_material(call, "", false, false);
+        let fresh = context_material(call, false, false);
         self.artifacts
             .read_exact(self.store.as_ref(), &grant.context, source, 8 * 1024 * 1024)
             .ok()
@@ -464,12 +468,7 @@ struct Route {
     account_revision: i64,
 }
 
-fn context_material(
-    call: &SamplingCall,
-    profile: &str,
-    temperature: bool,
-    stop: bool,
-) -> ProviderContext {
+fn context_material(call: &SamplingCall, temperature: bool, stop: bool) -> ProviderContext {
     let mut instructions = vec![TextBlock {
         text: INSTRUCTIONS.into(),
         cache: None,
@@ -501,9 +500,7 @@ fn context_material(
             .collect(),
         parameters: GenerationParameters {
             temperature: call.temperature.filter(|_| temperature),
-            // The subscription Responses profile has no output token parameter; the attempt's
-            // reserved headroom still bounds accounting.
-            max_output_tokens: (profile != "CodexSubscriptionResponses").then_some(call.max_tokens),
+            max_output_tokens: Some(call.max_tokens),
             stop: (stop && !call.stop_sequences.is_empty()).then(|| call.stop_sequences.clone()),
             ..Default::default()
         },
