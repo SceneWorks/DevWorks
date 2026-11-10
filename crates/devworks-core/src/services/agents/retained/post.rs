@@ -169,6 +169,7 @@ fn recipients(
             }
         } else if let Some(item) = item
             && assignment.work_id != *item
+            && !super::delegated_item_ids(tx, &assignment)?.contains(item)
         {
             continue;
         }

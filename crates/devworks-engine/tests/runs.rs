@@ -1685,7 +1685,7 @@ fn agent_launcher_runs_a_ready_child_under_the_same_activation() {
 }
 
 #[test]
-fn feature_delegate_binds_single_task_as_child_work_scope() {
+fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-f", 1, 1));
@@ -1721,6 +1721,28 @@ fn feature_delegate_binds_single_task_as_child_work_scope() {
         )
     });
     assert_eq!(pending.recipients, 0);
+    let human = fx.user.clone();
+    let pending_second = fx.tx(move |_, tx| {
+        devworks_core::services::agents::retained::post_message(
+            tx,
+            &human,
+            &devworks_core::services::agents::retained::PostSpec {
+                project: ProjectId(id("project-a")),
+                body: "Review the second task boundary".into(),
+                kind: devworks_core::services::agents::retained::MessageKind::Question,
+                item: Some(rid("task-f2")),
+                feature: None,
+                resource: None,
+                to_session: None,
+                to_human: false,
+                blocking: false,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )
+    });
+    assert_eq!(pending_second.recipients, 0);
     let session = read(&*fx.store, |snapshot| {
         let assignment = snapshot.runs().assignment(&primary.assignment_id)?.unwrap();
         snapshot.sessions().session(&assignment.session_id)
@@ -1745,7 +1767,7 @@ fn feature_delegate_binds_single_task_as_child_work_scope() {
     let request = devworks_core::operations::agents::DelegateInput {
         root_id: rid("root-f"),
         expected_control_revision: Revision::new(fx.control("root-f").revision).unwrap(),
-        task_ids: devworks_core::protocol::support::BoundedList(vec![id("task-f1")]),
+        task_ids: devworks_core::protocol::support::BoundedList(vec![id("task-f1"), id("task-f2")]),
         role_id: id("worker"),
         instruction: devworks_core::protocol::support::BoundedText("Implement task F1".into()),
         source_checkpoint_id: None,
@@ -1770,6 +1792,13 @@ fn feature_delegate_binds_single_task_as_child_work_scope() {
     })
     .unwrap();
     assert!(delivery.handed_over);
+    let second_delivery = read(&*fx.store, |snapshot| {
+        snapshot
+            .runs()
+            .agent_session_delivery(&pending_second.message.id, &assignment.session_id)
+    })
+    .unwrap();
+    assert!(second_delivery.handed_over);
     let human = fx.user.clone();
     let sibling = fx.tx(move |_, tx| {
         devworks_core::services::agents::retained::post_message(
@@ -1779,7 +1808,7 @@ fn feature_delegate_binds_single_task_as_child_work_scope() {
                 project: ProjectId(id("project-a")),
                 body: "Private sibling task question".into(),
                 kind: devworks_core::services::agents::retained::MessageKind::Question,
-                item: Some(rid("task-f2")),
+                item: Some(rid("task-f3")),
                 feature: None,
                 resource: None,
                 to_session: None,
@@ -1809,13 +1838,13 @@ fn feature_delegate_binds_single_task_as_child_work_scope() {
         .with_lineage(
             Some(ProjectId(id("project-a"))),
             Some(rid("root-f")),
-            Some(child.assignment_id),
+            Some(child.assignment_id.clone()),
         )
-        .with_activation(activation.id, epoch);
+        .with_activation(activation.id.clone(), epoch);
     let sibling_request = devworks_core::operations::agents::DelegateInput {
         root_id: rid("root-f"),
         expected_control_revision: Revision::new(fx.control("root-f").revision).unwrap(),
-        task_ids: devworks_core::protocol::support::BoundedList(vec![id("task-f2")]),
+        task_ids: devworks_core::protocol::support::BoundedList(vec![id("task-f3")]),
         role_id: id("worker"),
         instruction: devworks_core::protocol::support::BoundedText("Read sibling task".into()),
         source_checkpoint_id: None,
@@ -1832,6 +1861,46 @@ fn feature_delegate_binds_single_task_as_child_work_scope() {
     let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
     assert!(fx.tx(move |_, tx| Ok(agents.delegate(tx, &child_agent, &sibling_request).is_err())));
     assert_eq!(fx.inspection("root-f").assignments.len(), 2);
+    let host = principal(&*fx.store, "child-host", PrincipalKind::Host);
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let child_id = child.assignment_id.clone();
+    let activation_id = activation.id.clone();
+    fx.tx(move |_, tx| {
+        agents
+            .activate_child(tx, &host, &child_id, &activation_id, epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("activate child: {error:?}")))?
+            .map_err(|error| StorageError::InvalidRecord(format!("activate child: {error:?}")))
+    });
+    let human = fx.user.clone();
+    let live_second = fx.tx(move |_, tx| {
+        devworks_core::services::agents::retained::post_message(
+            tx,
+            &human,
+            &devworks_core::services::agents::retained::PostSpec {
+                project: ProjectId(id("project-a")),
+                body: "New second task question".into(),
+                kind: devworks_core::services::agents::retained::MessageKind::Question,
+                item: Some(rid("task-f2")),
+                feature: None,
+                resource: None,
+                to_session: None,
+                to_human: false,
+                blocking: false,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )
+    });
+    assert_eq!(live_second.recipients, 1);
+    assert!(
+        read(&*fx.store, |snapshot| {
+            snapshot
+                .runs()
+                .agent_session_delivery(&live_second.message.id, &assignment.session_id)
+        })
+        .is_some()
+    );
 }
 
 struct DelegatingCoordinator {

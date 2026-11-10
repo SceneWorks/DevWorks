@@ -389,6 +389,26 @@ pub fn deliver_inbox(
 
 /// Rebinds open item questions/requests to a newly owning session without rewriting older
 /// recipients. A retry finds its existing copy and leaves the event stream unchanged.
+pub(super) fn delegated_item_ids(
+    tx: &mut dyn WriteTransaction,
+    assignment: &crate::ports::storage::StoredAssignment,
+) -> Result<Vec<RootId>, StorageError> {
+    if assignment.purpose != crate::ports::storage::AssignmentPurpose::Child
+        || assignment.work_id == assignment.root_id
+    {
+        return Ok(Vec::new());
+    }
+    let Some(context) = tx.runs().agent_assignment_context(&assignment.id)? else {
+        return Ok(Vec::new());
+    };
+    let tasks: Vec<Id> = serde_json::from_value(context.task_ids)
+        .map_err(|_| StorageError::InvalidRecord("invalid delegated task scope".into()))?;
+    if !tasks.contains(&assignment.work_id.0) {
+        return Ok(Vec::new());
+    }
+    Ok(tasks.into_iter().map(RootId).collect())
+}
+
 pub fn handover_item(
     tx: &mut dyn WriteTransaction,
     assignment_id: &AssignmentId,
@@ -400,27 +420,19 @@ pub fn handover_item(
     if !assignment.state.is_live() {
         return Err(StorageError::ScopeDenied);
     }
-    if assignment.purpose == crate::ports::storage::AssignmentPurpose::Child {
-        let scoped = assignment.work_id != assignment.root_id
-            && tx
-                .runs()
-                .agent_assignment_context(&assignment.id)?
-                .is_some_and(|context| {
-                    context.task_ids.as_array().is_some_and(|tasks| {
-                        tasks
-                            .iter()
-                            .any(|task| task.as_str() == Some(assignment.work_id.0.as_str()))
-                    })
-                });
-        if !scoped {
+    let items = if assignment.purpose == crate::ports::storage::AssignmentPurpose::Child {
+        let items = delegated_item_ids(tx, &assignment)?;
+        if items.is_empty() {
             return Ok(0);
         }
-    }
-    let item = &assignment.work_id;
+        items
+    } else {
+        vec![assignment.work_id.clone()]
+    };
     let session_id = &assignment.session_id;
     let work = tx
         .sessions()
-        .work_root(item)?
+        .work_root(&assignment.work_id)?
         .ok_or(StorageError::ScopeDenied)?;
     let session = tx
         .sessions()
@@ -441,7 +453,10 @@ pub fn handover_item(
         before = page.last().map(|message| message.id.clone());
         let page_len = page.len();
         for message in page {
-            if message.target_item_id.as_ref() != Some(item)
+            if !message
+                .target_item_id
+                .as_ref()
+                .is_some_and(|item| items.contains(item))
                 || message.target_session_id.is_some()
                 || message.state.as_deref() != Some("Open")
                 || !matches!(message.message_class.as_str(), "Question" | "Request")
