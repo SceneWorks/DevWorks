@@ -161,13 +161,33 @@ impl Ctx<'_> {
     }
     /// Active claims linking `entity` to another entity, newest first, and whether more exist.
     /// The edge filter applies in the store, before the limit.
-    fn edges(&self, entity: &Id, limit: u16) -> Result<(Vec<StoredClaim>, bool), StorageError> {
-        // One past the limit detects more rows; at the store's maximum a full page counts.
-        let probe = limit.saturating_add(1).min(MAX_ROWS);
+    /// At most `limit` edges of `entity`, the neighbors of the edges past it (up to one
+    /// frontier's worth), and whether more edges exist than were returned.
+    fn edges(
+        &self,
+        entity: &Id,
+        limit: u16,
+    ) -> Result<(Vec<StoredClaim>, Vec<Id>, bool), StorageError> {
+        // Reading past the limit names the omitted neighbors, so a bounded expansion can
+        // continue through them; at the store's maximum a full page counts as more.
+        let probe = limit.saturating_add(129).min(MAX_ROWS);
         let mut all = self.k.knowledge_entity_edges(entity, &self.keys, probe)?;
         let more = all.len() > limit as usize || all.len() >= MAX_ROWS as usize;
+        let mut omitted = Vec::new();
+        for e in all.iter().skip(limit as usize) {
+            let other = if e.subject_id == *entity {
+                e.object_id.clone()
+            } else {
+                Some(e.subject_id.clone())
+            };
+            if let Some(other) = other
+                && !omitted.contains(&other)
+            {
+                omitted.push(other);
+            }
+        }
         all.truncate(limit as usize);
-        Ok((all, more))
+        Ok((all, omitted, more))
     }
 }
 
@@ -307,6 +327,8 @@ fn select(
     }
     // Breadth-first over active edge claims from the direct seeds, bounded in candidates.
     let mut frontier: HashSet<Id> = HashSet::new();
+    // Neighbors reached only by edges past the edge bound: continuation points of their own.
+    let mut beyond: Vec<Id> = Vec::new();
     // Who discovered each traversed entity, so a bound that drops it keeps its discoverer on
     // the frontier.
     let mut parent: HashMap<Id, Id> = HashMap::new();
@@ -318,10 +340,15 @@ fn select(
             frontier.insert(at);
             continue;
         }
-        let (edges, more) = c.edges(&at, bounds.edges)?;
+        let (edges, omitted, more) = c.edges(&at, bounds.edges)?;
         if more {
             frontier.insert(at.clone());
             truncated = true;
+        }
+        for other in omitted {
+            if !beyond.contains(&other) {
+                beyond.push(other);
+            }
         }
         let mut next: Vec<Id> = edges
             .iter()
@@ -450,6 +477,12 @@ fn select(
         .filter(|id| kept.contains(id))
         .collect();
     frontier.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    // Then the omitted neighbors the selection did not reach another way.
+    for id in beyond {
+        if !kept.contains(&id) && !frontier.contains(&id) && c.entity(&id)?.is_some() {
+            frontier.push(id);
+        }
+    }
     Ok(Selection {
         entities,
         claims,
@@ -534,8 +567,9 @@ fn conflicts(
 fn chains(
     c: &Ctx<'_>,
     claims: &[(StoredClaim, KnowledgeClaim, i64)],
-) -> Result<Vec<Id>, StorageError> {
+) -> Result<(Vec<Id>, bool), StorageError> {
     let mut out: Vec<Id> = Vec::new();
+    let mut cut = false;
     for (claim, _, _) in claims {
         for backward in [true, false] {
             let mut next = if backward {
@@ -545,7 +579,12 @@ fn chains(
             };
             let mut steps = 0;
             while let Some(id) = next.take() {
-                if steps >= MAX_CHAIN || out.contains(&id) || id == claim.id {
+                if steps >= MAX_CHAIN {
+                    // Visible links remain past the step bound.
+                    cut |= c.claim(&id)?.is_some();
+                    break;
+                }
+                if out.contains(&id) || id == claim.id {
                     break;
                 }
                 let Some(found) = c.claim(&id)? else { break };
@@ -559,7 +598,7 @@ fn chains(
             }
         }
     }
-    Ok(out)
+    Ok((out, cut))
 }
 
 /// The bundle of a selection, with the request's optional parts.
@@ -578,7 +617,9 @@ fn bundle(
         Vec::new()
     };
     let supersession = if q.include_supersession_chain {
-        chains(c, &s.claims)?
+        let (found, cut) = chains(c, &s.claims)?;
+        truncated |= cut;
+        found
     } else {
         Vec::new()
     };
@@ -1068,6 +1109,7 @@ fn additions(mut s: Selection, entity_seeds: &[Id], claim_seeds: &[Id], limit: u
     }
     nodes.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
     let over = nodes.len() > limit;
+    let selected: HashSet<Id> = s.entities.iter().map(|(e, _, _)| e.id.clone()).collect();
     // Additions that lose the ranking stay reachable: their entities become frontier entries.
     let ranked_out: Vec<Id> = nodes
         .iter()
@@ -1091,7 +1133,10 @@ fn additions(mut s: Selection, entity_seeds: &[Id], claim_seeds: &[Id], limit: u
         .map(|(_, x)| x)
         .collect();
     let added: HashSet<Id> = s.entities.iter().map(|(e, _, _)| e.id.clone()).collect();
-    s.frontier.retain(|id| added.contains(id));
+    // Kept: frontier entries among the additions, and neighbors past an edge bound that the
+    // selection never held (they continue the expansion).
+    s.frontier
+        .retain(|id| added.contains(id) || !selected.contains(id));
     for id in ranked_out {
         if !s.frontier.contains(&id) {
             s.frontier.push(id);
@@ -1156,7 +1201,7 @@ fn full_graph(
     let mut truncated = false;
     let per = clamp(q.neighbor_limit.get(), 1, 500) as u16;
     for e in &page {
-        let (edges, edge_more) = c.edges(&e.id, per)?;
+        let (edges, _, edge_more) = c.edges(&e.id, per)?;
         truncated |= edge_more;
         for claim in edges {
             if claim.subject_id == e.id

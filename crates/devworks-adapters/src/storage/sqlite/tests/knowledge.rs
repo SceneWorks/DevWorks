@@ -6137,3 +6137,67 @@ fn graph_reads_probe_past_seed_budgets_continue_through_omitted_edges_and_carry_
         "{got:?} vs {cited:?}"
     );
 }
+
+#[test]
+fn seeded_traversals_continue_past_their_edge_bound_and_long_chains_report_truncation() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    let edge = |o: &str| {
+        json!({"kind": "Fact", "subjectId": "a", "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let w = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [
+            {"clientId": "a", "label": "Hub A", "entityType": "service", "aliases": []},
+            {"clientId": "b", "label": "Hub B", "entityType": "service", "aliases": []},
+            {"clientId": "c", "label": "Hub C", "entityType": "service", "aliases": []}],
+        "evidence": [], "claims": [edge("b"), edge("c")]}),
+    ));
+    let [a, b, c] = [0, 1, 2].map(|i| w.entity_ids.0[i].clone());
+    // One edge per entity: the neighbor behind the other edge is on the frontier, from a seeded
+    // subgraph and from expanding the seed with the same bound.
+    for op in ["knowledge.subgraph", "knowledge.expand_frontier"] {
+        let g = q(
+            op,
+            json!({"entityIds": [a], "neighborLimit": 1, "maxDepth": 1}),
+        );
+        assert!(g.truncated, "{op}");
+        let reached: Vec<&Id> = g.entities.0.iter().map(|e| &e.id).collect();
+        let hidden = [&b, &c]
+            .into_iter()
+            .find(|x| !reached.contains(x))
+            .expect("one is omitted");
+        assert!(g.frontier.0.contains(hidden), "{op}: {:?}", g.frontier);
+    }
+    // Six predecessors, five shown: the chain says it is incomplete.
+    let mut latest = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Chained",
+        draft("Fact", "version 0"),
+    );
+    let subject = fx.claim(&user, proj("project-a"), &latest).subject_id;
+    for i in 1..=6 {
+        latest = receipt(fx.record(&user, proj("project-a"), json!({"entities": [], "evidence": [],
+            "claims": [with(draft("Fact", &format!("version {i}")), json!({"subjectId": subject, "supersedes": latest}))]})))
+            .claim_ids
+            .0[0]
+            .clone();
+    }
+    let chained = q(
+        "knowledge.subgraph",
+        json!({"claimIds": [latest], "maxDepth": 0}),
+    );
+    assert_eq!(chained.supersession_ids.0.len(), 5);
+    assert!(chained.truncated);
+}
