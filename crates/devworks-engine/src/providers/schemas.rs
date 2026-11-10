@@ -109,6 +109,9 @@ impl RegisteredSchemas {
             let effective = policy::resolve_policy(snapshot.configuration(), ctx.project_id())?;
             let mut selected = Vec::new();
             for descriptor in registry::all() {
+                if ctx.assignment_id().is_some() && descriptor.name.starts_with("indexing.") {
+                    continue;
+                }
                 for binding in descriptor.modes {
                     if self.registered(descriptor.name, binding.mode)
                         && matches!(

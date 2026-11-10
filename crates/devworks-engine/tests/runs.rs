@@ -1676,10 +1676,8 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             .recover_native_context_head(&context, &session.id)
             .unwrap()
             .unwrap();
-        let codex_binding = devworks_core::protocol::provider::NativeBinding {
-            connection_id: id("codex-connection"),
-            endpoint_profile:
-                devworks_core::protocol::provider::EndpointProfile::CodexSubscriptionResponses,
+        let smaller_binding = devworks_core::protocol::provider::NativeBinding {
+            model_id: id("smaller-model"),
             context_epoch: devworks_core::protocol::Counter::new(1).unwrap(),
             ..current_binding.clone()
         };
@@ -1689,7 +1687,7 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
                 &session.id,
                 &current_head,
                 &current_binding,
-                &codex_binding,
+                &smaller_binding,
             )
             .unwrap();
         let converted_context: devworks_core::providers::context::ProviderContext =

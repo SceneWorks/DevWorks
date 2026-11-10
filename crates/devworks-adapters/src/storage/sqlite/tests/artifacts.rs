@@ -7,6 +7,7 @@ use super::{Harness, T0};
 use crate::fs::NativeFilesystem;
 use crate::fs::artifacts::{NativeArtifactFiles, Step};
 use crate::storage::sqlite::{MIGRATION_0006_SHA256, MIGRATIONS, SqliteStore};
+use devworks_core::admission::{self, Selection};
 use devworks_core::authority::HostAuthority;
 use devworks_core::authority::destructive::BlockReason;
 use devworks_core::authority::reads::ReadRoot;
@@ -18,7 +19,9 @@ use devworks_core::ports::files::{
     ArtifactFiles, ArtifactSources, FileFault, ResolvedSource, SourceOrigin, SourceRefusal,
 };
 use devworks_core::ports::storage::*;
-use devworks_core::ports::{AuthorityPort, CommandHandler, Preparation, Prepared};
+use devworks_core::ports::{
+    AuthorityPort, AuthorityRequest, CommandHandler, Preparation, Prepared,
+};
 use devworks_core::protocol::data::{ArtifactSource, DataScope};
 use devworks_core::protocol::provider::{ArtifactRef, Digest};
 use devworks_core::protocol::records::{ArtifactReadContent, ArtifactRecord, MutationSummary};
@@ -30,6 +33,7 @@ use devworks_core::protocol::{
     ActorId, CommandReply, Counter, DomainErrorCode, DomainFault, Id, OperationState, ProjectId,
     Rejection, RetryAdvice, Revision, RootId,
 };
+use devworks_core::registry::Mode;
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::lifecycle::{
     ExportRefusal, RecoveryReport, StreamRefusal, VersionResolution, pin_for_backup, release_backup,
@@ -953,6 +957,60 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
         ))
         .code,
         DomainErrorCode::PermissionDenied
+    );
+    let coordinator = fx
+        .ctx("agent-p", PrincipalKind::Agent, Some("project-a"))
+        .with_lineage(
+            Some(project("project-a")),
+            Some(RootId(id("root-a"))),
+            Some(devworks_core::protocol::AssignmentId(id("scope-primary"))),
+        )
+        .with_session(id("scope-primary-session"))
+        .with_activation(id("scope-worker-execution"), 1);
+    let denied_scope = |ctx: &InvocationContext, operation, mode, frame: Value| {
+        let decoded =
+            admission::decode(Selection { operation, mode }, frame.to_string().as_bytes()).unwrap();
+        let request = AuthorityRequest {
+            descriptor: decoded.descriptor,
+            binding: decoded.binding,
+            effect: decoded.effect,
+            action: decoded.action,
+            input: &decoded.input,
+            fingerprint: &decoded.fingerprint,
+        };
+        assert!(matches!(
+            fx.authority().decide(ctx, &request),
+            Err(auth::Denied {
+                reason: devworks_core::authority::DenialReason::OutOfAssignmentScope,
+                ..
+            })
+        ));
+    };
+    denied_scope(
+        &coordinator,
+        "runs.redirect",
+        Mode::Command,
+        json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"cross-root-redirect",
+            "body":{"kind":"runs.redirect","rootId":"root-a","expectedControlRevision":"1",
+            "message":"Inspect attachment","attachments":[sibling.clone()]}}),
+    );
+    denied_scope(
+        &worker,
+        "indexing.runs",
+        Mode::Query,
+        json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"project-index-runs",
+            "body":{"kind":"indexing.runs","scope":{"kind":"Project","projectId":"project-a"},
+            "page":{"limit":10}}}),
+    );
+    denied_scope(
+        &worker,
+        "git.pull_request",
+        Mode::Command,
+        json!({"protocol":"1.0-draft.1","requestKey":"cross-root-pr",
+            "command":{"kind":"OpenPullRequest","repositoryId":"repo-a",
+            "headRef":"refs/heads/codex/task-a","baseRef":"refs/heads/main",
+            "expectedHead":{"format":"Sha1","hex":"0123456789abcdef0123456789abcdef01234567"},
+            "description":sibling.clone()}}),
     );
     let sessions = UseCases::new().with_sessions(Arc::new(
         devworks_core::services::sessions::SessionService::new(fx.h.ids.clone(), fx.store.clone()),

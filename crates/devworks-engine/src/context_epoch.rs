@@ -214,12 +214,9 @@ pub(crate) fn provider_change(
         previous_binding,
     )?;
     let mut context = source.context;
-    if ctx.assignment_id().is_some()
-        && next_binding.endpoint_profile
-            == devworks_core::protocol::provider::EndpointProfile::CodexSubscriptionResponses
-    {
-        // Agent bootstrap supplies this API headroom value. Codex subscription requests do
-        // not accept a max-output override when the route changes providers.
+    if ctx.assignment_id().is_some() {
+        // Agent bootstrap supplies this value for the first route. Later routes use their own
+        // response headroom, and some endpoints do not accept a max-output override at all.
         context.parameters.max_output_tokens = None;
     }
     let (converted, omitted) = context

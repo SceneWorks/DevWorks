@@ -368,12 +368,44 @@ pub fn reconcile_project(
             let current_session = tx.sessions().session(&a.session_id)?;
             let detached_child =
                 work.parent_feature_id.is_none() && a.purpose == AssignmentPurpose::Child;
-            if detached_child || current_session.as_ref().is_none_or(|s| s.closed()) {
+            let delegated: Vec<Id> = tx
+                .runs()
+                .agent_assignment_context(&a.id)?
+                .map(|context| {
+                    serde_json::from_value(context.task_ids)
+                        .map_err(|_| StorageError::InvalidRecord("assignment task scope".into()))
+                })
+                .transpose()?
+                .unwrap_or_default();
+            let mut split_scope = false;
+            for id in delegated {
+                let task = tx.work().work(&id)?;
+                if task.is_none_or(|task| {
+                    task.project_id != work.project_id
+                        || if work.parent_feature_id.is_some() {
+                            task.parent_feature_id.as_ref() != Some(&target.0)
+                        } else {
+                            task.id != target.0
+                        }
+                }) {
+                    split_scope = true;
+                    break;
+                }
+            }
+            if detached_child || split_scope || current_session.as_ref().is_none_or(|s| s.closed())
+            {
                 allocation::retire_handoff_claims(tx, &work.id, &actor)?;
                 tx.runs().retire_membership_handoff(&a.id, a.revision)?;
                 clear_handoff_hold(tx, &actor, &RootId(work.id.clone()), &a.id)?;
                 let id = EventId(tx.new_id(crate::ports::IdKind::Event));
-                tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(work.project_id.clone()),root_id:Some(target.clone()),operation_id:None,aggregate_kind:super::WORK_AGGREGATE.into(),aggregate_id:work.id.as_str().into(),aggregate_revision:work.revision,kind:"WorkerHandoffRetired".into(),payload:json!({"assignmentId":a.id.0,"sessionId":a.session_id,"fromRoot":a.root_id,"toRoot":target,"reason":if detached_child {"detached child requires a new issue coordinator"} else {"worker session closed"},"checkpointRetained":true})})?;
+                let reason = if detached_child {
+                    "detached child requires a new issue coordinator"
+                } else if split_scope {
+                    "delegated tasks cannot transfer together"
+                } else {
+                    "worker session closed"
+                };
+                tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(work.project_id.clone()),root_id:Some(target.clone()),operation_id:None,aggregate_kind:super::WORK_AGGREGATE.into(),aggregate_id:work.id.as_str().into(),aggregate_revision:work.revision,kind:"WorkerHandoffRetired".into(),payload:json!({"assignmentId":a.id.0,"sessionId":a.session_id,"fromRoot":a.root_id,"toRoot":target,"reason":reason,"checkpointRetained":true})})?;
                 changed += 1;
                 continue;
             }
