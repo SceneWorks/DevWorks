@@ -1383,6 +1383,41 @@ impl AgentTurnExecutor for ContextAwareCoordinator {
 fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
+    const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    fx.tx(|_, tx| {
+        tx.artifacts()
+            .put_blob(DIGEST, 2, "fixture", "artifacts/prestart")?;
+        tx.artifacts().insert_artifact(&StoredArtifact {
+            id: id("prestart-artifact"),
+            origin_project_id: Some(ProjectId(id("project-a"))),
+            origin_work_id: None,
+            title: "Document attached before start".into(),
+            revision: 1,
+            scope: ArtifactScope::Project(ProjectId(id("project-a"))),
+            owner: None,
+            retention: ArtifactRetention::Explicit,
+            scope_revision: 1,
+            reference_revision: 1,
+            current_version_id: None,
+            state: ArtifactState::Live,
+            created_at_ms: T0,
+            provenance: json!({}),
+        })?;
+        tx.artifacts().insert_version(&StoredVersion {
+            id: id("prestart-version"),
+            artifact_id: id("prestart-artifact"),
+            version_no: 1,
+            blob_digest: DIGEST.into(),
+            byte_count: 2,
+            blob_generation: "fixture".into(),
+            media_type: "application/json".into(),
+            created_at_ms: T0,
+            deleted_at_ms: None,
+            source: json!({}),
+        })
+    });
+    let attachment = json!({"artifactId":"prestart-artifact", "versionId":"prestart-version",
+        "sha256":DIGEST, "byteLength":"2", "mediaType":"application/json"});
     let turns = Arc::new(ContextAwareCoordinator {
         store: fx.store.clone(),
         seen: Mutex::new(Vec::new()),
@@ -1398,7 +1433,14 @@ fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
     ));
     let (supervisor, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher));
     applied(&fx.start(&fx.user, "root-i", 1, 1));
-    applied(&fx.redirect(&fx.user, "root-i", "Use the redirected layout"));
+    applied(&fx.command(
+        &fx.user,
+        "runs.redirect",
+        json!({"mode":"Command", "protocol":PROTOCOL, "requestKey":fx.key(), "body":{
+            "kind":"runs.redirect", "rootId":"root-i",
+            "expectedControlRevision":fx.control("root-i").revision.to_string(),
+            "message":"Use the redirected layout", "attachments":[attachment]}}),
+    ));
     let rt = runtime();
     rt.block_on(async {
         supervisor.tick().await.unwrap();
@@ -1421,6 +1463,14 @@ fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
         snapshot.sessions().session(&assignment.session_id)
     })
     .unwrap();
+    let links = read(&*fx.store, |snapshot| {
+        snapshot.artifacts().links(&id("prestart-artifact"))
+    });
+    assert!(links.iter().any(|link| {
+        link.version_id == id("prestart-version")
+            && link.subject == SubjectKey::session(&session.id)
+            && link.purpose == LinkPurpose::Reference
+    }));
     assert_eq!(seen[0].0, session.agent_id);
     let source = read(&*fx.store, |snapshot| {
         snapshot.runs().agent_assignment_context(&assignment.id)
@@ -1431,6 +1481,9 @@ fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
     assert!(matches!(&seen[0].2.messages[1].content[0],
         devworks_core::providers::context::ContentBlock::Text { text, .. }
         if text == "Use the redirected layout"));
+    assert!(matches!(&seen[0].2.messages[1].content[1],
+        devworks_core::providers::context::ContentBlock::Text { text, .. }
+        if text.contains("prestart-artifact")));
     let brief = &seen[0].2.messages[0].content;
     assert!(
         matches!(&brief[0], devworks_core::providers::context::ContentBlock::Text { text, .. }

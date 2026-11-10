@@ -373,6 +373,49 @@ fn primary_brief(
     .map_err(|_| StorageError::InvalidRecord("coordinator brief serialization".into()))
 }
 
+fn link_unlinked_redirect_attachments(
+    tx: &mut dyn WriteTransaction,
+    host: &InvocationContext,
+    root: &crate::protocol::RootId,
+    project: &ProjectId,
+    session: &Id,
+) -> Result<(), StorageError> {
+    let mut after = 0;
+    loop {
+        let page = tx.runs().instructions(root, after, 500)?;
+        let more = page.len() == 500;
+        for instruction in page {
+            after = instruction.seq;
+            if instruction.session_id.as_ref() == Some(session) {
+                continue;
+            }
+            let attachments: Vec<ArtifactRef> = serde_json::from_value(instruction.attachments)
+                .map_err(|_| StorageError::InvalidRecord("stored redirect attachments".into()))?;
+            for artifact in attachments {
+                if !crate::services::sessions::transcript::reference_resolves(
+                    tx,
+                    host,
+                    Some(project),
+                    &artifact,
+                )? {
+                    return Err(denied());
+                }
+                crate::services::artifacts::reference_from_host_owner(
+                    tx,
+                    host,
+                    &artifact,
+                    &crate::ports::storage::SubjectKey::session(session),
+                    Some(root.clone()),
+                )?;
+            }
+        }
+        if !more {
+            break;
+        }
+    }
+    Ok(())
+}
+
 /// One service for the agent-family gateway; composition registers only qualified operations.
 pub struct AgentService {
     ids: Arc<dyn IdSource>,
@@ -515,6 +558,9 @@ impl AgentService {
                     created_at_ms: now,
                 })?;
         }
+        // Redirects received before a coordinator existed have no transcript session link.
+        // Materialization grants their validated versions to this coordinator's session.
+        link_unlinked_redirect_attachments(tx, host, &root.id, &root.project_id, &session.id)?;
         bind_role_authority(tx, host, &session.agent_id, role, &root.project_id)?;
         let assignment = if assignment.state == AssignmentState::Active {
             assignment
