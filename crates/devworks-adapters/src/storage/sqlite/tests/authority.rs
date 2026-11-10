@@ -2268,6 +2268,9 @@ impl WriteTransaction for Lying<'_> {
     fn help(&mut self) -> &mut dyn HelpRepository {
         self.inner.help()
     }
+    fn instructions(&mut self) -> &mut dyn InstructionRepository {
+        self.inner.instructions()
+    }
     fn github(&mut self) -> &mut dyn GithubRepository {
         self.inner.github()
     }

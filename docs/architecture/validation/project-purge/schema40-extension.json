@@ -1,0 +1,20 @@
+{
+  "schema": 40,
+  "policy": "dw34-instructions-v1",
+  "additionalTables": [
+    {
+      "table": "instructions",
+      "class": "instruction_ownership",
+      "disposition": "project_owner",
+      "purpose": "Project-scoped skill and role instruction items are deleted with their project; workspace items have no project and are never candidates."
+    },
+    {
+      "table": "instruction_revisions",
+      "class": "instruction_ownership",
+      "disposition": "project_owner",
+      "purpose": "Immutable revisions of a project-scoped instruction item follow their item."
+    }
+  ],
+  "readerFloor": 38,
+  "writerFloor": 40
+}

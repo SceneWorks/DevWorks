@@ -459,6 +459,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0039_owned_containers.sql"),
         rebuilds_tables: false,
     },
+    // Prior writers cannot preserve instruction revision approval and activation invariants.
+    Migration {
+        version: 40,
+        minimum_reader: 38,
+        minimum_writer: 40,
+        sql: include_str!("migrations/0040_instructions.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

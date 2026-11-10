@@ -186,14 +186,25 @@ impl ArtifactService {
         ctx: &InvocationContext,
         reference: &ArtifactRef,
     ) -> Result<ConventionSourceLease, Failure> {
+        self.resolve_visible_upload(read, ctx, reference, "convention_upload")
+    }
+    /// A caller-supplied upload the invocation may read under ordinary artifact visibility,
+    /// bound to its exact live version and present blob.
+    pub(crate) fn resolve_visible_upload(
+        &self,
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        reference: &ArtifactRef,
+        kind: &'static str,
+    ) -> Result<ConventionSourceLease, Failure> {
         let viewer = super::Viewer::resolve(read.authority(), ctx)?;
         let artifact = read
             .artifacts()
             .artifact(&reference.artifact_id)?
             .filter(|a| a.state == ArtifactState::Live)
-            .ok_or_else(|| not_found("convention_upload", &reference.artifact_id))?;
+            .ok_or_else(|| not_found(kind, &reference.artifact_id))?;
         if !super::visible(read.artifacts(), &viewer, &artifact)? {
-            return Err(not_found("convention_upload", &reference.artifact_id).into());
+            return Err(not_found(kind, &reference.artifact_id).into());
         }
         let version = read
             .artifacts()
@@ -205,7 +216,7 @@ impl ArtifactService {
                     && v.byte_count == reference.byte_length.get()
                     && v.media_type == reference.media_type
             })
-            .ok_or_else(|| not_found("convention_upload", &reference.artifact_id))?;
+            .ok_or_else(|| not_found(kind, &reference.artifact_id))?;
         let hold = self.readers.acquire(&version.blob_digest);
         if !read
             .artifacts()
@@ -216,7 +227,7 @@ impl ArtifactService {
                     && b.byte_count == version.byte_count
             })
         {
-            return Err(not_found("convention_upload", &reference.artifact_id).into());
+            return Err(not_found(kind, &reference.artifact_id).into());
         }
         Ok(ConventionSourceLease {
             version,

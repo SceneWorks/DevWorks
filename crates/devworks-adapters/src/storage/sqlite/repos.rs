@@ -1136,6 +1136,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn help(&self) -> &dyn HelpRead {
         self
     }
+    fn instructions(&self) -> &dyn InstructionRead {
+        self
+    }
     fn github(&self) -> &dyn GithubRead {
         self
     }
@@ -1392,6 +1395,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn help(&mut self) -> &mut dyn HelpRepository {
+        self
+    }
+    fn instructions(&mut self) -> &mut dyn InstructionRepository {
         self
     }
     fn github(&mut self) -> &mut dyn GithubRepository {

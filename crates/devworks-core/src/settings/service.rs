@@ -520,6 +520,41 @@ pub fn apply_human_assignments(
     Ok(true)
 }
 
+/// Writes an activated role-instruction revision into the effective configuration of `scope`
+/// as a new settings revision. The role instruction owner decides the activation (a human save,
+/// or the replay of an exact human approval) in the same unit of work; this keeps the setting
+/// the single effective source that running agents adopt at their next safe step. Returns the
+/// new revision, or `None` when the scope already holds `text`.
+pub fn mirror_role_instructions(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    scope: &ConfigScope,
+    role: AgentRole,
+    text: &str,
+    origin: Value,
+) -> Result<Option<i64>, Failure> {
+    require_scope(&*tx.configuration(), scope)?;
+    let d = descriptor(role.instructions_key())
+        .ok_or_else(|| Refusal::new(DomainErrorCode::InvalidArgument, "setting", None))?;
+    let current = current_layer(&*tx.configuration(), scope)?;
+    let entries = [SettingAssignment {
+        key: BoundedText(d.key.to_owned()),
+        value: SchemaValue {
+            schema: d.schema_ref(),
+            value: DynamicJson(Value::String(text.to_owned())),
+        },
+    }];
+    let planned = plan_for_write(tx, &current, &entries)?;
+    let blocking: Vec<&Issue> = planned.blocking().collect();
+    if !blocking.is_empty() {
+        return Err(plan_refusal(&blocking, scope).into());
+    }
+    if !planned.differs {
+        return Ok(None);
+    }
+    Ok(Some(commit(tx, ctx, &current, &planned, origin)?.revision))
+}
+
 /// Stages a proposal for human approval, bound to the scope revision the author read. This is
 /// the transaction-scoped seam behind the approvals and roles proposal commands: it validates
 /// exactly like a save, writes nothing to the effective configuration and records the proposal

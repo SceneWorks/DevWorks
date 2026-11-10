@@ -1,0 +1,102 @@
+//! What running agents adopt at their next safe step: the effective skill set with exact
+//! revisions and digests. Only active (approved) revisions are ever part of it, so a pending or
+//! rejected proposal can never appear here; a change of the set's digest is the adoption
+//! boundary that a session records (SKILL-03, SKILL-05).
+use super::queries::skill_items;
+use super::{HARNESS_ROOT_ID, SHARED_ROOT_ID};
+use crate::fingerprint::sha256_hex;
+use crate::ports::storage::{InstructionOrigin, InstructionRead, StorageError};
+use crate::protocol::Id;
+use serde::Serialize;
+use serde_json::Value;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveSkill {
+    pub instruction_id: Id,
+    pub name: String,
+    pub root_id: &'static str,
+    pub source_path: Option<String>,
+    pub revision: i64,
+    pub content_digest: String,
+    /// The instruction text artifact (`ArtifactRef`).
+    pub content: Value,
+    /// `[{path, artifact, sha256, byteCount, script}]` resolved relative to the skill directory.
+    pub resources: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveSkills {
+    /// SHA-256 over the ordered `(name, instruction, revision, digest)` tuples.
+    pub digest: String,
+    pub skills: Vec<EffectiveSkill>,
+}
+impl EffectiveSkills {
+    /// Names whose effective revision differs from `adopted` (added, changed or removed).
+    pub fn transitions(&self, adopted: &EffectiveSkills) -> Vec<String> {
+        let mut changed: Vec<String> = Vec::new();
+        for s in &self.skills {
+            match adopted.skills.iter().find(|a| a.name == s.name) {
+                Some(a) if a.instruction_id == s.instruction_id && a.revision == s.revision => {}
+                _ => changed.push(s.name.clone()),
+            }
+        }
+        for a in &adopted.skills {
+            if !self.skills.iter().any(|s| s.name == a.name) {
+                changed.push(a.name.clone());
+            }
+        }
+        changed.sort();
+        changed.dedup();
+        changed
+    }
+}
+
+/// The current effective skill set, one per name, harness overrides first.
+pub fn effective_skills(read: &dyn InstructionRead) -> Result<EffectiveSkills, StorageError> {
+    let mut skills = Vec::new();
+    for (item, effective) in skill_items(read)? {
+        if !effective {
+            continue;
+        }
+        let Some(active) = item.active_revision else {
+            continue;
+        };
+        let Some(revision) = read.instruction_revision(&item.id, active)? else {
+            continue;
+        };
+        skills.push(EffectiveSkill {
+            instruction_id: item.id.clone(),
+            name: item.name.clone(),
+            root_id: if item.origin == InstructionOrigin::Shared {
+                SHARED_ROOT_ID
+            } else {
+                HARNESS_ROOT_ID
+            },
+            source_path: item.source_path.clone(),
+            revision: revision.revision,
+            content_digest: revision.content_digest,
+            content: revision.content,
+            resources: revision.resources,
+        });
+    }
+    let digest = sha256_hex(
+        serde_json::to_string(
+            &skills
+                .iter()
+                .map(|s| {
+                    (
+                        &s.name,
+                        s.instruction_id.as_str(),
+                        s.revision,
+                        &s.content_digest,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .expect("digest input")
+        .as_bytes(),
+    );
+    Ok(EffectiveSkills { digest, skills })
+}

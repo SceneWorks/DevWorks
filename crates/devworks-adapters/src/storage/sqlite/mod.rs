@@ -40,6 +40,7 @@ mod graph;
 mod handoff;
 mod help;
 mod indexing;
+mod instructions;
 mod jobs;
 mod knowledge;
 mod migrations;

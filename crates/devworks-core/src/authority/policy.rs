@@ -65,15 +65,19 @@ pub const NATIVE_EXECUTION: [&str; 16] = [
 ];
 
 /// Commands a non-human principal may run only with an explicit approval for the exact request:
-/// destructive project and repository-index changes (archiving fences
+/// destructive project and repository-index changes and skill/role activation (archiving fences
 /// and stops a project's work at once, deletion tombstones it, index removal drops a shared
 /// registration's index for every project). `process.request_system_install` only stages a
 /// proposal and performs no installation; its later approval is the human decision.
 /// The user's own command is its confirmation.
-pub const APPROVAL_REQUIRED: [&str; 3] = [
+pub const APPROVAL_REQUIRED: [&str; 5] = [
     "projects.archive",
     "projects.delete",
     "repositories.remove_index",
+    // Activation of a skill or role revision: agent content takes effect only by replay of an
+    // exact human approval of the proposed revision (SKILL-07, SET-05).
+    "skills.rollback",
+    "roles.rollback",
 ];
 
 /// The selectable access profiles.

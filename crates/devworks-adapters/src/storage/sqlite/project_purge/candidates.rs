@@ -207,6 +207,11 @@ pub(super) fn selection(project: &ProjectId) -> Result<Selection, StorageError> 
         "owned_containers".into(),
         Value::String("project_id=?1".into()),
     );
+    predicates.insert("instructions".into(), Value::String("project_id=?1".into()));
+    predicates.insert(
+        "instruction_revisions".into(),
+        Value::String("instruction_id IN (SELECT id FROM instructions WHERE project_id=?1)".into()),
+    );
     Ok(Selection {
         project: project.clone(),
         anchors,

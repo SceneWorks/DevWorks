@@ -291,6 +291,24 @@ pub struct RuntimeConfig {
     pub providers: Option<crate::providers::driver::ProviderComposition>,
     /// Durable notification catch-up interval; focus and committed commands also wake it.
     pub notification_interval: Duration,
+    /// File-backed skills and role instructions (`skills.*`, `roles.*`). Absent: neither family
+    /// is registered.
+    pub instructions: Option<InstructionComposition>,
+}
+
+/// The skill roots and their file access, supplied by the host.
+#[derive(Clone)]
+pub struct InstructionComposition {
+    pub source: Arc<dyn devworks_core::ports::indexing::SourceTree>,
+    pub files: Arc<dyn devworks_core::ports::skill_files::SkillFiles>,
+    pub roots: devworks_core::services::instructions::SkillRoots,
+}
+impl std::fmt::Debug for InstructionComposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstructionComposition")
+            .field("roots", &self.roots)
+            .finish_non_exhaustive()
+    }
 }
 impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
@@ -318,6 +336,7 @@ impl RuntimeConfig {
             native_notifications: None,
             providers: None,
             notification_interval: Duration::from_secs(5),
+            instructions: None,
         }
     }
 }
@@ -406,6 +425,9 @@ pub struct Runtime {
     providers: Option<Arc<crate::providers::driver::NativeProviders>>,
     embedding_probes: Option<Arc<crate::conventions::probes::ProbeRuntime>>,
     conventions: Arc<devworks_core::services::conventions::ConventionService>,
+    instructions: Option<Arc<devworks_core::services::instructions::InstructionService>>,
+    instruction_boot:
+        Option<Result<devworks_core::services::instructions::SyncReport, StorageError>>,
     schemas: Option<Arc<devworks_core::services::schemas::SchemaService>>,
     usage_task: Mutex<Option<JoinHandle<()>>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
@@ -875,6 +897,26 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .with_approval_control(runs.service.clone()),
     );
     let use_cases = use_cases.with_jobs(jobs.clone());
+    let instructions = config.instructions.clone().map(|c| {
+        Arc::new(
+            devworks_core::services::instructions::InstructionService::new(
+                store.clone(),
+                artifacts.clone(),
+                c.source,
+                c.files,
+                c.roots,
+                ids.clone(),
+                Arc::new(devworks_core::authority::HostRoles {
+                    store: store.clone(),
+                }),
+                clock.clone(),
+            ),
+        )
+    });
+    let use_cases = match &instructions {
+        Some(service) => use_cases.with_instructions(service.clone()),
+        None => use_cases,
+    };
     let approvals = Arc::new(
         ApprovalService::new(
             ids.clone(),
@@ -892,6 +934,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 Some(jobs.clone()),
             )
             .with_desktop(desktop.clone())
+            .with_instructions(instructions.clone())
             .with_control(runs.service.clone())
             .with_evidence(store.clone(), artifacts.clone()),
         )),
@@ -1329,6 +1372,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         providers,
         embedding_probes,
         conventions,
+        instruction_boot: instructions.as_ref().map(|service| service.sync()),
+        instructions,
         schemas,
         usage_task: Mutex::new(Some(usage_task)),
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
@@ -1527,6 +1572,35 @@ impl Runtime {
     }
     pub fn conventions(&self) -> &Arc<devworks_core::services::conventions::ConventionService> {
         &self.conventions
+    }
+    /// The skill and role instruction owner, when composed.
+    pub fn instructions(
+        &self,
+    ) -> Option<&Arc<devworks_core::services::instructions::InstructionService>> {
+        self.instructions.as_ref()
+    }
+    /// What the boot observation of skill directories and role settings found.
+    pub fn instruction_boot_sync(
+        &self,
+    ) -> Option<&Result<devworks_core::services::instructions::SyncReport, StorageError>> {
+        self.instruction_boot.as_ref()
+    }
+    /// The skill set a running agent adopts at its next safe step: sources are observed first,
+    /// so a saved, approved or externally changed skill is current; unapproved proposals are
+    /// never included. The caller records the returned digest and revisions in its session and
+    /// starts a new instruction context epoch when the digest differs from what it adopted.
+    pub fn effective_skills(
+        &self,
+    ) -> Result<devworks_core::services::instructions::EffectiveSkills, StorageError> {
+        let service = self.instructions.as_ref().ok_or_else(|| {
+            StorageError::unavailable(Unavailable::UnsupportedRuntime, "skills are not composed")
+        })?;
+        service.sync()?;
+        devworks_core::ports::storage::read_snapshot(
+            self.store.as_ref(),
+            &devworks_core::ports::storage::ReadOptions::default(),
+            |read| devworks_core::services::instructions::effective_skills(read.instructions()),
+        )
     }
     pub fn providers(&self) -> Option<&Arc<crate::providers::driver::NativeProviders>> {
         self.providers.as_ref()

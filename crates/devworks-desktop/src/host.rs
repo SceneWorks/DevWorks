@@ -463,6 +463,22 @@ async fn compose(
         client: purge_client.clone(),
     });
     runtime_config.shutdown_bound = config.shutdown_bound;
+    runtime_config.instructions = Some(devworks_engine::runtime::InstructionComposition {
+        source: Arc::new(NativeSourceTree::new()),
+        files: Arc::new(devworks_adapters::fs::skills::NativeSkillFiles::new(
+            config.data_root.join("skills"),
+        )),
+        roots: devworks_core::services::instructions::SkillRoots {
+            shared: std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| {
+                    std::path::PathBuf::from(home)
+                        .join(".agents")
+                        .join("skills")
+                }),
+            harness: config.data_root.join("skills"),
+        },
+    });
     runtime_config.schemas = Some(devworks_engine::schemas::SchemaComposition {
         reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
         secrets: secrets.clone(),
