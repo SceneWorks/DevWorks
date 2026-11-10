@@ -228,8 +228,10 @@ impl SkillFiles for NativeSkillFiles {
         let root = self.root()?;
         let n = self.next.fetch_add(1, Ordering::SeqCst);
         let tag = format!("{}-{}", std::process::id(), n);
-        let staging = root.join(format!(".{name}.new-{tag}"));
-        let retired = root.join(format!(".{name}.old-{tag}"));
+        // Temporary names never include the skill name: a name near the filesystem's length
+        // limit must still have a staging and a retired tree. Hidden, so scans skip them.
+        let staging = root.join(format!(".skill.new-{tag}"));
+        let retired = root.join(format!(".skill.old-{tag}"));
         let live = root.join(name);
         let written = (|| -> Result<(), SkillFileFault> {
             fs::create_dir(&staging).map_err(io_fault)?;
@@ -304,6 +306,30 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn a_name_at_the_length_limit_still_materializes() {
+        let root = temp();
+        let files = NativeSkillFiles::new(&root);
+        // 124 two-byte characters: 248 bytes, a valid directory name under Linux's 255-byte
+        // limit that a name-derived temporary suffix would push past it.
+        let name = "é".repeat(124);
+        files
+            .materialize(
+                &name,
+                &[SkillFile {
+                    path: "SKILL.md".into(),
+                    bytes: b"long".to_vec(),
+                    executable: false,
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            fs::read(root.join(&name).join("SKILL.md")).unwrap(),
+            b"long"
+        );
+        let _ = remove_tree(&root);
     }
 
     #[test]
