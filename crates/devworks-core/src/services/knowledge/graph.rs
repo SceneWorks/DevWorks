@@ -18,8 +18,8 @@
 //! query did not apply its own status filters; here `includeSuperseded`, `states`, predicates,
 //! tags and `confidenceMin` are always enforced.
 use super::{
-    KnowledgeService, Scoped, claim_wire, entity_wire, evidence_wire, knowledge_read, model,
-    resolve_scope, thresholds,
+    KNOWLEDGE_PAGE_MAX, KnowledgeService, Scoped, claim_wire, entity_wire, evidence_wire,
+    knowledge_read, model, resolve_scope, thresholds,
 };
 use crate::context::InvocationContext;
 use crate::ports::storage::{
@@ -171,14 +171,19 @@ impl Ctx<'_> {
     }
 }
 
-/// Seeds of a request: explicit ids (each must be visible) plus, for text, the claims the text
-/// matches and their subject entities.
+/// Candidate claims a text seed search examines before it stops looking for admitted ones.
+const SEED_SCAN_MAX: usize = 2000;
+
+/// Seeds of a request: explicit ids (each must be visible) plus, for text, the matching claims
+/// the request's filters admit (up to `text_limit`) and their subject entities. The flag is
+/// set when the scan bound stopped the text search before it was exhausted.
 fn seeds(
     c: &Ctx<'_>,
     q: &KnowledgeQuery,
     text_limit: usize,
     filter: &ClaimFilter,
-) -> Result<(Vec<Id>, Vec<Id>), Failure> {
+) -> Result<(Vec<Id>, Vec<Id>, bool), Failure> {
+    let mut more = false;
     let mut entities: Vec<Id> = Vec::new();
     let mut claims: Vec<Id> = Vec::new();
     for id in &q.entity_ids.0 {
@@ -205,28 +210,54 @@ fn seeds(
             return Err(invalid("text"));
         }
         if !words.is_empty() {
-            let found = c.k.knowledge_claims(
-                &ClaimQuery {
-                    scopes: c.keys.clone(),
-                    lifecycles: filter.lifecycles(),
-                    words,
-                    entity_limit: Some(text_limit as u16),
-                    ..Default::default()
-                },
-                None,
-                text_limit as u16,
-            )?;
-            for claim in found {
-                if !entities.contains(&claim.subject_id) && c.entity(&claim.subject_id)?.is_some() {
-                    entities.push(claim.subject_id.clone());
-                }
-                if !claims.contains(&claim.id) {
+            // Filters the store applies (lifecycle, tags) narrow the search itself; the rest are
+            // applied per page, so ineligible newer matches never use up the seed budget.
+            let query = ClaimQuery {
+                scopes: c.keys.clone(),
+                lifecycles: filter.lifecycles(),
+                tags: filter.tags.clone(),
+                words,
+                ..Default::default()
+            };
+            let mut admitted = 0;
+            let mut scanned = 0;
+            let mut after: Option<(i64, String)> = None;
+            'scan: loop {
+                let page = c.k.knowledge_claims(
+                    &query,
+                    after.as_ref().map(|(t, id)| (*t, id.as_str())),
+                    KNOWLEDGE_PAGE_MAX,
+                )?;
+                let last = page.len() < KNOWLEDGE_PAGE_MAX as usize;
+                for claim in page {
+                    if scanned >= SEED_SCAN_MAX {
+                        more = true;
+                        break 'scan;
+                    }
+                    scanned += 1;
+                    after = Some((claim.updated_at_ms, claim.id.as_str().to_owned()));
+                    let wire = claim_wire(c.k, &claim, c.th)?;
+                    if !filter.admits(&claim, &wire) || claims.contains(&claim.id) {
+                        continue;
+                    }
+                    if !entities.contains(&claim.subject_id)
+                        && c.entity(&claim.subject_id)?.is_some()
+                    {
+                        entities.push(claim.subject_id.clone());
+                    }
                     claims.push(claim.id);
+                    admitted += 1;
+                    if admitted >= text_limit {
+                        break 'scan;
+                    }
+                }
+                if last {
+                    break;
                 }
             }
         }
     }
-    Ok((entities, claims))
+    Ok((entities, claims, more))
 }
 
 fn entity_score(hop: u32, seed: bool) -> i64 {
@@ -426,11 +457,13 @@ fn select(
 
 /// Conflicts among `claims`: the same subject and predicate with different values, and
 /// recorded `contradicts` relations between returned claims.
+/// The open conflicts among `claims`; the flag is set when a group or a relation read was cut.
 fn conflicts(
     c: &Ctx<'_>,
     claims: &[(StoredClaim, KnowledgeClaim, i64)],
-) -> Result<Vec<KnowledgeConflict>, StorageError> {
+) -> Result<(Vec<KnowledgeConflict>, bool), StorageError> {
     let mut out = Vec::new();
+    let mut cut = false;
     let mut groups: BTreeMap<(String, String), Vec<&StoredClaim>> = BTreeMap::new();
     for (claim, _, _) in claims.iter().filter(|(c, _, _)| c.lifecycle == "Active") {
         groups
@@ -448,6 +481,7 @@ fn conflicts(
                 || o.body.value_json != first.body.value_json
                 || o.object_id != first.object_id
         }) {
+            cut |= group.len() > 128;
             out.push(KnowledgeConflict {
                 id: Id::new(
                     format!("conflict-{}", first.id.as_str())
@@ -473,7 +507,9 @@ fn conflicts(
         .collect();
     let mut recorded = HashSet::new();
     for (claim, _, _) in claims {
-        for r in c.k.knowledge_relations(&claim.id, &c.keys, 129)? {
+        let found = c.k.knowledge_relations(&claim.id, &c.keys, 129)?;
+        cut |= found.len() > 128;
+        for r in found {
             if r.predicate == model::CONTRADICTS
                 && active.contains(&r.subject_id)
                 && active.contains(&r.object_id)
@@ -488,7 +524,7 @@ fn conflicts(
             }
         }
     }
-    Ok(out)
+    Ok((out, cut))
 }
 
 /// The supersession chains of `claims` (both directions, at most five steps each).
@@ -553,7 +589,9 @@ fn bundle(
         }
     }
     let conflicts = if include_conflicts {
-        conflicts(c, &s.claims)?
+        let (found, cut) = conflicts(c, &s.claims)?;
+        truncated |= cut;
+        found
     } else {
         Vec::new()
     };
@@ -567,7 +605,9 @@ fn bundle(
     let mut relations = Vec::new();
     let mut seen = HashSet::new();
     for (claim, _, _) in &s.claims {
-        for r in c.k.knowledge_relations(&claim.id, &c.keys, 129)? {
+        let found = c.k.knowledge_relations(&claim.id, &c.keys, 129)?;
+        truncated |= found.len() > 128;
+        for r in found {
             if claim_ids.contains(&r.subject_id)
                 && claim_ids.contains(&r.object_id)
                 && seen.insert(r.id.clone())
@@ -584,6 +624,8 @@ fn bundle(
             }
         }
     }
+    // Capped lists say so: an incomplete conflict or relation view never reads as complete.
+    truncated |= conflicts.len() > 500 || relations.len() > 500;
     Ok(KnowledgeBundle {
         entities: BoundedList(s.entities.iter().map(|(e, _, _)| entity_wire(e)).collect()),
         claims: BoundedList(s.claims.iter().map(|(_, w, _)| w.clone()).collect()),
@@ -759,21 +801,23 @@ impl KnowledgeService {
                 Read::Bundle(full_graph(&c, ctx, q, revision, &filter)?)
             }
             "knowledge.subgraph" => {
-                let (e, cl) = seeds(&c, q, clamp(q.entity_limit.get(), 1, 10), &filter)?;
+                let (e, cl, more) = seeds(&c, q, clamp(q.entity_limit.get(), 1, 10), &filter)?;
                 let bounds = Bounds {
                     hops: q.max_depth.get().min(MAX_HOPS),
                     entities: clamp(q.entity_limit.get(), 1, 100),
                     claims: clamp(q.claim_limit.get(), 1, 200),
                     edges,
                 };
-                let s = select(&c, &e, &cl, bounds, &filter)?;
+                let mut s = select(&c, &e, &cl, bounds, &filter)?;
+                s.truncated |= more;
                 Read::Bundle(bundle(&c, q, &s, q.include_conflicts)?)
             }
             "knowledge.query" => {
                 let max_e = clamp(q.entity_limit.get(), 1, 50);
-                let (e, cl) = seeds(&c, q, max_e.min(10), &filter)?;
+                let (e, cl, more) = seeds(&c, q, max_e.min(10), &filter)?;
                 if e.is_empty() && cl.is_empty() {
                     let mut b = empty_bundle(&c)?;
+                    b.truncated |= more;
                     b.summary = Some(content(NO_MEMORIES));
                     Read::Bundle(b)
                 } else {
@@ -783,7 +827,8 @@ impl KnowledgeService {
                         claims: (2 * max_e).max(8).min(clamp(q.claim_limit.get(), 1, 200)),
                         edges,
                     };
-                    let s = select(&c, &e, &cl, bounds, &filter)?;
+                    let mut s = select(&c, &e, &cl, bounds, &filter)?;
+                    s.truncated |= more;
                     let mut b = bundle(&c, q, &s, q.include_conflicts)?;
                     let text = render(&s, &b.conflicts.0);
                     b.truncated |= text.chars().count() > 65_536;
@@ -795,7 +840,7 @@ impl KnowledgeService {
                 if q.entity_ids.0.is_empty() && q.claim_ids.0.is_empty() {
                     return Err(invalid("frontier"));
                 }
-                let (e, cl) = seeds(&c, &no_text(q), 0, &filter)?;
+                let (e, cl, _) = seeds(&c, &no_text(q), 0, &filter)?;
                 let limit = clamp(q.neighbor_limit.get(), 1, 100);
                 let bounds = Bounds {
                     hops: q.max_depth.get().clamp(1, MAX_HOPS),
@@ -811,7 +856,7 @@ impl KnowledgeService {
                 if q.entity_ids.0.is_empty() && q.claim_ids.0.is_empty() {
                     return Err(invalid("summary_seeds"));
                 }
-                let (e, cl) = seeds(&c, &no_text(q), 0, &filter)?;
+                let (e, cl, _) = seeds(&c, &no_text(q), 0, &filter)?;
                 let n = e.len() + cl.len();
                 let bounds = Bounds {
                     hops: 1,
@@ -824,7 +869,7 @@ impl KnowledgeService {
                     ..filter
                 };
                 let s = select(&c, &e, &cl, bounds, &summary_filter)?;
-                let found = conflicts(&c, &s.claims)?;
+                let (found, _) = conflicts(&c, &s.claims)?;
                 Read::Summary(if s.entities.is_empty() && s.claims.is_empty() {
                     NO_MEMORIES.to_owned()
                 } else {

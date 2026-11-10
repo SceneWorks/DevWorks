@@ -5963,3 +5963,84 @@ fn entity_bundles_continue_past_the_neighbor_bound_and_text_seeds_reach_requeste
         history.claims
     );
 }
+
+#[test]
+fn text_seeds_skip_ineligible_matches_and_capped_conflicts_report_truncation() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    // Older eligible matches about B, then newer ineligible ones about A: the newer matches
+    // must not use up the single seed slot.
+    let tagged = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Node B",
+        with(
+            draft("Fact", "quokka rollout tagged"),
+            json!({"tags": ["ops"], "confidence": 0.9}),
+        ),
+    );
+    // Later in time, so the store returns it first.
+    let later = fx.h.clock.0.load(std::sync::atomic::Ordering::SeqCst) + 60_000;
+    fx.h.clock
+        .0
+        .store(later, std::sync::atomic::Ordering::SeqCst);
+    let untagged = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Node A",
+        with(
+            draft("Fact", "quokka rollout untagged"),
+            json!({"confidence": 0.1}),
+        ),
+    );
+    let ids = |b: &KnowledgeBundle| b.claims.0.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+    let by_tag = q(
+        "knowledge.subgraph",
+        json!({"text": "quokka", "tags": ["ops"], "entityLimit": 1}),
+    );
+    assert!(ids(&by_tag).contains(&tagged), "{:?}", ids(&by_tag));
+    let by_confidence = q(
+        "knowledge.subgraph",
+        json!({"text": "quokka", "confidenceMin": 0.5, "entityLimit": 1}),
+    );
+    assert!(
+        ids(&by_confidence).contains(&tagged),
+        "{:?}",
+        ids(&by_confidence)
+    );
+    assert!(!ids(&by_confidence).contains(&untagged));
+    // 33 claims contradicting each other pairwise: 528 relations and recorded conflicts, more
+    // than either list carries, so the bundle says it is incomplete.
+    let claims: Vec<Value> = (0..33)
+        .map(|i| draft("Fact", &format!("value {i}")))
+        .collect();
+    let written = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [{"clientId": "s", "label": "Crowded", "entityType": "topic", "aliases": []}],
+        "evidence": [], "claims": claims}),
+    ));
+    let all = written.claim_ids.0.clone();
+    for i in 0..all.len() {
+        for j in i + 1..all.len() {
+            receipt(fx.cmd(&user, "knowledge.relate", json!({"scope": proj("project-a"),
+                "subjectId": all[i], "predicate": "contradicts", "objectId": all[j], "evidenceIds": []})));
+        }
+    }
+    let crowded = q(
+        "knowledge.subgraph",
+        json!({"claimIds": all, "maxDepth": 0, "claimLimit": 200}),
+    );
+    assert_eq!(crowded.claims.0.len(), 33);
+    assert_eq!(crowded.relations.as_ref().unwrap().0.len(), 500);
+    assert_eq!(crowded.conflicts.0.len(), 500);
+    assert!(crowded.truncated);
+}
