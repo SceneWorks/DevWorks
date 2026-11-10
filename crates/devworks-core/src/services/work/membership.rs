@@ -366,12 +366,14 @@ pub fn reconcile_project(
                 continue;
             }
             let current_session = tx.sessions().session(&a.session_id)?;
-            if current_session.as_ref().is_none_or(|s| s.closed()) {
+            let detached_child =
+                work.parent_feature_id.is_none() && a.purpose == AssignmentPurpose::Child;
+            if detached_child || current_session.as_ref().is_none_or(|s| s.closed()) {
                 allocation::retire_handoff_claims(tx, &work.id, &actor)?;
                 tx.runs().retire_membership_handoff(&a.id, a.revision)?;
                 clear_handoff_hold(tx, &actor, &RootId(work.id.clone()), &a.id)?;
                 let id = EventId(tx.new_id(crate::ports::IdKind::Event));
-                tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(work.project_id.clone()),root_id:Some(target.clone()),operation_id:None,aggregate_kind:super::WORK_AGGREGATE.into(),aggregate_id:work.id.as_str().into(),aggregate_revision:work.revision,kind:"WorkerHandoffRetired".into(),payload:json!({"assignmentId":a.id.0,"sessionId":a.session_id,"fromRoot":a.root_id,"toRoot":target,"reason":"worker session closed","checkpointRetained":true})})?;
+                tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(work.project_id.clone()),root_id:Some(target.clone()),operation_id:None,aggregate_kind:super::WORK_AGGREGATE.into(),aggregate_id:work.id.as_str().into(),aggregate_revision:work.revision,kind:"WorkerHandoffRetired".into(),payload:json!({"assignmentId":a.id.0,"sessionId":a.session_id,"fromRoot":a.root_id,"toRoot":target,"reason":if detached_child {"detached child requires a new issue coordinator"} else {"worker session closed"},"checkpointRetained":true})})?;
                 changed += 1;
                 continue;
             }

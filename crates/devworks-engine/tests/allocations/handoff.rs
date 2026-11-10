@@ -203,6 +203,73 @@ fn transferred_child_remains_schedulable_until_destination_launch() {
 }
 
 #[test]
+fn detached_child_retires_before_a_new_issue_coordinator_materializes() {
+    let m = MovedWorker::new_with_child(true);
+    m.change(None);
+    m.settle();
+    m.reconcile();
+    let retired = m.assignment();
+    assert_eq!(retired.state, AssignmentState::Superseded);
+    assert_eq!(retired.purpose, AssignmentPurpose::Child);
+    assert_eq!(retired.root_id, RootId(id("feature-a")));
+    assert_eq!(retired.checkpoint, m.worker.checkpoint);
+    assert!(
+        read(&*m.f.store, |s| root_assignments(
+            s.runs(),
+            &RootId(id("moving")),
+            true
+        ))
+        .is_empty()
+    );
+
+    let holds = read(&*m.f.store, |s| {
+        devworks_core::services::runs::active_blockers(
+            s.runs(),
+            &BlockerFilter::RootLevel(RootId(id("moving"))),
+        )
+    });
+    let covered: Vec<_> = holds
+        .iter()
+        .filter(|hold| hold.cause.manual_resume())
+        .map(|hold| json!({"holdId":hold.id,"revision":hold.revision.to_string()}))
+        .collect();
+    let root_control = read(&*m.f.store, |s| control_of(s.runs(), &RootId(id("moving"))));
+    applied(m.f.command("runs.continue", json!({"rootId":"moving","expectedControlRevision":root_control.revision.to_string(),"coveredHolds":covered})));
+    let control = m.f.control.clone();
+    let activation = write(&*m.f.store, move |tx| {
+        let claim = control.claim_activation(tx, &id("supervisor"))?.unwrap();
+        control.start_activation(tx, &claim.id, claim.owner_epoch)
+    })
+    .unwrap()
+    .unwrap();
+    let host = principal(&*m.f.store, "detached-host", PrincipalKind::Host);
+    let agents =
+        devworks_core::services::agents::AgentService::new(m.f.h.ids.clone(), m.f.control.clone());
+    let coordinator = write(&*m.f.store, move |tx| {
+        agents
+            .materialize_primary(tx, &host, &activation.id, activation.owner_epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("primary refused: {error:?}")))
+    })
+    .unwrap();
+    let primary = read(&*m.f.store, |s| {
+        s.runs().assignment(&coordinator.assignment_id)
+    })
+    .unwrap();
+    assert_eq!(primary.purpose, AssignmentPurpose::Primary);
+    assert_eq!(primary.root_id, RootId(id("moving")));
+    assert_eq!(primary.work_id, RootId(id("moving")));
+    assert_ne!(primary.id, m.worker.id);
+    assert_eq!(
+        read(&*m.f.store, |s| s
+            .runs()
+            .agent_assignment_context(&primary.id))
+        .unwrap()
+        .role_id,
+        id("issueCoordinator")
+    );
+}
+
+#[test]
 fn moving_a_secondary_delegated_task_fences_the_worker_without_moving_its_primary_task() {
     let m = MovedWorker::new();
     m.f.seed("secondary", Some("feature-a"), "task", 1);
