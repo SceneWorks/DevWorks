@@ -363,7 +363,14 @@ impl<'a> Preparation<'a> {
         &self,
         work: impl FnOnce(&dyn ReadSnapshot) -> Result<T, StorageError>,
     ) -> Result<T, StorageError> {
-        storage::read_snapshot(self.store, &storage::ReadOptions::default(), work)
+        storage::read_snapshot(
+            self.store,
+            &storage::ReadOptions {
+                cancellation: self.cancellation.cloned(),
+                deadline_ms: self.deadline_ms,
+            },
+            work,
+        )
     }
     /// Runs `work` in its own write transaction with only the journal and artifact records.
     pub fn write<T, F>(&self, work: F) -> Result<T, StorageError>

@@ -5,6 +5,7 @@
 //! the same validation, authority, receipts and implementation (ARCH-02). An operation with no
 //! registered use case is reported as [`GatewayFailure::NoUseCase`] before any store access, so
 //! nothing unimplemented is advertised or recorded.
+pub mod agents;
 pub mod approvals;
 pub mod artifacts;
 pub mod browser;
@@ -39,7 +40,7 @@ pub mod web;
 pub mod work;
 
 use crate::context::InvocationContext;
-use crate::gateway::{CommandOutcome, Gateway, GatewayFailure, QueryOutcome};
+use crate::gateway::{CommandOutcome, Gateway, GatewayFailure, PreparedReceive, QueryOutcome};
 use crate::ports::storage::{ReadOptions, WriteOptions};
 use crate::ports::{CommandHandler, QueryHandler};
 use crate::protocol::support::BoundedList;
@@ -188,6 +189,26 @@ impl UseCases {
     /// Registers the sessions family (`ConversationService`).
     pub fn with_sessions(mut self, service: Arc<sessions::SessionService>) -> Self {
         for op in sessions::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// One agent-coordination owner for the selected UI and tool operations.
+    pub fn with_agents(mut self, service: Arc<agents::AgentService>) -> Self {
+        for op in [
+            "agents.inspect",
+            "agents.delegate",
+            "agents.messages",
+            "agents.post",
+            "agents.receive",
+            "agents.ack",
+            "agents.history",
+            "agents.events",
+            "agents.inbox",
+            "agents.acknowledge",
+            "agents.checkpoint",
+        ] {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self
@@ -482,5 +503,27 @@ impl UseCases {
             Some(handler) => gateway.command_with(ctx, operation, raw, handler.clone(), options),
             None => Err(GatewayFailure::NoUseCase(operation.to_owned())),
         }
+    }
+
+    pub fn prepare_receive(
+        &self,
+        gateway: &Gateway<'_>,
+        ctx: &InvocationContext,
+        raw: &[u8],
+        options: WriteOptions,
+    ) -> Result<PreparedReceive, CommandOutcome> {
+        match self.commands.get("agents.receive") {
+            Some(handler) => gateway.prepare_receive(ctx, raw, handler.clone(), options),
+            None => Err(Err(GatewayFailure::NoUseCase("agents.receive".into()))),
+        }
+    }
+
+    pub fn finish_receive(
+        &self,
+        gateway: &Gateway<'_>,
+        ctx: &InvocationContext,
+        prepared: PreparedReceive,
+    ) -> CommandOutcome {
+        gateway.finish_receive(ctx, prepared)
     }
 }

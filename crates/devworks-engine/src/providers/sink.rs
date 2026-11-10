@@ -52,6 +52,7 @@ pub struct SourceProvenance {
 
 const MAX_CONTENT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CONTENT_ITEMS: usize = 65536;
+const MAX_DELEGATE_CALLS_PER_TURN: usize = 16;
 
 enum ArtifactKind {
     Evidence,
@@ -70,6 +71,7 @@ pub struct ProviderSink {
     content: BTreeMap<(u64, u64), Vec<ProviderBody>>,
     content_bytes: usize,
     content_items: usize,
+    delegate_calls: usize,
     live: Option<Arc<super::live::LiveTurns>>,
     live_session: Option<devworks_core::protocol::Id>,
     last_sequence: Option<i64>,
@@ -115,6 +117,7 @@ impl ProviderSink {
             content: BTreeMap::new(),
             content_bytes: 0,
             content_items: 0,
+            delegate_calls: 0,
             live: None,
             live_session: None,
             last_sequence: None,
@@ -353,6 +356,15 @@ impl ProviderSink {
             .find(|t| t.wire_name == call.name)
             .ok_or(StorageError::ScopeDenied)?
             .clone();
+        if matches!(
+            tool.capability_id.as_str(),
+            "devworks-command/agents.delegate" | "devworks/agents.delegate"
+        ) {
+            if self.delegate_calls >= MAX_DELEGATE_CALLS_PER_TURN {
+                return Err(invalid("delegate calls exceed per-turn limit"));
+            }
+            self.delegate_calls += 1;
+        }
         let arguments = self.artifact(
             attempt,
             call.arguments_raw.as_bytes(),

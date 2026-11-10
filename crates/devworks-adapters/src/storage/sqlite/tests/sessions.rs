@@ -1401,6 +1401,61 @@ fn operation_status_and_command_receipts_are_scoped() {
 // Authority and scope
 
 #[test]
+fn bound_agent_session_reads_stay_within_its_work_root() {
+    let fx = Fx::new();
+    fx.store.with_writer_connection(|conn| {
+        super::super::conn::db(conn.execute_batch(
+            "INSERT INTO work_items VALUES('root-c','project-a','feature',NULL,NULL,NULL,'Feature C',1,0,1,1,1,'{}');",
+        ))
+    }).unwrap();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    fx.seed_session("session-shared", "agent-p", Some("root-a"));
+    fx.seed_session("session-foreign", "agent-p", Some("root-c"));
+    let agent = fx.worker("agent-a", "session-a");
+    let listed = match result(fx.query(
+        &agent,
+        "sessions.list",
+        json!({
+            "scope":{"kind":"Project","projectId":"project-a"},"page":{"limit":50}
+        }),
+    )) {
+        OperationResult::SessionsList { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let ids: std::collections::HashSet<_> = listed.items.0.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        std::collections::HashSet::from(["session-a", "session-shared"])
+    );
+    result(fx.query(
+        &agent,
+        "sessions.get",
+        json!({"sessionId":"session-shared"}),
+    ));
+    assert_eq!(
+        fault(fx.query(
+            &agent,
+            "sessions.get",
+            json!({"sessionId":"session-foreign"})
+        ))
+        .code,
+        DomainErrorCode::NotFound
+    );
+    assert_eq!(
+        fault(fx.raw_query(
+            &agent,
+            "sessions.transcript",
+            json!({
+                "protocol":"1.0-draft.1","queryId":"foreign-transcript",
+                "sessionId":"session-foreign","limit":10
+            })
+        ))
+        .code,
+        DomainErrorCode::NotFound
+    );
+}
+
+#[test]
 fn reviewer_and_agent_scope_denials() {
     let fx = Fx::new();
     let s = fx.work_session();
@@ -1627,6 +1682,65 @@ fn the_session_migration_is_recorded_and_keeps_the_floors() {
         "an applied migration was edited"
     );
     assert_eq!((m.minimum_reader, m.minimum_writer), (5, 5));
+}
+
+#[test]
+fn provider_context_head_is_durable_and_rejects_a_stale_revision() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let mut head = StoredProviderContextHead {
+        session_id: id("session-a"),
+        context_epoch: 0,
+        observed_sequence: 0,
+        kind: "ProviderInitialContext".into(),
+        attempt_id: None,
+        binding: binding(),
+        artifact: art(),
+        revision: 1,
+    };
+    let first = head.clone();
+    fx.write(move |tx| tx.sessions().put_provider_context_head(&first, None));
+    assert_eq!(
+        fx.read(|r| r.sessions().provider_context_head(&id("session-a"))),
+        Some(head.clone())
+    );
+    head.revision = 2;
+    head.kind = "ProviderTurnContinuation".into();
+    head.attempt_id = Some(id("attempt-a"));
+    head.artifact = art_b();
+    let mut stale = head.clone();
+    stale.revision = 1;
+    let refused = run_write(&*fx.store, WriteOptions::default(), move |tx| {
+        tx.sessions().put_provider_context_head(&stale, Some(0))
+    });
+    assert!(refused.is_err());
+    assert_eq!(
+        fx.read(|r| r.sessions().provider_context_head(&id("session-a")))
+            .unwrap()
+            .revision,
+        1
+    );
+    let next = head.clone();
+    fx.write(move |tx| tx.sessions().put_provider_context_head(&next, Some(1)));
+    let raw = fx.h.raw();
+    let persisted: (i64, String) = raw.query_row(
+        "SELECT revision,artifact_json FROM session_provider_context_heads WHERE session_id='session-a'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    assert_eq!(persisted.0, 2);
+    assert_eq!(
+        serde_json::from_str::<Value>(&persisted.1).unwrap(),
+        art_b()
+    );
+    let plan = fx
+        .read(|r| r.projects().purge_planning(&project("project-a")))
+        .unwrap();
+    assert!(plan.rows.iter().any(|row| {
+        row.table == "session_provider_context_heads"
+            && row.action == ProjectPurgeRowAction::Delete
+            && row.reason == ProjectPurgeRowReason::OwnedLineage
+    }));
 }
 
 // ---------------------------------------------------------------------------------------------

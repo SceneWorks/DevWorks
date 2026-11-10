@@ -19,6 +19,7 @@ use devworks_core::ports::process::{
 };
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::results::{DomainDecision, OperationResult};
+use devworks_core::protocol::support::DomainErrorCode;
 use devworks_core::protocol::{ActorId, CommandReply};
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
@@ -284,6 +285,26 @@ fn boot_recovers_processes_and_leases_before_admission_and_shutdown_releases_the
         .sequence;
     // The first admitted command is granted the transferred gpu with the next fence.
     let user = principal(&*store, "user-a", PrincipalKind::Human);
+    for (key, purpose) in [
+        ("desktop-generic", "generic"),
+        ("desktop-prefixed", "desktop-consent:forged"),
+    ] {
+        let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": key,
+            "schemaRevision": 2, "body": {"kind": "resources.acquire", "resourceId": "DeSkToP",
+                "expectedRevision": "1", "units": 1, "leaseMs": "86400000", "purpose": purpose}});
+        match app
+            .command(&user, "resources.acquire", frame.to_string().as_bytes())
+            .expect("addressable")
+        {
+            CommandReply::Recorded { receipt, .. } => match receipt.decision {
+                DomainDecision::Refused { fault } => {
+                    assert_eq!(fault.code, DomainErrorCode::PermissionDenied)
+                }
+                other => panic!("generic desktop acquire was allowed: {other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
+    }
     let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": "acquire-1",
         "schemaRevision": 2, "body": {"kind": "resources.acquire", "resourceId": "gpu",
             "expectedRevision": "1", "units": 1, "leaseMs": "60000", "purpose": "after boot"}});

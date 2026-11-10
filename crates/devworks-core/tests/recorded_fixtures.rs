@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1926), 1926);
+    assert_eq!(run("domain-fixtures.json", 1936), 1936);
 }
 
 #[test]
@@ -424,7 +424,7 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
         missing.is_empty(),
         "bindings without an admitted recorded fixture: {missing:?}"
     );
-    // 359 operation/mode bindings at revision 1, plus revision 2 of artifacts.save and
+    // 360 operation/mode bindings at revision 1, plus revision 2 of artifacts.save and
     // artifacts.list, history.events, .work_lineage, .git_links, .evidence_links, .tool_usage
     // and sessions.briefing, revision 2 of the six resources operations, of sessions.list,
     // .get, .append_message, .start and .end, and of workspace.diagnostics, .logs and
@@ -446,7 +446,7 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // DW83 adds four revision-6 project purge bindings and history.command_receipt
     // at revision 6: five additional recorded native admissions.
     // Native accessibility targeting adds five selected revision-3 admissions.
-    assert_eq!(admitted.len(), 607);
+    assert_eq!(admitted.len(), 612);
 }
 
 #[test]

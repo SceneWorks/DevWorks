@@ -111,6 +111,8 @@ pub struct InvocationContext {
     project_id: Option<ProjectId>,
     root_id: Option<RootId>,
     assignment_id: Option<AssignmentId>,
+    /// The host-owned activation of this agent turn, not caller-supplied tool data.
+    activation: Option<(Id, i64)>,
     capability_registration: Option<Id>,
     authority_sources: Vec<Id>,
     worktree: Option<BoundWorktree>,
@@ -225,6 +227,7 @@ impl InvocationContext {
             project_id: None,
             root_id: None,
             assignment_id: None,
+            activation: None,
             capability_registration: None,
             authority_sources: Vec::new(),
             worktree: None,
@@ -284,7 +287,16 @@ impl InvocationContext {
         self.project_id = project_id;
         self.root_id = root_id;
         self.assignment_id = assignment_id;
+        self.activation = None;
         self
+    }
+    /// Binds the exact activation epoch from the trusted launch path after lineage resolution.
+    pub fn with_activation(mut self, id: Id, owner_epoch: i64) -> Self {
+        self.activation = Some((id, owner_epoch));
+        self
+    }
+    pub fn activation(&self) -> Option<(&Id, i64)> {
+        self.activation.as_ref().map(|(id, epoch)| (id, *epoch))
     }
     /// Current capability registration (tool/package contribution) the call was made through.
     pub fn with_capability_registration(mut self, registration: Id) -> Self {

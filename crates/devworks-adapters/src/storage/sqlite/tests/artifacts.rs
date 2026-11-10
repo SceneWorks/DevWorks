@@ -7,6 +7,7 @@ use super::{Harness, T0};
 use crate::fs::NativeFilesystem;
 use crate::fs::artifacts::{NativeArtifactFiles, Step};
 use crate::storage::sqlite::{MIGRATION_0006_SHA256, MIGRATIONS, SqliteStore};
+use devworks_core::admission::{self, Selection};
 use devworks_core::authority::HostAuthority;
 use devworks_core::authority::destructive::BlockReason;
 use devworks_core::authority::reads::ReadRoot;
@@ -18,7 +19,9 @@ use devworks_core::ports::files::{
     ArtifactFiles, ArtifactSources, FileFault, ResolvedSource, SourceOrigin, SourceRefusal,
 };
 use devworks_core::ports::storage::*;
-use devworks_core::ports::{AuthorityPort, CommandHandler, Preparation, Prepared};
+use devworks_core::ports::{
+    AuthorityPort, AuthorityRequest, CommandHandler, Preparation, Prepared,
+};
 use devworks_core::protocol::data::{ArtifactSource, DataScope};
 use devworks_core::protocol::provider::{ArtifactRef, Digest};
 use devworks_core::protocol::records::{ArtifactReadContent, ArtifactRecord, MutationSummary};
@@ -30,6 +33,7 @@ use devworks_core::protocol::{
     ActorId, CommandReply, Counter, DomainErrorCode, DomainFault, Id, OperationState, ProjectId,
     Rejection, RetryAdvice, Revision, RootId,
 };
+use devworks_core::registry::Mode;
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::lifecycle::{
     ExportRefusal, RecoveryReport, StreamRefusal, VersionResolution, pin_for_backup, release_backup,
@@ -767,6 +771,657 @@ fn save_list_read_preview_reference_export_and_delete_through_the_gateway() {
     assert_eq!(published.payload["digest"], sha256_hex(text));
     assert_eq!(published.payload["title"], "Findings");
     assert_eq!(published.payload["source"]["fileHandle"], "out-1");
+}
+
+#[test]
+fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
+    let fx = Fx::new();
+    fx.h.raw()
+        .execute(
+            "INSERT INTO work_items VALUES('root-c','project-a','feature',NULL,NULL,NULL,'Feature C',1,0,1,1,1,'{}')",
+            [],
+        )
+        .unwrap();
+    fx.write(|tx| {
+        for (session_id, agent) in [
+            ("scope-primary-session", "agent-p"),
+            ("scope-worker-session", "agent-a"),
+        ] {
+            tx.sessions().insert_session(&StoredSession {
+                id: id(session_id),
+                conversation_id: id(&format!("{session_id}-conversation")),
+                agent_id: actor(agent),
+                project_id: Some(project("project-a")),
+                root_id: Some(RootId(id("root-a"))),
+                title: "Artifact scope".into(),
+                context_epoch: 0,
+                revision: 1,
+                created_by: actor("user-a"),
+                created_at_ms: T0,
+                closed_at_ms: None,
+                closed_by: None,
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            })?;
+        }
+        for (assignment_id, purpose, work, parent, session_id) in [
+            (
+                "scope-primary",
+                AssignmentPurpose::Primary,
+                "root-a",
+                None,
+                "scope-primary-session",
+            ),
+            (
+                "scope-worker",
+                AssignmentPurpose::Child,
+                "task-a",
+                Some("scope-primary"),
+                "scope-worker-session",
+            ),
+        ] {
+            tx.runs().insert_assignment(&StoredAssignment {
+                id: devworks_core::protocol::AssignmentId(id(assignment_id)),
+                purpose,
+                root_id: RootId(id("root-a")),
+                work_id: RootId(id(work)),
+                parent_id: parent.map(|value| devworks_core::protocol::AssignmentId(id(value))),
+                session_id: id(session_id),
+                execution_id: None,
+                state: AssignmentState::Active,
+                generation: 1,
+                slot_held: purpose == AssignmentPurpose::Child,
+                revision: 1,
+                checkpoint: None,
+                scope_key: None,
+                scope_digest: None,
+                plan_revision: None,
+                instruction_revision: 0,
+                created_at_ms: T0,
+            })?;
+        }
+        tx.runs()
+            .insert_agent_assignment_context(&StoredAgentAssignmentContext {
+                assignment_id: devworks_core::protocol::AssignmentId(id("scope-worker")),
+                project_id: project("project-a"),
+                role_id: id("worker"),
+                role_instructions: "Work on task A".into(),
+                role_revisions: json!({}),
+                brief: "Work on task A".into(),
+                task_ids: json!(["task-a"]),
+                source_checkpoint_id: None,
+                created_at_ms: T0,
+            })?;
+        tx.runs()
+            .insert_agent_assignment_context(&StoredAgentAssignmentContext {
+                assignment_id: devworks_core::protocol::AssignmentId(id("scope-primary")),
+                project_id: project("project-a"),
+                role_id: id("coordinator"),
+                role_instructions: "Coordinate".into(),
+                role_revisions: json!({}),
+                brief: "Coordinate".into(),
+                task_ids: json!([]),
+                source_checkpoint_id: None,
+                created_at_ms: T0,
+            })
+    });
+    let boot = fx.store.info().boot_id.clone().unwrap();
+    fx.write(move |tx| {
+        tx.runs().insert_activation(&StoredActivation {
+            id: id("scope-worker-execution"),
+            root_id: RootId(id("root-a")),
+            boot_id: boot,
+            generation: 1,
+            phase: ActivationPhase::Running,
+            purpose: ActivationPurpose::Implementation,
+            owner: Some(id("scope-owner")),
+            lease_until_ms: Some(i64::MAX),
+            owner_epoch: 1,
+            revision: 1,
+            attempts: 1,
+            ready_at_ms: T0,
+            created_at_ms: T0,
+            stop_cause: None,
+            stop_requested_at_ms: None,
+            stop_acknowledged_at_ms: None,
+            stopped_at_ms: None,
+            outcome: None,
+            detail: None,
+            plan_revision: None,
+        })?;
+        let worker_id = devworks_core::protocol::AssignmentId(id("scope-worker"));
+        let before = tx.runs().assignment(&worker_id)?.unwrap();
+        let mut active = before.clone();
+        active.execution_id = Some(id("scope-worker-execution"));
+        active.revision += 1;
+        tx.runs().update_assignment(&active, before.revision)?;
+        let parent_id = devworks_core::protocol::AssignmentId(id("scope-primary"));
+        let before = tx.runs().assignment(&parent_id)?.unwrap();
+        let mut active = before.clone();
+        active.execution_id = Some(id("scope-worker-execution"));
+        active.revision += 1;
+        tx.runs().update_assignment(&active, before.revision)
+    });
+    let worker = fx
+        .ctx("agent-a", PrincipalKind::Agent, Some("project-a"))
+        .with_lineage(
+            Some(project("project-a")),
+            Some(RootId(id("root-a"))),
+            Some(devworks_core::protocol::AssignmentId(id("scope-worker"))),
+        )
+        .with_session(id("scope-worker-session"))
+        .with_activation(id("scope-worker-execution"), 1);
+    let sibling_user =
+        fx.user()
+            .with_lineage(Some(project("project-a")), Some(RootId(id("root-c"))), None);
+    fx.source(
+        "sibling-source",
+        "sibling.txt",
+        b"sibling",
+        SourceOrigin::default(),
+    );
+    let sibling = saved(fx.save(
+        &sibling_user,
+        "project-a",
+        "Sibling",
+        "text/plain",
+        "sibling-source",
+        b"sibling",
+    ))
+    .artifact;
+    fx.source(
+        "worker-source",
+        "worker.txt",
+        b"worker",
+        SourceOrigin::default(),
+    );
+    let own = saved(fx.save(
+        &worker,
+        "project-a",
+        "Own",
+        "text/plain",
+        "worker-source",
+        b"worker",
+    ))
+    .artifact;
+    assert!(matches!(
+        fx.query(&worker, "artifacts.read", version_query("Read", &own), None),
+        DomainQueryReply::Result { .. }
+    ));
+    assert_eq!(
+        fault(fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &sibling),
+            None
+        ))
+        .code,
+        DomainErrorCode::PermissionDenied
+    );
+    let coordinator = fx
+        .ctx("agent-p", PrincipalKind::Agent, Some("project-a"))
+        .with_lineage(
+            Some(project("project-a")),
+            Some(RootId(id("root-a"))),
+            Some(devworks_core::protocol::AssignmentId(id("scope-primary"))),
+        )
+        .with_session(id("scope-primary-session"))
+        .with_activation(id("scope-worker-execution"), 1);
+    let denied_scope = |ctx: &InvocationContext, operation, mode, frame: Value| {
+        let decoded =
+            admission::decode(Selection { operation, mode }, frame.to_string().as_bytes()).unwrap();
+        let request = AuthorityRequest {
+            descriptor: decoded.descriptor,
+            binding: decoded.binding,
+            effect: decoded.effect,
+            action: decoded.action,
+            input: &decoded.input,
+            fingerprint: &decoded.fingerprint,
+        };
+        let decision = fx.authority().decide(ctx, &request);
+        assert!(
+            matches!(
+                &decision,
+                Err(auth::Denied {
+                    reason: devworks_core::authority::DenialReason::OutOfAssignmentScope,
+                    ..
+                })
+            ),
+            "{operation}: {decision:?}"
+        );
+    };
+    denied_scope(
+        &coordinator,
+        "runs.redirect",
+        Mode::Command,
+        json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"cross-root-redirect",
+            "body":{"kind":"runs.redirect","rootId":"root-a","expectedControlRevision":"1",
+            "message":"Inspect attachment","attachments":[sibling.clone()]}}),
+    );
+    denied_scope(
+        &worker,
+        "indexing.runs",
+        Mode::Query,
+        json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"project-index-runs",
+            "body":{"kind":"indexing.runs","scope":{"kind":"Project","projectId":"project-a"},
+            "page":{"limit":10}}}),
+    );
+    denied_scope(
+        &worker,
+        "git.pull_request",
+        Mode::Command,
+        json!({"protocol":"1.0-draft.1","requestKey":"cross-root-pr",
+            "command":{"kind":"OpenPullRequest","repositoryId":"repo-a",
+            "headRef":"refs/heads/codex/task-a","baseRef":"refs/heads/main",
+            "expectedHead":{"format":"Sha1","hex":"0123456789abcdef0123456789abcdef01234567"},
+            "description":sibling.clone()}}),
+    );
+    let schema = descriptor("tools.overrides").unwrap().schema_ref();
+    fx.write(move |tx| {
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            "settings",
+            1,
+            1,
+            json!({"values":{"tools.overrides":{"schema":schema,"value":{
+                "devworks/browser.navigate":true,"devworks/browser.upload":true}}}}),
+        )?;
+        Ok(())
+    });
+    denied_scope(
+        &worker,
+        "browser.navigate",
+        Mode::Command,
+        json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"cross-root-browser-page",
+            "body":{"kind":"browser.navigate","sessionId":"scope-worker-session",
+            "expectedRevision":"1","location":{"kind":"Artifact","artifact":sibling.clone()}}}),
+    );
+    denied_scope(
+        &worker,
+        "browser.upload",
+        Mode::Command,
+        json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"cross-root-browser-upload",
+            "body":{"kind":"browser.upload","node":{"target":{"sessionId":"scope-worker-session",
+            "targetId":"browser-target","frameId":"browser-frame","documentRevision":"1"},
+            "nodeId":"file-input","snapshotRevision":"1"},"files":[sibling.clone()]}}),
+    );
+    denied_scope(
+        &worker,
+        "knowledge.diagnostics",
+        Mode::Query,
+        json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":2,
+            "queryId":"cross-root-knowledge-preview","body":{"kind":"knowledge.diagnostics",
+            "scope":{"kind":"Project","projectId":"project-a"},
+            "importSource":sibling.clone(),"importSchema":{"schemaId":"core/object",
+            "revision":"1","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}),
+    );
+    let sessions = UseCases::new().with_sessions(Arc::new(
+        devworks_core::services::sessions::SessionService::new(fx.h.ids.clone(), fx.store.clone()),
+    ));
+    let append_attachment = |key: &str, artifact: &ArtifactRef| {
+        let authority = fx.authority();
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*fx.store,
+            ids: &*fx.h.ids,
+        };
+        let frame = json!({"protocol":"1.0-draft.1","requestKey":key,
+            "sessionId":"scope-worker-session","expectedSessionRevision":"1",
+            "content":[{"kind":"Attachment","artifact":artifact}]});
+        sessions
+            .command(
+                &gateway,
+                &worker,
+                "sessions.append_message",
+                frame.to_string().as_bytes(),
+            )
+            .expect("addressable")
+    };
+    assert!(matches!(
+        append_attachment("sibling-attachment-denied", &sibling),
+        DomainCommandReply::Rejected {
+            code: Rejection::PermissionDenied,
+            ..
+        }
+    ));
+    assert_eq!(
+        fx.read(|s| s.sessions().session(&id("scope-worker-session")))
+            .unwrap()
+            .last_durable_sequence(),
+        0
+    );
+    let blocked_sender = worker.clone();
+    let blocked_attachment = sibling.clone();
+    assert!(matches!(
+        run_write(fx.store.as_ref(), WriteOptions::default(), move |tx| {
+            devworks_core::services::agents::post_assignment(
+                tx,
+                &blocked_sender,
+                &devworks_core::operations::agents::MessagesInput {
+                    recipient_assignment_id: devworks_core::protocol::AssignmentId(id(
+                        "scope-worker",
+                    )),
+                    message_class: devworks_core::protocol::records::MessageClass::Status,
+                    content: devworks_core::protocol::support::BoundedText("Self-send".into()),
+                    attachments: devworks_core::protocol::support::BoundedList(vec![
+                        blocked_attachment,
+                    ]),
+                },
+            )
+        }),
+        Err(StorageError::ScopeDenied)
+    ));
+    assert_eq!(
+        fault(fx.query(
+            &worker,
+            "artifacts.list",
+            json!({"kind":"List","projectId":"project-a"}),
+            None,
+        ))
+        .code,
+        DomainErrorCode::PermissionDenied
+    );
+    assert!(matches!(
+        fx.delete(&worker, delete_version(&sibling, 1, 1)),
+        DomainCommandReply::Rejected {
+            code: Rejection::PermissionDenied,
+            ..
+        }
+    ));
+    summary(fx.reference(
+        &fx.user(),
+        &sibling,
+        json!({"kind":"assignment","id":"scope-worker"}),
+        1,
+    ));
+    assert!(matches!(
+        append_attachment("sibling-attachment-referenced", &sibling),
+        DomainCommandReply::Recorded { .. }
+    ));
+    assert!(matches!(
+        fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &sibling),
+            None
+        ),
+        DomainQueryReply::Result { .. }
+    ));
+    assert!(matches!(
+        fx.delete(&worker, delete_version(&sibling, 1, 2)),
+        DomainCommandReply::Rejected {
+            code: Rejection::PermissionDenied,
+            ..
+        }
+    ));
+    fx.source(
+        "delivered-source",
+        "delivered.txt",
+        b"delivered",
+        SourceOrigin::default(),
+    );
+    let delivered = saved(fx.save(
+        &sibling_user,
+        "project-a",
+        "Delivered",
+        "text/plain",
+        "delivered-source",
+        b"delivered",
+    ))
+    .artifact;
+    assert_eq!(
+        fault(fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &delivered),
+            None
+        ))
+        .code,
+        DomainErrorCode::PermissionDenied
+    );
+    let sender =
+        fx.user()
+            .with_lineage(Some(project("project-a")), Some(RootId(id("root-a"))), None);
+    let attachment = delivered.clone();
+    fx.write(move |tx| {
+        devworks_core::services::agents::post_assignment(
+            tx,
+            &sender,
+            &devworks_core::operations::agents::MessagesInput {
+                recipient_assignment_id: devworks_core::protocol::AssignmentId(id("scope-worker")),
+                message_class: devworks_core::protocol::records::MessageClass::Status,
+                content: devworks_core::protocol::support::BoundedText("See attachment".into()),
+                attachments: devworks_core::protocol::support::BoundedList(vec![attachment]),
+            },
+        )
+    });
+    assert!(matches!(
+        fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &delivered),
+            None
+        ),
+        DomainQueryReply::Result { .. }
+    ));
+    let coordinator = fx
+        .ctx("agent-p", PrincipalKind::Agent, Some("project-a"))
+        .with_lineage(
+            Some(project("project-a")),
+            Some(RootId(id("root-a"))),
+            Some(devworks_core::protocol::AssignmentId(id("scope-primary"))),
+        )
+        .with_session(id("scope-primary-session"))
+        .with_activation(id("scope-worker-execution"), 1);
+    fx.source(
+        "session-delivery-source",
+        "session-delivery.txt",
+        b"session delivery",
+        SourceOrigin::default(),
+    );
+    let session_delivery = saved(fx.save(
+        &sibling_user,
+        "project-a",
+        "Session delivery",
+        "text/plain",
+        "session-delivery-source",
+        b"session delivery",
+    ))
+    .artifact;
+    assert_eq!(
+        fault(fx.query(
+            &coordinator,
+            "artifacts.read",
+            version_query("Read", &session_delivery),
+            None
+        ))
+        .code,
+        DomainErrorCode::PermissionDenied
+    );
+    let delivered_version = session_delivery.version_id.clone();
+    fx.write(move |tx| {
+        tx.artifacts().add_link(&ArtifactLink {
+            version_id: delivered_version,
+            subject: SubjectKey::session(&id("scope-primary-session")),
+            purpose: LinkPurpose::Reference,
+        })
+    });
+    assert!(matches!(
+        fx.query(
+            &coordinator,
+            "artifacts.read",
+            version_query("Read", &session_delivery),
+            None
+        ),
+        DomainQueryReply::Result { .. }
+    ));
+    assert_eq!(
+        fault(fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &session_delivery),
+            None
+        ))
+        .code,
+        DomainErrorCode::PermissionDenied
+    );
+    let forwarded = session_delivery.clone();
+    let sender = coordinator.clone();
+    fx.write(move |tx| {
+        devworks_core::services::agents::post_assignment(
+            tx,
+            &sender,
+            &devworks_core::operations::agents::MessagesInput {
+                recipient_assignment_id: devworks_core::protocol::AssignmentId(id("scope-worker")),
+                message_class: devworks_core::protocol::records::MessageClass::Status,
+                content: devworks_core::protocol::support::BoundedText(
+                    "Use session delivery".into(),
+                ),
+                attachments: devworks_core::protocol::support::BoundedList(vec![forwarded]),
+            },
+        )
+    });
+    assert!(matches!(
+        fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &session_delivery),
+            None
+        ),
+        DomainQueryReply::Result { .. }
+    ));
+    fx.source(
+        "coordinator-source",
+        "coordinator.txt",
+        b"coordinator",
+        SourceOrigin::default(),
+    );
+    let from_coordinator = saved(fx.save(
+        &coordinator,
+        "project-a",
+        "Coordinator evidence",
+        "text/plain",
+        "coordinator-source",
+        b"coordinator",
+    ))
+    .artifact;
+    assert_eq!(
+        fault(fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &from_coordinator),
+            None
+        ))
+        .code,
+        DomainErrorCode::PermissionDenied
+    );
+    let coordinator_attachment = from_coordinator.clone();
+    fx.write(move |tx| {
+        devworks_core::services::agents::post_assignment(
+            tx,
+            &coordinator,
+            &devworks_core::operations::agents::MessagesInput {
+                recipient_assignment_id: devworks_core::protocol::AssignmentId(id("scope-worker")),
+                message_class: devworks_core::protocol::records::MessageClass::Status,
+                content: devworks_core::protocol::support::BoundedText("Use this evidence".into()),
+                attachments: devworks_core::protocol::support::BoundedList(vec![
+                    coordinator_attachment,
+                ]),
+            },
+        )
+    });
+    assert!(matches!(
+        fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &from_coordinator),
+            None
+        ),
+        DomainQueryReply::Result { .. }
+    ));
+    fx.source(
+        "task-evidence-source",
+        "task-evidence.txt",
+        b"task evidence",
+        SourceOrigin::default(),
+    );
+    let task_evidence = saved(fx.save(
+        &sibling_user,
+        "project-a",
+        "Task evidence",
+        "text/plain",
+        "task-evidence-source",
+        b"task evidence",
+    ))
+    .artifact;
+    summary(fx.reference(
+        &fx.user(),
+        &task_evidence,
+        json!({"kind":"root","id":"task-a"}),
+        1,
+    ));
+    assert!(matches!(
+        fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &task_evidence),
+            None
+        ),
+        DomainQueryReply::Result { .. }
+    ));
+    let sender = worker.clone();
+    fx.write(move |tx| {
+        devworks_core::services::agents::post_assignment(
+            tx,
+            &sender,
+            &devworks_core::operations::agents::MessagesInput {
+                recipient_assignment_id: devworks_core::protocol::AssignmentId(id("scope-primary")),
+                message_class: devworks_core::protocol::records::MessageClass::Evidence,
+                content: devworks_core::protocol::support::BoundedText("Task evidence".into()),
+                attachments: devworks_core::protocol::support::BoundedList(vec![task_evidence]),
+            },
+        )
+    });
+    // A completed membership handoff keeps the assignment identity and the artifact's
+    // original provenance, while moving the live assignment and session to the new root.
+    fx.h.raw()
+        .execute(
+            "UPDATE assignments SET root_id='root-c' WHERE id='scope-worker'",
+            [],
+        )
+        .unwrap();
+    fx.h.raw()
+        .execute(
+            "UPDATE sessions SET root_id='root-c' WHERE id='scope-worker-session'",
+            [],
+        )
+        .unwrap();
+    let transferred_worker = worker.clone().with_lineage(
+        Some(project("project-a")),
+        Some(RootId(id("root-c"))),
+        Some(devworks_core::protocol::AssignmentId(id("scope-worker"))),
+    );
+    assert!(matches!(
+        fx.query(
+            &transferred_worker,
+            "artifacts.read",
+            version_query("Read", &own),
+            None
+        ),
+        DomainQueryReply::Result { .. }
+    ));
+    fx.write(|tx| {
+        let id = devworks_core::protocol::AssignmentId(id("scope-worker"));
+        let before = tx.runs().assignment(&id)?.unwrap();
+        let mut ended = before.clone();
+        ended.state = AssignmentState::Completed;
+        ended.revision += 1;
+        tx.runs().update_assignment(&ended, before.revision)
+    });
+    assert_eq!(
+        fault(fx.query(&worker, "artifacts.read", version_query("Read", &own), None)).code,
+        DomainErrorCode::PermissionDenied
+    );
 }
 
 fn as_failure<T>(
@@ -5117,6 +5772,7 @@ fn purge_planning_kept_artifact_subjects_retain_minimal_assignment_resource_and_
             checkpoint_sequence: 0,
         })?;
         tx.runs().insert_assignment(&StoredAssignment {
+            purpose: devworks_core::ports::storage::AssignmentPurpose::Primary,
             id: devworks_core::protocol::AssignmentId(id("kept-assignment")),
             root_id: RootId(id("root-a")),
             work_id: RootId(id("task-a")),

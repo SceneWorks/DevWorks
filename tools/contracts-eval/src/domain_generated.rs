@@ -538,6 +538,57 @@ impl Check for MessageClass {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum RetainedMessageKind {
+    Info,
+    Question,
+    Request,
+    Blocker,
+    Announcement,
+}
+impl Check for RetainedMessageKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum RetainedMessageState {
+    Open,
+    Answered,
+    Declined,
+}
+impl Check for RetainedMessageState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum RetainedMessageResolution {
+    Answered,
+    Declined,
+}
+impl Check for RetainedMessageResolution {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum RetainedDeliveryState {
+    Pending,
+    Delivered,
+    Read,
+    Answered,
+    Declined,
+}
+impl Check for RetainedDeliveryState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PageRequest {
     pub limit: Limit,
@@ -1290,6 +1341,300 @@ impl Check for AgentMessage {
         self.acknowledged.check()?;
         super::domain_rules::record(
             "AgentMessage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedMessage {
+    pub id: Id,
+    pub project_id: ProjectId,
+    pub channel: Label,
+    pub kind: RetainedMessageKind,
+    pub from_actor_id: ActorId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_session_id: Option<Id>,
+    pub from: RetainedActor,
+    pub body: Content,
+    pub created_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<RetainedMessageState>,
+    pub blocking: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_session_id: Option<Id>,
+    pub to_human: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_name: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_reply_to_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_by_actor_id: Option<ActorId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_by: Option<RetainedActor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<RetainedDeliveryState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed_over: Option<bool>,
+}
+impl Check for RetainedMessage {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.project_id.check()?;
+        self.channel.check()?;
+        self.kind.check()?;
+        self.from_actor_id.check()?;
+        self.from_session_id.check()?;
+        self.from.check()?;
+        self.body.check()?;
+        self.created_at_ms.check()?;
+        self.state.check()?;
+        self.blocking.check()?;
+        self.to_session_id.check()?;
+        self.to_human.check()?;
+        self.item_id.check()?;
+        self.feature_id.check()?;
+        self.resource_name.check()?;
+        self.in_reply_to_id.check()?;
+        self.resolved_by_actor_id.check()?;
+        self.resolved_by.check()?;
+        self.resolved_at_ms.check()?;
+        self.delivery.check()?;
+        self.handed_over.check()?;
+        super::domain_rules::record(
+            "RetainedMessage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedActor {
+    pub name: Text,
+    pub kind: Text,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<Text>,
+}
+impl Check for RetainedActor {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.kind.check()?;
+        self.session_id.check()?;
+        self.harness.check()?;
+        self.model.check()?;
+        self.host.check()?;
+        super::domain_rules::record(
+            "RetainedActor",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedPostResult {
+    pub created: bool,
+    pub message: RetainedMessage,
+    pub recipients: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<RetainedMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_versions: Option<Items<RetainedItemVersion>>,
+}
+impl Check for RetainedPostResult {
+    fn check(&self) -> Result<(), String> {
+        self.created.check()?;
+        self.message.check()?;
+        self.recipients.check()?;
+        self.resolved.check()?;
+        self.item_versions.check()?;
+        super::domain_rules::record(
+            "RetainedPostResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedInboxResult {
+    pub items: Rows<RetainedMessage>,
+    pub next_cursor: Cursor,
+}
+impl Check for RetainedInboxResult {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        super::domain_rules::record(
+            "RetainedInboxResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedAckResult {
+    pub acked: Counter,
+    pub messages: Rows<RetainedMessageLine>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_versions: Option<Items<RetainedItemVersion>>,
+}
+impl Check for RetainedAckResult {
+    fn check(&self) -> Result<(), String> {
+        self.acked.check()?;
+        self.messages.check()?;
+        self.item_versions.check()?;
+        super::domain_rules::record(
+            "RetainedAckResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedItemVersion {
+    pub key: Id,
+    pub version: Revision,
+}
+impl Check for RetainedItemVersion {
+    fn check(&self) -> Result<(), String> {
+        self.key.check()?;
+        self.version.check()?;
+        super::domain_rules::record(
+            "RetainedItemVersion",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedHistoryPage {
+    pub items: Rows<RetainedMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_before: Option<Counter>,
+}
+impl Check for RetainedHistoryPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_before.check()?;
+        super::domain_rules::record(
+            "RetainedHistoryPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedMessageLine {
+    pub id: Id,
+    pub kind: RetainedMessageKind,
+    pub from: Text,
+    pub summary: Text,
+    pub created_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<RetainedMessageState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<RetainedDeliveryState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed_over: Option<bool>,
+}
+impl Check for RetainedMessageLine {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.kind.check()?;
+        self.from.check()?;
+        self.summary.check()?;
+        self.created_at_ms.check()?;
+        self.from_session_id.check()?;
+        self.item_id.check()?;
+        self.state.check()?;
+        self.blocking.check()?;
+        self.delivery.check()?;
+        self.handed_over.check()?;
+        super::domain_rules::record(
+            "RetainedMessageLine",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedMessageEvent {
+    pub sequence: Counter,
+    pub project_id: ProjectId,
+    pub message_id: Id,
+    pub kind: Text,
+    pub actor: RetainedActor,
+    pub created_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<RetainedMessageLine>,
+}
+impl Check for RetainedMessageEvent {
+    fn check(&self) -> Result<(), String> {
+        self.sequence.check()?;
+        self.project_id.check()?;
+        self.message_id.check()?;
+        self.kind.check()?;
+        self.actor.check()?;
+        self.created_at_ms.check()?;
+        self.recipient.check()?;
+        self.message.check()?;
+        super::domain_rules::record(
+            "RetainedMessageEvent",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetainedEventPage {
+    pub items: Rows<RetainedMessageEvent>,
+    pub next_sequence: Counter,
+}
+impl Check for RetainedEventPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_sequence.check()?;
+        super::domain_rules::record(
+            "RetainedEventPage",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
@@ -17341,6 +17686,36 @@ pub enum DomainQuery {
     NextWorkInspectClaim { claim_id: Id },
     #[serde(rename = "agents.inspect")]
     AgentsInspect { assignment_id: AssignmentId },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.history")]
+    AgentsHistory {
+        project_id: ProjectId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<Text>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_id: Option<RootId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feature_id: Option<RootId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource_name: Option<Text>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        open_only: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_human: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<Counter>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<Revision>,
+    },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.events")]
+    AgentsEvents {
+        project_id: ProjectId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<Counter>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<Revision>,
+    },
     #[serde(rename = "agents.inbox")]
     AgentsInbox {
         assignment_id: AssignmentId,
@@ -18601,6 +18976,8 @@ impl DomainQuery {
             Self::WorkflowsList { .. } => "workflows.list",
             Self::NextWorkInspectClaim { .. } => "next_work.inspect_claim",
             Self::AgentsInspect { .. } => "agents.inspect",
+            Self::AgentsHistory { .. } => "agents.history",
+            Self::AgentsEvents { .. } => "agents.events",
             Self::AgentsInbox { .. } => "agents.inbox",
             Self::SessionsList { .. } => "sessions.list",
             Self::SessionsGet { .. } => "sessions.get",
@@ -18833,6 +19210,36 @@ impl Check for DomainQuery {
             }
             Self::AgentsInspect { assignment_id } => {
                 assignment_id.check()?;
+            }
+            Self::AgentsHistory {
+                project_id,
+                channel,
+                item_id,
+                feature_id,
+                resource_name,
+                open_only,
+                to_human,
+                before,
+                limit,
+            } => {
+                project_id.check()?;
+                channel.check()?;
+                item_id.check()?;
+                feature_id.check()?;
+                resource_name.check()?;
+                open_only.check()?;
+                to_human.check()?;
+                before.check()?;
+                limit.check()?;
+            }
+            Self::AgentsEvents {
+                project_id,
+                after,
+                limit,
+            } => {
+                project_id.check()?;
+                after.check()?;
+                limit.check()?;
             }
             Self::AgentsInbox {
                 assignment_id,
@@ -20270,6 +20677,12 @@ impl Revisioned for DomainQuery {
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
+            Self::AgentsHistory { .. } if revision < 7 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation predates its introduction".into())
+            }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {
                 Err("operation predates its introduction".into())
             }
@@ -20681,6 +21094,65 @@ pub enum DomainCommand {
         message_class: MessageClass,
         content: Content,
         attachments: Items<ArtifactRef>,
+    },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.post")]
+    AgentsPost {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<ProjectId>,
+        body: Content,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_kind: Option<RetainedMessageKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_id: Option<RootId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feature_id: Option<RootId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource_name: Option<Text>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_session_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_human: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blocking: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        in_reply_to_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolves: Option<RetainedMessageResolution>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        idempotency_key: Option<Text>,
+    },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.receive")]
+    AgentsReceive {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<ProjectId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<Cursor>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        include_read: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<Revision>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wait_seconds: Option<i32>,
+    },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.ack")]
+    AgentsAck {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<ProjectId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        messages: Option<Items<Id>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        up_to: Option<Cursor>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<RetainedMessageResolution>,
     },
     #[serde(rename = "agents.acknowledge")]
     AgentsAcknowledge {
@@ -22034,6 +22506,9 @@ impl DomainCommand {
             Self::RunsStop { .. } => "runs.stop",
             Self::AgentsDelegate { .. } => "agents.delegate",
             Self::AgentsMessages { .. } => "agents.messages",
+            Self::AgentsPost { .. } => "agents.post",
+            Self::AgentsReceive { .. } => "agents.receive",
+            Self::AgentsAck { .. } => "agents.ack",
             Self::AgentsAcknowledge { .. } => "agents.acknowledge",
             Self::AgentsCheckpoint { .. } => "agents.checkpoint",
             Self::SessionsStart { .. } => "sessions.start",
@@ -22574,6 +23049,63 @@ impl Check for DomainCommand {
                 message_class.check()?;
                 content.check()?;
                 attachments.check()?;
+            }
+            Self::AgentsPost {
+                session_id,
+                project_id,
+                body,
+                message_kind,
+                item_id,
+                feature_id,
+                resource_name,
+                to_session_id,
+                to_human,
+                blocking,
+                in_reply_to_id,
+                resolves,
+                idempotency_key,
+            } => {
+                session_id.check()?;
+                project_id.check()?;
+                body.check()?;
+                message_kind.check()?;
+                item_id.check()?;
+                feature_id.check()?;
+                resource_name.check()?;
+                to_session_id.check()?;
+                to_human.check()?;
+                blocking.check()?;
+                in_reply_to_id.check()?;
+                resolves.check()?;
+                idempotency_key.check()?;
+            }
+            Self::AgentsReceive {
+                session_id,
+                project_id,
+                cursor,
+                include_read,
+                limit,
+                wait_seconds,
+            } => {
+                session_id.check()?;
+                project_id.check()?;
+                cursor.check()?;
+                include_read.check()?;
+                limit.check()?;
+                wait_seconds.check()?;
+            }
+            Self::AgentsAck {
+                session_id,
+                project_id,
+                messages,
+                up_to,
+                resolution,
+            } => {
+                session_id.check()?;
+                project_id.check()?;
+                messages.check()?;
+                up_to.check()?;
+                resolution.check()?;
             }
             Self::AgentsAcknowledge {
                 assignment_id,
@@ -24405,6 +24937,15 @@ impl Revisioned for DomainCommand {
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
+            Self::AgentsPost { .. } if revision < 7 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::AgentsReceive { .. } if revision < 7 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::AgentsAck { .. } if revision < 7 => {
+                Err("operation predates its introduction".into())
+            }
             Self::NotificationsMarkRead { .. } if revision < 3 => {
                 Err("operation predates its introduction".into())
             }
@@ -24565,6 +25106,21 @@ pub enum OperationResult {
     AgentsDelegate { value: AgentRecord },
     #[serde(rename = "agents.messages")]
     AgentsMessages { value: AgentMessage },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.post")]
+    AgentsPost { value: RetainedPostResult },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.receive")]
+    AgentsReceive { value: RetainedInboxResult },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.ack")]
+    AgentsAck { value: RetainedAckResult },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.history")]
+    AgentsHistory { value: RetainedHistoryPage },
+    #[schemars(extend("x-since" = 7))]
+    #[serde(rename = "agents.events")]
+    AgentsEvents { value: RetainedEventPage },
     #[serde(rename = "agents.inbox")]
     AgentsInbox { value: Page<AgentMessage> },
     #[serde(rename = "agents.acknowledge")]
@@ -25261,6 +25817,11 @@ impl OperationResult {
             Self::AgentsInspect { .. } => "agents.inspect",
             Self::AgentsDelegate { .. } => "agents.delegate",
             Self::AgentsMessages { .. } => "agents.messages",
+            Self::AgentsPost { .. } => "agents.post",
+            Self::AgentsReceive { .. } => "agents.receive",
+            Self::AgentsAck { .. } => "agents.ack",
+            Self::AgentsHistory { .. } => "agents.history",
+            Self::AgentsEvents { .. } => "agents.events",
             Self::AgentsInbox { .. } => "agents.inbox",
             Self::AgentsAcknowledge { .. } => "agents.acknowledge",
             Self::AgentsCheckpoint { .. } => "agents.checkpoint",
@@ -25635,6 +26196,11 @@ impl Check for OperationResult {
             Self::AgentsInspect { value } => value.check()?,
             Self::AgentsDelegate { value } => value.check()?,
             Self::AgentsMessages { value } => value.check()?,
+            Self::AgentsPost { value } => value.check()?,
+            Self::AgentsReceive { value } => value.check()?,
+            Self::AgentsAck { value } => value.check()?,
+            Self::AgentsHistory { value } => value.check()?,
+            Self::AgentsEvents { value } => value.check()?,
             Self::AgentsInbox { value } => value.check()?,
             Self::AgentsAcknowledge { value } => value.check()?,
             Self::AgentsCheckpoint { value } => value.check()?,
@@ -26129,6 +26695,21 @@ impl Revisioned for OperationResult {
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
+            Self::AgentsPost { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AgentsReceive { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AgentsAck { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AgentsHistory { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {
                 Err("operation result predates its introduction".into())
             }

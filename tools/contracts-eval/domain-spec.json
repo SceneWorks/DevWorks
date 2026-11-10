@@ -365,6 +365,22 @@
         "Evidence"
       ]
     },
+    "RetainedMessageKind": {
+      "kind": "enum",
+      "values": ["Info", "Question", "Request", "Blocker", "Announcement"]
+    },
+    "RetainedMessageState": {
+      "kind": "enum",
+      "values": ["Open", "Answered", "Declined"]
+    },
+    "RetainedMessageResolution": {
+      "kind": "enum",
+      "values": ["Answered", "Declined"]
+    },
+    "RetainedDeliveryState": {
+      "kind": "enum",
+      "values": ["Pending", "Delivered", "Read", "Answered", "Declined"]
+    },
     "PageRequest": {
       "kind": "record",
       "fields": {
@@ -621,6 +637,119 @@
         "content": "Content",
         "artifact_refs": "Items<ArtifactRef>",
         "acknowledged": "bool"
+      }
+    },
+    "RetainedMessage": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "project_id": "ProjectId",
+        "channel": "Label",
+        "kind": "RetainedMessageKind",
+        "from_actor_id": "ActorId",
+        "from_session_id": "?Id",
+        "from": "RetainedActor",
+        "body": "Content",
+        "created_at_ms": "Counter",
+        "state": "?RetainedMessageState",
+        "blocking": "bool",
+        "to_session_id": "?Id",
+        "to_human": "bool",
+        "item_id": "?RootId",
+        "feature_id": "?RootId",
+        "resource_name": "?Text",
+        "in_reply_to_id": "?Id",
+        "resolved_by_actor_id": "?ActorId",
+        "resolved_by": "?RetainedActor",
+        "resolved_at_ms": "?Counter",
+        "delivery": "?RetainedDeliveryState",
+        "handed_over": "?bool"
+      }
+    },
+    "RetainedActor": {
+      "kind": "record",
+      "fields": {
+        "name": "Text",
+        "kind": "Text",
+        "session_id": "?Id",
+        "harness": "?Text",
+        "model": "?Text",
+        "host": "?Text"
+      }
+    },
+    "RetainedPostResult": {
+      "kind": "record",
+      "fields": {
+        "created": "bool",
+        "message": "RetainedMessage",
+        "recipients": "Counter",
+        "resolved": "?RetainedMessage",
+        "item_versions": "?Items<RetainedItemVersion>"
+      }
+    },
+    "RetainedInboxResult": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<RetainedMessage>",
+        "next_cursor": "Cursor"
+      }
+    },
+    "RetainedAckResult": {
+      "kind": "record",
+      "fields": {
+        "acked": "Counter",
+        "messages": "Rows<RetainedMessageLine>",
+        "item_versions": "?Items<RetainedItemVersion>"
+      }
+    },
+    "RetainedItemVersion": {
+      "kind": "record",
+      "fields": {
+        "key": "Id",
+        "version": "Revision"
+      }
+    },
+    "RetainedHistoryPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<RetainedMessage>",
+        "next_before": "?Counter"
+      }
+    },
+    "RetainedMessageLine": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "kind": "RetainedMessageKind",
+        "from": "Text",
+        "summary": "Text",
+        "created_at_ms": "Counter",
+        "from_session_id": "?Id",
+        "item_id": "?RootId",
+        "state": "?RetainedMessageState",
+        "blocking": "?bool",
+        "delivery": "?RetainedDeliveryState",
+        "handed_over": "?bool"
+      }
+    },
+    "RetainedMessageEvent": {
+      "kind": "record",
+      "fields": {
+        "sequence": "Counter",
+        "project_id": "ProjectId",
+        "message_id": "Id",
+        "kind": "Text",
+        "actor": "RetainedActor",
+        "created_at_ms": "Counter",
+        "recipient": "?Text",
+        "message": "?RetainedMessageLine"
+      }
+    },
+    "RetainedEventPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<RetainedMessageEvent>",
+        "next_sequence": "Counter"
       }
     },
     "CheckpointRecord": {
@@ -6932,6 +7061,97 @@
       "authority": "Scoped",
       "rules": "Durable send/ack lineage. Sender/root/parent/authority are host-derived; cross-root or revoked recipients rejected. Inbox reads are separate and cannot acknowledge delivery."
     },
+    "agents.post": {
+      "operation": "agents.post",
+      "mode": "Command",
+      "fields": {
+        "session_id": "?Id",
+        "project_id": "?ProjectId",
+        "body": "Content",
+        "message_kind": "?RetainedMessageKind",
+        "item_id": "?RootId",
+        "feature_id": "?RootId",
+        "resource_name": "?Text",
+        "to_session_id": "?Id",
+        "to_human": "?bool",
+        "blocking": "?bool",
+        "in_reply_to_id": "?Id",
+        "resolves": "?RetainedMessageResolution",
+        "idempotency_key": "?Text"
+      },
+      "result": "RetainedPostResult",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Additive retained-source post contract. The gateway-selected command and current principal bind the sender; optional session/project must match current authority. Route, reply resolution, blocking and idempotency are validated by the retained message service.",
+      "introducedRevision": 7
+    },
+    "agents.receive": {
+      "operation": "agents.receive",
+      "mode": "Command",
+      "fields": {
+        "session_id": "?Id",
+        "project_id": "?ProjectId",
+        "cursor": "?Cursor",
+        "include_read": "?bool",
+        "limit": "?Revision",
+        "wait_seconds": "?i32"
+      },
+      "result": "RetainedInboxResult",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Additive retained-source receive. The current principal selects its own session or the project's human inbox; cursor is an opaque inbox position, default zero, and unacknowledged deliveries replay. At most 55 seconds of polling in separate short snapshots precedes one transactional delivery and command receipt; cancellation leaves no receipt.",
+      "introducedRevision": 7
+    },
+    "agents.ack": {
+      "operation": "agents.ack",
+      "mode": "Command",
+      "fields": {
+        "session_id": "?Id",
+        "project_id": "?ProjectId",
+        "messages": "?Items<Id>",
+        "up_to": "?Cursor",
+        "resolution": "?RetainedMessageResolution"
+      },
+      "result": "RetainedAckResult",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Additive retained-source acknowledgment. Exactly one of message ids or an opaque next_cursor from the addressed inbox; resolution requires named messages. Current principal binds the recipient, and a repeated acknowledgment is a no-op. First/last blocking-question resolution atomically updates affected work versions.",
+      "introducedRevision": 7
+    },
+    "agents.history": {
+      "operation": "agents.history",
+      "mode": "Query",
+      "fields": {
+        "project_id": "ProjectId",
+        "channel": "?Text",
+        "item_id": "?RootId",
+        "feature_id": "?RootId",
+        "resource_name": "?Text",
+        "open_only": "?bool",
+        "to_human": "?bool",
+        "before": "?Counter",
+        "limit": "?Revision"
+      },
+      "result": "RetainedHistoryPage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Human project-scoped retained message history newest first. Filters and before cursor are checked against current item/feature ownership; the next_before cursor continues the recorded order without a write. Agent sessions read their addressed inbox instead of the full project history.",
+      "introducedRevision": 7
+    },
+    "agents.events": {
+      "operation": "agents.events",
+      "mode": "Query",
+      "fields": {
+        "project_id": "ProjectId",
+        "after": "?Counter",
+        "limit": "?Revision"
+      },
+      "result": "RetainedEventPage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Human project message event cursor. An absent cursor starts at the current head; an explicit cursor resumes committed later events in order, and an ahead cursor refuses after restore. Streaming callers repeat the query without holding a connection.",
+      "introducedRevision": 7
+    },
     "agents.inbox": {
       "operation": "agents.inbox",
       "mode": "Query",
@@ -11588,6 +11808,21 @@
     ],
     "projects.purge_status": [
       6
+    ],
+    "agents.post": [
+      7
+    ],
+    "agents.receive": [
+      7
+    ],
+    "agents.ack": [
+      7
+    ],
+    "agents.history": [
+      7
+    ],
+    "agents.events": [
+      7
     ],
     "history.command_receipt": [
       1,

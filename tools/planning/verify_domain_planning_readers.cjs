@@ -51,9 +51,9 @@ const fs=require('node:fs/promises'),path=require('node:path');
    }
    record.localLinksChecked=checked;
    if(stem==='devworks-architecture'){
-    const decisions=await page.locator('#architecture-decisions-and-validation-gates + p + table tbody tr').count();if(decisions!==78)throw Error('Decision rows '+decisions);record.decisionRows=decisions;
+    const decisions=await page.locator('#architecture-decisions-and-validation-gates + p + table tbody tr').count();if(decisions!==81)throw Error('Decision rows '+decisions);record.decisionRows=decisions;
     await page.locator('#doc-search').fill('complete domain operation schemas');if(!await page.locator('#complete-domain-operation-schemas').isVisible())throw Error('Section filter');await page.locator('#doc-search').fill('');
-    await page.locator('#req-search').fill('ROUTE-18');if(!await page.locator('.trace tbody tr:visible').filter({hasText:'ROUTE-18'}).count())throw Error('Requirement filter');await page.locator('#req-search').fill('');await page.locator('#req-status').selectOption('Confirmed');if(await page.locator('.trace tbody tr:visible').count()!==209)throw Error('Confirmed filter');record.filtersVerified=true;
+    await page.locator('#req-search').fill('ROUTE-18');if(!await page.locator('.trace tbody tr:visible').filter({hasText:'ROUTE-18'}).count())throw Error('Requirement filter');await page.locator('#req-search').fill('');await page.locator('#req-status').selectOption('Confirmed');if(await page.locator('.trace tbody tr:visible').count()!==230)throw Error('Confirmed filter');record.filtersVerified=true;
    }
    if(stem==='domain-operation-reference'){
     const catalog=JSON.parse(await fs.readFile(path.join(dir,'devworks-capability-catalog.json'),'utf8'));

@@ -586,6 +586,75 @@ fn read_effective_stamps_pages_and_expires_cursors() {
 }
 
 #[test]
+fn assigned_agent_setting_reads_stay_in_the_bound_project() {
+    let f = Fixture::new();
+    f.h.raw()
+        .execute(
+            "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project-b','B','Active',1,1,0)",
+            [],
+        )
+        .unwrap();
+    let agent = f
+        .ctx("agent-a")
+        .with_lineage(Some(ProjectId(id("project-a"))), None, None);
+    for (operation, body) in [
+        (
+            "settings.read_effective",
+            json!({"scope": ws(), "keys": [], "page": {"limit": 100}}),
+        ),
+        (
+            "settings.read_effective",
+            json!({"scope": {"kind": "Project", "projectId": "project-b"},
+                "keys": [], "page": {"limit": 100}}),
+        ),
+        (
+            "settings.validate",
+            json!({"scope": {"kind": "Project", "projectId": "project-b"},
+                "expectedRevision": "1", "entries": [assignment("power.keepAwake", json!(true))]}),
+        ),
+        (
+            "settings.explain_source",
+            json!({"scope": {"kind": "Project", "projectId": "project-b"},
+                "key": "power.keepAwake"}),
+        ),
+    ] {
+        let mut body = body;
+        body["kind"] = json!(operation);
+        let frame = json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": f.key(),
+            "body": body});
+        match f
+            .cases
+            .query(
+                &f.gateway(),
+                &agent,
+                operation,
+                frame.to_string().as_bytes(),
+            )
+            .unwrap()
+        {
+            DomainQueryReply::Rejected { fault, .. } => {
+                assert_eq!(fault.code, DomainErrorCode::PermissionDenied, "{operation}");
+            }
+            other => panic!("foreign settings scope was allowed for {operation}: {other:?}"),
+        }
+    }
+    let frame = json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": f.key(),
+        "body": {"kind": "settings.read_effective", "scope": project(),
+            "keys": [], "page": {"limit": 5}}});
+    assert!(matches!(
+        f.cases
+            .query(
+                &f.gateway(),
+                &agent,
+                "settings.read_effective",
+                frame.to_string().as_bytes()
+            )
+            .unwrap(),
+        DomainQueryReply::Result { .. }
+    ));
+}
+
+#[test]
 fn reviewers_cannot_write_and_policies_are_not_values() {
     let f = Fixture::new();
     let d = f.save(

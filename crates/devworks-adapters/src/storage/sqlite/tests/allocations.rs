@@ -648,6 +648,7 @@ fn completed_child_claim_releases_while_feature_coordinator_remains_live() {
             checkpoint_sequence: 0,
         })?;
         tx.runs().insert_assignment(&StoredAssignment {
+            purpose: devworks_core::ports::storage::AssignmentPurpose::Primary,
             id: devworks_core::protocol::AssignmentId(id("worker-assignment")),
             root_id: RootId(id("feature")),
             work_id: RootId(id("task-a")),

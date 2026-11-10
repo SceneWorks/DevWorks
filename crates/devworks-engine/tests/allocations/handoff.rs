@@ -14,6 +14,9 @@ struct MovedWorker {
 }
 impl MovedWorker {
     fn new() -> Self {
+        Self::new_with_child(false)
+    }
+    fn new_with_child(child: bool) -> Self {
         let f = Fx::new();
         for name in ["feature-a", "feature-b"] {
             f.seed(name, None, "feature", 1);
@@ -95,19 +98,19 @@ impl MovedWorker {
                         },
                     )?
                     .unwrap();
-                let worker = service
-                    .register_assignment(
-                        tx,
-                        &actor,
-                        NewRunAssignment {
-                            root: RootId(id("feature-a")),
-                            work: RootId(id("moving")),
-                            parent: Some(coordinator_a.id),
-                            session: sid.clone(),
-                            scope_key: Some("E1".into()),
-                        },
-                    )?
-                    .unwrap();
+                let request = NewRunAssignment {
+                    root: RootId(id("feature-a")),
+                    work: RootId(id("moving")),
+                    parent: Some(coordinator_a.id),
+                    session: sid.clone(),
+                    scope_key: Some("E1".into()),
+                };
+                let worker = if child {
+                    service.register_child_assignment(tx, &actor, request)?
+                } else {
+                    service.register_assignment(tx, &actor, request)?
+                }
+                .unwrap();
                 let worker = service
                     .set_assignment_state(
                         tx,
@@ -184,6 +187,214 @@ impl MovedWorker {
         })
         .unwrap()
     }
+}
+
+#[test]
+fn transferred_child_remains_schedulable_until_destination_launch() {
+    let m = MovedWorker::new_with_child(true);
+    m.change(Some("feature-b"));
+    m.settle();
+    m.reconcile();
+    let moved = m.assignment();
+    assert_eq!(moved.root_id, RootId(id("feature-b")));
+    assert_eq!(moved.execution_id, Some(m.activation_b.id));
+    assert_eq!(moved.state, AssignmentState::Waiting);
+    assert!(!moved.slot_held);
+}
+
+#[test]
+fn detached_child_retires_before_a_new_issue_coordinator_materializes() {
+    let m = MovedWorker::new_with_child(true);
+    m.change(None);
+    m.settle();
+    m.reconcile();
+    let retired = m.assignment();
+    assert_eq!(retired.state, AssignmentState::Superseded);
+    assert_eq!(retired.purpose, AssignmentPurpose::Child);
+    assert_eq!(retired.root_id, RootId(id("feature-a")));
+    assert_eq!(retired.checkpoint, m.worker.checkpoint);
+    assert!(
+        read(&*m.f.store, |s| root_assignments(
+            s.runs(),
+            &RootId(id("moving")),
+            true
+        ))
+        .is_empty()
+    );
+
+    let holds = read(&*m.f.store, |s| {
+        devworks_core::services::runs::active_blockers(
+            s.runs(),
+            &BlockerFilter::RootLevel(RootId(id("moving"))),
+        )
+    });
+    let covered: Vec<_> = holds
+        .iter()
+        .filter(|hold| hold.cause.manual_resume())
+        .map(|hold| json!({"holdId":hold.id,"revision":hold.revision.to_string()}))
+        .collect();
+    let root_control = read(&*m.f.store, |s| control_of(s.runs(), &RootId(id("moving"))));
+    applied(m.f.command("runs.continue", json!({"rootId":"moving","expectedControlRevision":root_control.revision.to_string(),"coveredHolds":covered})));
+    let control = m.f.control.clone();
+    let activation = write(&*m.f.store, move |tx| {
+        let claim = control.claim_activation(tx, &id("supervisor"))?.unwrap();
+        control.start_activation(tx, &claim.id, claim.owner_epoch)
+    })
+    .unwrap()
+    .unwrap();
+    let host = principal(&*m.f.store, "detached-host", PrincipalKind::Host);
+    let agents =
+        devworks_core::services::agents::AgentService::new(m.f.h.ids.clone(), m.f.control.clone());
+    let coordinator = write(&*m.f.store, move |tx| {
+        agents
+            .materialize_primary(tx, &host, &activation.id, activation.owner_epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("primary refused: {error:?}")))
+    })
+    .unwrap();
+    let primary = read(&*m.f.store, |s| {
+        s.runs().assignment(&coordinator.assignment_id)
+    })
+    .unwrap();
+    assert_eq!(primary.purpose, AssignmentPurpose::Primary);
+    assert_eq!(primary.root_id, RootId(id("moving")));
+    assert_eq!(primary.work_id, RootId(id("moving")));
+    assert_ne!(primary.id, m.worker.id);
+    assert_eq!(
+        read(&*m.f.store, |s| s
+            .runs()
+            .agent_assignment_context(&primary.id))
+        .unwrap()
+        .role_id,
+        id("issueCoordinator")
+    );
+}
+
+#[test]
+fn moving_a_secondary_delegated_task_fences_the_worker_without_moving_its_primary_task() {
+    let m = MovedWorker::new();
+    m.f.seed("secondary", Some("feature-a"), "task", 1);
+    write(&*m.f.store, |tx| {
+        let mut task = tx.work().work(&id("secondary"))?.unwrap();
+        task.revision = 2;
+        task.brief = json!({"inherits":["E1"]});
+        tx.work().update_work(&task, 1)
+    })
+    .unwrap();
+    let worker = m.worker.id.clone();
+    write(&*m.f.store, move |tx| {
+        tx.runs()
+            .insert_agent_assignment_context(&StoredAgentAssignmentContext {
+                assignment_id: worker,
+                project_id: ProjectId(id("project")),
+                role_id: id("worker"),
+                role_instructions: "Work on both tasks".into(),
+                role_revisions: json!({}),
+                brief: "Work on both tasks".into(),
+                task_ids: json!(["moving", "secondary"]),
+                source_checkpoint_id: None,
+                created_at_ms: 1,
+            })
+    })
+    .unwrap();
+    let revision = read(&*m.f.store, |s| s.work().work(&id("secondary")))
+        .unwrap()
+        .revision;
+    applied(m.f.command(
+        "tasks.set_feature",
+        json!({"taskId":"secondary","expectedRevision":revision.to_string(),"featureId":"feature-b","clearFeature":false}),
+    ));
+    assert_eq!(m.assignment().state, AssignmentState::Superseded);
+    let secondary_holds = || {
+        read(&*m.f.store, |s| {
+            devworks_core::services::runs::active_blockers(
+                s.runs(),
+                &BlockerFilter::RootLevel(RootId(id("secondary"))),
+            )
+        })
+    };
+    assert!(secondary_holds().iter().any(|hold| {
+        hold.origin_id == m.worker.id.0.as_str() && hold.clearance["membershipHandoff"] == true
+    }));
+    m.reconcile();
+    assert!(
+        !secondary_holds().is_empty(),
+        "the old turn is still active"
+    );
+    m.settle();
+    m.reconcile();
+    assert!(
+        secondary_holds().is_empty(),
+        "quiescence releases the moved task"
+    );
+    let after = m.assignment();
+    assert_eq!(after.state, AssignmentState::Superseded);
+    assert_eq!(after.checkpoint, m.worker.checkpoint);
+    assert_eq!(after.root_id, RootId(id("feature-a")));
+    assert_eq!(after.work_id, RootId(id("moving")));
+    assert_eq!(
+        read(&*m.f.store, |s| s.work().work(&id("moving")))
+            .unwrap()
+            .parent_feature_id,
+        Some(id("feature-a"))
+    );
+}
+
+#[test]
+fn a_split_delegated_scope_retires_instead_of_blocking_the_destination_forever() {
+    let m = MovedWorker::new();
+    m.f.seed("secondary", Some("feature-a"), "task", 1);
+    let worker = m.worker.id.clone();
+    write(&*m.f.store, move |tx| {
+        tx.runs()
+            .insert_agent_assignment_context(&StoredAgentAssignmentContext {
+                assignment_id: worker,
+                project_id: ProjectId(id("project")),
+                role_id: id("worker"),
+                role_instructions: "Work on both tasks".into(),
+                role_revisions: json!({}),
+                brief: "Work on both tasks".into(),
+                task_ids: json!(["moving", "secondary"]),
+                source_checkpoint_id: None,
+                created_at_ms: 1,
+            })
+    })
+    .unwrap();
+    m.change(Some("feature-b"));
+    let secondary_holds = || {
+        read(&*m.f.store, |s| {
+            devworks_core::services::runs::active_blockers(
+                s.runs(),
+                &BlockerFilter::RootLevel(RootId(id("secondary"))),
+            )
+        })
+    };
+    assert!(secondary_holds().iter().any(|hold| {
+        hold.origin_id == m.worker.id.0.as_str() && hold.clearance["membershipHandoff"] == true
+    }));
+    m.reconcile();
+    assert!(
+        !secondary_holds().is_empty(),
+        "the old turn is still active"
+    );
+    m.settle();
+    m.reconcile();
+    assert!(
+        secondary_holds().is_empty(),
+        "quiescence clears the secondary hold"
+    );
+    let retired = m.assignment();
+    assert_eq!(retired.state, AssignmentState::Superseded);
+    assert_eq!(retired.root_id, RootId(id("feature-a")));
+    assert_eq!(retired.checkpoint, m.worker.checkpoint);
+    assert!(
+        read(&*m.f.store, |s| {
+            devworks_core::services::runs::active_blockers(
+                s.runs(),
+                &BlockerFilter::RootLevel(RootId(id("moving"))),
+            )
+        })
+        .is_empty()
+    );
 }
 
 #[test]
@@ -410,14 +621,7 @@ fn a_closed_session_retires_its_pending_handoff_and_allows_a_fresh_destination_w
     m.reconcile();
     let retired = m.assignment();
     assert_eq!(retired.state, AssignmentState::Superseded);
-    assert!(
-        retired
-            .checkpoint
-            .as_ref()
-            .unwrap()
-            .get("membershipHandoff")
-            .is_some()
-    );
+    assert_eq!(retired.checkpoint, m.worker.checkpoint);
     let replacement = m.f.session(&id("feature-b"));
     let service = m.f.control.clone();
     let parent = m.coordinator_b.id.clone();

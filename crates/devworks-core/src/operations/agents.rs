@@ -13,7 +13,7 @@ use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{AssignmentId, Counter, Id, Revision, RootId};
+use crate::protocol::{AssignmentId, Counter, Id, ProjectId, Revision, RootId};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -80,6 +80,181 @@ impl Check for MessagesInput {
     }
 }
 impl Revisioned for MessagesInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `agents.post` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PostInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    pub body: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_kind: Option<RetainedMessageKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_name: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_human: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_reply_to_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolves: Option<RetainedMessageResolution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<Text>,
+}
+impl Check for PostInput {
+    fn check(&self) -> Result<(), String> {
+        self.session_id.check()?;
+        self.project_id.check()?;
+        self.body.check()?;
+        self.message_kind.check()?;
+        self.item_id.check()?;
+        self.feature_id.check()?;
+        self.resource_name.check()?;
+        self.to_session_id.check()?;
+        self.to_human.check()?;
+        self.blocking.check()?;
+        self.in_reply_to_id.check()?;
+        self.resolves.check()?;
+        self.idempotency_key.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for PostInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `agents.receive` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReceiveInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Cursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_read: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_seconds: Option<i32>,
+}
+impl Check for ReceiveInput {
+    fn check(&self) -> Result<(), String> {
+        self.session_id.check()?;
+        self.project_id.check()?;
+        self.cursor.check()?;
+        self.include_read.check()?;
+        self.limit.check()?;
+        self.wait_seconds.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for ReceiveInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `agents.ack` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AckInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messages: Option<Items<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub up_to: Option<Cursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<RetainedMessageResolution>,
+}
+impl Check for AckInput {
+    fn check(&self) -> Result<(), String> {
+        self.session_id.check()?;
+        self.project_id.check()?;
+        self.messages.check()?;
+        self.up_to.check()?;
+        self.resolution.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for AckInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `agents.history` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HistoryInput {
+    pub project_id: ProjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_name: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_only: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_human: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<Revision>,
+}
+impl Check for HistoryInput {
+    fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
+        self.channel.check()?;
+        self.item_id.check()?;
+        self.feature_id.check()?;
+        self.resource_name.check()?;
+        self.open_only.check()?;
+        self.to_human.check()?;
+        self.before.check()?;
+        self.limit.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for HistoryInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `agents.events` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EventsInput {
+    pub project_id: ProjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<Revision>,
+}
+impl Check for EventsInput {
+    fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
+        self.after.check()?;
+        self.limit.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for EventsInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
@@ -156,6 +331,16 @@ pub enum Input {
     Delegate(DelegateInput),
     /// `agents.messages` (Command).
     Messages(MessagesInput),
+    /// `agents.post` (Command).
+    Post(PostInput),
+    /// `agents.receive` (Command).
+    Receive(ReceiveInput),
+    /// `agents.ack` (Command).
+    Ack(AckInput),
+    /// `agents.history` (Query).
+    History(HistoryInput),
+    /// `agents.events` (Query).
+    Events(EventsInput),
     /// `agents.inbox` (Query).
     Inbox(InboxInput),
     /// `agents.acknowledge` (Command).
@@ -169,6 +354,11 @@ impl Input {
             Self::Inspect(_) => "agents.inspect",
             Self::Delegate(_) => "agents.delegate",
             Self::Messages(_) => "agents.messages",
+            Self::Post(_) => "agents.post",
+            Self::Receive(_) => "agents.receive",
+            Self::Ack(_) => "agents.ack",
+            Self::History(_) => "agents.history",
+            Self::Events(_) => "agents.events",
             Self::Inbox(_) => "agents.inbox",
             Self::Acknowledge(_) => "agents.acknowledge",
             Self::Checkpoint(_) => "agents.checkpoint",
@@ -179,6 +369,11 @@ impl Input {
             Self::Inspect(_) => Mode::Query,
             Self::Delegate(_) => Mode::Command,
             Self::Messages(_) => Mode::Command,
+            Self::Post(_) => Mode::Command,
+            Self::Receive(_) => Mode::Command,
+            Self::Ack(_) => Mode::Command,
+            Self::History(_) => Mode::Query,
+            Self::Events(_) => Mode::Query,
             Self::Inbox(_) => Mode::Query,
             Self::Acknowledge(_) => Mode::Command,
             Self::Checkpoint(_) => Mode::Command,

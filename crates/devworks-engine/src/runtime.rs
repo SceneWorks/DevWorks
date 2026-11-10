@@ -52,7 +52,8 @@ use devworks_core::services::runs::ControlService;
 use devworks_core::services::runs::recovery::{BootRecovery, LifecycleHooks, NoLifecycleHooks};
 use devworks_core::services::work::WorkService;
 use devworks_core::settings::view::Health;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use tokio::sync::{Notify, watch};
@@ -411,9 +412,10 @@ pub struct Runtime {
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
     /// itself is `admission`.
     stage: std::sync::atomic::AtomicU8,
-    /// The admission fence: every command holds it shared for its whole admission and unit of
-    /// work; shutdown takes it exclusively to close it, which waits for (drains) every command
-    /// already admitted. A command never commits after the run-control quiescence snapshot.
+    /// The admission fence: ordinary commands hold it through admission and commit. A retained
+    /// receive waits outside it with a registered shutdown token, then holds it for its final
+    /// decision. Shutdown closes it exclusively and cancels waiting receives; no command commits
+    /// after the run-control quiescence snapshot.
     admission: Arc<std::sync::RwLock<bool>>,
     /// The command path (admission fence, gateway, post-commit wakeups) shared with the
     /// scheduler's native runs.
@@ -1219,6 +1221,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         authority: authority.clone(),
         use_cases: use_cases.clone(),
         admission: admission.clone(),
+        receive_waiters: Arc::new(Mutex::new(BTreeMap::new())),
+        next_receive_waiter: AtomicU64::new(0),
         dispatcher: dispatcher.clone(),
         runs: run_supervisor.clone(),
         usage: usage.clone(),
@@ -1833,6 +1837,48 @@ impl Runtime {
         )
     }
 
+    /// Recover the exact context last published for this session, including frozen native
+    /// aliases. The returned cursor tells the caller whether later transcript facts need
+    /// reconciliation before another provider request.
+    pub fn recover_native_context_head(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+    ) -> Result<
+        Option<(
+            devworks_core::protocol::provider::ArtifactRef,
+            devworks_core::protocol::provider::NativeBinding,
+            i64,
+        )>,
+        StorageError,
+    > {
+        crate::tool_turn::recover_context_head(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            session_id,
+        )
+    }
+
+    /// Fix the first provider prompt and binding for a fresh session before its first send.
+    /// A restart recovers this head verbatim; a matching retry does not create another version.
+    pub fn publish_initial_native_context(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        binding: &devworks_core::protocol::provider::NativeBinding,
+        context: &devworks_core::providers::context::ProviderContext,
+    ) -> Result<devworks_core::protocol::provider::ArtifactRef, StorageError> {
+        crate::tool_turn::publish_initial_context(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            session_id,
+            binding,
+            context,
+        )
+    }
+
     /// Build the next provider context from the immutable request context and settled native
     /// exchange. The caller publishes the returned material before a new request.
     pub fn tool_continuation_context(
@@ -2320,15 +2366,24 @@ impl Runtime {
         // it starts no further step or probe, so no retention, probe or sweep write starts after
         // the admission fence closes; none of it is a command, so none of it changes run control.
         self.monitor.stop();
-        // AD20 step 1: fence admission in memory, then commit the run-control transition: live
-        // feature/issue work is held for manual Continue and asked to stop; launches get the
-        // cooperative grace. A storage failure here is not fatal: the next boot holds the same
-        // work from its boot epoch. Close admission first: wait (off the async thread) for every
-        // admitted command to commit, so none commits after the quiescence snapshot.
+        // AD20 step 1: fence admission in memory and cancel retained inbox waits, then commit the
+        // run-control transition: live feature/issue work is held for manual Continue and asked
+        // to stop; launches get the cooperative grace. A storage failure here is not fatal: the
+        // next boot holds the same work from its boot epoch. Close admission first: wait (off the
+        // async thread) for every
+        // command in admission or commit, so none commits after the quiescence snapshot.
         self.enter(ShutdownStage::DrainingAdmission);
         let admission = self.admission.clone();
+        let receive_waiters = self.admitter.receive_waiters.clone();
         let _ = tokio::task::spawn_blocking(move || {
             *admission.write().unwrap_or_else(|p| p.into_inner()) = true;
+            for token in receive_waiters
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .values()
+            {
+                token.cancel();
+            }
         })
         .await;
         // No blocking evaluator job may outlive the runtime: drain its local write fence.
@@ -2629,6 +2684,8 @@ struct Admitter {
     authority: Arc<dyn AuthorityPort>,
     use_cases: UseCases,
     admission: Arc<std::sync::RwLock<bool>>,
+    receive_waiters: Arc<Mutex<BTreeMap<u64, Cancellation>>>,
+    next_receive_waiter: AtomicU64,
     dispatcher: Dispatcher,
     runs: Arc<RunSupervisor>,
     usage: Arc<crate::usage::UsageRuntime>,
@@ -2643,6 +2700,19 @@ struct Admitter {
     indexing: Option<Arc<IndexSupervisor>>,
     /// The Tokio runtime [`boot`] ran on (a project archival's immediate stop is spawned there).
     handle: tokio::runtime::Handle,
+}
+
+struct ReceiveWaitGuard {
+    id: u64,
+    waiters: Arc<Mutex<BTreeMap<u64, Cancellation>>>,
+}
+impl Drop for ReceiveWaitGuard {
+    fn drop(&mut self) {
+        self.waiters
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.id);
+    }
 }
 impl Admitter {
     fn gateway(&self) -> Gateway<'_> {
@@ -2675,19 +2745,66 @@ impl Admitter {
         options: WriteOptions,
         wake_resumes: bool,
     ) -> CommandOutcome {
-        // Held until the command is decided and committed (or refused): shutdown's closing
-        // transition waits for it, and a command after it is refused before admission.
-        let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
-        if *open {
-            return closing_reply(
-                raw,
-                self.ids.next_id(devworks_core::ports::IdKind::Correlation),
-            );
-        }
-        let outcome = self
-            .use_cases
-            .command_with(&self.gateway(), ctx, operation, raw, options);
-        drop(open);
+        // A retained receive may wait 55 seconds. Its read-only preparation happens without
+        // holding the shutdown fence; only the final transactional decision holds that fence.
+        let outcome = if operation == "agents.receive" {
+            let mut options = options;
+            let token = options
+                .cancellation
+                .get_or_insert_with(Cancellation::new)
+                .clone();
+            let wait_guard = {
+                let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+                if *open {
+                    return closing_reply(
+                        raw,
+                        self.ids.next_id(devworks_core::ports::IdKind::Correlation),
+                    );
+                }
+                let id = self.next_receive_waiter.fetch_add(1, Ordering::Relaxed);
+                self.receive_waiters
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(id, token);
+                ReceiveWaitGuard {
+                    id,
+                    waiters: self.receive_waiters.clone(),
+                }
+            };
+            let prepared = self
+                .use_cases
+                .prepare_receive(&self.gateway(), ctx, raw, options);
+            drop(wait_guard);
+            let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+            if *open {
+                return closing_reply(
+                    raw,
+                    self.ids.next_id(devworks_core::ports::IdKind::Correlation),
+                );
+            }
+            let outcome = match prepared {
+                Ok(prepared) => self
+                    .use_cases
+                    .finish_receive(&self.gateway(), ctx, prepared),
+                Err(outcome) => outcome,
+            };
+            drop(open);
+            outcome
+        } else {
+            // Ordinary commands keep the fence through preparation and commit.
+            let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
+            if *open {
+                return closing_reply(
+                    raw,
+                    self.ids.next_id(devworks_core::ports::IdKind::Correlation),
+                );
+            }
+            let outcome =
+                self.use_cases
+                    .command_with(&self.gateway(), ctx, operation, raw, options);
+            drop(open);
+            outcome
+        };
         let (committed, released) = match &outcome {
             Ok(CommandReply::Recorded { receipt, .. }) => (
                 true,
