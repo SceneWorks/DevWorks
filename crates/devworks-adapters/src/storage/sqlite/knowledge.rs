@@ -963,6 +963,46 @@ macro_rules! knowledge_reads {
                     vec![Sql::Text(entity.as_str().into()), Sql::Integer(limit)],
                 )
             }
+            fn knowledge_entity_claims(
+                &self,
+                entity: &Id,
+                scopes: &[String],
+                limit: u16,
+            ) -> Result<Vec<StoredClaim>, StorageError> {
+                let limit = check_limit(limit)?;
+                claims_where(
+                    self.conn,
+                    "WHERE (c.subject_id=?1 OR c.object_id=?1) AND c.lifecycle<>'Deleted' \
+                     AND c.scope_key IN (SELECT value FROM json_each(?2)) \
+                     ORDER BY c.updated_at DESC, c.id DESC LIMIT ?3",
+                    vec![
+                        Sql::Text(entity.as_str().into()),
+                        Sql::Text(serde_json::to_string(scopes).expect("scope keys")),
+                        Sql::Integer(limit),
+                    ],
+                )
+            }
+            fn knowledge_entities(
+                &self,
+                scopes: &[String],
+                after: Option<(i64, &str)>,
+                limit: u16,
+            ) -> Result<Vec<StoredEntity>, StorageError> {
+                let limit = check_limit(limit)?;
+                let (at, id) = after.map_or((i64::MAX, String::new()), |(t, i)| (t, i.to_owned()));
+                entities_where(
+                    self.conn,
+                    "deleted_at IS NULL AND scope_key IN (SELECT value FROM json_each(?1)) \
+                     AND (?2=9223372036854775807 OR updated_at<?2 OR (updated_at=?2 AND id<?3)) \
+                     ORDER BY updated_at DESC, id DESC LIMIT ?4",
+                    vec![
+                        Sql::Text(serde_json::to_string(scopes).expect("scope keys")),
+                        Sql::Integer(at),
+                        Sql::Text(id),
+                        Sql::Integer(limit),
+                    ],
+                )
+            }
             fn knowledge_evidence(
                 &self,
                 id: &Id,
