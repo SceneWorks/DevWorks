@@ -389,7 +389,7 @@ async fn compose(
             id_source.clone(),
             store.clone(),
         )))
-        .with_agents(agents)
+        .with_agents(agents.clone())
         .with_history(Arc::new(HistoryService::new(id_source.clone())))
         // The router resolves tiers, named models, effort and availability over the provider
         // connections' durable rows (the same unit of work as each route).
@@ -660,7 +660,7 @@ async fn compose(
         config: runtime_config,
     };
     // Recovery and every required consumer start here, before any request below is admitted.
-    let runtime = boot(composition).await.map_err(StartError::Boot)?;
+    let runtime = Arc::new(boot(composition).await.map_err(StartError::Boot)?);
     // A previous boot cannot still be producing a paste. Live draft files require the
     // client keeper snapshot; this owner only reconciles incomplete reserved writes.
     if let Err(error) = devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
@@ -695,9 +695,22 @@ async fn compose(
         Counter::new(info.restore_epoch).map_err(|e| StartError::Thread(e.to_owned()))?,
         Revision::new(1).expect("positive"),
     );
+    runtime
+        .runs()
+        .install_launcher(Arc::new(
+            devworks_engine::agent_supervisor::AgentLauncher::new(
+                store.clone(),
+                id_source,
+                agents,
+                Arc::new(devworks_engine::agent_turns::NativeAgentTurnExecutor::new(
+                    &runtime,
+                )),
+            ),
+        ))
+        .map_err(StartError::Principal)?;
     runtime.notification_wakeup();
     Ok(Host {
-        runtime: Arc::new(runtime),
+        runtime,
         async_runtime: tokio::runtime::Handle::current(),
         ctx,
         sources,

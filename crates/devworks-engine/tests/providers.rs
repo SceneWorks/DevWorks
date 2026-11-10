@@ -1220,6 +1220,111 @@ fn compaction_result_is_artifact_only_and_does_not_enter_session_transcript() {
     });
 }
 #[test]
+fn agent_context_head_routes_with_its_existing_model_pin() {
+    runtime().block_on(async {
+        let f = Fx::new("CompatibleChat", Script::aggregate("{}"), false);
+        let human = principal(f.store.as_ref(), "route-owner", PrincipalKind::Human);
+        let agent = principal(f.store.as_ref(), "routed-agent", PrincipalKind::Agent)
+            .with_session(id("agent-session"));
+        write(f.store.as_ref(), {
+            let model = f.model.clone();
+            move |tx| {
+                bind_principal(
+                    tx,
+                    &human,
+                    NewPrincipalBinding {
+                        actor: ActorId(id("routed-agent")),
+                        kind: PrincipalKind::Agent,
+                        role: Some(devworks_core::settings::catalog::AgentRole::Worker),
+                        project_id: None,
+                        tool_families: None,
+                        bound_by: ActorId(id("route-owner")),
+                    },
+                    None,
+                )
+                .map_err(|error| StorageError::InvalidRecord(format!("binding: {error:?}")))?;
+                tx.sessions().insert_session(&StoredSession {
+                    id: id("agent-session"),
+                    conversation_id: id("agent-conversation"),
+                    agent_id: ActorId(id("routed-agent")),
+                    project_id: None,
+                    root_id: None,
+                    title: "Agent route".into(),
+                    context_epoch: 0,
+                    revision: 1,
+                    created_by: ActorId(id("route-owner")),
+                    created_at_ms: T0,
+                    closed_at_ms: None,
+                    closed_by: None,
+                    next_sequence: 1,
+                    checkpoint_sequence: 0,
+                })?;
+                tx.router().put_session_pin(
+                    &StoredPin {
+                        session_id: id("agent-session"),
+                        pin_id: id("agent-pin"),
+                        revision: 1,
+                        model_id: model,
+                        connection_id: id("connection"),
+                        upstream_model_id: Some("fixture-model".into()),
+                        endpoint_profile: Some("CompatibleChat".into()),
+                        identity_origin: "Resolved".into(),
+                        intent: serde_json::to_string(
+                            &devworks_core::protocol::records::RouteIntent::Model {
+                                model_id: id("model"),
+                            },
+                        )
+                        .unwrap(),
+                        requested_effort: "Default".into(),
+                        effective_effort: "Default".into(),
+                        required_capabilities: vec![],
+                        replaced_pin_id: None,
+                        reason: "Initial".into(),
+                        updated_at_ms: T0,
+                    },
+                    None,
+                )?;
+                Ok(())
+            }
+        })
+        .unwrap();
+        let app = devworks_engine::boot(tool_runtime_composition(&f))
+            .await
+            .unwrap();
+        let route = devworks_engine::agent_turns::route_context_head(
+            &app,
+            &agent,
+            &id("agent-session"),
+            0,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(route.model_id, f.model);
+        assert_eq!(route.pin_id, id("agent-pin"));
+        assert_eq!(
+            read(f.store.as_ref(), |snapshot| {
+                snapshot.router().session_pin(&id("agent-session"))
+            })
+            .unwrap()
+            .required_capabilities,
+            ["tools"]
+        );
+        let replay = devworks_engine::agent_turns::route_context_head(
+            &app,
+            &agent,
+            &id("agent-session"),
+            0,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(replay.pin_id, route.pin_id);
+        app.shutdown().await;
+    });
+}
+
+#[test]
 fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
     let f = Fx::new("CompatibleChat", Script::aggregate("{}"), false);
     let human = principal(f.store.as_ref(), "tool-selector", PrincipalKind::Human);
@@ -1251,13 +1356,13 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
     assert!(f.driver.schemas().tool(&agent, &alias).is_ok());
     let initial_tools = f.driver.schemas().selected_builtins(&agent).unwrap();
     assert!(initial_tools.iter().any(|tool| {
-        tool.capability_id.as_str() == "devworks/sessions.get"
+        tool.capability_id.as_str() == "devworks-query/sessions.get"
             && tool.wire_name == "sessions_get_query"
     }));
     assert!(
         !initial_tools
             .iter()
-            .any(|tool| tool.capability_id.as_str() == "devworks/agents.history")
+            .any(|tool| tool.capability_id.as_str() == "devworks-query/agents.history")
     );
     assert_eq!(
         serde_json::to_value(&initial_tools).unwrap(),
@@ -1284,7 +1389,7 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
             .selected_builtins(&agent)
             .unwrap()
             .iter()
-            .any(|tool| tool.capability_id.as_str() == "devworks/sessions.get")
+            .any(|tool| tool.capability_id.as_str() == "devworks-query/sessions.get")
     );
     let policy = read(f.store.as_ref(), |s| {
         devworks_core::authority::policy::resolve_policy(s.configuration(), None)
