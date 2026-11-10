@@ -49,7 +49,10 @@ pub struct Root(pub PathBuf);
 impl Root {
     pub fn new(name: &str) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let p = std::env::temp_dir().join(format!(
+        // Cargo's per-target scratch directory, not the system temp directory: on GitHub's
+        // Windows runners %TEMP% is on the C: OS disk, whose flush latency stalls the hundreds of
+        // durable commits of native Help startup past `SETTLE_BOUND`.
+        let p = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
             "devworks-desktop-{name}-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::SeqCst)
