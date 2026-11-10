@@ -2158,14 +2158,11 @@ impl Runtime {
         // An assignment's context starts with its role's instructions, captured when the work
         // began; a role changed since is adopted here, like changed guidance and skills.
         let mut role_changed = false;
-        if let Some(role) = self.current_role_prefix(ctx)? {
-            let texts = |blocks: &[devworks_core::providers::context::TextBlock]| {
-                blocks.iter().map(|b| b.text.clone()).collect::<Vec<_>>()
-            };
-            if texts(&base.instructions) != texts(&role) {
-                base.instructions = role;
-                role_changed = true;
-            }
+        if let Some(role) = self.current_role_prefix(ctx)?
+            && let Some(rebound) = with_role(&base.instructions, role)
+        {
+            base.instructions = rebound;
+            role_changed = true;
         }
         let rebound = self.bind_provider_instructions(ctx, base, targets)?;
         if !role_changed && rebound.instruction_stamps == old && rebound.skill_stamp == old_skills {
@@ -3183,6 +3180,30 @@ impl ResumeAdmission for Admitter {
 
 /// The `SkillRevisionsAdopted` payload of a skill-set change: the selected skills with exact
 /// revisions and digests, the transitions and any unresolved conflicts.
+/// The role prefix replaced by `role` when its text differs, keeping the host-authored blocks
+/// that follow it (they are not part of the role); `None` when the role is unchanged.
+fn with_role(
+    instructions: &[devworks_core::providers::context::TextBlock],
+    role: Vec<devworks_core::providers::context::TextBlock>,
+) -> Option<Vec<devworks_core::providers::context::TextBlock>> {
+    let host = |b: &devworks_core::providers::context::TextBlock| {
+        b.text == crate::agent_turns::TOOL_WINDOW_NOTICE
+    };
+    let current: Vec<&str> = instructions
+        .iter()
+        .filter(|b| !host(b))
+        .map(|b| b.text.as_str())
+        .collect();
+    if current == role.iter().map(|b| b.text.as_str()).collect::<Vec<_>>() {
+        return None;
+    }
+    Some(
+        role.into_iter()
+            .chain(instructions.iter().filter(|b| host(b)).cloned())
+            .collect(),
+    )
+}
+
 fn skill_adoption_payload(
     before: Option<&devworks_core::providers::instructions::SkillStamp>,
     after: Option<&devworks_core::providers::instructions::SkillStamp>,
@@ -3215,4 +3236,35 @@ fn skill_adoption_payload(
         "transitions": transitions,
         "conflicts": after.map(|s| s.conflicts.clone()).unwrap_or_default(),
     })
+}
+
+#[cfg(test)]
+mod role_adoption_tests {
+    use super::with_role;
+    use devworks_core::providers::context::TextBlock;
+
+    fn block(text: &str) -> TextBlock {
+        TextBlock {
+            text: text.into(),
+            cache: None,
+        }
+    }
+
+    #[test]
+    fn a_role_change_keeps_the_host_tool_window_notice() {
+        let notice = crate::agent_turns::TOOL_WINDOW_NOTICE;
+        let current = [block("old role"), block(notice)];
+        // An unchanged role is not a change, though the notice follows it.
+        assert!(with_role(&current, vec![block("old role")]).is_none());
+        let rebound = with_role(&current, vec![block("new role")]).expect("changed");
+        let texts: Vec<&str> = rebound.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(texts, ["new role", notice]);
+        // A role cleared to nothing keeps the notice alone; one set later leads again.
+        let cleared = with_role(&current, Vec::new()).expect("cleared");
+        assert_eq!(cleared.len(), 1);
+        assert_eq!(cleared[0].text, notice);
+        let set = with_role(&cleared, vec![block("role")]).expect("set");
+        assert_eq!(set[0].text, "role");
+        assert_eq!(set[1].text, notice);
+    }
 }
