@@ -51,6 +51,33 @@ fn rename(from: &Path, to: &Path) -> io::Result<()> {
         }
     }
 }
+/// Removes a tree this adapter wrote (staging or a retired tree). Windows refuses to delete a
+/// read-only file, and carried-over user files may be read-only, so their attribute is cleared
+/// there first; links are never followed.
+fn remove_tree(path: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    clear_readonly(path)?;
+    fs::remove_dir_all(path)
+}
+#[cfg(windows)]
+#[allow(clippy::permissions_set_readonly_false)] // Windows only: clears the read-only attribute
+fn clear_readonly(dir: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        let meta = fs::symlink_metadata(&path)?;
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            clear_readonly(&path)?;
+        } else if meta.permissions().readonly() {
+            let mut p = meta.permissions();
+            p.set_readonly(false);
+            fs::set_permissions(&path, p)?;
+        }
+    }
+    Ok(())
+}
 fn valid_segment(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\', ':', '\0'])
 }
@@ -149,8 +176,14 @@ fn copy_entry(from: &Path, to: &Path) -> io::Result<()> {
         return Ok(());
     }
     if kind.is_file() {
-        fs::copy(from, to)?;
-        File::open(to)?.sync_all()?;
+        // Copied through the handle that created it, which can flush on every platform (Windows
+        // denies flushing a read-only handle), then given the source's permissions, which may
+        // make it read-only.
+        let mut out = File::create_new(to)?;
+        io::copy(&mut File::open(from)?, &mut out)?;
+        out.sync_all()?;
+        drop(out);
+        fs::set_permissions(to, fs::metadata(from)?.permissions())?;
     }
     // Sockets, FIFOs and devices cannot be copied; they are left out rather than faked.
     Ok(())
@@ -227,14 +260,14 @@ impl SkillFiles for NativeSkillFiles {
             sync_dir(&staging).map_err(io_fault)
         })();
         if let Err(e) = written {
-            let _ = fs::remove_dir_all(&staging);
+            let _ = remove_tree(&staging);
             return Err(e);
         }
         // Links in the managed root are never followed: a link at the live name is replaced.
         let had_live = fs::symlink_metadata(&live).is_ok();
         if had_live {
             rename(&live, &retired).map_err(|e| {
-                let _ = fs::remove_dir_all(&staging);
+                let _ = remove_tree(&staging);
                 io_fault(e)
             })?;
         }
@@ -242,14 +275,14 @@ impl SkillFiles for NativeSkillFiles {
             if had_live {
                 let _ = rename(&retired, &live);
             }
-            let _ = fs::remove_dir_all(&staging);
+            let _ = remove_tree(&staging);
             return Err(io_fault(e));
         }
         sync_dir(&root).map_err(io_fault)?;
         if had_live {
             let meta = fs::symlink_metadata(&retired).map_err(io_fault)?;
             if meta.file_type().is_dir() {
-                let _ = fs::remove_dir_all(&retired);
+                let _ = remove_tree(&retired);
             } else {
                 let _ = fs::remove_file(&retired);
             }
@@ -383,6 +416,13 @@ mod tests {
         ));
         // Uncaptured user files survive a whole-tree replacement.
         fs::write(root.join("demo/.env"), b"secret").unwrap();
+        // A read-only uncaptured file is carried over too, still read-only.
+        fs::write(root.join("demo/.readonly"), b"fixed").unwrap();
+        let mut ro = fs::metadata(root.join("demo/.readonly"))
+            .unwrap()
+            .permissions();
+        ro.set_readonly(true);
+        fs::set_permissions(root.join("demo/.readonly"), ro).unwrap();
         fs::create_dir_all(root.join("demo/docs/.cache")).unwrap();
         fs::write(root.join("demo/docs/.cache/x"), b"c").unwrap();
         #[cfg(unix)]
@@ -399,6 +439,13 @@ mod tests {
             .unwrap();
         assert_eq!(fs::read(root.join("demo/SKILL.md")).unwrap(), b"three");
         assert_eq!(fs::read(root.join("demo/.env")).unwrap(), b"secret");
+        assert_eq!(fs::read(root.join("demo/.readonly")).unwrap(), b"fixed");
+        assert!(
+            fs::metadata(root.join("demo/.readonly"))
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
         assert_eq!(fs::read(root.join("demo/docs/.cache/x")).unwrap(), b"c");
         #[cfg(unix)]
         assert_eq!(
@@ -428,6 +475,6 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(leftovers, ["demo"]);
-        fs::remove_dir_all(root).unwrap();
+        remove_tree(&root).unwrap();
     }
 }
