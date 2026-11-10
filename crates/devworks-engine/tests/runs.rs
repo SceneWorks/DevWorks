@@ -1699,6 +1699,28 @@ fn feature_delegate_binds_single_task_as_child_work_scope() {
             .materialize_primary(tx, &host, &execution, epoch)
             .map_err(|error| StorageError::InvalidRecord(format!("primary: {error:?}")))
     });
+    let human = fx.user.clone();
+    let pending = fx.tx(move |_, tx| {
+        devworks_core::services::agents::retained::post_message(
+            tx,
+            &human,
+            &devworks_core::services::agents::retained::PostSpec {
+                project: ProjectId(id("project-a")),
+                body: "Review the task boundary".into(),
+                kind: devworks_core::services::agents::retained::MessageKind::Question,
+                item: Some(rid("task-f1")),
+                feature: None,
+                resource: None,
+                to_session: None,
+                to_human: false,
+                blocking: false,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )
+    });
+    assert_eq!(pending.recipients, 0);
     let session = read(&*fx.store, |snapshot| {
         let assignment = snapshot.runs().assignment(&primary.assignment_id)?.unwrap();
         snapshot.sessions().session(&assignment.session_id)
@@ -1741,6 +1763,13 @@ fn feature_delegate_binds_single_task_as_child_work_scope() {
     assert_eq!(assignment.purpose, AssignmentPurpose::Child);
     assert_eq!(assignment.root_id, rid("root-f"));
     assert_eq!(assignment.work_id, rid("task-f1"));
+    let delivery = read(&*fx.store, |snapshot| {
+        snapshot
+            .runs()
+            .agent_session_delivery(&pending.message.id, &assignment.session_id)
+    })
+    .unwrap();
+    assert!(delivery.handed_over);
 }
 
 struct DelegatingCoordinator {

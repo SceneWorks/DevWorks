@@ -400,8 +400,21 @@ pub fn handover_item(
     if !assignment.state.is_live() {
         return Err(StorageError::ScopeDenied);
     }
-    if assignment.purpose != crate::ports::storage::AssignmentPurpose::Primary {
-        return Ok(0);
+    if assignment.purpose == crate::ports::storage::AssignmentPurpose::Child {
+        let scoped = assignment.work_id != assignment.root_id
+            && tx
+                .runs()
+                .agent_assignment_context(&assignment.id)?
+                .is_some_and(|context| {
+                    context.task_ids.as_array().is_some_and(|tasks| {
+                        tasks
+                            .iter()
+                            .any(|task| task.as_str() == Some(assignment.work_id.0.as_str()))
+                    })
+                });
+        if !scoped {
+            return Ok(0);
+        }
     }
     let item = &assignment.work_id;
     let session_id = &assignment.session_id;
