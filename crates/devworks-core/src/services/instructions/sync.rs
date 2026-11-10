@@ -624,7 +624,9 @@ impl InstructionService {
             if item.origin != InstructionOrigin::Harness {
                 return Ok(wrote);
             }
-            if item.materialized_digest.as_deref() == Some(revision.content_digest.as_str())
+            // Matching digests prove nothing when the directory is gone: it is written again.
+            if item.present
+                && item.materialized_digest.as_deref() == Some(revision.content_digest.as_str())
                 && item.observed_digest == item.materialized_digest
             {
                 return Ok(wrote);

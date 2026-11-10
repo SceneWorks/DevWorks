@@ -537,6 +537,14 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
         );
         assert_eq!(find(&discover(&fx, &app, &user), "delta", "harness")["revision"], delta2["revision"]);
         assert_eq!(std::fs::read(fx.harness.join("delta/docs/.env")).unwrap(), b"secret");
+        // A deleted directory is written again by a restore of its active revision, even though
+        // the recorded digests already match it.
+        std::fs::remove_dir_all(fx.harness.join("delta")).unwrap();
+        let gone = find(&discover(&fx, &app, &user), "delta", "harness").clone();
+        assert!(labels(&gone).contains(&"missing".into()), "{gone}");
+        fx.command(&app, &user, "skills.rollback", json!({"instructionId":gone["id"],"expectedRevision":gone["revision"],"targetRevision":delta2["revision"]}));
+        assert_eq!(std::fs::read(fx.harness.join("delta/docs/ref.md")).unwrap(), b"nested");
+        assert!(!labels(find(&discover(&fx, &app, &user), "delta", "harness")).contains(&"missing".into()));
         // Captured skill versions stay out of artifact listings; other host artifacts remain.
         let staged = fx.artifacts.stage_host_bytes(&*fx.store, b"repository summary", json!({"kind":"Test"})).unwrap().unwrap();
         let (artifacts, s2) = (fx.artifacts.clone(), staged.clone());
@@ -549,6 +557,17 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
             .iter().map(|a| a["name"].as_str().unwrap().to_owned()).collect();
         assert!(names.contains(&"Repository summary".to_owned()), "{names:?}");
         assert!(!names.iter().any(|n| n.starts_with("Skill ") || n.starts_with("Role ")), "{names:?}");
+        // A creation that would take the harness root past what discovery reads is refused, so
+        // the existing harness skills stay editable.
+        let present = std::fs::read_dir(&fx.harness).unwrap().count();
+        for i in present..512 {
+            std::fs::create_dir(fx.harness.join(format!("filler-{i}"))).unwrap();
+        }
+        assert_eq!(
+            refused(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"overflow","content":fx.upload(&user, "one too many")}))),
+            "Conflict"
+        );
+        assert!(!fx.harness.join("overflow").exists());
         // Unknown roots are refused, not ignored.
         assert_eq!(
             fx.query(&app, &user, "skills.discover", json!({"scope":{"kind":"Workspace"},"rootIds":["elsewhere"],"page":{"limit":5}}))

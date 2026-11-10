@@ -129,7 +129,8 @@ impl InstructionService {
                 .is_some_and(|r| r.content.sha256.0 == draft.staged.instruction.digest);
             self.settle_capture(&draft.staged, committed);
         }
-        if let Some(record) = applied
+        // A save or restore that changed nothing still recreates a deleted directory.
+        if let Some(record) = applied.or_else(|| unchanged_record(reply))
             && record.approved
             && record
                 .source_path
@@ -456,6 +457,22 @@ impl InstructionService {
         match self.source.canonical_dir(&root.join(name)) {
             Err(SourceFault::Missing) => {}
             _ => return Err(refusal(DomainErrorCode::Conflict, "skill_directory", None)),
+        }
+        // Discovery refuses a root with more than `MAX_SKILLS` entries (and with it every later
+        // save), so a creation that would cross that bound is refused instead.
+        let entries = match self.source.list_dir(&root, scan::MAX_SKILLS + 1) {
+            Ok(entries) => entries.len(),
+            Err(SourceFault::Missing) => 0,
+            Err(_) => {
+                return Err(refusal(
+                    DomainErrorCode::SourceChanged,
+                    "skill_source",
+                    None,
+                ));
+            }
+        };
+        if entries >= scan::MAX_SKILLS {
+            return Err(refusal(DomainErrorCode::Conflict, "skill_capacity", None));
         }
         let item = StoredInstructionItem {
             id: tx.new_id(IdKind::Operation),
@@ -967,9 +984,15 @@ fn result(kind: InstructionKind, op: Op, value: InstructionRecord) -> OperationR
 }
 
 fn applied_record(reply: Option<&DomainCommandReply>) -> Option<InstructionRecord> {
+    decided_record(reply, "Applied")
+}
+fn unchanged_record(reply: Option<&DomainCommandReply>) -> Option<InstructionRecord> {
+    decided_record(reply, "NoChange")
+}
+fn decided_record(reply: Option<&DomainCommandReply>, kind: &str) -> Option<InstructionRecord> {
     let value = serde_json::to_value(reply?).ok()?;
     let decision = value.pointer("/receipt/decision")?;
-    if decision["kind"] != "Applied" {
+    if decision["kind"] != kind {
         return None;
     }
     let result = decision.get("result")?;
