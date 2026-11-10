@@ -295,8 +295,12 @@ fn agent_assignment_scope(
         return Ok(());
     }
     // A root lineage without a delegated assignment retains the pre-existing project artifact
-    // policy. New coordinator/Worker turns carry an assignment and are narrowed below.
-    if matches!(request.input, OperationInput::Artifacts(_)) && ctx.assignment_id().is_none() {
+    // and reviewed-job policies. New coordinator/Worker turns carry an assignment below.
+    if matches!(
+        request.input,
+        OperationInput::Artifacts(_) | OperationInput::Jobs(_)
+    ) && ctx.assignment_id().is_none()
+    {
         return Ok(());
     }
     let assignment_id = ctx
