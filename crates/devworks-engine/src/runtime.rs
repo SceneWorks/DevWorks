@@ -1622,34 +1622,7 @@ impl Runtime {
         before: Option<&devworks_core::providers::instructions::SkillStamp>,
         after: Option<&devworks_core::providers::instructions::SkillStamp>,
     ) -> Result<(), StorageError> {
-        let names = |s: Option<&devworks_core::providers::instructions::SkillStamp>| {
-            s.map(|s| {
-                s.skills
-                    .iter()
-                    .map(|e| (e.name.clone(), (e.instruction_id.clone(), e.revision)))
-                    .collect::<std::collections::BTreeMap<_, _>>()
-            })
-            .unwrap_or_default()
-        };
-        let (old, new) = (names(before), names(after));
-        let transitions: Vec<String> = old
-            .keys()
-            .chain(new.keys())
-            .filter(|n| old.get(*n) != new.get(*n))
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        let payload = serde_json::json!({
-            "digest": after.map(|s| s.digest.clone()),
-            "previousDigest": before.map(|s| s.digest.clone()),
-            "skills": after.map(|s| s.skills.iter().map(|e| serde_json::json!({
-                "name": e.name, "instructionId": e.instruction_id.as_str(), "rootId": e.root_id,
-                "revision": e.revision, "contentDigest": e.content_digest,
-            })).collect::<Vec<_>>()).unwrap_or_default(),
-            "transitions": transitions,
-            "conflicts": after.map(|s| s.conflicts.clone()).unwrap_or_default(),
-        });
+        let payload = skill_adoption_payload(before, after);
         let (session, actor) = (session_id.clone(), ctx.principal().clone());
         devworks_core::ports::storage::run_write(
             self.store.as_ref(),
@@ -2105,14 +2078,10 @@ impl Runtime {
         if rebound.instruction_stamps == old && rebound.skill_stamp == old_skills {
             return Ok(source.artifact);
         }
-        if rebound.skill_stamp != old_skills {
-            self.record_skill_adoption(
-                ctx,
-                session_id,
-                old_skills.as_ref(),
-                rebound.skill_stamp.as_ref(),
-            )?;
-        }
+        // Recorded in the transaction that publishes the epoch: a refused or failed transition
+        // records no adoption, and a retry records it once.
+        let adoption = (rebound.skill_stamp != old_skills)
+            .then(|| skill_adoption_payload(old_skills.as_ref(), rebound.skill_stamp.as_ref()));
         let next_binding = devworks_core::protocol::provider::NativeBinding {
             context_epoch: devworks_core::protocol::Counter::new(
                 previous_epoch
@@ -2138,6 +2107,7 @@ impl Runtime {
                 reason: devworks_core::protocol::provider::ContextChangeReason::InstructionAdoption,
                 context: converted,
                 omitted,
+                adoption,
             },
         )
     }
@@ -3004,4 +2974,40 @@ impl ResumeAdmission for Admitter {
         // Unknown outcomes wait for the periodic sweep, never a self-notification hot loop.
         self.command_with_wakeup(context, operation, frame, options, false)
     }
+}
+
+/// The `SkillRevisionsAdopted` payload of a skill-set change: the selected skills with exact
+/// revisions and digests, the transitions and any unresolved conflicts.
+fn skill_adoption_payload(
+    before: Option<&devworks_core::providers::instructions::SkillStamp>,
+    after: Option<&devworks_core::providers::instructions::SkillStamp>,
+) -> serde_json::Value {
+    let names = |s: Option<&devworks_core::providers::instructions::SkillStamp>| {
+        s.map(|s| {
+            s.skills
+                .iter()
+                .map(|e| (e.name.clone(), (e.instruction_id.clone(), e.revision)))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        })
+        .unwrap_or_default()
+    };
+    let (old, new) = (names(before), names(after));
+    let transitions: Vec<String> = old
+        .keys()
+        .chain(new.keys())
+        .filter(|n| old.get(*n) != new.get(*n))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    serde_json::json!({
+        "digest": after.map(|s| s.digest.clone()),
+        "previousDigest": before.map(|s| s.digest.clone()),
+        "skills": after.map(|s| s.skills.iter().map(|e| serde_json::json!({
+            "name": e.name, "instructionId": e.instruction_id.as_str(), "rootId": e.root_id,
+            "revision": e.revision, "contentDigest": e.content_digest,
+        })).collect::<Vec<_>>()).unwrap_or_default(),
+        "transitions": transitions,
+        "conflicts": after.map(|s| s.conflicts.clone()).unwrap_or_default(),
+    })
 }

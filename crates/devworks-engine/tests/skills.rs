@@ -301,6 +301,13 @@ fn labels(record: &Value) -> Vec<String> {
         .map(|l| l.as_str().unwrap().to_owned())
         .collect()
 }
+/// The revision digest a record exposes (what `*.propose` binds to).
+fn digest_of(record: &Value) -> String {
+    labels(record)
+        .into_iter()
+        .find_map(|l| l.strip_prefix("digest:").map(str::to_owned))
+        .expect("records expose their revision digest")
+}
 fn find<'a>(page: &'a Value, name: &str, origin: &str) -> &'a Value {
     page["items"]
         .as_array()
@@ -494,6 +501,12 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
             assert_eq!(std::fs::read(fx.harness.join("beta/notes.md")).unwrap(), b"edited again");
             std::fs::remove_file(fx.harness.join("beta/link.md")).unwrap();
         }
+        // A new harness skill whose name differs only in case from an existing one would share
+        // its directory on case-insensitive filesystems: refused, never an unchecked overwrite.
+        assert_eq!(
+            refused(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"BETA","content":fx.upload(&user, "other beta")}))),
+            "Conflict"
+        );
         // Captured skill versions stay out of artifact listings; other host artifacts remain.
         let staged = fx.artifacts.stage_host_bytes(&*fx.store, b"repository summary", json!({"kind":"Test"})).unwrap().unwrap();
         let (artifacts, s2) = (fx.artifacts.clone(), staged.clone());
@@ -570,9 +583,8 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
         // Direct activation by the agent is refused: it needs the exact human approval.
         let direct = fx.command(&app, &agent, "skills.rollback", json!({"instructionId":draft["id"],"expectedRevision":"1","targetRevision":"1"}));
         assert!(!matches!(&direct, CommandReply::Recorded{receipt,..} if matches!(receipt.decision, DomainDecision::Applied{..})), "{direct:?}");
-        let digest = read(&*fx.store, |s| s.instructions().instruction_revision(&id(draft["id"].as_str().unwrap()), 1))
-            .unwrap()
-            .content_digest;
+        // The revision digest a proposal binds to comes from the public draft record.
+        let digest = digest_of(&draft);
         let proposal = applied(fx.command(&app, &agent, "skills.propose", json!({"instructionId":draft["id"],"expectedRevision":"1","contentDigest":digest})));
         assert_eq!(proposal["state"], "Pending");
         assert_eq!(proposal["operationKind"], "skills.rollback");
@@ -620,7 +632,7 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
         // A rejected proposal leaves the active revision unchanged.
         let item = read(&*fx.store, |s| s.instructions().instruction_item(&id(draft["id"].as_str().unwrap()))).unwrap();
         let second = applied(fx.command(&app, &agent, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":draft["id"],"expectedRevision":item.latest_revision.to_string(),"name":"alpha","content":fx.upload(&agent, "Worse alpha.")})));
-        let digest = read(&*fx.store, |s| s.instructions().instruction_revision(&id(draft["id"].as_str().unwrap()), 2)).unwrap().content_digest;
+        let digest = digest_of(&second);
         let rejected = applied(fx.command(&app, &agent, "skills.propose", json!({"instructionId":second["id"],"expectedRevision":"2","contentDigest":digest})));
         applied(app.record_human_decision(&user, &decision(&rejected, "Reject")).unwrap());
         app.approval_resumes().tick().await.unwrap();
@@ -686,7 +698,7 @@ fn role_saves_adopt_at_once_and_agent_role_edits_need_approval() {
         let draft = applied(fx.command(&app, &agent, "roles.draft", json!({"scope":{"kind":"Workspace"},"instructionId":"role-worker","expectedRevision":"2","name":"worker","content":fx.upload(&agent, "Agent-suggested worker rules.")})));
         assert_eq!(draft["approved"], false);
         assert_eq!(setting(&*fx.store, AgentRole::Worker), default);
-        let digest = read(&*fx.store, |s| s.instructions().instruction_revision(&id("role-worker"), 3)).unwrap().content_digest;
+        let digest = digest_of(&draft);
         let proposal = applied(fx.command(&app, &agent, "roles.propose", json!({"instructionId":"role-worker","expectedRevision":"3","contentDigest":digest})));
         let decision = serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
             "requestKey":fx.h.ids.next_id(IdKind::Link),"body":{"kind":"approvals.record_human_decision",
@@ -895,6 +907,30 @@ fn provider_contexts_bind_skills_gate_dispatch_and_adopt_changes_at_an_epoch() {
             .find(|e| e.kind == "SkillRevisionsAdopted")
             .expect("recorded");
         assert_eq!(adoption.payload["transitions"], json!(["alpha"]));
+        // A refused transition (here: from a stale epoch) records no adoption.
+        std::fs::write(fx.shared.join("alpha/SKILL.md"), "Do alpha, third.").unwrap();
+        assert!(
+            app.adopt_instruction_epoch(&host, &session_id, &previous, &binding, &[])
+                .is_err()
+        );
+        let events = read(&*fx.store, |s| {
+            s.history().page(
+                &EventFilter::Aggregate {
+                    kind: "session".into(),
+                    id: session_id.as_str().into(),
+                },
+                0,
+                500,
+            )
+        });
+        assert_eq!(
+            events
+                .events
+                .iter()
+                .filter(|e| e.kind == "SkillRevisionsAdopted")
+                .count(),
+            1
+        );
         app.shutdown().await;
     });
 }

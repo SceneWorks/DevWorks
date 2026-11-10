@@ -73,6 +73,8 @@ impl Shell {
             // Fence the old details now; they reload with the refreshed record.
             p.reload_selected = true;
             p.detail.generation = p.detail.generation.wrapping_add(1);
+            p.detail.text_generation = p.detail.text_generation.wrapping_add(1);
+            p.detail.resources_generation = p.detail.resources_generation.wrapping_add(1);
             p.detail.history = None;
             p.detail.history_gathering.clear();
             p.detail.resources = None;
@@ -98,17 +100,29 @@ impl Shell {
         };
         let p = self.panel();
         p.detail.generation = p.detail.generation.wrapping_add(1);
-        let generation = p.detail.generation;
+        p.detail.text_generation = p.detail.text_generation.wrapping_add(1);
+        p.detail.resources_generation = p.detail.resources_generation.wrapping_add(1);
+        let (generation, text_generation, resources_generation) = (
+            p.detail.generation,
+            p.detail.text_generation,
+            p.detail.resources_generation,
+        );
         p.detail.history = None;
         p.detail.history_gathering.clear();
         p.detail.resources = None;
         p.detail.resources_gathering.clear();
+        p.detail.resources_revision = Some(sel.record.revision.get());
         p.detail.text = None;
         p.detail.shown = Some(sel.record.revision.get());
         self.history_page(sel.kind, sel.id.clone(), generation, None);
-        self.load_instruction_text(generation, sel.record.content.clone());
+        self.load_instruction_text(text_generation, sel.record.content.clone());
         if sel.kind == Kind::Skill {
-            self.resources_page(sel.id, sel.record.revision.get(), generation, None);
+            self.resources_page(
+                sel.id,
+                sel.record.revision.get(),
+                resources_generation,
+                None,
+            );
         }
     }
 
@@ -173,14 +187,30 @@ impl Shell {
         let Some(record) = record else {
             return;
         };
+        let skill = self
+            .panel()
+            .selected
+            .as_ref()
+            .is_some_and(|s| s.kind == Kind::Skill);
+        let id = self.panel().selected.as_ref().map(|s| s.id.clone());
         let p = self.panel();
-        p.detail.generation = p.detail.generation.wrapping_add(1);
-        let generation = p.detail.generation;
-        // History and resources stay as loaded; only the text slot moves to this generation.
+        // History stays as loaded; text (and a skill's resources) follow the viewed revision
+        // under their own generations, so nothing in flight is stranded.
+        p.detail.text_generation = p.detail.text_generation.wrapping_add(1);
+        let text_generation = p.detail.text_generation;
         p.detail.shown = Some(revision);
         p.detail.text = None;
         p.editor = None;
-        self.load_instruction_text(generation, record.content);
+        self.load_instruction_text(text_generation, record.content);
+        if skill && let Some(id) = id {
+            let d = &mut self.panel().detail;
+            d.resources_generation = d.resources_generation.wrapping_add(1);
+            d.resources = None;
+            d.resources_gathering.clear();
+            d.resources_revision = Some(revision);
+            let resources_generation = d.resources_generation;
+            self.resources_page(id, revision, resources_generation, None);
+        }
     }
 
     fn save_instruction(
@@ -349,7 +379,7 @@ impl Shell {
                 }
             }
             (Slot::InstructionResources(generation), Reply::Query(q)) => {
-                if generation != self.panel().detail.generation {
+                if generation != self.panel().detail.resources_generation {
                     return None;
                 }
                 match iop::resources(q) {
@@ -357,8 +387,10 @@ impl Shell {
                         self.panel().detail.resources_gathering.extend(page.items);
                         match page.next {
                             Some(next) => {
-                                if let Some(sel) = self.panel().selected.clone() {
-                                    let revision = sel.record.revision.get();
+                                let revision = self.panel().detail.resources_revision;
+                                if let (Some(sel), Some(revision)) =
+                                    (self.panel().selected.clone(), revision)
+                                {
                                     self.resources_page(sel.id, revision, generation, Some(next));
                                 }
                             }
@@ -377,7 +409,7 @@ impl Shell {
             }
             (Slot::InstructionText(generation), Reply::Task(result)) => {
                 let d = &mut self.panel().detail;
-                if generation != d.generation {
+                if generation != d.text_generation {
                     return None;
                 }
                 d.text = Some(match result {

@@ -51,7 +51,15 @@ pub struct Selection {
 
 #[derive(Default)]
 pub struct Detail {
+    /// Fences history replies (and everything on a new selection).
     pub generation: u64,
+    /// Fences text replies on their own, so viewing another revision never strands the
+    /// history or resource listing in flight.
+    pub text_generation: u64,
+    /// Fences resource listing replies on their own.
+    pub resources_generation: u64,
+    /// The revision the resource listing belongs to (its pages continue with it).
+    pub resources_revision: Option<i64>,
     /// `None` while loading.
     pub history: Option<Result<Vec<InstructionRecord>, String>>,
     pub history_gathering: Vec<InstructionRecord>,
@@ -123,6 +131,8 @@ impl InstructionsPanel {
         let generation = self.detail.generation.wrapping_add(1);
         self.detail = Detail {
             generation,
+            text_generation: self.detail.text_generation.wrapping_add(1),
+            resources_generation: self.detail.resources_generation.wrapping_add(1),
             shown: Some(selection.record.revision.get()),
             ..Detail::default()
         };

@@ -98,6 +98,9 @@ impl InstructionStamp {
     }
 }
 
+/// Shared and harness roots each hold at most 512 skills.
+pub const MAX_STAMPED_SKILLS: usize = 1024;
+
 /// The effective skill set bound into a provider context: the exact revisions an agent adopted
 /// at its last safe step. A changed set is a new adoption boundary (a new context epoch).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,8 +126,9 @@ impl SkillStamp {
     pub fn validate(&self) -> bool {
         let digest = |v: &str| v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit());
         digest(&self.digest)
-            && self.skills.len() <= 512
-            && self.conflicts.len() <= 512
+            // Both skill roots may each hold their maximum of distinct names.
+            && self.skills.len() <= MAX_STAMPED_SKILLS
+            && self.conflicts.len() <= MAX_STAMPED_SKILLS
             && self.skills.iter().all(|s| {
                 !s.name.is_empty()
                     && s.name.chars().count() <= 128

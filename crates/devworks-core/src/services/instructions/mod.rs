@@ -287,6 +287,8 @@ pub(crate) fn record(
     if !item.present {
         labels.push("missing".into());
     }
+    // The authoritative revision digest (`*.propose` binds to it).
+    labels.push(format!("digest:{}", revision.content_digest));
     labels.extend(revision.applicability.iter().cloned());
     labels.truncate(128);
     let source_path = match (&item.origin, &item.source_path) {

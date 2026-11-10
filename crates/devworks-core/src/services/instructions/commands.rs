@@ -373,22 +373,7 @@ impl InstructionService {
         if !valid_name(name) {
             return Err(invalid("skill_name"));
         }
-        let harness =
-            |tx: &mut dyn WriteTransaction| -> Result<Option<StoredInstructionItem>, StorageError> {
-                Ok(tx
-                    .instructions()
-                    .instruction_items(
-                        &InstructionFilter {
-                            kind: Some(InstructionKind::Skill),
-                            scopes: vec![ConfigScope::Workspace],
-                            name: Some(name.to_owned()),
-                        },
-                        None,
-                        16,
-                    )?
-                    .into_iter()
-                    .find(|i| i.origin == InstructionOrigin::Harness))
-            };
+        let harness = |tx: &mut dyn WriteTransaction| harness_named(tx, name);
         match input.instruction_id {
             Some(id) => {
                 let source = visible_item(tx.instructions(), ctx, id, InstructionKind::Skill)?;
@@ -725,19 +710,7 @@ impl InstructionService {
         target: &StoredInstructionRevision,
     ) -> Result<DomainDecision, Failure> {
         let now = tx.now_ms();
-        let existing = tx
-            .instructions()
-            .instruction_items(
-                &InstructionFilter {
-                    kind: Some(InstructionKind::Skill),
-                    scopes: vec![ConfigScope::Workspace],
-                    name: Some(shared.name.clone()),
-                },
-                None,
-                16,
-            )?
-            .into_iter()
-            .find(|i| i.origin == InstructionOrigin::Harness);
+        let existing = harness_named(tx, &shared.name)?;
         let mut item = match existing {
             Some(item) => item,
             None => self.new_harness_item(tx, &shared.name, now)?,
@@ -851,6 +824,39 @@ fn role_target(
                 overrides: None,
                 created: true,
             })
+        }
+    }
+}
+
+/// The harness skill whose directory `name` resolves to. Names are compared case-insensitively:
+/// on Windows and default macOS volumes `foo` and `Foo` are one directory, so a creation must
+/// never resolve onto (and overwrite) another skill's files.
+fn harness_named(
+    tx: &mut dyn WriteTransaction,
+    name: &str,
+) -> Result<Option<StoredInstructionItem>, StorageError> {
+    let folded = name.to_lowercase();
+    let mut after: Option<Id> = None;
+    loop {
+        let page = tx.instructions().instruction_items(
+            &InstructionFilter {
+                kind: Some(InstructionKind::Skill),
+                scopes: vec![ConfigScope::Workspace],
+                name: None,
+            },
+            after.as_ref(),
+            crate::ports::storage::MAX_PAGE,
+        )?;
+        let done = page.len() < crate::ports::storage::MAX_PAGE as usize;
+        after = page.last().map(|i| i.id.clone());
+        if let Some(found) = page
+            .into_iter()
+            .find(|i| i.origin == InstructionOrigin::Harness && i.name.to_lowercase() == folded)
+        {
+            return Ok(Some(found));
+        }
+        if done {
+            return Ok(None);
         }
     }
 }
