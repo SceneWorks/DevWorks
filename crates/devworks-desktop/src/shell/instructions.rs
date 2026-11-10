@@ -102,27 +102,51 @@ impl Shell {
         p.detail.generation = p.detail.generation.wrapping_add(1);
         p.detail.text_generation = p.detail.text_generation.wrapping_add(1);
         p.detail.resources_generation = p.detail.resources_generation.wrapping_add(1);
-        let (generation, text_generation, resources_generation) = (
-            p.detail.generation,
-            p.detail.text_generation,
-            p.detail.resources_generation,
-        );
+        let generation = p.detail.generation;
         p.detail.history = None;
         p.detail.history_gathering.clear();
         p.detail.resources = None;
         p.detail.resources_gathering.clear();
-        p.detail.resources_revision = Some(sel.record.revision.get());
+        p.detail.resources_revision = None;
         p.detail.text = None;
         p.detail.shown = Some(sel.record.revision.get());
+        // The listed record may predate the history (which observes sources first): the text
+        // and resources load from the history's current revision once it arrives.
+        p.detail.follow_history = true;
         self.history_page(sel.kind, sel.id.clone(), generation, None);
-        self.load_instruction_text(text_generation, sel.record.content.clone());
+    }
+
+    /// Loads the text (and a skill's resources) of the history's current revision.
+    fn load_current_from_history(&mut self) {
+        let p = self.panel();
+        if !std::mem::take(&mut p.detail.follow_history) {
+            return;
+        }
+        let Some(sel) = p.selected.clone() else {
+            return;
+        };
+        let current = match &p.detail.history {
+            Some(Ok(h)) => iop::current_in(h).cloned(),
+            Some(Err(e)) => {
+                let e = e.clone();
+                p.detail.text = Some(Err(e.clone()));
+                p.detail.resources = Some(Err(e));
+                return;
+            }
+            None => return,
+        };
+        let Some(current) = current else {
+            p.detail.text = Some(Err("This item has no revisions.".into()));
+            return;
+        };
+        let revision = current.revision.get();
+        p.detail.shown = Some(revision);
+        p.detail.resources_revision = Some(revision);
+        let (text_generation, resources_generation) =
+            (p.detail.text_generation, p.detail.resources_generation);
+        self.load_instruction_text(text_generation, current.content.clone());
         if sel.kind == Kind::Skill {
-            self.resources_page(
-                sel.id,
-                sel.record.revision.get(),
-                resources_generation,
-                None,
-            );
+            self.resources_page(sel.id, revision, resources_generation, None);
         }
     }
 
@@ -368,6 +392,7 @@ impl Shell {
                                 let mut all = std::mem::take(&mut d.history_gathering);
                                 all.sort_by_key(|r| std::cmp::Reverse(r.revision.get()));
                                 d.history = Some(Ok(all));
+                                self.load_current_from_history();
                             }
                         }
                     }
@@ -375,6 +400,7 @@ impl Shell {
                         let d = &mut self.panel().detail;
                         d.history_gathering.clear();
                         d.history = Some(Err(e.describe()));
+                        self.load_current_from_history();
                     }
                 }
             }

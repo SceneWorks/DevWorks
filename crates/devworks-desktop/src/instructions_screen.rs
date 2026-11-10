@@ -68,6 +68,9 @@ pub struct Detail {
     pub text: Option<Result<String, String>>,
     pub resources: Option<Result<Vec<ArtifactRef>, String>>,
     pub resources_gathering: Vec<ArtifactRef>,
+    /// The text and resources wait for the history: they load from its current revision, so
+    /// the shown text and the save's expected revision come from one observation.
+    pub follow_history: bool,
 }
 impl Detail {
     pub fn latest(&self) -> Option<i64> {

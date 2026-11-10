@@ -158,6 +158,14 @@ pub fn record_status(record: &InstructionRecord) -> Status {
 pub fn latest_revision(history: &[InstructionRecord]) -> Option<i64> {
     history.iter().map(|r| r.revision.get()).max()
 }
+/// The revision a history shows as current: the active one, else the newest (what a read
+/// without a revision answers).
+pub fn current_in(history: &[InstructionRecord]) -> Option<&InstructionRecord> {
+    history
+        .iter()
+        .find(|r| record_status(r).active)
+        .or_else(|| history.iter().max_by_key(|r| r.revision.get()))
+}
 /// Whether a human may restore this revision directly (approved and not already active).
 pub fn restorable(record: &InstructionRecord) -> bool {
     let s = record_status(record);
@@ -476,6 +484,21 @@ mod tests {
         assert!(!restorable(&history[0]));
         assert!(!restorable(&history[2]), "already active");
         assert!(restorable(&rec(1, true, &["state:approved"])));
+    }
+
+    #[test]
+    fn the_current_revision_of_a_history_is_the_active_one_else_the_newest() {
+        let history = vec![
+            rec(5, false, &["state:draft"]),
+            rec(4, true, &["state:approved", "active"]),
+        ];
+        assert_eq!(current_in(&history).map(|r| r.revision.get()), Some(4));
+        let drafts = vec![
+            rec(1, false, &["state:draft"]),
+            rec(2, false, &["state:draft"]),
+        ];
+        assert_eq!(current_in(&drafts).map(|r| r.revision.get()), Some(2));
+        assert!(current_in(&[]).is_none());
     }
 
     #[test]

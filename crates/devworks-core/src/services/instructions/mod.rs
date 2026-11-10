@@ -163,14 +163,35 @@ pub(crate) fn invalid(kind: &'static str) -> Failure {
 pub(crate) fn denied(kind: &'static str) -> Failure {
     refusal(DomainErrorCode::PermissionDenied, kind, None)
 }
-pub(crate) fn stale(item: &StoredInstructionItem, expected: i64) -> Failure {
+/// A revision conflict against `current`, the caller's [`visible_latest`].
+pub(crate) fn stale(item: &StoredInstructionItem, expected: i64, current: i64) -> Failure {
     Failure::Storage(StorageError::conflict(
         crate::protocol::RevisionDimension::Source,
         "instruction",
         item.id.clone(),
         rev(expected),
-        rev(item.latest_revision),
+        rev(current),
     ))
+}
+/// The concurrency token commands bind to: the newest revision the invocation can see (what
+/// its history shows first). Another project's confined drafts are skipped, and so are numbers
+/// a purge removed, so neither blocks a later save or restore.
+pub(crate) fn visible_latest(
+    read: &dyn crate::ports::storage::InstructionRead,
+    ctx: &InvocationContext,
+    item: &StoredInstructionItem,
+) -> Result<i64, Failure> {
+    let mut before = None;
+    loop {
+        let page = read.instruction_revisions(&item.id, before, crate::ports::storage::MAX_PAGE)?;
+        if let Some(r) = page.iter().find(|r| revision_visible(ctx, r)) {
+            return Ok(r.revision);
+        }
+        if page.len() < crate::ports::storage::MAX_PAGE as usize {
+            return Ok(0);
+        }
+        before = page.last().map(|r| r.revision);
+    }
 }
 
 /// The configuration scope a request names, within the invocation's project.

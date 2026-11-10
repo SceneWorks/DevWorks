@@ -871,10 +871,20 @@ fn a_project_agents_skill_draft_is_confined_to_its_project_until_a_person_approv
             refused(fx.command(&app, &b, "skills.propose", json!({"instructionId":item_id,"expectedRevision":"2","contentDigest":digest_of(&edit)}))),
             "NotFound"
         );
+        // A's hidden draft never blocks B: B saves against the revision its own history shows.
+        let b_edit = applied(fx.command(&app, &b, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":item_id,"expectedRevision":"1","name":"deploy","content":fx.upload_in(&b, "B change.", ArtifactScope::Project(ProjectId(id("project-b"))))})));
+        assert_eq!(b_edit["revision"], "3");
+        assert_eq!(history(&b), ["3", "1"]);
+        assert_eq!(history(&a), ["2", "1"]);
+        // A stale token is still refused.
+        assert_eq!(
+            refused(fx.command(&app, &b, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":item_id,"expectedRevision":"1","name":"deploy","content":fx.upload_in(&b, "B again.", ArtifactScope::Project(ProjectId(id("project-b"))))}))),
+            "RevisionConflict"
+        );
         // Events about a confined draft belong to its project.
         let events = read(&*fx.store, |s| s.history().page(&EventFilter::Aggregate{kind:"instruction".into(),id:item_id.as_str().unwrap().into()},0,500));
         let drafted: Vec<_> = events.events.iter().filter(|e| e.kind == "InstructionDrafted").map(|e| e.project_id.clone()).collect();
-        assert_eq!(drafted, [Some(ProjectId(id("project-a"))), Some(ProjectId(id("project-a")))]);
+        assert_eq!(drafted, [Some(ProjectId(id("project-a"))), Some(ProjectId(id("project-a"))), Some(ProjectId(id("project-b"))), ]);
         app.shutdown().await;
     });
 }

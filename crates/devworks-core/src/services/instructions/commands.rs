@@ -5,7 +5,8 @@ use super::sync::{RecordedRevision, StagedCapture, new_role_item, record_capture
 use super::{
     InstructionService, config_scope, denied, draft_confinement, event, event_in, invalid,
     item_visible, kind_of, not_found_failure, provenance, record, refusal, require_author,
-    require_human, stale, target_kind, visible_current, visible_item, visible_revision,
+    require_human, stale, target_kind, visible_current, visible_item, visible_latest,
+    visible_revision,
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
@@ -446,8 +447,9 @@ impl InstructionService {
                     .expected
                     .ok_or_else(|| invalid("expected_revision"))?
                     .get();
-                if source.latest_revision != expected {
-                    return Err(stale(&source, expected));
+                let current = visible_latest(tx.instructions(), ctx, &source)?;
+                if current != expected {
+                    return Err(stale(&source, expected, current));
                 }
                 if source.name != name {
                     return Err(invalid("skill_name"));
@@ -570,17 +572,18 @@ impl InstructionService {
                 Some(&item.id),
             ));
         }
+        let expected_token = visible_latest(tx.instructions(), ctx, &item)?;
         let proposal_id = tx.new_id(IdKind::Operation);
         let operation = activation_operation(kind);
         let args = json!({
             "instructionId": item.id.as_str(),
-            "expectedRevision": item.latest_revision.to_string(),
+            "expectedRevision": expected_token.to_string(),
             "targetRevision": revision.revision.to_string(),
             "proposalId": proposal_id.as_str(),
         });
         let request = crate::services::approvals::requests::decode(operation, 1, &args, true)
             .map_err(|_| invalid("saved_activation"))?;
-        let preview = approval::preview(&item, &revision, &proposal_id, item.latest_revision);
+        let preview = approval::preview(&item, &revision, &proposal_id, expected_token);
         // A confined draft's review is visible in its project only, like the draft.
         let scope = match &preview.scope {
             ConfigScope::Workspace => json!({"kind": "Workspace"}),
@@ -640,8 +643,9 @@ impl InstructionService {
         a: Activation<'_>,
     ) -> Result<DomainDecision, Failure> {
         let mut item = visible_item(tx.instructions(), ctx, a.id, kind)?;
-        if item.latest_revision != a.expected {
-            return Err(stale(&item, a.expected));
+        let current = visible_latest(tx.instructions(), ctx, &item)?;
+        if current != a.expected {
+            return Err(stale(&item, a.expected, current));
         }
         let target = visible_revision(tx.instructions(), ctx, &item, a.target)?;
         let approval_id = match a.proposal {
@@ -982,8 +986,9 @@ fn role_target(
                 .expected
                 .ok_or_else(|| invalid("expected_revision"))?
                 .get();
-            if item.latest_revision != expected {
-                return Err(stale(&item, expected));
+            let current = visible_latest(tx.instructions(), ctx, &item)?;
+            if current != expected {
+                return Err(stale(&item, expected, current));
             }
             let base = visible_current(tx.instructions(), ctx, &item).ok();
             Ok(Target {

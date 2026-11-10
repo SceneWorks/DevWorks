@@ -145,11 +145,17 @@ impl InstructionService {
         env: &Preparation<'_>,
     ) -> Result<OwnerPreview, Failure> {
         let r = request(decoded)?;
-        let (item, target) = env.read(|read| Ok(current(read.instructions(), ctx, &r)))??;
+        let (item, target, latest) = env.read(|read| {
+            Ok((|| {
+                let (item, target) = current(read.instructions(), ctx, &r)?;
+                let latest = super::visible_latest(read.instructions(), ctx, &item)?;
+                Ok::<_, Failure>((item, target, latest))
+            })())
+        })??;
         if !matches!(
             target.state,
             InstructionRevisionState::Draft | InstructionRevisionState::Proposed
-        ) || item.latest_revision != r.expected
+        ) || latest != r.expected
         {
             return Err(changed(&item.id));
         }
@@ -165,7 +171,7 @@ impl InstructionService {
     ) -> Result<(), Failure> {
         let r = request(decoded)?;
         let (item, target) = current(tx.instructions(), ctx, &r)?;
-        if item.latest_revision != r.expected
+        if super::visible_latest(tx.instructions(), ctx, &item)? != r.expected
             || preview(&item, &target, r.proposal, r.expected).binding != reviewed.binding
         {
             return Err(changed(&item.id));
