@@ -106,6 +106,27 @@ fn preserve_uncaptured_into(from: &Path, to: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+/// Relative paths of every entry under `dir` that [`preserve_uncaptured`] carries over.
+fn uncaptured_paths(dir: &Path, prefix: &str, out: &mut Vec<String>) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let kind = fs::symlink_metadata(entry.path())?.file_type();
+        let shown = name.to_string_lossy();
+        let relative = if prefix.is_empty() {
+            shown.into_owned()
+        } else {
+            format!("{prefix}/{shown}")
+        };
+        let hidden = name.to_str().is_none_or(|n| n.starts_with('.'));
+        if kind.is_dir() && !hidden {
+            uncaptured_paths(&entry.path(), &relative, out)?;
+        } else if hidden || !(kind.is_file() || kind.is_dir()) {
+            out.push(relative);
+        }
+    }
+    Ok(())
+}
 fn copy_entry(from: &Path, to: &Path) -> io::Result<()> {
     let kind = fs::symlink_metadata(from)?.file_type();
     if kind.is_symlink() {
@@ -136,6 +157,33 @@ fn copy_entry(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 impl SkillFiles for NativeSkillFiles {
+    fn uncaptured_collision(
+        &self,
+        name: &str,
+        paths: &[String],
+    ) -> Result<Option<String>, SkillFileFault> {
+        if !valid_segment(name) || name.starts_with('.') {
+            return Err(SkillFileFault::InvalidName);
+        }
+        let live = self.root()?.join(name);
+        if !fs::symlink_metadata(&live).is_ok_and(|m| m.file_type().is_dir()) {
+            return Ok(None);
+        }
+        let mut kept = Vec::new();
+        uncaptured_paths(&live, "", &mut kept).map_err(io_fault)?;
+        // Compared case-insensitively: on a case-insensitive filesystem `Docs` and `docs` are
+        // the same entry, and a false refusal elsewhere is safe.
+        let within = |inner: &str, outer: &str| {
+            inner.len() > outer.len()
+                && inner.as_bytes()[outer.len()] == b'/'
+                && inner[..outer.len()].eq_ignore_ascii_case(outer)
+        };
+        Ok(kept.into_iter().find(|u| {
+            paths
+                .iter()
+                .any(|f| f.eq_ignore_ascii_case(u) || within(u, f) || within(f, u))
+        }))
+    }
     fn root(&self) -> Result<PathBuf, SkillFileFault> {
         fs::create_dir_all(&self.root).map_err(io_fault)?;
         fs::canonicalize(&self.root).map_err(io_fault)
@@ -223,6 +271,52 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn uncaptured_collisions_are_found_before_a_tree_is_written() {
+        let root = temp();
+        let files = NativeSkillFiles::new(&root);
+        let paths = |p: &[&str]| p.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            files
+                .uncaptured_collision("demo", &paths(&["docs"]))
+                .unwrap(),
+            None
+        );
+        fs::create_dir_all(root.join("demo/docs")).unwrap();
+        fs::write(root.join("demo/docs/ref.md"), "captured").unwrap();
+        fs::write(root.join("demo/docs/.env"), "secret").unwrap();
+        fs::write(root.join("demo/.notes"), "kept").unwrap();
+        // A revision file where a live folder keeps an uncaptured entry cannot hold both.
+        assert_eq!(
+            files
+                .uncaptured_collision("demo", &paths(&["SKILL.md", "docs"]))
+                .unwrap()
+                .as_deref(),
+            Some("docs/.env")
+        );
+        // Captured files are replaced freely and hidden entries elsewhere are carried over.
+        assert_eq!(
+            files
+                .uncaptured_collision("demo", &paths(&["SKILL.md", "docs/ref.md"]))
+                .unwrap(),
+            None
+        );
+        // The same path, or a revision folder over an uncaptured file, also collides.
+        assert!(
+            files
+                .uncaptured_collision("demo", &paths(&[".notes"]))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            files
+                .uncaptured_collision("demo", &paths(&[".notes/x.md"]))
+                .unwrap()
+                .is_some()
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

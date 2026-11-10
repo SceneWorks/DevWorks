@@ -523,6 +523,20 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
             "Conflict"
         );
         assert_eq!(std::fs::read(fx.harness.join("gamma/notes.md")).unwrap(), b"keep me");
+        // A restore whose file `docs` would replace a live `docs/` folder holding an uncaptured
+        // `.env` is refused before activation, so the reported active revision is the one on disk.
+        write_skill(&fx.harness, "delta", &[("SKILL.md", "---\nname: delta\ndescription: Delta\n---\nDo delta."), ("docs", "flat")]);
+        let delta = find(&discover(&fx, &app, &user), "delta", "harness").clone();
+        std::fs::remove_file(fx.harness.join("delta/docs")).unwrap();
+        write_skill(&fx.harness, "delta", &[("docs/ref.md", "nested"), ("docs/.env", "secret")]);
+        let delta2 = find(&discover(&fx, &app, &user), "delta", "harness").clone();
+        assert_ne!(delta2["revision"], delta["revision"]);
+        assert_eq!(
+            refused(fx.command(&app, &user, "skills.rollback", json!({"instructionId":delta2["id"],"expectedRevision":delta2["revision"],"targetRevision":delta["revision"]}))),
+            "Conflict"
+        );
+        assert_eq!(find(&discover(&fx, &app, &user), "delta", "harness")["revision"], delta2["revision"]);
+        assert_eq!(std::fs::read(fx.harness.join("delta/docs/.env")).unwrap(), b"secret");
         // Captured skill versions stay out of artifact listings; other host artifacts remain.
         let staged = fx.artifacts.stage_host_bytes(&*fx.store, b"repository summary", json!({"kind":"Test"})).unwrap().unwrap();
         let (artifacts, s2) = (fx.artifacts.clone(), staged.clone());

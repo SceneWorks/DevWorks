@@ -36,4 +36,13 @@ pub trait SkillFiles: Send + Sync {
     /// written and flushed beside it, then swapped in with a rename, so readers see the old or
     /// the new tree, never a mixture.
     fn materialize(&self, name: &str, files: &[SkillFile]) -> Result<(), SkillFileFault>;
+    /// The first entry of the live directory `name` that capture never records (hidden, a
+    /// link, or special) and that a tree of exactly `paths` could not keep beside its files
+    /// (same path, or one is inside the other). `None` when the tree can be materialized
+    /// without dropping anything uncaptured, or when the directory does not exist.
+    fn uncaptured_collision(
+        &self,
+        name: &str,
+        paths: &[String],
+    ) -> Result<Option<String>, SkillFileFault>;
 }

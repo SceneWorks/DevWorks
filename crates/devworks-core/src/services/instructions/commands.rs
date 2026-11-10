@@ -287,6 +287,9 @@ impl InstructionService {
             resources: Vec::new(),
             digest,
         };
+        if human {
+            self.check_materializable(&item, &resources)?;
+        }
         let role = AgentRole::parse(&item.name);
         let revision = record_capture(
             tx,
@@ -660,6 +663,7 @@ impl InstructionService {
             });
         }
         let previous = item.active_revision;
+        self.check_materializable(&item, &target.resources)?;
         item.active_revision = Some(target.revision);
         item.version += 1;
         item.updated_at_ms = tx.now_ms();
@@ -709,6 +713,41 @@ impl InstructionService {
 }
 
 impl InstructionService {
+    /// Refuses activating a harness skill revision whose files would collide with entries of
+    /// its live directory that capture never records (a revision file `docs` beside a live
+    /// `docs/.env`): materializing it would fail after the activation committed, or drop them.
+    fn check_materializable(
+        &self,
+        item: &StoredInstructionItem,
+        resources: &Value,
+    ) -> Result<(), Failure> {
+        if item.kind != InstructionKind::Skill || item.origin != InstructionOrigin::Harness {
+            return Ok(());
+        }
+        let mut paths = vec![scan::SKILL_FILE.to_owned()];
+        for resource in resources.as_array().into_iter().flatten() {
+            paths.push(
+                resource["path"]
+                    .as_str()
+                    .ok_or_else(|| invalid("instruction_resources"))?
+                    .to_owned(),
+            );
+        }
+        match self.files.uncaptured_collision(&item.name, &paths) {
+            Ok(None) => Ok(()),
+            Ok(Some(_)) => Err(refusal(
+                DomainErrorCode::Conflict,
+                "skill_uncaptured_entry",
+                Some(&item.id),
+            )),
+            Err(_) => Err(refusal(
+                DomainErrorCode::SourceChanged,
+                "skill_source",
+                Some(&item.id),
+            )),
+        }
+    }
+
     fn restore_into_override(
         &self,
         ctx: &InvocationContext,
