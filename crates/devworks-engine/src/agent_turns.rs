@@ -1101,20 +1101,29 @@ pub fn ensure_membership_context(
                             }],
                         });
                         for fact in facts {
-                            context
-                                .messages
-                                .push(crate::tool_turn::context_fact_message(
-                                    runtime.store().as_ref(),
-                                    runtime.artifacts(),
-                                    ctx,
-                                    session_id,
-                                    fact,
-                                )?);
+                            crate::tool_turn::append_context_fact(
+                                &mut context,
+                                runtime.store().as_ref(),
+                                runtime.artifacts(),
+                                ctx,
+                                session_id,
+                                fact,
+                            )?;
                         }
                     }
-                    None => context.messages.extend(handoff_fact_messages(
-                        runtime, ctx, session_id, observed, sequence,
-                    )?),
+                    None => {
+                        for fact in handoff_fact_messages(runtime, session_id, observed, sequence)?
+                        {
+                            crate::tool_turn::append_context_fact(
+                                &mut context,
+                                runtime.store().as_ref(),
+                                runtime.artifacts(),
+                                ctx,
+                                session_id,
+                                fact,
+                            )?;
+                        }
+                    }
                 }
             }
             Some((context, binding))
@@ -1125,7 +1134,7 @@ pub fn ensure_membership_context(
         if unpublished_turn(runtime.store().as_ref(), ctx, session_id, 0)?.is_some() {
             return Err(StorageError::ScopeDenied);
         }
-        handoff_fact_messages(runtime, ctx, session_id, 0, sequence)?
+        handoff_fact_messages(runtime, session_id, 0, sequence)?
     } else {
         Vec::new()
     };
@@ -1155,7 +1164,16 @@ pub fn ensure_membership_context(
             .map_err(|error| StorageError::InvalidRecord(format!("handoff context: {error:?}")))?
     } else {
         let mut context = fresh.clone();
-        context.messages.extend(missing_head_facts);
+        for fact in missing_head_facts {
+            crate::tool_turn::append_context_fact(
+                &mut context,
+                runtime.store().as_ref(),
+                runtime.artifacts(),
+                ctx,
+                session_id,
+                fact,
+            )?;
+        }
         (context, Vec::new())
     };
     context.instructions = fresh.instructions;
@@ -1256,11 +1274,10 @@ pub fn ensure_membership_context(
 
 fn handoff_fact_messages(
     runtime: &Runtime,
-    ctx: &InvocationContext,
     session_id: &Id,
     after: i64,
     sequence: i64,
-) -> Result<Vec<Message>, StorageError> {
+) -> Result<Vec<TranscriptBody>, StorageError> {
     let facts = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
         let mut position = after;
         let mut facts = Vec::new();
@@ -1294,18 +1311,7 @@ fn handoff_fact_messages(
         }
         Ok(facts)
     })?;
-    facts
-        .into_iter()
-        .map(|fact| {
-            crate::tool_turn::context_fact_message(
-                runtime.store().as_ref(),
-                runtime.artifacts(),
-                ctx,
-                session_id,
-                fact,
-            )
-        })
-        .collect()
+    Ok(facts)
 }
 
 /// Publish a materialized assignment's first bound prompt after the current route resolves.
