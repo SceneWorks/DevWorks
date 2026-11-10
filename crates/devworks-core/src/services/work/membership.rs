@@ -35,11 +35,30 @@ pub fn request(
     };
     let root = RootId(old_root.clone());
     let assignments = root_assignments(tx.runs(), &root, false)?;
+    let mut fenced_ids = HashSet::new();
     for a in assignments
         .iter()
-        .filter(|a| a.work_id.0 == after.id && a.work_id != a.root_id && a.state.is_live())
+        .filter(|a| a.work_id != a.root_id && a.state.is_live())
     {
+        if fenced_ids.contains(&a.id) {
+            continue;
+        }
+        let primary = a.work_id.0 == after.id;
+        let delegated = tx
+            .runs()
+            .agent_assignment_context(&a.id)?
+            .map(|context| {
+                serde_json::from_value::<Vec<Id>>(context.task_ids)
+                    .map(|tasks| tasks.contains(&after.id))
+                    .map_err(|_| StorageError::InvalidRecord("assignment task scope".into()))
+            })
+            .transpose()?
+            .unwrap_or(false);
+        if !primary && !delegated {
+            continue;
+        }
         let tree = fence(tx, ctx.principal(), after, a, &assignments)?;
+        fenced_ids.extend(tree.iter().cloned());
         super::event(
             tx,
             ctx,
@@ -70,6 +89,17 @@ fn fence(
             break;
         }
     }
+    let mut guarded = HashSet::from([RootId(after.id.clone())]);
+    for child in assignments.iter().filter(|child| tree.contains(&child.id)) {
+        guarded.insert(child.work_id.clone());
+        if let Some(context) = tx.runs().agent_assignment_context(&child.id)? {
+            let tasks: Vec<Id> = serde_json::from_value(context.task_ids)
+                .map_err(|_| StorageError::InvalidRecord("assignment task scope".into()))?;
+            guarded.extend(tasks.into_iter().map(RootId));
+        }
+    }
+    let mut guarded: Vec<_> = guarded.into_iter().collect();
+    guarded.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
     // Retired descendants remain attributable to their original root; no old-root child
     // can become runnable merely because its parent follows the moved task.
     for child in assignments
@@ -83,23 +113,24 @@ fn fence(
         fenced.slot_held = false;
         if child.id == a.id {
             fenced.checkpoint = Some(
-                json!({"kind":"DevWorksMembershipHandoff","version":1,"membershipHandoff":{"workId":after.id,"fromRoot":root,"toFeature":after.parent_feature_id,"hadCheckpoint":child.checkpoint.is_some(),"previousCheckpoint":child.checkpoint,"subtree":tree.iter().map(|id|id.0.as_str()).collect::<Vec<_>>()}}),
+                json!({"kind":"DevWorksMembershipHandoff","version":1,"membershipHandoff":{"workId":after.id,"secondaryTaskId":(child.work_id.0 != after.id).then_some(&after.id),"fromRoot":root,"toFeature":after.parent_feature_id,"hadCheckpoint":child.checkpoint.is_some(),"previousCheckpoint":child.checkpoint,"subtree":tree.iter().map(|id|id.0.as_str()).collect::<Vec<_>>(),"guardedTaskIds":guarded.iter().map(|id|id.0.as_str()).collect::<Vec<_>>()}}),
             );
         }
         tx.runs().update_assignment(&fenced, child.revision)?;
     }
-    let mut guarded = HashSet::new();
-    for child in assignments.iter().filter(|child| tree.contains(&child.id)) {
-        if !guarded.insert(child.work_id.clone()) {
-            continue;
+    for guarded_id in guarded {
+        let work = tx
+            .sessions()
+            .work_root(&guarded_id)?
+            .ok_or_else(|| StorageError::NotFound {
+                kind: "work",
+                id: guarded_id.0.as_str().into(),
+            })?;
+        if work.project_id != after.project_id {
+            return Err(StorageError::InvalidRecord(
+                "assignment task project".into(),
+            ));
         }
-        let work =
-            tx.sessions()
-                .work_root(&child.work_id)?
-                .ok_or_else(|| StorageError::NotFound {
-                    kind: "work",
-                    id: child.work_id.0.as_str().into(),
-                })?;
         crate::services::runs::ensure_control(tx, &work.id)?;
         raise_blocker(
             tx,
@@ -126,6 +157,27 @@ fn subtree(a: &StoredAssignment) -> Result<HashSet<AssignmentId>, StorageError> 
     let ids: Vec<Id> = serde_json::from_value(value)
         .map_err(|_| StorageError::InvalidRecord("membership handoff subtree".into()))?;
     Ok(ids.into_iter().map(AssignmentId).collect())
+}
+fn guarded_tasks(a: &StoredAssignment) -> Result<Vec<RootId>, StorageError> {
+    let Some(value) = a
+        .checkpoint
+        .as_ref()
+        .and_then(|c| c.get(MARKER))
+        .and_then(|m| m.get("guardedTaskIds"))
+    else {
+        return Ok(Vec::new());
+    };
+    let ids: Vec<Id> = serde_json::from_value(value.clone())
+        .map_err(|_| StorageError::InvalidRecord("membership guarded tasks".into()))?;
+    Ok(ids.into_iter().map(RootId).collect())
+}
+fn previous_checkpoint(a: &StoredAssignment) -> Option<Value> {
+    a.checkpoint
+        .as_ref()
+        .and_then(|c| c.get(MARKER))
+        .filter(|m| m.get("hadCheckpoint") == Some(&Value::Bool(true)))
+        .and_then(|m| m.get("previousCheckpoint"))
+        .cloned()
 }
 /// Unclaimed old deliveries whose effects never started are cancelled, never copied to a new
 /// root. An uncertain/dispatched effect must be observed before this handoff can finish.
@@ -282,15 +334,85 @@ pub fn reconcile_project(
             {
                 clear_handoff_hold(tx, &actor, &child.work_id, &a.id)?;
             }
+            for guarded in guarded_tasks(&a)? {
+                if guarded != a.work_id {
+                    clear_handoff_hold(tx, &actor, &guarded, &a.id)?;
+                }
+            }
             if !tx.runs().assignment_handoff_quiescent(&a.id)? {
                 continue;
             }
-            let current_session = tx.sessions().session(&a.session_id)?;
-            if current_session.as_ref().is_none_or(|s| s.closed()) {
+            if a.checkpoint
+                .as_ref()
+                .and_then(|c| c.get(MARKER))
+                .and_then(|m| m.get("secondaryTaskId"))
+                .is_some_and(|id| !id.is_null())
+            {
                 allocation::retire_handoff_claims(tx, &work.id, &actor)?;
+                tx.runs().retire_membership_handoff(&a.id, a.revision)?;
+                if let Some(secondary) = a
+                    .checkpoint
+                    .as_ref()
+                    .and_then(|c| c.get(MARKER))
+                    .and_then(|m| m.get("secondaryTaskId"))
+                    .and_then(Value::as_str)
+                {
+                    clear_handoff_hold(
+                        tx,
+                        &actor,
+                        &RootId(Id::new(secondary.to_owned()).map_err(|_| {
+                            StorageError::InvalidRecord("secondary task id".into())
+                        })?),
+                        &a.id,
+                    )?;
+                }
                 clear_handoff_hold(tx, &actor, &RootId(work.id.clone()), &a.id)?;
                 let id = EventId(tx.new_id(crate::ports::IdKind::Event));
-                tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(work.project_id.clone()),root_id:Some(target.clone()),operation_id:None,aggregate_kind:super::WORK_AGGREGATE.into(),aggregate_id:work.id.as_str().into(),aggregate_revision:work.revision,kind:"WorkerHandoffRetired".into(),payload:json!({"assignmentId":a.id.0,"sessionId":a.session_id,"fromRoot":a.root_id,"toRoot":target,"reason":"worker session closed","checkpointRetained":true})})?;
+                tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(work.project_id.clone()),root_id:Some(a.root_id.clone()),operation_id:None,aggregate_kind:super::WORK_AGGREGATE.into(),aggregate_id:work.id.as_str().into(),aggregate_revision:work.revision,kind:"WorkerMembershipScopeRetired".into(),payload:json!({"assignmentId":a.id.0,"sessionId":a.session_id,"movedSecondaryTask":a.checkpoint.as_ref().and_then(|c| c.get(MARKER)).and_then(|m| m.get("secondaryTaskId")),"checkpointRetained":true})})?;
+                changed += 1;
+                continue;
+            }
+            let current_session = tx.sessions().session(&a.session_id)?;
+            let detached_child =
+                work.parent_feature_id.is_none() && a.purpose == AssignmentPurpose::Child;
+            let delegated: Vec<Id> = tx
+                .runs()
+                .agent_assignment_context(&a.id)?
+                .map(|context| {
+                    serde_json::from_value(context.task_ids)
+                        .map_err(|_| StorageError::InvalidRecord("assignment task scope".into()))
+                })
+                .transpose()?
+                .unwrap_or_default();
+            let mut split_scope = false;
+            for id in delegated {
+                let task = tx.work().work(&id)?;
+                if task.is_none_or(|task| {
+                    task.project_id != work.project_id
+                        || if work.parent_feature_id.is_some() {
+                            task.parent_feature_id.as_ref() != Some(&target.0)
+                        } else {
+                            task.id != target.0
+                        }
+                }) {
+                    split_scope = true;
+                    break;
+                }
+            }
+            if detached_child || split_scope || current_session.as_ref().is_none_or(|s| s.closed())
+            {
+                allocation::retire_handoff_claims(tx, &work.id, &actor)?;
+                tx.runs().retire_membership_handoff(&a.id, a.revision)?;
+                clear_handoff_hold(tx, &actor, &RootId(work.id.clone()), &a.id)?;
+                let id = EventId(tx.new_id(crate::ports::IdKind::Event));
+                let reason = if detached_child {
+                    "detached child requires a new issue coordinator"
+                } else if split_scope {
+                    "delegated tasks cannot transfer together"
+                } else {
+                    "worker session closed"
+                };
+                tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(work.project_id.clone()),root_id:Some(target.clone()),operation_id:None,aggregate_kind:super::WORK_AGGREGATE.into(),aggregate_id:work.id.as_str().into(),aggregate_revision:work.revision,kind:"WorkerHandoffRetired".into(),payload:json!({"assignmentId":a.id.0,"sessionId":a.session_id,"fromRoot":a.root_id,"toRoot":target,"reason":reason,"checkpointRetained":true})})?;
                 changed += 1;
                 continue;
             }
@@ -331,13 +453,7 @@ pub fn reconcile_project(
                 .scope()
                 .plan(tx.runs(), &newroot)?
                 .approved_revision();
-            moved.checkpoint = a
-                .checkpoint
-                .as_ref()
-                .and_then(|c| c.get(MARKER))
-                .filter(|m| m.get("hadCheckpoint") == Some(&Value::Bool(true)))
-                .and_then(|m| m.get("previousCheckpoint"))
-                .cloned();
+            moved.checkpoint = previous_checkpoint(&a);
             match tx
                 .runs()
                 .reparent_assignment(&moved, a.revision, session.revision)
@@ -373,10 +489,10 @@ pub fn reconcile_project(
             changed += 1;
         }
     }
-    changed += acquire_destination_slots(tx, control, project)?;
+    changed += release_destination_capacity_holds(tx, control, project)?;
     Ok(changed)
 }
-fn acquire_destination_slots(
+fn release_destination_capacity_holds(
     tx: &mut dyn WriteTransaction,
     control: &ControlService,
     project: &ProjectId,
@@ -450,11 +566,16 @@ fn acquire_destination_slots(
                 {
                     continue;
                 }
-                let mut active = assignment.clone();
-                active.state = AssignmentState::Active;
-                active.slot_held = true;
-                active.revision += 1;
-                tx.runs().update_assignment(&active, assignment.revision)?;
+                if assignment.purpose != crate::ports::storage::AssignmentPurpose::Child {
+                    // Legacy primary worker assignments are resumed by their existing
+                    // coordinator path rather than the child supervisor.
+                    let mut active = assignment.clone();
+                    active.state = AssignmentState::Active;
+                    active.slot_held = true;
+                    active.revision += 1;
+                    tx.runs().update_assignment(&active, assignment.revision)?;
+                }
+                // A Child must remain Waiting until the destination supervisor launches it.
                 for hold in holds {
                     clear_blocker(
                         tx,

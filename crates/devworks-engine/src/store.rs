@@ -20,9 +20,21 @@ where
     T: Send + 'static,
     F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
 {
+    write_with(store, WriteOptions::default(), work).await
+}
+
+pub(crate) async fn write_with<T, F>(
+    store: &Arc<dyn ApplicationStore>,
+    options: WriteOptions,
+    work: F,
+) -> Result<T, StorageError>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
+{
     let (tx, rx) = tokio::sync::oneshot::channel();
     store.submit_write(
-        WriteOptions::default(),
+        options,
         write_job(work, move |r| {
             let _ = tx.send(r);
         }),

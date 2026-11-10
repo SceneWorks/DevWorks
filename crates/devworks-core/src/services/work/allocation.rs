@@ -302,6 +302,9 @@ fn eligible(
     if !tx.work().open_prerequisites(&w.id)?.is_empty() {
         return Ok(false);
     }
+    if tx.runs().open_blocking_question(&RootId(w.id.clone()))? {
+        return Ok(false);
+    }
     let r = root(feature.unwrap_or(w));
     let control = service.evaluate(tx.runs(), &r, &Target::Root, ActivationPurpose::Planning)?;
     if !control.eligible {

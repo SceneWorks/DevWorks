@@ -5,16 +5,23 @@ use super::policy::{
     self, AccessProfile, DenialReason, EffectivePolicy, Provenance, Verdict, resolve_policy,
 };
 use crate::context::{InvocationContext, PrincipalKind};
+use crate::operations::{
+    OperationInput, approvals, artifacts, browser, features, git, history, issues, knowledge,
+    next_work, runs, sessions, tasks,
+};
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
-    GrantState, NewAuthorityGrant, NewEvent, NewPrincipalBinding, PrincipalBinding, ReadOptions,
-    ReadSnapshot, StorageError, WriteTransaction, read_snapshot,
+    GrantState, LinkPurpose, NewAuthorityGrant, NewEvent, NewPrincipalBinding, PrincipalBinding,
+    ReadOptions, ReadSnapshot, StorageError, WriteTransaction, read_snapshot,
 };
 use crate::ports::{
     AuthorityDenial, AuthorityFence, AuthorityPort, AuthorityRequest, Authorization, Clock,
     GrantUse, IdKind,
 };
-use crate::protocol::{ActorId, EventId, Id, ProjectId, RootId};
+use crate::protocol::data::{ArtifactCommand, ArtifactDeletion, ArtifactQuery, GitCommand};
+use crate::protocol::provider::UserContent;
+use crate::protocol::records::BrowserLocation;
+use crate::protocol::{ActorId, EventId, Id, ProjectId, RootId, Subject};
 use crate::registry::{self, Mode};
 use crate::settings::catalog::AgentRole;
 use crate::settings::service::PrincipalRoles;
@@ -267,6 +274,475 @@ fn bound(
     }
 }
 
+/// A project binding does not grant a running agent authority over sibling roots. Check the
+/// selected typed input here so direct gateway callers have the same boundary as advertised tools.
+fn agent_assignment_scope(
+    s: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    request: &AuthorityRequest<'_>,
+) -> Result<(), DenialReason> {
+    if ctx.principal_kind() != PrincipalKind::Agent {
+        return Ok(());
+    }
+    // A superseded assignment cannot use any selected family, including project-scoped
+    // families whose inputs need no extra root-specific check below.
+    let assignment = if let Some(assignment_id) = ctx.assignment_id() {
+        let assignment = s
+            .runs()
+            .assignment(assignment_id)
+            .map_err(|_| DenialReason::AuthorityUnavailable)?
+            .ok_or(DenialReason::OutOfAssignmentScope)?;
+        let session = s
+            .sessions()
+            .session(&assignment.session_id)
+            .map_err(|_| DenialReason::AuthorityUnavailable)?
+            .ok_or(DenialReason::OutOfAssignmentScope)?;
+        if !assignment.state.is_live()
+            || ctx.root_id() != Some(&assignment.root_id)
+            || ctx.session_id() != Some(&assignment.session_id)
+            || session.closed()
+            || session.agent_id != *ctx.principal()
+            || session.project_id.as_ref() != ctx.project_id()
+            || session.root_id.as_ref() != ctx.root_id()
+        {
+            return Err(DenialReason::OutOfAssignmentScope);
+        }
+        Some(assignment)
+    } else {
+        None
+    };
+    let Some(root) = ctx.root_id() else {
+        return Ok(());
+    };
+    if !matches!(
+        request.input,
+        OperationInput::Tasks(_)
+            | OperationInput::Approvals(_)
+            | OperationInput::Artifacts(_)
+            | OperationInput::Features(_)
+            | OperationInput::Issues(_)
+            | OperationInput::Jobs(_)
+            | OperationInput::NextWork(_)
+            | OperationInput::Runs(_)
+            | OperationInput::History(_)
+            | OperationInput::Indexing(_)
+            | OperationInput::Knowledge(
+                knowledge::Input::Diagnostics(_) | knowledge::Input::ImportUserData(_)
+            )
+            | OperationInput::Git(git::Input::Commit(_) | git::Input::PullRequest(_))
+            | OperationInput::Browser(browser::Input::Navigate(_) | browser::Input::Upload(_))
+            | OperationInput::Sessions(sessions::Input::AppendMessage(_))
+    ) {
+        return Ok(());
+    }
+    // A root lineage without a delegated assignment retains the pre-existing policies.
+    // New coordinator/Worker turns carry an assignment below.
+    if matches!(
+        request.input,
+        OperationInput::Artifacts(_)
+            | OperationInput::Jobs(_)
+            | OperationInput::Approvals(_)
+            | OperationInput::Git(git::Input::Commit(_) | git::Input::PullRequest(_))
+            | OperationInput::Browser(browser::Input::Navigate(_) | browser::Input::Upload(_))
+            | OperationInput::Sessions(sessions::Input::AppendMessage(_))
+            | OperationInput::Knowledge(
+                knowledge::Input::Diagnostics(_) | knowledge::Input::ImportUserData(_)
+            )
+    ) && assignment.is_none()
+    {
+        return Ok(());
+    }
+    let assignment_id = ctx
+        .assignment_id()
+        .ok_or(DenialReason::OutOfAssignmentScope)?;
+    let assignment = assignment.ok_or(DenialReason::OutOfAssignmentScope)?;
+    let context = s
+        .runs()
+        .agent_assignment_context(assignment_id)
+        .map_err(|_| DenialReason::AuthorityUnavailable)?
+        .ok_or(DenialReason::OutOfAssignmentScope)?;
+    let task_ids: Vec<Id> =
+        serde_json::from_value(context.task_ids).map_err(|_| DenialReason::AuthorityUnavailable)?;
+    let coordinator = assignment.parent_id.is_none();
+    let scoped = |id: &Id| -> Result<bool, DenialReason> {
+        if id == &root.0 {
+            return Ok(true);
+        }
+        if coordinator {
+            return Ok(s
+                .work()
+                .work(id)
+                .map_err(|_| DenialReason::AuthorityUnavailable)?
+                .is_some_and(|w| w.parent_feature_id.as_ref() == Some(&root.0)));
+        }
+        if id != &assignment.work_id.0 && !task_ids.contains(id) {
+            return Ok(false);
+        }
+        let current_root = s
+            .sessions()
+            .work_root(root)
+            .map_err(|_| DenialReason::AuthorityUnavailable)?;
+        let current_task = s
+            .sessions()
+            .work_root(&crate::protocol::RootId(id.clone()))
+            .map_err(|_| DenialReason::AuthorityUnavailable)?;
+        Ok(current_root
+            .zip(current_task)
+            .is_some_and(|(root_work, task)| {
+                task.project_id == root_work.project_id
+                    && task.kind != "feature"
+                    && (if root_work.kind == "feature" {
+                        task.parent_feature_id.as_ref() == Some(&root_work.id)
+                    } else {
+                        task.id == root_work.id
+                    })
+            }))
+    };
+    let owned_artifact = |id: &Id| -> Result<bool, DenialReason> {
+        let artifact = s
+            .artifacts()
+            .artifact(id)
+            .map_err(|_| DenialReason::AuthorityUnavailable)?;
+        Ok(artifact.is_some_and(|a| {
+            a.origin_project_id.as_ref() == ctx.project_id()
+                && (a.provenance["assignmentId"].as_str() == Some(assignment_id.0.as_str())
+                    || coordinator && a.origin_work_id.as_ref() == Some(root))
+        }))
+    };
+    let readable_artifact = |id: &Id, version: &Id| -> Result<bool, DenialReason> {
+        if owned_artifact(id)? {
+            return Ok(true);
+        }
+        let links = s
+            .artifacts()
+            .links(id)
+            .map_err(|_| DenialReason::AuthorityUnavailable)?;
+        for link in links {
+            if link.purpose != LinkPurpose::Reference || &link.version_id != version {
+                continue;
+            }
+            if link.subject.kind == "root" && scoped(&link.subject.id)?
+                || link.subject.kind == "session" && link.subject.id == assignment.session_id
+                || link.subject.kind == "assignment"
+                    && (link.subject.id == assignment_id.0
+                        || coordinator
+                            && s.runs()
+                                .assignment(&crate::protocol::AssignmentId(link.subject.id))
+                                .map_err(|_| DenialReason::AuthorityUnavailable)?
+                                .is_some_and(|a| a.root_id == *root))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    let allowed = match request.input {
+        OperationInput::Sessions(sessions::Input::AppendMessage(input)) => {
+            ctx.session_id() == Some(&input.session_id)
+                && input.content.iter().try_fold(true, |allowed, part| {
+                    Ok::<_, DenialReason>(
+                        allowed
+                            && match part {
+                                UserContent::Text { .. } => true,
+                                UserContent::Attachment { artifact } => {
+                                    readable_artifact(&artifact.artifact_id, &artifact.version_id)?
+                                }
+                            },
+                    )
+                })?
+        }
+        OperationInput::Git(git::Input::Commit(input)) => match &input.command {
+            GitCommand::Commit { message, .. } => {
+                ctx.reviewed_operation().is_some()
+                    || readable_artifact(&message.artifact_id, &message.version_id)?
+            }
+            _ => false,
+        },
+        OperationInput::Git(git::Input::PullRequest(input)) => match &input.command {
+            GitCommand::OpenPullRequest { description, .. } => {
+                readable_artifact(&description.artifact_id, &description.version_id)?
+            }
+            _ => false,
+        },
+        OperationInput::Browser(browser::Input::Navigate(input)) => match &input.location {
+            BrowserLocation::Artifact { artifact } => {
+                readable_artifact(&artifact.artifact_id, &artifact.version_id)?
+            }
+            _ => true,
+        },
+        OperationInput::Browser(browser::Input::Upload(input)) => {
+            input.files.0.iter().try_fold(true, |allowed, artifact| {
+                Ok::<_, DenialReason>(
+                    allowed && readable_artifact(&artifact.artifact_id, &artifact.version_id)?,
+                )
+            })?
+        }
+        OperationInput::Knowledge(knowledge::Input::Diagnostics(input)) => input
+            .import_source
+            .as_ref()
+            .map(|artifact| readable_artifact(&artifact.artifact_id, &artifact.version_id))
+            .transpose()?
+            .unwrap_or(true),
+        OperationInput::Knowledge(knowledge::Input::ImportUserData(input)) => {
+            readable_artifact(&input.source.artifact_id, &input.source.version_id)?
+        }
+        OperationInput::History(input) => {
+            let history_scoped = |id: &RootId| {
+                if !coordinator && id == root && assignment.work_id != *root {
+                    return Ok(false);
+                }
+                scoped(&id.0)
+            };
+            match input {
+                history::Input::Events(query) => match &query.query {
+                    crate::protocol::Query::Events {
+                        root_id: Some(id),
+                        project_id: None,
+                        ..
+                    } => history_scoped(id)?,
+                    _ => false,
+                },
+                history::Input::WorkLineage(input) => history_scoped(&input.root_id)?,
+                history::Input::GitLinks(input) => history_scoped(&input.root_id)?,
+                history::Input::EvidenceLinks(input) => history_scoped(&input.root_id)?,
+                history::Input::ToolUsage(input) => match (
+                    input.root_id.as_ref(),
+                    input.project_id.as_ref(),
+                    input.workspace,
+                ) {
+                    (Some(id), None, None) => history_scoped(id)?,
+                    _ => false,
+                },
+                history::Input::OperationStatus(query) => match &query.query {
+                    crate::protocol::Query::Operation { operation_id } => {
+                        match s
+                            .operations()
+                            .operation(operation_id)
+                            .map_err(|_| DenialReason::AuthorityUnavailable)?
+                        {
+                            Some(operation)
+                                if operation.assignment_id.as_ref() == Some(assignment_id) =>
+                            {
+                                true
+                            }
+                            Some(operation) => match operation.root_id.as_ref() {
+                                Some(id) => history_scoped(id)?,
+                                None => false,
+                            },
+                            None => false,
+                        }
+                    }
+                    _ => false,
+                },
+                // Receipt identity binds actor, ingress and scope to the requesting principal.
+                history::Input::CommandReceipt(_) => true,
+            }
+        }
+        // Jobs have project scope and no root or assignment owner. Active assignments cannot
+        // use project-wide scheduler operations through their ambient agent authority.
+        OperationInput::Jobs(_) => false,
+        OperationInput::Approvals(input) => match input {
+            approvals::Input::List(_) | approvals::Input::ReviewQueue(_) => false,
+            approvals::Input::Inspect(i) => {
+                if let Some(proposal) = s
+                    .configuration()
+                    .proposal(&i.proposal_id)
+                    .map_err(|_| DenialReason::AuthorityUnavailable)?
+                {
+                    proposal.author == *ctx.principal()
+                } else if let Some(proposal) = s
+                    .work()
+                    .proposal(&i.proposal_id)
+                    .map_err(|_| DenialReason::AuthorityUnavailable)?
+                {
+                    proposal.requested_by == *ctx.principal() || scoped(&proposal.feature_id)?
+                } else {
+                    s.decisions()
+                        .approval(&i.proposal_id)
+                        .map_err(|_| DenialReason::AuthorityUnavailable)?
+                        .is_some_and(|proposal| proposal.author == *ctx.principal())
+                }
+            }
+            approvals::Input::Propose(i) => scoped(&i.target.id)?,
+            approvals::Input::RecordHumanDecision(_) => false,
+        },
+        OperationInput::Artifacts(input) => match input {
+            artifacts::Input::List(_) => false,
+            artifacts::Input::Read(req)
+            | artifacts::Input::Preview(req)
+            | artifacts::Input::Export(req) => match &req.query {
+                ArtifactQuery::Read {
+                    artifact_id,
+                    version_id,
+                }
+                | ArtifactQuery::Preview {
+                    artifact_id,
+                    version_id,
+                }
+                | ArtifactQuery::Export {
+                    artifact_id,
+                    version_id,
+                } => readable_artifact(artifact_id, version_id)?,
+                _ => false,
+            },
+            artifacts::Input::Save(req) | artifacts::Input::Reference(req) => match &req.command {
+                ArtifactCommand::Save { project_id, .. } => project_id.as_ref() == ctx.project_id(),
+                ArtifactCommand::Reference {
+                    artifact_id,
+                    version_id,
+                    subject,
+                    ..
+                } => {
+                    let subject_scoped = match subject {
+                        Subject::Root(id) => scoped(&id.0)?,
+                        Subject::Assignment(id) => {
+                            id == assignment_id
+                                || coordinator
+                                    && s.runs()
+                                        .assignment(id)
+                                        .map_err(|_| DenialReason::AuthorityUnavailable)?
+                                        .is_some_and(|a| a.root_id == *root)
+                        }
+                        _ => false,
+                    };
+                    subject_scoped && readable_artifact(artifact_id, version_id)?
+                }
+                ArtifactCommand::Replace { artifact_id, .. }
+                | ArtifactCommand::DeleteVersion { artifact_id, .. }
+                | ArtifactCommand::DisableRetrieval { artifact_id, .. }
+                | ArtifactCommand::RemoveIndex { artifact_id, .. } => owned_artifact(artifact_id)?,
+                ArtifactCommand::DetachProject { .. }
+                | ArtifactCommand::Share { .. }
+                | ArtifactCommand::Move { .. } => false,
+            },
+            artifacts::Input::Delete(req) => match &req.deletion {
+                ArtifactDeletion::DeleteVersion { artifact_id, .. }
+                | ArtifactDeletion::DeleteArtifact { artifact_id, .. } => {
+                    owned_artifact(artifact_id)?
+                }
+                ArtifactDeletion::DetachProject { .. } => false,
+            },
+            artifacts::Input::Tag(input) => owned_artifact(&input.artifact_id)?,
+        },
+        OperationInput::Tasks(input) => match input {
+            tasks::Input::List(_) => false,
+            tasks::Input::Get(i) => scoped(&i.work_id)?,
+            tasks::Input::Edit(i) => scoped(&i.work_id)?,
+            tasks::Input::Move(i) => scoped(&i.task_id)?,
+            tasks::Input::AcceptanceEvidence(i) => scoped(&i.task_id)?,
+            tasks::Input::Assign(i) => {
+                scoped(&i.task_id)?
+                    && match &i.assignment_id {
+                        Some(id) => s
+                            .runs()
+                            .assignment(id)
+                            .map_err(|_| DenialReason::AuthorityUnavailable)?
+                            .is_some_and(|a| a.root_id == *root),
+                        None => true,
+                    }
+            }
+            tasks::Input::Create(i) => coordinator && i.parent_id.as_ref() == Some(root),
+            tasks::Input::SyncPlan(i) => {
+                coordinator
+                    && &i.feature_id == root
+                    && i.project_plan.is_none()
+                    && i.staged_project_plan.is_none()
+            }
+            tasks::Input::SetFeature(i) => {
+                scoped(&i.task_id)? && !i.clear_feature && i.feature_id.as_ref() == Some(root)
+            }
+            tasks::Input::Prioritize(_) | tasks::Input::DependencyLinks(_) => false,
+        },
+        OperationInput::Features(input) => match input {
+            features::Input::List(_)
+            | features::Input::Create(_)
+            | features::Input::Prioritize(_)
+            | features::Input::Dependencies(_) => false,
+            features::Input::Get(i) => scoped(&i.work_id)?,
+            features::Input::Edit(i) => scoped(&i.work_id)?,
+            features::Input::EditPlan(i) => coordinator && &i.feature_id == root,
+            features::Input::RequestPlanApproval(i) => coordinator && &i.feature_id == root,
+        },
+        OperationInput::Issues(input) => match input {
+            issues::Input::List(_) | issues::Input::Create(_) | issues::Input::Prioritize(_) => {
+                false
+            }
+            issues::Input::Get(i) => scoped(&i.work_id)?,
+            issues::Input::Edit(i) => scoped(&i.work_id)?,
+            issues::Input::Publish(i) => scoped(&i.issue_id.0)?,
+            issues::Input::Link(i) => scoped(&i.issue_id.0)?,
+        },
+        OperationInput::NextWork(input) => match input {
+            next_work::Input::ClaimProjectQueue(_) => false,
+            next_work::Input::ClaimFeatureTask(i) => coordinator && &i.root_id == root,
+            next_work::Input::InspectQueue(i) => {
+                coordinator && i.feature_id.as_ref() == Some(&root.0)
+            }
+            next_work::Input::InspectClaim(i) => {
+                let claim = s
+                    .work()
+                    .allocation_claim(&i.claim_id)
+                    .map_err(|_| DenialReason::AuthorityUnavailable)?;
+                match claim {
+                    Some(claim) => claim.root_id == *root && scoped(&claim.work_id)?,
+                    None => false,
+                }
+            }
+            next_work::Input::ReleaseClaim(i) => {
+                let claim = s
+                    .work()
+                    .allocation_claim(&i.claim_id)
+                    .map_err(|_| DenialReason::AuthorityUnavailable)?;
+                match claim {
+                    Some(claim) => claim.root_id == *root && scoped(&claim.work_id)?,
+                    None => false,
+                }
+            }
+        },
+        OperationInput::Runs(input) => match input {
+            runs::Input::Start(i) | runs::Input::Pause(i) | runs::Input::Continue(i) => {
+                match &i.command {
+                    crate::protocol::RootCommand::Start { root_id, .. }
+                    | crate::protocol::RootCommand::Pause { root_id, .. }
+                    | crate::protocol::RootCommand::Continue { root_id, .. } => {
+                        coordinator && root_id == root
+                    }
+                }
+            }
+            runs::Input::Redirect(i) => {
+                coordinator
+                    && &i.root_id == root
+                    && i.attachments.0.iter().try_fold(true, |allowed, artifact| {
+                        Ok::<_, DenialReason>(
+                            allowed
+                                && readable_artifact(&artifact.artifact_id, &artifact.version_id)?,
+                        )
+                    })?
+            }
+            runs::Input::Stop(i) => coordinator && &i.root_id == root,
+            runs::Input::Inspect(i) | runs::Input::Eligibility(i) => match &i.query {
+                crate::protocol::Query::Root { root_id } => root_id == root,
+                crate::protocol::Query::Eligibility { target, .. } => match target {
+                    crate::protocol::EligibilityTarget::Root(id) => id == root,
+                    crate::protocol::EligibilityTarget::Assignment(id) => s
+                        .runs()
+                        .assignment(id)
+                        .map_err(|_| DenialReason::AuthorityUnavailable)?
+                        .is_some_and(|a| a.root_id == *root),
+                },
+                _ => false,
+            },
+        },
+        OperationInput::Indexing(_) => false,
+        _ => true,
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(DenialReason::OutOfAssignmentScope)
+    }
+}
+
 pub(crate) fn decide_in(
     s: &dyn ReadSnapshot,
     ctx: &InvocationContext,
@@ -289,6 +765,9 @@ pub(crate) fn decide_in(
     let binding = bound(s, ctx).map_err(unavailable)?;
     let policy = resolve_policy(s.configuration(), ctx.project_id()).map_err(unavailable)?;
     let mut verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, protected_branches);
+    if matches!(verdict, Verdict::Allow | Verdict::NeedsGrant { .. }) {
+        agent_assignment_scope(s, ctx, request).map_err(deny)?;
+    }
     if let Some(reviewed) = ctx.reviewed_operation()
         && (reviewed.operation() != request.descriptor.name
             || reviewed.request_digest() != request.fingerprint.as_str()

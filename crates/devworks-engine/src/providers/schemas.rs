@@ -25,6 +25,32 @@ pub struct RegisteredSchemas {
     packages: Option<Arc<PackageService>>,
     artifacts: Arc<ArtifactService>,
 }
+
+fn mode_namespace(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Query => "devworks-query",
+        Mode::Command => "devworks-command",
+    }
+}
+
+fn builtin_operation(capability: &str) -> Option<(&str, Option<Mode>)> {
+    if let Some(operation) = capability.strip_prefix("devworks-query/") {
+        Some((operation, Some(Mode::Query)))
+    } else if let Some(operation) = capability.strip_prefix("devworks-command/") {
+        Some((operation, Some(Mode::Command)))
+    } else {
+        capability
+            .strip_prefix("devworks/")
+            .map(|operation| (operation, None))
+    }
+}
+
+fn matches_builtin_capability(capability: &str, operation: &str, mode: Mode) -> bool {
+    builtin_operation(capability).is_some_and(|(selected_operation, selected_mode)| {
+        selected_operation == operation && selected_mode.is_none_or(|selected| selected == mode)
+    })
+}
+
 impl RegisteredSchemas {
     pub fn new(
         store: Arc<dyn ApplicationStore>,
@@ -66,17 +92,106 @@ impl RegisteredSchemas {
             input_schema: reference,
         })
     }
+    /// Current built-in tools the shared selection permits this agent to see. This is the
+    /// complete inventory, not a provider request: a turn planner must project a bounded
+    /// subset before dispatch because one request accepts at most 256 aliases. Query and
+    /// command bindings have distinct frozen IDs so both modes can be offered in one turn.
+    pub fn selected_builtins(
+        &self,
+        ctx: &InvocationContext,
+    ) -> Result<Vec<ToolSchema>, StorageError> {
+        if ctx.principal_kind() != devworks_core::context::PrincipalKind::Agent {
+            return Err(StorageError::ScopeDenied);
+        }
+        let selected = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+            current_context(snapshot, ctx)?;
+            let principal = snapshot.authority().principal(ctx.principal())?;
+            let effective = policy::resolve_policy(snapshot.configuration(), ctx.project_id())?;
+            let mut selected = Vec::new();
+            for descriptor in registry::all() {
+                if ctx.assignment_id().is_some() && descriptor.name.starts_with("indexing.") {
+                    continue;
+                }
+                for binding in descriptor.modes {
+                    if self.registered(descriptor.name, binding.mode)
+                        && matches!(
+                            policy::registered_tool_visibility(
+                                ctx,
+                                principal.as_ref(),
+                                &effective,
+                                descriptor,
+                                binding,
+                                binding.effect,
+                            ),
+                            Verdict::Allow
+                        )
+                    {
+                        let revision = *descriptor.revisions.last().ok_or_else(|| {
+                            StorageError::InvalidRecord("operation has no schema revision".into())
+                        })?;
+                        selected.push((descriptor.name, binding.mode, revision));
+                    }
+                }
+            }
+            Ok(selected)
+        })?;
+        let mut tools = selected
+            .into_iter()
+            .map(|(name, mode, revision)| {
+                let mode_name = match mode {
+                    Mode::Query => "query",
+                    Mode::Command => "command",
+                };
+                let wire_name = format!("{}_{}", name.replace('.', "_"), mode_name);
+                if wire_name.len() > 128 {
+                    return Err(StorageError::InvalidRecord(
+                        "built-in alias too long".into(),
+                    ));
+                }
+                let mut tool = self
+                    .builtin(name, mode, revision, &wire_name)
+                    .map_err(|error| {
+                        StorageError::InvalidRecord(format!("built-in schema: {error:?}"))
+                    })?;
+                tool.capability_id =
+                    QualifiedId::try_from(format!("{}/{}", mode_namespace(mode), name))
+                        .map_err(|error| StorageError::InvalidRecord(error.into()))?;
+                Ok(tool)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        tools.sort_by(|a, b| {
+            a.capability_id
+                .as_str()
+                .cmp(b.capability_id.as_str())
+                .then_with(|| a.wire_name.cmp(&b.wire_name))
+        });
+        if tools
+            .iter()
+            .map(|tool| tool.wire_name.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != tools.len()
+        {
+            return Err(StorageError::InvalidRecord(
+                "ambiguous built-in alias".into(),
+            ));
+        }
+        Ok(tools)
+    }
     /// Only exact registered built-in bindings have a durable turn dispatcher. A package
-    /// declaring a `devworks/` capability ID is still an external tool.
+    /// declaring a built-in-looking capability ID is still an external tool.
     pub(crate) fn builtin_binding(
         &self,
         capability: &QualifiedId,
         reference: &SchemaRef,
     ) -> Option<(&'static registry::OperationDescriptor, Mode, SchemaRevision)> {
-        let operation = capability.as_str().strip_prefix("devworks/")?;
+        let (operation, selected_mode) = builtin_operation(capability.as_str())?;
         let descriptor = registry::find(operation)?;
         let revision = SchemaRevision(u32::try_from(reference.revision.get()).ok()?);
         for binding in descriptor.modes {
+            if selected_mode.is_some_and(|mode| mode != binding.mode) {
+                continue;
+            }
             let Ok(registered) = self.builtin(operation, binding.mode, revision, "recorded") else {
                 continue;
             };
@@ -377,7 +492,8 @@ impl SchemaDocuments for RegisteredSchemas {
     ) -> Result<PreparedTool, ProviderError> {
         let (schema, description) = match self.builtin_document(ctx, &alias.input_schema)? {
             Some((schema, d, selected)) => {
-                if alias.capability_id.as_str() != format!("devworks/{}", d.name) {
+                if !matches_builtin_capability(alias.capability_id.as_str(), d.name, selected.mode)
+                {
                     return Err(ProviderError::MaterialUnavailable);
                 }
                 let description = schema

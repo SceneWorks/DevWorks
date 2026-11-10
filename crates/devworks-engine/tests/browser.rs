@@ -1420,6 +1420,28 @@ impl Fx {
             None => ctx,
         }
     }
+    fn opt_in_agent_browser_tools(&self) {
+        let store = self.app().store().clone();
+        let schema = devworks_core::settings::catalog::descriptor("tools.overrides")
+            .unwrap()
+            .schema_ref();
+        let selected = devworks_core::registry::all()
+            .iter()
+            .filter(|operation| operation.family == "browser")
+            .map(|operation| (format!("devworks/{}", operation.name), json!(true)))
+            .collect::<serde_json::Map<String, Value>>();
+        write(&*store, move |tx| {
+            tx.configuration().append_revision(
+                &ConfigScope::Workspace,
+                "settings",
+                1,
+                1,
+                json!({"values":{"tools.overrides":{"schema":schema,"value":selected}}}),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
     fn shutdown(&mut self) {
         if let Some(app) = self.app.take() {
             self.rt.block_on(app.shutdown());
@@ -2046,6 +2068,7 @@ fn assert_popup(fx: &Fx, user: &InvocationContext, session: &Id, popup: BrowserS
 fn uploads_materialize_only_exact_artifacts_the_caller_may_see() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();
+    fx.opt_in_agent_browser_tools();
     let user = fx.user.clone();
     let session = fx.create(&user, workspace());
     let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
@@ -2296,6 +2319,7 @@ fn an_exited_browser_is_detected_and_its_session_settled() {
 fn reviewers_cannot_use_the_browser_and_only_the_owner_or_a_person_drives_a_session() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();
+    fx.opt_in_agent_browser_tools();
     let user = fx.user.clone();
     let project = json!({"kind": "Project", "projectId": "project-a"});
     let worker = fx.agent("agent-a", AgentRole::Worker, Some("project-a"));
@@ -4193,6 +4217,7 @@ fn the_largest_notification_page_stays_within_the_repository_bound() {
 fn a_queued_action_of_a_revoked_owner_is_never_performed() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();
+    fx.opt_in_agent_browser_tools();
     let user = fx.user.clone();
     let agent = fx.agent("agent-v", AgentRole::Worker, None);
     let session = fx.create(&agent, workspace());

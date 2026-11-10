@@ -51,6 +51,238 @@ fn click_row(h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>, 
 }
 
 #[test]
+fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state() {
+    let root = Root::new("work-message-board");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Messages", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let posted = wops::message_posted(backend.command(
+        "agents.post",
+        &wops::message_post(
+            &*backend,
+            &pid,
+            json!({"body":"Please review the build","messageKind":"Question","toHuman":true}),
+        ),
+    ))
+    .unwrap();
+    assert!(posted.created);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Messages");
+    assert!(has_text(&h, "Please review the build"));
+    assert_eq!(h.state().work.messages.inbox.len(), 1);
+    assert_eq!(h.state().work.messages.history.len(), 1);
+    assert!(matches!(
+        h.state().work.messages.inbox[0].delivery,
+        Some(devworks_core::protocol::records::RetainedDeliveryState::Delivered)
+    ));
+    click(&mut h, Role::Button, "Answer question");
+    assert!(h.state().work.messages.inbox.is_empty());
+    assert_eq!(h.state().work.messages.history.len(), 1);
+    assert!(matches!(
+        h.state().work.messages.history[0].state,
+        Some(devworks_core::protocol::records::RetainedMessageState::Answered)
+    ));
+    type_into(&mut h, Role::TextInput, "Message body", "I will check it");
+    click(&mut h, Role::CheckBox, "To you");
+    click(&mut h, Role::Button, "Post message");
+    assert!(
+        h.state()
+            .work
+            .messages
+            .history
+            .iter()
+            .any(|m| m.body.0 == "I will check it")
+    );
+    assert!(
+        h.state()
+            .work
+            .messages
+            .inbox
+            .iter()
+            .any(|m| m.body.0 == "I will check it")
+    );
+    click(&mut h, Role::Button, "Mark read");
+    assert!(h.state().work.messages.inbox.is_empty());
+    wops::message_posted(backend.command(
+        "agents.post",
+        &wops::message_post(
+            &*backend,
+            &pid,
+            json!({"body":"External update","toHuman":true}),
+        ),
+    ))
+    .unwrap();
+    h.state_mut().work.messages.event_poll_at =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    settle(&mut h);
+    assert!(
+        h.state()
+            .work
+            .messages
+            .inbox
+            .iter()
+            .any(|m| m.body.0 == "External update")
+    );
+}
+
+#[test]
+fn message_event_refresh_keeps_earlier_unread_inbox_entries() {
+    let root = Root::new("work-message-refresh");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Inbox refresh", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let post = |body: &str| {
+        wops::message_posted(backend.command(
+            "agents.post",
+            &wops::message_post(&*backend, &pid, json!({"body":body,"toHuman":true})),
+        ))
+        .unwrap()
+    };
+    post("First unread");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Messages");
+    assert_eq!(h.state().work.messages.inbox.len(), 1);
+
+    post("Second unread");
+    h.state_mut().work.messages.event_poll_at =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    settle(&mut h);
+    let inbox = &h.state().work.messages.inbox;
+    assert_eq!(inbox.len(), 2);
+    assert!(inbox.iter().any(|message| message.body.0 == "First unread"));
+    assert!(
+        inbox
+            .iter()
+            .any(|message| message.body.0 == "Second unread")
+    );
+
+    for n in 0..99 {
+        post(&format!("More {n}"));
+    }
+    h.state_mut().work.messages.event_poll_at =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    settle(&mut h);
+    assert_eq!(h.state().work.messages.inbox.len(), 100);
+    h.state_mut().work.messages.event_poll_at =
+        Some(std::time::Instant::now() + std::time::Duration::from_secs(60));
+    click(&mut h, Role::Button, "Load more inbox messages");
+    assert_eq!(
+        h.state().work.messages.inbox.len(),
+        101,
+        "has_more={} cursor={:?} error={:?}",
+        h.state().work.messages.inbox_has_more,
+        h.state().work.messages.inbox_cursor,
+        h.state().work.messages.error
+    );
+    assert!(
+        h.state()
+            .work
+            .messages
+            .inbox
+            .iter()
+            .any(|message| message.body.0 == "More 98")
+    );
+}
+
+#[test]
+fn message_subscription_starts_before_the_initial_inbox_snapshot() {
+    let root = Root::new("work-message-subscription");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Subscription order", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let gate = Gate::holding_replies("agents.events");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(backend.clone())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1600.0,
+        1000.0,
+    );
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let _release = Release(gate.clone());
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Messages")
+        .scroll_to_me();
+    h.step();
+    h.get_by_role_and_label(Role::Button, "Messages").click();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !gate.has_waiter() && std::time::Instant::now() < deadline {
+        h.step();
+        std::thread::yield_now();
+    }
+    assert!(
+        gate.has_waiter(),
+        "initial event subscription is in flight; board={:?}",
+        h.state().work.messages.project
+    );
+    assert!(!h.state().work.messages.inbox_loaded);
+    assert!(!h.state().work.messages.history_loaded);
+
+    wops::message_posted(backend.command(
+        "agents.post",
+        &wops::message_post(
+            &*backend,
+            &pid,
+            json!({"body":"Between subscription and snapshot","toHuman":true}),
+        ),
+    ))
+    .unwrap();
+    gate.open();
+    settle(&mut h);
+    assert!(
+        h.state()
+            .work
+            .messages
+            .inbox
+            .iter()
+            .any(|message| message.body.0 == "Between subscription and snapshot")
+    );
+    assert!(
+        h.state()
+            .work
+            .messages
+            .history
+            .iter()
+            .any(|message| message.body.0 == "Between subscription and snapshot")
+    );
+}
+
+#[test]
 fn features_board_issues_and_overview_share_the_agent_operations() {
     let root = Root::new("work-screens");
     let engine = start(&root);

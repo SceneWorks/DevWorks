@@ -106,6 +106,7 @@ impl StoreHarness for Harness {
     }
 }
 
+mod agent_messages;
 mod allocations;
 mod artifacts;
 mod authority;

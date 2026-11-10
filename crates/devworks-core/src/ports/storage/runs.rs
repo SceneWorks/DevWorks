@@ -5,7 +5,10 @@
 //! service (`crate::services::runs`) is the only writer; every update is a compare-and-set on the
 //! record's revision, so a stale writer gets a [`StorageError::RevisionConflict`] and changes
 //! nothing.
-use super::{MAX_PAGE, StorageError};
+use super::{
+    AgentMessageHistoryFilter, MAX_PAGE, StorageError, StoredAgentAssignmentContext,
+    StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent,
+};
 use crate::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId, RootId};
 use serde_json::Value;
 
@@ -361,6 +364,29 @@ pub enum AssignmentState {
     Failed,
     Superseded,
 }
+
+/// A primary work owner and its delegated children share a root but have different custody.
+/// Only primary assignments participate in the one-live-owner constraint for a work item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssignmentPurpose {
+    Primary,
+    Child,
+}
+impl AssignmentPurpose {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "Primary",
+            Self::Child => "Child",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "Primary" => Some(Self::Primary),
+            "Child" => Some(Self::Child),
+            _ => None,
+        }
+    }
+}
 impl AssignmentState {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -392,6 +418,7 @@ impl AssignmentState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredAssignment {
     pub id: AssignmentId,
+    pub purpose: AssignmentPurpose,
     pub root_id: RootId,
     /// The work item it is for: the root itself or work in the root's hierarchy.
     pub work_id: RootId,
@@ -504,6 +531,86 @@ pub struct StoredStopCoverage {
 }
 
 pub trait RunRead {
+    fn agent_assignment_context(
+        &self,
+        assignment: &AssignmentId,
+    ) -> Result<Option<StoredAgentAssignmentContext>, StorageError>;
+    fn agent_message(&self, id: &Id) -> Result<Option<StoredAgentMessage>, StorageError>;
+    fn agent_message_by_key(
+        &self,
+        project: &ProjectId,
+        sender: &ActorId,
+        key: &str,
+    ) -> Result<Option<StoredAgentMessage>, StorageError>;
+    /// Project history, newest first. `before` is the last message ID of the prior page.
+    fn agent_messages(
+        &self,
+        project: &ProjectId,
+        before: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredAgentMessage>, StorageError>;
+    /// Direct session deliveries still eligible for one successor, in delivery order.
+    fn unhanded_direct_deliveries(
+        &self,
+        project: &ProjectId,
+        after: i64,
+        limit: u16,
+    ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError>;
+    fn agent_message_history(
+        &self,
+        filter: &AgentMessageHistoryFilter<'_>,
+    ) -> Result<Vec<(i64, StoredAgentMessage)>, StorageError>;
+    /// Assignment's inbound/outbound message thread, newest first; `before` is the prior page's
+    /// final ID. An unacknowledged filter only selects inbound pending/delivered copies.
+    fn agent_assignment_thread(
+        &self,
+        project: &ProjectId,
+        assignment: &AssignmentId,
+        direction: &str,
+        unacknowledged_only: bool,
+        before: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<(StoredAgentMessage, Option<StoredAgentDelivery>)>, StorageError>;
+    fn agent_delivery(
+        &self,
+        message: &Id,
+        recipient: Option<&AssignmentId>,
+    ) -> Result<Option<StoredAgentDelivery>, StorageError>;
+    fn agent_session_delivery(
+        &self,
+        message: &Id,
+        session: &Id,
+    ) -> Result<Option<StoredAgentDelivery>, StorageError>;
+    fn agent_recipient_count(&self, message: &Id) -> Result<usize, StorageError>;
+    /// Latest agent message post, delivery, or acknowledgement attributable to this session.
+    fn agent_session_activity_at(&self, session: &Id) -> Result<Option<i64>, StorageError>;
+    /// Open questions to a human that hold implementation of exactly this work item.
+    fn open_blocking_question(&self, item: &RootId) -> Result<bool, StorageError>;
+    /// Delivery cursor is global, so a session can resume after a crash without reordering.
+    fn agent_inbox(
+        &self,
+        project: &ProjectId,
+        recipient: Option<&AssignmentId>,
+        after: i64,
+        include_read: bool,
+        limit: u16,
+    ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError>;
+    fn agent_session_inbox(
+        &self,
+        project: &ProjectId,
+        session: &Id,
+        after: i64,
+        include_read: bool,
+        limit: u16,
+    ) -> Result<Vec<(StoredAgentDelivery, StoredAgentMessage)>, StorageError>;
+    fn agent_delivery_head(&self) -> Result<i64, StorageError>;
+    fn agent_message_events(
+        &self,
+        project: &ProjectId,
+        after: i64,
+        limit: u16,
+    ) -> Result<Vec<StoredAgentMessageEvent>, StorageError>;
+    fn agent_event_head(&self) -> Result<i64, StorageError>;
     fn root_control(&self, root: &RootId) -> Result<Option<StoredRootControl>, StorageError>;
     /// Roots with a journaled stop whose outcome is still to be observed, in root order after
     /// `after`, at most `limit` (1..=500).
@@ -598,6 +705,27 @@ pub trait RunRead {
 }
 
 pub trait RunRepository: RunRead {
+    fn insert_agent_assignment_context(
+        &mut self,
+        context: &StoredAgentAssignmentContext,
+    ) -> Result<(), StorageError>;
+    fn insert_agent_message(&mut self, message: &StoredAgentMessage) -> Result<(), StorageError>;
+    fn resolve_agent_message(
+        &mut self,
+        message: &StoredAgentMessage,
+        expected_revision: i64,
+    ) -> Result<(), StorageError>;
+    fn insert_agent_delivery(&mut self, delivery: &StoredAgentDelivery)
+    -> Result<(), StorageError>;
+    fn update_agent_delivery(
+        &mut self,
+        delivery: &StoredAgentDelivery,
+        expected_revision: i64,
+    ) -> Result<(), StorageError>;
+    fn insert_agent_message_event(
+        &mut self,
+        event: &StoredAgentMessageEvent,
+    ) -> Result<(), StorageError>;
     /// Inserts the root's first control record (its revision is the record's).
     fn insert_root_control(&mut self, control: &StoredRootControl) -> Result<(), StorageError>;
     /// Replaces the record when its stored revision is `expected` (a `Control` conflict
@@ -623,8 +751,8 @@ pub trait RunRepository: RunRead {
         blocker: &StoredBlocker,
         expected: i64,
     ) -> Result<(), StorageError>;
-    /// Inserts an assignment. A second live coordinator of one root, or a second live
-    /// assignment of one work item, is [`StorageError::Duplicate`].
+    /// Inserts an assignment. A second live primary owner of one work item is
+    /// [`StorageError::Duplicate`]; child assignments retain their own identity.
     fn insert_assignment(&mut self, assignment: &StoredAssignment) -> Result<(), StorageError>;
     fn update_assignment(
         &mut self,
@@ -639,6 +767,12 @@ pub trait RunRepository: RunRead {
         assignment: &StoredAssignment,
         expected_assignment: i64,
         expected_session_revision: i64,
+    ) -> Result<(), StorageError>;
+    /// Retires a superseded membership marker without reviving the assignment or changing its scope.
+    fn retire_membership_handoff(
+        &mut self,
+        assignment: &AssignmentId,
+        expected_revision: i64,
     ) -> Result<(), StorageError>;
     fn insert_instruction(&mut self, instruction: &StoredInstruction) -> Result<(), StorageError>;
     fn update_instruction(

@@ -736,9 +736,10 @@ impl ResourceService {
         desktop_owner: bool,
     ) -> Result<DomainDecision, Failure> {
         if !desktop_owner
-            && i.purpose
-                .as_ref()
-                .is_some_and(|p| p.0.starts_with(DESKTOP_CONSENT_PURPOSE))
+            && (i.resource_id.0.as_str().eq_ignore_ascii_case(DESKTOP)
+                || i.purpose
+                    .as_ref()
+                    .is_some_and(|p| p.0.starts_with(DESKTOP_CONSENT_PURPOSE)))
         {
             return Err(Refusal::new(
                 DomainErrorCode::PermissionDenied,
@@ -973,9 +974,10 @@ impl ResourceService {
     ) -> Result<DomainDecision, Failure> {
         let lease_ms = lease_ms(&i.lease_ms.0)?;
         let (mut l, res) = self.own_lease(tx, ctx, &i.lease_id)?;
-        if l.purpose
-            .as_deref()
-            .is_some_and(|p| p.starts_with(DESKTOP_CONSENT_PURPOSE))
+        if res.name.eq_ignore_ascii_case(DESKTOP)
+            || l.purpose
+                .as_deref()
+                .is_some_and(|p| p.starts_with(DESKTOP_CONSENT_PURPOSE))
         {
             return Err(Refusal::new(
                 DomainErrorCode::PermissionDenied,

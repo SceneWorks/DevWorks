@@ -119,7 +119,7 @@ pub struct StoredEpoch {
     pub session_id: Id,
     pub epoch: i64,
     pub previous_epoch: i64,
-    /// `Compaction`, `ProviderChange` or `InstructionAdoption`.
+    /// `Compaction`, `ProviderChange`, `InstructionAdoption` or `MembershipHandoff`.
     pub reason: String,
     /// The immutable context snapshot (`ArtifactRef` JSON).
     pub context: Value,
@@ -130,6 +130,22 @@ pub struct StoredEpoch {
     /// Transcript sequence of the boundary entry.
     pub sequence: i64,
     pub created_at_ms: i64,
+}
+
+/// The latest immutable provider context published for a session. The transcript remains the
+/// authority for conversation facts; this pointer makes exact native aliases and opaque items
+/// recoverable after a host restart without reconstructing them from a changed tool registry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredProviderContextHead {
+    pub session_id: Id,
+    pub context_epoch: i64,
+    pub observed_sequence: i64,
+    /// `ProviderInitialContext`, `ProviderTurnContinuation` or `ProviderOperationUpdateContext`.
+    pub kind: String,
+    pub attempt_id: Option<Id>,
+    pub binding: Value,
+    pub artifact: Value,
+    pub revision: i64,
 }
 
 /// A context source the host recorded for one epoch (instruction revisions, retrieved sources,
@@ -207,6 +223,10 @@ pub enum SessionScope {
     All,
     /// Sessions of one project.
     Project(ProjectId),
+    /// Sessions of one work root in a project.
+    Root(ProjectId, RootId),
+    /// One session, used when an agent has no work root.
+    One(Id),
     /// Workspace (Home) sessions without a project.
     Workspace,
 }
@@ -317,6 +337,10 @@ impl LineageRow {
 pub trait SessionRead {
     fn work_root(&self, root: &RootId) -> Result<Option<WorkRoot>, StorageError>;
     fn session(&self, id: &Id) -> Result<Option<StoredSession>, StorageError>;
+    /// Immutable repository IDs captured when the session was created, in ID order.
+    fn session_repository_scope(&self, id: &Id) -> Result<Vec<Id>, StorageError>;
+    /// Last authenticated session activity, including an empty inbox poll.
+    fn session_activity_at_ms(&self, id: &Id) -> Result<Option<i64>, StorageError>;
     /// Sessions in `scope` (optionally only open or closed ones), newest first after `after`, at
     /// most `limit` (1..=500).
     fn sessions(
@@ -375,6 +399,10 @@ pub trait SessionRead {
         limit: u16,
     ) -> Result<Vec<StoredToolCall>, StorageError>;
     fn epoch(&self, session: &Id, epoch: i64) -> Result<Option<StoredEpoch>, StorageError>;
+    fn provider_context_head(
+        &self,
+        session: &Id,
+    ) -> Result<Option<StoredProviderContextHead>, StorageError>;
     /// Recorded sources of one epoch with ordinal greater than `after`, at most `limit`.
     fn context_sources(
         &self,
@@ -457,6 +485,8 @@ pub trait SessionRead {
 }
 
 pub trait SessionRepository: SessionRead {
+    /// Advances the durable activity clock without changing transcript or authority revisions.
+    fn touch_session_activity(&mut self, id: &Id, at_ms: i64) -> Result<(), StorageError>;
     /// Inserts the session and its conversation. The project, root and actors must exist.
     fn insert_session(&mut self, session: &StoredSession) -> Result<(), StorageError>;
     /// Replaces the mutable columns (title, epoch, revision, close, append bookkeeping). The
@@ -473,6 +503,13 @@ pub trait SessionRepository: SessionRead {
     /// [`StorageError::Duplicate`].
     fn record_response(&mut self, call: &StoredToolCall) -> Result<(), StorageError>;
     fn insert_epoch(&mut self, epoch: &StoredEpoch) -> Result<(), StorageError>;
+    /// Replace the session's provider context pointer after the new artifact is committed in
+    /// this transaction. `expected_revision` is None only for its first publication.
+    fn put_provider_context_head(
+        &mut self,
+        head: &StoredProviderContextHead,
+        expected_revision: Option<i64>,
+    ) -> Result<(), StorageError>;
     fn insert_context_source(&mut self, source: &StoredContextSource) -> Result<(), StorageError>;
     fn insert_checkpoint(&mut self, checkpoint: &StoredCheckpoint) -> Result<(), StorageError>;
     fn insert_usage(&mut self, usage: &StoredUsage) -> Result<(), StorageError>;

@@ -13,7 +13,7 @@ devworks-core = { path = "../devworks-core" }
 devworks-extension-protocol = { path = "../devworks-extension-protocol" }
 semver.workspace = true
 serde_json.workspace = true
-tokio = { version = "=1.54.1", default-features = false, features = ["sync", "time", "rt"] }
+tokio = { version = "=1.54.1", default-features = false, features = ["sync", "time", "rt", "macros"] }
 
 # Integration tests compose the real SQLite adapter (STORE-11).
 [dev-dependencies]

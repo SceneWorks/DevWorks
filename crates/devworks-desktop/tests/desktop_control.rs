@@ -19,6 +19,84 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[test]
+fn opted_in_agent_capture_still_requires_current_consent() {
+    use devworks_core::authority::service::bind_principal;
+    use devworks_core::context::{HostIngress, PrincipalKind};
+    use devworks_core::ports::storage::{
+        ConfigScope, NewPrincipalBinding, WriteOptions, run_write,
+    };
+    use devworks_core::protocol::results::DomainQueryReply;
+    use devworks_core::protocol::{ActorId, Counter, Id, Revision};
+
+    let _case = native_runtime_case();
+    let root = Root::new("desktop-agent-capture");
+    let platform = Arc::new(ScriptedDesktop::default());
+    let mut configuration = config(&root.0);
+    configuration.desktop_platform = Some(platform.clone());
+    let engine = devworks_desktop::host::Engine::start(configuration).expect("runtime boot");
+    let backend = engine.backend();
+    let desktop = inspect(&*backend);
+    let store = engine.host().runtime().store().clone();
+    let human = engine.host().user().clone();
+    let worker = ActorId(Id::new("capture-worker").unwrap());
+    let worker_for_write = worker.clone();
+    let schema = devworks_core::settings::catalog::descriptor("tools.overrides")
+        .unwrap()
+        .schema_ref();
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        tx.actors()
+            .register(&worker_for_write, PrincipalKind::Agent, "capture worker")?;
+        bind_principal(
+            tx,
+            &human,
+            NewPrincipalBinding {
+                actor: worker_for_write.clone(),
+                kind: PrincipalKind::Agent,
+                role: Some(devworks_core::settings::catalog::AgentRole::Worker),
+                project_id: None,
+                tool_families: None,
+                bound_by: human.principal().clone(),
+            },
+            None,
+        )
+        .map_err(|error| {
+            devworks_core::ports::storage::StorageError::InvalidRecord(format!("{error:?}"))
+        })?;
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            "settings",
+            1,
+            1,
+            json!({"values":{"tools.overrides":{"schema":schema,
+                "value":{"devworks/desktop.capture":true}}}}),
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let agent = HostIngress::new(&*store).context(
+        worker,
+        PrincipalKind::Agent,
+        Id::new("capture-invocation").unwrap(),
+        Id::new("capture-ingress").unwrap(),
+        Counter::new(store.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    let raw = ops::query_frame(
+        &*backend,
+        "desktop.capture",
+        json!({"desktopId":desktop.desktop_id,"expectedRevision":desktop.revision}),
+    );
+    assert!(matches!(
+        engine
+            .host()
+            .runtime()
+            .query(&agent, "desktop.capture", &raw),
+        Ok(DomainQueryReply::Rejected { .. })
+    ));
+    assert_eq!(*platform.captures.lock().unwrap(), 0);
+}
+
 struct ScriptedDesktop {
     input: Mutex<Vec<DesktopInput>>,
     captures: Mutex<usize>,

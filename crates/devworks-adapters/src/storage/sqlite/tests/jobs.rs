@@ -576,6 +576,154 @@ fn jobs_are_created_listed_inspected_and_edited_with_both_revisions() {
 }
 
 #[test]
+fn an_assigned_worker_cannot_list_or_disable_project_jobs() {
+    let fx = Fx::new();
+    let p = fx.project("P");
+    fx.bind_agent("agent-a", Some(&p.id));
+    fx.bind_agent("agent-p", Some(&p.id));
+    let job = fx.job(
+        &fx.user(),
+        json!({"scope":{"kind":"Project","projectId":p.id.0.as_str()},"title":"Project job",
+            "schedule":every(3600),"definition":native(),"enabled":true}),
+    );
+    let project = p.id.clone();
+    fx.write(move |tx| {
+        tx.work().insert_work(&StoredWork {
+            id: id("job-root"),
+            project_id: project.clone(),
+            kind: "feature".into(),
+            parent_feature_id: None,
+            status_id: None,
+            title: "Work".into(),
+            priority: 1,
+            manual_order: 0,
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            created_by: None,
+            updated_by: None,
+            search_key: "job-root".into(),
+            caller_ref: None,
+            completion: None,
+            brief: json!({}),
+        })?;
+        tx.sessions().insert_session(&StoredSession {
+            id: id("job-parent-session"),
+            conversation_id: id("job-parent-conversation"),
+            agent_id: actor("agent-a"),
+            project_id: Some(project.clone()),
+            root_id: Some(RootId(id("job-root"))),
+            title: "Coordinator".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor("user-a"),
+            created_at_ms: T0,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })?;
+        tx.sessions().insert_session(&StoredSession {
+            id: id("job-worker-session"),
+            conversation_id: id("job-worker-conversation"),
+            agent_id: actor("agent-p"),
+            project_id: Some(project.clone()),
+            root_id: Some(RootId(id("job-root"))),
+            title: "Worker".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor("user-a"),
+            created_at_ms: T0,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })?;
+        tx.runs().insert_assignment(&StoredAssignment {
+            id: devworks_core::protocol::AssignmentId(id("job-parent")),
+            purpose: AssignmentPurpose::Primary,
+            root_id: RootId(id("job-root")),
+            work_id: RootId(id("job-root")),
+            parent_id: None,
+            session_id: id("job-parent-session"),
+            execution_id: None,
+            state: AssignmentState::Active,
+            generation: 1,
+            slot_held: false,
+            revision: 1,
+            checkpoint: None,
+            scope_key: None,
+            scope_digest: None,
+            plan_revision: None,
+            instruction_revision: 0,
+            created_at_ms: T0,
+        })?;
+        tx.runs().insert_assignment(&StoredAssignment {
+            id: devworks_core::protocol::AssignmentId(id("job-worker")),
+            purpose: AssignmentPurpose::Child,
+            root_id: RootId(id("job-root")),
+            work_id: RootId(id("job-root")),
+            parent_id: Some(devworks_core::protocol::AssignmentId(id("job-parent"))),
+            session_id: id("job-worker-session"),
+            execution_id: None,
+            state: AssignmentState::Active,
+            generation: 1,
+            slot_held: true,
+            revision: 1,
+            checkpoint: None,
+            scope_key: None,
+            scope_digest: None,
+            plan_revision: None,
+            instruction_revision: 0,
+            created_at_ms: T0,
+        })?;
+        tx.runs()
+            .insert_agent_assignment_context(&StoredAgentAssignmentContext {
+                assignment_id: devworks_core::protocol::AssignmentId(id("job-worker")),
+                project_id: project,
+                role_id: id("worker"),
+                role_instructions: "Work".into(),
+                role_revisions: json!({}),
+                brief: "Work".into(),
+                task_ids: json!([]),
+                source_checkpoint_id: None,
+                created_at_ms: T0,
+            })
+    });
+    let worker = fx
+        .ctx("agent-p", PrincipalKind::Agent, Some(&p.id))
+        .with_lineage(
+            Some(p.id.clone()),
+            Some(RootId(id("job-root"))),
+            Some(devworks_core::protocol::AssignmentId(id("job-worker"))),
+        )
+        .with_session(id("job-worker-session"));
+    assert_eq!(
+        query_fault(fx.query_at(
+            &worker,
+            "jobs.list",
+            json!({"scope":{"kind":"Project","projectId":p.id.0.as_str()},"page":{"limit":10}}),
+            2
+        ))
+        .0,
+        DomainErrorCode::PermissionDenied,
+    );
+    assert!(matches!(
+        fx.command(
+            &worker,
+            "jobs.disable",
+            json!({"jobId":s(&job,"id"),"expectedRevision":s(&job,"revision")})
+        ),
+        DomainCommandReply::Rejected {
+            code: devworks_core::protocol::Rejection::PermissionDenied,
+            ..
+        }
+    ));
+    assert!(fx.stored(&s(&job, "id")).enabled);
+}
+
+#[test]
 fn listing_pages_by_title_within_one_scope() {
     let fx = Fx::new();
     let user = fx.user();

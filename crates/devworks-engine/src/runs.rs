@@ -158,7 +158,7 @@ pub struct RunSupervisor {
     service: Arc<ControlService>,
     processes: Arc<ProcessSupervisor>,
     containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
-    launcher: Option<Arc<dyn ActivationLauncher>>,
+    launcher: Mutex<Option<Arc<dyn ActivationLauncher>>>,
     hooks: Arc<dyn LifecycleHooks>,
     owner: Id,
     /// A wall-clock advance exceeding the monotonic advance by more than this is a sleep/wake.
@@ -200,7 +200,7 @@ impl RunSupervisor {
             service,
             processes,
             containers: None,
-            launcher,
+            launcher: Mutex::new(launcher),
             hooks,
             owner,
             wake_jump_ms: 10_000,
@@ -219,6 +219,25 @@ impl RunSupervisor {
 
     pub fn service(&self) -> &Arc<ControlService> {
         &self.service
+    }
+    /// Install the production launcher after boot composition has returned its runtime owner.
+    /// The slot is one-shot: replacing a live launcher would leave its claimed activations with
+    /// different execution semantics. A newly installed launcher wakes the supervision loop.
+    pub fn install_launcher(
+        &self,
+        launcher: Arc<dyn ActivationLauncher>,
+    ) -> Result<(), StorageError> {
+        if self.stopping.load(Ordering::SeqCst) {
+            return Err(StorageError::ScopeDenied);
+        }
+        let mut slot = self.launcher.lock().unwrap_or_else(|p| p.into_inner());
+        if slot.is_some() {
+            return Err(StorageError::ScopeDenied);
+        }
+        *slot = Some(launcher);
+        drop(slot);
+        self.notify();
+        Ok(())
     }
     pub fn with_containers(
         &mut self,
@@ -326,7 +345,12 @@ impl RunSupervisor {
         {
             self.wake_dispatcher();
         }
-        if self.launcher.is_some() && !self.stopping.load(Ordering::SeqCst) {
+        let has_launcher = self
+            .launcher
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some();
+        if has_launcher && !self.stopping.load(Ordering::SeqCst) {
             loop {
                 // Shutdown (or drop) may begin while this tick runs: no further claim, and a
                 // claim committed meanwhile is not launched (shutdown records it interrupted).
@@ -567,7 +591,12 @@ impl RunSupervisor {
     }
 
     fn spawn_launch(self: &Arc<Self>, activation: StoredActivation) {
-        let Some(launcher) = self.launcher.clone() else {
+        let Some(launcher) = self
+            .launcher
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+        else {
             return;
         };
         let (stop_tx, stop_rx) = watch::channel(false);

@@ -47,6 +47,31 @@ pub(crate) struct ContinuationMaterial {
     pub observed_sequence: i64,
 }
 
+#[derive(Clone)]
+pub(crate) struct ContextHeadFence {
+    pub session_id: Id,
+    pub epoch: i64,
+    pub sequence: i64,
+    pub head: Option<StoredProviderContextHead>,
+}
+
+impl ContextHeadFence {
+    pub fn check(&self, tx: &mut dyn WriteTransaction) -> Result<(), StorageError> {
+        let session = tx
+            .sessions()
+            .session(&self.session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.closed()
+            || session.context_epoch != self.epoch
+            || session.last_durable_sequence() != self.sequence
+            || tx.sessions().provider_context_head(&self.session_id)? != self.head
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        Ok(())
+    }
+}
+
 fn authorized_session(
     read: &dyn ReadSnapshot,
     ctx: &InvocationContext,
@@ -110,6 +135,295 @@ pub(crate) fn pending_calls(
             })
             .collect()
     })
+}
+
+/// Publish the first request context before inference. This fixes its exact bytes and provider
+/// binding in the session head, so a restarted caller can recover the same prompt and aliases.
+/// Only a fresh epoch-zero session may acquire an initial context; retries return its first
+/// publication when the bytes and binding match.
+pub(crate) fn publish_initial_context(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    binding: &NativeBinding,
+    context: &ProviderContext,
+) -> Result<ArtifactRef, StorageError> {
+    context
+        .validate()
+        .map_err(|error| invalid(format!("initial provider context: {error:?}")))?;
+    if binding.context_epoch.get() != 0
+        || context.messages.iter().any(|message| {
+            !matches!(message.role, MessageRole::User)
+                || message.content.iter().any(|block| {
+                    !matches!(
+                        block,
+                        ContentBlock::Text { .. } | ContentBlock::Image { .. }
+                    )
+                })
+        })
+        || ctx.session_id() != Some(session_id)
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let bytes = serde_json::to_vec(context).map_err(invalid)?;
+    let digest = sha256_hex(&bytes);
+    let staged = artifacts
+        .stage_host_bytes(
+            store,
+            &bytes,
+            json!({"kind":"ProviderInitialContext","sessionId":session_id,
+                "binding":binding,"observedSequence":0}),
+        )?
+        .map_err(invalid)?;
+    let staged_for_write = staged.clone();
+    let service = artifacts.clone();
+    let ctx = ctx.clone();
+    let session_id = session_id.clone();
+    let binding = binding.clone();
+    let committed = run_write(store, WriteOptions::default(), move |tx| {
+        let session = tx
+            .sessions()
+            .session(&session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.closed()
+            || session.context_epoch != 0
+            || tx.store().store_id != *ctx.store_id()
+            || tx.store().restore_epoch != ctx.restore_epoch().get()
+            || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+            || !matches!(
+                ctx.principal_kind(),
+                PrincipalKind::Host | PrincipalKind::Agent
+            )
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        if ctx.principal_kind() == PrincipalKind::Agent {
+            let principal = tx
+                .authority()
+                .principal(ctx.principal())?
+                .ok_or(StorageError::ScopeDenied)?;
+            if !principal.active
+                || session.agent_id != *ctx.principal()
+                || principal
+                    .project_id
+                    .as_ref()
+                    .is_some_and(|project| session.project_id.as_ref() != Some(project))
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+        if let Some(head) = tx.sessions().provider_context_head(&session_id)? {
+            let artifact: ArtifactRef = serde_json::from_value(head.artifact).map_err(invalid)?;
+            let version = tx
+                .artifacts()
+                .version(&artifact.version_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if head.kind == "ProviderInitialContext"
+                && head.context_epoch == 0
+                && head.observed_sequence == 0
+                && head.attempt_id.is_none()
+                && head.binding == json!(binding)
+                && artifact.sha256.as_str() == digest
+                && version.live()
+                && version.version_no == 1
+                && version.artifact_id == artifact.artifact_id
+            {
+                return Ok((artifact, false));
+            }
+            return Err(StorageError::ScopeDenied);
+        }
+        let scope = session
+            .project_id
+            .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+        let version = service.commit_host_bytes_in_scope(
+            tx,
+            &staged_for_write,
+            HostArtifactPublication {
+                title: "Initial provider context",
+                media_type: "application/vnd.devworks.provider-context+json",
+                provenance: json!({"kind":"ProviderInitialContext","sessionId":session_id,
+                    "binding":binding,"observedSequence":0,"epochRoot":null}),
+                scope,
+                owner: ctx.principal().clone(),
+            },
+        )?;
+        let artifact = version_ref(&version);
+        tx.sessions().put_provider_context_head(
+            &StoredProviderContextHead {
+                session_id,
+                context_epoch: 0,
+                observed_sequence: 0,
+                kind: "ProviderInitialContext".into(),
+                attempt_id: None,
+                binding: json!(binding),
+                artifact: json!(artifact),
+                revision: 1,
+            },
+            None,
+        )?;
+        Ok((artifact, true))
+    });
+    artifacts.settle_host_bytes(store, &staged, matches!(&committed, Ok((_, true))));
+    committed.map(|(artifact, _)| artifact)
+}
+
+/// A fresh native request must consume the current published context. A recorded route request
+/// is handled by the provider's replay checks, since its original source may precede a later
+/// completed turn that has already advanced the head.
+pub(crate) fn require_current_head_for_new_request(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    request_id: &Id,
+    source: &ArtifactRef,
+) -> Result<ContextHeadFence, StorageError> {
+    read_snapshot(store, &ReadOptions::default(), |read| {
+        let session = authorized_session(read, ctx, session_id)?;
+        if read.router().route_request(request_id)?.is_some() {
+            return Ok(ContextHeadFence {
+                session_id: session_id.clone(),
+                epoch: session.context_epoch,
+                sequence: session.last_durable_sequence(),
+                head: read.sessions().provider_context_head(session_id)?,
+            });
+        }
+        let head = read.sessions().provider_context_head(session_id)?;
+        if let Some(head) = &head
+            && head.context_epoch == session.context_epoch
+            && (head.observed_sequence != session.last_durable_sequence()
+                || head.artifact != json!(source))
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        Ok(ContextHeadFence {
+            session_id: session_id.clone(),
+            epoch: session.context_epoch,
+            sequence: session.last_durable_sequence(),
+            head,
+        })
+    })
+}
+
+/// A concurrent transcript fact or context publication can make a planned native request stale
+/// between context refresh and admission. Only that race is safe to replay with a refreshed head.
+pub(crate) fn native_head_became_stale(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    source: &ArtifactRef,
+) -> Result<bool, StorageError> {
+    read_snapshot(store, &ReadOptions::default(), |read| {
+        let session = authorized_session(read, ctx, session_id)?;
+        let head = read.sessions().provider_context_head(session_id)?;
+        Ok(head.as_ref().is_none_or(|head| {
+            head.artifact != json!(source)
+                || head.context_epoch != session.context_epoch
+                || head.observed_sequence != session.last_durable_sequence()
+        }))
+    })
+}
+
+/// Recover the last published immutable native context after a host restart. A new epoch uses
+/// its durable root until a turn publishes a continuation in that epoch.
+pub(crate) fn recover_context_head(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+) -> Result<Option<(ArtifactRef, NativeBinding, i64)>, StorageError> {
+    let source = read_snapshot(store, &ReadOptions::default(), |read| {
+        let session = authorized_session(read, ctx, session_id)?;
+        let head = read.sessions().provider_context_head(session_id)?;
+        if let Some(head) = head
+            && head.context_epoch == session.context_epoch
+        {
+            if head.observed_sequence > session.last_durable_sequence() {
+                return Err(StorageError::ScopeDenied);
+            }
+            return Ok(Some((
+                head.artifact,
+                Some(head.binding),
+                head.observed_sequence,
+                head.kind,
+                head.attempt_id,
+                session.context_epoch,
+                Some(crate::context_epoch::epoch_root(
+                    read.sessions(),
+                    session_id,
+                    session.context_epoch,
+                )?),
+            )));
+        }
+        if session.context_epoch == 0 {
+            return Ok(None);
+        }
+        let epoch = read
+            .sessions()
+            .epoch(session_id, session.context_epoch)?
+            .ok_or(StorageError::ScopeDenied)?;
+        Ok(Some((
+            epoch.context,
+            None,
+            epoch.sequence,
+            "ProviderContextEpoch".to_owned(),
+            None,
+            session.context_epoch,
+            None,
+        )))
+    })?;
+    let Some((
+        artifact_json,
+        stored_binding,
+        observed_sequence,
+        kind,
+        attempt_id,
+        epoch,
+        head_root,
+    )) = source
+    else {
+        return Ok(None);
+    };
+    let artifact: ArtifactRef = serde_json::from_value(artifact_json).map_err(invalid)?;
+    let (bytes, provenance) = artifacts
+        .read_exact(store, ctx, &artifact, 8 * 1024 * 1024)
+        .map_err(|_| StorageError::ScopeDenied)?;
+    let context: ProviderContext = serde_json::from_slice(&bytes).map_err(invalid)?;
+    context
+        .validate()
+        .map_err(|error| invalid(format!("{error:?}")))?;
+    let derived = &provenance["derived"];
+    let binding: NativeBinding =
+        serde_json::from_value(derived["binding"].clone()).map_err(invalid)?;
+    if provenance["principalKind"] != "Host"
+        || provenance["producedBy"] != store.info().host_actor.0.as_str()
+        || derived["kind"] != kind
+        || derived["sessionId"] != session_id.as_str()
+        || !matches!(
+            (kind.as_str(), attempt_id.as_ref()),
+            ("ProviderTurnContinuation", Some(_))
+                | (
+                    "ProviderInitialContext"
+                        | "ProviderOperationUpdateContext"
+                        | "ProviderContextEpoch",
+                    None
+                )
+        )
+        || (kind == "ProviderInitialContext" && (epoch != 0 || observed_sequence != 0))
+        || head_root
+            .as_ref()
+            .is_some_and(|root| derived.get("epochRoot") != Some(root))
+        || attempt_id
+            .as_ref()
+            .is_some_and(|id| derived["attemptId"] != id.as_str())
+        || stored_binding.is_some_and(|value| value != json!(binding))
+        || binding.context_epoch.get() != epoch
+        || derived["binding"] != json!(binding)
+        || derived["observedSequence"] != observed_sequence
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    Ok(Some((artifact, binding, observed_sequence)))
 }
 
 /// Linked operations reconcile independently of unanswered sibling calls. Only the authorized
@@ -275,6 +589,31 @@ pub(crate) fn continuation_context(
     binding: &NativeBinding,
     previous: &devworks_core::protocol::provider::ArtifactRef,
 ) -> Result<ContinuationMaterial, StorageError> {
+    continuation_context_at_epoch(store, artifacts, ctx, source, binding, previous, false)
+}
+
+/// A membership transfer has already incremented the session epoch; assemble the settled
+/// previous-epoch turn before publishing the destination epoch root.
+pub(crate) fn handoff_continuation_context(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    source: TurnSource<'_>,
+    binding: &NativeBinding,
+    previous: &devworks_core::protocol::provider::ArtifactRef,
+) -> Result<ContinuationMaterial, StorageError> {
+    continuation_context_at_epoch(store, artifacts, ctx, source, binding, previous, true)
+}
+
+fn continuation_context_at_epoch(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    source: TurnSource<'_>,
+    binding: &NativeBinding,
+    previous: &devworks_core::protocol::provider::ArtifactRef,
+    handoff: bool,
+) -> Result<ContinuationMaterial, StorageError> {
     let TurnSource {
         session_id,
         attempt_id,
@@ -303,7 +642,7 @@ pub(crate) fn continuation_context(
     {
         return Err(invalid("foreign native state requires a new context epoch"));
     }
-    let (entries, updates, observed_sequence) =
+    let (entries, updates, after_turn, observed_sequence) =
         read_snapshot(store, &ReadOptions::default(), |read| {
             let session = read
                 .sessions()
@@ -314,7 +653,8 @@ pub(crate) fn continuation_context(
                 .inference_attempt(&attempt_id.0)?
                 .ok_or(StorageError::ScopeDenied)?;
             if session.closed()
-                || session.context_epoch != binding.context_epoch.get()
+                || (session.context_epoch != binding.context_epoch.get()
+                    && !(handoff && session.context_epoch == binding.context_epoch.get() + 1))
                 || attempt.session_id.as_ref() != Some(session_id)
                 || attempt.connection_id != binding.connection_id
                 || attempt.catalog_model_id != binding.model_id
@@ -325,6 +665,7 @@ pub(crate) fn continuation_context(
             let mut position = after_sequence;
             let mut selected = Vec::new();
             let mut updates = Vec::new();
+            let mut after_turn = Vec::new();
             while position < session.last_durable_sequence() {
                 if position - after_sequence >= 10_000 {
                     return Err(invalid("tool turn exceeds transcript scan bound"));
@@ -340,15 +681,6 @@ pub(crate) fn continuation_context(
                     position = entry.sequence;
                     let body: TranscriptBody =
                         serde_json::from_value(entry.body).map_err(invalid)?;
-                    if matches!(
-                        &body,
-                        TranscriptBody::UserMessage { .. } | TranscriptBody::HostNotice { .. }
-                    ) {
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool continuation needs redirected context reconstruction",
-                        ));
-                    }
                     let belongs = match &body {
                         TranscriptBody::AssistantAttempt { attempt_id: id, .. } => id == attempt_id,
                         TranscriptBody::ToolCallRecorded { tool_call } => {
@@ -359,6 +691,8 @@ pub(crate) fn continuation_context(
                             &call.attempt_id == attempt_id
                         }
                         TranscriptBody::OperationUpdate { .. } => true,
+                        TranscriptBody::UserMessage { .. } => true,
+                        TranscriptBody::HostNotice { .. } => true,
                         TranscriptBody::NativeItem { artifact, .. } => {
                             let row = read
                                 .artifacts()
@@ -381,6 +715,11 @@ pub(crate) fn continuation_context(
                             | TranscriptBody::NativeItem { .. }
                     ) {
                         selected.push(body);
+                    } else if matches!(
+                        &body,
+                        TranscriptBody::UserMessage { .. } | TranscriptBody::HostNotice { .. }
+                    ) {
+                        after_turn.push(body);
                     } else if let TranscriptBody::OperationUpdate {
                         operation_id,
                         revision,
@@ -394,7 +733,12 @@ pub(crate) fn continuation_context(
                     }
                 }
             }
-            Ok((selected, updates, session.last_durable_sequence()))
+            Ok((
+                selected,
+                updates,
+                after_turn,
+                session.last_durable_sequence(),
+            ))
         })?;
     let mut assistant = Vec::new();
     for entry in entries {
@@ -523,6 +867,52 @@ pub(crate) fn continuation_context(
             }],
         });
     }
+    for entry in after_turn {
+        let blocks = match entry {
+            TranscriptBody::UserMessage { content } => content
+                .into_iter()
+                .map(|item| match item {
+                    devworks_core::protocol::provider::UserContent::Text { text } => {
+                        ContentBlock::Text { text, cache: None }
+                    }
+                    devworks_core::protocol::provider::UserContent::Attachment { artifact }
+                        if artifact.media_type.starts_with("image/") =>
+                    {
+                        ContentBlock::Image {
+                            artifact,
+                            detail: None,
+                            cache: None,
+                        }
+                    }
+                    devworks_core::protocol::provider::UserContent::Attachment { artifact } => {
+                        ContentBlock::Text {
+                            text: format!(
+                                "User attachment: {} ({})",
+                                artifact.artifact_id.as_str(),
+                                artifact.media_type
+                            ),
+                            cache: None,
+                        }
+                    }
+                })
+                .collect(),
+            TranscriptBody::HostNotice { artifact, .. } => vec![ContentBlock::Text {
+                text: String::from_utf8(
+                    artifacts
+                        .read_exact(store, ctx, &artifact, 8_000)
+                        .map_err(|_| StorageError::ScopeDenied)?
+                        .0,
+                )
+                .map_err(invalid)?,
+                cache: None,
+            }],
+            _ => unreachable!(),
+        };
+        context.messages.push(Message {
+            role: MessageRole::User,
+            content: blocks,
+        });
+    }
     context.validate().map_err(|e| invalid(format!("{e:?}")))?;
     Ok(ContinuationMaterial {
         context,
@@ -605,6 +995,24 @@ pub(crate) fn publish_continuation(
                 return Err(StorageError::ScopeDenied);
             }
         }
+        let previous_head = tx.sessions().provider_context_head(&session_id)?;
+        if let Some(head) = &previous_head {
+            if head.context_epoch > binding.context_epoch.get()
+                || (head.context_epoch == binding.context_epoch.get()
+                    && head.observed_sequence > observed_sequence)
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            if head.kind == "ProviderTurnContinuation"
+                && head.context_epoch == binding.context_epoch.get()
+                && head.observed_sequence == observed_sequence
+                && head.attempt_id.as_ref() == Some(&attempt_id.0)
+                && head.binding == json!(binding)
+            {
+                let artifact = serde_json::from_value(head.artifact.clone()).map_err(invalid)?;
+                return Ok((artifact, false));
+            }
+        }
         let scope = session
             .project_id
             .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
@@ -626,10 +1034,28 @@ pub(crate) fn publish_continuation(
                 owner: ctx.principal().clone(),
             },
         )?;
-        Ok(version_ref(&version))
+        let artifact = version_ref(&version);
+        let revision = previous_head
+            .as_ref()
+            .map_or(Some(1), |head| head.revision.checked_add(1))
+            .ok_or_else(|| invalid("provider context head revision exhausted"))?;
+        tx.sessions().put_provider_context_head(
+            &StoredProviderContextHead {
+                session_id: session_id.clone(),
+                context_epoch: binding.context_epoch.get(),
+                observed_sequence,
+                kind: "ProviderTurnContinuation".into(),
+                attempt_id: Some(attempt_id.0.clone()),
+                binding: json!(binding),
+                artifact: json!(artifact),
+                revision,
+            },
+            previous_head.as_ref().map(|head| head.revision),
+        )?;
+        Ok((artifact, true))
     });
-    artifacts.settle_host_bytes(store, &staged, committed.is_ok());
-    committed
+    artifacts.settle_host_bytes(store, &staged, matches!(&committed, Ok((_, true))));
+    committed.map(|(artifact, _)| artifact)
 }
 
 fn operation_update_text(
@@ -674,6 +1100,75 @@ fn operation_update_text(
     ))
 }
 
+pub(crate) fn context_fact_message(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    body: TranscriptBody,
+) -> Result<Message, StorageError> {
+    let content = match body {
+        TranscriptBody::UserMessage { content } => content
+            .into_iter()
+            .map(|item| match item {
+                devworks_core::protocol::provider::UserContent::Text { text } => {
+                    ContentBlock::Text { text, cache: None }
+                }
+                devworks_core::protocol::provider::UserContent::Attachment { artifact }
+                    if artifact.media_type.starts_with("image/") =>
+                {
+                    ContentBlock::Image {
+                        artifact,
+                        detail: None,
+                        cache: None,
+                    }
+                }
+                devworks_core::protocol::provider::UserContent::Attachment { artifact } => {
+                    ContentBlock::Text {
+                        text: format!(
+                            "User attachment: {} ({})",
+                            artifact.artifact_id.as_str(),
+                            artifact.media_type
+                        ),
+                        cache: None,
+                    }
+                }
+            })
+            .collect(),
+        TranscriptBody::HostNotice { artifact, .. } => vec![ContentBlock::Text {
+            text: String::from_utf8(
+                artifacts
+                    .read_exact(store, ctx, &artifact, 8_000)
+                    .map_err(|_| StorageError::ScopeDenied)?
+                    .0,
+            )
+            .map_err(invalid)?,
+            cache: None,
+        }],
+        TranscriptBody::OperationUpdate {
+            operation_id,
+            revision,
+            artifact,
+        } => vec![ContentBlock::Text {
+            text: operation_update_text(
+                store,
+                artifacts,
+                ctx,
+                session_id,
+                &operation_id,
+                &revision,
+                &artifact,
+            )?,
+            cache: None,
+        }],
+        _ => return Err(invalid("not a provider context fact")),
+    };
+    Ok(Message {
+        role: MessageRole::User,
+        content,
+    })
+}
+
 /// Reconcile later operation facts into an append-only provider context. A provider's first tool
 /// result remains immutable; each subsequent journal revision enters as a separate host-labeled
 /// message. Any other transcript entry requires the caller to rebuild redirected context.
@@ -694,7 +1189,8 @@ pub(crate) fn append_operation_updates(
         || !matches!(
             derived["kind"].as_str(),
             Some(
-                "ProviderTurnContinuation"
+                "ProviderInitialContext"
+                    | "ProviderTurnContinuation"
                     | "ProviderToolContinuation"
                     | "ProviderOperationUpdateContext"
                     | "ProviderContextEpoch"
@@ -766,18 +1262,19 @@ pub(crate) fn append_operation_updates(
                     return Err(invalid("operation update transcript gap"));
                 }
                 position = entry.sequence;
-                let TranscriptBody::OperationUpdate {
-                    operation_id,
-                    revision,
-                    artifact,
-                } = serde_json::from_value(entry.body).map_err(invalid)?
-                else {
+                let body: TranscriptBody = serde_json::from_value(entry.body).map_err(invalid)?;
+                if !matches!(
+                    body,
+                    TranscriptBody::OperationUpdate { .. }
+                        | TranscriptBody::UserMessage { .. }
+                        | TranscriptBody::HostNotice { .. }
+                ) {
                     return Err(StorageError::unavailable(
                         Unavailable::UnsupportedRuntime,
-                        "tool context needs redirected transcript reconstruction",
+                        "tool context needs a settled transcript turn",
                     ));
-                };
-                updates.push((operation_id, revision, artifact));
+                }
+                updates.push(body);
                 if updates.len() > 128 {
                     return Err(invalid(
                         "too many operation updates for one context revision",
@@ -790,25 +1287,68 @@ pub(crate) fn append_operation_updates(
     if updates.is_empty() {
         return Ok(source.clone());
     }
-    let mut blocks = Vec::with_capacity(updates.len());
-    for (operation_id, revision, artifact) in updates {
-        blocks.push(ContentBlock::Text {
-            text: operation_update_text(
-                store,
-                artifacts,
-                ctx,
-                session_id,
-                &operation_id,
-                &revision,
-                &artifact,
-            )?,
-            cache: None,
+    for update in updates {
+        let blocks = match update {
+            TranscriptBody::OperationUpdate {
+                operation_id,
+                revision,
+                artifact,
+            } => vec![ContentBlock::Text {
+                text: operation_update_text(
+                    store,
+                    artifacts,
+                    ctx,
+                    session_id,
+                    &operation_id,
+                    &revision,
+                    &artifact,
+                )?,
+                cache: None,
+            }],
+            TranscriptBody::UserMessage { content } => content
+                .into_iter()
+                .map(|item| match item {
+                    devworks_core::protocol::provider::UserContent::Text { text } => {
+                        ContentBlock::Text { text, cache: None }
+                    }
+                    devworks_core::protocol::provider::UserContent::Attachment { artifact }
+                        if artifact.media_type.starts_with("image/") =>
+                    {
+                        ContentBlock::Image {
+                            artifact,
+                            detail: None,
+                            cache: None,
+                        }
+                    }
+                    devworks_core::protocol::provider::UserContent::Attachment { artifact } => {
+                        ContentBlock::Text {
+                            text: format!(
+                                "User attachment: {} ({})",
+                                artifact.artifact_id.as_str(),
+                                artifact.media_type
+                            ),
+                            cache: None,
+                        }
+                    }
+                })
+                .collect(),
+            TranscriptBody::HostNotice { artifact, .. } => vec![ContentBlock::Text {
+                text: String::from_utf8(
+                    artifacts
+                        .read_exact(store, ctx, &artifact, 8_000)
+                        .map_err(|_| StorageError::ScopeDenied)?
+                        .0,
+                )
+                .map_err(invalid)?,
+                cache: None,
+            }],
+            _ => unreachable!(),
+        };
+        context.messages.push(Message {
+            role: MessageRole::User,
+            content: blocks,
         });
     }
-    context.messages.push(Message {
-        role: MessageRole::User,
-        content: blocks,
-    });
     context
         .validate()
         .map_err(|error| invalid(format!("{error:?}")))?;
@@ -826,6 +1366,7 @@ pub(crate) fn append_operation_updates(
     let ctx_for_write = ctx.clone();
     let session_for_write = session_id.clone();
     let binding_for_write = binding.clone();
+    let source_for_write = source.clone();
     let committed = run_write(store, WriteOptions::default(), move |tx| {
         let session = tx
             .sessions()
@@ -861,6 +1402,25 @@ pub(crate) fn append_operation_updates(
                 return Err(StorageError::ScopeDenied);
             }
         }
+        let previous_head = tx.sessions().provider_context_head(&session_for_write)?;
+        if let Some(head) = &previous_head {
+            if head.context_epoch > binding_for_write.context_epoch.get() {
+                return Err(StorageError::ScopeDenied);
+            }
+            if head.context_epoch == binding_for_write.context_epoch.get() {
+                if head.observed_sequence == observed
+                    && head.kind == "ProviderOperationUpdateContext"
+                    && head.binding == json!(binding_for_write)
+                {
+                    let artifact =
+                        serde_json::from_value(head.artifact.clone()).map_err(invalid)?;
+                    return Ok((artifact, false));
+                }
+                if head.observed_sequence != after || head.artifact != json!(source_for_write) {
+                    return Err(StorageError::ScopeDenied);
+                }
+            }
+        }
         let scope = session
             .project_id
             .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
@@ -876,10 +1436,28 @@ pub(crate) fn append_operation_updates(
                     "binding":binding_for_write,"observedSequence":observed,
                     "epochRoot":root}),
                 scope, owner: ctx_for_write.principal().clone() })?;
-        Ok(version_ref(&version))
+        let artifact = version_ref(&version);
+        let revision = previous_head
+            .as_ref()
+            .map_or(Some(1), |head| head.revision.checked_add(1))
+            .ok_or_else(|| invalid("provider context head revision exhausted"))?;
+        tx.sessions().put_provider_context_head(
+            &StoredProviderContextHead {
+                session_id: session_for_write.clone(),
+                context_epoch: binding_for_write.context_epoch.get(),
+                observed_sequence: observed,
+                kind: "ProviderOperationUpdateContext".into(),
+                attempt_id: None,
+                binding: json!(binding_for_write),
+                artifact: json!(artifact),
+                revision,
+            },
+            previous_head.as_ref().map(|head| head.revision),
+        )?;
+        Ok((artifact, true))
     });
-    artifacts.settle_host_bytes(store, &staged, committed.is_ok());
-    committed
+    artifacts.settle_host_bytes(store, &staged, matches!(&committed, Ok((_, true))));
+    committed.map(|(artifact, _)| artifact)
 }
 
 /// Build the exact frame sent to the application gateway for a recorded native call. The
