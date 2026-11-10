@@ -1220,7 +1220,7 @@ fn compaction_result_is_artifact_only_and_does_not_enter_session_transcript() {
     });
 }
 #[test]
-fn agent_context_head_routes_with_its_existing_model_pin() {
+fn reviewer_agent_context_head_routes_with_its_existing_model_pin() {
     runtime().block_on(async {
         let f = Fx::new("CompatibleChat", Script::aggregate("{}"), false);
         let human = principal(f.store.as_ref(), "route-owner", PrincipalKind::Human);
@@ -1235,7 +1235,7 @@ fn agent_context_head_routes_with_its_existing_model_pin() {
                     NewPrincipalBinding {
                         actor: ActorId(id("routed-agent")),
                         kind: PrincipalKind::Agent,
-                        role: Some(devworks_core::settings::catalog::AgentRole::Worker),
+                        role: Some(devworks_core::settings::catalog::AgentRole::CodeReviewer),
                         project_id: None,
                         tool_families: None,
                         bound_by: ActorId(id("route-owner")),

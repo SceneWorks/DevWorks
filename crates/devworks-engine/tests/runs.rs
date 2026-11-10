@@ -946,7 +946,7 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
     let request = devworks_core::operations::agents::DelegateInput {
         root_id: rid("root-i"),
         expected_control_revision: Revision::new(fx.control("root-i").revision).unwrap(),
-        task_ids: devworks_core::protocol::support::BoundedList(vec![]),
+        task_ids: devworks_core::protocol::support::BoundedList(vec![id("root-i")]),
         role_id: id("worker"),
         instruction: devworks_core::protocol::support::BoundedText("Check descendant".into()),
         source_checkpoint_id: None,
@@ -980,14 +980,59 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
     assert!(!read(&*fx.store, |snapshot| {
         Ok(snapshot.runs().assignment(&child_id)?.unwrap().slot_held)
     }));
-    let grandchild_id = grandchild.assignment_id;
+    let grandchild_id = grandchild.assignment_id.clone();
+    let grandchild_session = read(&*fx.store, |snapshot| {
+        let assignment = snapshot
+            .runs()
+            .assignment(&grandchild_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        snapshot
+            .sessions()
+            .session(&assignment.session_id)?
+            .ok_or(StorageError::ScopeDenied)
+    });
+    let grandchild_ctx = devworks_core::context::HostIngress::new(&*fx.store)
+        .context(
+            grandchild_session.agent_id,
+            PrincipalKind::Agent,
+            id("grandchild-context"),
+            id("agent-ingress"),
+            devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(grandchild_session.id)
+        .with_lineage(
+            Some(ProjectId(id("project-a"))),
+            Some(rid("root-i")),
+            Some(grandchild_id.clone()),
+        )
+        .with_activation(activation_id.clone(), epoch);
+    fx.tx({
+        let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+        let host = host.clone();
+        let grandchild_id = grandchild_id.clone();
+        let activation_id = activation_id.clone();
+        move |_, tx| {
+            agents
+                .activate_child(tx, &host, &grandchild_id, &activation_id, epoch)
+                .map_err(|error| {
+                    StorageError::InvalidRecord(format!("grandchild launch: {error:?}"))
+                })?
+                .map_err(|fenced| {
+                    StorageError::InvalidRecord(format!("grandchild fenced: {fenced:?}"))
+                })?;
+            Ok(())
+        }
+    });
+    let prompt =
+        devworks_engine::agent_turns::initial_context(&*fx.store, &grandchild_ctx, &grandchild)
+            .unwrap();
+    assert!(matches!(
+        &prompt.messages[0].content[0],
+        devworks_core::providers::context::ContentBlock::Text { text, .. }
+            if text.contains("Assigned task IDs: root-i")
+    ));
     fx.tx(move |_, tx| {
-        agents
-            .activate_child(tx, &host, &grandchild_id, &activation_id, epoch)
-            .map_err(|error| StorageError::InvalidRecord(format!("grandchild launch: {error:?}")))?
-            .map_err(|fenced| {
-                StorageError::InvalidRecord(format!("grandchild fenced: {fenced:?}"))
-            })?;
         agents
             .complete_child(tx, &host, &grandchild_id, &activation_id, epoch)
             .map_err(|error| {
@@ -1725,6 +1770,7 @@ fn root_stop_reaches_a_running_child_and_keeps_both_assignments_for_continue() {
             .iter()
             .all(|a| a.state == AssignmentState::Waiting)
     );
+    assert!(assignments.iter().all(|a| !a.slot_held));
     turns.wait_workers.store(false, Ordering::SeqCst);
     applied(&fx.resume(&fx.user, "root-i"));
     rt.block_on(async {

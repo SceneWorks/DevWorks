@@ -1,6 +1,6 @@
 //! The first provider input of a materialized agent turn comes from its durable assignment
 //! context. The agent cannot replace its role text, project or work brief through tool arguments.
-use devworks_core::context::{InvocationContext, PrincipalKind};
+use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::storage::{
     ActivationOutcome, ApplicationStore, AssignmentState, Cancellation, ReadOptions, StorageError,
@@ -33,6 +33,7 @@ use devworks_core::services::usage::accounting::AttemptRequest;
 use devworks_core::services::usage::auxiliary;
 use devworks_core::services::usage::meter::InputSemantics;
 use devworks_core::services::usage::pricing::PricingContext;
+use devworks_core::settings::catalog::AgentRole;
 
 use crate::Runtime;
 use crate::agent_supervisor::AgentTurnExecutor;
@@ -434,7 +435,7 @@ pub fn route_context_head(
     head_digest: Option<&str>,
     tools_required: bool,
 ) -> Result<RouteChoice, StorageError> {
-    let (intent, effort, mut required, pin_revision) =
+    let (intent, effort, mut required, pin_revision, reviewer) =
         read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
             let session = read
                 .sessions()
@@ -448,6 +449,14 @@ pub fn route_context_head(
             {
                 return Err(StorageError::ScopeDenied);
             }
+            let reviewer = read
+                .authority()
+                .principal(ctx.principal())?
+                .is_some_and(|binding| {
+                    binding.active
+                        && binding.kind == PrincipalKind::Agent
+                        && binding.role == Some(AgentRole::CodeReviewer)
+                });
             match read.router().session_pin(session_id)? {
                 Some(pin) => Ok((
                     serde_json::from_str::<RouteIntent>(&pin.intent)
@@ -456,6 +465,7 @@ pub fn route_context_head(
                         .map_err(|_| StorageError::InvalidRecord("stored route effort".into()))?,
                     pin.required_capabilities,
                     pin.revision,
+                    reviewer,
                 )),
                 None => Ok((
                     RouteIntent::Tier {
@@ -464,6 +474,7 @@ pub fn route_context_head(
                     EffortName::Default,
                     Vec::new(),
                     0,
+                    reviewer,
                 )),
             }
         })?;
@@ -494,8 +505,34 @@ pub fn route_context_head(
         }
     }))
     .map_err(|error| StorageError::InvalidRecord(format!("route frame: {error}")))?;
+    // Reviewers cannot issue Commands. Routing is host bookkeeping for their own validated
+    // session; their later selected tool inventory still uses the read-only reviewer principal.
+    let route_ctx = if reviewer {
+        let info = runtime.store().info();
+        let mut host = HostIngress::new(runtime.store().as_ref())
+            .context(
+                info.host_actor,
+                PrincipalKind::Host,
+                ctx.invocation_id().clone(),
+                Id::new("agent-route-host").expect("static ingress"),
+                ctx.restore_epoch().clone(),
+                ctx.policy_revision().clone(),
+            )
+            .with_session(session_id.clone())
+            .with_lineage(
+                ctx.project_id().cloned(),
+                ctx.root_id().cloned(),
+                ctx.assignment_id().cloned(),
+            );
+        if let Some((activation, epoch)) = ctx.activation() {
+            host = host.with_activation(activation.clone(), epoch);
+        }
+        host
+    } else {
+        ctx.clone()
+    };
     let reply = runtime
-        .command(ctx, "router.route", &frame)
+        .command(&route_ctx, "router.route", &frame)
         .map_err(|error| StorageError::InvalidRecord(format!("agent route gateway: {error}")))?;
     let choice = match reply {
         CommandReply::Recorded { receipt, .. } => match receipt.decision {
@@ -536,7 +573,7 @@ pub fn initial_context(
     ctx: &InvocationContext,
     agent: &AgentRecord,
 ) -> Result<ProviderContext, StorageError> {
-    let (role, brief) = read_snapshot(store, &ReadOptions::default(), |snapshot| {
+    let (role, brief, tasks) = read_snapshot(store, &ReadOptions::default(), |snapshot| {
         let assignment = snapshot
             .runs()
             .assignment(&agent.assignment_id)?
@@ -567,8 +604,18 @@ pub fn initial_context(
         {
             return Err(StorageError::ScopeDenied);
         }
-        Ok((source.role_instructions, source.brief))
+        let tasks: Vec<Id> = serde_json::from_value(source.task_ids)
+            .map_err(|_| StorageError::InvalidRecord("stored task references".into()))?;
+        Ok((source.role_instructions, source.brief, tasks))
     })?;
+    let brief = if tasks.is_empty() {
+        brief
+    } else {
+        format!(
+            "{brief}\n\nAssigned task IDs: {}",
+            tasks.iter().map(Id::as_str).collect::<Vec<_>>().join(", ")
+        )
+    };
     let context = ProviderContext {
         version: 1,
         instructions: if role.is_empty() {
