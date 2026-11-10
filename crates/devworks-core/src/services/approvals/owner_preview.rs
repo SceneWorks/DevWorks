@@ -201,6 +201,16 @@ impl SavedOperationOwners for NativeOwnerPreviews {
         preview: &OwnerPreview,
         approve: bool,
     ) -> Result<(), Failure> {
+        if !matches!(request.descriptor.family, "skills" | "roles" | "addons") {
+            return Ok(());
+        }
+        // A review sealed into evidence is decided over its complete original binding.
+        let expanded = if approve {
+            crate::services::approvals::review_evidence::expand(tx.artifacts(), preview)?
+        } else {
+            crate::services::approvals::review_evidence::expand_historical(preview)?
+        };
+        let preview = &expanded;
         if matches!(request.descriptor.family, "skills" | "roles") {
             return self
                 .instructions
@@ -208,15 +218,6 @@ impl SavedOperationOwners for NativeOwnerPreviews {
                 .ok_or_else(unsupported)?
                 .decide_approval(tx, human, request, preview, approve);
         }
-        if request.descriptor.family != "addons" {
-            return Ok(());
-        }
-        let expanded = if approve {
-            crate::services::approvals::review_evidence::expand(tx.artifacts(), preview)?
-        } else {
-            crate::services::approvals::review_evidence::expand_historical(preview)?
-        };
-        let preview = &expanded;
         if request.descriptor.family == "addons" {
             return self
                 .packages

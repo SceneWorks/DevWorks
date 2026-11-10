@@ -276,6 +276,21 @@ impl InstructionService {
                 let on_disk_ours = item.observed_digest == item.materialized_digest
                     || (!item.present && item.materialized_digest.is_none());
                 if active.is_some() && active != item.materialized_digest && on_disk_ours {
+                    // A directory the scan did not find as a skill (its SKILL.md is gone) may
+                    // still hold files no revision records: never replace it unattended.
+                    if !item.present
+                        && let Some(root) = &canonical
+                        && !matches!(
+                            self.source.canonical_dir(&root.join(&item.name)),
+                            Err(SourceFault::Missing)
+                        )
+                    {
+                        report.failures.push(format!(
+                            "harness: {}: the directory holds files that were not captured",
+                            item.name
+                        ));
+                        continue;
+                    }
                     match self.materialize_locked(&item.id) {
                         Ok(true) => report.materialized += 1,
                         Ok(false) => {}

@@ -763,8 +763,20 @@ impl InstructionService {
                         Some(proposal),
                     )
                 })?;
+                // A review sealed into evidence keeps its complete original binding in the
+                // stored envelope; the exact approved binding is checked either way.
+                let reviewed = crate::services::approvals::review_evidence::expand_historical(
+                    &crate::services::approvals::OwnerPreview {
+                        scope: approval.scope.clone(),
+                        target_id: approval.target_id.clone(),
+                        target_revision: approval.target_revision,
+                        summary: approval.summary.clone(),
+                        reviewed: approval.payload["reviewed"].clone(),
+                        binding: approval.payload["binding"].clone(),
+                    },
+                )?;
                 if approval.state != "Approved"
-                    || !binding_matches(&approval.payload["binding"], &item, &target, proposal)
+                    || !binding_matches(&reviewed.binding, &item, &target, proposal)
                 {
                     return Err(denied("instruction_proposal"));
                 }

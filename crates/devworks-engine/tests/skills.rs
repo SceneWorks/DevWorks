@@ -803,6 +803,33 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
 
 /// A writable agent bound to (and invoking within) its own new project.
 #[test]
+fn an_unfinished_write_never_replaces_a_directory_holding_uncaptured_files() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let saved = applied(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"delta","content":fx.upload(&user, "Do delta.")})));
+        assert!(fx.harness.join("delta/SKILL.md").exists());
+        // The activation committed but its write never ran (the process stopped): the item's
+        // last write differs from its active revision and still matches what the scan saw.
+        let db = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
+        db.execute(
+            "UPDATE instructions SET observed_digest=?1, materialized_digest=?1 WHERE id=?2",
+            rusqlite::params!["f".repeat(64), saved["id"].as_str().unwrap()],
+        )
+        .unwrap();
+        // Meanwhile the person removed SKILL.md and kept working in the directory.
+        std::fs::remove_file(fx.harness.join("delta/SKILL.md")).unwrap();
+        std::fs::write(fx.harness.join("delta/notes.md"), "my uncaptured notes").unwrap();
+        // The next sync repairs nothing over those files.
+        discover(&fx, &app, &user);
+        assert_eq!(std::fs::read(fx.harness.join("delta/notes.md")).unwrap(), b"my uncaptured notes");
+        assert!(!fx.harness.join("delta/SKILL.md").exists());
+        app.shutdown().await;
+    });
+}
+
+#[test]
 fn a_proposal_with_a_review_over_the_inline_limit_is_readable_and_decidable() {
     let fx = Fx::new();
     runtime().block_on(async {
@@ -835,6 +862,24 @@ fn a_proposal_with_a_review_over_the_inline_limit_is_readable_and_decidable() {
             "proposalId":proposal["id"],"expectedRevision":proposal["revision"],"contentDigest":proposal["contentDigest"],
             "decision":"Reject","rationale":"Too large to adopt"}})).unwrap();
         applied(app.record_human_decision(&user, &reject).unwrap());
+        // An approved oversized review activates through the replayed activation.
+        let edit = applied(fx.command(&app, &agent, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":draft["id"],"expectedRevision":"1","name":"big","content":fx.upload(&agent, "Do the big thing, revised.")})));
+        assert_eq!(edit["revision"], "2");
+        db.execute(
+            "UPDATE instruction_revisions SET resources_json=?1 WHERE instruction_id=?2 AND revision=2",
+            rusqlite::params![serde_json::to_string(&resources).unwrap(), draft["id"].as_str().unwrap()],
+        )
+        .unwrap();
+        let second = applied(fx.command(&app, &agent, "skills.propose", json!({"instructionId":draft["id"],"expectedRevision":"2","contentDigest":digest_of(&edit)})));
+        let approve = serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+            "requestKey":fx.h.ids.next_id(IdKind::Link),"body":{"kind":"approvals.record_human_decision",
+            "proposalId":second["id"],"expectedRevision":second["revision"],"contentDigest":second["contentDigest"],
+            "decision":"Approve","rationale":"Reviewed the complete manifest"}})).unwrap();
+        applied(app.record_human_decision(&user, &approve).unwrap());
+        app.approval_resumes().tick().await.unwrap();
+        let active = fx.query(&app, &user, "skills.read", json!({"instructionId":draft["id"]})).unwrap();
+        assert_eq!(active["revision"], "2", "{active}");
+        assert!(labels(&active).contains(&"active".into()), "{active}");
         app.shutdown().await;
     });
 }
