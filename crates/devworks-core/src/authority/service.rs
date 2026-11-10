@@ -281,6 +281,33 @@ fn agent_assignment_scope(
     if ctx.principal_kind() != PrincipalKind::Agent {
         return Ok(());
     }
+    // A superseded assignment cannot use any selected family, including project-scoped
+    // families whose inputs need no extra root-specific check below.
+    let assignment = if let Some(assignment_id) = ctx.assignment_id() {
+        let assignment = s
+            .runs()
+            .assignment(assignment_id)
+            .map_err(|_| DenialReason::AuthorityUnavailable)?
+            .ok_or(DenialReason::OutOfAssignmentScope)?;
+        let session = s
+            .sessions()
+            .session(&assignment.session_id)
+            .map_err(|_| DenialReason::AuthorityUnavailable)?
+            .ok_or(DenialReason::OutOfAssignmentScope)?;
+        if !assignment.state.is_live()
+            || ctx.root_id() != Some(&assignment.root_id)
+            || ctx.session_id() != Some(&assignment.session_id)
+            || session.closed()
+            || session.agent_id != *ctx.principal()
+            || session.project_id.as_ref() != ctx.project_id()
+            || session.root_id.as_ref() != ctx.root_id()
+        {
+            return Err(DenialReason::OutOfAssignmentScope);
+        }
+        Some(assignment)
+    } else {
+        None
+    };
     let Some(root) = ctx.root_id() else {
         return Ok(());
     };
@@ -303,24 +330,14 @@ fn agent_assignment_scope(
     if matches!(
         request.input,
         OperationInput::Artifacts(_) | OperationInput::Jobs(_) | OperationInput::Approvals(_)
-    ) && ctx.assignment_id().is_none()
+    ) && assignment.is_none()
     {
         return Ok(());
     }
     let assignment_id = ctx
         .assignment_id()
         .ok_or(DenialReason::OutOfAssignmentScope)?;
-    let assignment = s
-        .runs()
-        .assignment(assignment_id)
-        .map_err(|_| DenialReason::AuthorityUnavailable)?
-        .ok_or(DenialReason::OutOfAssignmentScope)?;
-    if !assignment.state.is_live()
-        || &assignment.root_id != root
-        || ctx.session_id() != Some(&assignment.session_id)
-    {
-        return Err(DenialReason::OutOfAssignmentScope);
-    }
+    let assignment = assignment.ok_or(DenialReason::OutOfAssignmentScope)?;
     let context = s
         .runs()
         .agent_assignment_context(assignment_id)

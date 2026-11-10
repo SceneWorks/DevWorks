@@ -2,6 +2,7 @@
 //! context. The agent cannot replace its role text, project or work brief through tool arguments.
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
+use devworks_core::ports::IdKind;
 use devworks_core::ports::storage::{
     ActivationOutcome, ApplicationStore, ArtifactScope, AssignmentPurpose, AssignmentState,
     Cancellation, ReadOptions, StorageError, StoredEpoch, WriteOptions, read_snapshot, run_write,
@@ -33,6 +34,10 @@ use devworks_core::services::artifacts::{host::HostArtifactPublication, version_
 use devworks_core::services::prices::CatalogPriceResolver;
 use devworks_core::services::router::accounting::{AttemptSelection, PinFence, ReportCategory};
 use devworks_core::services::router::{Purpose, RequestAdmission};
+use devworks_core::services::sessions::{
+    transcript::{BatchOutcome, SessionBatch, SessionWriter},
+    turn,
+};
 use devworks_core::services::usage::accounting::AttemptRequest;
 use devworks_core::services::usage::auxiliary;
 use devworks_core::services::usage::meter::InputSemantics;
@@ -1033,6 +1038,10 @@ pub fn ensure_membership_context(
         )
         .with_session(session_id.clone())
         .with_lineage(ctx.project_id().cloned(), ctx.root_id().cloned(), None);
+    if sequence == 0 {
+        append_empty_handoff_boundary(runtime, &host, session_id, &agent.assignment_id, epoch)?;
+        return ensure_membership_context(runtime, ctx, agent);
+    }
     let previous = source
         .as_ref()
         .map(|source| {
@@ -1105,7 +1114,7 @@ pub fn ensure_membership_context(
                                 &mut context,
                                 runtime.store().as_ref(),
                                 runtime.artifacts(),
-                                ctx,
+                                &host,
                                 session_id,
                                 fact,
                             )?;
@@ -1118,7 +1127,7 @@ pub fn ensure_membership_context(
                                 &mut context,
                                 runtime.store().as_ref(),
                                 runtime.artifacts(),
-                                ctx,
+                                &host,
                                 session_id,
                                 fact,
                             )?;
@@ -1169,7 +1178,7 @@ pub fn ensure_membership_context(
                 &mut context,
                 runtime.store().as_ref(),
                 runtime.artifacts(),
-                ctx,
+                &host,
                 session_id,
                 fact,
             )?;
@@ -1264,6 +1273,91 @@ pub fn ensure_membership_context(
                 created_at_ms,
             })?;
             Ok(())
+        },
+    );
+    runtime
+        .artifacts()
+        .settle_host_bytes(runtime.store().as_ref(), &staged, committed.is_ok());
+    committed
+}
+
+/// The epoch row must name an existing transcript position. A queued child can move before
+/// its first provider turn, so create a host-authored boundary that the rebuilt prompt reads.
+fn append_empty_handoff_boundary(
+    runtime: &Runtime,
+    host: &InvocationContext,
+    session_id: &Id,
+    assignment_id: &devworks_core::protocol::AssignmentId,
+    epoch: i64,
+) -> Result<(), StorageError> {
+    let notice = "Assignment transferred before the first provider turn.";
+    let staged = runtime
+        .artifacts()
+        .stage_host_bytes(
+            runtime.store().as_ref(),
+            notice.as_bytes(),
+            json!({"kind":"MembershipHandoffBoundary","sessionId":session_id}),
+        )?
+        .map_err(StorageError::InvalidRecord)?;
+    let pending = staged.clone();
+    let artifacts = runtime.artifacts().clone();
+    let host = host.clone();
+    let session_id = session_id.clone();
+    let assignment_id = assignment_id.clone();
+    let committed = run_write(
+        runtime.store().as_ref(),
+        WriteOptions::default(),
+        move |tx| {
+            let session = tx
+                .sessions()
+                .session(&session_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let assignment = tx
+                .runs()
+                .assignment(&assignment_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if session.closed()
+                || session.context_epoch != epoch
+                || session.last_durable_sequence() != 0
+                || assignment.state != AssignmentState::Active
+                || assignment.session_id != session_id
+                || session.root_id.as_ref() != Some(&assignment.root_id)
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            let scope = session
+                .project_id
+                .clone()
+                .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+            let version = artifacts.commit_host_bytes_in_scope(
+                tx,
+                &pending,
+                HostArtifactPublication {
+                    title: "Membership handoff boundary",
+                    media_type: "text/plain; charset=utf-8",
+                    provenance: json!({"kind":"MembershipHandoffBoundary","sessionId":session_id}),
+                    scope,
+                    owner: host.principal().clone(),
+                },
+            )?;
+            let batch = turn::batch_of(
+                &session_id,
+                tx.new_id(IdKind::TranscriptBatch),
+                epoch,
+                session.next_sequence,
+                vec![TranscriptBody::HostNotice {
+                    source: tx.new_id(IdKind::Event),
+                    artifact: version_ref(&version),
+                }],
+                || tx.new_id(IdKind::TranscriptEntry),
+            );
+            match SessionWriter::append_in(tx, &host, &SessionBatch::entries(batch))? {
+                BatchOutcome::Accepted(_) => Ok(()),
+                BatchOutcome::Replayed(_) => Err(StorageError::ScopeDenied),
+                BatchOutcome::Refused(reason) => Err(StorageError::InvalidRecord(format!(
+                    "handoff boundary refused: {reason:?}"
+                ))),
+            }
         },
     );
     runtime

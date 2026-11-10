@@ -25,8 +25,8 @@ use devworks_core::ports::provider_http::{
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::results::{DomainCommandReply, DomainDecision, DomainQueryReply};
 use devworks_core::protocol::{
-    ActorId, AssignmentId, CommandReply, HoldRef, Id, OperationId, OperationState, ProjectId,
-    Revision, RootId,
+    ActorId, AssignmentId, CommandReply, DomainErrorCode, HoldRef, Id, OperationId, OperationState,
+    ProjectId, Revision, RootId,
 };
 use devworks_core::services::UseCases;
 use devworks_core::services::agents::AgentService;
@@ -1793,6 +1793,107 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
         assert!(moved_prompt.messages.iter().any(|message| message.content.iter().any(|part| {
             matches!(part, devworks_core::providers::context::ContentBlock::Text { text, .. } if text == "Preserve this unissued handoff fact")
         })));
+
+        // A queued child can move before any provider call or transcript entry. Its epoch still
+        // needs a real transcript position for the schema-48 foreign key.
+        assert!(matches!(
+            fx.stop(&fx.user, "root-i"),
+            DomainCommandReply::Recorded { .. }
+        ));
+        applied(&fx.start(&fx.user, "root-g", 1, 1));
+        let empty_activation = fx.launch("empty-handoff-runner");
+        assert_eq!(empty_activation.root_id, rid("root-g"));
+        let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+        let host = principal(&*fx.store, "empty-handoff-host", PrincipalKind::Host);
+        let execution = empty_activation.id.clone();
+        let owner_epoch = empty_activation.owner_epoch;
+        let empty_agent = fx.tx(move |_, tx| {
+            agents
+                .materialize_primary(tx, &host, &execution, owner_epoch)
+                .map_err(|error| StorageError::InvalidRecord(format!("primary: {error:?}")))
+        });
+        let empty_session = read(&*fx.store, |snapshot| {
+            let assignment = snapshot.runs().assignment(&empty_agent.assignment_id)?.unwrap();
+            snapshot.sessions().session(&assignment.session_id)
+        })
+        .unwrap();
+        assert_eq!(empty_session.last_durable_sequence(), 0);
+        let mut empty_pin = read(&*fx.store, |snapshot| snapshot.router().session_pin(&session.id))
+            .unwrap();
+        empty_pin.session_id = empty_session.id.clone();
+        empty_pin.pin_id = id("empty-handoff-pin");
+        fx.tx(move |_, tx| tx.router().put_session_pin(&empty_pin, None));
+        db.execute(
+            "INSERT INTO work_items VALUES('root-h','project-a','feature',NULL,NULL,NULL,'root-h',1,0,1,1,1,'{}')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE assignments SET root_id='root-h',purpose='Child',generation=1,state='Active',revision=revision+1 WHERE id=?1",
+            [empty_agent.assignment_id.0.as_str()],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE sessions SET root_id='root-h',context_epoch=1,revision=revision+1 WHERE id=?1",
+            [empty_session.id.as_str()],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE conversations SET root_id='root-h' WHERE id=?1",
+            [empty_session.conversation_id.as_str()],
+        )
+        .unwrap();
+        let empty_context = devworks_core::context::HostIngress::new(&*fx.store)
+            .context(
+                empty_session.agent_id.clone(),
+                PrincipalKind::Agent,
+                id("empty-handoff-invocation"),
+                id("empty-handoff-ingress"),
+                devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            )
+            .with_session(empty_session.id.clone())
+            .with_lineage(
+                empty_session.project_id.clone(),
+                Some(rid("root-h")),
+                Some(empty_agent.assignment_id.clone()),
+            );
+        let mut moved_empty_agent = empty_agent.clone();
+        moved_empty_agent.root_id = rid("root-h");
+        devworks_engine::agent_turns::ensure_membership_context(
+            &app,
+            &empty_context,
+            &moved_empty_agent,
+        )
+        .unwrap();
+        let empty_epoch = read(&*fx.store, |snapshot| {
+            snapshot.sessions().epoch(&empty_session.id, 1)
+        })
+        .expect("empty handoff epoch");
+        assert_eq!(empty_epoch.sequence, 1);
+        let entries = read(&*fx.store, |snapshot| {
+            snapshot.sessions().entries(&empty_session.id, 0, 10)
+        });
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(
+            serde_json::from_value::<devworks_core::protocol::provider::TranscriptBody>(
+                entries[0].body.clone()
+            )
+            .unwrap(),
+            devworks_core::protocol::provider::TranscriptBody::HostNotice { .. }
+        ));
+        devworks_engine::agent_turns::ensure_membership_context(
+            &app,
+            &empty_context,
+            &moved_empty_agent,
+        )
+        .unwrap();
+        assert_eq!(
+            read(&*fx.store, |snapshot| snapshot.sessions().session(&empty_session.id))
+                .unwrap()
+                .last_durable_sequence(),
+            1
+        );
         app.shutdown().await;
     });
 }
@@ -2596,7 +2697,7 @@ fn bound_agent_gateway_refuses_sibling_work_and_run_controls() {
         .with_lineage(
             Some(ProjectId(id("project-a"))),
             Some(rid("root-f")),
-            Some(child.assignment_id),
+            Some(child.assignment_id.clone()),
         )
         .with_activation(activation.id, epoch);
     let task_get = |work: &str| {
@@ -2699,6 +2800,55 @@ fn bound_agent_gateway_refuses_sibling_work_and_run_controls() {
         membership(&coordinator),
         DomainCommandReply::Recorded { .. }
     ));
+
+    // Omitted-family settings calls still need the assignment fence. A moved Worker cannot
+    // retain project-wide read authority while its old provider turn settles.
+    let settings = UseCases::new().with_settings(Arc::new(
+        devworks_core::settings::service::SettingsService {
+            roles: Arc::new(devworks_core::authority::HostRoles {
+                store: fx.store.clone(),
+            }),
+            paths: Arc::new(devworks_adapters::paths::FsPathProbe),
+            ids: fx.h.ids.clone(),
+        },
+    ));
+    let read_settings = || {
+        let authority = fx.authority();
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*fx.store,
+            ids: &*fx.h.ids,
+        };
+        settings
+            .query(
+                &gateway,
+                &worker,
+                "settings.read_effective",
+                json!({"mode":"Query","protocol":PROTOCOL,"queryId":fx.key(),
+                    "body":{"kind":"settings.read_effective",
+                        "scope":{"kind":"Project","projectId":"project-a"},
+                        "keys":[],"page":{"limit":5}}})
+                .to_string()
+                .as_bytes(),
+            )
+            .expect("addressable")
+    };
+    assert!(matches!(read_settings(), DomainQueryReply::Result { .. }));
+    let child_id = child.assignment_id.clone();
+    fx.tx(move |_, tx| {
+        let before = tx.runs().assignment(&child_id)?.unwrap();
+        let mut superseded = before.clone();
+        superseded.state = AssignmentState::Superseded;
+        superseded.slot_held = false;
+        superseded.revision += 1;
+        tx.runs().update_assignment(&superseded, before.revision)
+    });
+    match read_settings() {
+        DomainQueryReply::Rejected { fault, .. } => {
+            assert_eq!(fault.code, DomainErrorCode::PermissionDenied)
+        }
+        other => panic!("superseded Worker read settings: {other:?}"),
+    }
 }
 
 struct DelegatingCoordinator {
