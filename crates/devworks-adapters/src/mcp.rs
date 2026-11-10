@@ -21,6 +21,7 @@ use rmcp::model::{
 };
 use rmcp::service::RunningService;
 use rmcp::transport::StreamableHttpClientTransport;
+use rmcp::transport::async_rw::AsyncRwTransport;
 use rmcp::{RoleClient, serve_client};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -72,6 +73,7 @@ pub enum ConnectFault {
 const CONNECT_DEADLINE: Duration = Duration::from_secs(20);
 const CALL_DEADLINE: Duration = Duration::from_secs(15);
 const CATALOG_MAX: usize = 500;
+const MCP_MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 pub struct McpWireCatalog {
     pub tools: Vec<Tool>,
@@ -206,7 +208,7 @@ fn map_binding_fault(fault: BindingRefusal) -> McpRemoteFault {
 
 fn bounded_result(result: &impl serde::Serialize) -> Result<serde_json::Value, ConnectFault> {
     let bytes = serde_json::to_vec(result).map_err(|_| ConnectFault::Protocol)?;
-    if bytes.len() > 8 * 1024 * 1024 {
+    if bytes.len() > MCP_MAX_FRAME_BYTES {
         return Err(ConnectFault::TooLarge);
     }
     serde_json::from_slice(&bytes).map_err(|_| ConnectFault::Protocol)
@@ -580,7 +582,9 @@ impl McpWireSession {
         let mut config =
             rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(
                 endpoint.to_owned(),
-            );
+            )
+            .max_sse_event_size(MCP_MAX_FRAME_BYTES);
+        // rmcp's reqwest client also bounds JSON response bodies to 16 MiB before decoding.
         config.auth_header = bearer.map(|token| format!("Bearer {token}"));
         let transport = StreamableHttpClientTransport::from_config(config);
         let client = tokio::time::timeout(
@@ -691,7 +695,10 @@ async fn connect_pipes(
 ) -> Result<RunningService<RoleClient, ClientConfig>, ConnectFault> {
     tokio::time::timeout(
         CONNECT_DEADLINE,
-        serve_client(ClientConfig::default(), (reader, writer)),
+        serve_client(
+            ClientConfig::default(),
+            AsyncRwTransport::new(reader, writer).with_max_line_length(MCP_MAX_FRAME_BYTES),
+        ),
     )
     .await
     .map_err(|_| ConnectFault::Deadline)?
