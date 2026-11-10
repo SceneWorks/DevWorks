@@ -52,6 +52,8 @@ pub(crate) enum Standing {
     /// case-sensitive filesystem): a material conflict. None of them is in effect until the
     /// user resolves it by renaming or removing one.
     Conflict,
+    /// Not usable: nothing approved yet, or the directory is missing or disabled.
+    Inactive,
 }
 impl Standing {
     pub(crate) fn label(self) -> &'static str {
@@ -59,6 +61,7 @@ impl Standing {
             Self::Effective => "effective",
             Self::Overridden => "overridden",
             Self::Conflict => "conflict",
+            Self::Inactive => "inactive",
         }
     }
 }
@@ -111,6 +114,7 @@ pub(crate) fn skill_items(
         .into_iter()
         .map(|i| {
             let standing = match best.get(&i.name.to_lowercase()) {
+                _ if !usable(&i) => Standing::Inactive,
                 Some((_, ids)) if ids.len() > 1 && ids.contains(&i.id) => Standing::Conflict,
                 Some((_, ids)) if ids.len() == 1 && ids[0] == i.id => Standing::Effective,
                 _ => Standing::Overridden,
@@ -150,11 +154,9 @@ impl InstructionService {
                     if !roots.is_empty() && !roots.contains(&root) {
                         continue;
                     }
-                    // A harness item with nothing approved yet (a pending agent draft) is not
-                    // a discoverable skill.
-                    if item.active_revision.is_none() {
-                        continue;
-                    }
+                    // A harness item with nothing approved yet (an unproposed, pending or
+                    // rejected first draft) is listed with its latest revision and state, so it
+                    // can be selected and edited with its own revision. It is never effective.
                     fence = fence.max(item.version);
                     let revision = current_revision(instructions, &item)?;
                     records.push(record(&item, &revision, Some(standing))?);

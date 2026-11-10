@@ -130,9 +130,16 @@ pub fn scan_root(
         Err(SourceFault::Missing) => return Ok((Vec::new(), Vec::new())),
         Err(e) => return Err(e),
     };
+    // A truncated root listing would make unlisted skills look deleted: refuse it whole, so
+    // every previously discovered skill keeps its state.
+    if entries.len() > MAX_SKILLS {
+        return Err(SourceFault::Refused(format!(
+            "more than {MAX_SKILLS} entries in the skill root"
+        )));
+    }
     let mut skills = Vec::new();
     let mut skipped = Vec::new();
-    for entry in entries.into_iter().take(MAX_SKILLS) {
+    for entry in entries {
         if entry.kind != EntryKind::Directory || !valid_name(&entry.name) {
             continue;
         }
@@ -172,9 +179,19 @@ pub fn scan_skill(
         } else {
             root.join(name).join(&relative)
         };
+        let shown = if relative.is_empty() {
+            "."
+        } else {
+            relative.as_str()
+        };
+        // One more than the bound detects truncation: a partial listing is never captured as a
+        // complete revision (materializing it would delete the files it omitted).
         let entries = source
-            .list_dir(&dir, MAX_ENTRIES)
-            .map_err(|e| format!("{}: {e}", if relative.is_empty() { "." } else { &relative }))?;
+            .list_dir(&dir, MAX_ENTRIES + 1)
+            .map_err(|e| format!("{shown}: {e}"))?;
+        if entries.len() > MAX_ENTRIES {
+            return Err(format!("{shown}: more than {MAX_ENTRIES} entries"));
+        }
         for entry in entries {
             if entry.name.starts_with('.') {
                 continue;
@@ -235,6 +252,70 @@ mod tests {
         let c = revision_digest("a", &[]);
         assert_ne!(a, b);
         assert_ne!(a, c);
+    }
+
+    /// A tree whose `big` skill directory holds more entries than the listing bound.
+    struct Crowded;
+    impl SourceTree for Crowded {
+        fn canonical_dir(&self, p: &Path) -> Result<std::path::PathBuf, SourceFault> {
+            Ok(p.to_path_buf())
+        }
+        fn list_dir(
+            &self,
+            dir: &Path,
+            limit: usize,
+        ) -> Result<Vec<crate::ports::indexing::DirEntry>, SourceFault> {
+            let names: Vec<String> = if dir.ends_with("big") {
+                (0..MAX_ENTRIES + 5)
+                    .map(|i| format!(".hidden{i:05}"))
+                    .chain(["visible.md".into()])
+                    .collect()
+            } else {
+                vec!["big".into()]
+            };
+            let kind = if dir.ends_with("big") {
+                EntryKind::File
+            } else {
+                EntryKind::Directory
+            };
+            let mut names = names;
+            names.sort();
+            Ok(names
+                .into_iter()
+                .take(limit)
+                .map(|name| crate::ports::indexing::DirEntry { name, kind })
+                .collect())
+        }
+        fn git_marker(
+            &self,
+            _: &Path,
+        ) -> Result<Option<crate::ports::indexing::GitMarker>, SourceFault> {
+            Ok(None)
+        }
+        fn read_file(&self, _: &Path, relative: &str, _: u64) -> Result<Vec<u8>, SourceFault> {
+            if relative == "big/SKILL.md" {
+                Ok(b"skill".to_vec())
+            } else {
+                Ok(b"x".to_vec())
+            }
+        }
+        fn case_insensitive(&self, _: &Path) -> bool {
+            false
+        }
+        fn home(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    #[test]
+    fn truncated_listings_are_refused_not_captured() {
+        let (skills, skipped) = scan_root(&Crowded, Path::new("/root")).unwrap();
+        assert!(
+            skills.is_empty(),
+            "a partial tree must never become a revision"
+        );
+        assert_eq!(skipped.len(), 1);
+        assert!(skipped[0].reason.contains("more than"), "{:?}", skipped[0]);
     }
 
     #[test]

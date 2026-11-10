@@ -487,6 +487,12 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
         assert!(labels(&draft).contains(&"origin:harness".into()));
         assert!(labels(&draft).contains(&"state:draft".into()));
         assert_eq!(tree(&fx.shared), shared_before, "shared originals are untouched");
+        // The unapproved override is discoverable (to keep editing it with its own revision)
+        // but never effective.
+        let listed = find(&discover(&fx, &app, &user), "alpha", "harness").clone();
+        assert_eq!(listed["id"], draft["id"]);
+        assert!(labels(&listed).contains(&"inactive".into()) && labels(&listed).contains(&"state:draft".into()));
+        assert!(labels(find(&discover(&fx, &app, &user), "alpha", "shared")).contains(&"effective".into()));
         assert!(!fx.harness.join("alpha").exists());
         assert_eq!(app.effective_skills().unwrap().skills[0].root_id, "skills-shared");
         // Direct activation by the agent is refused: it needs the exact human approval.
