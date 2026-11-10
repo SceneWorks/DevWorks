@@ -2078,6 +2078,16 @@ fn bound_agent_gateway_refuses_sibling_work_and_run_controls() {
         fx.stop(&agent, "root-i"),
         DomainCommandReply::Rejected { .. }
     ));
+    assert!(matches!(
+        fx.command(
+            &agent,
+            "next_work.claim_feature_task",
+            json!({"mode":"Command","protocol":PROTOCOL,"requestKey":fx.key(),
+                "body":{"kind":"next_work.claim_feature_task","rootId":"root-g",
+                "expectedTaskSetRevision":"1","leaseMs":"60000"}})
+        ),
+        DomainCommandReply::Rejected { .. }
+    ));
 
     let delegate = devworks_core::operations::agents::DelegateInput {
         root_id: rid("root-f"),
@@ -2163,6 +2173,52 @@ fn bound_agent_gateway_refuses_sibling_work_and_run_controls() {
     assert!(matches!(
         fx.stop(&worker, "root-f"),
         DomainCommandReply::Rejected { .. }
+    ));
+    let membership = |ctx: &InvocationContext| {
+        fx.command(
+            ctx,
+            "projects.membership",
+            json!({"mode":"Command","protocol":PROTOCOL,"requestKey":fx.key(),
+                "body":{"kind":"projects.membership","projectId":"project-a",
+                "expectedRevision":"1","repositoryIds":[]}}),
+        )
+    };
+    assert!(matches!(
+        membership(&worker),
+        DomainCommandReply::Rejected { .. }
+    ));
+    assert!(matches!(
+        fx.command(
+            &worker,
+            "next_work.claim_project_queue",
+            json!({"mode":"Command","protocol":PROTOCOL,"requestKey":fx.key(),
+                "body":{"kind":"next_work.claim_project_queue","projectId":"project-a",
+                "expectedQueueRevision":"1","leaseMs":"60000"}})
+        ),
+        DomainCommandReply::Rejected { .. }
+    ));
+    let coordinator = principal(&*fx.store, "workspace-coordinator", PrincipalKind::Agent)
+        .with_lineage(Some(ProjectId(id("project-a"))), None, None);
+    let user = fx.user.clone();
+    fx.tx(move |_, tx| {
+        bind_principal(
+            tx,
+            &user,
+            NewPrincipalBinding {
+                actor: ActorId(id("workspace-coordinator")),
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::WorkspaceCoordinator),
+                project_id: Some(ProjectId(id("project-a"))),
+                tool_families: None,
+                bound_by: ActorId(id("user-a")),
+            },
+            None,
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("bind coordinator: {e:?}")))
+    });
+    assert!(matches!(
+        membership(&coordinator),
+        DomainCommandReply::Recorded { .. }
     ));
 }
 

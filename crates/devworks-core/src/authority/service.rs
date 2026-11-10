@@ -5,7 +5,7 @@ use super::policy::{
     self, AccessProfile, DenialReason, EffectivePolicy, Provenance, Verdict, resolve_policy,
 };
 use crate::context::{InvocationContext, PrincipalKind};
-use crate::operations::{OperationInput, features, issues, runs, tasks};
+use crate::operations::{OperationInput, features, issues, next_work, runs, tasks};
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
     GrantState, NewAuthorityGrant, NewEvent, NewPrincipalBinding, PrincipalBinding, ReadOptions,
@@ -286,6 +286,7 @@ fn agent_assignment_scope(
         OperationInput::Tasks(_)
             | OperationInput::Features(_)
             | OperationInput::Issues(_)
+            | OperationInput::NextWork(_)
             | OperationInput::Runs(_)
     ) {
         return Ok(());
@@ -370,6 +371,33 @@ fn agent_assignment_scope(
             issues::Input::Edit(i) => scoped(&i.work_id)?,
             issues::Input::Publish(i) => scoped(&i.issue_id.0)?,
             issues::Input::Link(i) => scoped(&i.issue_id.0)?,
+        },
+        OperationInput::NextWork(input) => match input {
+            next_work::Input::ClaimProjectQueue(_) => false,
+            next_work::Input::ClaimFeatureTask(i) => coordinator && &i.root_id == root,
+            next_work::Input::InspectQueue(i) => {
+                coordinator && i.feature_id.as_ref() == Some(&root.0)
+            }
+            next_work::Input::InspectClaim(i) => {
+                let claim = s
+                    .work()
+                    .allocation_claim(&i.claim_id)
+                    .map_err(|_| DenialReason::AuthorityUnavailable)?;
+                match claim {
+                    Some(claim) => claim.root_id == *root && scoped(&claim.work_id)?,
+                    None => false,
+                }
+            }
+            next_work::Input::ReleaseClaim(i) => {
+                let claim = s
+                    .work()
+                    .allocation_claim(&i.claim_id)
+                    .map_err(|_| DenialReason::AuthorityUnavailable)?;
+                match claim {
+                    Some(claim) => claim.root_id == *root && scoped(&claim.work_id)?,
+                    None => false,
+                }
+            }
         },
         OperationInput::Runs(input) => match input {
             runs::Input::Start(i) | runs::Input::Pause(i) | runs::Input::Continue(i) => {

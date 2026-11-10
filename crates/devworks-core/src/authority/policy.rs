@@ -448,6 +448,19 @@ pub fn registered_tool_visibility(
         }
         (_, None) => None,
     };
+    // A task or feature assignment never grants project administration. Workspace coordinators
+    // may administer their bound project only outside a root assignment; humans retain their
+    // direct authority through the earlier branch.
+    if kind == PrincipalKind::Agent
+        && command
+        && (matches!(fam, "projects" | "workflows" | "roles")
+            || op == "repositories.remove_index"
+            || op == "next_work.claim_project_queue"
+            || class == AuthorityClass::Configuration)
+        && (role != Some(AgentRole::WorkspaceCoordinator) || ctx.root_id().is_some())
+    {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
     if ctx.root_id().is_some()
         && role == Some(AgentRole::Worker)
         && matches!(
@@ -462,6 +475,7 @@ pub fn registered_tool_visibility(
                 | "features.edit"
                 | "features.edit_plan"
                 | "features.request_plan_approval"
+                | "next_work.claim_feature_task"
         )
     {
         return Verdict::Deny(DenialReason::OutOfAssignmentScope);
