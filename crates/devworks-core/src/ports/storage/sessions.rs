@@ -119,7 +119,7 @@ pub struct StoredEpoch {
     pub session_id: Id,
     pub epoch: i64,
     pub previous_epoch: i64,
-    /// `Compaction`, `ProviderChange` or `InstructionAdoption`.
+    /// `Compaction`, `ProviderChange`, `InstructionAdoption` or `MembershipHandoff`.
     pub reason: String,
     /// The immutable context snapshot (`ArtifactRef` JSON).
     pub context: Value,

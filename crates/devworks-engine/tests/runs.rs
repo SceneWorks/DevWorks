@@ -177,6 +177,9 @@ impl Fx {
                 service.clone(),
             )))
             .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store.clone())))
+            .with_history(Arc::new(
+                devworks_core::services::history::HistoryService::new(h.ids.clone()),
+            ))
             .with_work(Arc::new(WorkService::new(h.ids.clone(), service.clone())));
         let user = principal(&*store, "user-a", PrincipalKind::Human);
         let agent = principal(&*store, "agent-a", PrincipalKind::Agent);
@@ -1503,7 +1506,7 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
         .unwrap();
         let context = devworks_core::context::HostIngress::new(&*fx.store)
             .context(
-                session.agent_id,
+                session.agent_id.clone(),
                 PrincipalKind::Agent,
                 id("first-prompt-invocation"),
                 id("first-prompt-ingress"),
@@ -1698,6 +1701,62 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             )
             .unwrap();
         assert_eq!(converted_context.parameters.max_output_tokens, None);
+        // A membership handoff commits the new root and epoch before a destination agent
+        // resumes. The storage transition is exercised by allocations/handoff.rs; here the
+        // provider recovery path starts from that committed shape.
+        let db = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
+        db.execute(
+            "UPDATE assignments SET root_id='root-f',purpose='Child',generation=1,state='Active',revision=revision+1 WHERE id=?1",
+            [primary.assignment_id.0.as_str()],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE sessions SET root_id='root-f',context_epoch=2,revision=revision+1 WHERE id=?1",
+            [session.id.as_str()],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE conversations SET root_id='root-f' WHERE id=?1",
+            [session.conversation_id.as_str()],
+        )
+        .unwrap();
+        let moved_context = devworks_core::context::HostIngress::new(&*fx.store)
+            .context(
+                session.agent_id.clone(),
+                PrincipalKind::Agent,
+                id("moved-context-invocation"),
+                id("moved-context-ingress"),
+                devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            )
+            .with_session(session.id.clone())
+            .with_lineage(
+                session.project_id.clone(),
+                Some(rid("root-f")),
+                Some(primary.assignment_id.clone()),
+            );
+        let mut moved_agent = primary.clone();
+        moved_agent.root_id = rid("root-f");
+        devworks_engine::agent_turns::ensure_membership_context(&app, &moved_context, &moved_agent)
+            .unwrap();
+        let epoch = read(&*fx.store, |snapshot| snapshot.sessions().epoch(&session.id, 2))
+            .expect("handoff epoch");
+        assert_eq!(epoch.reason, "MembershipHandoff");
+        let (moved_head, moved_binding, _) = app
+            .recover_native_context_head(&moved_context, &session.id)
+            .unwrap()
+            .expect("destination provider context");
+        assert_eq!(moved_binding.context_epoch.get(), 2);
+        let moved_bytes = app
+            .artifacts()
+            .read_exact(app.store().as_ref(), &moved_context, &moved_head, 8 * 1024 * 1024)
+            .unwrap()
+            .0;
+        let moved_prompt: devworks_core::providers::context::ProviderContext =
+            serde_json::from_slice(&moved_bytes).unwrap();
+        assert!(moved_prompt.messages.iter().any(|message| message.content.iter().any(|part| {
+            matches!(part, devworks_core::providers::context::ContentBlock::Text { text, .. } if text.contains("moved to root root-f"))
+        })));
         app.shutdown().await;
     });
 }
@@ -1787,6 +1846,120 @@ fn agent_launcher_runs_a_ready_child_under_the_same_activation() {
     })
     .unwrap();
     assert_eq!(seen[0].0, child_session.agent_id);
+}
+
+struct HeldChildTurn {
+    entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+impl AgentTurnExecutor for HeldChildTurn {
+    fn run(
+        &self,
+        _: InvocationContext,
+        _: devworks_core::protocol::records::AgentRecord,
+        _: tokio::sync::watch::Receiver<bool>,
+    ) -> LaunchFuture {
+        let entered = self.entered.lock().unwrap().take().unwrap();
+        let release = self.release.lock().unwrap().take().unwrap();
+        Box::pin(async move {
+            entered.send(()).unwrap();
+            release.await.unwrap();
+            LaunchEnd::Finished {
+                outcome: ActivationOutcome::Completed,
+                detail: None,
+            }
+        })
+    }
+}
+
+#[test]
+fn a_membership_fenced_child_exit_does_not_fail_its_source_activation() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    let activation = fx.launch("handoff-source");
+    let host = principal(&*fx.store, "handoff-host", PrincipalKind::Host);
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let activation_id = activation.id.clone();
+    let epoch = activation.owner_epoch;
+    let primary = fx.tx(move |_, tx| {
+        agents
+            .materialize_primary(tx, &host, &activation_id, epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("primary: {error:?}")))
+    });
+    let session = read(&*fx.store, |snapshot| {
+        let assignment = snapshot.runs().assignment(&primary.assignment_id)?.unwrap();
+        snapshot.sessions().session(&assignment.session_id)
+    })
+    .unwrap();
+    let parent = devworks_core::context::HostIngress::new(&*fx.store)
+        .context(
+            session.agent_id,
+            PrincipalKind::Agent,
+            id("handoff-parent"),
+            id("handoff-parent-ingress"),
+            devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(session.id)
+        .with_lineage(
+            Some(ProjectId(id("project-a"))),
+            Some(rid("root-f")),
+            Some(primary.assignment_id),
+        )
+        .with_activation(activation.id.clone(), epoch);
+    let request = devworks_core::operations::agents::DelegateInput {
+        root_id: rid("root-f"),
+        expected_control_revision: Revision::new(fx.control("root-f").revision).unwrap(),
+        task_ids: devworks_core::protocol::support::BoundedList(vec![id("task-f1")]),
+        role_id: id("worker"),
+        instruction: devworks_core::protocol::support::BoundedText("Implement F1".into()),
+        source_checkpoint_id: None,
+    };
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let child = fx.tx(move |_, tx| {
+        agents
+            .delegate(tx, &parent, &request)
+            .map_err(|error| StorageError::InvalidRecord(format!("delegate: {error:?}")))
+    });
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let launcher = AgentLauncher::new(
+        fx.store.clone(),
+        fx.h.ids.clone(),
+        Arc::new(AgentService::new(fx.h.ids.clone(), fx.service.clone())),
+        Arc::new(HeldChildTurn {
+            entered: Mutex::new(Some(entered_tx)),
+            release: Mutex::new(Some(release_rx)),
+        }),
+    );
+    runtime().block_on(async {
+        let task = tokio::spawn(launcher.launch_child(
+            child.assignment_id.clone(),
+            activation.id.clone(),
+            epoch,
+            tokio::sync::watch::channel(false).1,
+        ));
+        entered_rx.await.unwrap();
+        applied(&fx.set_feature("task-f1", Some("root-g")));
+        assert_eq!(
+            read(&*fx.store, |snapshot| snapshot
+                .runs()
+                .assignment(&child.assignment_id))
+            .unwrap()
+            .state,
+            AssignmentState::Superseded
+        );
+        release_tx.send(()).unwrap();
+        assert!(matches!(
+            task.await.unwrap(),
+            ChildLaunch::Fenced(Fenced::NotFound("child no longer owned here"))
+        ));
+    });
+    assert_eq!(
+        fx.activation(&activation.id).phase,
+        ActivationPhase::Running
+    );
 }
 
 #[test]
@@ -2359,6 +2532,29 @@ fn bound_agent_gateway_refuses_sibling_work_and_run_controls() {
     assert!(matches!(
         task_get("task-f2"),
         DomainQueryReply::Rejected { .. }
+    ));
+    let history = |query: Value| {
+        fx.query(
+            &worker,
+            "history.events",
+            json!({"protocol":PROTOCOL,"schemaRevision":2,"queryId":fx.key(),"query":query}),
+        )
+    };
+    assert!(matches!(
+        history(json!({"kind":"history.events","projectId":"project-a","limit":10})),
+        DomainQueryReply::Rejected { .. }
+    ));
+    assert!(matches!(
+        history(json!({"kind":"history.events","rootId":"root-f","limit":10})),
+        DomainQueryReply::Rejected { .. }
+    ));
+    assert!(matches!(
+        history(json!({"kind":"history.events","rootId":"task-f2","limit":10})),
+        DomainQueryReply::Rejected { .. }
+    ));
+    assert!(matches!(
+        history(json!({"kind":"history.events","rootId":"task-f1","limit":10})),
+        DomainQueryReply::Result { .. }
     ));
     assert!(matches!(
         fx.command(

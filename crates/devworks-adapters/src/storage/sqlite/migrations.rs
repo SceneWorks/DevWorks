@@ -516,6 +516,13 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0047_agent_message_heads.sql"),
         rebuilds_tables: false,
     },
+    Migration {
+        version: 48,
+        minimum_reader: 48,
+        minimum_writer: 48,
+        sql: include_str!("migrations/0048_membership_context_epoch.sql"),
+        rebuilds_tables: true,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

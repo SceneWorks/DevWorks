@@ -6,7 +6,7 @@ use super::policy::{
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::operations::{
-    OperationInput, approvals, artifacts, features, issues, next_work, runs, tasks,
+    OperationInput, approvals, artifacts, features, history, issues, next_work, runs, tasks,
 };
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
@@ -294,6 +294,7 @@ fn agent_assignment_scope(
             | OperationInput::Jobs(_)
             | OperationInput::NextWork(_)
             | OperationInput::Runs(_)
+            | OperationInput::History(_)
     ) {
         return Ok(());
     }
@@ -400,6 +401,58 @@ fn agent_assignment_scope(
         Ok(false)
     };
     let allowed = match request.input {
+        OperationInput::History(input) => {
+            let history_scoped = |id: &RootId| {
+                if !coordinator && id == root && assignment.work_id != *root {
+                    return Ok(false);
+                }
+                scoped(&id.0)
+            };
+            match input {
+                history::Input::Events(query) => match &query.query {
+                    crate::protocol::Query::Events {
+                        root_id: Some(id),
+                        project_id: None,
+                        ..
+                    } => history_scoped(id)?,
+                    _ => false,
+                },
+                history::Input::WorkLineage(input) => history_scoped(&input.root_id)?,
+                history::Input::GitLinks(input) => history_scoped(&input.root_id)?,
+                history::Input::EvidenceLinks(input) => history_scoped(&input.root_id)?,
+                history::Input::ToolUsage(input) => match (
+                    input.root_id.as_ref(),
+                    input.project_id.as_ref(),
+                    input.workspace,
+                ) {
+                    (Some(id), None, None) => history_scoped(id)?,
+                    _ => false,
+                },
+                history::Input::OperationStatus(query) => match &query.query {
+                    crate::protocol::Query::Operation { operation_id } => {
+                        match s
+                            .operations()
+                            .operation(operation_id)
+                            .map_err(|_| DenialReason::AuthorityUnavailable)?
+                        {
+                            Some(operation)
+                                if operation.assignment_id.as_ref() == Some(assignment_id) =>
+                            {
+                                true
+                            }
+                            Some(operation) => match operation.root_id.as_ref() {
+                                Some(id) => history_scoped(id)?,
+                                None => false,
+                            },
+                            None => false,
+                        }
+                    }
+                    _ => false,
+                },
+                // Receipt identity binds actor, ingress and scope to the requesting principal.
+                history::Input::CommandReceipt(_) => true,
+            }
+        }
         // Jobs have project scope and no root or assignment owner. Active assignments cannot
         // use project-wide scheduler operations through their ambient agent authority.
         OperationInput::Jobs(_) => false,
