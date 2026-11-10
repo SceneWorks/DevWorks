@@ -2036,10 +2036,12 @@ fn fresh_native_tool_turn_publishes_context_and_holds_on_user_redirection() {
             Ok(())
         }).unwrap();
         let result = &progress.provider.result;
-        assert!(app.tool_continuation_context(&f.context, &id("session"),
+        let redirected = app.tool_continuation_context(&f.context, &id("session"),
             result.attempt_id.as_ref().unwrap(), result.turn_start_sequence.unwrap(),
-            result.binding.as_ref().unwrap(), &previous).is_err());
-        assert!(app.produce_and_dispatch_native_turn(invoke(request), None).await.is_err());
+            result.binding.as_ref().unwrap(), &previous).unwrap();
+        assert!(redirected.messages.iter().flat_map(|message| &message.content).any(|block|
+            matches!(block, ContentBlock::Text { text, .. } if text == "Change direction")));
+        assert!(app.produce_and_dispatch_native_turn(invoke(request), None).await.is_ok());
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
         app.shutdown().await;
     });
