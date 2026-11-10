@@ -2449,21 +2449,18 @@ impl Shell {
                     } else {
                         self.settings.mcp.loading = false;
                         self.settings.mcp.last_refresh = Some(Instant::now());
-                        if let Some(id) = &self.settings.mcp.pending_server
-                            && let Some(server) = self
-                                .settings
+                        if let Some(server) = self.settings.mcp.selected.as_ref().and_then(|id| {
+                            self.settings
                                 .mcp
                                 .servers
                                 .iter()
                                 .find(|server| &server.id == id)
-                            && !matches!(server.state, ItemState::Unavailable)
+                        }) && matches!(server.state, ItemState::Failed)
                         {
-                            if matches!(server.state, ItemState::Failed) {
-                                self.settings.mcp.error = Some(server.last_failure.as_ref().map_or_else(
-                                    || "The MCP server operation failed. Check its configuration and retry.".into(),
-                                    |failure| failure.0.clone()));
-                            }
-                            self.settings.mcp.pending_server = None;
+                            self.settings.mcp.error = Some(server.last_failure.as_ref().map_or_else(
+                                || "The MCP server operation failed. Check its configuration and retry.".into(),
+                                |failure| failure.0.clone(),
+                            ));
                         }
                         if let Some(server) = self.settings.mcp.selected.as_ref().and_then(|id| {
                             self.settings
@@ -2515,23 +2512,47 @@ impl Shell {
             (Slot::McpCommand, Reply::Command(c)) => {
                 self.settings.mcp.busy = false;
                 match ops::mcp_command_status(c) {
-                    Ok((message, accepted, configured)) => {
+                    Ok((message, operation, configured)) => {
                         self.settings.mcp.message = Some(message);
                         self.settings.mcp.error = None;
                         if let Some(id) = configured {
                             self.settings.mcp.selected = Some(id);
                         }
-                        if !accepted {
+                        self.settings.mcp.pending_operation = operation;
+                        if self.settings.mcp.pending_operation.is_none() {
                             self.settings.mcp.pending_server = None;
                         }
                         self.load_mcp_servers(None);
                     }
                     Err(error) => {
                         self.settings.mcp.pending_server = None;
+                        self.settings.mcp.pending_operation = None;
                         self.settings.mcp.error = Some(error.describe());
                     }
                 }
             }
+            (Slot::McpOperation(scope), Reply::Query(_)) if scope != self.mcp_scope_key() => {}
+            (Slot::McpOperation(_), Reply::Query(q)) => match ops::query_result(q) {
+                Ok((
+                    devworks_core::protocol::results::OperationResult::HistoryOperationStatus {
+                        value,
+                    },
+                    _,
+                )) => {
+                    if self
+                        .settings
+                        .mcp
+                        .observed_operation(&value.operation_id, value.state)
+                    {
+                        self.load_mcp_servers(None);
+                    }
+                }
+                Ok(_) => {
+                    self.settings.mcp.error =
+                        Some("Unexpected MCP operation status response".into())
+                }
+                Err(error) => self.settings.mcp.error = Some(error.describe()),
+            },
             (Slot::SettingsExplain(key), Reply::Query(q)) => match ops::settings_chain(q) {
                 Ok(chain) => {
                     if let Some(v) = &mut self.settings.view {
@@ -3399,6 +3420,8 @@ impl Shell {
                     self.settings.mcp.error = Some("MCP command could not be submitted.".into());
                 } else {
                     self.settings.mcp.pending_server = pending_server;
+                    self.settings.mcp.pending_operation = None;
+                    self.settings.mcp.last_operation_poll = None;
                 }
             }
         }
@@ -3597,18 +3620,22 @@ impl Shell {
     }
 
     fn poll_mcp(&mut self, ctx: &egui::Context) {
-        if self.settings.mcp.pending_server.is_none() {
+        let Some(operation) = self.settings.mcp.pending_operation.clone() else {
             return;
-        }
+        };
         let interval = Duration::from_secs(2);
-        if !self.settings.mcp.loading
+        let slot = Slot::McpOperation(self.mcp_scope_key());
+        if !self.pending(&slot)
             && self
                 .settings
                 .mcp
-                .last_refresh
+                .last_operation_poll
                 .is_none_or(|last| last.elapsed() >= interval)
         {
-            self.load_mcp_servers(None);
+            self.settings.mcp.last_operation_poll = Some(Instant::now());
+            self.query(slot, "Checking MCP operation", "history.operation_status", move |backend| {
+                serde_json::json!({"protocol":ops::PROTOCOL,"queryId":backend.token("q"),"query":{"kind":"history.operation_status","operationId":operation}}).to_string().into_bytes()
+            });
         }
         ctx.request_repaint_after(interval);
     }

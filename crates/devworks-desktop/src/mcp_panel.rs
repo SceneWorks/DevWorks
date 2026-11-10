@@ -2,7 +2,7 @@
 //! All mutations go through the same domain gateway used by agents.
 use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::records::{McpCapability, McpServer, ProjectRecord};
-use devworks_core::protocol::{Id, ProjectId};
+use devworks_core::protocol::{Id, OperationId, OperationState, ProjectId};
 use eframe::egui::{self, Ui};
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -17,6 +17,30 @@ pub enum McpAction {
     Select(Id, i64, i64, Vec<Id>),
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_stays_pending_until_its_operation_settles() {
+        let mut panel = McpPanel::default();
+        let server = Id::new("server-a").unwrap();
+        let operation = OperationId(Id::new("discovery-a").unwrap());
+        panel.pending_server = Some(server.clone());
+        panel.pending_operation = Some(operation.clone());
+        assert!(!panel.observed_operation(
+            &OperationId(Id::new("other-operation").unwrap()),
+            OperationState::ObservedComplete,
+        ));
+        assert!(!panel.observed_operation(&operation, OperationState::Dispatching));
+        assert_eq!(panel.pending_server, Some(server));
+        assert_eq!(panel.pending_operation, Some(operation.clone()));
+        assert!(panel.observed_operation(&operation, OperationState::ObservedComplete));
+        assert!(panel.pending_server.is_none());
+        assert!(panel.pending_operation.is_none());
+    }
+}
+
 #[derive(Default)]
 pub struct McpPanel {
     pub projects: Vec<ProjectRecord>,
@@ -29,6 +53,8 @@ pub struct McpPanel {
     pub error: Option<String>,
     pub message: Option<String>,
     pub pending_server: Option<Id>,
+    pub pending_operation: Option<OperationId>,
+    pub last_operation_poll: Option<Instant>,
     pub last_refresh: Option<Instant>,
     pub name: String,
     pub endpoint: String,
@@ -41,6 +67,29 @@ pub struct McpPanel {
 }
 
 impl McpPanel {
+    pub fn observed_operation(&mut self, operation: &OperationId, state: OperationState) -> bool {
+        if self.pending_operation.as_ref() != Some(operation) {
+            return false;
+        }
+        if !matches!(
+            state,
+            OperationState::ObservedComplete
+                | OperationState::Failed
+                | OperationState::CancelledBeforeDispatch
+                | OperationState::NeedsInput
+        ) {
+            return false;
+        }
+        if state != OperationState::ObservedComplete {
+            self.error = Some(format!(
+                "MCP operation {state:?}; check the server diagnostic."
+            ));
+        }
+        self.pending_operation = None;
+        self.pending_server = None;
+        true
+    }
+
     pub fn loaded_servers(&mut self, servers: Vec<McpServer>, append: bool, complete: bool) {
         self.error = None;
         if append {
@@ -117,6 +166,7 @@ impl McpPanel {
         if self.project != previous_project {
             self.selected = None;
             self.pending_server = None;
+            self.pending_operation = None;
             self.capabilities.clear();
             self.selection.clear();
             self.servers.clear();

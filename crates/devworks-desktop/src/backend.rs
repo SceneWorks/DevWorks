@@ -341,6 +341,7 @@ pub enum Slot {
     /// The recent web activity record.
     WebActivity,
     McpServers(String, Option<String>),
+    McpOperation(String),
     McpCapabilities(String, String, Option<String>),
     McpCommand,
     /// Active and archived projects.

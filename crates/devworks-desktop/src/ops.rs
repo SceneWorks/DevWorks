@@ -206,12 +206,19 @@ pub fn mcp_command(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u
 
 pub fn mcp_command_status(
     outcome: CommandOutcome,
-) -> Result<(String, bool, Option<devworks_core::protocol::Id>), Failure> {
+) -> Result<
+    (
+        String,
+        Option<devworks_core::protocol::OperationId>,
+        Option<devworks_core::protocol::Id>,
+    ),
+    Failure,
+> {
     match outcome.map_err(gateway)? {
         CommandReply::Recorded { receipt, .. } => match receipt.decision {
             DomainDecision::Applied { result } => Ok((
                 "MCP configuration applied".into(),
-                false,
+                None,
                 match result {
                     OperationResult::McpConfigure { value } => Some(value.id),
                     _ => None,
@@ -219,7 +226,7 @@ pub fn mcp_command_status(
             )),
             DomainDecision::NoChange { result } => Ok((
                 "MCP configuration unchanged".into(),
-                false,
+                None,
                 match result {
                     OperationResult::McpConfigure { value } => Some(value.id),
                     _ => None,
@@ -227,7 +234,7 @@ pub fn mcp_command_status(
             )),
             DomainDecision::Accepted { operation_id } => Ok((
                 format!("MCP operation {} accepted", operation_id.0.as_str()),
-                true,
+                Some(operation_id),
                 None,
             )),
             DomainDecision::Refused { fault } => Err(Failure::Refused(fault)),
