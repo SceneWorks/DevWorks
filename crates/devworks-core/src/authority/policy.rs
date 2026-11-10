@@ -415,6 +415,12 @@ pub fn registered_tool_visibility(
     if kind == PrincipalKind::Agent && ctx.assignment_id().is_some() && op.starts_with("jobs.") {
         return Verdict::Deny(DenialReason::OutOfAssignmentScope);
     }
+    if kind == PrincipalKind::Agent
+        && ctx.assignment_id().is_some()
+        && matches!(op, "approvals.list" | "approvals.review_queue")
+    {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
     // Project-wide message views belong to the human UI. Agent sessions use their addressed
     // inbox; never advertise a project history or event feed they cannot read.
     if matches!(op, "agents.history" | "agents.events") && kind != PrincipalKind::Human {
@@ -504,7 +510,10 @@ pub fn registered_tool_visibility(
     {
         return Verdict::Deny(DenialReason::ToolNotSelected);
     }
-    if kind == PrincipalKind::Agent && !policy.tool_selected(&format!("devworks/{op}"), true) {
+    let default_selected = !matches!(fam, "desktop" | "browser");
+    if kind == PrincipalKind::Agent
+        && !policy.tool_selected(&format!("devworks/{op}"), default_selected)
+    {
         return Verdict::Deny(DenialReason::ToolNotSelected);
     }
     let read_only_role = role.is_some_and(AgentRole::read_only);

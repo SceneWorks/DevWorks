@@ -1400,10 +1400,47 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
             .iter()
             .any(|tool| tool.capability_id.as_str() == "devworks-query/agents.history")
     );
+    assert!(!initial_tools.iter().any(|tool| {
+        tool.capability_id
+            .as_str()
+            .starts_with("devworks-query/desktop.")
+            || tool
+                .capability_id
+                .as_str()
+                .starts_with("devworks-command/desktop.")
+            || tool.capability_id.as_str() == "devworks-command/browser.upload"
+    }));
     assert_eq!(
         serde_json::to_value(&initial_tools).unwrap(),
         serde_json::to_value(f.driver.schemas().selected_builtins(&agent).unwrap()).unwrap()
     );
+    let visibility = |name: &str, mode| {
+        read(f.store.as_ref(), |snapshot| {
+            let binding = snapshot.authority().principal(agent.principal())?.unwrap();
+            let policy =
+                devworks_core::authority::policy::resolve_policy(snapshot.configuration(), None)?;
+            let descriptor = devworks_core::registry::find(name).unwrap();
+            let selected = descriptor.binding(mode).unwrap();
+            Ok(
+                devworks_core::authority::policy::registered_tool_visibility(
+                    &agent,
+                    Some(&binding),
+                    &policy,
+                    descriptor,
+                    selected,
+                    selected.effect,
+                ),
+            )
+        })
+    };
+    assert!(!matches!(
+        visibility("desktop.capture", devworks_core::registry::Mode::Query),
+        devworks_core::authority::policy::Verdict::Allow
+    ));
+    assert!(!matches!(
+        visibility("browser.upload", devworks_core::registry::Mode::Command),
+        devworks_core::authority::policy::Verdict::Allow
+    ));
     let descriptor = devworks_core::settings::catalog::descriptor("tools.overrides").unwrap();
     let schema = descriptor.schema_ref();
     write(f.store.as_ref(), move |tx| {
@@ -1413,7 +1450,9 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
             1,
             1,
             json!({"values": {"tools.overrides": {"schema":schema,
-                "value":{"devworks/sessions.get":false}}}}),
+                "value":{"devworks/sessions.get":false,
+                    "devworks/desktop.capture":true,
+                    "devworks/browser.upload":true}}}}),
         )?;
         Ok(())
     })
@@ -1427,6 +1466,14 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
             .iter()
             .any(|tool| tool.capability_id.as_str() == "devworks-query/sessions.get")
     );
+    assert!(matches!(
+        visibility("desktop.capture", devworks_core::registry::Mode::Query),
+        devworks_core::authority::policy::Verdict::Allow
+    ));
+    assert!(matches!(
+        visibility("browser.upload", devworks_core::registry::Mode::Command),
+        devworks_core::authority::policy::Verdict::Allow
+    ));
     let policy = read(f.store.as_ref(), |s| {
         devworks_core::authority::policy::resolve_policy(s.configuration(), None)
     });

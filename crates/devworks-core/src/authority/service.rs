@@ -5,7 +5,9 @@ use super::policy::{
     self, AccessProfile, DenialReason, EffectivePolicy, Provenance, Verdict, resolve_policy,
 };
 use crate::context::{InvocationContext, PrincipalKind};
-use crate::operations::{OperationInput, artifacts, features, issues, next_work, runs, tasks};
+use crate::operations::{
+    OperationInput, approvals, artifacts, features, issues, next_work, runs, tasks,
+};
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
     GrantState, LinkPurpose, NewAuthorityGrant, NewEvent, NewPrincipalBinding, PrincipalBinding,
@@ -285,6 +287,7 @@ fn agent_assignment_scope(
     if !matches!(
         request.input,
         OperationInput::Tasks(_)
+            | OperationInput::Approvals(_)
             | OperationInput::Artifacts(_)
             | OperationInput::Features(_)
             | OperationInput::Issues(_)
@@ -400,6 +403,31 @@ fn agent_assignment_scope(
         // Jobs have project scope and no root or assignment owner. Active assignments cannot
         // use project-wide scheduler operations through their ambient agent authority.
         OperationInput::Jobs(_) => false,
+        OperationInput::Approvals(input) => match input {
+            approvals::Input::List(_) | approvals::Input::ReviewQueue(_) => false,
+            approvals::Input::Inspect(i) => {
+                if let Some(proposal) = s
+                    .configuration()
+                    .proposal(&i.proposal_id)
+                    .map_err(|_| DenialReason::AuthorityUnavailable)?
+                {
+                    proposal.author == *ctx.principal()
+                } else if let Some(proposal) = s
+                    .work()
+                    .proposal(&i.proposal_id)
+                    .map_err(|_| DenialReason::AuthorityUnavailable)?
+                {
+                    proposal.requested_by == *ctx.principal() || scoped(&proposal.feature_id)?
+                } else {
+                    s.decisions()
+                        .approval(&i.proposal_id)
+                        .map_err(|_| DenialReason::AuthorityUnavailable)?
+                        .is_some_and(|proposal| proposal.author == *ctx.principal())
+                }
+            }
+            approvals::Input::Propose(i) => scoped(&i.target.id)?,
+            approvals::Input::RecordHumanDecision(_) => false,
+        },
         OperationInput::Artifacts(input) => match input {
             artifacts::Input::List(_) => false,
             artifacts::Input::Read(req)

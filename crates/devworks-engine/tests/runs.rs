@@ -160,8 +160,17 @@ impl Fx {
     fn over(h: Harness, store: Arc<dyn ApplicationStore>) -> Self {
         let scope = Arc::new(ScriptedScope::new());
         let service = Arc::new(ControlService::with_scope(h.ids.clone(), scope.clone()));
+        let approvals = Arc::new(devworks_core::services::approvals::ApprovalService::new(
+            h.ids.clone(),
+            h.clock(),
+            Arc::new(devworks_core::authority::HostRoles {
+                store: store.clone(),
+            }),
+            service.clone(),
+        ));
         let use_cases = UseCases::new()
             .with_runs(service.clone())
+            .with_approvals(approvals)
             .with_agents(Arc::new(AgentService::new(h.ids.clone(), service.clone())))
             .with_projects(Arc::new(ProjectService::new(
                 h.ids.clone(),
@@ -2218,6 +2227,36 @@ fn bound_agent_gateway_refuses_sibling_work_and_run_controls() {
             "queryId":fx.key(),"body":{"kind":"tasks.list","projectId":"project-a",
             "page":{"limit":10},"statusIds":[],"repositoryIds":[],
             "detailLevel":"Summary"}})
+        ),
+        DomainQueryReply::Rejected { .. }
+    ));
+    let author = fx.user.principal().clone();
+    let unrelated_approval = fx.tx(move |_, tx| {
+        tx.configuration().stage(NewProposal {
+            id: id("other-root-settings"),
+            scope: ConfigScope::Project(ProjectId(id("project-a"))),
+            namespace: "settings".into(),
+            base_revision: 1,
+            author,
+            body: json!({}),
+        })
+    });
+    assert!(matches!(
+        fx.query(
+            &agent,
+            "approvals.list",
+            json!({"mode":"Query","protocol":PROTOCOL,"queryId":fx.key(),
+                "body":{"kind":"approvals.list","scope":{"kind":"Project","projectId":"project-a"},
+                "page":{"limit":10}}})
+        ),
+        DomainQueryReply::Rejected { .. }
+    ));
+    assert!(matches!(
+        fx.query(
+            &agent,
+            "approvals.inspect",
+            json!({"mode":"Query","protocol":PROTOCOL,"queryId":fx.key(),
+                "body":{"kind":"approvals.inspect","proposalId":unrelated_approval.id}})
         ),
         DomainQueryReply::Rejected { .. }
     ));
