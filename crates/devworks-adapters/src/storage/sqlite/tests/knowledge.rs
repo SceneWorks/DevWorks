@@ -6201,3 +6201,76 @@ fn seeded_traversals_continue_past_their_edge_bound_and_long_chains_report_trunc
     assert_eq!(chained.supersession_ids.0.len(), 5);
     assert!(chained.truncated);
 }
+
+#[test]
+fn claim_seeds_never_prune_the_walk_and_whole_graph_pages_keep_cross_page_edges() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    let edge = |s: &str, o: &str| {
+        json!({"kind": "Fact", "subjectId": s, "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let w = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [
+            {"clientId": "a", "label": "Hub A", "entityType": "service", "aliases": []},
+            {"clientId": "b", "label": "Hub B", "entityType": "service", "aliases": []},
+            {"clientId": "c", "label": "Hub C", "entityType": "service", "aliases": []}],
+        "evidence": [],
+        "claims": [edge("a", "b"), edge("b", "c"),
+            with(draft("Fact", "about b"), json!({"subjectId": "b"}))]}),
+    ));
+    let [a, c] = [0, 2].map(|i| w.entity_ids.0[i].clone());
+    let about_b = w.claim_ids.0[2].clone();
+    // A seed claim about B does not stop the walk from A through B to C.
+    let g = q(
+        "knowledge.subgraph",
+        json!({"entityIds": [a], "claimIds": [about_b], "maxDepth": 2}),
+    );
+    assert!(
+        g.entities.0.iter().any(|e| e.id == c),
+        "{:?}",
+        entity_labels(&g)
+    );
+    // The seed claim keeps the walk's depth bound: one hop from A never reaches C.
+    let shallow = q(
+        "knowledge.subgraph",
+        json!({"entityIds": [a], "claimIds": [about_b], "maxDepth": 1}),
+    );
+    assert!(!shallow.entities.0.iter().any(|e| e.id == c));
+    // One entity per page: following every cursor still returns both edges.
+    let mut edges = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut page = json!({"limit": 1});
+        if let Some(at) = &cursor {
+            page["cursor"] = json!(at);
+        }
+        let b = q("knowledge.subgraph", json!({"page": page}));
+        assert_eq!(b.entities.0.len(), 1);
+        edges.extend(
+            b.claims
+                .0
+                .iter()
+                .filter(|claim| claim.object_id.is_some())
+                .map(|claim| claim.id.clone()),
+        );
+        match b.next_cursor {
+            Some(next) => cursor = Some(next.0),
+            None => break,
+        }
+    }
+    edges.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    let mut expected = vec![w.claim_ids.0[0].clone(), w.claim_ids.0[1].clone()];
+    expected.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    assert_eq!(edges, expected);
+}

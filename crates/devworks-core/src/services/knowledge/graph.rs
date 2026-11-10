@@ -332,10 +332,13 @@ fn select(
     // Who discovered each traversed entity, so a bound that drops it keeps its discoverer on
     // the frontier.
     let mut parent: HashMap<Id, Id> = HashMap::new();
-    let mut queue: VecDeque<Id> = entity_seeds.iter().cloned().collect();
+    // Each queued entity with its distance from the entity seeds along the walk.
+    let mut queue: VecDeque<(Id, u32)> = entity_seeds.iter().map(|id| (id.clone(), 0)).collect();
+    // Queued for traversal, apart from membership: an entity a seed claim added is still
+    // traversed when the entity-seeded walk reaches it.
+    let mut queued: HashSet<Id> = entity_seeds.iter().cloned().collect();
     let candidate_bound = bounds.entities.saturating_mul(4).max(1);
-    while let Some(at) = queue.pop_front() {
-        let d = hop[&at];
+    while let Some((at, d)) = queue.pop_front() {
         if d >= bounds.hops {
             frontier.insert(at);
             continue;
@@ -358,12 +361,20 @@ fn select(
                 } else {
                     e.subject_id.clone()
                 };
-                (!hop.contains_key(&other)).then_some(other)
+                (!queued.contains(&other)).then_some(other)
             })
             .collect();
         next.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         next.dedup();
         for other in next {
+            if let Some(h) = hop.get_mut(&other) {
+                // A seed claim's entity: walk on from it at its traversal distance.
+                *h = (*h).min(d + 1);
+                parent.insert(other.clone(), at.clone());
+                queued.insert(other.clone());
+                queue.push_back((other, d + 1));
+                continue;
+            }
             if hop.len() >= candidate_bound {
                 frontier.insert(at.clone());
                 truncated = true;
@@ -375,7 +386,8 @@ fn select(
             hop.insert(other.clone(), d + 1);
             rank.insert(other.clone(), 2);
             parent.insert(other.clone(), at.clone());
-            queue.push_back(other);
+            queued.insert(other.clone());
+            queue.push_back((other, d + 1));
         }
     }
     // Rank: direct seeds, then seed-claim entities, then by distance and id; then bound.
@@ -1146,8 +1158,9 @@ fn additions(mut s: Selection, entity_seeds: &[Id], claim_seeds: &[Id], limit: u
     s
 }
 
-/// One page of the whole visible graph: entities newest first and the active edge claims
-/// between entities on the page.
+/// One page of the whole visible graph: entities newest first and the active edge claims whose
+/// subject is on the page and whose object the caller can see, so following every cursor
+/// returns each visible edge once even when its endpoints fall on different pages.
 fn full_graph(
     c: &Ctx<'_>,
     ctx: &InvocationContext,
@@ -1196,6 +1209,9 @@ fn full_graph(
                 .is_empty();
     }
     let on_page: HashSet<&Id> = page.iter().map(|e| &e.id).collect();
+    let visible_object = |id: &Id| -> Result<bool, StorageError> {
+        Ok(on_page.contains(id) || c.entity(id)?.is_some())
+    };
     let mut claims = Vec::new();
     let mut seen = HashSet::new();
     let mut truncated = false;
@@ -1204,11 +1220,12 @@ fn full_graph(
         let (edges, _, edge_more) = c.edges(&e.id, per)?;
         truncated |= edge_more;
         for claim in edges {
+            let Some(object) = claim.object_id.as_ref() else {
+                continue;
+            };
             if claim.subject_id == e.id
-                && claim
-                    .object_id
-                    .as_ref()
-                    .is_some_and(|o| on_page.contains(o))
+                && !seen.contains(&claim.id)
+                && visible_object(object)?
                 && seen.insert(claim.id.clone())
             {
                 // A page's claims fit one bundle; the rest is reported as truncated.
