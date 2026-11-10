@@ -239,10 +239,15 @@ impl McpRemote for NativeMcpClients {
         // Keep the same slot across reconnects. Concurrent callers either reuse this endpoint
         // or wait for the changed endpoint to finish replacing its session.
         let mut guard = self.runtime.block_on(slot.lock());
-        if guard.as_ref().is_some_and(|connected| connected.key == key) {
+        if guard
+            .as_ref()
+            .is_some_and(|connected| connected.key == key && !connected.wire.client.is_closed())
+        {
             return Ok(());
         }
-        if let Some(old) = guard.take() {
+        if let Some(old) = guard.take()
+            && !old.wire.client.is_closed()
+        {
             self.runtime
                 .block_on(old.wire.close())
                 .map_err(map_connect_fault)?;

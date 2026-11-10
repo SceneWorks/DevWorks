@@ -19,7 +19,7 @@ use crate::protocol::data::DataScope;
 use crate::protocol::provider::{Digest, QualifiedId, SchemaRef, ToolCallKey, ToolSchema};
 use crate::protocol::records::{ItemState, McpCapability, McpServer, McpTransport, PageRequest};
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Check, Page};
+use crate::protocol::support::{BoundedList, BoundedText, Check, Limit, Page};
 use crate::protocol::{
     ActorId, CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId,
     OperationState, ProjectId, RetryAdvice, Revision, RevisionDimension,

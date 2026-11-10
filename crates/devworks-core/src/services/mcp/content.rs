@@ -113,7 +113,30 @@ impl McpClientService {
             .cloned()
             .collect();
         caps.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
-        let cap_page = page(&caps, request, version).map_err(|error| self.fault(error))?;
+        let mut bounded_page = request.clone();
+        bounded_page.limit = Limit::new(request.limit.get().min(32)).expect("bounded MCP page");
+        let cap_page = page(&caps, &bounded_page, version).map_err(|error| self.fault(error))?;
+        let mut published_bytes = 0usize;
+        let mut charge = |content: &Value| -> Result<(), DomainFault> {
+            let size = serde_json::to_vec(content)
+                .map_err(|_| {
+                    self.fault(StorageError::InvalidRecord(
+                        "MCP content serialization".into(),
+                    ))
+                })?
+                .len();
+            published_bytes = published_bytes
+                .checked_add(size)
+                .filter(|total| *total <= 8 * 1024 * 1024)
+                .ok_or_else(|| {
+                    crate::services::fault(
+                        DomainErrorCode::InvalidArgument,
+                        RetryAdvice::Never,
+                        &CorrelationId(self.ids.next_id(IdKind::Correlation)),
+                    )
+                })?;
+            Ok(())
+        };
         if matches!(query.input(), OperationInput::Mcp(ops::Input::Resources(_))) {
             let mut items = Vec::new();
             for cap in cap_page.items.0 {
@@ -132,6 +155,7 @@ impl McpClientService {
                     self.read_with_reconnect(ctx, query, native, &scope, &server, &cap, || {
                         native.remote.read_resource(server_id, uri)
                     })?;
+                charge(&content)?;
                 let reference =
                     self.publish_content(ctx, query, native, &scope, &server, &cap, uri, content)?;
                 items.push(McpResource {
@@ -208,6 +232,7 @@ impl McpClientService {
                             .remote
                             .get_prompt(server_id, &cap.name.0, args.clone())
                     })?;
+                charge(&content)?;
                 let reference = self.publish_content(
                     ctx,
                     query,
