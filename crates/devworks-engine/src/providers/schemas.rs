@@ -25,6 +25,32 @@ pub struct RegisteredSchemas {
     packages: Option<Arc<PackageService>>,
     artifacts: Arc<ArtifactService>,
 }
+
+fn mode_namespace(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Query => "devworks-query",
+        Mode::Command => "devworks-command",
+    }
+}
+
+fn builtin_operation(capability: &str) -> Option<(&str, Option<Mode>)> {
+    if let Some(operation) = capability.strip_prefix("devworks-query/") {
+        Some((operation, Some(Mode::Query)))
+    } else if let Some(operation) = capability.strip_prefix("devworks-command/") {
+        Some((operation, Some(Mode::Command)))
+    } else {
+        capability
+            .strip_prefix("devworks/")
+            .map(|operation| (operation, None))
+    }
+}
+
+fn matches_builtin_capability(capability: &str, operation: &str, mode: Mode) -> bool {
+    builtin_operation(capability).is_some_and(|(selected_operation, selected_mode)| {
+        selected_operation == operation && selected_mode.is_none_or(|selected| selected == mode)
+    })
+}
+
 impl RegisteredSchemas {
     pub fn new(
         store: Arc<dyn ApplicationStore>,
@@ -68,8 +94,8 @@ impl RegisteredSchemas {
     }
     /// Current built-in tools the shared selection permits this agent to see. This is the
     /// complete inventory, not a provider request: a turn planner must project a bounded
-    /// subset before dispatch because one request accepts at most 256 aliases and one mode
-    /// per capability ID.
+    /// subset before dispatch because one request accepts at most 256 aliases. Query and
+    /// command bindings have distinct frozen IDs so both modes can be offered in one turn.
     pub fn selected_builtins(
         &self,
         ctx: &InvocationContext,
@@ -119,10 +145,15 @@ impl RegisteredSchemas {
                         "built-in alias too long".into(),
                     ));
                 }
-                self.builtin(name, mode, revision, &wire_name)
+                let mut tool = self
+                    .builtin(name, mode, revision, &wire_name)
                     .map_err(|error| {
                         StorageError::InvalidRecord(format!("built-in schema: {error:?}"))
-                    })
+                    })?;
+                tool.capability_id =
+                    QualifiedId::try_from(format!("{}/{}", mode_namespace(mode), name))
+                        .map_err(|error| StorageError::InvalidRecord(error.into()))?;
+                Ok(tool)
             })
             .collect::<Result<Vec<_>, _>>()?;
         tools.sort_by(|a, b| {
@@ -145,16 +176,19 @@ impl RegisteredSchemas {
         Ok(tools)
     }
     /// Only exact registered built-in bindings have a durable turn dispatcher. A package
-    /// declaring a `devworks/` capability ID is still an external tool.
+    /// declaring a built-in-looking capability ID is still an external tool.
     pub(crate) fn builtin_binding(
         &self,
         capability: &QualifiedId,
         reference: &SchemaRef,
     ) -> Option<(&'static registry::OperationDescriptor, Mode, SchemaRevision)> {
-        let operation = capability.as_str().strip_prefix("devworks/")?;
+        let (operation, selected_mode) = builtin_operation(capability.as_str())?;
         let descriptor = registry::find(operation)?;
         let revision = SchemaRevision(u32::try_from(reference.revision.get()).ok()?);
         for binding in descriptor.modes {
+            if selected_mode.is_some_and(|mode| mode != binding.mode) {
+                continue;
+            }
             let Ok(registered) = self.builtin(operation, binding.mode, revision, "recorded") else {
                 continue;
             };
@@ -455,7 +489,8 @@ impl SchemaDocuments for RegisteredSchemas {
     ) -> Result<PreparedTool, ProviderError> {
         let (schema, description) = match self.builtin_document(ctx, &alias.input_schema)? {
             Some((schema, d, selected)) => {
-                if alias.capability_id.as_str() != format!("devworks/{}", d.name) {
+                if !matches_builtin_capability(alias.capability_id.as_str(), d.name, selected.mode)
+                {
                     return Err(ProviderError::MaterialUnavailable);
                 }
                 let description = schema

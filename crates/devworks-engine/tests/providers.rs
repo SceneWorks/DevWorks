@@ -1356,13 +1356,13 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
     assert!(f.driver.schemas().tool(&agent, &alias).is_ok());
     let initial_tools = f.driver.schemas().selected_builtins(&agent).unwrap();
     assert!(initial_tools.iter().any(|tool| {
-        tool.capability_id.as_str() == "devworks/sessions.get"
+        tool.capability_id.as_str() == "devworks-query/sessions.get"
             && tool.wire_name == "sessions_get_query"
     }));
     assert!(
         !initial_tools
             .iter()
-            .any(|tool| tool.capability_id.as_str() == "devworks/agents.history")
+            .any(|tool| tool.capability_id.as_str() == "devworks-query/agents.history")
     );
     assert_eq!(
         serde_json::to_value(&initial_tools).unwrap(),
@@ -1389,7 +1389,7 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
             .selected_builtins(&agent)
             .unwrap()
             .iter()
-            .any(|tool| tool.capability_id.as_str() == "devworks/sessions.get")
+            .any(|tool| tool.capability_id.as_str() == "devworks-query/sessions.get")
     );
     let policy = read(f.store.as_ref(), |s| {
         devworks_core::authority::policy::resolve_policy(s.configuration(), None)

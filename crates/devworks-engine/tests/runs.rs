@@ -14,9 +14,13 @@ use devworks_core::authority::destructive::ProtectedRoots;
 use devworks_core::authority::service::{GrantBounds, bind_principal};
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
+use devworks_core::ports::http::HttpRequest;
 use devworks_core::ports::process::{
     NativeIdentity, PowerAssertion, PowerPort, PowerRequest, Probe, ProcessError, ProcessHost,
     ProcessSpec, ProcessTree, TreeStatus,
+};
+use devworks_core::ports::provider_http::{
+    HttpStream, ResponseHead, StreamCloser, StreamLimits, StreamingHttp, TransportError,
 };
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::results::{DomainCommandReply, DomainDecision, DomainQueryReply};
@@ -42,6 +46,7 @@ use devworks_core::services::sessions::SessionService;
 use devworks_core::services::work::WorkService;
 use devworks_core::settings::catalog::AgentRole;
 use devworks_engine::agent_supervisor::{AgentLauncher, AgentTurnExecutor, ChildLaunch};
+use devworks_engine::agent_turns::NativeAgentTurnExecutor;
 use devworks_engine::{
     ActivationLauncher, Composition, Launch, LaunchEnd, LaunchFuture, RunComposition, RunGate,
     RunSupervisor, RunTick, RuntimeConfig, ShutdownStage, boot,
@@ -55,6 +60,57 @@ use std::time::Duration;
 // Fixture
 
 const PROTOCOL: &str = "1.0-draft.1";
+
+struct AgentWire(Arc<AtomicUsize>);
+struct AgentStream {
+    head: ResponseHead,
+    body: Option<Vec<u8>>,
+}
+struct AgentClose;
+impl StreamCloser for AgentClose {
+    fn close(&self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+impl HttpStream for AgentStream {
+    fn closer(&self) -> Arc<dyn StreamCloser> {
+        Arc::new(AgentClose)
+    }
+    fn head(&self) -> &ResponseHead {
+        &self.head
+    }
+    fn read(&mut self, buffer: &mut [u8], _: &Cancellation) -> Result<usize, TransportError> {
+        let Some(mut body) = self.body.take() else {
+            return Ok(0);
+        };
+        let n = body.len().min(buffer.len());
+        buffer[..n].copy_from_slice(&body[..n]);
+        if n < body.len() {
+            self.body = Some(body.split_off(n));
+        }
+        Ok(n)
+    }
+    fn close(&mut self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+impl StreamingHttp for AgentWire {
+    fn open(
+        &self,
+        _: &HttpRequest,
+        _: &StreamLimits,
+        _: &Cancellation,
+    ) -> Result<Box<dyn HttpStream>, TransportError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(AgentStream {
+            head: ResponseHead {
+                status: 200,
+                headers: vec![("content-type".into(), "text/event-stream".into())],
+            },
+            body: Some(b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec()),
+        }))
+    }
+}
 
 fn seed(h: &Harness) {
     let c = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
@@ -1130,12 +1186,13 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
                     connections,
                 ),
             ));
+        let wire_calls = Arc::new(AtomicUsize::new(0));
         composed.config.providers = Some(
-            devworks_engine::providers::driver::ProviderComposition::new(Arc::new(
-                devworks_adapters::provider_stream::NativeStreamingHttp::direct().unwrap(),
-            )),
+            devworks_engine::providers::driver::ProviderComposition::new(Arc::new(AgentWire(
+                wire_calls.clone(),
+            ))),
         );
-        let app = boot(composed).await.unwrap();
+        let app = Arc::new(boot(composed).await.unwrap());
         applied(&fx.start(&fx.user, "root-i", 1, 1));
         let activation = fx.launch("coordinator-first-prompt");
         let host = principal(&*fx.store, "first-prompt-host", PrincipalKind::Host);
@@ -1277,6 +1334,48 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             planned.request.input,
             devworks_core::protocol::provider::InferenceInput::Generation { .. }
         ));
+        let progress = app
+            .produce_and_dispatch_native_turn(planned, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            progress.provider.result.outcome,
+            Some(devworks_core::services::usage::accounting::AttemptEnd::Completed)
+        );
+        assert!(progress.continuation.is_some());
+        assert_eq!(wire_calls.load(Ordering::SeqCst), 1);
+        let turn_id = read(&*fx.store, |snapshot| {
+            snapshot.runs().session_turn(&session.id)
+        })
+        .unwrap()
+        .turn_id;
+        let turn_session = session.id.clone();
+        fx.tx(move |service, tx| {
+            service
+                .end_turn(tx, &turn_session, &turn_id)?
+                .map_err(|fence| StorageError::InvalidRecord(format!("turn end: {fence:?}")))
+        });
+        let (_stop_tx, stop) = tokio::sync::watch::channel(false);
+        let end = NativeAgentTurnExecutor::new(&app)
+            .run(context.clone(), primary.clone(), stop)
+            .await;
+        assert!(
+            matches!(
+                end,
+                LaunchEnd::Finished {
+                    outcome: ActivationOutcome::Completed,
+                    ..
+                }
+            ),
+            "{end:?}"
+        );
+        assert_eq!(wire_calls.load(Ordering::SeqCst), 2);
+        assert!(
+            read(&*fx.store, |snapshot| snapshot
+                .runs()
+                .session_turn(&session.id))
+            .is_none()
+        );
         assert!(
             devworks_engine::agent_turns::publish_first_context(&app, &context, &primary, &route)
                 .is_err()

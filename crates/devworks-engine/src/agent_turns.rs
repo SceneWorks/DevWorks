@@ -168,6 +168,8 @@ async fn run_native_loop(
 ) -> Result<(), StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     let mut recovered = runtime.recover_native_context_head(ctx, session_id)?;
+    let mut window = 0;
+    let mut completed_windows = 0;
     loop {
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
@@ -187,12 +189,15 @@ async fn run_native_loop(
             }
         };
         head = runtime.refresh_native_tool_context(ctx, session_id, &head)?;
-        let tools_required = !runtime
+        let selected_count = runtime
             .providers()
             .ok_or(StorageError::ScopeDenied)?
             .schemas()
             .selected_builtins(ctx)?
-            .is_empty();
+            .len();
+        let tools_required = selected_count != 0;
+        let windows = tool_window_count(selected_count);
+        window %= windows;
         let route = route_context_head(
             runtime,
             ctx,
@@ -224,7 +229,7 @@ async fn run_native_loop(
             .recover_native_context_head(ctx, session_id)?
             .ok_or(StorageError::ScopeDenied)?
             .1;
-        let invocation = plan_generation(runtime, ctx, &route, &binding, &head)?;
+        let invocation = plan_generation_window(runtime, ctx, &route, &binding, &head, window)?;
         let progress = runtime
             .produce_and_dispatch_native_turn(invocation, Some(cancellation.clone()))
             .await?;
@@ -232,8 +237,17 @@ async fn run_native_loop(
             return Err(StorageError::Cancelled);
         }
         match progress.provider.result.outcome {
-            Some(AttemptEnd::Completed) if progress.continuation.is_some() => return Ok(()),
+            Some(AttemptEnd::Completed) if progress.continuation.is_some() => {
+                completed_windows += 1;
+                if completed_windows >= windows {
+                    return Ok(());
+                }
+                window = (window + 1) % windows;
+                recovered = runtime.recover_native_context_head(ctx, session_id)?;
+            }
             Some(AttemptEnd::ToolCallsReady) if progress.continuation.is_some() => {
+                completed_windows = 0;
+                window = (window + 1) % windows;
                 recovered = runtime.recover_native_context_head(ctx, session_id)?;
             }
             Some(AttemptEnd::ToolCallsReady) => {
@@ -280,6 +294,21 @@ fn binding_for_route(
 }
 
 const DEFAULT_OUTPUT_HEADROOM: i64 = 8_192;
+const MAX_ALIASES_PER_TURN: usize = 256;
+
+fn tool_window<T>(all: &[T], index: usize) -> Result<&[T], StorageError> {
+    let start = index
+        .checked_mul(MAX_ALIASES_PER_TURN)
+        .ok_or(StorageError::ScopeDenied)?;
+    if start >= all.len() && !(all.is_empty() && index == 0) {
+        return Err(StorageError::ScopeDenied);
+    }
+    Ok(&all[start..all.len().min(start.saturating_add(MAX_ALIASES_PER_TURN))])
+}
+
+fn tool_window_count(total: usize) -> usize {
+    total.div_ceil(MAX_ALIASES_PER_TURN).max(1)
+}
 
 fn output_headroom(context_tokens: Option<i64>) -> i64 {
     context_tokens
@@ -518,6 +547,18 @@ pub fn publish_first_context(
             ))
         })?;
     let mut prompt = initial_context(runtime.store().as_ref(), ctx, agent)?;
+    let selected_count = runtime
+        .providers()
+        .ok_or(StorageError::ScopeDenied)?
+        .schemas()
+        .selected_builtins(ctx)?
+        .len();
+    if tool_window_count(selected_count) > 1 {
+        prompt.instructions.push(TextBlock {
+            text: "Selected tools are presented in successive windows. A completed response may be followed by another turn with the remaining tools before the assignment closes. If a needed tool is absent, state the intended operation and continue when the next window appears.".into(),
+            cache: None,
+        });
+    }
     prompt.parameters.max_output_tokens = Some(headroom as u32);
     let bound = runtime.bind_provider_instructions(ctx, prompt, &[])?;
     let head = runtime.publish_initial_native_context(ctx, session_id, &binding, &bound)?;
@@ -533,6 +574,20 @@ pub fn plan_generation(
     binding: &NativeBinding,
     head: &ArtifactRef,
 ) -> Result<NativeInvocation, StorageError> {
+    plan_generation_window(runtime, ctx, route, binding, head, 0)
+}
+
+/// A bounded, deterministic window of the complete selected tool inventory. The caller rotates
+/// across windows after settled turns so every selected binding can be offered without changing
+/// the immutable alias map of an already dispatched request.
+pub fn plan_generation_window(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    binding: &NativeBinding,
+    head: &ArtifactRef,
+    window: usize,
+) -> Result<NativeInvocation, StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     let root_id = ctx.root_id().ok_or(StorageError::ScopeDenied)?;
     let project_id = ctx.project_id().ok_or(StorageError::ScopeDenied)?;
@@ -540,15 +595,22 @@ pub fn plan_generation(
         return Err(StorageError::ScopeDenied);
     }
     let providers = runtime.providers().ok_or(StorageError::ScopeDenied)?;
-    let tools = providers.schemas().selected_builtins(ctx)?;
-    if tools.len() > 256 {
-        return Err(StorageError::InvalidRecord(
-            "selected tool set exceeds provider alias limit".into(),
-        ));
-    }
+    let selected = providers.schemas().selected_builtins(ctx)?;
+    let tools = tool_window(&selected, window)?.to_vec();
     let tool_bytes = serde_json::to_vec(&tools)
         .map_err(|error| StorageError::InvalidRecord(format!("tool schemas: {error}")))?
         .len();
+    let (context_bytes, _) = runtime
+        .artifacts()
+        .read_exact(runtime.store().as_ref(), ctx, head, 32 * 1024 * 1024)
+        .map_err(|error| StorageError::InvalidRecord(format!("agent context read: {error:?}")))?;
+    let provider_context: ProviderContext = serde_json::from_slice(&context_bytes)
+        .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?;
+    let instruction_targets = provider_context
+        .instruction_stamps
+        .iter()
+        .map(|stamp| (stamp.repository_id.clone(), stamp.targets.clone()))
+        .collect();
     let input_headroom = head
         .byte_length
         .get()
@@ -558,7 +620,7 @@ pub fn plan_generation(
         "agent-request-{}",
         sha256_hex(
             format!(
-                "{}:{}:{}:{}",
+                "{}:{}:{}:{}:{window}",
                 session_id.as_str(),
                 head.sha256.as_str(),
                 route.pin_id.as_str(),
@@ -775,11 +837,30 @@ pub fn plan_generation(
     };
     Ok(NativeInvocation {
         source_fences: Vec::new(),
-        instruction_targets: None,
+        instruction_targets: Some(instruction_targets),
         context: ctx.clone(),
         logical,
         category: ReportCategory::Assistant,
         attempt,
         request: inference,
     })
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    #[test]
+    fn every_selected_alias_is_reachable_across_bounded_windows() {
+        let selected: Vec<_> = (0..374).collect();
+        assert_eq!(tool_window_count(selected.len()), 2);
+        assert_eq!(tool_window(&selected, 0).unwrap().len(), 256);
+        assert_eq!(tool_window(&selected, 1).unwrap().len(), 118);
+        let projected: Vec<_> = (0..tool_window_count(selected.len()))
+            .flat_map(|window| tool_window(&selected, window).unwrap().iter().copied())
+            .collect();
+        assert_eq!(projected, selected);
+        assert!(tool_window(&selected, 2).is_err());
+        assert!(tool_window::<usize>(&[], 0).unwrap().is_empty());
+    }
 }
