@@ -174,4 +174,28 @@ impl SourceTree for NativeSourceTree {
     fn home(&self) -> Option<PathBuf> {
         crate::fs::home_dir()
     }
+    fn executable(&self, root: &Path, relative: &str) -> Result<bool, SourceFault> {
+        if relative
+            .split('/')
+            .any(|p| p.is_empty() || p == "." || p == "..")
+        {
+            return Err(SourceFault::Refused("invalid relative path".into()));
+        }
+        let meta = std::fs::symlink_metadata(root.join(relative)).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => SourceFault::Missing,
+            _ => SourceFault::Io(e.kind().to_string()),
+        })?;
+        if !meta.is_file() {
+            return Ok(false);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            Ok(meta.permissions().mode() & 0o111 != 0)
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(false)
+        }
+    }
 }

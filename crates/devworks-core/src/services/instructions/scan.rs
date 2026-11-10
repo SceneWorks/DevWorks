@@ -22,6 +22,9 @@ pub struct ScannedFile {
     pub sha256: String,
     /// Script resources are invoked only through ordinary process tools and permissions.
     pub script: bool,
+    /// The file's execute permission as observed, restored on materialization independently of
+    /// whether it is recognized as a script (native helpers keep working).
+    pub executable: bool,
 }
 impl ScannedFile {
     pub fn new(path: String, bytes: Vec<u8>) -> Self {
@@ -31,6 +34,7 @@ impl ScannedFile {
             path,
             bytes,
             script,
+            executable: false,
         }
     }
 }
@@ -72,7 +76,8 @@ pub fn valid_name(name: &str) -> bool {
         && !name.chars().any(char::is_control)
 }
 
-/// Whole-revision digest: the instruction bytes plus every resource path, digest and kind.
+/// Whole-revision digest: the instruction bytes plus every resource path, digest and execute
+/// permission.
 pub fn revision_digest(instruction_sha256: &str, resources: &[(String, String, bool)]) -> String {
     let value = json!({
         "instruction": instruction_sha256,
@@ -96,7 +101,7 @@ impl ScannedSkill {
             &instruction.sha256,
             &resources
                 .iter()
-                .map(|r| (r.path.clone(), r.sha256.clone(), r.script))
+                .map(|r| (r.path.clone(), r.sha256.clone(), r.executable))
                 .collect::<Vec<_>>(),
         );
         Self {
@@ -216,7 +221,11 @@ pub fn scan_skill(
                     if total > MAX_SKILL_TOTAL_BYTES {
                         return Err("skill exceeds its total size bound".into());
                     }
-                    resources.push(ScannedFile::new(path, bytes));
+                    let mut file = ScannedFile::new(path, bytes);
+                    file.executable = source
+                        .executable(root, &format!("{name}/{}", file.path))
+                        .unwrap_or(false);
+                    resources.push(file);
                 }
                 // Links and special files are never followed or captured.
                 EntryKind::Link | EntryKind::Other => {

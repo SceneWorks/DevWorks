@@ -219,7 +219,10 @@ impl InstructionService {
             // The directory exists but could not be captured now: keep its last observed state
             // rather than treating it as deleted.
             seen.insert(s.name.clone());
-            report.skipped.push((s.name, s.reason));
+            report.skipped.push((
+                s.name,
+                format!("{}: {}", origin.as_str().to_lowercase(), s.reason),
+            ));
         }
         for skill in skills {
             seen.insert(skill.name.clone());
@@ -672,7 +675,7 @@ impl InstructionService {
                     .ok_or_else(|| StorageError::InvalidRecord("resource path".into()))?
                     .to_owned(),
                 bytes: self.artifact_bytes(&resource["artifact"])?,
-                executable: resource["script"].as_bool().unwrap_or(false),
+                executable: resource["executable"].as_bool().unwrap_or(false),
             });
         }
         Ok(files)
@@ -785,7 +788,7 @@ pub(crate) fn record_capture(
         let artifact = publish(tx, s, media_type(&file.path), &file.path)?;
         resources.push(json!({
             "path": file.path, "artifact": artifact, "sha256": file.sha256,
-            "byteCount": file.bytes.len(), "script": file.script,
+            "byteCount": file.bytes.len(), "script": file.script, "executable": file.executable,
         }));
     }
     let revision = StoredInstructionRevision {

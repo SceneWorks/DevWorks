@@ -231,6 +231,17 @@ impl InstructionService {
             InstructionKind::Skill => self.skill_target(tx, ctx, &scope, &name, &input, now)?,
             InstructionKind::Role => role_target(tx, ctx, &scope, &name, &input, now)?,
         };
+        // Role text must satisfy the role setting's own rules for every author, so approved
+        // content can always be applied by the activation that mirrors it into settings.
+        if kind == InstructionKind::Role
+            && let Some(d) = AgentRole::parse(&name)
+                .and_then(|r| crate::settings::catalog::descriptor(r.instructions_key()))
+            && crate::settings::validate::check_value(d, &Value::String(prepared.text.clone()))
+                .iter()
+                .any(|issue| issue.blocking)
+        {
+            return Err(invalid("instruction_content"));
+        }
         let Target {
             mut item,
             base,
@@ -249,7 +260,7 @@ impl InstructionService {
                 (
                     r["path"].as_str().unwrap_or_default().to_owned(),
                     r["sha256"].as_str().unwrap_or_default().to_owned(),
-                    r["script"].as_bool().unwrap_or(false),
+                    r["executable"].as_bool().unwrap_or(false),
                 )
             })
             .collect();

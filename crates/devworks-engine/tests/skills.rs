@@ -440,6 +440,19 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
         );
         assert_eq!(std::fs::read(fx.harness.join("beta/notes.md")).unwrap(), b"added on disk");
         assert_eq!(find(&discover(&fx, &app, &user), "beta", "harness")["revision"], "2");
+        // While the target's harness directory cannot be captured, no save may replace it.
+        #[cfg(unix)]
+        {
+            let beta = find(&discover(&fx, &app, &user), "beta", "harness").clone();
+            std::fs::write(fx.harness.join("beta/notes.md"), "edited again").unwrap();
+            std::os::unix::fs::symlink("notes.md", fx.harness.join("beta/link.md")).unwrap();
+            assert_eq!(
+                refused(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":beta["id"],"expectedRevision":beta["revision"],"name":"beta","content":fx.upload(&user, "harness beta v3")}))),
+                "SourceChanged"
+            );
+            assert_eq!(std::fs::read(fx.harness.join("beta/notes.md")).unwrap(), b"edited again");
+            std::fs::remove_file(fx.harness.join("beta/link.md")).unwrap();
+        }
         // Captured skill versions stay out of artifact listings; other host artifacts remain.
         let staged = fx.artifacts.stage_host_bytes(&*fx.store, b"repository summary", json!({"kind":"Test"})).unwrap().unwrap();
         let (artifacts, s2) = (fx.artifacts.clone(), staged.clone());
@@ -468,8 +481,26 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
     write_skill(
         &fx.shared,
         "alpha",
-        &[("SKILL.md", "Do alpha."), ("scripts/run.sh", "#!/bin/sh\n")],
+        &[
+            ("SKILL.md", "Do alpha."),
+            ("scripts/run.sh", "#!/bin/sh\n"),
+            ("bin/tool", "ELF"),
+        ],
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            fx.shared.join("alpha/bin/tool"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            fx.shared.join("alpha/scripts/run.sh"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+    }
     let shared_before = tree(&fx.shared);
     runtime().block_on(async {
         let (user, agent, reviewer) = fx.principals();
@@ -522,8 +553,16 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
         // The approved override is materialized with the shared skill's resources carried over.
         assert_eq!(
             tree(&fx.harness.join("alpha")),
-            [("SKILL.md".to_owned(), b"Do alpha, improved.".to_vec()), ("scripts/run.sh".to_owned(), b"#!/bin/sh\n".to_vec())]
+            [("SKILL.md".to_owned(), b"Do alpha, improved.".to_vec()), ("bin/tool".to_owned(), b"ELF".to_vec()), ("scripts/run.sh".to_owned(), b"#!/bin/sh\n".to_vec())]
         );
+        // Execute permissions follow the source, not script detection.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &str| std::fs::metadata(fx.harness.join(p)).unwrap().permissions().mode() & 0o111;
+            assert_ne!(mode("alpha/bin/tool"), 0, "a native helper stays executable");
+            assert_eq!(mode("alpha/scripts/run.sh"), 0, "a non-executable script stays non-executable");
+        }
         assert_eq!(tree(&fx.shared), shared_before);
         let events = read(&*fx.store, |s| s.history().page(&EventFilter::Aggregate{kind:"instruction".into(),id:draft["id"].as_str().unwrap().into()},0,500));
         let kinds: Vec<_> = events.events.iter().map(|e| (e.kind.as_str(), e.actor.0.as_str().to_owned())).collect();
@@ -596,6 +635,11 @@ fn role_saves_adopt_at_once_and_agent_role_edits_need_approval() {
         assert_eq!(
             refused(fx.command(&app, &reviewer, "roles.draft", json!({"scope":{"kind":"Workspace"},"instructionId":"role-worker","expectedRevision":"2","name":"worker","content":fx.upload(&reviewer, "x")}))),
             "PermissionDenied"
+        );
+        // Role text must satisfy the role setting's rules for every author (here: an embedded NUL).
+        assert_eq!(
+            refused(fx.command(&app, &agent, "roles.draft", json!({"scope":{"kind":"Workspace"},"instructionId":"role-worker","expectedRevision":"2","name":"worker","content":fx.upload(&agent, "bad\u{0}text")}))),
+            "InvalidArgument"
         );
         // An agent edit stays a draft until the exact human approval.
         let draft = applied(fx.command(&app, &agent, "roles.draft", json!({"scope":{"kind":"Workspace"},"instructionId":"role-worker","expectedRevision":"2","name":"worker","content":fx.upload(&agent, "Agent-suggested worker rules.")})));

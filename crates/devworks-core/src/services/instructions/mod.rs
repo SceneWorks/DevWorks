@@ -415,7 +415,21 @@ impl CommandHandler for InstructionService {
         // caller read it becomes a newer revision, so a stale expectedRevision is refused as a
         // conflict instead of a save materializing an older snapshot over the change.
         if let Some(kind) = kind_of(command.input()) {
-            self.sync_kind(Some(kind))?;
+            let report = self.sync_kind(Some(kind))?;
+            // A save or activation may replace the harness directory of its target: refuse it
+            // while that directory (or the harness root) cannot be observed completely, so a
+            // stale snapshot never replaces live changes that could not be captured.
+            if kind == InstructionKind::Skill
+                && let Some(name) = self.target_skill_name(command)?
+                && (report.failures.iter().any(|f| f.starts_with("harness"))
+                    || report.skipped.iter().any(|(n, reason)| {
+                        n.eq_ignore_ascii_case(&name) && reason.starts_with("harness:")
+                    }))
+            {
+                return Ok(Some(Prepared::new(commands::PreparedRefusal(
+                    Refusal::new(DomainErrorCode::SourceChanged, "skill_source", None),
+                ))));
+            }
         }
         let result = match command.input() {
             OperationInput::Skills(skill_ops::Input::Draft(i)) => {
@@ -458,6 +472,22 @@ impl CommandHandler for InstructionService {
         }
         let outcome = self.decide_command(ctx, command, tx);
         decided(tx, outcome)
+    }
+}
+
+impl InstructionService {
+    /// The skill name a draft or activation writes (`None` for other commands).
+    fn target_skill_name(&self, command: &AdmittedCommand) -> Result<Option<String>, StorageError> {
+        let id = match command.input() {
+            OperationInput::Skills(skill_ops::Input::Draft(i)) => {
+                return Ok(Some(i.name.0.trim().to_owned()));
+            }
+            OperationInput::Skills(skill_ops::Input::Rollback(i)) => i.instruction_id.clone(),
+            _ => return Ok(None),
+        };
+        crate::ports::storage::read_snapshot(&*self.store, &Default::default(), |read| {
+            Ok(read.instructions().instruction_item(&id)?.map(|i| i.name))
+        })
     }
 }
 
