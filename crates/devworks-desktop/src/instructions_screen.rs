@@ -112,7 +112,7 @@ pub struct InstructionsPanel {
     pub selected: Option<Selection>,
     pub detail: Detail,
     /// The edited text of the selected item.
-    pub editor: Option<String>,
+    pub editor: Option<Editor>,
     /// A new harness skill being written (name, text).
     pub new_skill: Option<(String, String)>,
     pub pending: Option<Pending>,
@@ -121,6 +121,15 @@ pub struct InstructionsPanel {
     /// A refresh is re-reading the selected item's record: its details load once that record
     /// arrives, so the shown text and the expected revision come from the same observation.
     pub reload_selected: bool,
+}
+
+/// Text being edited and the newest revision it was based on. A save expects that revision, so
+/// a revision recorded since (by a refresh, another client or a file edit) is a conflict
+/// rather than silently overwritten.
+#[derive(Clone, Debug)]
+pub struct Editor {
+    pub text: String,
+    pub base: i64,
 }
 
 impl InstructionsPanel {
@@ -559,7 +568,7 @@ impl InstructionsPanel {
                 labelled(r, egui::Role::TextInput, &format!("{} text", sel.title));
                 if ui
                     .add_enabled(
-                        !busy,
+                        !busy && latest.is_some(),
                         egui::Button::new(if shared {
                             "Edit as harness override"
                         } else {
@@ -568,16 +577,20 @@ impl InstructionsPanel {
                     )
                     .clicked()
                 {
-                    start_edit = Some(text.clone());
+                    start_edit = latest.map(|base| Editor {
+                        text: text.clone(),
+                        base,
+                    });
                 }
             }
             Some(Ok(_)) => {}
         }
-        if let Some(text) = start_edit {
-            self.editor = Some(text);
+        if let Some(editor) = start_edit {
+            self.editor = Some(editor);
         }
         let mut close = false;
-        if let Some(text) = &mut self.editor {
+        if let Some(Editor { text, base }) = &mut self.editor {
+            let base = *base;
             let r = ui.add(
                 egui::TextEdit::multiline(text)
                     .desired_rows(10)
@@ -592,17 +605,18 @@ impl InstructionsPanel {
             if !iop::savable_text(text) {
                 widgets::caption(ui, "Instruction text must not be blank.");
             }
-            if latest.is_none() {
-                widgets::caption(ui, "Saving waits for the item's history to load.");
+            if latest.is_some_and(|latest| latest != base) {
+                widgets::caption(
+                    ui,
+                    "A newer revision was recorded since editing began; saving reports a conflict.",
+                );
             }
             ui.horizontal(|ui| {
-                let enabled = !busy && latest.is_some() && iop::savable_text(text);
-                if ui.add_enabled(enabled, egui::Button::new("Save")).clicked()
-                    && let Some(expected) = latest
-                {
+                let enabled = !busy && iop::savable_text(text);
+                if ui.add_enabled(enabled, egui::Button::new("Save")).clicked() {
                     actions.push(InstructionAction::Save {
                         kind: sel.kind,
-                        target: Some((sel.id.clone(), expected)),
+                        target: Some((sel.id.clone(), base)),
                         name: sel.draft_name.clone(),
                         text: text.clone(),
                     });
@@ -729,4 +743,63 @@ fn labelled(r: egui::Response, role: egui::Role, label: &str) -> egui::Response 
     let label = label.to_owned();
     r.widget_info(|| egui::WidgetInfo::labeled(role, enabled, label.clone()));
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    fn rec(revision: i64) -> InstructionRecord {
+        serde_json::from_value(serde_json::json!({
+            "id": "skill-1", "revision": revision.to_string(), "name": "lint",
+            "scope": {"kind": "Workspace"},
+            "content": {"artifactId": "art-1", "versionId": "ver-1",
+                "sha256": "a".repeat(64), "byteLength": "3", "mediaType": "text/markdown"},
+            "approved": true, "applicability": ["origin:harness", "state:approved", "active"],
+        }))
+        .expect("record")
+    }
+
+    #[test]
+    fn a_save_expects_the_revision_its_edit_began_from() {
+        let mut panel = InstructionsPanel {
+            requested: true,
+            skills: Some(Ok(vec![rec(2)])),
+            ..InstructionsPanel::default()
+        };
+        panel.select(InstructionsPanel::skill_selection(&rec(1)));
+        // A refresh has since loaded revision 2, recorded elsewhere while the edit was open.
+        panel.detail.history = Some(Ok(vec![rec(2), rec(1)]));
+        panel.detail.text = Some(Ok("revision 2".into()));
+        panel.editor = Some(Editor {
+            text: "edited from revision 1".into(),
+            base: 1,
+        });
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1200.0, 2400.0))
+            .build_ui_state(
+                |ui, state: &mut (InstructionsPanel, Vec<InstructionAction>)| {
+                    let (panel, actions) = state;
+                    panel.ui(ui, true, actions);
+                },
+                (panel, Vec::new()),
+            );
+        // The resource list is still loading (a spinner), so the frames are stepped.
+        harness.run_steps(2);
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::Button, "Save")
+            .click();
+        harness.run_steps(2);
+        let saves: Vec<_> = harness
+            .state()
+            .1
+            .iter()
+            .filter_map(|a| match a {
+                InstructionAction::Save { target, .. } => target.clone(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(saves, [("skill-1".to_owned(), 1)]);
+    }
 }

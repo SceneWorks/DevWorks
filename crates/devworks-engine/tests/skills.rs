@@ -790,6 +790,43 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
 }
 
 /// A writable agent bound to (and invoking within) its own new project.
+#[test]
+fn a_proposal_with_a_review_over_the_inline_limit_is_readable_and_decidable() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, agent, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let content = fx.upload(&agent, "Do the big thing.");
+        let draft = applied(fx.command(&app, &agent, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"big","content":content})));
+        // A resource manifest past the 512 KiB inline review limit: 256 entries with long
+        // nested paths, as a deep skill tree on a filesystem with long names records.
+        let artifact = &draft["content"];
+        let resources: Vec<Value> = (0..256)
+            .map(|i| json!({"path": format!("{}/file-{i}.md", vec!["d".repeat(250); 8].join("/")), "artifact": artifact, "executable": false}))
+            .collect();
+        assert!(serde_json::to_vec(&resources).unwrap().len() > 512 * 1024);
+        let db = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
+        db.execute(
+            "UPDATE instruction_revisions SET resources_json=?1 WHERE instruction_id=?2 AND revision=1",
+            rusqlite::params![serde_json::to_string(&resources).unwrap(), draft["id"].as_str().unwrap()],
+        )
+        .unwrap();
+        let proposal = applied(fx.command(&app, &agent, "skills.propose", json!({"instructionId":draft["id"],"expectedRevision":"1","contentDigest":digest_of(&draft)})));
+        // The stored review points at its complete evidence, so a person can read it ...
+        let inspected = fx
+            .query(&app, &user, "approvals.inspect", json!({"proposalId":proposal["id"]}))
+            .expect("a sealed review is readable");
+        assert_eq!(inspected["id"], proposal["id"], "{inspected}");
+        // ... and decide it.
+        let reject = serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+            "requestKey":fx.h.ids.next_id(IdKind::Link),"body":{"kind":"approvals.record_human_decision",
+            "proposalId":proposal["id"],"expectedRevision":proposal["revision"],"contentDigest":proposal["contentDigest"],
+            "decision":"Reject","rationale":"Too large to adopt"}})).unwrap();
+        applied(app.record_human_decision(&user, &reject).unwrap());
+        app.shutdown().await;
+    });
+}
+
 fn project_agent(
     fx: &Fx,
     user: &InvocationContext,

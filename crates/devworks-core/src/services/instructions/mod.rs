@@ -552,6 +552,12 @@ impl CommandHandler for InstructionService {
             OperationInput::Roles(role_ops::Input::Draft(i)) => {
                 self.prepare_draft(ctx, env, &i.content)
             }
+            OperationInput::Skills(skill_ops::Input::Propose(i)) => {
+                self.prepare_proposal(ctx, env, &i.instruction_id, i.expected_revision.get())
+            }
+            OperationInput::Roles(role_ops::Input::Propose(i)) => {
+                self.prepare_proposal(ctx, env, &i.instruction_id, i.expected_revision.get())
+            }
             OperationInput::Skills(skill_ops::Input::Rollback(i)) => {
                 self.prepare_activation(ctx, env, &i.instruction_id, i.target_revision.get())
             }

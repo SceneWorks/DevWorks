@@ -37,6 +37,36 @@ pub(crate) struct PreparedDraft {
     upload: ArtifactRef,
     staged: Arc<StagedCapture>,
 }
+/// The saved activation a proposal of `revision` asks a person to approve, and its decoding.
+fn proposal_request(
+    item: &StoredInstructionItem,
+    revision: &StoredInstructionRevision,
+    proposal_id: &Id,
+    token: i64,
+) -> Result<(Value, crate::admission::DecodedRequest), Failure> {
+    let args = json!({
+        "instructionId": item.id.as_str(),
+        "expectedRevision": token.to_string(),
+        "targetRevision": revision.revision.to_string(),
+        "proposalId": proposal_id.as_str(),
+    });
+    let request = crate::services::approvals::requests::decode(
+        activation_operation(item.kind),
+        1,
+        &args,
+        true,
+    )
+    .map_err(|_| invalid("saved_activation"))?;
+    Ok((args, request))
+}
+
+/// A proposal's identity chosen before its unit of work, and the published evidence of its
+/// review when the review is too large to store inline (the generic proposal path seals such
+/// reviews the same way).
+pub(crate) struct PreparedProposal {
+    proposal_id: Id,
+    evidence: Option<ArtifactRef>,
+}
 /// The target text of an activation: for the role settings mirror, and, when the target is a
 /// confined draft, a copy staged for release to the item's scope.
 pub(crate) struct PreparedActivation {
@@ -85,6 +115,59 @@ impl InstructionService {
             text,
             upload: content.clone(),
             staged: Arc::new(staged),
+        })))
+    }
+
+    /// Builds the review a proposal of revision `target` stages and, when it exceeds the inline
+    /// limit, publishes it as owner review evidence first. The unit of work rebuilds the same
+    /// review and seals it against that evidence; a review that changed in between is refused
+    /// as a changed source.
+    pub(crate) fn prepare_proposal(
+        &self,
+        ctx: &InvocationContext,
+        env: &Preparation<'_>,
+        id: &Id,
+        target: i64,
+    ) -> Result<Option<Prepared>, Failure> {
+        let proposal_id = self.ids.next_id(IdKind::Operation);
+        let reviewed = env.read(|read| {
+            Ok((|| -> Result<_, Failure> {
+                let item = match read.instructions().instruction_item(id)? {
+                    Some(item) if item_visible(ctx, &item) => item,
+                    _ => return Ok(None),
+                };
+                let Ok(revision) = visible_revision(read.instructions(), ctx, &item, target) else {
+                    return Ok(None);
+                };
+                let token = visible_latest(read.instructions(), ctx, &item)?;
+                Ok(Some((item, revision, token)))
+            })())
+        })??;
+        let mut evidence = None;
+        if let Some((item, revision, token)) = reviewed {
+            let (_, request) = proposal_request(&item, &revision, &proposal_id, token)?;
+            let preview = approval::preview(&item, &revision, &proposal_id, token);
+            if crate::services::approvals::review_evidence::needed(&preview) {
+                let document = crate::services::approvals::review_evidence::document(&preview);
+                evidence = Some(
+                    crate::services::approvals::owner_preview::publish_review_evidence(
+                        &self.artifacts,
+                        &*self.store,
+                        ctx,
+                        env,
+                        &request,
+                        (
+                            "SavedOperationReviewEvidence",
+                            "Complete saved-operation owner review",
+                        ),
+                        &document,
+                    )?,
+                );
+            }
+        }
+        Ok(Some(Prepared::new(PreparedProposal {
+            proposal_id,
+            evidence,
         })))
     }
 
@@ -212,6 +295,7 @@ impl InstructionService {
             OperationInput::Skills(skill_ops::Input::Propose(i)) => self.propose(
                 ctx,
                 tx,
+                command.prepared::<PreparedProposal>(),
                 kind,
                 &i.instruction_id,
                 i.expected_revision.get(),
@@ -220,6 +304,7 @@ impl InstructionService {
             OperationInput::Roles(role_ops::Input::Propose(i)) => self.propose(
                 ctx,
                 tx,
+                command.prepared::<PreparedProposal>(),
                 kind,
                 &i.instruction_id,
                 i.expected_revision.get(),
@@ -539,10 +624,12 @@ impl InstructionService {
         Ok(item)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn propose(
         &self,
         ctx: &InvocationContext,
         tx: &mut dyn WriteTransaction,
+        prepared: Option<&PreparedProposal>,
         kind: InstructionKind,
         id: &Id,
         expected: i64,
@@ -573,17 +660,28 @@ impl InstructionService {
             ));
         }
         let expected_token = visible_latest(tx.instructions(), ctx, &item)?;
-        let proposal_id = tx.new_id(IdKind::Operation);
+        let proposal_id = match prepared {
+            Some(p) => p.proposal_id.clone(),
+            None => tx.new_id(IdKind::Operation),
+        };
         let operation = activation_operation(kind);
-        let args = json!({
-            "instructionId": item.id.as_str(),
-            "expectedRevision": expected_token.to_string(),
-            "targetRevision": revision.revision.to_string(),
-            "proposalId": proposal_id.as_str(),
-        });
-        let request = crate::services::approvals::requests::decode(operation, 1, &args, true)
-            .map_err(|_| invalid("saved_activation"))?;
+        let (args, request) = proposal_request(&item, &revision, &proposal_id, expected_token)?;
         let preview = approval::preview(&item, &revision, &proposal_id, expected_token);
+        // A review over the inline limit is sealed against the evidence published before this
+        // unit of work, as the generic proposal path does; without matching evidence the review
+        // changed since it was prepared.
+        let preview = if crate::services::approvals::review_evidence::needed(&preview) {
+            let reference = prepared.and_then(|p| p.evidence.as_ref()).ok_or_else(|| {
+                refusal(
+                    DomainErrorCode::SourceChanged,
+                    "review_evidence",
+                    Some(&item.id),
+                )
+            })?;
+            crate::services::approvals::review_evidence::seal(tx.artifacts(), &preview, reference)?
+        } else {
+            preview
+        };
         // A confined draft's review is visible in its project only, like the draft.
         let scope = match &preview.scope {
             ConfigScope::Workspace => json!({"kind": "Workspace"}),
