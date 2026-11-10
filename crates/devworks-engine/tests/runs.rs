@@ -1953,6 +1953,62 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
         assert!(moved_prompt.messages.iter().any(|message| message.content.iter().any(|part| {
             matches!(part, devworks_core::providers::context::ContentBlock::Text { text, .. } if text == "Preserve this unissued handoff fact")
         })));
+        // A role changed while the assignment runs is adopted at the next safe boundary: the
+        // role prefix is rebound from the effective setting under a new epoch, and an unchanged
+        // role keeps the published context.
+        let assignment_context = read(&*fx.store, |snapshot| {
+            snapshot.runs().agent_assignment_context(&primary.assignment_id)
+        })
+    .unwrap();
+        let role = devworks_core::settings::catalog::AgentRole::parse(
+            assignment_context.role_id.as_str(),
+        )
+        .unwrap();
+        assert_ne!(
+            moved_prompt.instructions.first().map(|b| b.text.as_str()),
+            Some("Revised role rules.")
+        );
+        let editor = fx.user.clone();
+        let role_scope = devworks_core::ports::storage::ConfigScope::Project(
+            assignment_context.project_id.clone(),
+        );
+        fx.tx(move |_, tx| {
+            devworks_core::settings::service::mirror_role_instructions(
+                tx,
+                &editor,
+                &role_scope,
+                role,
+                "Revised role rules.",
+                serde_json::json!({"kind": "Test"}),
+            )
+            .map_err(|failure| StorageError::InvalidRecord(format!("role: {failure:?}")))?;
+            Ok(())
+        });
+        let adopted = app
+            .adopt_instruction_epoch(&moved_context, &session.id, &moved_head, &moved_binding, &[])
+            .unwrap();
+        assert_ne!(adopted.version_id, moved_head.version_id);
+        let (_, adopted_binding, _) = app
+            .recover_native_context_head(&moved_context, &session.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(adopted_binding.context_epoch.get(), 3);
+        let adopted_prompt: devworks_core::providers::context::ProviderContext =
+            serde_json::from_slice(
+                &app.artifacts()
+                    .read_exact(app.store().as_ref(), &moved_context, &adopted, 8 * 1024 * 1024)
+                    .unwrap()
+                    .0,
+            )
+            .unwrap();
+        assert_eq!(adopted_prompt.instructions[0].text, "Revised role rules.");
+        assert!(adopted_prompt.skill_stamp.is_some());
+        assert_eq!(
+            app.adopt_instruction_epoch(&moved_context, &session.id, &adopted, &adopted_binding, &[])
+                .unwrap()
+                .version_id,
+            adopted.version_id
+        );
 
         // A queued child can move before any provider call or transcript entry. Its epoch still
         // needs a real transcript position for the schema-48 foreign key.

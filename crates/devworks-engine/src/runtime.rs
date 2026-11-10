@@ -2155,8 +2155,20 @@ impl Runtime {
         if old_skills.is_some() {
             base.instructions.pop();
         }
+        // An assignment's context starts with its role's instructions, captured when the work
+        // began; a role changed since is adopted here, like changed guidance and skills.
+        let mut role_changed = false;
+        if let Some(role) = self.current_role_prefix(ctx)? {
+            let texts = |blocks: &[devworks_core::providers::context::TextBlock]| {
+                blocks.iter().map(|b| b.text.clone()).collect::<Vec<_>>()
+            };
+            if texts(&base.instructions) != texts(&role) {
+                base.instructions = role;
+                role_changed = true;
+            }
+        }
         let rebound = self.bind_provider_instructions(ctx, base, targets)?;
-        if rebound.instruction_stamps == old && rebound.skill_stamp == old_skills {
+        if !role_changed && rebound.instruction_stamps == old && rebound.skill_stamp == old_skills {
             return Ok(source.artifact);
         }
         // Recorded in the transaction that publishes the epoch: a refused or failed transition
@@ -2189,6 +2201,47 @@ impl Runtime {
                 context: converted,
                 omitted,
                 adoption,
+            },
+        )
+    }
+
+    /// The current role instructions of the agent assignment `ctx` runs, as the role prefix of
+    /// its provider context (empty when the role has no instructions); `None` outside an agent
+    /// assignment.
+    fn current_role_prefix(
+        &self,
+        ctx: &InvocationContext,
+    ) -> Result<Option<Vec<devworks_core::providers::context::TextBlock>>, StorageError> {
+        let Some(assignment) = ctx.assignment_id() else {
+            return Ok(None);
+        };
+        devworks_core::ports::storage::read_snapshot(
+            self.store.as_ref(),
+            &devworks_core::ports::storage::ReadOptions::default(),
+            |read| {
+                let Some(source) = read.runs().agent_assignment_context(assignment)? else {
+                    return Ok(None);
+                };
+                let role =
+                    devworks_core::settings::catalog::AgentRole::parse(source.role_id.as_str())
+                        .ok_or_else(|| StorageError::InvalidRecord("assignment role".into()))?;
+                let text = devworks_core::settings::service::role_instructions(
+                    read.configuration(),
+                    role,
+                    Some(&source.project_id),
+                )
+                .map_err(|failure| match failure {
+                    devworks_core::settings::service::Failure::Storage(e) => e,
+                    devworks_core::settings::service::Failure::Refused(_) => {
+                        StorageError::InvalidRecord("role instructions".into())
+                    }
+                })?
+                .text;
+                Ok(Some(if text.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![devworks_core::providers::context::TextBlock { text, cache: None }]
+                }))
             },
         )
     }
