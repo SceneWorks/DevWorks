@@ -288,6 +288,7 @@ fn agent_assignment_scope(
             | OperationInput::Artifacts(_)
             | OperationInput::Features(_)
             | OperationInput::Issues(_)
+            | OperationInput::Jobs(_)
             | OperationInput::NextWork(_)
             | OperationInput::Runs(_)
     ) {
@@ -392,6 +393,9 @@ fn agent_assignment_scope(
         Ok(false)
     };
     let allowed = match request.input {
+        // Jobs have project scope and no root or assignment owner. Active assignments cannot
+        // use project-wide scheduler operations through their ambient agent authority.
+        OperationInput::Jobs(_) => false,
         OperationInput::Artifacts(input) => match input {
             artifacts::Input::List(_) => false,
             artifacts::Input::Read(req)

@@ -412,6 +412,9 @@ pub fn registered_tool_visibility(
     if kind == PrincipalKind::Agent && ctx.assignment_id().is_some() && op == "artifacts.list" {
         return Verdict::Deny(DenialReason::OutOfAssignmentScope);
     }
+    if kind == PrincipalKind::Agent && ctx.assignment_id().is_some() && op.starts_with("jobs.") {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
     // Project-wide message views belong to the human UI. Agent sessions use their addressed
     // inbox; never advertise a project history or event feed they cannot read.
     if matches!(op, "agents.history" | "agents.events") && kind != PrincipalKind::Human {

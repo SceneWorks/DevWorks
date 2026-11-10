@@ -102,6 +102,49 @@ fn source_assignment(
     Ok(Some(id.clone()))
 }
 
+fn sender_can_read_attachment(
+    tx: &mut dyn WriteTransaction,
+    sender: Option<&AssignmentId>,
+    root: &crate::protocol::RootId,
+    reference: &ArtifactRef,
+) -> Result<bool, StorageError> {
+    let Some(sender) = sender else {
+        return Ok(true);
+    };
+    let assignment = tx.runs().assignment(sender)?.ok_or_else(denied)?;
+    let coordinator = assignment.parent_id.is_none();
+    if tx
+        .artifacts()
+        .artifact(&reference.artifact_id)?
+        .is_some_and(|artifact| {
+            artifact.origin_work_id.as_ref() == Some(root)
+                && (coordinator
+                    || artifact.provenance["assignmentId"].as_str() == Some(sender.0.as_str()))
+        })
+    {
+        return Ok(true);
+    }
+    for link in tx.artifacts().links(&reference.artifact_id)? {
+        if link.purpose != crate::ports::storage::LinkPurpose::Reference
+            || link.version_id != reference.version_id
+        {
+            continue;
+        }
+        if link.subject.kind == "root" && link.subject.id == root.0
+            || link.subject.kind == "assignment"
+                && (link.subject.id == sender.0
+                    || coordinator
+                        && tx
+                            .runs()
+                            .assignment(&AssignmentId(link.subject.id))?
+                            .is_some_and(|a| a.root_id == *root))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn query_source_assignment(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
@@ -1574,6 +1617,9 @@ pub fn post_assignment(
             Some(&project),
             attachment,
         )? {
+            return Err(denied());
+        }
+        if !sender_can_read_attachment(tx, sender.as_ref(), &recipient.root_id, attachment)? {
             return Err(denied());
         }
     }
