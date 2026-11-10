@@ -770,6 +770,12 @@ pub(crate) fn continuation_context(
     }
     let mut results = Vec::new();
     for item in resolved {
+        let operation_id = match &item.outcome {
+            ToolOutcome::OperationAccepted { operation_id, .. }
+            | ToolOutcome::ApprovalRequired { operation_id, .. }
+            | ToolOutcome::OutcomeUnknown { operation_id, .. } => Some(operation_id.clone()),
+            _ => None,
+        };
         let (content, is_error) = match item.outcome {
             ToolOutcome::Completed { artifacts: refs }
             | ToolOutcome::OperationAccepted {
@@ -807,6 +813,7 @@ pub(crate) fn continuation_context(
         };
         results.push(ContentBlock::ToolResult {
             call_id: item.call.call.native_call_id,
+            operation_id,
             content,
             is_error,
             cache: None,
@@ -1097,13 +1104,41 @@ fn append_operation_result(
         .find(|call| call.operation_id.as_ref() == Some(operation_id))
         .ok_or(StorageError::ScopeDenied)?
         .native_call_id;
+    let tagged = context
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter(|block| {
+            matches!(block, ContentBlock::ToolResult { call_id: id, operation_id: Some(op), .. }
+            if id == call_id && op == operation_id)
+        })
+        .count();
+    let legacy = context
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter(|block| {
+            matches!(block, ContentBlock::ToolResult { call_id: id, operation_id: None, .. }
+            if id == call_id)
+        })
+        .count();
+    if tagged != 1 && (tagged != 0 || legacy != 1) {
+        return Err(StorageError::ScopeDenied);
+    }
     let result = context
         .messages
         .iter_mut()
         .flat_map(|message| message.content.iter_mut())
-        .find(
-            |block| matches!(block, ContentBlock::ToolResult { call_id: id, .. } if id == call_id),
-        )
+        .find(|block| match block {
+            ContentBlock::ToolResult {
+                call_id: id,
+                operation_id: op,
+                ..
+            } if id == call_id => {
+                op.as_ref() == Some(operation_id) || (tagged == 0 && op.is_none())
+            }
+            _ => false,
+        })
         .ok_or(StorageError::ScopeDenied)?;
     if let ContentBlock::ToolResult { content, .. } = result {
         content.push(ResultBlock::Text { text });
@@ -2353,6 +2388,56 @@ mod tests {
     use devworks_core::protocol::{
         AttemptId, CommandId, CorrelationId, Counter, HoldId, Protocol, Receipt, Revision,
     };
+
+    #[test]
+    fn operation_update_uses_durable_identity_when_native_call_ids_repeat() {
+        let first = OperationId(Id::new("operation-first").unwrap());
+        let second = OperationId(Id::new("operation-second").unwrap());
+        let result = |operation_id: Option<OperationId>| ContentBlock::ToolResult {
+            call_id: "reused-call-id".into(),
+            operation_id,
+            content: vec![ResultBlock::Text {
+                text: "initial".into(),
+            }],
+            is_error: false,
+            cache: None,
+        };
+        let context = ProviderContext {
+            version: 1,
+            instructions: vec![],
+            instruction_stamps: vec![],
+            messages: vec![Message {
+                role: MessageRole::User,
+                content: vec![result(Some(first.clone())), result(Some(second.clone()))],
+            }],
+            parameters: Default::default(),
+        };
+        let mut recovered: ProviderContext =
+            serde_json::from_slice(&serde_json::to_vec(&context).unwrap()).unwrap();
+        let linked = [StoredToolCall {
+            session_id: Id::new("session").unwrap(),
+            attempt_id: Id::new("attempt").unwrap(),
+            native_call_id: "reused-call-id".into(),
+            ordinal: 0,
+            capability_id: "mcp.tool".into(),
+            call_sequence: 1,
+            response_sequence: Some(2),
+            outcome: Some("OperationAccepted".into()),
+            operation_id: Some(second.clone()),
+        }];
+        append_operation_result(&mut recovered, &linked, &second, "later update".into()).unwrap();
+        let results = &recovered.messages[0].content;
+        assert!(
+            matches!(&results[0], ContentBlock::ToolResult { content, .. } if content.len() == 1)
+        );
+        assert!(
+            matches!(&results[1], ContentBlock::ToolResult { content, .. } if content.len() == 2)
+        );
+        recovered.messages[0].content = vec![result(None), result(None)];
+        assert!(
+            append_operation_result(&mut recovered, &linked, &second, "ambiguous".into()).is_err()
+        );
+    }
 
     fn key(native: &str) -> ToolCallKey {
         ToolCallKey {

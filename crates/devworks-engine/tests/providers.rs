@@ -2151,7 +2151,8 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
             f.store.as_ref(), &f.context, &first, 1024 * 1024).unwrap().0).unwrap();
         assert_eq!(material.messages.len(), 3);
         assert!(material.messages[2].content.iter().any(|block| matches!(block,
-            ContentBlock::ToolResult { content, .. } if content.iter().any(|result| matches!(result,
+            ContentBlock::ToolResult { operation_id: Some(id), content, .. }
+                if id == &operation_id && content.iter().any(|result| matches!(result,
                 ResultBlock::Text { text } if text.contains("Tool operation update:")
                     && text.contains("accepted-operation"))))));
         let replay = app.refresh_native_tool_context(&f.context, &id("session"), &first).unwrap();

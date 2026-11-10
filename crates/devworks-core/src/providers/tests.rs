@@ -204,6 +204,7 @@ fn provider_context_requires_ordered_completed_tool_exchanges() {
     };
     let result = || ContentBlock::ToolResult {
         call_id: "call".into(),
+        operation_id: None,
         content: vec![ResultBlock::Text { text: "ok".into() }],
         is_error: false,
         cache: None,
@@ -277,6 +278,7 @@ fn explicit_provider_epoch_conversion_preserves_completed_tool_exchange() {
         role: MessageRole::User,
         content: vec![ContentBlock::ToolResult {
             call_id: "call-1".into(),
+            operation_id: None,
             content: vec![ResultBlock::Text {
                 text: "found".into(),
             }],
@@ -607,6 +609,7 @@ fn exact_native_bindings_and_tool_argument_bytes_survive() {
         role: MessageRole::User,
         content: vec![ContentBlock::ToolResult {
             call_id: "call-a".into(),
+            operation_id: None,
             content: vec![ResultBlock::Text {
                 text: "found".into(),
             }],
@@ -761,6 +764,7 @@ fn tool_result_errors_and_grouped_images_keep_call_and_artifact_order() {
             content: vec![
                 ContentBlock::ToolResult {
                     call_id: "first".into(),
+                    operation_id: None,
                     content: vec![
                         ResultBlock::Text {
                             text: "first failed".into(),
@@ -775,6 +779,7 @@ fn tool_result_errors_and_grouped_images_keep_call_and_artifact_order() {
                 },
                 ContentBlock::ToolResult {
                     call_id: "second".into(),
+                    operation_id: None,
                     content: vec![
                         ResultBlock::Text {
                             text: "second result".into(),
@@ -1242,6 +1247,7 @@ fn converted_message_and_tool_text_keep_frozen_newlines_without_changing_instruc
             role: MessageRole::User,
             content: vec![ContentBlock::ToolResult {
                 call_id: "call".into(),
+                operation_id: None,
                 content: vec![
                     ResultBlock::Text {
                         text: "First result".into(),
@@ -1623,6 +1629,7 @@ fn repeated_native_and_tool_json_artifacts_share_the_request_expansion_budget() 
                     content: (0..512)
                         .map(|i| ContentBlock::ToolResult {
                             call_id: format!("call-{i}"),
+                            operation_id: None,
                             content: vec![ResultBlock::Text { text: "ok".into() }],
                             is_error: false,
                             cache: None,
