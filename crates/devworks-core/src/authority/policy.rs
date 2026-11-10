@@ -448,10 +448,10 @@ pub fn registered_tool_visibility(
         }
         (_, None) => None,
     };
-    // A task or feature assignment never grants project administration. Workspace coordinators
-    // may administer their bound project only outside a root assignment; humans retain their
-    // direct authority through the earlier branch.
+    // A task or feature assignment never grants project administration. Rootless agents retain
+    // their existing project policy and approval path; humans retain direct authority above.
     if kind == PrincipalKind::Agent
+        && ctx.root_id().is_some()
         && command
         && (matches!(fam, "projects" | "workflows" | "roles")
             || op == "repositories.remove_index"
