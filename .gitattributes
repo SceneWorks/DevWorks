@@ -5,3 +5,22 @@
 *.py text eol=lf
 *.sql text eol=lf
 *.md text eol=lf
+
+# Generated or recorded outputs. GitHub collapses these in diffs, automated
+# review skips them (AGENTS.md), and the PR size check does not count them
+# (tools/pr-size/check.py). Edit the sources named in each generator instead.
+Cargo.lock linguist-generated
+**/Cargo.lock linguist-generated
+docs/architecture/contracts/*.schema.json linguist-generated
+docs/architecture/contracts/*fixtures.json linguist-generated
+docs/architecture/contracts/fixture*.json linguist-generated
+docs/architecture/contracts/manifest.json linguist-generated
+docs/architecture/validation/**/*.json linguist-generated
+docs/architecture/validation/**/*.log linguist-generated
+docs/architecture/validation/**/*.stdout linguist-generated
+docs/architecture/validation/**/*.stderr linguist-generated
+crates/devworks-core/src/protocol/records.rs linguist-generated
+crates/devworks-core/src/protocol/results.rs linguist-generated
+crates/devworks-core/src/operations/*.rs linguist-generated
+crates/devworks-core/src/registry/catalog.rs linguist-generated
+tools/contracts-eval/src/domain_generated.rs linguist-generated
