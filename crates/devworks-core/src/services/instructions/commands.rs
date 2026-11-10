@@ -227,6 +227,17 @@ impl InstructionService {
             .ok_or_else(|| invalid("instruction_content"))?;
         let scope = config_scope(ctx, input.scope)?;
         let human = ctx.principal_kind() == PrincipalKind::Human;
+        // A workspace instruction's draft is readable across every project before any approval,
+        // so only a workspace-authorized author may write one: an agent confined to a project
+        // (by its binding or its invocation) drafts in that project only.
+        if !human
+            && scope == ConfigScope::Workspace
+            && (ctx.project_id().is_some()
+                || crate::services::artifacts::authorized_scope(tx.authority(), ctx)?
+                    != crate::services::artifacts::AuthorizedScope::Workspace)
+        {
+            return Err(denied("workspace_scope"));
+        }
         let name = input.name.0.trim().to_owned();
         let now = tx.now_ms();
         let target = match kind {

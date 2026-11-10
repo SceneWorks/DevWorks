@@ -201,6 +201,9 @@ impl Fx {
     }
     /// An upload the actor owns, as a client would attach draft text.
     fn upload(&self, owner: &InvocationContext, text: &str) -> Value {
+        self.upload_in(owner, text, ArtifactScope::Workspace)
+    }
+    fn upload_in(&self, owner: &InvocationContext, text: &str, scope: ArtifactScope) -> Value {
         let staged = self
             .artifacts
             .stage_host_bytes(&*self.store, text.as_bytes(), json!({"kind": "Test"}))
@@ -211,6 +214,7 @@ impl Fx {
             owner.principal().clone(),
             staged.clone(),
         );
+        let scope = scope.clone();
         let version = write(&*self.store, move |tx| {
             artifacts.commit_host_bytes_in_scope(
                 tx,
@@ -219,7 +223,7 @@ impl Fx {
                     title: "draft",
                     media_type: "text/markdown",
                     provenance: json!({}),
-                    scope: ArtifactScope::Workspace,
+                    scope,
                     owner: actor,
                 },
             )
@@ -613,6 +617,32 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
         // A read-only reviewer cannot author skills.
         assert_eq!(
             refused(fx.command(&app, &reviewer, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":shared["id"],"expectedRevision":"1","name":"alpha","content":fx.upload(&reviewer, "x")}))),
+            "PermissionDenied"
+        );
+        // An agent confined to a project cannot draft a workspace skill: its unapproved text
+        // would be readable from every other project.
+        let confined = principal(&*fx.store, "project-agent", PrincipalKind::Agent);
+        {
+            let (u, actor) = (user.clone(), confined.principal().clone());
+            write(&*fx.store, move |tx| {
+                tx.projects().insert_project(&StoredProject {
+                    id: devworks_core::protocol::ProjectId(id("project-a")),
+                    name: "A".into(), description: String::new(), lifecycle: "Active".into(),
+                    revision: 1, scope_revision: 1, created_at_ms: T0, updated_at_ms: T0,
+                    archived_at_ms: None, deleted_at_ms: None, archive_epoch: 0, archive_stop_pending: false,
+                })?;
+                bind_principal(tx, &u, NewPrincipalBinding {
+                    actor, kind: PrincipalKind::Agent, role: Some(AgentRole::Worker),
+                    project_id: Some(devworks_core::protocol::ProjectId(id("project-a"))),
+                    tool_families: None, bound_by: u.principal().clone(),
+                }, None)
+                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+            })
+            .unwrap();
+        }
+        let confined = confined.with_lineage(Some(devworks_core::protocol::ProjectId(id("project-a"))), None, None);
+        assert_eq!(
+            refused(fx.command(&app, &confined, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"leak","content":fx.upload_in(&confined, "project secrets", ArtifactScope::Project(devworks_core::protocol::ProjectId(id("project-a"))))}))),
             "PermissionDenied"
         );
         // An agent improvement of a shared skill drafts a harness override; nothing is effective.
