@@ -958,8 +958,9 @@ pub fn initial_context(
             } else {
                 content.push(ContentBlock::Text {
                     text: format!(
-                        "User attachment: {} ({})",
+                        "User attachment: {} (version {}, {})",
                         artifact.artifact_id.as_str(),
+                        artifact.version_id.as_str(),
                         artifact.media_type
                     ),
                     cache: None,

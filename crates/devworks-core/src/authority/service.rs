@@ -6,8 +6,8 @@ use super::policy::{
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::operations::{
-    OperationInput, approvals, artifacts, browser, features, git, history, issues, next_work, runs,
-    sessions, tasks,
+    OperationInput, approvals, artifacts, browser, features, git, history, issues, knowledge,
+    next_work, runs, sessions, tasks,
 };
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
@@ -326,6 +326,9 @@ fn agent_assignment_scope(
             | OperationInput::Runs(_)
             | OperationInput::History(_)
             | OperationInput::Indexing(_)
+            | OperationInput::Knowledge(
+                knowledge::Input::Diagnostics(_) | knowledge::Input::ImportUserData(_)
+            )
             | OperationInput::Git(git::Input::Commit(_) | git::Input::PullRequest(_))
             | OperationInput::Browser(browser::Input::Navigate(_) | browser::Input::Upload(_))
             | OperationInput::Sessions(sessions::Input::AppendMessage(_))
@@ -342,6 +345,9 @@ fn agent_assignment_scope(
             | OperationInput::Git(git::Input::Commit(_) | git::Input::PullRequest(_))
             | OperationInput::Browser(browser::Input::Navigate(_) | browser::Input::Upload(_))
             | OperationInput::Sessions(sessions::Input::AppendMessage(_))
+            | OperationInput::Knowledge(
+                knowledge::Input::Diagnostics(_) | knowledge::Input::ImportUserData(_)
+            )
     ) && assignment.is_none()
     {
         return Ok(());
@@ -470,6 +476,15 @@ fn agent_assignment_scope(
                     allowed && readable_artifact(&artifact.artifact_id, &artifact.version_id)?,
                 )
             })?
+        }
+        OperationInput::Knowledge(knowledge::Input::Diagnostics(input)) => input
+            .import_source
+            .as_ref()
+            .map(|artifact| readable_artifact(&artifact.artifact_id, &artifact.version_id))
+            .transpose()?
+            .unwrap_or(true),
+        OperationInput::Knowledge(knowledge::Input::ImportUserData(input)) => {
+            readable_artifact(&input.source.artifact_id, &input.source.version_id)?
         }
         OperationInput::History(input) => {
             let history_scoped = |id: &RootId| {
