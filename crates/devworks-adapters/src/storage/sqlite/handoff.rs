@@ -2,7 +2,7 @@
 use super::conn::db;
 use super::repos::Unit;
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{Id, Revision, RevisionDimension};
+use devworks_core::protocol::{AssignmentId, Id, Revision, RevisionDimension};
 use rusqlite::{Connection, params};
 
 fn invalid(message: &str) -> StorageError {
@@ -47,6 +47,46 @@ fn preserved_checkpoint(old: &StoredAssignment) -> Result<Option<serde_json::Val
         )),
         None => Err(invalid("membership handoff checkpoint presence is absent")),
     }
+}
+
+pub(super) fn retire(
+    unit: &mut Unit<'_>,
+    assignment: &AssignmentId,
+    expected: i64,
+) -> Result<(), StorageError> {
+    let old = unit
+        .assignment(assignment)?
+        .ok_or_else(|| StorageError::NotFound {
+            kind: "assignment",
+            id: assignment.0.as_str().into(),
+        })?;
+    if old.revision != expected {
+        return Err(conflict(
+            "assignment",
+            &assignment.0,
+            expected,
+            old.revision,
+        )?);
+    }
+    if old.state != AssignmentState::Superseded || old.slot_held {
+        return Err(invalid(
+            "membership retirement requires a superseded assignment",
+        ));
+    }
+    let checkpoint = preserved_checkpoint(&old)?;
+    let next = expected
+        .checked_add(1)
+        .ok_or_else(|| invalid("assignment revision overflow"))?;
+    db(unit.conn.execute(
+        "UPDATE assignments SET checkpoint_json=?2,revision=?3 WHERE id=?1 AND revision=?4",
+        params![
+            assignment.0.as_str(),
+            checkpoint.as_ref().map(serde_json::Value::to_string),
+            next,
+            expected
+        ],
+    ))?;
+    Ok(())
 }
 
 pub(super) fn reparent(

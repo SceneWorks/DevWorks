@@ -954,6 +954,41 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
         .code,
         DomainErrorCode::PermissionDenied
     );
+    let sessions = UseCases::new().with_sessions(Arc::new(
+        devworks_core::services::sessions::SessionService::new(fx.h.ids.clone(), fx.store.clone()),
+    ));
+    let append_attachment = |key: &str, artifact: &ArtifactRef| {
+        let authority = fx.authority();
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*fx.store,
+            ids: &*fx.h.ids,
+        };
+        let frame = json!({"protocol":"1.0-draft.1","requestKey":key,
+            "sessionId":"scope-worker-session","expectedSessionRevision":"1",
+            "content":[{"kind":"Attachment","artifact":artifact}]});
+        sessions
+            .command(
+                &gateway,
+                &worker,
+                "sessions.append_message",
+                frame.to_string().as_bytes(),
+            )
+            .expect("addressable")
+    };
+    assert!(matches!(
+        append_attachment("sibling-attachment-denied", &sibling),
+        DomainCommandReply::Rejected {
+            code: Rejection::PermissionDenied,
+            ..
+        }
+    ));
+    assert_eq!(
+        fx.read(|s| s.sessions().session(&id("scope-worker-session")))
+            .unwrap()
+            .last_durable_sequence(),
+        0
+    );
     let blocked_sender = worker.clone();
     let blocked_attachment = sibling.clone();
     assert!(matches!(
@@ -997,6 +1032,10 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
         &sibling,
         json!({"kind":"assignment","id":"scope-worker"}),
         1,
+    ));
+    assert!(matches!(
+        append_attachment("sibling-attachment-referenced", &sibling),
+        DomainCommandReply::Recorded { .. }
     ));
     assert!(matches!(
         fx.query(

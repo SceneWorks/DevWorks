@@ -108,6 +108,29 @@ fn fence(
         tx.runs().update_assignment(&fenced, child.revision)?;
     }
     let mut guarded = HashSet::new();
+    if a.work_id.0 != after.id {
+        let secondary = RootId(after.id.clone());
+        guarded.insert(secondary.clone());
+        let work = tx
+            .sessions()
+            .work_root(&secondary)?
+            .ok_or_else(|| StorageError::NotFound {
+                kind: "work",
+                id: after.id.as_str().into(),
+            })?;
+        crate::services::runs::ensure_control(tx, &work.id)?;
+        raise_blocker(
+            tx,
+            actor,
+            &work,
+            HoldSubject::default(),
+            HoldCause::Policy,
+            a.id.0.as_str(),
+            after.revision,
+            "existing worker subtree is quiescing before its membership handoff",
+            json!({"membershipHandoff":true,"assignmentId":a.id.0,"fromRoot":root,"workId":after.id}),
+        )?;
+    }
     for child in assignments.iter().filter(|child| tree.contains(&child.id)) {
         if !guarded.insert(child.work_id.clone()) {
             continue;
@@ -145,6 +168,14 @@ fn subtree(a: &StoredAssignment) -> Result<HashSet<AssignmentId>, StorageError> 
     let ids: Vec<Id> = serde_json::from_value(value)
         .map_err(|_| StorageError::InvalidRecord("membership handoff subtree".into()))?;
     Ok(ids.into_iter().map(AssignmentId).collect())
+}
+fn previous_checkpoint(a: &StoredAssignment) -> Option<Value> {
+    a.checkpoint
+        .as_ref()
+        .and_then(|c| c.get(MARKER))
+        .filter(|m| m.get("hadCheckpoint") == Some(&Value::Bool(true)))
+        .and_then(|m| m.get("previousCheckpoint"))
+        .cloned()
 }
 /// Unclaimed old deliveries whose effects never started are cancelled, never copied to a new
 /// root. An uncertain/dispatched effect must be observed before this handoff can finish.
@@ -311,6 +342,23 @@ pub fn reconcile_project(
                 .is_some_and(|id| !id.is_null())
             {
                 allocation::retire_handoff_claims(tx, &work.id, &actor)?;
+                tx.runs().retire_membership_handoff(&a.id, a.revision)?;
+                if let Some(secondary) = a
+                    .checkpoint
+                    .as_ref()
+                    .and_then(|c| c.get(MARKER))
+                    .and_then(|m| m.get("secondaryTaskId"))
+                    .and_then(Value::as_str)
+                {
+                    clear_handoff_hold(
+                        tx,
+                        &actor,
+                        &RootId(Id::new(secondary.to_owned()).map_err(|_| {
+                            StorageError::InvalidRecord("secondary task id".into())
+                        })?),
+                        &a.id,
+                    )?;
+                }
                 clear_handoff_hold(tx, &actor, &RootId(work.id.clone()), &a.id)?;
                 let id = EventId(tx.new_id(crate::ports::IdKind::Event));
                 tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(work.project_id.clone()),root_id:Some(a.root_id.clone()),operation_id:None,aggregate_kind:super::WORK_AGGREGATE.into(),aggregate_id:work.id.as_str().into(),aggregate_revision:work.revision,kind:"WorkerMembershipScopeRetired".into(),payload:json!({"assignmentId":a.id.0,"sessionId":a.session_id,"movedSecondaryTask":a.checkpoint.as_ref().and_then(|c| c.get(MARKER)).and_then(|m| m.get("secondaryTaskId")),"checkpointRetained":true})})?;
@@ -320,6 +368,7 @@ pub fn reconcile_project(
             let current_session = tx.sessions().session(&a.session_id)?;
             if current_session.as_ref().is_none_or(|s| s.closed()) {
                 allocation::retire_handoff_claims(tx, &work.id, &actor)?;
+                tx.runs().retire_membership_handoff(&a.id, a.revision)?;
                 clear_handoff_hold(tx, &actor, &RootId(work.id.clone()), &a.id)?;
                 let id = EventId(tx.new_id(crate::ports::IdKind::Event));
                 tx.history().append(NewEvent{id,actor:actor.clone(),project_id:Some(work.project_id.clone()),root_id:Some(target.clone()),operation_id:None,aggregate_kind:super::WORK_AGGREGATE.into(),aggregate_id:work.id.as_str().into(),aggregate_revision:work.revision,kind:"WorkerHandoffRetired".into(),payload:json!({"assignmentId":a.id.0,"sessionId":a.session_id,"fromRoot":a.root_id,"toRoot":target,"reason":"worker session closed","checkpointRetained":true})})?;
@@ -363,13 +412,7 @@ pub fn reconcile_project(
                 .scope()
                 .plan(tx.runs(), &newroot)?
                 .approved_revision();
-            moved.checkpoint = a
-                .checkpoint
-                .as_ref()
-                .and_then(|c| c.get(MARKER))
-                .filter(|m| m.get("hadCheckpoint") == Some(&Value::Bool(true)))
-                .and_then(|m| m.get("previousCheckpoint"))
-                .cloned();
+            moved.checkpoint = previous_checkpoint(&a);
             match tx
                 .runs()
                 .reparent_assignment(&moved, a.revision, session.revision)

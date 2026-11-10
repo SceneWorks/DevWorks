@@ -768,6 +768,12 @@ pub trait RunRepository: RunRead {
         expected_assignment: i64,
         expected_session_revision: i64,
     ) -> Result<(), StorageError>;
+    /// Retires a superseded membership marker without reviving the assignment or changing its scope.
+    fn retire_membership_handoff(
+        &mut self,
+        assignment: &AssignmentId,
+        expected_revision: i64,
+    ) -> Result<(), StorageError>;
     fn insert_instruction(&mut self, instruction: &StoredInstruction) -> Result<(), StorageError>;
     fn update_instruction(
         &mut self,

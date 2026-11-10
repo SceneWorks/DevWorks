@@ -6,7 +6,8 @@ use super::policy::{
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::operations::{
-    OperationInput, approvals, artifacts, features, history, issues, next_work, runs, tasks,
+    OperationInput, approvals, artifacts, features, history, issues, next_work, runs, sessions,
+    tasks,
 };
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
@@ -18,6 +19,7 @@ use crate::ports::{
     GrantUse, IdKind,
 };
 use crate::protocol::data::{ArtifactCommand, ArtifactDeletion, ArtifactQuery};
+use crate::protocol::provider::UserContent;
 use crate::protocol::{ActorId, EventId, Id, ProjectId, RootId, Subject};
 use crate::registry::{self, Mode};
 use crate::settings::catalog::AgentRole;
@@ -322,6 +324,7 @@ fn agent_assignment_scope(
             | OperationInput::NextWork(_)
             | OperationInput::Runs(_)
             | OperationInput::History(_)
+            | OperationInput::Sessions(sessions::Input::AppendMessage(_))
     ) {
         return Ok(());
     }
@@ -418,6 +421,20 @@ fn agent_assignment_scope(
         Ok(false)
     };
     let allowed = match request.input {
+        OperationInput::Sessions(sessions::Input::AppendMessage(input)) => {
+            ctx.session_id() == Some(&input.session_id)
+                && input.content.iter().try_fold(true, |allowed, part| {
+                    Ok::<_, DenialReason>(
+                        allowed
+                            && match part {
+                                UserContent::Text { .. } => true,
+                                UserContent::Attachment { artifact } => {
+                                    readable_artifact(&artifact.artifact_id, &artifact.version_id)?
+                                }
+                            },
+                    )
+                })?
+        }
         OperationInput::History(input) => {
             let history_scoped = |id: &RootId| {
                 if !coordinator && id == root && assignment.work_id != *root {
