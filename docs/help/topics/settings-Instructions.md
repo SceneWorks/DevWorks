@@ -4,7 +4,7 @@ Workspace coordinator, feature coordinator, issue coordinator, worker, code revi
 
 ## Versions and approval
 
-Every role instruction and skill keeps immutable versions. Your own save takes effect at once. An agent can draft a change and propose it, but nothing it drafts becomes active until you approve that exact version in Approvals; a pending or rejected proposal changes nothing. Running agents adopt a saved or approved version at their next safe step, without a restart. History shows each version, who wrote it, and whether it was approved. Restore makes an earlier approved version active again as a revision-checked change; reset to default restores the first recorded version.
+Every role instruction and skill keeps immutable versions. Your own save takes effect at once. An agent can draft a change and propose it, but nothing it drafts becomes active until you approve that exact version in Approvals; a pending or rejected proposal changes nothing. A draft by an agent working in one project stays visible only in that project, and to you, until you approve it; the approved version then applies in every project. Running agents adopt a saved or approved version at their next safe step, without a restart. History shows each version, who wrote it, and whether it was approved. Restore makes an earlier approved version active again as a revision-checked change; reset to default restores the first recorded version.
 
 ## Skills
 

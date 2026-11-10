@@ -368,6 +368,7 @@ impl InstructionService {
                         version: 1,
                         created_at_ms: now,
                         updated_at_ms: now,
+                        confined_project: None,
                     };
                     tx.instructions().insert_instruction_item(&item)?;
                     item
@@ -386,10 +387,13 @@ impl InstructionService {
                     applicability: Vec::new(),
                     title: format!("Skill {}", item.name),
                     carried_resources: None,
+                    confined: None,
                 },
             )?;
             item.latest_revision = revision.revision;
             item.active_revision = Some(revision.revision);
+            // Once something is in effect the item is no longer one project's draft.
+            item.confined_project = None;
             item.observed_digest = Some(revision.content_digest.clone());
             if origin == InstructionOrigin::Harness {
                 item.materialized_digest = Some(revision.content_digest.clone());
@@ -570,10 +574,13 @@ impl InstructionService {
                     applicability: vec![role.as_str().to_owned()],
                     title: format!("Role {}", role.as_str()),
                     carried_resources: None,
+                    confined: None,
                 },
             )?;
             item.latest_revision = revision.revision;
             item.active_revision = Some(revision.revision);
+            // Once something is in effect the item is no longer one project's draft.
+            item.confined_project = None;
             item.version += 1;
             item.updated_at_ms = now;
             tx.instructions().update_instruction_item(&item)?;
@@ -733,6 +740,7 @@ pub(crate) fn new_role_item(
         version: 1,
         created_at_ms: now,
         updated_at_ms: now,
+        confined_project: None,
     }
 }
 
@@ -744,6 +752,37 @@ pub(crate) struct RecordedRevision {
     pub title: String,
     /// Already-recorded resource artifacts carried over unchanged (a draft of the text only).
     pub carried_resources: Option<Value>,
+    /// A project-confined agent's draft: its content is scoped to this project only.
+    pub confined: Option<crate::protocol::ProjectId>,
+}
+
+/// Publishes a staged instruction text as a host artifact in the item's own scope (the release
+/// of a confined draft's approved content) and answers its `ArtifactRef`.
+pub(crate) fn publish_instruction_text(
+    tx: &mut dyn crate::ports::storage::WriteTransaction,
+    artifacts: &ArtifactService,
+    item: &StoredInstructionItem,
+    staged: &StagedCapture,
+    title: &str,
+) -> Result<Value, StorageError> {
+    let scope = match &item.scope {
+        ConfigScope::Workspace => crate::ports::storage::ArtifactScope::Workspace,
+        ConfigScope::Project(p) => crate::ports::storage::ArtifactScope::Project(p.clone()),
+    };
+    let owner = tx.store().host_actor.clone();
+    let version = artifacts.commit_host_bytes_in_scope(
+        tx,
+        &staged.instruction,
+        crate::services::artifacts::host::HostArtifactPublication {
+            title: &format!("{title} {}", scan::SKILL_FILE),
+            media_type: staged.instruction_media,
+            provenance: json!({"kind": "Instruction", "instructionId": item.id.as_str(), "path": scan::SKILL_FILE}),
+            scope,
+            owner,
+        },
+    )?;
+    serde_json::to_value(version_ref(&version))
+        .map_err(|e| StorageError::InvalidRecord(e.to_string()))
 }
 
 /// Commits a staged capture as host artifacts in the item's scope and appends its revision
@@ -755,9 +794,11 @@ pub(crate) fn record_capture(
     staged: &StagedCapture,
     recorded: RecordedRevision,
 ) -> Result<StoredInstructionRevision, StorageError> {
-    let scope = match &item.scope {
-        ConfigScope::Workspace => crate::ports::storage::ArtifactScope::Workspace,
-        ConfigScope::Project(p) => crate::ports::storage::ArtifactScope::Project(p.clone()),
+    let scope = match (&recorded.confined, &item.scope) {
+        (Some(p), _) | (None, ConfigScope::Project(p)) => {
+            crate::ports::storage::ArtifactScope::Project(p.clone())
+        }
+        (None, ConfigScope::Workspace) => crate::ports::storage::ArtifactScope::Workspace,
     };
     let owner = tx.store().host_actor.clone();
     let publish = |tx: &mut dyn crate::ports::storage::WriteTransaction,
@@ -808,6 +849,7 @@ pub(crate) fn record_capture(
         approval_id: None,
         created_at_ms: tx.now_ms(),
         decided_at_ms: None,
+        confined_project: recorded.confined,
     };
     tx.instructions().insert_instruction_revision(&revision)?;
     Ok(revision)

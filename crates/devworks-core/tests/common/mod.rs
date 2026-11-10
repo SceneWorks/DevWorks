@@ -3478,6 +3478,14 @@ impl InstructionRepository for Unsupported {
     ) -> Result<(), StorageError> {
         nope()
     }
+    fn release_instruction_revision(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &serde_json::Value,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
 }
 impl HelpRepository for Unsupported {
     fn set_help_generation_operation(

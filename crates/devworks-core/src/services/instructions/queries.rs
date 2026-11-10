@@ -1,7 +1,7 @@
 //! `skills.discover`, `.read`, `.resources`, `.history` and `roles.read`, `.history`.
 use super::{
-    HARNESS_ROOT_ID, InstructionService, SHARED_ROOT_ID, config_scope, current_revision, invalid,
-    not_found_failure, record, visible_item,
+    HARNESS_ROOT_ID, InstructionService, SHARED_ROOT_ID, config_scope, invalid, item_visible,
+    record, revision_visible, visible_current, visible_item, visible_revision,
 };
 use crate::context::InvocationContext;
 use crate::operations::{roles as role_ops, skills as skill_ops};
@@ -151,14 +151,15 @@ impl InstructionService {
                     } else {
                         HARNESS_ROOT_ID
                     };
-                    if !roots.is_empty() && !roots.contains(&root) {
+                    // Another project's confined draft is not listed.
+                    if (!roots.is_empty() && !roots.contains(&root)) || !item_visible(ctx, &item) {
                         continue;
                     }
                     // A harness item with nothing approved yet (an unproposed, pending or
                     // rejected first draft) is listed with its latest revision and state, so it
                     // can be selected and edited with its own revision. It is never effective.
                     fence = fence.max(item.version);
-                    let revision = current_revision(instructions, &item)?;
+                    let revision = visible_current(instructions, ctx, &item)?;
                     records.push(record(&item, &revision, Some(standing))?);
                 }
                 let binding = crate::fingerprint::sha256_hex(
@@ -191,9 +192,7 @@ impl InstructionService {
             skill_ops::Input::Resources(i) => {
                 let item =
                     visible_item(instructions, ctx, &i.instruction_id, InstructionKind::Skill)?;
-                let revision = instructions
-                    .instruction_revision(&item.id, i.revision.get())?
-                    .ok_or_else(|| not_found_failure(InstructionKind::Skill, &item.id))?;
+                let revision = visible_revision(instructions, ctx, &item, i.revision.get())?;
                 let refs: Vec<ArtifactRef> = revision
                     .resources
                     .as_array()
@@ -266,10 +265,8 @@ impl InstructionService {
     ) -> Result<(InstructionRecord, i64), Failure> {
         let item = visible_item(read, ctx, id, kind)?;
         let r = match revision {
-            Some(n) => read
-                .instruction_revision(&item.id, n)?
-                .ok_or_else(|| not_found_failure(kind, &item.id))?,
-            None => current_revision(read, &item)?,
+            Some(n) => visible_revision(read, ctx, &item, n)?,
+            None => visible_current(read, ctx, &item)?,
         };
         let effective = if kind == InstructionKind::Skill {
             skill_items(read)?
@@ -300,7 +297,19 @@ impl InstructionService {
             ),
         };
         let limit = (page.limit.get() as u16).min(crate::ports::storage::MAX_PAGE - 1);
-        let rows = read.instruction_revisions(&item.id, before, limit + 1)?;
+        // Another project's confined drafts are skipped; read on until the page fills.
+        let mut rows = Vec::new();
+        let mut scan = before;
+        loop {
+            let batch =
+                read.instruction_revisions(&item.id, scan, crate::ports::storage::MAX_PAGE)?;
+            let end = batch.len() < crate::ports::storage::MAX_PAGE as usize;
+            scan = batch.last().map(|r| r.revision);
+            rows.extend(batch.into_iter().filter(|r| revision_visible(ctx, r)));
+            if end || rows.len() > limit as usize {
+                break;
+            }
+        }
         let has_more = rows.len() > limit as usize;
         let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
         let next = has_more
@@ -366,6 +375,7 @@ mod tests {
                 approval_id: None,
                 created_at_ms: 0,
                 decided_at_ms: None,
+                confined_project: None,
             }))
         }
         fn instruction_revisions(
@@ -401,6 +411,7 @@ mod tests {
             version: 2,
             created_at_ms: 0,
             updated_at_ms: 0,
+            confined_project: None,
         }
     }
 

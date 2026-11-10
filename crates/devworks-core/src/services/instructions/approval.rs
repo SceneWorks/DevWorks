@@ -1,6 +1,6 @@
 //! The business owner of saved `skills.rollback` / `roles.rollback` approvals: the reviewed
 //! content of an agent proposal and the exact binding the replayed activation must match.
-use super::{InstructionService, event, invalid, target_kind};
+use super::{InstructionService, event_in, invalid, target_kind};
 use crate::admission::DecodedRequest;
 use crate::context::InvocationContext;
 use crate::operations::{OperationInput, roles as role_ops, skills as skill_ops};
@@ -23,7 +23,11 @@ pub(crate) fn preview(
 ) -> OwnerPreview {
     let kind = target_kind(item.kind);
     OwnerPreview {
-        scope: item.scope.clone(),
+        // A confined draft is reviewed in its own project, where alone it is visible.
+        scope: target.confined_project.clone().map_or_else(
+            || item.scope.clone(),
+            crate::ports::storage::ConfigScope::Project,
+        ),
         target_id: item.id.clone(),
         target_revision: target.revision,
         summary: format!(
@@ -117,9 +121,7 @@ fn current(
     r: &Request<'_>,
 ) -> Result<(StoredInstructionItem, StoredInstructionRevision), Failure> {
     let item = super::visible_item(read, ctx, r.id, r.kind)?;
-    let target = read
-        .instruction_revision(&item.id, r.target)?
-        .ok_or_else(|| super::not_found_failure(r.kind, &item.id))?;
+    let target = super::visible_revision(read, ctx, &item, r.target)?;
     Ok((item, target))
 }
 fn changed(id: &Id) -> Failure {
@@ -209,20 +211,22 @@ impl InstructionService {
                 target.approval_id.as_ref(),
                 Some(now),
             )?;
-            event(
+            event_in(
                 tx,
                 human.principal(),
                 &item,
+                target.confined_project.as_ref(),
                 "InstructionProposalRejected",
                 json!({"revision": target.revision, "approvalId": target.approval_id.as_ref().map(Id::as_str)}),
             )
             .map_err(Failure::from)?;
         } else if approve {
             tx.instructions().update_instruction_item(&item)?;
-            event(
+            event_in(
                 tx,
                 human.principal(),
                 &item,
+                target.confined_project.as_ref(),
                 "InstructionProposalApproved",
                 json!({"revision": target.revision, "approvalId": target.approval_id.as_ref().map(Id::as_str)}),
             )

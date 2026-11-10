@@ -207,10 +207,18 @@ pub(super) fn selection(project: &ProjectId) -> Result<Selection, StorageError> 
         "owned_containers".into(),
         Value::String("project_id=?1".into()),
     );
-    predicates.insert("instructions".into(), Value::String("project_id=?1".into()));
+    // A workspace item or revision a project-confined agent drafted is confined to (and purged
+    // with) that project until a person approves it.
+    predicates.insert(
+        "instructions".into(),
+        Value::String("project_id=?1 OR confined_project_id=?1".into()),
+    );
     predicates.insert(
         "instruction_revisions".into(),
-        Value::String("instruction_id IN (SELECT id FROM instructions WHERE project_id=?1)".into()),
+        Value::String(
+            "confined_project_id=?1 OR instruction_id IN (SELECT id FROM instructions WHERE project_id=?1 OR confined_project_id=?1)"
+                .into(),
+        ),
     );
     Ok(Selection {
         project: project.clone(),
@@ -289,6 +297,48 @@ mod tests {
     use super::*;
     use devworks_core::ports::storage::{ReadOptions, read_snapshot};
     use devworks_core::protocol::Id;
+    #[test]
+    fn confined_instruction_drafts_are_purged_with_their_project_only() {
+        let h = crate::storage::sqlite::tests::Harness::new();
+        let store = h.store();
+        let c = h.raw();
+        for p in ["purge-a", "purge-b"] {
+            c.execute("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES(?1,'Fixture','Deleted',1,1,0)",[p]).unwrap();
+        }
+        let item = |id: &str, confined: Option<&str>| {
+            c.execute("INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,root_path,source_path,latest_revision,active_revision,enabled,present,version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,'workspace',NULL,'Harness','/r',?2,2,NULL,1,0,1,0,0,?3)",
+                rusqlite::params![id, format!("/r/{id}"), confined]).unwrap();
+        };
+        let revision = |item: &str, n: i64, confined: Option<&str>| {
+            c.execute("INSERT INTO instruction_revisions(instruction_id,revision,content_json,content_digest,state,author,origin_json,resources_json,applicability_json,created_at,confined_project_id) VALUES(?1,?2,'{}',?3,'Draft','agent','{}','[]','[]',0,?4)",
+                rusqlite::params![item, n, "a".repeat(64), confined]).unwrap();
+        };
+        // An item a project-A agent created, with its confined draft and a later unconfined one.
+        item("made-by-a", Some("purge-a"));
+        revision("made-by-a", 1, Some("purge-a"));
+        revision("made-by-a", 2, None);
+        // A shared workspace item: its own draft stays, project A's draft of it goes.
+        item("shared", None);
+        revision("shared", 1, None);
+        revision("shared", 2, Some("purge-a"));
+        // Project B's confinement is untouched by purging A.
+        item("made-by-b", Some("purge-b"));
+        revision("made-by-b", 1, Some("purge-b"));
+        let p = ProjectId(Id::new("purge-a").unwrap());
+        let selected = read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(&p)
+        })
+        .unwrap()
+        .unwrap();
+        let count = |table: &str| selected.rows.iter().filter(|r| r.table == table).count();
+        assert_eq!(count("instructions"), 1, "only the item project A created");
+        assert_eq!(
+            count("instruction_revisions"),
+            3,
+            "its revisions and A's draft of the shared item"
+        );
+    }
+
     #[test]
     fn candidate_primary_key_hash_matches_the_native_exact_row_guard() {
         let h = crate::storage::sqlite::tests::Harness::new();

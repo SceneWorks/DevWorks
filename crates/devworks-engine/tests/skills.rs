@@ -18,8 +18,8 @@ use devworks_core::ports::storage::*;
 use devworks_core::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, Clock, IdKind, IdSource,
 };
-use devworks_core::protocol::CommandReply;
 use devworks_core::protocol::results::{DomainCommandReply, DomainDecision, DomainQueryReply};
+use devworks_core::protocol::{CommandReply, ProjectId};
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::instructions::SkillRoots;
 use devworks_core::services::{
@@ -663,32 +663,6 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
             refused(fx.command(&app, &reviewer, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":shared["id"],"expectedRevision":"1","name":"alpha","content":fx.upload(&reviewer, "x")}))),
             "PermissionDenied"
         );
-        // An agent confined to a project cannot draft a workspace skill: its unapproved text
-        // would be readable from every other project.
-        let confined = principal(&*fx.store, "project-agent", PrincipalKind::Agent);
-        {
-            let (u, actor) = (user.clone(), confined.principal().clone());
-            write(&*fx.store, move |tx| {
-                tx.projects().insert_project(&StoredProject {
-                    id: devworks_core::protocol::ProjectId(id("project-a")),
-                    name: "A".into(), description: String::new(), lifecycle: "Active".into(),
-                    revision: 1, scope_revision: 1, created_at_ms: T0, updated_at_ms: T0,
-                    archived_at_ms: None, deleted_at_ms: None, archive_epoch: 0, archive_stop_pending: false,
-                })?;
-                bind_principal(tx, &u, NewPrincipalBinding {
-                    actor, kind: PrincipalKind::Agent, role: Some(AgentRole::Worker),
-                    project_id: Some(devworks_core::protocol::ProjectId(id("project-a"))),
-                    tool_families: None, bound_by: u.principal().clone(),
-                }, None)
-                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
-            })
-            .unwrap();
-        }
-        let confined = confined.with_lineage(Some(devworks_core::protocol::ProjectId(id("project-a"))), None, None);
-        assert_eq!(
-            refused(fx.command(&app, &confined, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"leak","content":fx.upload_in(&confined, "project secrets", ArtifactScope::Project(devworks_core::protocol::ProjectId(id("project-a"))))}))),
-            "PermissionDenied"
-        );
         // An agent improvement of a shared skill drafts a harness override; nothing is effective.
         let draft = applied(fx.command(&app, &agent, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":shared["id"],"expectedRevision":"1","name":"alpha","content":content})));
         assert_eq!(draft["approved"], false);
@@ -771,6 +745,177 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
             refused(fx.command(&app, &user, "skills.rollback", json!({"instructionId":draft["id"],"expectedRevision":latest.to_string(),"targetRevision":"2"}))),
             "ApprovalRequired"
         );
+        app.shutdown().await;
+    });
+}
+
+/// A writable agent bound to (and invoking within) its own new project.
+fn project_agent(
+    fx: &Fx,
+    user: &InvocationContext,
+    name: &str,
+    project: &str,
+) -> InvocationContext {
+    let agent = principal(&*fx.store, name, PrincipalKind::Agent);
+    let (u, actor, p) = (
+        user.clone(),
+        agent.principal().clone(),
+        ProjectId(id(project)),
+    );
+    let (pid, title) = (p.clone(), project.to_owned());
+    write(&*fx.store, move |tx| {
+        tx.projects().insert_project(&StoredProject {
+            id: pid.clone(),
+            name: title.clone(),
+            description: String::new(),
+            lifecycle: "Active".into(),
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            archived_at_ms: None,
+            deleted_at_ms: None,
+            archive_epoch: 0,
+            archive_stop_pending: false,
+        })?;
+        bind_principal(
+            tx,
+            &u,
+            NewPrincipalBinding {
+                actor,
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::Worker),
+                project_id: Some(pid),
+                tool_families: None,
+                bound_by: u.principal().clone(),
+            },
+            None,
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    })
+    .unwrap();
+    agent.with_lineage(Some(p), None, None)
+}
+
+#[test]
+fn a_project_agents_skill_draft_is_confined_to_its_project_until_a_person_approves_it() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let a = project_agent(&fx, &user, "agent-a", "project-a");
+        let b = project_agent(&fx, &user, "agent-b", "project-b");
+        let in_a = ArtifactScope::Project(ProjectId(id("project-a")));
+        let names = |page: &Value| -> Vec<String> {
+            page["items"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap().to_owned()).collect()
+        };
+        let code = |r: Result<Value, Value>| r.expect_err("refused")["code"].as_str().unwrap().to_owned();
+        let artifact_scope = |content: &Value| {
+            let artifact = id(content["artifactId"].as_str().unwrap());
+            read(&*fx.store, |s| s.artifacts().artifact(&artifact)).unwrap().scope
+        };
+        // A project-confined agent drafts a new workspace skill: it is recorded, confined to its
+        // project, and its text lives in a project-scoped artifact.
+        let draft = applied(fx.command(&app, &a, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"deploy","content":fx.upload_in(&a, "Project A deploy steps.", in_a.clone())})));
+        assert!(labels(&draft).contains(&"state:draft".into()));
+        assert_eq!(artifact_scope(&draft["content"]), in_a);
+        let item_id = draft["id"].clone();
+        // Project B cannot find, read, list the history of, or list the resources of it.
+        assert!(!names(&discover(&fx, &app, &b)).contains(&"deploy".to_owned()));
+        assert_eq!(code(fx.query(&app, &b, "skills.read", json!({"instructionId":item_id}))), "NotFound");
+        assert_eq!(code(fx.query(&app, &b, "skills.history", json!({"instructionId":item_id,"page":{"limit":10}}))), "NotFound");
+        assert_eq!(code(fx.query(&app, &b, "skills.resources", json!({"instructionId":item_id,"revision":"1","page":{"limit":10}}))), "NotFound");
+        // Taking the same name is a conflict that does not name the hidden item.
+        let taken = fx.command(&app, &b, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"deploy","content":fx.upload_in(&b, "B text", ArtifactScope::Project(ProjectId(id("project-b"))))}));
+        let taken = serde_json::to_value(&taken).unwrap();
+        assert_eq!(taken.pointer("/receipt/decision/fault/code").and_then(Value::as_str), Some("Conflict"), "{taken}");
+        assert!(taken.pointer("/receipt/decision/fault/targetId").is_none_or(Value::is_null), "{taken}");
+        // Its own project and the person see it.
+        assert!(names(&discover(&fx, &app, &a)).contains(&"deploy".to_owned()));
+        assert!(names(&discover(&fx, &app, &user)).contains(&"deploy".to_owned()));
+        // The proposal's review is scoped to project A, like the draft.
+        let proposal = applied(fx.command(&app, &a, "skills.propose", json!({"instructionId":item_id,"expectedRevision":"1","contentDigest":digest_of(&draft)})));
+        let approval = read(&*fx.store, |s| s.decisions().approval(&id(proposal["id"].as_str().unwrap()))).unwrap();
+        assert_eq!(approval.scope, ConfigScope::Project(ProjectId(id("project-a"))));
+        assert_eq!(code(fx.query(&app, &b, "skills.read", json!({"instructionId":item_id}))), "NotFound");
+        // Once the person approves, the skill is a normal workspace skill everyone can read.
+        let decision = serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+            "requestKey":fx.h.ids.next_id(IdKind::Link),"body":{"kind":"approvals.record_human_decision",
+            "proposalId":proposal["id"],"expectedRevision":proposal["revision"],"contentDigest":proposal["contentDigest"],
+            "decision":"Approve","rationale":"Reviewed"}})).unwrap();
+        applied(app.record_human_decision(&user, &decision).unwrap());
+        app.approval_resumes().tick().await.unwrap();
+        let seen = fx.query(&app, &b, "skills.read", json!({"instructionId":item_id})).unwrap();
+        assert!(labels(&seen).contains(&"active".into()) && labels(&seen).contains(&"effective".into()), "{seen}");
+        assert_eq!(artifact_scope(&seen["content"]), ArtifactScope::Workspace);
+        assert_eq!(seen["content"]["sha256"], draft["content"]["sha256"], "the same approved bytes");
+        assert_eq!(std::fs::read(fx.harness.join("deploy/SKILL.md")).unwrap(), b"Project A deploy steps.");
+        let stored = read(&*fx.store, |s| s.instructions().instruction_item(&id(item_id.as_str().unwrap()))).unwrap();
+        assert_eq!(stored.confined_project, None);
+        // A later edit by project A of the now-shared skill is again confined: B still reads the
+        // active revision and sees only that one in history.
+        let edit = applied(fx.command(&app, &a, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":item_id,"expectedRevision":"1","name":"deploy","content":fx.upload_in(&a, "A secret change.", in_a.clone())})));
+        assert_eq!(edit["revision"], "2");
+        assert_eq!(fx.query(&app, &b, "skills.read", json!({"instructionId":item_id})).unwrap()["revision"], "1");
+        assert_eq!(code(fx.query(&app, &b, "skills.read", json!({"instructionId":item_id,"revision":"2"}))), "NotFound");
+        assert_eq!(code(fx.query(&app, &b, "skills.resources", json!({"instructionId":item_id,"revision":"2","page":{"limit":10}}))), "NotFound");
+        let history = |who: &InvocationContext| -> Vec<String> {
+            fx.query(&app, who, "skills.history", json!({"instructionId":item_id,"page":{"limit":10}})).unwrap()["items"]
+                .as_array().unwrap().iter().map(|r| r["revision"].as_str().unwrap().to_owned()).collect()
+        };
+        assert_eq!(history(&b), ["1"]);
+        assert_eq!(history(&a), ["2", "1"]);
+        assert_eq!(history(&user), ["2", "1"]);
+        // B cannot propose A's draft either.
+        assert_eq!(
+            refused(fx.command(&app, &b, "skills.propose", json!({"instructionId":item_id,"expectedRevision":"2","contentDigest":digest_of(&edit)}))),
+            "NotFound"
+        );
+        // Events about a confined draft belong to its project.
+        let events = read(&*fx.store, |s| s.history().page(&EventFilter::Aggregate{kind:"instruction".into(),id:item_id.as_str().unwrap().into()},0,500));
+        let drafted: Vec<_> = events.events.iter().filter(|e| e.kind == "InstructionDrafted").map(|e| e.project_id.clone()).collect();
+        assert_eq!(drafted, [Some(ProjectId(id("project-a"))), Some(ProjectId(id("project-a")))]);
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn a_project_agents_workspace_role_draft_is_confined_until_approved() {
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let a = project_agent(&fx, &user, "agent-a", "project-a");
+        let b = project_agent(&fx, &user, "agent-b", "project-b");
+        let in_a = ArtifactScope::Project(ProjectId(id("project-a")));
+        let default = setting(&*fx.store, AgentRole::Worker);
+        let draft = applied(fx.command(&app, &a, "roles.draft", json!({"scope":{"kind":"Workspace"},"instructionId":"role-worker","expectedRevision":"1","name":"worker","content":fx.upload_in(&a, "Project A worker rules.", in_a.clone())})));
+        assert_eq!(draft["revision"], "2");
+        let revisions = |who: &InvocationContext| -> Vec<String> {
+            fx.query(&app, who, "roles.history", json!({"instructionId":"role-worker","page":{"limit":10}})).unwrap()["items"]
+                .as_array().unwrap().iter().map(|r| r["revision"].as_str().unwrap().to_owned()).collect()
+        };
+        // Project B keeps reading the active default and never sees A's draft.
+        assert_eq!(fx.query(&app, &b, "roles.read", json!({"instructionId":"role-worker"})).unwrap()["revision"], "1");
+        let hidden = fx.query(&app, &b, "roles.read", json!({"instructionId":"role-worker","revision":"2"})).expect_err("hidden");
+        assert_eq!(hidden["code"], "NotFound");
+        assert_eq!(revisions(&b), ["1"]);
+        assert_eq!(revisions(&a), ["2", "1"]);
+        let proposal = applied(fx.command(&app, &a, "roles.propose", json!({"instructionId":"role-worker","expectedRevision":"2","contentDigest":digest_of(&draft)})));
+        let decision = serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+            "requestKey":fx.h.ids.next_id(IdKind::Link),"body":{"kind":"approvals.record_human_decision",
+            "proposalId":proposal["id"],"expectedRevision":proposal["revision"],"contentDigest":proposal["contentDigest"],
+            "decision":"Approve","rationale":"Adopt"}})).unwrap();
+        assert_eq!(setting(&*fx.store, AgentRole::Worker), default);
+        applied(app.record_human_decision(&user, &decision).unwrap());
+        app.approval_resumes().tick().await.unwrap();
+        // Approved: the workspace setting changes and project B reads the released revision.
+        assert_eq!(setting(&*fx.store, AgentRole::Worker), "Project A worker rules.");
+        let seen = fx.query(&app, &b, "roles.read", json!({"instructionId":"role-worker"})).unwrap();
+        assert_eq!(seen["revision"], "2");
+        let artifact = id(seen["content"]["artifactId"].as_str().unwrap());
+        assert_eq!(read(&*fx.store, |s| s.artifacts().artifact(&artifact)).unwrap().scope, ArtifactScope::Workspace);
+        assert_eq!(revisions(&b), ["2", "1"]);
         app.shutdown().await;
     });
 }

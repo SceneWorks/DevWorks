@@ -2,7 +2,7 @@
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, Revision, RevisionDimension};
+use devworks_core::protocol::{ActorId, Id, ProjectId, Revision, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::Value;
 
@@ -32,8 +32,8 @@ fn digest(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-const ITEM_COLUMNS: &str = "id,kind,name,scope_key,origin,root_path,source_path,latest_revision,active_revision,enabled,materialized_digest,observed_digest,present,version,created_at,updated_at";
-const REVISION_COLUMNS: &str = "instruction_id,revision,content_json,content_digest,state,author,origin_json,resources_json,applicability_json,approval_id,created_at,decided_at";
+const ITEM_COLUMNS: &str = "id,kind,name,scope_key,origin,root_path,source_path,latest_revision,active_revision,enabled,materialized_digest,observed_digest,present,version,created_at,updated_at,confined_project_id";
+const REVISION_COLUMNS: &str = "instruction_id,revision,content_json,content_digest,state,author,origin_json,resources_json,applicability_json,approval_id,created_at,decided_at,confined_project_id";
 
 fn item(r: &Row<'_>) -> rusqlite::Result<RawItem> {
     Ok(RawItem {
@@ -53,6 +53,7 @@ fn item(r: &Row<'_>) -> rusqlite::Result<RawItem> {
         version: r.get(13)?,
         created_at: r.get(14)?,
         updated_at: r.get(15)?,
+        confined: r.get(16)?,
     })
 }
 struct RawItem {
@@ -72,6 +73,7 @@ struct RawItem {
     version: i64,
     created_at: i64,
     updated_at: i64,
+    confined: Option<String>,
 }
 impl RawItem {
     fn decode(self) -> Result<StoredInstructionItem, StorageError> {
@@ -94,6 +96,7 @@ impl RawItem {
             version: self.version,
             created_at_ms: self.created_at,
             updated_at_ms: self.updated_at,
+            confined_project: self.confined.map(id).transpose()?.map(ProjectId),
         })
     }
 }
@@ -111,6 +114,7 @@ struct RawRevision {
     approval_id: Option<String>,
     created_at: i64,
     decided_at: Option<i64>,
+    confined: Option<String>,
 }
 fn revision(r: &Row<'_>) -> rusqlite::Result<RawRevision> {
     Ok(RawRevision {
@@ -126,6 +130,7 @@ fn revision(r: &Row<'_>) -> rusqlite::Result<RawRevision> {
         approval_id: r.get(9)?,
         created_at: r.get(10)?,
         decided_at: r.get(11)?,
+        confined: r.get(12)?,
     })
 }
 impl RawRevision {
@@ -145,6 +150,7 @@ impl RawRevision {
             approval_id: self.approval_id.map(id).transpose()?,
             created_at_ms: self.created_at,
             decided_at_ms: self.decided_at,
+            confined_project: self.confined.map(id).transpose()?.map(ProjectId),
         })
     }
 }
@@ -300,6 +306,8 @@ fn check_item(item: &StoredInstructionItem) -> Result<(), StorageError> {
             .as_deref()
             .is_some_and(|d| !digest(d))
         || item.observed_digest.as_deref().is_some_and(|d| !digest(d))
+        || (item.confined_project.is_some()
+            && (item.scope != ConfigScope::Workspace || item.active_revision.is_some()))
     {
         return Err(invalid("instruction item"));
     }
@@ -316,7 +324,7 @@ impl InstructionRepository for Unit<'_> {
             return Err(invalid("a new instruction item starts at version 1"));
         }
         db(self.conn.execute(
-            &format!("INSERT INTO instructions({ITEM_COLUMNS},project_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)"),
+            &format!("INSERT INTO instructions({ITEM_COLUMNS},project_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)"),
             params![
                 item.id.as_str(),
                 item.kind.as_str(),
@@ -334,6 +342,7 @@ impl InstructionRepository for Unit<'_> {
                 item.version,
                 item.created_at_ms,
                 item.updated_at_ms,
+                item.confined_project.as_ref().map(|p| p.0.as_str()),
                 item.scope.project_id().map(|p| p.0.as_str()),
             ],
         ))?;
@@ -363,6 +372,8 @@ impl InstructionRepository for Unit<'_> {
             || current.name != item.name
             || current.created_at_ms != item.created_at_ms
             || item.latest_revision < current.latest_revision
+            || (item.confined_project.is_some()
+                && item.confined_project != current.confined_project)
         {
             return Err(invalid("instruction identity is immutable"));
         }
@@ -373,7 +384,7 @@ impl InstructionRepository for Unit<'_> {
             }
         }
         db(self.conn.execute(
-            "UPDATE instructions SET root_path=?2,source_path=?3,latest_revision=?4,active_revision=?5,enabled=?6,materialized_digest=?7,observed_digest=?8,present=?9,version=?10,updated_at=?11 WHERE id=?1 AND version=?12",
+            "UPDATE instructions SET root_path=?2,source_path=?3,latest_revision=?4,active_revision=?5,enabled=?6,materialized_digest=?7,observed_digest=?8,present=?9,version=?10,updated_at=?11,confined_project_id=?13 WHERE id=?1 AND version=?12",
             params![
                 item.id.as_str(),
                 item.root_path,
@@ -387,6 +398,7 @@ impl InstructionRepository for Unit<'_> {
                 item.version,
                 item.updated_at_ms,
                 item.version - 1,
+                item.confined_project.as_ref().map(|p| p.0.as_str()),
             ],
         ))?;
         Ok(())
@@ -405,11 +417,14 @@ impl InstructionRepository for Unit<'_> {
             || !r.content.is_object()
             || !r.resources.is_array()
             || (r.approval_id.is_some() && r.state == InstructionRevisionState::Draft)
+            || (r.confined_project.is_some()
+                && (r.state == InstructionRevisionState::Approved
+                    || parent.scope != ConfigScope::Workspace))
         {
             return Err(invalid("instruction revision"));
         }
         db(self.conn.execute(
-            &format!("INSERT INTO instruction_revisions({REVISION_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"),
+            &format!("INSERT INTO instruction_revisions({REVISION_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)"),
             params![
                 r.instruction_id.as_str(),
                 r.revision,
@@ -423,6 +438,7 @@ impl InstructionRepository for Unit<'_> {
                 r.approval_id.as_ref().map(Id::as_str),
                 r.created_at_ms,
                 r.decided_at_ms,
+                r.confined_project.as_ref().map(|p| p.0.as_str()),
             ],
         ))?;
         Ok(())
@@ -478,6 +494,30 @@ impl InstructionRepository for Unit<'_> {
                 Revision::new(number.max(1)).expect("positive"),
             ));
         }
+        Ok(())
+    }
+    fn release_instruction_revision(
+        &mut self,
+        key: &Id,
+        number: i64,
+        content: &Value,
+    ) -> Result<(), StorageError> {
+        let current =
+            get_revision(self.conn, key, number)?.ok_or_else(|| StorageError::NotFound {
+                kind: "instruction_revision",
+                id: key.as_str().into(),
+            })?;
+        if current.confined_project.is_none()
+            || !content.is_object()
+            || content.get("sha256").is_none()
+            || content.get("sha256") != current.content.get("sha256")
+        {
+            return Err(invalid("instruction revision release"));
+        }
+        db(self.conn.execute(
+            "UPDATE instruction_revisions SET content_json=?3,confined_project_id=NULL WHERE instruction_id=?1 AND revision=?2 AND confined_project_id IS NOT NULL",
+            params![key.as_str(), number, content.to_string()],
+        ))?;
         Ok(())
     }
 }

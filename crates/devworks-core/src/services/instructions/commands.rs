@@ -3,9 +3,9 @@ use super::approval::{self, binding_matches};
 use super::scan::{self, valid_name};
 use super::sync::{RecordedRevision, StagedCapture, new_role_item, record_capture};
 use super::{
-    InstructionService, config_scope, current_revision, denied, event, invalid, kind_of,
-    not_found_failure, provenance, record, refusal, require_author, require_human, stale,
-    target_kind, visible_item,
+    InstructionService, config_scope, denied, draft_confinement, event, event_in, invalid,
+    item_visible, kind_of, not_found_failure, provenance, record, refusal, require_author,
+    require_human, stale, target_kind, visible_current, visible_item, visible_revision,
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
@@ -36,9 +36,11 @@ pub(crate) struct PreparedDraft {
     upload: ArtifactRef,
     staged: Arc<StagedCapture>,
 }
-/// The target text of a role activation (for the settings mirror).
+/// The target text of an activation: for the role settings mirror, and, when the target is a
+/// confined draft, a copy staged for release to the item's scope.
 pub(crate) struct PreparedActivation {
     text: Option<String>,
+    release: Option<Arc<StagedCapture>>,
 }
 
 impl InstructionService {
@@ -93,25 +95,45 @@ impl InstructionService {
         target: i64,
     ) -> Result<Option<Prepared>, Failure> {
         let revision = env.read(|read| {
-            Ok((|| {
+            Ok((|| -> Result<_, StorageError> {
                 let item = match read.instructions().instruction_item(id)? {
-                    Some(item) if super::visible(ctx, &item.scope) => item,
+                    Some(item) if item_visible(ctx, &item) => item,
                     _ => return Ok(None),
                 };
-                if item.kind != InstructionKind::Role {
-                    return Ok(None);
-                }
-                read.instructions().instruction_revision(id, target)
+                Ok(read
+                    .instructions()
+                    .instruction_revision(id, target)?
+                    .filter(|r| super::revision_visible(ctx, r))
+                    .map(|r| (item.kind, r)))
             })())
         })??;
-        let text = match revision {
-            Some(r) => Some(
-                String::from_utf8(self.artifact_bytes(&r.content)?)
-                    .map_err(|_| invalid("instruction_content"))?,
-            ),
+        let Some((kind, r)) = revision else {
+            return Ok(Some(Prepared::new(PreparedActivation {
+                text: None,
+                release: None,
+            })));
+        };
+        if kind != InstructionKind::Role && r.confined_project.is_none() {
+            return Ok(Some(Prepared::new(PreparedActivation {
+                text: None,
+                release: None,
+            })));
+        }
+        let text = String::from_utf8(self.artifact_bytes(&r.content)?)
+            .map_err(|_| invalid("instruction_content"))?;
+        // A confined draft's content is readable in its project only; activating it publishes
+        // the same bytes at the item's scope.
+        let release = match &r.confined_project {
+            Some(_) => Some(Arc::new(self.stage_capture(
+                &super::sync::Capture::text(&text),
+                json!({"kind": "InstructionRelease", "instructionId": id.as_str(), "revision": target}),
+            )?)),
             None => None,
         };
-        Ok(Some(Prepared::new(PreparedActivation { text })))
+        Ok(Some(Prepared::new(PreparedActivation {
+            text: Some(text),
+            release,
+        })))
     }
 
     /// After the outcome: release a draft copy that was not recorded, and write an activated
@@ -128,6 +150,15 @@ impl InstructionService {
                 .as_ref()
                 .is_some_and(|r| r.content.sha256.0 == draft.staged.instruction.digest);
             self.settle_capture(&draft.staged, committed);
+        }
+        if let Some(staged) = prepared
+            .and_then(|p| p.get::<PreparedActivation>())
+            .and_then(|a| a.release.as_ref())
+        {
+            let committed = applied
+                .as_ref()
+                .is_some_and(|r| r.content.sha256.0 == staged.instruction.digest);
+            self.settle_capture(staged, committed);
         }
         // A save or restore that changed nothing still recreates a deleted directory.
         if let Some(record) = applied.or_else(|| unchanged_record(reply))
@@ -163,6 +194,7 @@ impl InstructionService {
                     instruction_id: i.instruction_id.as_ref(),
                     expected: i.expected_revision.as_ref(),
                     name: &i.name,
+                    confined: None,
                 };
                 self.draft(ctx, command, tx, kind, draft)
             }
@@ -172,6 +204,7 @@ impl InstructionService {
                     instruction_id: i.instruction_id.as_ref(),
                     expected: i.expected_revision.as_ref(),
                     name: &i.name,
+                    confined: None,
                 };
                 self.draft(ctx, command, tx, kind, draft)
             }
@@ -219,7 +252,7 @@ impl InstructionService {
         command: &AdmittedCommand,
         tx: &mut dyn WriteTransaction,
         kind: InstructionKind,
-        input: Draft<'_>,
+        mut input: Draft<'_>,
     ) -> Result<DomainDecision, Failure> {
         require_author(tx, ctx, &*self.roles)?;
         let prepared = command
@@ -227,17 +260,11 @@ impl InstructionService {
             .ok_or_else(|| invalid("instruction_content"))?;
         let scope = config_scope(ctx, input.scope)?;
         let human = ctx.principal_kind() == PrincipalKind::Human;
-        // A workspace instruction's draft is readable across every project before any approval,
-        // so only a workspace-authorized author may write one: an agent confined to a project
-        // (by its binding or its invocation) drafts in that project only.
-        if !human
-            && scope == ConfigScope::Workspace
-            && (ctx.project_id().is_some()
-                || crate::services::artifacts::authorized_scope(tx.authority(), ctx)?
-                    != crate::services::artifacts::AuthorizedScope::Workspace)
-        {
-            return Err(denied("workspace_scope"));
-        }
+        // A workspace instruction's draft would be readable from every project before any
+        // approval, so a project-confined agent's draft (and any item it creates) is confined to
+        // its project until a person approves it.
+        input.confined = draft_confinement(tx, ctx, &scope)?;
+        let confined = input.confined.clone();
         let name = input.name.0.trim().to_owned();
         let now = tx.now_ms();
         let target = match kind {
@@ -345,12 +372,14 @@ impl InstructionService {
                 title: format!("{} {}", target_kind(kind), item.name),
                 // Resources carry over from the base revision; they are immutable artifacts.
                 carried_resources: Some(resources),
+                confined: confined.clone(),
             },
         )?;
         let previous = item.active_revision;
         item.latest_revision = revision.revision;
         if human {
             item.active_revision = Some(revision.revision);
+            item.confined_project = None;
         }
         item.version += 1;
         item.updated_at_ms = now;
@@ -366,10 +395,11 @@ impl InstructionService {
             )
             .map_err(settings_failure)?;
         }
-        event(
+        event_in(
             tx,
             ctx.principal(),
             &item,
+            confined.as_ref(),
             if human {
                 "InstructionSaved"
             } else {
@@ -395,6 +425,7 @@ impl InstructionService {
         input: &Draft<'_>,
         now: i64,
     ) -> Result<Target, Failure> {
+        let confined = input.confined.as_ref();
         // File-backed skill roots are workspace resources.
         if *scope != ConfigScope::Workspace {
             return Err(invalid("skill_scope"));
@@ -402,7 +433,12 @@ impl InstructionService {
         if !valid_name(name) {
             return Err(invalid("skill_name"));
         }
-        let harness = |tx: &mut dyn WriteTransaction| harness_named(tx, name);
+        // An existing skill of that name the caller cannot see (another project's confined
+        // draft) is a conflict that names nothing.
+        let harness = |tx: &mut dyn WriteTransaction| {
+            harness_named(tx, name)
+                .map(|found| found.map(|i| item_visible(ctx, &i).then_some(i.id)))
+        };
         match input.instruction_id {
             Some(id) => {
                 let source = visible_item(tx.instructions(), ctx, id, InstructionKind::Skill)?;
@@ -416,7 +452,7 @@ impl InstructionService {
                 if source.name != name {
                     return Err(invalid("skill_name"));
                 }
-                let base = current_revision(tx.instructions(), &source).ok();
+                let base = visible_current(tx.instructions(), ctx, &source).ok();
                 if source.origin == InstructionOrigin::Shared {
                     // An improvement to a shared skill becomes a same-name harness override; the
                     // shared original and its files stay untouched.
@@ -427,11 +463,11 @@ impl InstructionService {
                         return Err(refusal(
                             DomainErrorCode::Conflict,
                             "skill_override",
-                            Some(&existing.id),
+                            existing.as_ref(),
                         ));
                     }
                     Ok(Target {
-                        item: self.new_harness_item(tx, name, now)?,
+                        item: self.new_harness_item(tx, name, now, confined)?,
                         base,
                         overrides,
                         created: true,
@@ -453,11 +489,11 @@ impl InstructionService {
                     return Err(refusal(
                         DomainErrorCode::Conflict,
                         "skill",
-                        Some(&existing.id),
+                        existing.as_ref(),
                     ));
                 }
                 Ok(Target {
-                    item: self.new_harness_item(tx, name, now)?,
+                    item: self.new_harness_item(tx, name, now, confined)?,
                     base: None,
                     overrides: None,
                     created: true,
@@ -471,6 +507,7 @@ impl InstructionService {
         tx: &mut dyn WriteTransaction,
         name: &str,
         now: i64,
+        confined: Option<&crate::protocol::ProjectId>,
     ) -> Result<StoredInstructionItem, Failure> {
         self.check_directory(name, None)?;
         let root = self
@@ -494,6 +531,7 @@ impl InstructionService {
             version: 1,
             created_at_ms: now,
             updated_at_ms: now,
+            confined_project: confined.cloned(),
         };
         tx.instructions().insert_instruction_item(&item)?;
         Ok(item)
@@ -514,10 +552,7 @@ impl InstructionService {
         }
         require_author(tx, ctx, &*self.roles)?;
         let item = visible_item(tx.instructions(), ctx, id, kind)?;
-        let revision = tx
-            .instructions()
-            .instruction_revision(&item.id, expected)?
-            .ok_or_else(|| not_found_failure(kind, &item.id))?;
+        let revision = visible_revision(tx.instructions(), ctx, &item, expected)?;
         if revision.state != InstructionRevisionState::Draft {
             return Err(refusal(
                 DomainErrorCode::Conflict,
@@ -546,7 +581,8 @@ impl InstructionService {
         let request = crate::services::approvals::requests::decode(operation, 1, &args, true)
             .map_err(|_| invalid("saved_activation"))?;
         let preview = approval::preview(&item, &revision, &proposal_id, item.latest_revision);
-        let scope = match &item.scope {
+        // A confined draft's review is visible in its project only, like the draft.
+        let scope = match &preview.scope {
             ConfigScope::Workspace => json!({"kind": "Workspace"}),
             ConfigScope::Project(p) => json!({"kind": "Project", "projectId": p}),
         };
@@ -574,10 +610,11 @@ impl InstructionService {
         item.version += 1;
         item.updated_at_ms = tx.now_ms();
         tx.instructions().update_instruction_item(&item)?;
-        event(
+        event_in(
             tx,
             ctx.principal(),
             &item,
+            revision.confined_project.as_ref(),
             "InstructionProposed",
             json!({
                 "revision": revision.revision, "contentDigest": revision.content_digest,
@@ -606,10 +643,7 @@ impl InstructionService {
         if item.latest_revision != a.expected {
             return Err(stale(&item, a.expected));
         }
-        let target = tx
-            .instructions()
-            .instruction_revision(&item.id, a.target)?
-            .ok_or_else(|| not_found_failure(kind, &item.id))?;
+        let target = visible_revision(tx.instructions(), ctx, &item, a.target)?;
         let approval_id = match a.proposal {
             // Activation of reviewed agent content: only the exact approved proposal.
             Some(proposal) => {
@@ -631,6 +665,9 @@ impl InstructionService {
                     || !binding_matches(&approval.payload["binding"], &item, &target, proposal)
                 {
                     return Err(denied("instruction_proposal"));
+                }
+                if target.confined_project.is_some() {
+                    self.release(tx, command, &item, &target)?;
                 }
                 if target.state == InstructionRevisionState::Proposed {
                     let now = tx.now_ms();
@@ -686,6 +723,7 @@ impl InstructionService {
         let previous = item.active_revision;
         self.check_materializable(&item, &target.resources)?;
         item.active_revision = Some(target.revision);
+        item.confined_project = None;
         item.version += 1;
         item.updated_at_ms = tx.now_ms();
         tx.instructions().update_instruction_item(&item)?;
@@ -801,6 +839,38 @@ impl InstructionService {
         }
     }
 
+    /// Publishes a confined draft's prepared copy at its item's scope and releases the
+    /// revision to it, so what a person approved becomes readable wherever it takes effect.
+    fn release(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        command: &AdmittedCommand,
+        item: &StoredInstructionItem,
+        target: &StoredInstructionRevision,
+    ) -> Result<(), Failure> {
+        let staged = command
+            .prepared::<PreparedActivation>()
+            .and_then(|p| p.release.clone())
+            .filter(|s| target.content["sha256"].as_str() == Some(s.instruction.digest.as_str()))
+            .ok_or_else(|| {
+                refusal(
+                    DomainErrorCode::SourceChanged,
+                    "instruction_revision",
+                    Some(&item.id),
+                )
+            })?;
+        let content = super::sync::publish_instruction_text(
+            tx,
+            &self.artifacts,
+            item,
+            &staged,
+            &format!("{} {}", target_kind(item.kind), item.name),
+        )?;
+        tx.instructions()
+            .release_instruction_revision(&item.id, target.revision, &content)?;
+        Ok(())
+    }
+
     fn restore_into_override(
         &self,
         ctx: &InvocationContext,
@@ -818,7 +888,7 @@ impl InstructionService {
                 Some(&existing.id),
             ));
         }
-        let mut item = self.new_harness_item(tx, &shared.name, now)?;
+        let mut item = self.new_harness_item(tx, &shared.name, now, None)?;
         let revision = StoredInstructionRevision {
             instruction_id: item.id.clone(),
             revision: item.latest_revision + 1,
@@ -836,6 +906,7 @@ impl InstructionService {
             approval_id: None,
             created_at_ms: now,
             decided_at_ms: Some(now),
+            confined_project: None,
         };
         tx.instructions().insert_instruction_revision(&revision)?;
         let previous = item.active_revision;
@@ -871,6 +942,8 @@ struct Draft<'a> {
     instruction_id: Option<&'a Id>,
     expected: Option<&'a Revision>,
     name: &'a Label,
+    /// The project the draft (and any item it creates) is confined to.
+    confined: Option<crate::protocol::ProjectId>,
 }
 struct Activation<'a> {
     id: &'a Id,
@@ -893,6 +966,7 @@ fn role_target(
     input: &Draft<'_>,
     now: i64,
 ) -> Result<Target, Failure> {
+    let confined = input.confined.as_ref();
     let role =
         AgentRole::parse(name).ok_or_else(|| refusal(DomainErrorCode::NotFound, "role", None))?;
     let id = super::role_item_id(role, scope);
@@ -901,7 +975,7 @@ fn role_target(
     }
     match tx.instructions().instruction_item(&id)? {
         Some(item) => {
-            if !super::visible(ctx, &item.scope) {
+            if !item_visible(ctx, &item) {
                 return Err(not_found_failure(InstructionKind::Role, &id));
             }
             let expected = input
@@ -911,7 +985,7 @@ fn role_target(
             if item.latest_revision != expected {
                 return Err(stale(&item, expected));
             }
-            let base = current_revision(tx.instructions(), &item).ok();
+            let base = visible_current(tx.instructions(), ctx, &item).ok();
             Ok(Target {
                 item,
                 base,
@@ -920,7 +994,8 @@ fn role_target(
             })
         }
         None => {
-            let item = new_role_item(role, scope, now);
+            let mut item = new_role_item(role, scope, now);
+            item.confined_project = confined.cloned();
             tx.instructions().insert_instruction_item(&item)?;
             Ok(Target {
                 item,

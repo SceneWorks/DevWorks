@@ -4,7 +4,7 @@
 //! decision) can become active, and the active revision is what agents adopt at their next safe
 //! step. Drafts and pending proposals never change the active revision.
 use super::{ConfigScope, StorageError};
-use crate::protocol::{ActorId, Id};
+use crate::protocol::{ActorId, Id, ProjectId};
 use serde_json::Value;
 
 /// What an instruction item is.
@@ -117,6 +117,9 @@ pub struct StoredInstructionItem {
     pub version: i64,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    /// The one project that may see a workspace item created by a project-confined agent's
+    /// draft, until a revision of it becomes active (`None` for every other item).
+    pub confined_project: Option<ProjectId>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -139,6 +142,9 @@ pub struct StoredInstructionRevision {
     pub approval_id: Option<Id>,
     pub created_at_ms: i64,
     pub decided_at_ms: Option<i64>,
+    /// The one project that may see an unapproved revision a project-confined agent drafted
+    /// (its content artifact is scoped to that project); cleared when it is approved.
+    pub confined_project: Option<ProjectId>,
 }
 
 /// A filter over instruction items.
@@ -203,5 +209,14 @@ pub trait InstructionRepository: InstructionRead {
         to: InstructionRevisionState,
         approval_id: Option<&Id>,
         decided_at_ms: Option<i64>,
+    ) -> Result<(), StorageError>;
+    /// Releases a confined revision to its item's scope: replaces its content with `content`,
+    /// a copy of the same bytes (same `sha256`) published at that scope, and clears the
+    /// confinement. Refused unless the revision is confined and the bytes are the same.
+    fn release_instruction_revision(
+        &mut self,
+        id: &Id,
+        revision: i64,
+        content: &Value,
     ) -> Result<(), StorageError>;
 }

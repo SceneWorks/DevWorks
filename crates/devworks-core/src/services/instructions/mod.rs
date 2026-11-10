@@ -59,7 +59,7 @@ use crate::protocol::data::DataScope;
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{InstructionRecord, RegisteredPath};
 use crate::protocol::support::{BoundedList, RelativePath};
-use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id};
+use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, ProjectId};
 use crate::services::artifacts::ArtifactService;
 use crate::services::sessions::{Failure, Refusal, decided, label, not_found, query_fault, rev};
 use crate::settings::catalog::AgentRole;
@@ -194,9 +194,13 @@ fn data_scope(scope: &ConfigScope) -> DataScope {
         },
     }
 }
-/// Whether the invocation may see an item of `scope`.
+/// Whether the invocation may see an item of `scope`: workspace instructions apply in every
+/// project, a project's only within it.
 pub(crate) fn visible(ctx: &InvocationContext, scope: &ConfigScope) -> bool {
-    crate::services::sessions::project_visible(ctx, scope.project_id())
+    match scope {
+        ConfigScope::Workspace => true,
+        ConfigScope::Project(p) => crate::services::sessions::project_visible(ctx, Some(p)),
+    }
 }
 /// The item if it exists, is of `kind` and is visible to the invocation (else `NotFound`).
 pub(crate) fn visible_item(
@@ -206,9 +210,57 @@ pub(crate) fn visible_item(
     kind: InstructionKind,
 ) -> Result<StoredInstructionItem, Failure> {
     match read.instruction_item(id)? {
-        Some(item) if item.kind == kind && visible(ctx, &item.scope) => Ok(item),
+        Some(item) if item.kind == kind && item_visible(ctx, &item) => Ok(item),
         _ => Err(not_found(target_kind(kind), id).into()),
     }
+}
+/// Whether the invocation may see `confined`'s draft: a draft a project-confined agent wrote is
+/// visible only within that project (and to callers not confined to any project).
+fn confinement_visible(ctx: &InvocationContext, confined: Option<&ProjectId>) -> bool {
+    confined.is_none_or(|p| crate::services::sessions::project_visible(ctx, Some(p)))
+}
+/// Whether the invocation may see the item: its scope and any draft confinement.
+pub(crate) fn item_visible(ctx: &InvocationContext, item: &StoredInstructionItem) -> bool {
+    visible(ctx, &item.scope) && confinement_visible(ctx, item.confined_project.as_ref())
+}
+/// Whether the invocation may see one revision of a visible item.
+pub(crate) fn revision_visible(ctx: &InvocationContext, r: &StoredInstructionRevision) -> bool {
+    confinement_visible(ctx, r.confined_project.as_ref())
+}
+/// Revision `n` of a visible item if the invocation may see it (else `NotFound`).
+pub(crate) fn visible_revision(
+    read: &dyn crate::ports::storage::InstructionRead,
+    ctx: &InvocationContext,
+    item: &StoredInstructionItem,
+    n: i64,
+) -> Result<StoredInstructionRevision, Failure> {
+    match read.instruction_revision(&item.id, n)? {
+        Some(r) if revision_visible(ctx, &r) => Ok(r),
+        _ => Err(not_found(target_kind(item.kind), &item.id).into()),
+    }
+}
+/// The project a draft by this invocation is confined to: a non-human author confined to one
+/// project (by its invocation or its binding) writing a workspace instruction, whose draft
+/// would otherwise be readable from every project before any approval.
+pub(crate) fn draft_confinement(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    scope: &ConfigScope,
+) -> Result<Option<ProjectId>, Failure> {
+    if ctx.principal_kind() == crate::context::PrincipalKind::Human
+        || *scope != ConfigScope::Workspace
+    {
+        return Ok(None);
+    }
+    if let Some(p) = ctx.project_id() {
+        return Ok(Some(p.clone()));
+    }
+    Ok(
+        match crate::services::artifacts::authorized_scope(tx.authority(), ctx)? {
+            crate::services::artifacts::AuthorizedScope::Workspace => None,
+            crate::services::artifacts::AuthorizedScope::Project(p) => Some(p),
+        },
+    )
 }
 pub(crate) fn target_kind(kind: InstructionKind) -> &'static str {
     match kind {
@@ -324,6 +376,28 @@ pub(crate) fn current_revision(
     read.instruction_revision(&item.id, number)?
         .ok_or_else(|| not_found(target_kind(item.kind), &item.id).into())
 }
+/// The revision the invocation sees as current: the active one, else its newest visible one
+/// (another project's confined drafts are skipped).
+pub(crate) fn visible_current(
+    read: &dyn crate::ports::storage::InstructionRead,
+    ctx: &InvocationContext,
+    item: &StoredInstructionItem,
+) -> Result<StoredInstructionRevision, Failure> {
+    if item.active_revision.is_some() {
+        return current_revision(read, item);
+    }
+    let mut before = None;
+    loop {
+        let page = read.instruction_revisions(&item.id, before, crate::ports::storage::MAX_PAGE)?;
+        if let Some(r) = page.iter().find(|r| revision_visible(ctx, r)) {
+            return Ok(r.clone());
+        }
+        if page.len() < crate::ports::storage::MAX_PAGE as usize {
+            return Err(not_found(target_kind(item.kind), &item.id).into());
+        }
+        before = page.last().map(|r| r.revision);
+    }
+}
 
 /// Event provenance of the invocation (responsible agent, work and session).
 pub(crate) fn provenance(ctx: &InvocationContext) -> Value {
@@ -345,11 +419,28 @@ pub(crate) fn event(
     kind: &str,
     payload: Value,
 ) -> Result<(), StorageError> {
+    event_in(tx, actor, item, None, kind, payload)
+}
+/// An item event; `confined` names the project of a confined revision it describes, so the
+/// event is visible (and purged) with that project only.
+pub(crate) fn event_in(
+    tx: &mut dyn WriteTransaction,
+    actor: &crate::protocol::ActorId,
+    item: &StoredInstructionItem,
+    confined: Option<&ProjectId>,
+    kind: &str,
+    payload: Value,
+) -> Result<(), StorageError> {
     let id = crate::protocol::EventId(tx.new_id(IdKind::Event));
     tx.history().append(crate::ports::storage::NewEvent {
         id,
         actor: actor.clone(),
-        project_id: item.scope.project_id().cloned(),
+        project_id: item
+            .scope
+            .project_id()
+            .or(confined)
+            .or(item.confined_project.as_ref())
+            .cloned(),
         root_id: None,
         operation_id: None,
         aggregate_kind: AGGREGATE.into(),
