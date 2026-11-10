@@ -411,6 +411,12 @@ impl CommandHandler for InstructionService {
         command: &AdmittedCommand,
         env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, StorageError> {
+        // Observe live sources first: a skill directory or role setting changed since the
+        // caller read it becomes a newer revision, so a stale expectedRevision is refused as a
+        // conflict instead of a save materializing an older snapshot over the change.
+        if let Some(kind) = kind_of(command.input()) {
+            self.sync_kind(Some(kind))?;
+        }
         let result = match command.input() {
             OperationInput::Skills(skill_ops::Input::Draft(i)) => {
                 self.prepare_draft(ctx, env, &i.content)

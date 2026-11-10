@@ -430,6 +430,28 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
         let mut shared_now = shared_before.clone();
         shared_now.iter_mut().find(|(p, _)| p == "alpha/SKILL.md").unwrap().1 = b"Do alpha better.".to_vec();
         assert_eq!(tree(&fx.shared), shared_now);
+        // An on-disk edit of a harness skill after it was read makes a stale save a conflict, and
+        // the edit is captured rather than overwritten.
+        let beta = find(&discover(&fx, &app, &user), "beta", "harness").clone();
+        std::fs::write(fx.harness.join("beta/notes.md"), "added on disk").unwrap();
+        assert_eq!(
+            refused(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":beta["id"],"expectedRevision":beta["revision"],"name":"beta","content":fx.upload(&user, "harness beta v2")}))),
+            "RevisionConflict"
+        );
+        assert_eq!(std::fs::read(fx.harness.join("beta/notes.md")).unwrap(), b"added on disk");
+        assert_eq!(find(&discover(&fx, &app, &user), "beta", "harness")["revision"], "2");
+        // Captured skill versions stay out of artifact listings; other host artifacts remain.
+        let staged = fx.artifacts.stage_host_bytes(&*fx.store, b"repository summary", json!({"kind":"Test"})).unwrap().unwrap();
+        let (artifacts, s2) = (fx.artifacts.clone(), staged.clone());
+        write(&*fx.store, move |tx| artifacts.commit_host_bytes(tx, &s2, "Repository summary", "text/markdown", json!({"repositoryId":"repo"}))).unwrap();
+        fx.artifacts.settle_host_bytes(&*fx.store, &staged, true);
+        let list = serde_json::to_vec(&json!({"protocol":"1.0-draft.1","queryId":"list","schemaRevision":4,
+            "query":{"kind":"List","workspace":true},"limit":100})).unwrap();
+        let listed = serde_json::to_value(app.query(&user, "artifacts.list", &list).unwrap()).unwrap();
+        let names: Vec<String> = listed.pointer("/result/value/items").and_then(Value::as_array).unwrap_or_else(|| panic!("{listed}"))
+            .iter().map(|a| a["name"].as_str().unwrap().to_owned()).collect();
+        assert!(names.contains(&"Repository summary".to_owned()), "{names:?}");
+        assert!(!names.iter().any(|n| n.starts_with("Skill ") || n.starts_with("Role ")), "{names:?}");
         // Unknown roots are refused, not ignored.
         assert_eq!(
             fx.query(&app, &user, "skills.discover", json!({"scope":{"kind":"Workspace"},"rootIds":["elsewhere"],"page":{"limit":5}}))
