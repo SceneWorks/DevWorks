@@ -65,6 +65,7 @@ fn settings_adds_and_lists_an_outgoing_mcp_server() {
     )
     .expect("saved MCP credential references");
     assert_eq!(references.len(), 1);
+    assert!(references.iter().all(|handle| handle.starts_with("mcp-")));
 }
 
 #[test]

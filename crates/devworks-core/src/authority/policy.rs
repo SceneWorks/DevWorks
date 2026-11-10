@@ -388,7 +388,11 @@ pub fn registered_tool_visibility(
     let command = selected.mode == Mode::Command;
     // Project-wide message views belong to the human UI. Agent sessions use their addressed
     // inbox; never advertise a project history or event feed they cannot read.
-    if matches!(op, "agents.history" | "agents.events") && kind != PrincipalKind::Human {
+    if matches!(
+        op,
+        "agents.history" | "agents.events" | "mcp.configure" | "mcp.select_tools"
+    ) && kind != PrincipalKind::Human
+    {
         return Verdict::Deny(DenialReason::HumanOnly);
     }
 

@@ -121,6 +121,12 @@ impl NativeMcpClients {
                 endpoint,
                 credential_ref,
             } => {
+                if credential_ref
+                    .as_ref()
+                    .is_some_and(|handle| !handle.as_str().starts_with("mcp-"))
+                {
+                    return Err(McpRemoteFault::InvalidConfiguration);
+                }
                 let secret = credential_ref
                     .as_ref()
                     .map(|id| {

@@ -332,7 +332,7 @@ impl McpClientService {
                     selected.push(McpToolMaterial {
                         alias: ToolSchema {
                             capability_id: capability,
-                            wire_name: format!("mcp_{digest}"),
+                            wire_name: format!("mcp_{}", &digest[..60]),
                             input_schema: reference.clone(),
                         },
                         schema: schema.clone(),
@@ -1462,6 +1462,25 @@ impl McpClientService {
         tx: &mut dyn WriteTransaction,
         input: &ops::ConfigureInput,
     ) -> Result<DomainDecision, Failure> {
+        if ctx.principal_kind() != PrincipalKind::Human {
+            return Err(
+                Refusal::new(DomainErrorCode::PermissionDenied, "mcp_configuration", None).into(),
+            );
+        }
+        if let McpTransport::Http {
+            credential_ref: Some(handle),
+            ..
+        } = &input.transport
+            && !handle.as_str().starts_with("mcp-")
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::InvalidArgument,
+                "mcp_credential_ref",
+                Some(handle.clone()),
+            )
+            .into());
+        }
+        scope(ctx, &input.scope, tx.projects())?;
         let scope = active_server_scope(ctx, &input.scope, tx.projects())?;
         let (version, mut state) = current(tx.configuration(), &scope)?;
         let transport_label = BoundedText(match &input.transport {
@@ -1549,6 +1568,12 @@ impl McpClientService {
         tx: &mut dyn WriteTransaction,
         input: &ops::SelectToolsInput,
     ) -> Result<DomainDecision, Failure> {
+        if ctx.principal_kind() != PrincipalKind::Human {
+            return Err(
+                Refusal::new(DomainErrorCode::PermissionDenied, "mcp_selection", None).into(),
+            );
+        }
+        scope(ctx, &input.scope, tx.projects())?;
         let scope = active_server_scope(ctx, &input.scope, tx.projects())?;
         let (version, mut state) = current(tx.configuration(), &scope)?;
         let server = state

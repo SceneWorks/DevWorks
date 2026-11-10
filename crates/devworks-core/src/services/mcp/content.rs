@@ -361,7 +361,10 @@ impl McpClientService {
         let catalog_revision = server.public.catalog_revision.clone();
         let capability_id = cap.id.clone();
         let observed = Observed {
-            project: scope.project_id().cloned(),
+            project: ctx
+                .project_id()
+                .cloned()
+                .or_else(|| scope.project_id().cloned()),
             title: format!("MCP {} {}", cap.kind.0, name),
             media_type: "application/json".into(),
             tags: vec!["mcp".into(), "untrusted".into()],

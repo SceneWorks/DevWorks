@@ -3377,7 +3377,7 @@ impl Shell {
                                 Slot::McpCommand,
                                 "Storing MCP credential",
                                 move |backend| {
-                                    let handle = backend.stage_api_key(secret)?;
+                                    let handle = backend.stage_mcp_api_key(secret)?;
                                     let mut body = body;
                                     body["transport"]["credentialRef"] = serde_json::json!(handle);
                                     Ok(TaskOutput::Prepared {

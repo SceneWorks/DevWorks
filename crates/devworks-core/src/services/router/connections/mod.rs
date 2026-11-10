@@ -831,6 +831,24 @@ impl ConnectionService {
         self.write_handle(principal, true, &Credential::ApiKey(Secret::new(trimmed)))
     }
 
+    /// MCP bearer handles use a separate purpose marker inside this store's secret namespace.
+    /// A remote MCP endpoint may never consume an ordinary provider connection handle.
+    pub fn stage_mcp_api_key(&self, principal: &ActorId, key: Secret) -> Result<Id, SecretError> {
+        let trimmed = key.expose().trim();
+        if trimmed.is_empty() {
+            return Err(SecretError::Failed("empty key".into()));
+        }
+        let minted = self.ids.next_id(IdKind::Credential);
+        let handle = Id::new(format!("mcp-{}", minted.as_str()))
+            .map_err(|_| SecretError::Failed("MCP credential handle unavailable".into()))?;
+        self.write_handle_reserved(
+            principal,
+            true,
+            &Credential::ApiKey(Secret::new(trimmed)),
+            handle,
+        )
+    }
+
     /// Writes `credential` under a new handle, registered as staged first so a concurrent
     /// reconcile never deletes it before it is published.
     fn write_handle(

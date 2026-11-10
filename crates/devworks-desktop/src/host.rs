@@ -1232,6 +1232,12 @@ impl Backend for DesktopBackend {
             .stage_api_key(self.host.ctx.principal(), key)
             .map_err(|e| e.to_string())
     }
+    fn stage_mcp_api_key(&self, key: Secret) -> Result<Id, String> {
+        self.host
+            .connections
+            .stage_mcp_api_key(self.host.ctx.principal(), key)
+            .map_err(|e| e.to_string())
+    }
     fn generate_database_encryption_key(&self) -> Result<Secret, String> {
         self.host
             .runtime

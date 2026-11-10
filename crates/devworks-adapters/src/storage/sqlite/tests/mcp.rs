@@ -889,6 +889,12 @@ fn journaled_discovery_publishes_selected_read_only_catalog() {
     let published = servers(&h, &store, &cases).pop().unwrap();
     assert_eq!(published.catalog_revision.get(), 2);
     assert_eq!(published.selected_tool_ids.0.len(), 1);
+    let selected = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+        service.selected_tool_materials(&context(&store), snapshot)
+    })
+    .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert!(selected[0].alias.wire_name.len() <= 64);
     assert!(
         matches!(capabilities(&h, &store, &cases, &server.id, 2), DomainQueryReply::Result { result: OperationResult::McpCapabilities { value }, .. } if value.items.0.len() == 1)
     );
