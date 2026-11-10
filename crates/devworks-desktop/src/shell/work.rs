@@ -2934,6 +2934,38 @@ fn message_board(ui: &mut Ui, board: &mut MessageBoard, open: bool, actions: &mu
             if !meta.is_empty() {
                 widgets::caption(ui, meta.join(" · "));
             }
+            // Project history retains read questions after their inbox delivery is acknowledged.
+            // Keep their resolution actions available while the question remains open.
+            if message.to_human
+                && matches!(
+                    message.kind,
+                    devworks_core::protocol::records::RetainedMessageKind::Question
+                        | devworks_core::protocol::records::RetainedMessageKind::Request
+                )
+                && matches!(
+                    message.state,
+                    Some(devworks_core::protocol::records::RetainedMessageState::Open)
+                )
+            {
+                if ui
+                    .add_enabled(open, egui::Button::new("Answer question"))
+                    .clicked()
+                {
+                    actions.push(Action::AckMessage(
+                        message.id.as_str().to_owned(),
+                        Some("Answered"),
+                    ));
+                }
+                if ui
+                    .add_enabled(open, egui::Button::new("Decline question"))
+                    .clicked()
+                {
+                    actions.push(Action::AckMessage(
+                        message.id.as_str().to_owned(),
+                        Some("Declined"),
+                    ));
+                }
+            }
         });
     }
     if board.history_before.is_some() && widgets::secondary_button(ui, "Older messages").clicked() {

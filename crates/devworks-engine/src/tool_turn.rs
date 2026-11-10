@@ -589,6 +589,31 @@ pub(crate) fn continuation_context(
     binding: &NativeBinding,
     previous: &devworks_core::protocol::provider::ArtifactRef,
 ) -> Result<ContinuationMaterial, StorageError> {
+    continuation_context_at_epoch(store, artifacts, ctx, source, binding, previous, false)
+}
+
+/// A membership transfer has already incremented the session epoch; assemble the settled
+/// previous-epoch turn before publishing the destination epoch root.
+pub(crate) fn handoff_continuation_context(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    source: TurnSource<'_>,
+    binding: &NativeBinding,
+    previous: &devworks_core::protocol::provider::ArtifactRef,
+) -> Result<ContinuationMaterial, StorageError> {
+    continuation_context_at_epoch(store, artifacts, ctx, source, binding, previous, true)
+}
+
+fn continuation_context_at_epoch(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    source: TurnSource<'_>,
+    binding: &NativeBinding,
+    previous: &devworks_core::protocol::provider::ArtifactRef,
+    handoff: bool,
+) -> Result<ContinuationMaterial, StorageError> {
     let TurnSource {
         session_id,
         attempt_id,
@@ -628,7 +653,8 @@ pub(crate) fn continuation_context(
                 .inference_attempt(&attempt_id.0)?
                 .ok_or(StorageError::ScopeDenied)?;
             if session.closed()
-                || session.context_epoch != binding.context_epoch.get()
+                || (session.context_epoch != binding.context_epoch.get()
+                    && !(handoff && session.context_epoch == binding.context_epoch.get() + 1))
                 || attempt.session_id.as_ref() != Some(session_id)
                 || attempt.connection_id != binding.connection_id
                 || attempt.catalog_model_id != binding.model_id

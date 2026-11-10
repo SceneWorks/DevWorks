@@ -14,6 +14,9 @@ struct MovedWorker {
 }
 impl MovedWorker {
     fn new() -> Self {
+        Self::new_with_child(false)
+    }
+    fn new_with_child(child: bool) -> Self {
         let f = Fx::new();
         for name in ["feature-a", "feature-b"] {
             f.seed(name, None, "feature", 1);
@@ -95,19 +98,19 @@ impl MovedWorker {
                         },
                     )?
                     .unwrap();
-                let worker = service
-                    .register_assignment(
-                        tx,
-                        &actor,
-                        NewRunAssignment {
-                            root: RootId(id("feature-a")),
-                            work: RootId(id("moving")),
-                            parent: Some(coordinator_a.id),
-                            session: sid.clone(),
-                            scope_key: Some("E1".into()),
-                        },
-                    )?
-                    .unwrap();
+                let request = NewRunAssignment {
+                    root: RootId(id("feature-a")),
+                    work: RootId(id("moving")),
+                    parent: Some(coordinator_a.id),
+                    session: sid.clone(),
+                    scope_key: Some("E1".into()),
+                };
+                let worker = if child {
+                    service.register_child_assignment(tx, &actor, request)?
+                } else {
+                    service.register_assignment(tx, &actor, request)?
+                }
+                .unwrap();
                 let worker = service
                     .set_assignment_state(
                         tx,
@@ -184,6 +187,68 @@ impl MovedWorker {
         })
         .unwrap()
     }
+}
+
+#[test]
+fn transferred_child_remains_schedulable_until_destination_launch() {
+    let m = MovedWorker::new_with_child(true);
+    m.change(Some("feature-b"));
+    m.settle();
+    m.reconcile();
+    let moved = m.assignment();
+    assert_eq!(moved.root_id, RootId(id("feature-b")));
+    assert_eq!(moved.execution_id, Some(m.activation_b.id));
+    assert_eq!(moved.state, AssignmentState::Waiting);
+    assert!(!moved.slot_held);
+}
+
+#[test]
+fn moving_a_secondary_delegated_task_fences_the_worker_without_moving_its_primary_task() {
+    let m = MovedWorker::new();
+    m.f.seed("secondary", Some("feature-a"), "task", 1);
+    write(&*m.f.store, |tx| {
+        let mut task = tx.work().work(&id("secondary"))?.unwrap();
+        task.revision = 2;
+        task.brief = json!({"inherits":["E1"]});
+        tx.work().update_work(&task, 1)
+    })
+    .unwrap();
+    let worker = m.worker.id.clone();
+    write(&*m.f.store, move |tx| {
+        tx.runs()
+            .insert_agent_assignment_context(&StoredAgentAssignmentContext {
+                assignment_id: worker,
+                project_id: ProjectId(id("project")),
+                role_id: id("worker"),
+                role_instructions: "Work on both tasks".into(),
+                role_revisions: json!({}),
+                brief: "Work on both tasks".into(),
+                task_ids: json!(["moving", "secondary"]),
+                source_checkpoint_id: None,
+                created_at_ms: 1,
+            })
+    })
+    .unwrap();
+    let revision = read(&*m.f.store, |s| s.work().work(&id("secondary")))
+        .unwrap()
+        .revision;
+    applied(m.f.command(
+        "tasks.set_feature",
+        json!({"taskId":"secondary","expectedRevision":revision.to_string(),"featureId":"feature-b","clearFeature":false}),
+    ));
+    assert_eq!(m.assignment().state, AssignmentState::Superseded);
+    m.settle();
+    m.reconcile();
+    let after = m.assignment();
+    assert_eq!(after.state, AssignmentState::Superseded);
+    assert_eq!(after.root_id, RootId(id("feature-a")));
+    assert_eq!(after.work_id, RootId(id("moving")));
+    assert_eq!(
+        read(&*m.f.store, |s| s.work().work(&id("moving")))
+            .unwrap()
+            .parent_feature_id,
+        Some(id("feature-a"))
+    );
 }
 
 #[test]

@@ -3,8 +3,8 @@
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::storage::{
-    ActivationOutcome, ApplicationStore, AssignmentState, Cancellation, ReadOptions, StorageError,
-    read_snapshot,
+    ActivationOutcome, ApplicationStore, ArtifactScope, AssignmentPurpose, AssignmentState,
+    Cancellation, ReadOptions, StorageError, StoredEpoch, WriteOptions, read_snapshot, run_write,
 };
 use devworks_core::ports::usage::{PriceQuery, PriceResolver};
 use devworks_core::protocol::provider::{
@@ -29,6 +29,7 @@ use serde_json::{Value, json};
 use std::sync::{Arc, Weak};
 use tokio::sync::watch;
 
+use devworks_core::services::artifacts::{host::HostArtifactPublication, version_ref};
 use devworks_core::services::prices::CatalogPriceResolver;
 use devworks_core::services::router::accounting::{AttemptSelection, PinFence, ReportCategory};
 use devworks_core::services::router::{Purpose, RequestAdmission};
@@ -227,6 +228,7 @@ async fn run_native_loop(
     retry_at_ms: &mut Option<i64>,
 ) -> Result<(), StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    ensure_membership_context(runtime, ctx, agent)?;
     let mut recovered = runtime.recover_native_context_head(ctx, session_id)?;
     let mut window = 0;
     let mut completed_windows = 0;
@@ -874,7 +876,6 @@ pub fn initial_context(
                 || ctx.project_id() != Some(&source.project_id)
                 || session.agent_id != *ctx.principal()
                 || session.closed()
-                || session.context_epoch != 0
                 || assignment.state != AssignmentState::Active
                 || agent.root_id != assignment.root_id
                 || agent.role_id != source.role_id
@@ -968,6 +969,343 @@ pub fn initial_context(
         .validate()
         .map_err(|e| StorageError::InvalidRecord(format!("agent provider context: {e:?}")))?;
     Ok(context)
+}
+
+/// A membership handoff advances the session epoch in the same transaction as its root change.
+/// Rebuild the provider root before the destination child sends another native request.
+pub fn ensure_membership_context(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    agent: &AgentRecord,
+) -> Result<(), StorageError> {
+    let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let pending = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+        let session = read
+            .sessions()
+            .session(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let assignment = read
+            .runs()
+            .assignment(&agent.assignment_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.closed()
+            || session.agent_id != *ctx.principal()
+            || session.root_id.as_ref() != ctx.root_id()
+            || assignment.session_id != *session_id
+            || assignment.root_id != agent.root_id
+            || assignment.state != AssignmentState::Active
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let epoch = session.context_epoch;
+        if epoch == 0 || read.sessions().epoch(session_id, epoch)?.is_some() {
+            return Ok(None);
+        }
+        if assignment.purpose != AssignmentPurpose::Child || assignment.generation == 0 {
+            return Err(StorageError::ScopeDenied);
+        }
+        let previous = epoch - 1;
+        let head = read.sessions().provider_context_head(session_id)?;
+        let source = if let Some(head) = head.filter(|head| head.context_epoch == previous) {
+            Some(head.artifact)
+        } else if previous > 0 {
+            read.sessions()
+                .epoch(session_id, previous)?
+                .map(|epoch| epoch.context)
+        } else {
+            None
+        };
+        Ok(Some((epoch, session.last_durable_sequence(), source)))
+    })?;
+    let Some((epoch, sequence, source)) = pending else {
+        return Ok(());
+    };
+    let fresh = initial_context(runtime.store().as_ref(), ctx, agent)?;
+    let host = HostIngress::new(runtime.store().as_ref())
+        .context(
+            runtime.store().info().host_actor,
+            PrincipalKind::Host,
+            ctx.invocation_id().clone(),
+            Id::new("membership-context").expect("static ingress"),
+            Counter::new(runtime.store().info().restore_epoch)
+                .map_err(|_| StorageError::ScopeDenied)?,
+            Revision::new(1).expect("positive policy revision"),
+        )
+        .with_session(session_id.clone())
+        .with_lineage(ctx.project_id().cloned(), ctx.root_id().cloned(), None);
+    let previous = source
+        .as_ref()
+        .map(|source| {
+            let reference: ArtifactRef =
+                serde_json::from_value(source.clone()).map_err(|_| StorageError::ScopeDenied)?;
+            let (bytes, provenance) = runtime
+                .artifacts()
+                .read_exact(runtime.store().as_ref(), &host, &reference, 8 * 1024 * 1024)
+                .map_err(|_| StorageError::ScopeDenied)?;
+            let context: ProviderContext =
+                serde_json::from_slice(&bytes).map_err(|_| StorageError::ScopeDenied)?;
+            let binding: NativeBinding =
+                serde_json::from_value(provenance["derived"]["binding"].clone())
+                    .map_err(|_| StorageError::ScopeDenied)?;
+            let observed = provenance["derived"]["observedSequence"]
+                .as_i64()
+                .ok_or(StorageError::ScopeDenied)?;
+            if binding.context_epoch.get() != epoch - 1 {
+                return Err(StorageError::ScopeDenied);
+            }
+            if observed < 0 || observed > sequence {
+                return Err(StorageError::ScopeDenied);
+            }
+            Ok((context, binding, observed, reference))
+        })
+        .transpose()?;
+    let previous = match previous {
+        Some((mut context, binding, observed, reference)) => {
+            if observed < sequence {
+                match unpublished_turn(runtime.store().as_ref(), ctx, session_id, observed)? {
+                    Some(UnpublishedTurn::Settled {
+                        attempt_id,
+                        has_tools,
+                    }) => {
+                        let material = crate::tool_turn::handoff_continuation_context(
+                            runtime.store().as_ref(),
+                            runtime.artifacts(),
+                            ctx,
+                            crate::tool_turn::TurnSource {
+                                session_id,
+                                attempt_id: &attempt_id,
+                                after_sequence: observed,
+                                has_tools,
+                            },
+                            &binding,
+                            &reference,
+                        )?;
+                        if material.observed_sequence != sequence {
+                            return Err(StorageError::ScopeDenied);
+                        }
+                        context = material.context;
+                    }
+                    Some(UnpublishedTurn::Interrupted {
+                        sequence: interrupted_at,
+                        facts,
+                        ..
+                    }) => {
+                        if interrupted_at != sequence {
+                            return Err(StorageError::ScopeDenied);
+                        }
+                        context.messages.push(Message {
+                            role: MessageRole::User,
+                            content: vec![ContentBlock::Text {
+                                text: "Host notice: The previous assistant response was interrupted before completion. Continue from the last completed step; do not assume the partial response was applied.".into(),
+                                cache: None,
+                            }],
+                        });
+                        for fact in facts {
+                            context
+                                .messages
+                                .push(crate::tool_turn::context_fact_message(
+                                    runtime.store().as_ref(),
+                                    runtime.artifacts(),
+                                    ctx,
+                                    session_id,
+                                    fact,
+                                )?);
+                        }
+                    }
+                    None => context.messages.extend(handoff_fact_messages(
+                        runtime, ctx, session_id, observed, sequence,
+                    )?),
+                }
+            }
+            Some((context, binding))
+        }
+        None => None,
+    };
+    let missing_head_facts = if source.is_none() && sequence > 0 {
+        if unpublished_turn(runtime.store().as_ref(), ctx, session_id, 0)?.is_some() {
+            return Err(StorageError::ScopeDenied);
+        }
+        handoff_fact_messages(runtime, ctx, session_id, 0, sequence)?
+    } else {
+        Vec::new()
+    };
+    let tools_required = !runtime
+        .providers()
+        .ok_or(StorageError::ScopeDenied)?
+        .schemas()
+        .selected_builtins(ctx)?
+        .is_empty();
+    let needs_images = previous.as_ref().map_or_else(
+        || context_has_images(&fresh),
+        |(context, _)| context_has_images(context),
+    );
+    let route = route_context_head(
+        runtime,
+        ctx,
+        session_id,
+        epoch,
+        None,
+        tools_required,
+        needs_images,
+    )?;
+    let binding = binding_for_route(runtime, &route, epoch)?;
+    let (mut context, omitted) = if let Some((previous, old_binding)) = previous {
+        previous
+            .converted_for_new_epoch(&old_binding, &binding)
+            .map_err(|error| StorageError::InvalidRecord(format!("handoff context: {error:?}")))?
+    } else {
+        let mut context = fresh.clone();
+        context.messages.extend(missing_head_facts);
+        (context, Vec::new())
+    };
+    context.instructions = fresh.instructions;
+    context.instruction_stamps.clear();
+    context.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![ContentBlock::Text {
+            text: format!(
+                "Host notice: This assignment moved to root {}. Recheck its current requirements and plan before acting; earlier context remains history.",
+                agent.root_id.0.as_str()
+            ),
+            cache: None,
+        }],
+    });
+    let context = runtime.bind_provider_instructions(ctx, context, &[])?;
+    context
+        .validate()
+        .map_err(|error| StorageError::InvalidRecord(format!("handoff context: {error:?}")))?;
+    let bytes = serde_json::to_vec(&context)
+        .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
+    let staged = runtime
+        .artifacts()
+        .stage_host_bytes(
+            runtime.store().as_ref(),
+            &bytes,
+            json!({"kind":"ProviderContextEpoch","reason":"MembershipHandoff",
+                "sessionId":session_id,"previousEpoch":epoch-1,"nextEpoch":epoch,
+                "omittedNative":omitted}),
+        )?
+        .map_err(StorageError::InvalidRecord)?;
+    let staged_for_write = staged.clone();
+    let service = runtime.artifacts().clone();
+    let session_id = session_id.clone();
+    let ctx = ctx.clone();
+    let assignment_id = agent.assignment_id.clone();
+    let root_id = agent.root_id.clone();
+    let committed = run_write(
+        runtime.store().as_ref(),
+        WriteOptions::default(),
+        move |tx| {
+            let session = tx
+                .sessions()
+                .session(&session_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let assignment = tx
+                .runs()
+                .assignment(&assignment_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if session.closed()
+                || session.context_epoch != epoch
+                || session.last_durable_sequence() != sequence
+                || tx.sessions().epoch(&session_id, epoch)?.is_some()
+                || assignment.state != AssignmentState::Active
+                || assignment.root_id != root_id
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            let scope = session
+                .project_id
+                .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+            let version = service.commit_host_bytes_in_scope(
+                tx,
+                &staged_for_write,
+                HostArtifactPublication {
+                    title: "Membership handoff context",
+                    media_type: "application/vnd.devworks.provider-context+json",
+                    provenance: json!({"kind":"ProviderContextEpoch","reason":"MembershipHandoff",
+                "sessionId":session_id,"previousEpoch":epoch-1,"binding":binding,
+                "observedSequence":sequence,"omittedNative":omitted}),
+                    scope,
+                    owner: ctx.principal().clone(),
+                },
+            )?;
+            let reference = version_ref(&version);
+            let created_at_ms = tx.now_ms();
+            tx.sessions().insert_epoch(&StoredEpoch {
+                session_id: session_id.clone(),
+                epoch,
+                previous_epoch: epoch - 1,
+                reason: "MembershipHandoff".into(),
+                context: json!(reference),
+                identity: devworks_core::services::sessions::transcript::epoch_identity(
+                    &session_id,
+                    epoch,
+                    &reference,
+                ),
+                sequence,
+                created_at_ms,
+            })?;
+            Ok(())
+        },
+    );
+    runtime
+        .artifacts()
+        .settle_host_bytes(runtime.store().as_ref(), &staged, committed.is_ok());
+    committed
+}
+
+fn handoff_fact_messages(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    after: i64,
+    sequence: i64,
+) -> Result<Vec<Message>, StorageError> {
+    let facts = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+        let mut position = after;
+        let mut facts = Vec::new();
+        while position < sequence {
+            if position - after >= 10_000 {
+                return Err(StorageError::InvalidRecord(
+                    "handoff transcript exceeds scan bound".into(),
+                ));
+            }
+            let page = read.sessions().entries(session_id, position, 500)?;
+            if page.is_empty() {
+                return Err(StorageError::InvalidRecord("handoff transcript gap".into()));
+            }
+            for entry in page {
+                if entry.sequence != position + 1 || entry.sequence > sequence {
+                    return Err(StorageError::InvalidRecord("handoff transcript gap".into()));
+                }
+                position = entry.sequence;
+                let body: TranscriptBody =
+                    serde_json::from_value(entry.body).map_err(|_| StorageError::ScopeDenied)?;
+                if !matches!(
+                    body,
+                    TranscriptBody::UserMessage { .. }
+                        | TranscriptBody::HostNotice { .. }
+                        | TranscriptBody::OperationUpdate { .. }
+                ) {
+                    return Err(StorageError::ScopeDenied);
+                }
+                facts.push(body);
+            }
+        }
+        Ok(facts)
+    })?;
+    facts
+        .into_iter()
+        .map(|fact| {
+            crate::tool_turn::context_fact_message(
+                runtime.store().as_ref(),
+                runtime.artifacts(),
+                ctx,
+                session_id,
+                fact,
+            )
+        })
+        .collect()
 }
 
 /// Publish a materialized assignment's first bound prompt after the current route resolves.

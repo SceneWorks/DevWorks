@@ -138,11 +138,11 @@ impl AgentLauncher {
                         .sessions()
                         .session(&assignment.session_id)?
                         .ok_or(StorageError::ScopeDenied)?;
-                    Ok(Ok((child, session)))
+                    Ok(Ok((child, session, assignment.generation)))
                 })
                 .await
             };
-            let (child, session) = match child {
+            let (child, session, generation) = match child {
                 Ok(Ok(value)) => value,
                 Ok(Err(fenced)) => return ChildLaunch::Fenced(fenced),
                 Err(error) => return ChildLaunch::End(failed(error)),
@@ -163,18 +163,46 @@ impl AgentLauncher {
             if *stop_watch.borrow() {
                 return ChildLaunch::End(stopped());
             }
+            let assignment_id = child.assignment_id.clone();
+            let current = store::read(&store, move |snapshot| {
+                snapshot.runs().assignment(&assignment_id)
+            })
+            .await;
+            match current {
+                Ok(Some(assignment))
+                    if assignment.root_id == child.root_id
+                        && assignment.execution_id.as_ref() == Some(&activation_id)
+                        && assignment.generation == generation
+                        && assignment.state == AssignmentState::Active => {}
+                Ok(_) => {
+                    return ChildLaunch::Fenced(Fenced::NotFound("child no longer owned here"));
+                }
+                Err(error) => return ChildLaunch::End(failed(error)),
+            }
             if let LaunchEnd::Finished {
                 outcome: devworks_core::ports::storage::ActivationOutcome::Completed,
                 ..
             } = &end
             {
                 let assignment_id = child.assignment_id;
+                let child_root = child.root_id;
                 loop {
                     let agents_for_write = agents.clone();
                     let host_for_write = host.clone();
                     let assignment_for_write = assignment_id.clone();
                     let activation_for_write = activation_id.clone();
+                    let root_for_write = child_root.clone();
                     let complete = store::write(&store, move |tx| {
+                        let Some(current) = tx.runs().assignment(&assignment_for_write)? else {
+                            return Ok(Some(false));
+                        };
+                        if current.root_id != root_for_write
+                            || current.execution_id.as_ref() != Some(&activation_for_write)
+                            || current.generation != generation
+                            || current.state != AssignmentState::Active
+                        {
+                            return Ok(Some(false));
+                        }
                         match agents_for_write.complete_child(
                             tx,
                             &host_for_write,
@@ -182,7 +210,7 @@ impl AgentLauncher {
                             &activation_for_write,
                             epoch,
                         ) {
-                            Ok(()) => return Ok(true),
+                            Ok(()) => return Ok(Some(true)),
                             Err(Failure::Refused(refusal))
                                 if refusal.code == DomainErrorCode::Conflict
                                     && refusal.target_kind == "assignment" => {}
@@ -199,12 +227,17 @@ impl AgentLauncher {
                                 epoch,
                             )
                             .map_err(failure)?;
-                        Ok(false)
+                        Ok(None)
                     })
                     .await;
                     match complete {
-                        Ok(true) => break,
-                        Ok(false) => {}
+                        Ok(Some(true)) => break,
+                        Ok(Some(false)) => {
+                            return ChildLaunch::Fenced(Fenced::NotFound(
+                                "child no longer owned here",
+                            ));
+                        }
+                        Ok(None) => {}
                         Err(error) => return ChildLaunch::End(failed(error)),
                     }
                     if *stop_watch.borrow() {

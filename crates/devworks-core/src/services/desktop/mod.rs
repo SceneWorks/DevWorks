@@ -757,46 +757,94 @@ impl DesktopService {
         })
     }
 
+    fn validate_capture_consent(
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        desktop_id: &Id,
+    ) -> Result<(), Failure> {
+        let key = canonical_key(
+            ResourceScopeKind::Machine,
+            None,
+            crate::services::resources::DESKTOP,
+        );
+        let resource = tx
+            .resources()
+            .resource_by_key(&key)?
+            .filter(|resource| resource.id == *desktop_id)
+            .ok_or(StorageError::ScopeDenied)?;
+        let lease = tx
+            .resources()
+            .holders(&resource.id, 0, 1)?
+            .into_iter()
+            .next()
+            .ok_or(StorageError::ScopeDenied)?;
+        let consent_id = lease
+            .purpose
+            .as_deref()
+            .and_then(|purpose| purpose.strip_prefix(CONSENT_PURPOSE))
+            .and_then(|id| Id::new(id).ok())
+            .ok_or(StorageError::ScopeDenied)?;
+        Self::validate_consent(tx, ctx, desktop_id, &lease.id, lease.fence, &consent_id)
+    }
+
     fn validate_input(
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         input: &ops::InputInput,
     ) -> Result<(), Failure> {
-        let lease = tx.resources().lease(&input.lease_id)?.ok_or_else(|| {
+        Self::validate_consent(
+            tx,
+            ctx,
+            &input.desktop_id,
+            &input.lease_id,
+            input.expected_fence.get(),
+            &input.consent_id,
+        )
+    }
+
+    fn validate_consent(
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        desktop_id: &Id,
+        lease_id: &Id,
+        expected_fence: i64,
+        consent_id: &Id,
+    ) -> Result<(), Failure> {
+        let lease = tx.resources().lease(lease_id)?.ok_or_else(|| {
             Refusal::new(
                 DomainErrorCode::NotFound,
                 "desktop_lease",
-                Some(input.lease_id.clone()),
+                Some(lease_id.clone()),
             )
         })?;
         if lease.owner != *ctx.principal()
-            || lease.resource_id != input.desktop_id
+            || lease.resource_id != *desktop_id
             || lease.session_id.as_ref() != ctx.session_id()
             || lease.project_id.as_ref() != ctx.project_id()
             || lease.phase != LeasePhase::Held
             || lease.expires_at_ms <= tx.now_ms()
-            || lease.fence != input.expected_fence.get()
+            || lease.fence != expected_fence
             || lease.purpose.as_deref()
-                != Some(format!("{CONSENT_PURPOSE}{}", input.consent_id.as_str()).as_str())
+                != Some(format!("{CONSENT_PURPOSE}{}", consent_id.as_str()).as_str())
         {
             return Err(Refusal::new(
                 DomainErrorCode::LeaseLost,
                 "desktop_lease",
-                Some(input.lease_id.clone()),
+                Some(lease_id.clone()),
             )
             .into());
         }
-        let approval = tx.decisions().approval(&input.consent_id)?.ok_or_else(|| {
+        let approval = tx.decisions().approval(consent_id)?.ok_or_else(|| {
             Refusal::new(
                 DomainErrorCode::PermissionDenied,
                 "desktop_consent",
-                Some(input.consent_id.clone()),
+                Some(consent_id.clone()),
             )
         })?;
         let audit = tx
             .decisions()
-            .human_decision(ApprovalSource::Generic, &input.consent_id)?;
-        let resume = tx.decisions().approval_resume(&input.consent_id)?;
+            .human_decision(ApprovalSource::Generic, consent_id)?;
+        let resume = tx.decisions().approval_resume(consent_id)?;
         let issued = resume.as_ref().and_then(|resume| {
             if resume.state != "Admitted"
                 || resume.operation != "desktop.request_control"
@@ -810,7 +858,7 @@ impl DesktopService {
             let approved_ms = request.lease_ms.0.parse::<i64>().ok()?;
             let granted = lease.granted_at_ms?;
             let approved_until = granted.checked_add(approved_ms)?;
-            if request.desktop_id != input.desktop_id
+            if request.desktop_id != *desktop_id
                 || lease.lease_ms != approved_ms
                 || lease.requested_at_ms < approval.decided_at_ms?
                 || tx.now_ms() >= approved_until
@@ -836,7 +884,7 @@ impl DesktopService {
         });
         if approval.state != "Approved"
             || approval.operation_kind != "desktop.request_control"
-            || approval.target_id != input.desktop_id
+            || approval.target_id != *desktop_id
             || approval.author != *ctx.principal()
             || approval.scope
                 != ctx
@@ -847,7 +895,7 @@ impl DesktopService {
             || audit
                 .as_ref()
                 .is_none_or(|decision| decision.decision != "Approved")
-            || issued.as_ref() != Some(&input.lease_id)
+            || issued.as_ref() != Some(lease_id)
             || !approval.decided_by.as_ref().is_some_and(|id| {
                 tx.actors().actor_kind(id).ok().flatten() == Some(PrincipalKind::Human)
             })
@@ -855,7 +903,7 @@ impl DesktopService {
             return Err(Refusal::new(
                 DomainErrorCode::PermissionDenied,
                 "desktop_consent",
-                Some(input.consent_id.clone()),
+                Some(consent_id.clone()),
             )
             .into());
         }
@@ -1078,6 +1126,15 @@ impl QueryHandler for DesktopService {
                 Some(input.desktop_id.clone()),
             ));
         }
+        if ctx.principal_kind() == PrincipalKind::Agent {
+            let capture_ctx = ctx.clone();
+            let desktop_id = input.desktop_id.clone();
+            run_write(&*self.store, WriteOptions::default(), move |tx| {
+                Self::validate_capture_consent(tx, &capture_ctx, &desktop_id)
+                    .map_err(|_| StorageError::ScopeDenied)
+            })
+            .map_err(|_| self.fault(DomainErrorCode::PermissionDenied, "desktop_consent", None))?;
+        }
         let tested_repository = self
             .tested_source(ctx, &|| env.stopped(self.clock.now_ms().get()))
             .map_err(|failure| query_fault(failure, "git_source", self.correlation()))?;
@@ -1117,6 +1174,8 @@ impl QueryHandler for DesktopService {
         let target = input.desktop_id.clone();
         let expected = input.expected_revision.clone();
         let binding = source_binding;
+        let capture_ctx = ctx.clone();
+        let capture_agent = ctx.principal_kind() == PrincipalKind::Agent;
         let (reference, ()) = self
             .artifacts
             .publish_evidence(&*self.store, evidence, &png, move |tx, _ref| {
@@ -1155,6 +1214,10 @@ impl QueryHandler for DesktopService {
                         expected.clone(),
                         current,
                     ));
+                }
+                if capture_agent {
+                    Self::validate_capture_consent(tx, &capture_ctx, &target)
+                        .map_err(|_| StorageError::ScopeDenied)?;
                 }
                 Ok(())
             })

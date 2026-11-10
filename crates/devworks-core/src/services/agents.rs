@@ -102,6 +102,92 @@ fn source_assignment(
     Ok(Some(id.clone()))
 }
 
+fn sender_can_read_attachment(
+    tx: &mut dyn WriteTransaction,
+    sender: Option<&AssignmentId>,
+    root: &crate::protocol::RootId,
+    reference: &ArtifactRef,
+) -> Result<bool, StorageError> {
+    let Some(sender) = sender else {
+        return Ok(true);
+    };
+    let assignment = tx.runs().assignment(sender)?.ok_or_else(denied)?;
+    let coordinator = assignment.parent_id.is_none();
+    if tx
+        .artifacts()
+        .artifact(&reference.artifact_id)?
+        .is_some_and(|artifact| {
+            artifact.origin_work_id.as_ref() == Some(root)
+                && (coordinator
+                    || artifact.provenance["assignmentId"].as_str() == Some(sender.0.as_str()))
+        })
+    {
+        return Ok(true);
+    }
+    let context = tx
+        .runs()
+        .agent_assignment_context(sender)?
+        .ok_or_else(denied)?;
+    let task_ids: Vec<Id> = serde_json::from_value(context.task_ids)
+        .map_err(|_| StorageError::InvalidRecord("assignment task scope".into()))?;
+    for link in tx.artifacts().links(&reference.artifact_id)? {
+        if link.purpose != crate::ports::storage::LinkPurpose::Reference
+            || link.version_id != reference.version_id
+        {
+            continue;
+        }
+        if link.subject.kind == "root"
+            && sender_scopes_root_subject(tx, &assignment, &task_ids, root, &link.subject.id)?
+            || link.subject.kind == "assignment"
+                && (link.subject.id == sender.0
+                    || coordinator
+                        && tx
+                            .runs()
+                            .assignment(&AssignmentId(link.subject.id))?
+                            .is_some_and(|a| a.root_id == *root))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn sender_scopes_root_subject(
+    tx: &mut dyn WriteTransaction,
+    assignment: &StoredAssignment,
+    task_ids: &[Id],
+    root: &crate::protocol::RootId,
+    subject: &Id,
+) -> Result<bool, StorageError> {
+    if subject == &root.0 {
+        return Ok(true);
+    }
+    if assignment.parent_id.is_none() {
+        return Ok(tx
+            .work()
+            .work(subject)?
+            .is_some_and(|work| work.parent_feature_id.as_ref() == Some(&root.0)));
+    }
+    if subject != &assignment.work_id.0 && !task_ids.contains(subject) {
+        return Ok(false);
+    }
+    let current_root = tx.sessions().work_root(root)?;
+    let current_task = tx
+        .sessions()
+        .work_root(&crate::protocol::RootId(subject.clone()))?;
+    Ok(current_root
+        .zip(current_task)
+        .is_some_and(|(root_work, task)| {
+            task.project_id == root_work.project_id
+                && task.kind != "feature"
+                && (if root_work.kind == "feature" {
+                    task.parent_feature_id.as_ref() == Some(&root_work.id)
+                } else {
+                    task.id == root_work.id
+                })
+        }))
+}
+
 fn query_source_assignment(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
@@ -747,6 +833,25 @@ impl AgentService {
         let role_id = crate::protocol::Id::new(role.as_str()).map_err(|_| denied())?;
         if input.instruction.0.trim().is_empty() {
             return Err(Refusal::new(DomainErrorCode::InvalidArgument, "instruction", None).into());
+        }
+        if parent_role == AgentRole::Worker {
+            let parent_assignment = tx.runs().assignment(&parent)?.ok_or_else(denied)?;
+            let parent_tasks: Vec<crate::protocol::Id> =
+                serde_json::from_value(parent_context.task_ids.clone())
+                    .map_err(|_| StorageError::InvalidRecord("invalid parent task scope".into()))?;
+            if input.task_ids.0.is_empty() && parent_assignment.work_id != root.id {
+                return Err(Refusal::new(DomainErrorCode::PermissionDenied, "task", None).into());
+            }
+            for task in &input.task_ids.0 {
+                if task != &parent_assignment.work_id.0 && !parent_tasks.contains(task) {
+                    return Err(Refusal::new(
+                        DomainErrorCode::PermissionDenied,
+                        "task",
+                        Some(task.clone()),
+                    )
+                    .into());
+                }
+            }
         }
         for task in &input.task_ids.0 {
             let work = tx
@@ -1557,6 +1662,23 @@ pub fn post_assignment(
         )? {
             return Err(denied());
         }
+        if !sender_can_read_attachment(tx, sender.as_ref(), &recipient.root_id, attachment)? {
+            return Err(denied());
+        }
+    }
+    // Delivery itself grants the exact immutable version to this recipient. Record that grant
+    // with the message in the same transaction so an inbox reference is immediately readable.
+    for attachment in &input.attachments.0 {
+        crate::services::artifacts::reference_from_host_owner(
+            tx,
+            ctx,
+            attachment,
+            &crate::ports::storage::SubjectKey {
+                kind: "assignment",
+                id: recipient.id.0.clone(),
+            },
+            Some(recipient.root_id.clone()),
+        )?;
     }
     let now = tx.now_ms();
     let message = StoredAgentMessage {

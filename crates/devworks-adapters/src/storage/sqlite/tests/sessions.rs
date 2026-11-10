@@ -1401,6 +1401,61 @@ fn operation_status_and_command_receipts_are_scoped() {
 // Authority and scope
 
 #[test]
+fn bound_agent_session_reads_stay_within_its_work_root() {
+    let fx = Fx::new();
+    fx.store.with_writer_connection(|conn| {
+        super::super::conn::db(conn.execute_batch(
+            "INSERT INTO work_items VALUES('root-c','project-a','feature',NULL,NULL,NULL,'Feature C',1,0,1,1,1,'{}');",
+        ))
+    }).unwrap();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    fx.seed_session("session-shared", "agent-p", Some("root-a"));
+    fx.seed_session("session-foreign", "agent-p", Some("root-c"));
+    let agent = fx.worker("agent-a", "session-a");
+    let listed = match result(fx.query(
+        &agent,
+        "sessions.list",
+        json!({
+            "scope":{"kind":"Project","projectId":"project-a"},"page":{"limit":50}
+        }),
+    )) {
+        OperationResult::SessionsList { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let ids: std::collections::HashSet<_> = listed.items.0.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        std::collections::HashSet::from(["session-a", "session-shared"])
+    );
+    result(fx.query(
+        &agent,
+        "sessions.get",
+        json!({"sessionId":"session-shared"}),
+    ));
+    assert_eq!(
+        fault(fx.query(
+            &agent,
+            "sessions.get",
+            json!({"sessionId":"session-foreign"})
+        ))
+        .code,
+        DomainErrorCode::NotFound
+    );
+    assert_eq!(
+        fault(fx.raw_query(
+            &agent,
+            "sessions.transcript",
+            json!({
+                "protocol":"1.0-draft.1","queryId":"foreign-transcript",
+                "sessionId":"session-foreign","limit":10
+            })
+        ))
+        .code,
+        DomainErrorCode::NotFound
+    );
+}
+
+#[test]
 fn reviewer_and_agent_scope_denials() {
     let fx = Fx::new();
     let s = fx.work_session();

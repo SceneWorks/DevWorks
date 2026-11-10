@@ -119,7 +119,7 @@ pub struct StoredEpoch {
     pub session_id: Id,
     pub epoch: i64,
     pub previous_epoch: i64,
-    /// `Compaction`, `ProviderChange` or `InstructionAdoption`.
+    /// `Compaction`, `ProviderChange`, `InstructionAdoption` or `MembershipHandoff`.
     pub reason: String,
     /// The immutable context snapshot (`ArtifactRef` JSON).
     pub context: Value,
@@ -223,6 +223,10 @@ pub enum SessionScope {
     All,
     /// Sessions of one project.
     Project(ProjectId),
+    /// Sessions of one work root in a project.
+    Root(ProjectId, RootId),
+    /// One session, used when an agent has no work root.
+    One(Id),
     /// Workspace (Home) sessions without a project.
     Workspace,
 }

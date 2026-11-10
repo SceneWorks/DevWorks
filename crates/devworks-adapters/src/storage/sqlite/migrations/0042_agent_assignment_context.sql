@@ -6,7 +6,8 @@ CREATE TABLE agent_assignment_context (
  role_id TEXT NOT NULL CHECK(length(role_id) BETWEEN 1 AND 120),
  role_instructions TEXT NOT NULL,
  role_revisions_json TEXT NOT NULL CHECK(json_valid(role_revisions_json)),
- brief TEXT NOT NULL CHECK(length(brief) BETWEEN 1 AND 65536),
+ -- A coordinator brief combines several independently bounded work fields and an approved plan.
+ brief TEXT NOT NULL CHECK(length(brief) >= 1),
  task_ids_json TEXT NOT NULL CHECK(json_valid(task_ids_json)),
  source_checkpoint_id TEXT,
  created_at INTEGER NOT NULL
