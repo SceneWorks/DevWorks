@@ -1255,6 +1255,41 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
         ),
         DomainQueryReply::Result { .. }
     ));
+    assert_eq!(
+        fault(fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &session_delivery),
+            None
+        ))
+        .code,
+        DomainErrorCode::PermissionDenied
+    );
+    let forwarded = session_delivery.clone();
+    let sender = coordinator.clone();
+    fx.write(move |tx| {
+        devworks_core::services::agents::post_assignment(
+            tx,
+            &sender,
+            &devworks_core::operations::agents::MessagesInput {
+                recipient_assignment_id: devworks_core::protocol::AssignmentId(id("scope-worker")),
+                message_class: devworks_core::protocol::records::MessageClass::Status,
+                content: devworks_core::protocol::support::BoundedText(
+                    "Use session delivery".into(),
+                ),
+                attachments: devworks_core::protocol::support::BoundedList(vec![forwarded]),
+            },
+        )
+    });
+    assert!(matches!(
+        fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &session_delivery),
+            None
+        ),
+        DomainQueryReply::Result { .. }
+    ));
     fx.source(
         "coordinator-source",
         "coordinator.txt",
