@@ -6274,3 +6274,64 @@ fn claim_seeds_never_prune_the_walk_and_whole_graph_pages_keep_cross_page_edges(
     expected.sort_by(|x, y| x.as_str().cmp(y.as_str()));
     assert_eq!(edges, expected);
 }
+
+#[test]
+fn claims_about_claims_stay_and_edge_bound_whole_graph_pages_name_a_frontier() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    let edge = |o: &str| {
+        json!({"kind": "Fact", "subjectId": "a", "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let w = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [
+            {"clientId": "a", "label": "Hub A", "entityType": "service", "aliases": []},
+            {"clientId": "b", "label": "Hub B", "entityType": "service", "aliases": []},
+            {"clientId": "c", "label": "Hub C", "entityType": "service", "aliases": []}],
+        "evidence": [], "claims": [edge("b"), edge("c")]}),
+    ));
+    let [a, b, c] = [0, 1, 2].map(|i| w.entity_ids.0[i].clone());
+    // All three entities on one page, one edge per entity: the omitted edge's neighbor is a
+    // continuation point.
+    let page = q(
+        "knowledge.subgraph",
+        json!({"neighborLimit": 1, "page": {"limit": 10}}),
+    );
+    assert_eq!(page.claims.0.len(), 1);
+    assert!(page.truncated);
+    assert!(page.next_cursor.is_none());
+    let shown = page.claims.0[0].object_id.clone().unwrap();
+    let hidden = if shown == b { &c } else { &b };
+    assert!(page.frontier.0.contains(hidden), "{:?}", page.frontier);
+    assert!(page.frontier.0.contains(&a), "{:?}", page.frontier);
+    // A claim about A whose object is another claim stays in an entity-seeded read.
+    let about = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({"entities": [], "evidence": [], "claims": [
+            {"kind": "Fact", "subjectId": a, "predicate": "confirms",
+            "objectId": w.claim_ids.0[0], "confidence": 0.9, "evidenceIds": [], "tags": []}]}),
+    ))
+    .claim_ids
+    .0[0]
+        .clone();
+    let seeded = q(
+        "knowledge.subgraph",
+        json!({"entityIds": [a], "maxDepth": 0}),
+    );
+    assert!(
+        seeded.claims.0.iter().any(|claim| claim.id == about),
+        "{:?}",
+        seeded.claims.0.iter().map(|c| &c.id).collect::<Vec<_>>()
+    );
+}

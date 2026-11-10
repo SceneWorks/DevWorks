@@ -433,7 +433,8 @@ fn select(
             .then(b.2.cmp(&a.2))
             .then(a.0.id.as_str().cmp(b.0.id.as_str()))
     });
-    // Claims: seeds first, then claims about kept entities (object absent or kept), newest first.
+    // Claims: seeds first, then claims about kept entities (object absent, a kept entity or a
+    // visible claim), newest first.
     let mut claims: Vec<(StoredClaim, KnowledgeClaim, i64)> = Vec::new();
     let mut seen: HashSet<Id> = HashSet::new();
     for claim in seed_claims {
@@ -453,9 +454,14 @@ fn select(
         let all = c.k.knowledge_entity_claims(&e.id, &c.keys, MAX_ROWS)?;
         truncated |= all.len() >= MAX_ROWS as usize;
         for claim in all.into_iter().take(500) {
-            if seen.contains(&claim.id)
-                || claim.subject_id != e.id
-                || claim.object_id.as_ref().is_some_and(|o| !kept.contains(o))
+            if seen.contains(&claim.id) || claim.subject_id != e.id {
+                continue;
+            }
+            // An entity object must be kept; a visible claim object is a fact about that
+            // claim and stays, without becoming a traversable endpoint.
+            if let Some(o) = claim.object_id.as_ref()
+                && !kept.contains(o)
+                && (c.entity(o)?.is_some() || c.claim(o)?.is_none())
             {
                 continue;
             }
@@ -1215,10 +1221,23 @@ fn full_graph(
     let mut claims = Vec::new();
     let mut seen = HashSet::new();
     let mut truncated = false;
+    // An entity whose edges pass the neighbor bound, and the visible neighbors behind the
+    // omitted edges, continue the page through frontier expansion as a seeded read does.
+    let mut frontier: Vec<Id> = Vec::new();
     let per = clamp(q.neighbor_limit.get(), 1, 500) as u16;
     for e in &page {
-        let (edges, _, edge_more) = c.edges(&e.id, per)?;
-        truncated |= edge_more;
+        let (edges, omitted, edge_more) = c.edges(&e.id, per)?;
+        if edge_more {
+            truncated = true;
+            if !frontier.contains(&e.id) {
+                frontier.push(e.id.clone());
+            }
+            for other in omitted {
+                if !frontier.contains(&other) && visible_object(&other)? {
+                    frontier.push(other);
+                }
+            }
+        }
         for claim in edges {
             let Some(object) = claim.object_id.as_ref() else {
                 continue;
@@ -1250,7 +1269,7 @@ fn full_graph(
     let s = Selection {
         entities: page.into_iter().map(|e| (e, 0, 0)).collect(),
         claims,
-        frontier: Vec::new(),
+        frontier,
         truncated,
     };
     let mut b = bundle(c, q, &s, false)?;
