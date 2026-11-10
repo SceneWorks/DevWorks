@@ -118,6 +118,14 @@ pub struct NativeInvocation {
     pub category: ReportCategory,
     pub attempt: AttemptRequest,
     pub request: InferenceRequest,
+    /// A text-only request made from inside one of this session's dispatching tool calls.
+    pub nested: Option<NestedToolInference>,
+}
+/// The request's output is an artifact; it never enters the transcript or moves the context head.
+#[derive(Clone)]
+pub struct NestedToolInference {
+    pub tool_operation: devworks_core::protocol::OperationId,
+    pub call: ToolCallKey,
 }
 pub struct ProviderInvocation {
     pub accounting: DriveOutcome,
@@ -420,6 +428,7 @@ impl NativeProviders {
                 category,
                 attempt,
                 request,
+                nested: None,
             },
             None,
         )
@@ -440,6 +449,7 @@ impl NativeProviders {
             category,
             mut attempt,
             mut request,
+            nested,
         } = invocation;
         if cancellation
             .as_ref()
@@ -493,9 +503,11 @@ impl NativeProviders {
             }
         }
         let compaction = matches!(request.purpose, InferencePurpose::Compaction);
+        let detached = compaction || nested.is_some();
         if compaction != (logical.purpose == devworks_core::services::router::Purpose::Compaction)
-            || (compaction
+            || (detached
                 && !matches!(&request.input, InferenceInput::Generation { tools, .. } if tools.is_empty()))
+            || (compaction && nested.is_some())
         {
             return Err(StorageError::ScopeDenied);
         }
@@ -518,7 +530,9 @@ impl NativeProviders {
                 // shared tool selection before the provider sees a tool schema.
                 return Err(StorageError::ScopeDenied);
             }
-            if !compaction {
+            if let Some(nested) = &nested {
+                self.require_dispatching_call(&context, session_id, nested)?;
+            } else if !compaction {
                 let fence = crate::tool_turn::require_current_head_for_new_request(
                     self.store.as_ref(),
                     &context,
@@ -547,6 +561,7 @@ impl NativeProviders {
             return Err(StorageError::ScopeDenied);
         }
         if let InferenceInput::Generation { session_id, .. } = &request.input
+            && nested.is_none()
             && !crate::tool_turn::pending_calls(self.store.as_ref(), &context, session_id)?
                 .is_empty()
         {
@@ -588,6 +603,7 @@ impl NativeProviders {
             ..
         } = &request.input
             && context_epoch.get() > 0
+            && nested.is_none()
         {
             // The epoch is host-published provenance, not a guess from a cache miss. Record
             // its reason on the attributed attempt without copying prompt or tool material.
@@ -702,6 +718,7 @@ impl NativeProviders {
             shared,
             result: result.clone(),
             turn_start_sequence,
+            detached,
             inner: None,
         };
         let request_id = logical.request_id.clone();
@@ -729,6 +746,28 @@ impl NativeProviders {
             result.lock().unwrap_or_else(|p| p.into_inner()).clone()
         };
         Ok(ProviderInvocation { accounting, result })
+    }
+    /// The nested request's tool call must still be dispatching for this principal and session.
+    fn require_dispatching_call(
+        &self,
+        context: &InvocationContext,
+        session_id: &Id,
+        nested: &NestedToolInference,
+    ) -> Result<(), StorageError> {
+        let operation = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+            read.operations().operation(&nested.tool_operation)
+        })?
+        .ok_or(StorageError::ScopeDenied)?;
+        let payload = &operation.payload;
+        if operation.capability != "mcp.tool"
+            || operation.state != devworks_core::protocol::OperationState::Dispatching
+            || payload.get("principal") != Some(&serde_json::json!(context.principal()))
+            || payload.get("sessionId") != Some(&serde_json::json!(session_id))
+            || payload.get("call") != Some(&serde_json::json!(nested.call))
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        Ok(())
     }
     pub(crate) fn recorded_result(
         &self,
@@ -1294,6 +1333,7 @@ struct LazySink {
     shared: SharedPrepared,
     result: ResultChannel,
     turn_start_sequence: Option<i64>,
+    detached: bool,
     inner: Option<ProviderSink>,
 }
 impl LazySink {
@@ -1341,6 +1381,8 @@ impl LazySink {
             self.inner = Some(
                 if matches!(self.request.purpose, InferencePurpose::Compaction) {
                     sink.with_compaction()
+                } else if self.detached {
+                    sink.with_sampled_text()
                 } else {
                     sink.with_live(self.owner.live.clone())
                 },

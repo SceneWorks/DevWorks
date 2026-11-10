@@ -58,13 +58,20 @@ enum ArtifactKind {
     Evidence,
     NativeContinuation,
     CompactionSummary,
+    SampledText,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Detached {
+    No,
+    Compaction,
+    SampledText,
 }
 pub struct ProviderSink {
     store: Arc<dyn ApplicationStore>,
     artifacts: Arc<ArtifactService>,
     context: InvocationContext,
     prepared: PreparedRequest,
-    compaction: bool,
+    detached: Detached,
     assembler: TurnAssembler,
     /// Private content slots use provider item/sub-block positions, independently of when
     /// completion evidence becomes releasable. No placeholder enters the transcript.
@@ -112,7 +119,7 @@ impl ProviderSink {
             artifacts,
             context,
             prepared,
-            compaction: false,
+            detached: Detached::No,
             assembler: TurnAssembler::positioned(),
             content: BTreeMap::new(),
             content_bytes: 0,
@@ -139,7 +146,12 @@ impl ProviderSink {
         }
     }
     pub(crate) fn with_compaction(mut self) -> Self {
-        self.compaction = true;
+        self.detached = Detached::Compaction;
+        self
+    }
+    /// Text for an MCP sampling request: an artifact only, with no transcript or live preview.
+    pub(crate) fn with_sampled_text(mut self) -> Self {
+        self.detached = Detached::SampledText;
         self
     }
     pub(crate) fn with_turn_start_sequence(mut self, sequence: Option<i64>) -> Self {
@@ -318,6 +330,7 @@ impl ProviderSink {
             ArtifactKind::Evidence => "ProviderEvidence",
             ArtifactKind::NativeContinuation => "ProviderNativeContinuation",
             ArtifactKind::CompactionSummary => "ProviderCompactionSummary",
+            ArtifactKind::SampledText => "ProviderSampledText",
         };
         fence.publication(|| {
             // Existing artifact staging journals and file publication run off the DB writer.
@@ -346,8 +359,8 @@ impl ProviderSink {
         call: DecodedToolCall,
         fence: &AccountingWriteFence,
     ) -> Result<(), StorageError> {
-        if self.compaction {
-            return Err(invalid("compaction cannot emit tool calls"));
+        if self.detached != Detached::No {
+            return Err(invalid("detached generation cannot emit tool calls"));
         }
         let tool = self
             .prepared
@@ -621,7 +634,10 @@ impl OwnedInferenceSink for ProviderSink {
                             .or(self.retry_at);
                 }
                 self.evidence(attempt,json!({"kind":observation.kind,"ordinal":observation.ordinal,"rawJson":observation.raw_json,"replay":format!("{:?}",observation.replay)}),fence)?;
-                if let Some(value) = observation.continuation.filter(|_| !self.compaction) {
+                if let Some(value) = observation
+                    .continuation
+                    .filter(|_| self.detached == Detached::No)
+                {
                     let bytes = serde_json::to_vec(&value)
                         .map_err(|_| invalid("native continuation JSON"))?;
                     let artifact = self.artifact(
@@ -853,26 +869,38 @@ impl ProviderSink {
             }
             return Ok(());
         }
-        if self.compaction {
-            if outcome == AttemptEnd::Completed {
+        if self.detached != Detached::No {
+            let compaction = self.detached == Detached::Compaction;
+            // A sampling request returns text that hit its token limit; compaction does not.
+            if outcome == AttemptEnd::Completed
+                || (!compaction && outcome == AttemptEnd::Incomplete)
+            {
                 let mut summary = String::new();
                 for (_, bodies) in std::mem::take(&mut self.content) {
                     for body in bodies {
                         let ProviderBody::TextDelta { text, .. } = body else {
-                            return Err(invalid("compaction emitted non-text content"));
+                            return Err(invalid("detached generation emitted non-text content"));
                         };
                         summary.push_str(&text);
                     }
                 }
-                if summary.trim().is_empty() {
+                if compaction && summary.trim().is_empty() {
                     return Err(invalid("empty compaction summary"));
                 }
+                let (title, kind) = if compaction {
+                    (
+                        "Provider compaction summary",
+                        ArtifactKind::CompactionSummary,
+                    )
+                } else {
+                    ("Provider sampled text", ArtifactKind::SampledText)
+                };
                 let artifact = self.artifact(
                     attempt,
                     summary.as_bytes(),
-                    "Provider compaction summary",
+                    title,
                     "text/plain; charset=utf-8",
-                    ArtifactKind::CompactionSummary,
+                    kind,
                     fence,
                 )?;
                 self.result

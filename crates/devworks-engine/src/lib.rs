@@ -217,6 +217,7 @@ mod instruction_guard;
 pub mod jobs;
 pub mod knowledge;
 pub mod mcp;
+pub mod mcp_sampling;
 pub mod notifications;
 pub mod package;
 pub mod package_host;

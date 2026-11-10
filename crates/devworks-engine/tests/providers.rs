@@ -709,6 +709,7 @@ impl Fx {
             category: ReportCategory::Assistant,
             attempt,
             request,
+            nested: None,
         }
     }
     fn transcript(&self) -> Vec<StoredEntry> {
@@ -2832,3 +2833,6 @@ mod selection_refresh;
 
 #[path = "providers/convention_index_compatibility.rs"]
 mod convention_index_compatibility;
+
+#[path = "providers/mcp_sampling.rs"]
+mod mcp_sampling;

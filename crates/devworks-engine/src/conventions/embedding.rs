@@ -363,6 +363,7 @@ impl NativeEmbeddings {
             category: ReportCategory::Other,
             attempt,
             request: inference,
+            nested: None,
         })
     }
     fn produce(
