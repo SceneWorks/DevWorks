@@ -243,9 +243,18 @@ pub fn post_message(
             "blocking requires a human item question".into(),
         ));
     }
-    if spec.blocking && ctx.principal_kind() == PrincipalKind::Agent {
+    if let Some(target) = &spec.item
+        && ctx.principal_kind() == PrincipalKind::Agent
+    {
         let own_root = ctx.root_id().ok_or(StorageError::ScopeDenied)?;
-        let target = spec.item.as_ref().ok_or(StorageError::ScopeDenied)?;
+        let assignment_id = ctx.assignment_id().ok_or(StorageError::ScopeDenied)?;
+        let assignment = tx
+            .runs()
+            .assignment(assignment_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if &assignment.root_id != own_root || ctx.session_id() != Some(&assignment.session_id) {
+            return Err(StorageError::ScopeDenied);
+        }
         if target != own_root {
             let target_work = tx
                 .sessions()
@@ -258,6 +267,17 @@ pub fn post_message(
             if own_work.kind != "feature"
                 || target_work.parent_feature_id.as_ref() != Some(own_root)
             {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+        if assignment.parent_id.is_some() {
+            let context = tx
+                .runs()
+                .agent_assignment_context(assignment_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let delegated: Vec<Id> = serde_json::from_value(context.task_ids)
+                .map_err(|_| StorageError::InvalidRecord("assignment task references".into()))?;
+            if target != &assignment.work_id && !delegated.contains(&target.0) {
                 return Err(StorageError::ScopeDenied);
             }
         }

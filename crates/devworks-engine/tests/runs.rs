@@ -1859,6 +1859,7 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
             .is_err())
     }));
     let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let child_agent_for_post = child_agent.clone();
     assert!(fx.tx(move |_, tx| Ok(agents.delegate(tx, &child_agent, &sibling_request).is_err())));
     assert_eq!(fx.inspection("root-f").assignments.len(), 2);
     let host = principal(&*fx.store, "child-host", PrincipalKind::Host);
@@ -1900,6 +1901,104 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
                 .agent_session_delivery(&live_second.message.id, &assignment.session_id)
         })
         .is_some()
+    );
+    let sibling_agent = child_agent_for_post.clone();
+    let sibling_refused = fx.tx(move |_, tx| {
+        Ok(matches!(
+            devworks_core::services::agents::retained::post_message(
+                tx,
+                &sibling_agent,
+                &devworks_core::services::agents::retained::PostSpec {
+                    project: ProjectId(id("project-a")),
+                    body: "Forged F3 blocker".into(),
+                    kind: devworks_core::services::agents::retained::MessageKind::Question,
+                    item: Some(rid("task-f3")),
+                    feature: None,
+                    resource: None,
+                    to_session: None,
+                    to_human: true,
+                    blocking: true,
+                    in_reply_to: None,
+                    resolves: None,
+                    idempotency_key: None,
+                },
+            ),
+            Err(StorageError::ScopeDenied)
+        ))
+    });
+    assert!(sibling_refused);
+    assert!(!read(&*fx.store, |s| s
+        .runs()
+        .open_blocking_question(&rid("task-f3"))));
+    fx.tx(move |_, tx| {
+        devworks_core::services::agents::retained::post_message(
+            tx,
+            &child_agent_for_post,
+            &devworks_core::services::agents::retained::PostSpec {
+                project: ProjectId(id("project-a")),
+                body: "F2 needs a human decision".into(),
+                kind: devworks_core::services::agents::retained::MessageKind::Question,
+                item: Some(rid("task-f2")),
+                feature: None,
+                resource: None,
+                to_session: None,
+                to_human: true,
+                blocking: true,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )
+    });
+    let root = fx.root("root-f");
+    let eligibility = read(&*fx.store, |snapshot| {
+        fx.service.evaluate(
+            snapshot.runs(),
+            &root,
+            &Target::Assignment(child.assignment_id.clone()),
+            ActivationPurpose::Implementation,
+        )
+    });
+    assert!(eligibility.conditions.iter().any(|c| {
+        c.reason.contains("open blocking question")
+            && matches!(&c.subject, devworks_core::protocol::Subject::Root(id) if id == &rid("task-f2"))
+    }));
+    assert!(!eligibility.eligible);
+}
+
+#[test]
+fn primary_coordinator_brief_accepts_a_full_length_work_description() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let description = "x".repeat(65_536);
+    rusqlite::Connection::open(fx.h.root.join("workspace.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE work_items SET brief_json=?1 WHERE id='root-i'",
+            [json!({"description": description}).to_string()],
+        )
+        .unwrap();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let activation = fx.launch("long-brief-runner");
+    let host = principal(&*fx.store, "long-brief-host", PrincipalKind::Host);
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let execution = activation.id.clone();
+    let epoch = activation.owner_epoch;
+    let primary = fx.tx(move |_, tx| {
+        agents
+            .materialize_primary(tx, &host, &execution, epoch)
+            .map_err(|e| StorageError::InvalidRecord(format!("primary: {e:?}")))
+    });
+    let context = read(&*fx.store, |snapshot| {
+        snapshot
+            .runs()
+            .agent_assignment_context(&primary.assignment_id)
+    })
+    .unwrap();
+    assert!(context.brief.len() > 65_536);
+    assert_eq!(
+        serde_json::from_str::<Value>(&context.brief).unwrap()["description"],
+        description
     );
 }
 
