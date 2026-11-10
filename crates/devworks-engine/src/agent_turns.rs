@@ -399,7 +399,22 @@ async fn run_native_loop(
             handle.block_on(worker.produce_and_dispatch_native_turn(invocation, Some(stopped)))
         })
         .await
-        .map_err(|error| StorageError::InvalidRecord(format!("agent turn worker: {error}")))??;
+        .map_err(|error| StorageError::InvalidRecord(format!("agent turn worker: {error}")))?;
+        let progress = match progress {
+            Ok(progress) => progress,
+            Err(StorageError::ScopeDenied)
+                if crate::tool_turn::native_head_became_stale(
+                    runtime.store().as_ref(),
+                    ctx,
+                    session_id,
+                    &head,
+                )? =>
+            {
+                recovered = runtime.recover_native_context_head(ctx, session_id)?;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
@@ -462,13 +477,9 @@ async fn wait_for_linked_effects(
                     .operation(operation_id)?
                     .ok_or(StorageError::ScopeDenied)?;
                 match operation.state {
-                    OperationState::ObservedComplete => {}
-                    OperationState::Failed | OperationState::CancelledBeforeDispatch => {
-                        return Err(StorageError::InvalidRecord(format!(
-                            "accepted tool operation {} did not complete",
-                            operation_id.0.as_str()
-                        )));
-                    }
+                    OperationState::ObservedComplete
+                    | OperationState::Failed
+                    | OperationState::CancelledBeforeDispatch => {}
                     _ => pending = true,
                 }
             }

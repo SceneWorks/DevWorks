@@ -305,6 +305,25 @@ pub(crate) fn require_current_head_for_new_request(
     })
 }
 
+/// A concurrent transcript fact or context publication can make a planned native request stale
+/// between context refresh and admission. Only that race is safe to replay with a refreshed head.
+pub(crate) fn native_head_became_stale(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    source: &ArtifactRef,
+) -> Result<bool, StorageError> {
+    read_snapshot(store, &ReadOptions::default(), |read| {
+        let session = authorized_session(read, ctx, session_id)?;
+        let head = read.sessions().provider_context_head(session_id)?;
+        Ok(head.as_ref().is_none_or(|head| {
+            head.artifact != json!(source)
+                || head.context_epoch != session.context_epoch
+                || head.observed_sequence != session.last_durable_sequence()
+        }))
+    })
+}
+
 /// Recover the last published immutable native context after a host restart. A new epoch uses
 /// its durable root until a turn publishes a continuation in that epoch.
 pub(crate) fn recover_context_head(
