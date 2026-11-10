@@ -169,20 +169,53 @@ impl AgentLauncher {
             } = &end
             {
                 let assignment_id = child.assignment_id;
-                let complete = {
-                    let agents = agents.clone();
-                    store::write(&store, move |tx| {
-                        agents
-                            .complete_child(tx, &host, &assignment_id, &activation_id, epoch)
+                let mut waiting = false;
+                loop {
+                    let agents_for_write = agents.clone();
+                    let host_for_write = host.clone();
+                    let assignment_for_write = assignment_id.clone();
+                    let activation_for_write = activation_id.clone();
+                    let complete = store::write(&store, move |tx| {
+                        agents_for_write
+                            .complete_child(
+                                tx,
+                                &host_for_write,
+                                &assignment_for_write,
+                                &activation_for_write,
+                                epoch,
+                            )
                             .map_err(failure)
                     })
-                    .await
-                };
-                if let Err(error) = complete {
+                    .await;
+                    if complete.is_ok() {
+                        break;
+                    }
                     if *stop_watch.borrow() {
                         return ChildLaunch::End(stopped());
                     }
-                    return ChildLaunch::End(failed(error));
+                    if !waiting {
+                        let agents_for_write = agents.clone();
+                        let host_for_write = host.clone();
+                        let assignment_for_write = assignment_id.clone();
+                        let activation_for_write = activation_id.clone();
+                        if let Err(error) = store::write(&store, move |tx| {
+                            agents_for_write
+                                .wait_for_descendants(
+                                    tx,
+                                    &host_for_write,
+                                    &assignment_for_write,
+                                    &activation_for_write,
+                                    epoch,
+                                )
+                                .map_err(failure)
+                        })
+                        .await
+                        {
+                            return ChildLaunch::End(failed(error));
+                        }
+                        waiting = true;
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
                 }
             }
             ChildLaunch::End(end)
@@ -264,10 +297,36 @@ async fn supervise_children(
                 .collect();
             let live_ids: HashSet<_> = live_children.iter().map(|child| child.id.clone()).collect();
             retry_after.retain(|id, _| live_ids.contains(id));
-            let active = live_children
-                .iter()
-                .filter(|child| child.state == AssignmentState::Active)
-                .count();
+            for child in &live_children {
+                if child.state != AssignmentState::Active
+                    || child.slot_held
+                    || running.contains(&child.id)
+                    || live_children
+                        .iter()
+                        .any(|descendant| descendant.parent_id.as_ref() == Some(&child.id))
+                {
+                    continue;
+                }
+                let agents = launcher.agents.clone();
+                let host = AgentLauncher::host_context(&*launcher.store, &*launcher.ids);
+                let id = child.id.clone();
+                let activation = activation_id.clone();
+                if let Err(error) = store::write(&launcher.store, move |tx| {
+                    agents
+                        .complete_child(tx, &host, &id, &activation, epoch)
+                        .map_err(failure)
+                })
+                .await
+                {
+                    fatal = Some(failed(error));
+                    let _ = stop_all.send(true);
+                    break;
+                }
+            }
+            if fatal.is_some() {
+                continue;
+            }
+            let active = live_children.iter().filter(|child| child.slot_held).count();
             let launching = live_children
                 .iter()
                 .filter(|child| {

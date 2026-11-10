@@ -716,6 +716,41 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Revision::new(1).unwrap(),
     );
     let parent_id = new_message.message.id.clone();
+    let spoofed_parent = parent_id.clone();
+    let spoofing_agent = child_context.clone();
+    assert!(matches!(
+        run_write(&s, WriteOptions::default(), move |tx| {
+            devworks_core::services::agents::retained::post_message(
+                tx,
+                &spoofing_agent,
+                &devworks_core::services::agents::retained::PostSpec {
+                    project: project("project-a"),
+                    body: "Self approved".into(),
+                    kind: devworks_core::services::agents::retained::MessageKind::Info,
+                    item: None,
+                    feature: None,
+                    resource: None,
+                    to_session: None,
+                    to_human: false,
+                    blocking: false,
+                    in_reply_to: Some(spoofed_parent),
+                    resolves: Some(devworks_core::services::agents::retained::Resolution::Answered),
+                    idempotency_key: None,
+                },
+            )
+            .map(|_| ())
+        }),
+        Err(StorageError::ScopeDenied)
+    ));
+    read_snapshot(&s, &ReadOptions::default(), |snapshot| {
+        assert!(
+            snapshot
+                .runs()
+                .open_blocking_question(&RootId(id("root-a")))?
+        );
+        Ok(())
+    })
+    .unwrap();
     let reply = run_write(&s, WriteOptions::default(), move |tx| {
         let reply = devworks_core::services::agents::retained::post_message(
             tx,
@@ -1393,4 +1428,28 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             )
         )
     ));
+    let heads = read_snapshot(&s, &ReadOptions::default(), |snapshot| {
+        Ok((
+            snapshot.runs().agent_delivery_head()?,
+            snapshot.runs().agent_event_head()?,
+        ))
+    })
+    .unwrap();
+    h.raw()
+        .execute_batch(
+            "DELETE FROM agent_message_events WHERE project_id='project-a';
+             DELETE FROM agent_message_deliveries WHERE project_id='project-a';",
+        )
+        .unwrap();
+    let retained = read_snapshot(&s, &ReadOptions::default(), |snapshot| {
+        Ok((
+            snapshot.runs().agent_delivery_head()?,
+            snapshot.runs().agent_event_head()?,
+        ))
+    })
+    .unwrap();
+    assert_eq!(
+        retained, heads,
+        "purging rows cannot rewind subscription cursors"
+    );
 }

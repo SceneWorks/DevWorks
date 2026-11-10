@@ -917,6 +917,83 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
     });
     assert_eq!(active_child.state, OperationState::Dispatching);
     assert_eq!(active_child.role_id.as_str(), "worker");
+    let child_session = read(&*fx.store, |snapshot| {
+        let assignment = snapshot
+            .runs()
+            .assignment(&active_child.assignment_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        snapshot
+            .sessions()
+            .session(&assignment.session_id)?
+            .ok_or(StorageError::ScopeDenied)
+    });
+    let child_agent = devworks_core::context::HostIngress::new(&*fx.store)
+        .context(
+            child_session.agent_id,
+            PrincipalKind::Agent,
+            id("grandchild-delegate"),
+            id("delegate-ingress"),
+            devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(child_session.id)
+        .with_lineage(
+            Some(ProjectId(id("project-a"))),
+            Some(rid("root-i")),
+            Some(active_child.assignment_id.clone()),
+        )
+        .with_activation(activation.id.clone(), epoch);
+    let request = devworks_core::operations::agents::DelegateInput {
+        root_id: rid("root-i"),
+        expected_control_revision: Revision::new(fx.control("root-i").revision).unwrap(),
+        task_ids: devworks_core::protocol::support::BoundedList(vec![]),
+        role_id: id("worker"),
+        instruction: devworks_core::protocol::support::BoundedText("Check descendant".into()),
+        source_checkpoint_id: None,
+    };
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let grandchild = fx.tx(move |_, tx| {
+        agents
+            .delegate(tx, &child_agent, &request)
+            .map_err(|error| StorageError::InvalidRecord(format!("grandchild refused: {error:?}")))
+    });
+    let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let child_id = active_child.assignment_id.clone();
+    let activation_id = activation.id.clone();
+    fx.tx({
+        let host = host.clone();
+        let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+        let child_id = child_id.clone();
+        let activation_id = activation_id.clone();
+        move |_, tx| {
+            assert!(
+                agents
+                    .complete_child(tx, &host, &child_id, &activation_id, epoch)
+                    .is_err()
+            );
+            agents
+                .wait_for_descendants(tx, &host, &child_id, &activation_id, epoch)
+                .map_err(|error| StorageError::InvalidRecord(format!("descendant wait: {error:?}")))
+        }
+    });
+    assert!(!read(&*fx.store, |snapshot| {
+        Ok(snapshot.runs().assignment(&child_id)?.unwrap().slot_held)
+    }));
+    let grandchild_id = grandchild.assignment_id;
+    fx.tx(move |_, tx| {
+        agents
+            .activate_child(tx, &host, &grandchild_id, &activation_id, epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("grandchild launch: {error:?}")))?
+            .map_err(|fenced| {
+                StorageError::InvalidRecord(format!("grandchild fenced: {fenced:?}"))
+            })?;
+        agents
+            .complete_child(tx, &host, &grandchild_id, &activation_id, epoch)
+            .map_err(|error| {
+                StorageError::InvalidRecord(format!("grandchild completion: {error:?}"))
+            })
+    });
     let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
     let agents =
         devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());

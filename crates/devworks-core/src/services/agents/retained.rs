@@ -737,6 +737,11 @@ pub(super) fn resolve_message(
     message: &StoredAgentMessage,
     resolution: Resolution,
 ) -> Result<Option<(StoredAgentDelivery, StoredAgentMessage)>, StorageError> {
+    authorize_recipient(tx, ctx, project, recipient)?;
+    let (mut delivery, _) = delivery_for(tx, project, recipient, &message.id)?;
+    if message.to_human && !matches!(recipient, Recipient::Human) {
+        return Err(StorageError::ScopeDenied);
+    }
     if !matches!(message.message_class.as_str(), "Question" | "Request") {
         return Err(StorageError::InvalidRecord(
             "only a question or request can be resolved".into(),
@@ -766,33 +771,6 @@ pub(super) fn resolve_message(
     resolved.resolved_by_session_id = ctx.session_id().cloned();
     tx.runs()
         .resolve_agent_message(&resolved, message.revision)?;
-    let mut delivery = match recipient {
-        Recipient::Session(id) => tx.runs().agent_session_delivery(&message.id, id)?,
-        Recipient::Human => tx.runs().agent_delivery(&message.id, None)?,
-    };
-    if delivery.is_none() {
-        let new = StoredAgentDelivery {
-            sequence: tx.runs().agent_delivery_head()? + 1,
-            message_id: message.id.clone(),
-            project_id: project.clone(),
-            recipient_assignment_id: None,
-            recipient_human: matches!(recipient, Recipient::Human),
-            state: "Pending".into(),
-            revision: 1,
-            delivered_at_ms: None,
-            read_at_ms: None,
-            recipient_session_id: match recipient {
-                Recipient::Session(id) => Some(id.clone()),
-                Recipient::Human => None,
-            },
-            handed_over: false,
-            handed_to_session_id: None,
-            resolved_at_ms: None,
-        };
-        tx.runs().insert_agent_delivery(&new)?;
-        delivery = Some(new);
-    }
-    let mut delivery = delivery.expect("inserted or existing delivery");
     let expected = delivery.revision;
     delivery.state = resolution.state().into();
     delivery.revision += 1;

@@ -508,6 +508,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0046_provider_context_head.sql"),
         rebuilds_tables: false,
     },
+    // Agent message cursors must never retreat when a project's rows are purged.
+    Migration {
+        version: 47,
+        minimum_reader: 46,
+        minimum_writer: 47,
+        sql: include_str!("migrations/0047_agent_message_heads.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

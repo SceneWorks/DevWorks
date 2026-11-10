@@ -1125,7 +1125,7 @@ fn the_shell_reaches_only_validated_operations() {
 }
 
 #[test]
-fn closing_the_window_with_an_active_root_leaves_it_held_for_continue_after_reopen() {
+fn closing_the_window_keeps_a_live_root_or_its_existing_policy_hold() {
     let root = Root::new("close-holds-runs");
     let engine = start(&root);
     // A standalone issue root (work items arrive with later items; seeded here directly).
@@ -1187,11 +1187,6 @@ fn closing_the_window_with_an_active_root_leaves_it_held_for_continue_after_reop
         }
         std::thread::sleep(Duration::from_millis(2));
     }
-    assert_eq!(
-        held_before_persisting,
-        Some(1),
-        "held before the window state was persisted"
-    );
     drop(h);
     // Reopen: the root is held, and only an explicit Continue runs it again.
     let engine = start(&root);
@@ -1204,6 +1199,21 @@ fn closing_the_window_with_an_active_root_leaves_it_held_for_continue_after_reop
         .as_bytes(),
     );
     let text = format!("{inspected:?}");
+    if held_before_persisting == Some(0) {
+        // The native agent executor can reach a policy hold before the window closes.
+        // A stopped activation already has a durable hold and needs no restart hold.
+        assert!(
+            text.contains("phase: Stopped") && text.contains("cause: Policy"),
+            "{text}"
+        );
+        assert!(!text.contains("cause: RestartContinue"), "{text}");
+        return;
+    }
+    assert_eq!(
+        held_before_persisting,
+        Some(1),
+        "live root held before window persistence"
+    );
     assert!(
         text.contains("desired_state: Paused") && text.contains("cause: RestartContinue"),
         "{text}"
