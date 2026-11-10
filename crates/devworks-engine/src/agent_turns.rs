@@ -248,7 +248,7 @@ async fn run_native_loop(
                     .providers()
                     .ok_or(StorageError::ScopeDenied)?
                     .schemas()
-                    .selected_builtins(ctx)?
+                    .selected_agent_tools(ctx)?
                     .is_empty();
                 let needs_images =
                     context_has_images(&initial_context(runtime.store().as_ref(), ctx, agent)?);
@@ -293,15 +293,14 @@ async fn run_native_loop(
                         }],
                     });
                     for fact in facts {
-                        context
-                            .messages
-                            .push(crate::tool_turn::context_fact_message(
-                                runtime.store().as_ref(),
-                                runtime.artifacts(),
-                                ctx,
-                                session_id,
-                                fact,
-                            )?);
+                        crate::tool_turn::append_context_fact(
+                            &mut context,
+                            runtime.store().as_ref(),
+                            runtime.artifacts(),
+                            ctx,
+                            session_id,
+                            fact,
+                        )?;
                     }
                     crate::tool_turn::publish_continuation(
                         runtime.store().as_ref(),
@@ -359,7 +358,7 @@ async fn run_native_loop(
             .providers()
             .ok_or(StorageError::ScopeDenied)?
             .schemas()
-            .selected_builtins(ctx)?
+            .selected_agent_tools(ctx)?
             .len();
         let tools_required = selected_count != 0;
         let windows = tool_window_count(selected_count);
@@ -1118,20 +1117,29 @@ pub fn ensure_membership_context(
                             }],
                         });
                         for fact in facts {
-                            context
-                                .messages
-                                .push(crate::tool_turn::context_fact_message(
-                                    runtime.store().as_ref(),
-                                    runtime.artifacts(),
-                                    &host,
-                                    session_id,
-                                    fact,
-                                )?);
+                            crate::tool_turn::append_context_fact(
+                                &mut context,
+                                runtime.store().as_ref(),
+                                runtime.artifacts(),
+                                &host,
+                                session_id,
+                                fact,
+                            )?;
                         }
                     }
-                    None => context.messages.extend(handoff_fact_messages(
-                        runtime, &host, session_id, observed, sequence,
-                    )?),
+                    None => {
+                        for fact in handoff_fact_messages(runtime, session_id, observed, sequence)?
+                        {
+                            crate::tool_turn::append_context_fact(
+                                &mut context,
+                                runtime.store().as_ref(),
+                                runtime.artifacts(),
+                                &host,
+                                session_id,
+                                fact,
+                            )?;
+                        }
+                    }
                 }
             }
             Some((context, binding))
@@ -1142,7 +1150,7 @@ pub fn ensure_membership_context(
         if unpublished_turn(runtime.store().as_ref(), ctx, session_id, 0)?.is_some() {
             return Err(StorageError::ScopeDenied);
         }
-        handoff_fact_messages(runtime, &host, session_id, 0, sequence)?
+        handoff_fact_messages(runtime, session_id, 0, sequence)?
     } else {
         Vec::new()
     };
@@ -1172,7 +1180,16 @@ pub fn ensure_membership_context(
             .map_err(|error| StorageError::InvalidRecord(format!("handoff context: {error:?}")))?
     } else {
         let mut context = fresh.clone();
-        context.messages.extend(missing_head_facts);
+        for fact in missing_head_facts {
+            crate::tool_turn::append_context_fact(
+                &mut context,
+                runtime.store().as_ref(),
+                runtime.artifacts(),
+                &host,
+                session_id,
+                fact,
+            )?;
+        }
         (context, Vec::new())
     };
     context.instructions = fresh.instructions;
@@ -1358,11 +1375,10 @@ fn append_empty_handoff_boundary(
 
 fn handoff_fact_messages(
     runtime: &Runtime,
-    ctx: &InvocationContext,
     session_id: &Id,
     after: i64,
     sequence: i64,
-) -> Result<Vec<Message>, StorageError> {
+) -> Result<Vec<TranscriptBody>, StorageError> {
     let facts = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
         let mut position = after;
         let mut facts = Vec::new();
@@ -1396,18 +1412,7 @@ fn handoff_fact_messages(
         }
         Ok(facts)
     })?;
-    facts
-        .into_iter()
-        .map(|fact| {
-            crate::tool_turn::context_fact_message(
-                runtime.store().as_ref(),
-                runtime.artifacts(),
-                ctx,
-                session_id,
-                fact,
-            )
-        })
-        .collect()
+    Ok(facts)
 }
 
 /// Publish a materialized assignment's first bound prompt after the current route resolves.
@@ -1472,7 +1477,7 @@ pub fn publish_first_context(
         .providers()
         .ok_or(StorageError::ScopeDenied)?
         .schemas()
-        .selected_builtins(ctx)?
+        .selected_agent_tools(ctx)?
         .len();
     if tool_window_count(selected_count) > 1 {
         prompt.instructions.push(TextBlock {
@@ -1518,7 +1523,7 @@ pub fn plan_generation_window(
         return Err(StorageError::ScopeDenied);
     }
     let providers = runtime.providers().ok_or(StorageError::ScopeDenied)?;
-    let selected = providers.schemas().selected_builtins(ctx)?;
+    let selected = providers.schemas().selected_agent_tools(ctx)?;
     let tools = tool_window(&selected, window)?.to_vec();
     let tool_bytes = serde_json::to_vec(&tools)
         .map_err(|error| StorageError::InvalidRecord(format!("tool schemas: {error}")))?

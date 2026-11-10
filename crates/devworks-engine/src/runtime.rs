@@ -239,6 +239,24 @@ impl std::fmt::Debug for PurgeComposition {
         f.write_str("PurgeComposition")
     }
 }
+#[derive(Clone)]
+pub struct McpComposition {
+    pub validator: Arc<dyn devworks_core::ports::packages::SchemaValidator>,
+    pub factory: Arc<
+        dyn Fn(
+                Arc<ProcessSupervisor>,
+                tokio::runtime::Handle,
+            ) -> Arc<dyn devworks_core::ports::mcp::McpRemote>
+            + Send
+            + Sync,
+    >,
+}
+impl std::fmt::Debug for McpComposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("McpComposition(..)")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
     /// The native desktop adapter. It remains registered when an OS permission is missing so
@@ -248,6 +266,8 @@ pub struct RuntimeConfig {
     /// Process tools are offered only when a host supplies owned executable/root and secret
     /// bindings. Missing qualification leaves the family unregistered.
     pub process_tools: Option<ProcessToolComposition>,
+    /// Native outgoing MCP connection owner, installed after the process supervisor exists.
+    pub mcp: Option<McpComposition>,
     /// Optional selected container backend. Without a qualified host binding the family is absent.
     pub containers: Option<ContainerComposition>,
     pub schemas: Option<crate::schemas::SchemaComposition>,
@@ -300,6 +320,7 @@ impl RuntimeConfig {
             dispatcher: DispatcherConfig::new(owner),
             purge: None,
             process_tools: None,
+            mcp: None,
             containers: None,
             price_refresh: None,
             schemas: None,
@@ -526,6 +547,17 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         process_host,
         resources.clone(),
     ));
+    if let (Some(service), Some(composition)) = (use_cases.mcp_service(), config.mcp.as_ref()) {
+        service
+            .install_remote(
+                store.clone(),
+                (composition.factory)(supervisor.clone(), tokio::runtime::Handle::current()),
+                composition.validator.clone(),
+                artifacts.clone(),
+            )
+            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))?;
+        consumers.push(crate::mcp::consumer(service));
+    }
     let process_tools = config.process_tools.as_ref().map(|composition| {
         Arc::new(
             devworks_core::services::process::tools::ProcessToolService::new(
@@ -1439,6 +1471,9 @@ pub struct NativeTurnProgress {
 }
 
 impl Runtime {
+    pub fn mcp_service(&self) -> Option<Arc<devworks_core::services::mcp::McpClientService>> {
+        self.use_cases.mcp_service()
+    }
     /// What boot recovery established.
     pub fn report(&self) -> &BootReport {
         &self.report

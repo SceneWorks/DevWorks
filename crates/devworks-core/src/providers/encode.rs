@@ -836,7 +836,7 @@ impl Encoder<'_> {
                     let args=self.json(arguments)?;if !args.is_object(){return Err(ProviderError::InvalidInput("tool_arguments"));}
                     json!({"type":"tool_use","id":call_id,"name":wire_name,"input":args})
                 }
-                ContentBlock::ToolResult{call_id,content,is_error,cache:c}=>{
+                ContentBlock::ToolResult{call_id,content,is_error,cache:c,..}=>{
                     if !matches!(m.role,MessageRole::User){return Err(ProviderError::InvalidInput("tool_result_role"));}
                     let blocks=content.iter().map(|v|match v{
                         ResultBlock::Text{text}=>Ok(json!({"type":"text","text":text})),
@@ -932,6 +932,7 @@ impl Encoder<'_> {
                     content,
                     is_error,
                     cache: c,
+                    ..
                 } => {
                     if !matches!(m.role, MessageRole::User) {
                         return Err(ProviderError::InvalidInput("tool_result_role"));

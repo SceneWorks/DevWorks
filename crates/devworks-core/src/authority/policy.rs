@@ -45,7 +45,7 @@ pub const UNVERIFIED_READ_FAMILIES: [&str; 4] = ["mcp", "addons", "database", "b
 /// Commands that run arbitrary native code with the desktop user's rights. Under Project scope
 /// they need a reviewed native grant, because no confined launcher is qualified; there is no
 /// fallback to Full.
-pub const NATIVE_EXECUTION: [&str; 16] = [
+pub const NATIVE_EXECUTION: [&str; 17] = [
     "git.worktree",
     "git.commit",
     "git.push",
@@ -57,6 +57,7 @@ pub const NATIVE_EXECUTION: [&str; 16] = [
     "containers.start",
     "containers.exec",
     "mcp.connect",
+    "mcp.discover",
     "addons.install",
     "addons.update",
     "addons.enable",
@@ -423,7 +424,11 @@ pub fn registered_tool_visibility(
     }
     // Project-wide message views belong to the human UI. Agent sessions use their addressed
     // inbox; never advertise a project history or event feed they cannot read.
-    if matches!(op, "agents.history" | "agents.events") && kind != PrincipalKind::Human {
+    if matches!(
+        op,
+        "agents.history" | "agents.events" | "mcp.configure" | "mcp.select_tools"
+    ) && kind != PrincipalKind::Human
+    {
         return Verdict::Deny(DenialReason::HumanOnly);
     }
 
@@ -547,6 +552,60 @@ pub fn registered_tool_visibility(
         return Verdict::Allow;
     }
 
+    Verdict::Allow
+}
+
+/// Visibility of a selected external MCP tool. A server's read-only annotation is advisory;
+/// it cannot qualify a reviewer read or bypass the principal's current project and profile.
+pub fn outgoing_mcp_tool_visibility(
+    ctx: &InvocationContext,
+    binding: Option<&PrincipalBinding>,
+    policy: &EffectivePolicy,
+    capability: &str,
+) -> Verdict {
+    if matches!(
+        ctx.principal_kind(),
+        PrincipalKind::Human | PrincipalKind::Host
+    ) {
+        return Verdict::Allow;
+    }
+    let Some(binding) = binding else {
+        return Verdict::Deny(DenialReason::UnboundPrincipal);
+    };
+    if binding.kind != ctx.principal_kind() || !binding.active {
+        return Verdict::Deny(DenialReason::PrincipalRevoked);
+    }
+    if (ctx.principal_kind() == PrincipalKind::Agent && binding.role.is_none())
+        || (ctx.principal_kind() != PrincipalKind::Agent && binding.role.is_some())
+    {
+        return Verdict::Deny(DenialReason::UnsupportedPrincipal);
+    }
+    if let Some(project) = &binding.project_id
+        && ctx.project_id() != Some(project)
+    {
+        return Verdict::Deny(DenialReason::OutOfProjectScope);
+    }
+    if let Some(families) = &binding.tool_families
+        && !families.iter().any(|family| family == "mcp")
+    {
+        return Verdict::Deny(DenialReason::ToolNotSelected);
+    }
+    if binding.role.is_some_and(AgentRole::read_only) {
+        return Verdict::Deny(DenialReason::UnverifiedRead);
+    }
+    match policy.profile {
+        None => return Verdict::Deny(DenialReason::UnsupportedProfile),
+        Some(AccessProfile::ProjectScope) => {
+            return Verdict::Deny(DenialReason::EnforcementUnavailable);
+        }
+        Some(_) => {}
+    }
+    if ctx.principal_kind() != PrincipalKind::Agent {
+        return Verdict::Deny(DenialReason::GrantRequired);
+    }
+    if !policy.tool_selected(capability, true) {
+        return Verdict::Deny(DenialReason::ToolNotSelected);
+    }
     Verdict::Allow
 }
 

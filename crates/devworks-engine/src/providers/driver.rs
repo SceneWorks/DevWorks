@@ -464,13 +464,28 @@ impl NativeProviders {
                     .cmp(b.capability_id.as_str())
                     .then_with(|| a.wire_name.cmp(&b.wire_name))
             });
+            let selected_mcp = if tools
+                .iter()
+                .any(|tool| tool.capability_id.as_str().starts_with("mcp/"))
+            {
+                self.schemas.selected_mcp_tools(&context)?
+            } else {
+                Vec::new()
+            };
             if tools.iter().any(|tool| {
                 self.schemas
                     .builtin_binding(&tool.capability_id, &tool.input_schema)
                     .is_none()
+                    && !selected_mcp.iter().any(|selected| {
+                        selected.capability_id == tool.capability_id
+                            && selected.wire_name == tool.wire_name
+                            && selected.input_schema.schema_id == tool.input_schema.schema_id
+                            && selected.input_schema.revision == tool.input_schema.revision
+                            && selected.input_schema.sha256 == tool.input_schema.sha256
+                    })
             }) {
-                // Schema discovery alone does not make a package or MCP invocation durable.
-                // Do not advertise a call the turn dispatcher cannot yet answer.
+                // Schema discovery alone does not make an external invocation durable. Only
+                // currently selected MCP bindings have the journaled turn dispatcher.
                 return Err(StorageError::unavailable(
                     Unavailable::UnsupportedRuntime,
                     "external tool dispatch is unavailable",

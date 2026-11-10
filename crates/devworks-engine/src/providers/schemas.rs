@@ -178,6 +178,66 @@ impl RegisteredSchemas {
         }
         Ok(tools)
     }
+
+    pub fn selected_mcp_tools(
+        &self,
+        ctx: &InvocationContext,
+    ) -> Result<Vec<ToolSchema>, StorageError> {
+        let service = self.cases.mcp_service().ok_or(StorageError::ScopeDenied)?;
+        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+            service
+                .selected_tool_materials(ctx, snapshot)
+                .map(|materials| {
+                    materials
+                        .into_iter()
+                        .map(|material| material.alias)
+                        .collect()
+                })
+        })
+    }
+
+    /// The provider caller's full currently selected, durably dispatchable inventory. Keep
+    /// external aliases behind the same selection and authority check as the tool dispatcher.
+    pub fn selected_agent_tools(
+        &self,
+        ctx: &InvocationContext,
+    ) -> Result<Vec<ToolSchema>, StorageError> {
+        let mut tools = self.selected_builtins(ctx)?;
+        if self.cases.mcp_service().is_some() {
+            tools.extend(self.selected_mcp_tools(ctx)?);
+        }
+        tools.sort_by(|a, b| {
+            a.capability_id
+                .as_str()
+                .cmp(b.capability_id.as_str())
+                .then_with(|| a.wire_name.cmp(&b.wire_name))
+        });
+        let mut names = std::collections::HashSet::new();
+        let mut ids = std::collections::HashSet::new();
+        if tools
+            .iter()
+            .any(|tool| !names.insert(&tool.wire_name) || !ids.insert(tool.capability_id.as_str()))
+        {
+            return Err(StorageError::InvalidRecord(
+                "ambiguous selected agent tool".into(),
+            ));
+        }
+        Ok(tools)
+    }
+
+    fn selected_mcp_materials(
+        &self,
+        ctx: &InvocationContext,
+    ) -> Result<Vec<devworks_core::services::mcp::McpToolMaterial>, ProviderError> {
+        let service = self
+            .cases
+            .mcp_service()
+            .ok_or(ProviderError::MaterialUnavailable)?;
+        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+            service.selected_tool_materials(ctx, snapshot)
+        })
+        .map_err(|_| ProviderError::MaterialUnavailable)
+    }
     /// Only exact registered built-in bindings have a durable turn dispatcher. A package
     /// declaring a built-in-looking capability ID is still an external tool.
     pub(crate) fn builtin_binding(
@@ -480,6 +540,14 @@ impl SchemaDocuments for RegisteredSchemas {
         ctx: &InvocationContext,
         reference: &SchemaRef,
     ) -> Result<Value, ProviderError> {
+        if reference.schema_id.as_str().starts_with("mcp/") {
+            return self
+                .selected_mcp_materials(ctx)?
+                .into_iter()
+                .find(|material| equal(&material.alias.input_schema, reference))
+                .map(|material| material.schema)
+                .ok_or(ProviderError::MaterialUnavailable);
+        }
         match self.builtin_document(ctx, reference)? {
             Some((schema, _, _)) => Ok(schema),
             None => self.package_document(ctx, reference),
@@ -490,6 +558,24 @@ impl SchemaDocuments for RegisteredSchemas {
         ctx: &InvocationContext,
         alias: &ToolSchema,
     ) -> Result<PreparedTool, ProviderError> {
+        if alias.capability_id.as_str().starts_with("mcp/") {
+            let material = self
+                .selected_mcp_materials(ctx)?
+                .into_iter()
+                .find(|material| {
+                    material.alias.capability_id.as_str() == alias.capability_id.as_str()
+                        && material.alias.wire_name == alias.wire_name
+                        && equal(&material.alias.input_schema, &alias.input_schema)
+                })
+                .ok_or(ProviderError::MaterialUnavailable)?;
+            return Ok(PreparedTool {
+                wire_name: alias.wire_name.clone(),
+                capability_id: alias.capability_id.clone(),
+                input_schema: alias.input_schema.clone(),
+                schema: material.schema,
+                description: Some(material.description),
+            });
+        }
         let (schema, description) = match self.builtin_document(ctx, &alias.input_schema)? {
             Some((schema, d, selected)) => {
                 if !matches_builtin_capability(alias.capability_id.as_str(), d.name, selected.mode)

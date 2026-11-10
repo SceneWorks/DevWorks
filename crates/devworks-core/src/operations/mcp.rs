@@ -66,11 +66,13 @@ impl Revisioned for ConfigureInput {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConnectInput {
+    pub scope: DataScope,
     pub server_id: Id,
     pub expected_revision: Revision,
 }
 impl Check for ConnectInput {
     fn check(&self) -> Result<(), String> {
+        self.scope.check()?;
         self.server_id.check()?;
         self.expected_revision.check()?;
         Ok(())
@@ -84,11 +86,13 @@ impl Revisioned for ConnectInput {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiscoverInput {
+    pub scope: DataScope,
     pub server_id: Id,
     pub expected_catalog_revision: Revision,
 }
 impl Check for DiscoverInput {
     fn check(&self) -> Result<(), String> {
+        self.scope.check()?;
         self.server_id.check()?;
         self.expected_catalog_revision.check()?;
         Ok(())
@@ -102,6 +106,7 @@ impl Revisioned for DiscoverInput {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SelectToolsInput {
+    pub scope: DataScope,
     pub server_id: Id,
     pub expected_revision: Revision,
     pub expected_catalog_revision: Revision,
@@ -109,6 +114,7 @@ pub struct SelectToolsInput {
 }
 impl Check for SelectToolsInput {
     fn check(&self) -> Result<(), String> {
+        self.scope.check()?;
         self.server_id.check()?;
         self.expected_revision.check()?;
         self.expected_catalog_revision.check()?;
@@ -124,6 +130,7 @@ impl Revisioned for SelectToolsInput {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourcesInput {
+    pub scope: DataScope,
     pub server_id: Id,
     pub catalog_revision: Revision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -132,6 +139,7 @@ pub struct ResourcesInput {
 }
 impl Check for ResourcesInput {
     fn check(&self) -> Result<(), String> {
+        self.scope.check()?;
         self.server_id.check()?;
         self.catalog_revision.check()?;
         self.uri.check()?;
@@ -147,6 +155,7 @@ impl Revisioned for ResourcesInput {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PromptsInput {
+    pub scope: DataScope,
     pub server_id: Id,
     pub catalog_revision: Revision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -157,6 +166,7 @@ pub struct PromptsInput {
 }
 impl Check for PromptsInput {
     fn check(&self) -> Result<(), String> {
+        self.scope.check()?;
         self.server_id.check()?;
         self.catalog_revision.check()?;
         self.name.check()?;
@@ -173,12 +183,14 @@ impl Revisioned for PromptsInput {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CapabilitiesInput {
+    pub scope: DataScope,
     pub server_id: Id,
     pub catalog_revision: Revision,
     pub page: PageRequest,
 }
 impl Check for CapabilitiesInput {
     fn check(&self) -> Result<(), String> {
+        self.scope.check()?;
         self.server_id.check()?;
         self.catalog_revision.check()?;
         self.page.check()?;
