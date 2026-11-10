@@ -1684,6 +1684,65 @@ fn agent_launcher_runs_a_ready_child_under_the_same_activation() {
     assert_eq!(seen[0].0, child_session.agent_id);
 }
 
+#[test]
+fn feature_delegate_binds_single_task_as_child_work_scope() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    let activation = fx.launch("coordinator-runner");
+    let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let execution = activation.id.clone();
+    let epoch = activation.owner_epoch;
+    let primary = fx.tx(move |_, tx| {
+        agents
+            .materialize_primary(tx, &host, &execution, epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("primary: {error:?}")))
+    });
+    let session = read(&*fx.store, |snapshot| {
+        let assignment = snapshot.runs().assignment(&primary.assignment_id)?.unwrap();
+        snapshot.sessions().session(&assignment.session_id)
+    })
+    .unwrap();
+    let agent = devworks_core::context::HostIngress::new(&*fx.store)
+        .context(
+            session.agent_id,
+            PrincipalKind::Agent,
+            id("delegate-task"),
+            id("delegate-ingress"),
+            devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(session.id)
+        .with_lineage(
+            Some(ProjectId(id("project-a"))),
+            Some(rid("root-f")),
+            Some(primary.assignment_id),
+        )
+        .with_activation(activation.id, epoch);
+    let request = devworks_core::operations::agents::DelegateInput {
+        root_id: rid("root-f"),
+        expected_control_revision: Revision::new(fx.control("root-f").revision).unwrap(),
+        task_ids: devworks_core::protocol::support::BoundedList(vec![id("task-f1")]),
+        role_id: id("worker"),
+        instruction: devworks_core::protocol::support::BoundedText("Implement task F1".into()),
+        source_checkpoint_id: None,
+    };
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let child = fx.tx(move |_, tx| {
+        agents
+            .delegate(tx, &agent, &request)
+            .map_err(|error| StorageError::InvalidRecord(format!("delegate: {error:?}")))
+    });
+    let assignment = read(&*fx.store, |snapshot| {
+        snapshot.runs().assignment(&child.assignment_id)
+    })
+    .unwrap();
+    assert_eq!(assignment.purpose, AssignmentPurpose::Child);
+    assert_eq!(assignment.root_id, rid("root-f"));
+    assert_eq!(assignment.work_id, rid("task-f1"));
+}
+
 struct DelegatingCoordinator {
     store: Arc<dyn ApplicationStore>,
     ids: Arc<dyn devworks_core::ports::IdSource>,

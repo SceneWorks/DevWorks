@@ -317,7 +317,7 @@ pub(super) fn assignment_thread(
         None => (i64::MAX, "~"),
     };
     let mut stmt=db(conn.prepare(
-        "SELECT m.id FROM agent_messages m LEFT JOIN agent_message_deliveries d ON d.message_id=m.id AND d.recipient_assignment_id=?2 AND d.recipient_session_id IS NULL WHERE m.project_id=?1 AND m.channel='Assignment' AND ((?3='Inbound' AND d.sequence IS NOT NULL) OR (?3='Outbound' AND m.from_assignment_id=?2) OR (?3='Both' AND (d.sequence IS NOT NULL OR m.from_assignment_id=?2))) AND (NOT ?4 OR d.state IN ('Pending','Delivered')) AND (m.created_at<?5 OR (m.created_at=?5 AND m.id<?6)) ORDER BY m.created_at DESC,m.id DESC LIMIT ?7"
+        "SELECT m.id FROM agent_messages m JOIN agent_message_deliveries d ON d.message_id=m.id AND d.recipient_assignment_id=m.to_assignment_id AND d.recipient_session_id IS NULL WHERE m.project_id=?1 AND m.channel='Assignment' AND ((?3='Inbound' AND m.to_assignment_id=?2) OR (?3='Outbound' AND m.from_assignment_id=?2) OR (?3='Both' AND (m.to_assignment_id=?2 OR m.from_assignment_id=?2))) AND (NOT ?4 OR d.state IN ('Pending','Delivered')) AND (m.created_at<?5 OR (m.created_at=?5 AND m.id<?6)) ORDER BY m.created_at DESC,m.id DESC LIMIT ?7"
     ))?;
     let mut rows = db(stmt.query(params![
         project.0.as_str(),
@@ -337,7 +337,11 @@ pub(super) fn assignment_thread(
     ids.into_iter()
         .map(|key| {
             let m = message(conn, &key)?.ok_or_else(|| corrupt("thread message"))?;
-            let d = delivery(conn, &key, Some(assignment))?;
+            let recipient = m
+                .to_assignment_id
+                .as_ref()
+                .ok_or_else(|| corrupt("assignment recipient"))?;
+            let d = delivery(conn, &key, Some(recipient))?;
             Ok((m, d))
         })
         .collect()

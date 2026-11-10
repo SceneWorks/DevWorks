@@ -953,7 +953,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             Some(0),
             100,
         )?;
-        assert!(replay.items.iter().any(|event| event.kind == "HandedOver"));
+        assert!(replay.items.iter().all(|event| event.kind != "HandedOver"));
         assert_eq!(replay.next_sequence, fresh.next_sequence);
         Ok(())
     })
@@ -1141,6 +1141,16 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             10,
         )?;
         assert!(thread.iter().any(|(message, _)| message.id == posted.id));
+        let pending_outbound = snap.runs().agent_assignment_thread(
+            &project("project-a"),
+            &assignment("sender"),
+            "Outbound",
+            true,
+            None,
+            10,
+        )?;
+        assert_eq!(pending_outbound[0].0.id, posted.id);
+        assert_eq!(pending_outbound[0].1.as_ref().unwrap().state, "Pending");
         let unread = snap.runs().agent_assignment_thread(
             &project("project-a"),
             &assignment("recipient"),
@@ -1166,6 +1176,27 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     assert!(acknowledged.acknowledged);
     assert_eq!(acknowledged.revision.get(), 2);
     read_snapshot(&s, &ReadOptions::default(), |snap| {
+        assert!(
+            snap.runs()
+                .agent_assignment_thread(
+                    &project("project-a"),
+                    &assignment("sender"),
+                    "Outbound",
+                    true,
+                    None,
+                    10,
+                )?
+                .is_empty()
+        );
+        let outbound = snap.runs().agent_assignment_thread(
+            &project("project-a"),
+            &assignment("sender"),
+            "Outbound",
+            false,
+            None,
+            10,
+        )?;
+        assert_eq!(outbound[0].1.as_ref().unwrap().state, "Read");
         assert!(
             snap.runs()
                 .agent_assignment_thread(

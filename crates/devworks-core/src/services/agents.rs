@@ -828,7 +828,13 @@ impl AgentService {
                 ctx.principal(),
                 NewRunAssignment {
                     root: root.id.clone(),
-                    work: root.id.clone(),
+                    work: input
+                        .task_ids
+                        .0
+                        .first()
+                        .cloned()
+                        .map(crate::protocol::RootId)
+                        .unwrap_or_else(|| root.id.clone()),
                     parent: Some(parent),
                     session: session.id,
                     scope_key: None,
