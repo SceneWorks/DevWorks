@@ -2747,6 +2747,14 @@ impl KnowledgeRead for Unsupported {
     ) -> Result<Vec<StoredClaim>, StorageError> {
         nope()
     }
+    fn knowledge_entity_edges(
+        &self,
+        _: &Id,
+        _: &[String],
+        _: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError> {
+        nope()
+    }
     fn knowledge_entities(
         &self,
         _: &[String],

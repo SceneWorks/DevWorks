@@ -5596,3 +5596,187 @@ fn graph_reads_are_scope_first_bounded_and_keep_retained_shapes() {
     assert_eq!(denied.code, DomainErrorCode::NotFound);
     let _ = d;
 }
+
+#[test]
+fn graph_reads_filter_seeds_keep_frontiers_and_bound_every_page() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let edge = |s: &str, o: &str| {
+        json!({"kind": "Fact", "subjectId": s, "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let written = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+            "entities": [
+                {"clientId": "a", "label": "Svc A", "entityType": "service", "aliases": []},
+                {"clientId": "b", "label": "Svc B", "entityType": "service", "aliases": []},
+                {"clientId": "c", "label": "Svc C", "entityType": "service", "aliases": []}],
+            "evidence": [],
+            "claims": [edge("a", "b"), edge("b", "c"),
+                with(draft("Fact", "uptime high"), json!({"subjectId": "a", "confidence": 0.2}))]}),
+    ));
+    let [a, b] = [0, 1].map(|i| written.entity_ids.0[i].clone());
+    let low = written.claim_ids.0[2].clone();
+    // Newer scalar facts about A never crowd its edge out of the neighbor budget.
+    for n in 0..3 {
+        receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": [], "evidence": [],
+            "claims": [with(draft("Fact", &format!("note {n}")), json!({"subjectId": a}))]}),
+        ));
+    }
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    let near = q(
+        "knowledge.subgraph",
+        json!({"entityIds": [a], "maxDepth": 1, "neighborLimit": 1}),
+    );
+    assert_eq!(entity_labels(&near), ["Svc A", "Svc B"]);
+    // Text-derived seed claims obey the filters too.
+    let filtered = q(
+        "knowledge.query",
+        json!({"text": "uptime", "confidenceMin": 0.5}),
+    );
+    assert!(
+        !filtered.claims.0.iter().any(|c| c.id == low),
+        "a low-confidence seed is filtered"
+    );
+    assert!(!filtered.summary.unwrap().0.contains("uptime high"));
+    // A bound that drops traversed entities keeps their discoverer on the frontier.
+    let cut = q(
+        "knowledge.subgraph",
+        json!({"entityIds": [a], "maxDepth": 5, "entityLimit": 2}),
+    );
+    assert!(cut.truncated);
+    assert_eq!(cut.frontier.0, std::slice::from_ref(&b));
+    // A superseded side of a recorded contradiction is not an open conflict.
+    let x = fx.claim_id(&user, proj("project-a"), "Ports", draft("Fact", "port 80"));
+    let y = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Ports",
+        draft("Fact", "never port 80"),
+    );
+    receipt(fx.cmd(
+        &user,
+        "knowledge.relate",
+        json!({"scope": proj("project-a"),
+        "subjectId": y, "predicate": "contradicts", "objectId": x, "evidenceIds": []}),
+    ));
+    let ports = fx.read_claim(&user, proj("project-a"), &x).entities.0[0]
+        .id
+        .clone();
+    receipt(fx.record(&user, proj("project-a"), json!({"entities": [], "evidence": [],
+        "claims": [with(draft("Fact", "port 8443"), json!({"subjectId": ports, "supersedes": x}))]})));
+    let hist = q(
+        "knowledge.subgraph",
+        json!({"claimIds": [x, y], "includeSuperseded": true}),
+    );
+    assert!(
+        !hist
+            .conflicts
+            .0
+            .iter()
+            .any(|c| c.claim_ids.0.contains(&x) && c.claim_ids.0.contains(&y)),
+        "{:?}",
+        hist.conflicts
+    );
+}
+
+#[test]
+fn whole_graph_pages_continue_at_the_store_maximum_and_cap_page_claims() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // 600 entities (more than one maximum page).
+    for batch in 0..6 {
+        let entities: Vec<Value> = (0..100)
+            .map(|i| {
+                json!({"clientId": format!("e{i}"), "label": format!("E{batch}-{i}"),
+                "entityType": "node", "aliases": []})
+            })
+            .collect();
+        let claims: Vec<Value> = (0..100)
+            .map(|i| with(draft("Fact", "x"), json!({"subjectId": format!("e{i}")})))
+            .collect();
+        receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": entities, "evidence": [], "claims": claims}),
+        ));
+    }
+    let page = |cursor: Option<String>| {
+        let mut p = json!({"limit": 500});
+        if let Some(c) = cursor {
+            p["cursor"] = json!(c);
+        }
+        bundle_of_reply(fx.q(
+            &user,
+            "knowledge.subgraph",
+            json!({"scope": proj("project-a"), "query": graph_query(json!({"page": p}))}),
+        ))
+    };
+    let first = page(None);
+    assert_eq!(first.entities.0.len(), 500);
+    let second = page(Some(
+        first.next_cursor.expect("continues at the maximum page").0,
+    ));
+    assert_eq!(second.entities.0.len(), 100);
+    assert!(second.next_cursor.is_none());
+    // A dense page reports its claim budget instead of overflowing the bundle.
+    let fx = Fx::new();
+    let dense: Vec<Value> = (0..32)
+        .map(|i| json!({"clientId": format!("n{i}"), "label": format!("N{i}"), "entityType": "node", "aliases": []}))
+        .collect();
+    let mut pairs = Vec::new();
+    for i in 0..32 {
+        for j in 0..32 {
+            if i != j {
+                pairs.push(
+                    json!({"kind": "Fact", "subjectId": format!("n{i}"), "predicate": "links",
+                    "objectId": format!("n{j}"), "confidence": 0.9, "evidenceIds": [], "tags": []}),
+                );
+            }
+        }
+    }
+    let user = fx.user();
+    let ids = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({"entities": dense, "evidence": [], "claims": pairs[..100].to_vec()}),
+    ))
+    .entity_ids;
+    let rest: Vec<Value> = pairs[100..]
+        .iter()
+        .map(|p| {
+            let mut p = p.clone();
+            for k in ["subjectId", "objectId"] {
+                let n: usize = p[k].as_str().unwrap()[1..].parse().unwrap();
+                p[k] = json!(ids.0[n]);
+            }
+            p
+        })
+        .collect();
+    for chunk in rest.chunks(100) {
+        receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": [], "evidence": [], "claims": chunk}),
+        ));
+    }
+    let g = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.subgraph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"page": {"limit": 32}}))}),
+    ));
+    assert_eq!(g.entities.0.len(), 32);
+    assert!(g.claims.0.len() <= 500 && g.truncated);
+}

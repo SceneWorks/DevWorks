@@ -146,18 +146,14 @@ impl Ctx<'_> {
             .filter(|c| c.lifecycle != "Deleted" && self.scoped.sees(&c.scope)))
     }
     /// Active claims linking `entity` to another entity, newest first, and whether more exist.
+    /// The edge filter applies in the store, before the limit.
     fn edges(&self, entity: &Id, limit: u16) -> Result<(Vec<StoredClaim>, bool), StorageError> {
         // One past the limit detects more rows; at the store's maximum a full page counts.
         let probe = limit.saturating_add(1).min(MAX_ROWS);
-        let all = self.k.knowledge_entity_claims(entity, &self.keys, probe)?;
+        let mut all = self.k.knowledge_entity_edges(entity, &self.keys, probe)?;
         let more = all.len() > limit as usize || all.len() >= MAX_ROWS as usize;
-        Ok((
-            all.into_iter()
-                .take(limit as usize)
-                .filter(|c| c.lifecycle == "Active" && c.object_id.is_some())
-                .collect(),
-            more,
-        ))
+        all.truncate(limit as usize);
+        Ok((all, more))
     }
 }
 
@@ -262,6 +258,9 @@ fn select(
     }
     // Breadth-first over active edge claims from the direct seeds, bounded in candidates.
     let mut frontier: HashSet<Id> = HashSet::new();
+    // Who discovered each traversed entity, so a bound that drops it keeps its discoverer on
+    // the frontier.
+    let mut parent: HashMap<Id, Id> = HashMap::new();
     let mut queue: VecDeque<Id> = entity_seeds.iter().cloned().collect();
     let candidate_bound = bounds.entities.saturating_mul(4).max(1);
     while let Some(at) = queue.pop_front() {
@@ -299,6 +298,7 @@ fn select(
             }
             hop.insert(other.clone(), d + 1);
             rank.insert(other.clone(), 2);
+            parent.insert(other.clone(), at.clone());
             queue.push_back(other);
         }
     }
@@ -312,11 +312,28 @@ fn select(
             .then(a.1.cmp(&b.1))
             .then(a.0.as_str().cmp(b.0.as_str()))
     });
-    if ordered.len() > bounds.entities {
+    let dropped: Vec<Id> = if ordered.len() > bounds.entities {
         truncated = true;
-        ordered.truncate(bounds.entities);
-    }
+        ordered
+            .split_off(bounds.entities)
+            .into_iter()
+            .map(|o| o.0)
+            .collect()
+    } else {
+        Vec::new()
+    };
     let kept: HashSet<Id> = ordered.iter().map(|o| o.0.clone()).collect();
+    for id in &dropped {
+        // Walk up to the nearest kept ancestor: continuing from it reaches the dropped node.
+        let mut at = parent.get(id);
+        while let Some(p) = at {
+            if kept.contains(p) {
+                frontier.insert(p.clone());
+                break;
+            }
+            at = parent.get(p);
+        }
+    }
     let mut entities = Vec::new();
     for (id, h, r) in &ordered {
         if let Some(e) = c.entity(id)? {
@@ -334,7 +351,10 @@ fn select(
     for claim in seed_claims {
         let wire = claim_wire(c.k, &claim, c.th)?;
         seen.insert(claim.id.clone());
-        claims.push((claim, wire, 100));
+        // Seeds obey the request's filters like every other claim.
+        if filter.admits(&claim, &wire) {
+            claims.push((claim, wire, 100));
+        }
     }
     let mut candidates: Vec<(StoredClaim, u32)> = Vec::new();
     for (e, h, _) in &entities {
@@ -426,13 +446,18 @@ fn conflicts(
             });
         }
     }
-    let ids: HashSet<&Id> = claims.iter().map(|(c, _, _)| &c.id).collect();
+    // A recorded contradiction is open only while both of its claims are active.
+    let active: HashSet<&Id> = claims
+        .iter()
+        .filter(|(c, _, _)| c.lifecycle == "Active")
+        .map(|(c, _, _)| &c.id)
+        .collect();
     let mut recorded = HashSet::new();
     for (claim, _, _) in claims {
         for r in c.k.knowledge_relations(&claim.id, &c.keys, 129)? {
             if r.predicate == model::CONTRADICTS
-                && ids.contains(&r.subject_id)
-                && ids.contains(&r.object_id)
+                && active.contains(&r.subject_id)
+                && active.contains(&r.object_id)
                 && recorded.insert(r.id.clone())
             {
                 out.push(KnowledgeConflict {
@@ -973,8 +998,17 @@ fn full_graph(
         after.as_ref().map(|(t, id)| (*t, id.as_str())),
         ((limit + 1) as u16).min(MAX_ROWS),
     )?;
-    let more = rows.len() > limit;
+    let mut more = rows.len() > limit;
     let page: Vec<StoredEntity> = rows.into_iter().take(limit).collect();
+    // At the store's page maximum the probe row does not fit: ask whether anything follows.
+    if !more
+        && page.len() == limit
+        && let Some(last) = page.last()
+    {
+        more =
+            !c.k.knowledge_entities(&c.keys, Some((last.updated_at_ms, last.id.as_str())), 1)?
+                .is_empty();
+    }
     let on_page: HashSet<&Id> = page.iter().map(|e| &e.id).collect();
     let mut claims = Vec::new();
     let mut seen = HashSet::new();
@@ -991,6 +1025,11 @@ fn full_graph(
                     .is_some_and(|o| on_page.contains(o))
                 && seen.insert(claim.id.clone())
             {
+                // A page's claims fit one bundle; the rest is reported as truncated.
+                if claims.len() >= MAX_ROWS as usize {
+                    truncated = true;
+                    break;
+                }
                 let wire = claim_wire(c.k, &claim, c.th)?;
                 claims.push((claim, wire, 60));
             }
