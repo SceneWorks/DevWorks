@@ -1045,6 +1045,16 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
             "targetId":"browser-target","frameId":"browser-frame","documentRevision":"1"},
             "nodeId":"file-input","snapshotRevision":"1"},"files":[sibling.clone()]}}),
     );
+    denied_scope(
+        &worker,
+        "knowledge.diagnostics",
+        Mode::Query,
+        json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":2,
+            "queryId":"cross-root-knowledge-preview","body":{"kind":"knowledge.diagnostics",
+            "scope":{"kind":"Project","projectId":"project-a"},
+            "importSource":sibling.clone(),"importSchema":{"schemaId":"core/object",
+            "revision":"1","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}),
+    );
     let sessions = UseCases::new().with_sessions(Arc::new(
         devworks_core::services::sessions::SessionService::new(fx.h.ids.clone(), fx.store.clone()),
     ));

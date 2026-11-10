@@ -1483,7 +1483,7 @@ fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
         if text == "Use the redirected layout"));
     assert!(matches!(&seen[0].2.messages[1].content[1],
         devworks_core::providers::context::ContentBlock::Text { text, .. }
-        if text.contains("prestart-artifact")));
+        if text.contains("prestart-artifact") && text.contains("prestart-version")));
     let brief = &seen[0].2.messages[0].content;
     assert!(
         matches!(&brief[0], devworks_core::providers::context::ContentBlock::Text { text, .. }
