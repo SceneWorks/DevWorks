@@ -1298,6 +1298,7 @@ fn reviewer_agent_context_head_routes_with_its_existing_model_pin() {
             0,
             None,
             true,
+            false,
         )
         .unwrap();
         assert_eq!(route.model_id, f.model);
@@ -1317,9 +1318,38 @@ fn reviewer_agent_context_head_routes_with_its_existing_model_pin() {
             0,
             None,
             true,
+            false,
         )
         .unwrap();
         assert_eq!(replay.pin_id, route.pin_id);
+        write(f.store.as_ref(), |tx| {
+            let mut model = tx.router().route_model(&id("model"))?.unwrap();
+            let expected = model.revision;
+            model.image_input = true;
+            model.revision += 1;
+            tx.router().put_route_model(&model, Some(expected))?;
+            Ok(())
+        })
+        .unwrap();
+        let image_route = devworks_engine::agent_turns::route_context_head(
+            &app,
+            &agent,
+            &id("agent-session"),
+            0,
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+        assert_eq!(image_route.model_id, f.model);
+        assert_eq!(
+            read(f.store.as_ref(), |snapshot| {
+                snapshot.router().session_pin(&id("agent-session"))
+            })
+            .unwrap()
+            .required_capabilities,
+            ["tools", "vision"]
+        );
         app.shutdown().await;
     });
 }

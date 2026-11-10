@@ -1055,6 +1055,75 @@ fn operation_update_text(
     ))
 }
 
+pub(crate) fn context_fact_message(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    body: TranscriptBody,
+) -> Result<Message, StorageError> {
+    let content = match body {
+        TranscriptBody::UserMessage { content } => content
+            .into_iter()
+            .map(|item| match item {
+                devworks_core::protocol::provider::UserContent::Text { text } => {
+                    ContentBlock::Text { text, cache: None }
+                }
+                devworks_core::protocol::provider::UserContent::Attachment { artifact }
+                    if artifact.media_type.starts_with("image/") =>
+                {
+                    ContentBlock::Image {
+                        artifact,
+                        detail: None,
+                        cache: None,
+                    }
+                }
+                devworks_core::protocol::provider::UserContent::Attachment { artifact } => {
+                    ContentBlock::Text {
+                        text: format!(
+                            "User attachment: {} ({})",
+                            artifact.artifact_id.as_str(),
+                            artifact.media_type
+                        ),
+                        cache: None,
+                    }
+                }
+            })
+            .collect(),
+        TranscriptBody::HostNotice { artifact, .. } => vec![ContentBlock::Text {
+            text: String::from_utf8(
+                artifacts
+                    .read_exact(store, ctx, &artifact, 8_000)
+                    .map_err(|_| StorageError::ScopeDenied)?
+                    .0,
+            )
+            .map_err(invalid)?,
+            cache: None,
+        }],
+        TranscriptBody::OperationUpdate {
+            operation_id,
+            revision,
+            artifact,
+        } => vec![ContentBlock::Text {
+            text: operation_update_text(
+                store,
+                artifacts,
+                ctx,
+                session_id,
+                &operation_id,
+                &revision,
+                &artifact,
+            )?,
+            cache: None,
+        }],
+        _ => return Err(invalid("not a provider context fact")),
+    };
+    Ok(Message {
+        role: MessageRole::User,
+        content,
+    })
+}
+
 /// Reconcile later operation facts into an append-only provider context. A provider's first tool
 /// result remains immutable; each subsequent journal revision enters as a separate host-labeled
 /// message. Any other transcript entry requires the caller to rebuild redirected context.
