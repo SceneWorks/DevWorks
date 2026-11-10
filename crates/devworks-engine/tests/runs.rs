@@ -2108,10 +2108,14 @@ fn feature_delegate_binds_all_tasks_and_constrains_nested_scope() {
     assert_eq!(broad.recipients, 1);
     assert_eq!(resource.recipients, 1);
     for message in [&broad.message.id, &resource.message.id] {
-        assert!(read(&*fx.store, |snapshot| {
-            snapshot.runs().agent_session_delivery(message, &other_session.id)
-        })
-        .is_none());
+        assert!(
+            read(&*fx.store, |snapshot| {
+                snapshot
+                    .runs()
+                    .agent_session_delivery(message, &other_session.id)
+            })
+            .is_none()
+        );
     }
     assert!(matches!(
         send(Some(rid("root-g")), None, None),
