@@ -213,8 +213,16 @@ pub(crate) fn provider_change(
         previous_context,
         previous_binding,
     )?;
-    let (converted, omitted) = source
-        .context
+    let mut context = source.context;
+    if ctx.assignment_id().is_some()
+        && next_binding.endpoint_profile
+            == devworks_core::protocol::provider::EndpointProfile::CodexSubscriptionResponses
+    {
+        // Agent bootstrap supplies this API headroom value. Codex subscription requests do
+        // not accept a max-output override when the route changes providers.
+        context.parameters.max_output_tokens = None;
+    }
+    let (converted, omitted) = context
         .converted_for_new_epoch(previous_binding, next_binding)
         .map_err(|e| StorageError::InvalidRecord(format!("provider context conversion: {e:?}")))?;
     publish(

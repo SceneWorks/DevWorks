@@ -18,7 +18,9 @@ use devworks_core::protocol::records::{
     AgentRecord, EffortName, RouteChoice, RouteIntent, TierName,
 };
 use devworks_core::protocol::results::{DomainDecision, OperationResult};
-use devworks_core::protocol::{AttemptId, CommandReply, Counter, Id, Protocol, Revision};
+use devworks_core::protocol::{
+    AttemptId, CommandReply, Counter, Id, OperationState, Protocol, Revision,
+};
 use devworks_core::providers::context::{
     ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext, TextBlock,
 };
@@ -195,7 +197,7 @@ async fn drive_agent_turn(
 }
 
 async fn run_native_loop(
-    runtime: &Runtime,
+    runtime: &Arc<Runtime>,
     ctx: &InvocationContext,
     agent: &AgentRecord,
     cancellation: &Cancellation,
@@ -265,11 +267,7 @@ async fn run_native_loop(
                 }
             };
             if has_tools {
-                runtime.dispatch_pending_tool_calls_cancellable(
-                    ctx,
-                    session_id,
-                    Some(cancellation),
-                )?;
+                dispatch_pending_off_thread(runtime, ctx, session_id, cancellation).await?;
                 if !crate::tool_turn::pending_calls(runtime.store().as_ref(), ctx, session_id)?
                     .is_empty()
                 {
@@ -345,9 +343,14 @@ async fn run_native_loop(
             .ok_or(StorageError::ScopeDenied)?
             .1;
         let invocation = plan_generation_window(runtime, ctx, &route, &binding, &head, window)?;
-        let progress = runtime
-            .produce_and_dispatch_native_turn(invocation, Some(cancellation.clone()))
-            .await?;
+        let worker = Arc::clone(runtime);
+        let stopped = cancellation.clone();
+        let handle = tokio::runtime::Handle::current();
+        let progress = tokio::task::spawn_blocking(move || {
+            handle.block_on(worker.produce_and_dispatch_native_turn(invocation, Some(stopped)))
+        })
+        .await
+        .map_err(|error| StorageError::InvalidRecord(format!("agent turn worker: {error}")))??;
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
@@ -355,6 +358,7 @@ async fn run_native_loop(
             Some(AttemptEnd::Completed) if progress.continuation.is_some() => {
                 completed_windows += 1;
                 if completed_windows >= windows {
+                    wait_for_linked_effects(runtime, ctx, session_id, cancellation).await?;
                     return Ok(());
                 }
                 window = (window + 1) % windows;
@@ -383,6 +387,66 @@ async fn run_native_loop(
             }
         }
     }
+}
+
+async fn wait_for_linked_effects(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    cancellation: &Cancellation,
+) -> Result<(), StorageError> {
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(StorageError::Cancelled);
+        }
+        let linked =
+            crate::tool_turn::linked_operations(runtime.store().as_ref(), ctx, session_id)?;
+        let pending = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+            let mut pending = false;
+            for call in &linked {
+                let Some(operation_id) = &call.operation_id else {
+                    continue;
+                };
+                let operation = read
+                    .operations()
+                    .operation(operation_id)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                match operation.state {
+                    OperationState::ObservedComplete => {}
+                    OperationState::Failed | OperationState::CancelledBeforeDispatch => {
+                        return Err(StorageError::InvalidRecord(format!(
+                            "accepted tool operation {} did not complete",
+                            operation_id.0.as_str()
+                        )));
+                    }
+                    _ => pending = true,
+                }
+            }
+            Ok(pending)
+        })?;
+        if !pending {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
+async fn dispatch_pending_off_thread(
+    runtime: &Arc<Runtime>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    cancellation: &Cancellation,
+) -> Result<(), StorageError> {
+    let worker = Arc::clone(runtime);
+    let ctx = ctx.clone();
+    let session_id = session_id.clone();
+    let cancellation = cancellation.clone();
+    tokio::task::spawn_blocking(move || {
+        worker.dispatch_pending_tool_calls_cancellable(&ctx, &session_id, Some(&cancellation))
+    })
+    .await
+    .map_err(|error| StorageError::InvalidRecord(format!("agent tool worker: {error}")))??;
+    Ok(())
 }
 
 /// A provider exchange can be durable before its next context head is published. Recover that
