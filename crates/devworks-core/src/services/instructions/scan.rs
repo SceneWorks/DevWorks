@@ -203,6 +203,21 @@ pub fn scan_skill(
         if entries.len() > MAX_ENTRIES {
             return Err(format!("{shown}: more than {MAX_ENTRIES} entries"));
         }
+        // On a case-insensitive volume `SKILL.md` was read through whatever case the file has
+        // (`skill.md`): that entry is the instruction file, never also a resource.
+        let instruction_entry = relative.is_empty().then(|| {
+            entries
+                .iter()
+                .find(|e| e.name == SKILL_FILE)
+                .or_else(|| {
+                    let mut variants = entries.iter().filter(|e| {
+                        e.kind == EntryKind::File && e.name.eq_ignore_ascii_case(SKILL_FILE)
+                    });
+                    variants.next().filter(|_| variants.next().is_none())
+                })
+                .map(|e| e.name.clone())
+        });
+        let instruction_entry = instruction_entry.flatten();
         for entry in entries {
             if entry.name.starts_with('.') {
                 continue;
@@ -227,7 +242,7 @@ pub fn scan_skill(
             match entry.kind {
                 EntryKind::Directory if depth + 1 < MAX_DEPTH => stack.push((path, depth + 1)),
                 EntryKind::Directory => return Err(format!("{path}: nested too deeply")),
-                EntryKind::File if path == SKILL_FILE => {}
+                EntryKind::File if Some(&path) == instruction_entry.as_ref() => {}
                 EntryKind::File => {
                     if resources.len() >= MAX_RESOURCES {
                         return Err(format!("more than {MAX_RESOURCES} resources"));
@@ -250,6 +265,15 @@ pub fn scan_skill(
                     return Err(format!("{path}: links and special files are not supported"));
                 }
             }
+        }
+    }
+    // Paths that differ only in case are one file on case-insensitive volumes: such a revision
+    // could never be written back there (the second file would collide with the first).
+    let mut folded = std::collections::BTreeSet::new();
+    folded.insert(SKILL_FILE.to_lowercase());
+    for r in &resources {
+        if !folded.insert(r.path.to_lowercase()) {
+            return Err(format!("{}: another file differs only in case", r.path));
         }
     }
     Ok(Some(ScannedSkill::from_files(
@@ -343,6 +367,67 @@ mod tests {
         );
         assert_eq!(skipped.len(), 1);
         assert!(skipped[0].reason.contains("more than"), "{:?}", skipped[0]);
+    }
+
+    /// A skill directory listing the given root files; `SKILL.md` always reads (as on a
+    /// case-insensitive volume when only `skill.md` exists).
+    struct Files(&'static [&'static str]);
+    impl SourceTree for Files {
+        fn canonical_dir(&self, p: &Path) -> Result<std::path::PathBuf, SourceFault> {
+            Ok(p.to_path_buf())
+        }
+        fn list_dir(
+            &self,
+            dir: &Path,
+            _: usize,
+        ) -> Result<Vec<crate::ports::indexing::DirEntry>, SourceFault> {
+            let (names, kind): (Vec<&str>, _) = if dir.ends_with("sk") {
+                (self.0.to_vec(), EntryKind::File)
+            } else {
+                (vec!["sk"], EntryKind::Directory)
+            };
+            Ok(names
+                .into_iter()
+                .map(|n| crate::ports::indexing::DirEntry {
+                    name: n.into(),
+                    kind,
+                })
+                .collect())
+        }
+        fn git_marker(
+            &self,
+            _: &Path,
+        ) -> Result<Option<crate::ports::indexing::GitMarker>, SourceFault> {
+            Ok(None)
+        }
+        fn read_file(&self, _: &Path, _: &str, _: u64) -> Result<Vec<u8>, SourceFault> {
+            Ok(b"text".to_vec())
+        }
+        fn case_insensitive(&self, _: &Path) -> bool {
+            false
+        }
+        fn home(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_case_variant_instruction_file_is_the_instruction_not_a_resource() {
+        let skill = scan_skill(&Files(&["notes.md", "skill.md"]), Path::new("/r"), "sk")
+            .unwrap()
+            .unwrap();
+        let paths: Vec<_> = skill.resources.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, ["notes.md"]);
+        // Distinct files differing only in case (a case-sensitive volume) cannot be written
+        // back on a case-insensitive one, so they are refused.
+        for files in [
+            &["SKILL.md", "skill.md"][..],
+            &["A.md", "a.md", "SKILL.md"][..],
+        ] {
+            let leaked: &'static [&'static str] = Box::leak(files.to_vec().into_boxed_slice());
+            let err = scan_skill(&Files(leaked), Path::new("/r"), "sk").unwrap_err();
+            assert!(err.contains("differs only in case"), "{err}");
+        }
     }
 
     #[test]
