@@ -2836,3 +2836,6 @@ mod convention_index_compatibility;
 
 #[path = "providers/mcp_sampling.rs"]
 mod mcp_sampling;
+
+#[path = "providers/mcp_end_to_end.rs"]
+mod mcp_end_to_end;

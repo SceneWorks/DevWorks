@@ -7,7 +7,7 @@ use devworks_core::protocol::{OperationId, OperationState};
 use devworks_core::services::mcp::SamplingGrant;
 use devworks_engine::mcp_sampling::McpSampling;
 
-const WIRE: &str = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Sampled answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+pub(super) const WIRE: &str = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Sampled answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
 
 fn call(ordinal: u8, text: &str) -> SamplingCall {
     SamplingCall {
@@ -46,21 +46,13 @@ fn pin(revision: i64) -> StoredPin {
     }
 }
 
-/// An agent session with a routed pin, a published context head and one dispatching
-/// `mcp.tool` call, as the core service grants it to a sampling request.
-fn agent_call(f: &Fx) -> SamplingGrant {
+/// A bound Worker agent whose session has a routed pin and a published context head.
+pub(super) fn agent_session(f: &Fx) -> (InvocationContext, i64) {
     let human = principal(f.store.as_ref(), "sampling-owner", PrincipalKind::Human);
     let agent = principal(f.store.as_ref(), "sampling-agent", PrincipalKind::Agent)
         .with_session(id("agent-session"));
     let head = f.bytes(b"{\"published\":\"head\"}");
-    let key = ToolCallKey {
-        attempt_id: AttemptId(id("provider-attempt")),
-        native_call_id: "call-sample".into(),
-        ordinal: Counter::new(0).unwrap(),
-    };
-    let payload = json!({"principal":"sampling-agent","principalKind":"Agent",
-        "sessionId":"agent-session","call":key});
-    let (revision, attempt) = write(f.store.as_ref(), move |tx| {
+    let revision = write(f.store.as_ref(), move |tx| {
         let binding = bind_principal(
             tx,
             &human,
@@ -105,6 +97,24 @@ fn agent_call(f: &Fx) -> SamplingGrant {
             },
             None,
         )?;
+        Ok(binding.revision)
+    })
+    .unwrap();
+    (agent, revision)
+}
+
+/// The agent session plus one dispatching `mcp.tool` call, as the core service grants it to a
+/// sampling request.
+fn agent_call(f: &Fx) -> SamplingGrant {
+    let (agent, revision) = agent_session(f);
+    let key = ToolCallKey {
+        attempt_id: AttemptId(id("provider-attempt")),
+        native_call_id: "call-sample".into(),
+        ordinal: Counter::new(0).unwrap(),
+    };
+    let payload = json!({"principal":"sampling-agent","principalKind":"Agent",
+        "sessionId":"agent-session","call":key});
+    let attempt = write(f.store.as_ref(), move |tx| {
         let operation = OperationId(id("mcp-tool-call"));
         let intent = tx.operations().record_intent(NewOperation {
             id: operation.clone(),
@@ -128,7 +138,7 @@ fn agent_call(f: &Fx) -> SamplingGrant {
             OperationState::Dispatching,
             None,
         )?;
-        Ok((binding.revision, attempt.id.0))
+        Ok(attempt.id.0)
     })
     .unwrap();
     SamplingGrant {

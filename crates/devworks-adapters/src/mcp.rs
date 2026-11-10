@@ -480,6 +480,43 @@ fn mcp_bearer(stored: Option<&Secret>) -> Result<Option<Secret>, McpRemoteFault>
 }
 
 impl NativeMcpClients {
+    fn slot(&self, endpoint: &McpEndpoint) -> Result<(Vec<u8>, SessionSlot), McpRemoteFault> {
+        let key =
+            serde_json::to_vec(&(endpoint.scope.key(), &endpoint.transport, endpoint.sampling))
+                .map_err(|_| McpRemoteFault::InvalidConfiguration)?;
+        let slot = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(endpoint.server_id.as_str().into())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None)))
+            .clone();
+        Ok((key, slot))
+    }
+
+    /// Attach a server the host already connected over in-process pipes. The session then serves
+    /// that endpoint exactly as a connection opened by `connect` would, sampling included.
+    pub async fn attach_pipes(
+        &self,
+        endpoint: &McpEndpoint,
+        reader: tokio::io::DuplexStream,
+        writer: tokio::io::DuplexStream,
+    ) -> Result<(), McpRemoteFault> {
+        let (key, slot) = self.slot(endpoint)?;
+        let client = SamplingClient::new(endpoint.sampling, self.sampler.clone());
+        let client = connect_pipes(reader, writer, client)
+            .await
+            .map_err(map_connect_fault)?;
+        let wire = McpWireSession {
+            client,
+            process: None,
+        };
+        if let Some(old) = slot.lock().await.replace(ConnectedSession { key, wire }) {
+            let _ = old.wire.close().await;
+        }
+        Ok(())
+    }
+
     fn call(
         &self,
         server_id: &Id,
@@ -533,16 +570,7 @@ impl McpRemote for NativeMcpClients {
                 .then_some(left)
                 .ok_or(McpRemoteFault::Deadline)
         };
-        let key =
-            serde_json::to_vec(&(endpoint.scope.key(), &endpoint.transport, endpoint.sampling))
-                .map_err(|_| McpRemoteFault::InvalidConfiguration)?;
-        let slot = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .entry(endpoint.server_id.as_str().into())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None)))
-            .clone();
+        let (key, slot) = self.slot(endpoint)?;
         // Keep the same slot across reconnects. Concurrent callers either reuse this endpoint
         // or wait for the changed endpoint to finish replacing its session.
         let timeout = remaining()?;
