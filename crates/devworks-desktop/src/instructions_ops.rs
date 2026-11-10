@@ -196,6 +196,15 @@ pub fn role_id(role: AgentRole) -> String {
         .as_str()
         .to_owned()
 }
+/// The catalog default instruction text of a role (by role key), when it has one.
+pub fn role_default_text(role_key: &str) -> Option<String> {
+    let role = AgentRole::parse(role_key)?;
+    let descriptor = devworks_core::settings::catalog::descriptor(role.instructions_key())?;
+    (descriptor.default)()
+        .as_str()
+        .map(str::to_owned)
+        .filter(|t| !t.trim().is_empty())
+}
 pub fn role_title(role: AgentRole) -> &'static str {
     match role {
         AgentRole::WorkspaceCoordinator => "Workspace coordinator role",

@@ -39,6 +39,81 @@ fn valid_segment(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\', ':', '\0'])
 }
 
+/// Copies every entry under `from` that skill capture does not record (a name starting with
+/// `.`, a link, or anything but a regular file/directory) to the same place under `to`, unless
+/// the new tree already has that path.
+fn preserve_uncaptured(from: &Path, to: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let source = entry.path();
+        let target = to.join(&name);
+        let kind = fs::symlink_metadata(&source)?.file_type();
+        let hidden = name.to_string_lossy().starts_with('.');
+        if kind.is_dir() && !hidden {
+            preserve_uncaptured_into(&source, &target)?;
+        } else if (hidden || !(kind.is_file() || kind.is_dir()))
+            && fs::symlink_metadata(&target).is_err()
+        {
+            copy_entry(&source, &target)?;
+        }
+    }
+    Ok(())
+}
+fn preserve_uncaptured_into(from: &Path, to: &Path) -> io::Result<()> {
+    // Only create a visible directory in the new tree when it has something to keep.
+    let mut kept = false;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let kind = fs::symlink_metadata(entry.path())?.file_type();
+        let hidden = entry.file_name().to_string_lossy().starts_with('.');
+        if hidden || !kind.is_file() {
+            kept = true;
+            break;
+        }
+    }
+    if !kept {
+        return Ok(());
+    }
+    let created = !to.exists();
+    if created {
+        fs::create_dir_all(to)?;
+    }
+    preserve_uncaptured(from, to)?;
+    if created && fs::read_dir(to)?.next().is_none() {
+        fs::remove_dir(to)?;
+    }
+    Ok(())
+}
+fn copy_entry(from: &Path, to: &Path) -> io::Result<()> {
+    let kind = fs::symlink_metadata(from)?.file_type();
+    if kind.is_symlink() {
+        let target = fs::read_link(from)?;
+        #[cfg(unix)]
+        return std::os::unix::fs::symlink(target, to);
+        #[cfg(windows)]
+        return if fs::metadata(from).is_ok_and(|m| m.is_dir()) {
+            std::os::windows::fs::symlink_dir(target, to)
+        } else {
+            std::os::windows::fs::symlink_file(target, to)
+        };
+    }
+    if kind.is_dir() {
+        fs::create_dir_all(to)?;
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            copy_entry(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    if kind.is_file() {
+        fs::copy(from, to)?;
+        File::open(to)?.sync_all()?;
+    }
+    // Sockets, FIFOs and devices cannot be copied; they are left out rather than faked.
+    Ok(())
+}
+
 impl SkillFiles for NativeSkillFiles {
     fn root(&self) -> Result<PathBuf, SkillFileFault> {
         fs::create_dir_all(&self.root).map_err(io_fault)?;
@@ -74,6 +149,11 @@ impl SkillFiles for NativeSkillFiles {
                         .map_err(io_fault)?;
                 }
                 sync_dir(&parent).map_err(io_fault)?;
+            }
+            // Entries skill capture never records (hidden files and folders, links, special
+            // files) are user-owned and carried into the new tree unchanged, never deleted.
+            if fs::symlink_metadata(&live).is_ok_and(|m| m.file_type().is_dir()) {
+                preserve_uncaptured(&live, &staging).map_err(io_fault)?;
             }
             sync_dir(&staging).map_err(io_fault)
         })();
@@ -166,7 +246,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(fs::read(root.join("demo/SKILL.md")).unwrap(), b"two");
-        assert!(!root.join("demo/scripts").exists(), "the old tree is gone");
+        assert!(
+            !root.join("demo/scripts/run.sh").exists(),
+            "captured files follow the revision"
+        );
         assert!(matches!(
             files.materialize(
                 "demo",
@@ -183,6 +266,30 @@ mod tests {
             files.materialize("../x", &[]),
             Err(SkillFileFault::InvalidName)
         ));
+        // Uncaptured user files survive a whole-tree replacement.
+        fs::write(root.join("demo/.env"), b"secret").unwrap();
+        fs::create_dir_all(root.join("demo/docs/.cache")).unwrap();
+        fs::write(root.join("demo/docs/.cache/x"), b"c").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("SKILL.md", root.join("demo/link.md")).unwrap();
+        files
+            .materialize(
+                "demo",
+                &[SkillFile {
+                    path: "SKILL.md".into(),
+                    bytes: b"three".to_vec(),
+                    executable: false,
+                }],
+            )
+            .unwrap();
+        assert_eq!(fs::read(root.join("demo/SKILL.md")).unwrap(), b"three");
+        assert_eq!(fs::read(root.join("demo/.env")).unwrap(), b"secret");
+        assert_eq!(fs::read(root.join("demo/docs/.cache/x")).unwrap(), b"c");
+        #[cfg(unix)]
+        assert_eq!(
+            fs::read_link(root.join("demo/link.md")).unwrap(),
+            Path::new("SKILL.md")
+        );
         let leftovers: Vec<_> = fs::read_dir(&root)
             .unwrap()
             .map(|e| e.unwrap().file_name())

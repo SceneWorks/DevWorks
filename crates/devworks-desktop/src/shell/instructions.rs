@@ -68,8 +68,16 @@ impl Shell {
                     .insert(id, Err("Not requested: DevWorks is offline.".into()));
             }
         }
-        if self.panel().selected.is_some() {
-            self.load_instruction_detail();
+        let p = self.panel();
+        if p.selected.is_some() {
+            // Fence the old details now; they reload with the refreshed record.
+            p.reload_selected = true;
+            p.detail.generation = p.detail.generation.wrapping_add(1);
+            p.detail.history = None;
+            p.detail.history_gathering.clear();
+            p.detail.resources = None;
+            p.detail.resources_gathering.clear();
+            p.detail.text = None;
         }
     }
 
@@ -277,6 +285,12 @@ impl Shell {
                                     sel.record = r.clone();
                                 }
                                 p.skills = Some(Ok(all));
+                                if p.reload_selected
+                                    && p.selected.as_ref().is_some_and(|s| s.kind == Kind::Skill)
+                                {
+                                    p.reload_selected = false;
+                                    self.load_instruction_detail();
+                                }
                             }
                         }
                     }
@@ -296,7 +310,15 @@ impl Shell {
                 {
                     sel.record = r.clone();
                 }
+                let reload = p.reload_selected
+                    && p.selected
+                        .as_ref()
+                        .is_some_and(|s| s.kind == Kind::Role && s.id == id);
                 p.roles.insert(id, result);
+                if reload {
+                    self.panel().reload_selected = false;
+                    self.load_instruction_detail();
+                }
             }
             (Slot::InstructionHistory(generation), Reply::Query(q)) => {
                 if generation != self.panel().detail.generation {

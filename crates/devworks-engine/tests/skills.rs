@@ -411,6 +411,16 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
         assert_eq!(adoptions[0].payload["transitions"], json!(["alpha"]));
         assert_eq!(adoptions[0].payload["skills"][0]["revision"], 2);
         assert!(app.adopt_skills(&user, &session_id, None).is_err(), "another session cannot record");
+        // A skill that temporarily cannot be captured (here: a link appears in it) is reported,
+        // not treated as deleted: its last approved revision stays in effect.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(fx.shared.join("alpha/SKILL.md"), fx.shared.join("alpha/link.md")).unwrap();
+            let report = app.instructions().unwrap().sync().unwrap();
+            assert!(report.skipped.iter().any(|(name, _)| name == "alpha"), "{report:?}");
+            assert!(app.effective_skills().unwrap().skills.iter().any(|s| s.name == "alpha"));
+            std::fs::remove_file(fx.shared.join("alpha/link.md")).unwrap();
+        }
         // Idempotent: unchanged sources record nothing new.
         assert_eq!(app.instructions().unwrap().sync().unwrap().observed, 0);
         // A human restores the earlier captured revision; the shared file is not touched.
@@ -585,6 +595,36 @@ fn role_saves_adopt_at_once_and_agent_role_edits_need_approval() {
         .unwrap();
         let current = fx.query(&app, &user, "roles.read", json!({"instructionId":"role-worker"})).unwrap();
         assert_eq!(current["revision"], "4");
+        // A project override saved only through settings is discovered and readable, and a
+        // first observation that is not the catalog default is not labelled as the default.
+        let project = devworks_core::protocol::ProjectId(id("project-a"));
+        let (ctx, store, p) = (user.clone(), fx.store.clone(), project.clone());
+        write(&*store, move |tx| {
+            tx.projects().insert_project(&StoredProject {
+                id: p.clone(),
+                name: "A".into(),
+                description: String::new(),
+                lifecycle: "Active".into(),
+                revision: 1,
+                scope_revision: 1,
+                created_at_ms: T0,
+                updated_at_ms: T0,
+                archived_at_ms: None,
+                deleted_at_ms: None,
+                archive_epoch: 0,
+                archive_stop_pending: false,
+            })?;
+            devworks_core::settings::service::mirror_role_instructions(tx, &ctx, &ConfigScope::Project(p), AgentRole::Worker, "Project worker rules.", json!({"kind":"Saved"}))
+                .map(|_| ())
+                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        })
+        .unwrap();
+        let project_id = devworks_core::services::instructions::role_item_id(AgentRole::Worker, &ConfigScope::Project(project.clone()));
+        let scoped = user.clone().with_lineage(Some(project), None, None);
+        let override_role = fx.query(&app, &scoped, "roles.read", json!({"instructionId":project_id.as_str()})).unwrap();
+        assert_eq!(override_role["content"]["sha256"], devworks_core::fingerprint::sha256_hex(b"Project worker rules."));
+        let first = read(&*fx.store, |s| s.instructions().instruction_revision(&project_id, 1)).unwrap();
+        assert_eq!(first.origin["kind"], "SettingsObserved");
         app.shutdown().await;
     });
 }

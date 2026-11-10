@@ -108,6 +108,9 @@ pub struct InstructionsPanel {
     pub pending: Option<Pending>,
     pub message: Option<(Tone, String)>,
     pub sequence: u64,
+    /// A refresh is re-reading the selected item's record: its details load once that record
+    /// arrives, so the shown text and the expected revision come from the same observation.
+    pub reload_selected: bool,
 }
 
 impl InstructionsPanel {
@@ -481,11 +484,7 @@ impl InstructionsPanel {
                             actions.push(InstructionAction::View(revision));
                         }
                         if iop::restorable(record) {
-                            let label = if sel.kind == Kind::Role && revision == 1 {
-                                "Reset to default".to_owned()
-                            } else {
-                                format!("Restore revision {revision}")
-                            };
+                            let label = format!("Restore revision {revision}");
                             if ui
                                 .add_enabled(!busy && latest.is_some(), egui::Button::new(label))
                                 .clicked()
@@ -600,6 +599,25 @@ impl InstructionsPanel {
                     close = true;
                 }
             });
+        }
+        // Reset saves the role's catalog default text as a new revision; an earlier revision
+        // is not assumed to hold it (it may be a customization recorded first).
+        if sel.kind == Kind::Role
+            && let Some(default) = iop::role_default_text(&sel.draft_name)
+        {
+            let enabled = !busy && latest.is_some();
+            if ui
+                .add_enabled(enabled, egui::Button::new("Reset to default"))
+                .clicked()
+                && let Some(expected) = latest
+            {
+                actions.push(InstructionAction::Save {
+                    kind: Kind::Role,
+                    target: Some((sel.id.clone(), expected)),
+                    name: sel.draft_name.clone(),
+                    text: default,
+                });
+            }
         }
         if close {
             self.editor = None;

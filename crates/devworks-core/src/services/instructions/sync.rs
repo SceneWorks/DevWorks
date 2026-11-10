@@ -214,10 +214,13 @@ impl InstructionService {
                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
             None => (Vec::new(), Vec::new()),
         };
+        let mut seen = std::collections::BTreeSet::new();
         for s in skipped {
+            // The directory exists but could not be captured now: keep its last observed state
+            // rather than treating it as deleted.
+            seen.insert(s.name.clone());
             report.skipped.push((s.name, s.reason));
         }
-        let mut seen = std::collections::BTreeSet::new();
         for skill in skills {
             seen.insert(skill.name.clone());
             let item = existing.get(&skill.name);
@@ -264,7 +267,7 @@ impl InstructionService {
                 let on_disk_ours = item.observed_digest == item.materialized_digest
                     || (!item.present && item.materialized_digest.is_none());
                 if active.is_some() && active != item.materialized_digest && on_disk_ours {
-                    match self.materialize(&item) {
+                    match self.materialize_locked(&item.id) {
                         Ok(true) => report.materialized += 1,
                         Ok(false) => {}
                         Err(e) => report.failures.push(e.to_string()),
@@ -428,6 +431,12 @@ impl InstructionService {
                 targets.push((role, item.scope.clone()));
             }
         }
+        // Project role overrides saved through settings before any instruction item existed.
+        for (role, scope) in self.configured_project_roles()? {
+            if !targets.iter().any(|(r, s)| *r == role && *s == scope) {
+                targets.push((role, scope));
+            }
+        }
         for (role, scope) in targets {
             let id = role_item_id(role, &scope);
             let item = existing.get(id.as_str());
@@ -460,6 +469,40 @@ impl InstructionService {
         Ok(())
     }
 
+    /// Every (role, project) whose project settings layer sets the role's instructions.
+    fn configured_project_roles(&self) -> Result<Vec<(AgentRole, ConfigScope)>, StorageError> {
+        read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            let mut out = Vec::new();
+            let filter = crate::ports::storage::ProjectFilter {
+                only: None,
+                lifecycles: vec!["Active".into(), "Archived".into()],
+            };
+            let mut after = None;
+            loop {
+                let page = read
+                    .projects()
+                    .projects(&filter, after.as_ref(), MAX_PAGE)?;
+                for project in &page {
+                    let scope = ConfigScope::Project(project.id.clone());
+                    let layer =
+                        crate::settings::model::current_layer(read.configuration(), &scope)?;
+                    for role in AgentRole::ALL {
+                        if layer.values.contains_key(role.instructions_key()) {
+                            out.push((role, scope.clone()));
+                        }
+                    }
+                }
+                if page.len() < MAX_PAGE as usize {
+                    return Ok(out);
+                }
+                after = page.last().map(|p| crate::ports::storage::ProjectPosition {
+                    created_at_ms: p.created_at_ms,
+                    id: p.id.clone(),
+                });
+            }
+        })
+    }
+
     fn observe_role(
         &self,
         role: AgentRole,
@@ -475,6 +518,15 @@ impl InstructionService {
             "workspaceRevision": settings.workspace,
             "projectRevision": settings.project,
         });
+        // Only text equal to the catalog default is recorded as the default revision; an earlier
+        // customization observed first is recorded as what it is.
+        let is_default = crate::settings::catalog::descriptor(role.instructions_key())
+            .map(|d| (d.default)())
+            .and_then(|v| {
+                v.as_str()
+                    .map(|t| crate::fingerprint::sha256_hex(t.as_bytes()))
+            })
+            == Some(capture.instruction.sha256.clone());
         let staged = Arc::new(self.stage_capture(&capture, source.clone())?);
         let staged_in = staged.clone();
         let artifacts = self.artifacts.clone();
@@ -511,7 +563,7 @@ impl InstructionService {
                 RecordedRevision {
                     state: InstructionRevisionState::Approved,
                     author: host.clone(),
-                    origin: json!({"kind": if first { "Default" } else { "SettingsObserved" }, "source": source}),
+                    origin: json!({"kind": if first && is_default { "Default" } else { "SettingsObserved" }, "source": source}),
                     applicability: vec![role.as_str().to_owned()],
                     title: format!("Role {}", role.as_str()),
                     carried_resources: None,
@@ -536,41 +588,71 @@ impl InstructionService {
     }
 
     /// Writes the active revision of a harness skill into its directory, then records it.
-    /// `Ok(false)` when there is nothing to write.
+    /// Serialized with source observation and every other materialization (the sync lock), and
+    /// always reconciled against the item's current active revision, so a stale write can never
+    /// be observed as a user edit. `Ok(false)` when there is nothing to write.
     pub(crate) fn materialize(&self, item: &StoredInstructionItem) -> Result<bool, StorageError> {
-        if item.origin != InstructionOrigin::Harness {
-            return Ok(false);
-        }
-        let Some(active) = item.active_revision else {
-            return Ok(false);
-        };
-        let id = item.id.clone();
-        let revision = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-            read.instructions().instruction_revision(&id, active)
-        })?
-        .ok_or(StorageError::ScopeDenied)?;
-        let files = self.revision_files(&revision)?;
-        self.files.materialize(&item.name, &files).map_err(|e| {
-            StorageError::unavailable(crate::ports::storage::Unavailable::Io, e.to_string())
-        })?;
-        let mut next = item.clone();
-        next.materialized_digest = Some(revision.content_digest.clone());
-        next.observed_digest = Some(revision.content_digest);
-        next.present = true;
-        next.version += 1;
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
-            let current = tx
-                .instructions()
-                .instruction_item(&next.id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            if current.version != next.version - 1 {
-                // Superseded meanwhile: the next sync reconciles the directory again.
-                return Ok(false);
+        let _guard = self
+            .sync_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.materialize_locked(&item.id)
+    }
+
+    fn materialize_locked(&self, id: &Id) -> Result<bool, StorageError> {
+        let mut wrote = false;
+        // A concurrent activation can commit between the read and the record; write again for
+        // the newer active revision (bounded: each round observes a newer committed state).
+        for _ in 0..8 {
+            let id = id.clone();
+            let current = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+                let Some(item) = read.instructions().instruction_item(&id)? else {
+                    return Ok(None);
+                };
+                let revision = match item.active_revision {
+                    Some(active) => read.instructions().instruction_revision(&id, active)?,
+                    None => None,
+                };
+                Ok(Some((item, revision)))
+            })?;
+            let Some((item, Some(revision))) = current else {
+                return Ok(wrote);
+            };
+            if item.origin != InstructionOrigin::Harness {
+                return Ok(wrote);
             }
-            next.updated_at_ms = tx.now_ms();
-            tx.instructions().update_instruction_item(&next)?;
-            Ok(true)
-        })
+            if item.materialized_digest.as_deref() == Some(revision.content_digest.as_str())
+                && item.observed_digest == item.materialized_digest
+            {
+                return Ok(wrote);
+            }
+            let files = self.revision_files(&revision)?;
+            self.files.materialize(&item.name, &files).map_err(|e| {
+                StorageError::unavailable(crate::ports::storage::Unavailable::Io, e.to_string())
+            })?;
+            wrote = true;
+            let mut next = item.clone();
+            next.materialized_digest = Some(revision.content_digest.clone());
+            next.observed_digest = Some(revision.content_digest);
+            next.present = true;
+            next.version += 1;
+            let recorded = run_write(&*self.store, WriteOptions::default(), move |tx| {
+                let current = tx
+                    .instructions()
+                    .instruction_item(&next.id)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                if current.version != next.version - 1 {
+                    return Ok(false);
+                }
+                next.updated_at_ms = tx.now_ms();
+                tx.instructions().update_instruction_item(&next)?;
+                Ok(true)
+            })?;
+            if recorded {
+                return Ok(true);
+            }
+        }
+        Err(StorageError::Busy)
     }
 
     /// Every file of a revision, read back from its managed artifacts.

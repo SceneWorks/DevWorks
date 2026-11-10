@@ -102,21 +102,24 @@ fn roles_are_drafted_and_reset_and_harness_skills_are_created() {
         assert!(top.approved && iop::record_status(top).active);
     }
 
-    // Reset to the default revision (roles.rollback of revision 1).
+    // Reset saves the role's catalog default text as a new approved revision (it does not
+    // assume revision 1 holds the default).
     {
         assert!(
             h.query_by_role_and_label(Role::Button, "Reset to default")
                 .is_some()
         );
+        let default = iop::role_default_text("worker").expect("worker has a default");
         click(&mut h, Role::Button, "Reset to default");
+        let reset = saved + 1;
         wait(&mut h, "role reset", |s| {
             let p = &s.settings.instructions;
             idle(s)
-                && matches!(&p.message, Some((_, t)) if t.starts_with("Restored revision 1"))
-                && matches!(p.roles.get("role-worker"), Some(Ok(r)) if r.revision.get() == 1)
+                && matches!(p.roles.get("role-worker"), Some(Ok(r)) if r.revision.get() == reset)
                 && matches!(&p.detail.history, Some(Ok(h)) if h.iter().any(|r| {
-                    r.revision.get() == 1 && iop::record_status(r).active
+                    r.revision.get() == reset && iop::record_status(r).active
                 }))
+                && matches!(&p.detail.text, Some(Ok(t)) if *t == default)
         });
     }
 
