@@ -930,10 +930,16 @@ pub fn initial_context(
         instruction_stamps: Vec::new(),
         messages: vec![Message {
             role: MessageRole::User,
-            content: vec![ContentBlock::Text {
-                text: brief,
-                cache: None,
-            }],
+            content: vec![
+                ContentBlock::Text {
+                    text: brief,
+                    cache: None,
+                },
+                ContentBlock::Text {
+                    text: format!("Current assignment ID: {}", agent.assignment_id.0.as_str()),
+                    cache: None,
+                },
+            ],
         }],
         parameters: GenerationParameters::default(),
     };
