@@ -73,7 +73,19 @@ pub enum ConnectFault {
 const CONNECT_DEADLINE: Duration = Duration::from_secs(20);
 const CALL_DEADLINE: Duration = Duration::from_secs(15);
 const CATALOG_MAX: usize = 500;
+const CATALOG_MAX_BYTES: usize = 1024 * 1024;
 const MCP_MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+
+fn charge_catalog_page(
+    remaining: &mut usize,
+    page: &impl serde::Serialize,
+) -> Result<(), ConnectFault> {
+    let bytes = serde_json::to_vec(page)
+        .map_err(|_| ConnectFault::Protocol)?
+        .len();
+    *remaining = remaining.checked_sub(bytes).ok_or(ConnectFault::TooLarge)?;
+    Ok(())
+}
 
 pub struct McpWireCatalog {
     pub tools: Vec<Tool>,
@@ -542,6 +554,7 @@ impl McpWireSession {
     pub async fn discover(&self) -> Result<McpWireCatalog, ConnectFault> {
         let peer = self.client.peer_info().ok_or(ConnectFault::Protocol)?;
         tokio::time::timeout(CALL_DEADLINE, async {
+            let mut remaining_bytes = CATALOG_MAX_BYTES;
             let mut tools = Vec::new();
             if peer.capabilities.tools.is_some() {
                 let mut cursor = None;
@@ -552,6 +565,7 @@ impl McpWireSession {
                         .list_tools(Some(PaginatedRequestParams::default().with_cursor(cursor)))
                         .await
                         .map_err(|_| ConnectFault::Protocol)?;
+                    charge_catalog_page(&mut remaining_bytes, &page)?;
                     tools.extend(page.tools);
                     if tools.len() > CATALOG_MAX {
                         return Err(ConnectFault::TooLarge);
@@ -575,6 +589,7 @@ impl McpWireSession {
                         .list_resources(Some(PaginatedRequestParams::default().with_cursor(cursor)))
                         .await
                         .map_err(|_| ConnectFault::Protocol)?;
+                    charge_catalog_page(&mut remaining_bytes, &page)?;
                     resources.extend(page.resources);
                     if resources.len() > CATALOG_MAX {
                         return Err(ConnectFault::TooLarge);
@@ -598,6 +613,7 @@ impl McpWireSession {
                         .list_prompts(Some(PaginatedRequestParams::default().with_cursor(cursor)))
                         .await
                         .map_err(|_| ConnectFault::Protocol)?;
+                    charge_catalog_page(&mut remaining_bytes, &page)?;
                     prompts.extend(page.prompts);
                     if prompts.len() > CATALOG_MAX {
                         return Err(ConnectFault::TooLarge);
@@ -769,6 +785,23 @@ async fn connect_pipes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_pages_share_one_byte_budget_across_capability_families() {
+        let mut remaining = CATALOG_MAX_BYTES;
+        charge_catalog_page(
+            &mut remaining,
+            &serde_json::json!({"tools": [{"description": "x".repeat(600_000)}], "nextCursor": "a"}),
+        )
+        .unwrap();
+        assert_eq!(
+            charge_catalog_page(
+                &mut remaining,
+                &serde_json::json!({"resources": [{"description": "y".repeat(500_000)}]}),
+            ),
+            Err(ConnectFault::TooLarge)
+        );
+    }
 
     #[test]
     fn mcp_bearer_uses_only_the_key_from_a_staged_credential() {
