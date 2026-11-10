@@ -611,6 +611,20 @@ impl ControlService {
         } else {
             "Capacity"
         };
+        // The launcher has stopped every child task before reporting failure. A retry may keep
+        // the same activation id, so release its interrupted child slots for the next owner.
+        for child in root_assignments(tx.runs(), &root.id, true)? {
+            if child.parent_id.is_some()
+                && child.state == AssignmentState::Active
+                && child.execution_id.as_ref() == Some(&a.id)
+            {
+                let mut waiting = child.clone();
+                waiting.state = AssignmentState::Waiting;
+                waiting.slot_held = false;
+                waiting.revision += 1;
+                tx.runs().update_assignment(&waiting, child.revision)?;
+            }
+        }
         match failure {
             ActivationFailure::Transient(detail) if a.attempts + 1 < self.config.max_attempts => {
                 let attempt = a.attempts + 1;

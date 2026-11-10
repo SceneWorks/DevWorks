@@ -749,6 +749,54 @@ fn standalone_issue_can_register_children_without_replacing_its_primary_owner() 
 }
 
 #[test]
+fn transient_activation_retry_releases_interrupted_child_slot() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let primary = fx.assign("root-i", "root-i", None, None);
+    let new = NewRunAssignment {
+        root: rid("root-i"),
+        work: rid("root-i"),
+        parent: Some(primary.id),
+        session: fx.session("root-i"),
+        scope_key: None,
+    };
+    let child = fx.tx(move |service, tx| {
+        let host = tx.store().host_actor.clone();
+        Ok(service
+            .register_child_assignment(tx, &host, new)?
+            .expect("child"))
+    });
+    let activation = fx.launch("issue-runner");
+    let child_id = child.id.clone();
+    let activation_id = activation.id.clone();
+    fx.tx(move |_, tx| {
+        let before = tx.runs().assignment(&child_id)?.unwrap();
+        assert_eq!(before.execution_id, Some(activation_id));
+        let mut active = before.clone();
+        active.state = AssignmentState::Active;
+        active.slot_held = true;
+        active.revision += 1;
+        tx.runs().update_assignment(&active, before.revision)
+    });
+    let execution = activation.id.clone();
+    let epoch = activation.owner_epoch;
+    fx.tx(move |service, tx| {
+        service.report_failure(
+            tx,
+            &execution,
+            epoch,
+            ActivationFailure::Transient("temporary provider failure".into()),
+        )
+    })
+    .unwrap();
+    let after = read(&*fx.store, |snapshot| snapshot.runs().assignment(&child.id)).unwrap();
+    assert_eq!(after.state, AssignmentState::Waiting);
+    assert!(!after.slot_held);
+    assert_eq!(after.execution_id, Some(activation.id));
+}
+
+#[test]
 fn host_materializes_one_issue_coordinator_for_a_running_activation() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();

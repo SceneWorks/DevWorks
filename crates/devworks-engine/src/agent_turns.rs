@@ -117,36 +117,8 @@ async fn drive_agent_turn(
         return turn_failure(StorageError::ScopeDenied);
     };
     let activation_id = activation_id.clone();
-    let control = runtime.runs().service().clone();
-    let root_id = coordinator.root_id.clone();
-    let coordinator_assignment = assignment_id.clone();
-    let execution = activation_id.clone();
-    let ack = store::write(runtime.store(), move |tx| {
-        let assignment = tx
-            .runs()
-            .assignment(&coordinator_assignment)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if assignment.parent_id.is_some() {
-            return Ok(Ok(()));
-        }
-        let revision = tx
-            .runs()
-            .root_control(&root_id)?
-            .ok_or(StorageError::ScopeDenied)?
-            .instruction_revision;
-        control
-            .acknowledge_instructions(tx, &execution, epoch, revision)
-            .map(|result| result.map(|_| ()))
-    })
-    .await;
-    match ack {
-        Ok(Ok(())) => {}
-        Ok(Err(fenced)) => {
-            return LaunchEnd::Failed(ActivationFailure::Transient(format!(
-                "agent instruction acknowledgement fenced: {fenced:?}"
-            )));
-        }
-        Err(error) => return turn_failure(error),
+    if let Err(error) = acknowledge_native_instructions(&runtime, &ctx, &coordinator).await {
+        return turn_failure(error);
     }
     let control = runtime.runs().service().clone();
     let session = session_id.clone();
@@ -169,7 +141,15 @@ async fn drive_agent_turn(
         while !*stop.borrow() && stop.changed().await.is_ok() {}
         signal.cancel();
     });
-    let result = run_native_loop(&runtime, &ctx, &coordinator, &cancellation).await;
+    let mut retry_at_ms = None;
+    let result = run_native_loop(
+        &runtime,
+        &ctx,
+        &coordinator,
+        &cancellation,
+        &mut retry_at_ms,
+    )
+    .await;
     bridge.abort();
     let control = runtime.runs().service().clone();
     let turn_id = turn.turn_id;
@@ -193,7 +173,49 @@ async fn drive_agent_turn(
             detail: None,
         },
         Err(StorageError::Cancelled) if cancellation.is_cancelled() => cancelled(),
+        Err(error) if retry_at_ms.is_some() => LaunchEnd::Failed(ActivationFailure::RateLimited {
+            until_ms: retry_at_ms.expect("checked above"),
+            detail: format!("native agent provider cooldown: {error:?}"),
+        }),
         Err(error) => turn_failure(error),
+    }
+}
+
+async fn acknowledge_native_instructions(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    coordinator: &AgentRecord,
+) -> Result<(), StorageError> {
+    let (activation_id, epoch) = ctx.activation().ok_or(StorageError::ScopeDenied)?;
+    let control = runtime.runs().service().clone();
+    let root_id = coordinator.root_id.clone();
+    let coordinator_assignment = ctx
+        .assignment_id()
+        .ok_or(StorageError::ScopeDenied)?
+        .clone();
+    let execution = activation_id.clone();
+    let ack = store::write(runtime.store(), move |tx| {
+        let assignment = tx
+            .runs()
+            .assignment(&coordinator_assignment)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if assignment.parent_id.is_some() {
+            return Ok(Ok(()));
+        }
+        let revision = tx
+            .runs()
+            .root_control(&root_id)?
+            .ok_or(StorageError::ScopeDenied)?
+            .instruction_revision;
+        control
+            .acknowledge_instructions(tx, &execution, epoch, revision)
+            .map(|result| result.map(|_| ()))
+    })
+    .await;
+    match ack {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_fenced)) => Err(StorageError::Cancelled),
+        Err(error) => Err(error),
     }
 }
 
@@ -202,6 +224,7 @@ async fn run_native_loop(
     ctx: &InvocationContext,
     agent: &AgentRecord,
     cancellation: &Cancellation,
+    retry_at_ms: &mut Option<i64>,
 ) -> Result<(), StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     let mut recovered = runtime.recover_native_context_head(ctx, session_id)?;
@@ -367,6 +390,7 @@ async fn run_native_loop(
             .recover_native_context_head(ctx, session_id)?
             .ok_or(StorageError::ScopeDenied)?
             .1;
+        acknowledge_native_instructions(runtime, ctx, agent).await?;
         let invocation = plan_generation_window(runtime, ctx, &route, &binding, &head, window)?;
         let worker = Arc::clone(runtime);
         let stopped = cancellation.clone();
@@ -405,6 +429,7 @@ async fn run_native_loop(
             }
             Some(AttemptEnd::Cancelled) => return Err(StorageError::Cancelled),
             outcome => {
+                *retry_at_ms = progress.provider.result.retry_at_ms;
                 return Err(StorageError::InvalidRecord(format!(
                     "agent inference did not yield a settled continuation: {outcome:?}; faults: {:?}",
                     progress.provider.result.faults

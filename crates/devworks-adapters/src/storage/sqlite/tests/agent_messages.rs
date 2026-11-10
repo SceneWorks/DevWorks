@@ -736,6 +736,19 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     assert_eq!(new_message.recipients, 1);
     read_snapshot(&s, &ReadOptions::default(), |snap| {
         assert!(snap.runs().open_blocking_question(&RootId(id("root-a")))?);
+        let assignment_thread = snap.runs().agent_assignment_thread(
+            &project("project-a"),
+            &assignment("recipient"),
+            "Outbound",
+            false,
+            None,
+            10,
+        )?;
+        assert!(
+            assignment_thread
+                .iter()
+                .all(|(message, _)| message.id != new_message.message.id)
+        );
         Ok(())
     })
     .unwrap();
@@ -854,7 +867,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         )?;
         assert_eq!(
             devworks_core::services::agents::retained::handover_item(tx, &assignment("recipient"))?,
-            1
+            0
         );
         assert_eq!(
             devworks_core::services::agents::retained::handover_item(tx, &assignment("recipient"))?,
@@ -883,12 +896,11 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     })
     .unwrap();
     read_snapshot(&s, &ReadOptions::default(), |snap| {
-        let delivery = snap
-            .runs()
-            .agent_session_delivery(&direct.message.id, &id("session-child"))?
-            .unwrap();
-        assert_eq!(delivery.state, "Pending");
-        assert!(delivery.handed_over);
+        assert!(
+            snap.runs()
+                .agent_session_delivery(&direct.message.id, &id("session-child"))?
+                .is_none()
+        );
         Ok(())
     })
     .unwrap();
