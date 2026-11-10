@@ -389,11 +389,23 @@ pub fn registered_tool_visibility(
     let fam = family(op);
     let class = selected.authority;
     let command = selected.mode == Mode::Command;
-    // Project-wide listings cannot be narrowed by a selected operation's input. Agents use
-    // addressed get calls for their root and delegated task references instead.
+    // These project-wide operations have no target that can be narrowed to the running root.
+    // Agents use addressed reads and writes for their root and delegated task references.
     if kind == PrincipalKind::Agent
         && ctx.root_id().is_some()
-        && matches!(op, "features.list" | "issues.list" | "tasks.list")
+        && matches!(
+            op,
+            "features.list"
+                | "features.create"
+                | "features.prioritize"
+                | "features.dependencies"
+                | "issues.list"
+                | "issues.create"
+                | "issues.prioritize"
+                | "tasks.list"
+                | "tasks.prioritize"
+                | "tasks.dependency_links"
+        )
     {
         return Verdict::Deny(DenialReason::OutOfAssignmentScope);
     }
@@ -436,6 +448,24 @@ pub fn registered_tool_visibility(
         }
         (_, None) => None,
     };
+    if ctx.root_id().is_some()
+        && role == Some(AgentRole::Worker)
+        && matches!(
+            op,
+            "runs.start"
+                | "runs.pause"
+                | "runs.continue"
+                | "runs.redirect"
+                | "runs.stop"
+                | "tasks.create"
+                | "tasks.sync_plan"
+                | "features.edit"
+                | "features.edit_plan"
+                | "features.request_plan_approval"
+        )
+    {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
     match class {
         AuthorityClass::HumanConfiguration
         | AuthorityClass::HumanDecision
