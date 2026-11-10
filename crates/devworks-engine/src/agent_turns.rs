@@ -3,7 +3,8 @@
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::storage::{
-    ApplicationStore, AssignmentState, ReadOptions, StorageError, read_snapshot,
+    ActivationOutcome, ApplicationStore, AssignmentState, Cancellation, ReadOptions, StorageError,
+    read_snapshot,
 };
 use devworks_core::ports::usage::{PriceQuery, PriceResolver};
 use devworks_core::protocol::provider::{ArtifactRef, EndpointProfile, NativeBinding};
@@ -20,6 +21,8 @@ use devworks_core::providers::context::{
     ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext, TextBlock,
 };
 use serde_json::{Value, json};
+use std::sync::{Arc, Weak};
+use tokio::sync::watch;
 
 use devworks_core::services::prices::CatalogPriceResolver;
 use devworks_core::services::router::accounting::{AttemptSelection, PinFence, ReportCategory};
@@ -30,7 +33,251 @@ use devworks_core::services::usage::meter::InputSemantics;
 use devworks_core::services::usage::pricing::PricingContext;
 
 use crate::Runtime;
+use crate::agent_supervisor::AgentTurnExecutor;
 use crate::providers::driver::NativeInvocation;
+use crate::runs::{LaunchEnd, LaunchFuture};
+use crate::store;
+use devworks_core::services::runs::substrate::ActivationFailure;
+use devworks_core::services::usage::accounting::AttemptEnd;
+
+/// The desktop-owned turn driver holds only a weak runtime reference so the supervisor does not
+/// keep its own runtime alive after shutdown.
+pub struct NativeAgentTurnExecutor {
+    runtime: Weak<Runtime>,
+}
+
+impl NativeAgentTurnExecutor {
+    pub fn new(runtime: &Arc<Runtime>) -> Self {
+        Self {
+            runtime: Arc::downgrade(runtime),
+        }
+    }
+}
+
+impl AgentTurnExecutor for NativeAgentTurnExecutor {
+    fn run(
+        &self,
+        context: InvocationContext,
+        coordinator: AgentRecord,
+        stop: watch::Receiver<bool>,
+    ) -> LaunchFuture {
+        let runtime = self.runtime.clone();
+        Box::pin(async move {
+            let Some(runtime) = runtime.upgrade() else {
+                return LaunchEnd::Finished {
+                    outcome: ActivationOutcome::Interrupted,
+                    detail: Some("runtime stopped before agent turn".into()),
+                };
+            };
+            drive_agent_turn(runtime, context, coordinator, stop).await
+        })
+    }
+}
+
+fn turn_failure(error: StorageError) -> LaunchEnd {
+    let detail = format!("native agent turn: {error:?}");
+    let failure = match error {
+        StorageError::ScopeDenied
+        | StorageError::InvalidRecord(_)
+        | StorageError::NotFound { .. } => ActivationFailure::Deterministic(detail),
+        _ => ActivationFailure::Transient(detail),
+    };
+    LaunchEnd::Failed(failure)
+}
+
+fn cancelled() -> LaunchEnd {
+    LaunchEnd::Finished {
+        outcome: ActivationOutcome::Cancelled,
+        detail: Some("agent turn stopped".into()),
+    }
+}
+
+async fn drive_agent_turn(
+    runtime: Arc<Runtime>,
+    ctx: InvocationContext,
+    coordinator: AgentRecord,
+    mut stop: watch::Receiver<bool>,
+) -> LaunchEnd {
+    if *stop.borrow() {
+        return cancelled();
+    }
+    let Some(session_id) = ctx.session_id().cloned() else {
+        return turn_failure(StorageError::ScopeDenied);
+    };
+    let Some(assignment_id) = ctx.assignment_id().cloned() else {
+        return turn_failure(StorageError::ScopeDenied);
+    };
+    let Some((activation_id, epoch)) = ctx.activation() else {
+        return turn_failure(StorageError::ScopeDenied);
+    };
+    let activation_id = activation_id.clone();
+    let control = runtime.runs().service().clone();
+    let session = session_id.clone();
+    let turn = match store::write(runtime.store(), move |tx| {
+        control.begin_turn(tx, &session, &assignment_id, &activation_id, epoch)
+    })
+    .await
+    {
+        Ok(Ok(turn)) => turn,
+        Ok(Err(fenced)) => {
+            return LaunchEnd::Failed(ActivationFailure::Transient(format!(
+                "agent turn fenced: {fenced:?}"
+            )));
+        }
+        Err(error) => return turn_failure(error),
+    };
+    let cancellation = Cancellation::new();
+    let signal = cancellation.clone();
+    let bridge = tokio::spawn(async move {
+        while !*stop.borrow() && stop.changed().await.is_ok() {}
+        signal.cancel();
+    });
+    let result = run_native_loop(&runtime, &ctx, &coordinator, &cancellation).await;
+    bridge.abort();
+    let control = runtime.runs().service().clone();
+    let turn_id = turn.turn_id;
+    let end = store::write(runtime.store(), move |tx| {
+        control.end_turn(tx, &session_id, &turn_id)
+    })
+    .await;
+    match end {
+        Ok(Ok(())) => {}
+        Ok(Err(fenced)) => {
+            return LaunchEnd::Failed(ActivationFailure::Transient(format!(
+                "agent turn end fenced: {fenced:?}"
+            )));
+        }
+        Err(error) => return turn_failure(error),
+    }
+    match result {
+        Ok(()) if cancellation.is_cancelled() => cancelled(),
+        Ok(()) => LaunchEnd::Finished {
+            outcome: ActivationOutcome::Completed,
+            detail: None,
+        },
+        Err(StorageError::Cancelled) if cancellation.is_cancelled() => cancelled(),
+        Err(error) => turn_failure(error),
+    }
+}
+
+async fn run_native_loop(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    agent: &AgentRecord,
+    cancellation: &Cancellation,
+) -> Result<(), StorageError> {
+    let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let mut recovered = runtime.recover_native_context_head(ctx, session_id)?;
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(StorageError::Cancelled);
+        }
+        let (mut head, mut binding, _) = match recovered.take() {
+            Some(value) => value,
+            None => {
+                let tools_required = !runtime
+                    .providers()
+                    .ok_or(StorageError::ScopeDenied)?
+                    .schemas()
+                    .selected_builtins(ctx)?
+                    .is_empty();
+                let route = route_context_head(runtime, ctx, session_id, 0, None, tools_required)?;
+                let (head, binding) = publish_first_context(runtime, ctx, agent, &route)?;
+                (head, binding, 0)
+            }
+        };
+        head = runtime.refresh_native_tool_context(ctx, session_id, &head)?;
+        let tools_required = !runtime
+            .providers()
+            .ok_or(StorageError::ScopeDenied)?
+            .schemas()
+            .selected_builtins(ctx)?
+            .is_empty();
+        let route = route_context_head(
+            runtime,
+            ctx,
+            session_id,
+            binding.context_epoch.get(),
+            Some(head.sha256.as_str()),
+            tools_required,
+        )?;
+        let next = binding_for_route(runtime, &route, binding.context_epoch.get())?;
+        if next.connection_id != binding.connection_id
+            || next.model_id != binding.model_id
+            || next.account_revision != binding.account_revision
+            || next.endpoint_profile != binding.endpoint_profile
+        {
+            let epoch = binding
+                .context_epoch
+                .get()
+                .checked_add(1)
+                .ok_or(StorageError::ScopeDenied)?;
+            let next = NativeBinding {
+                context_epoch: Counter::new(epoch).map_err(|_| StorageError::ScopeDenied)?,
+                ..next
+            };
+            head = runtime.change_provider_epoch(ctx, session_id, &head, &binding, &next)?;
+            binding = next;
+        }
+        head = runtime.adopt_instruction_epoch(ctx, session_id, &head, &binding, &[])?;
+        binding = runtime
+            .recover_native_context_head(ctx, session_id)?
+            .ok_or(StorageError::ScopeDenied)?
+            .1;
+        let invocation = plan_generation(runtime, ctx, &route, &binding, &head)?;
+        let progress = runtime
+            .produce_and_dispatch_native_turn(invocation, Some(cancellation.clone()))
+            .await?;
+        if cancellation.is_cancelled() {
+            return Err(StorageError::Cancelled);
+        }
+        match progress.provider.result.outcome {
+            Some(AttemptEnd::Completed) if progress.continuation.is_some() => return Ok(()),
+            Some(AttemptEnd::ToolCallsReady) if progress.continuation.is_some() => {
+                recovered = runtime.recover_native_context_head(ctx, session_id)?;
+            }
+            Some(AttemptEnd::ToolCallsReady) => {
+                // An approval or a still-running operation can delay the initial result. The
+                // native request is durable: replaying its key resumes the pending dispatches
+                // without sending a second provider request.
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                recovered = runtime
+                    .recover_native_context_head(ctx, session_id)?
+                    .or(Some((head, binding, 0)));
+            }
+            Some(AttemptEnd::Cancelled) => return Err(StorageError::Cancelled),
+            outcome => {
+                return Err(StorageError::InvalidRecord(format!(
+                    "agent inference did not yield a settled continuation: {outcome:?}; faults: {:?}",
+                    progress.provider.result.faults
+                )));
+            }
+        }
+    }
+}
+
+fn binding_for_route(
+    runtime: &Runtime,
+    route: &RouteChoice,
+    epoch: i64,
+) -> Result<NativeBinding, StorageError> {
+    read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+        let connection = read
+            .router()
+            .connection(&route.connection_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let profile = serde_json::from_value::<EndpointProfile>(Value::String(connection.profile))
+            .map_err(|_| StorageError::InvalidRecord("route endpoint profile".into()))?;
+        Ok(NativeBinding {
+            connection_id: route.connection_id.clone(),
+            account_revision: Revision::new(connection.account_revision)
+                .map_err(|_| StorageError::ScopeDenied)?,
+            endpoint_profile: profile,
+            model_id: route.model_id.clone(),
+            context_epoch: Counter::new(epoch).map_err(|_| StorageError::ScopeDenied)?,
+        })
+    })
+}
 
 const DEFAULT_OUTPUT_HEADROOM: i64 = 8_192;
 
