@@ -1122,6 +1122,49 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
         ),
         DomainQueryReply::Result { .. }
     ));
+    fx.source(
+        "task-evidence-source",
+        "task-evidence.txt",
+        b"task evidence",
+        SourceOrigin::default(),
+    );
+    let task_evidence = saved(fx.save(
+        &sibling_user,
+        "project-a",
+        "Task evidence",
+        "text/plain",
+        "task-evidence-source",
+        b"task evidence",
+    ))
+    .artifact;
+    summary(fx.reference(
+        &fx.user(),
+        &task_evidence,
+        json!({"kind":"root","id":"task-a"}),
+        1,
+    ));
+    assert!(matches!(
+        fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &task_evidence),
+            None
+        ),
+        DomainQueryReply::Result { .. }
+    ));
+    let sender = worker.clone();
+    fx.write(move |tx| {
+        devworks_core::services::agents::post_assignment(
+            tx,
+            &sender,
+            &devworks_core::operations::agents::MessagesInput {
+                recipient_assignment_id: devworks_core::protocol::AssignmentId(id("scope-primary")),
+                message_class: devworks_core::protocol::records::MessageClass::Evidence,
+                content: devworks_core::protocol::support::BoundedText("Task evidence".into()),
+                attachments: devworks_core::protocol::support::BoundedList(vec![task_evidence]),
+            },
+        )
+    });
     fx.write(|tx| {
         let id = devworks_core::protocol::AssignmentId(id("scope-worker"));
         let before = tx.runs().assignment(&id)?.unwrap();

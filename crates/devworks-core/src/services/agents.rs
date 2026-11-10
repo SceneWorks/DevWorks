@@ -124,13 +124,20 @@ fn sender_can_read_attachment(
     {
         return Ok(true);
     }
+    let context = tx
+        .runs()
+        .agent_assignment_context(sender)?
+        .ok_or_else(denied)?;
+    let task_ids: Vec<Id> = serde_json::from_value(context.task_ids)
+        .map_err(|_| StorageError::InvalidRecord("assignment task scope".into()))?;
     for link in tx.artifacts().links(&reference.artifact_id)? {
         if link.purpose != crate::ports::storage::LinkPurpose::Reference
             || link.version_id != reference.version_id
         {
             continue;
         }
-        if link.subject.kind == "root" && link.subject.id == root.0
+        if link.subject.kind == "root"
+            && sender_scopes_root_subject(tx, &assignment, &task_ids, root, &link.subject.id)?
             || link.subject.kind == "assignment"
                 && (link.subject.id == sender.0
                     || coordinator
@@ -143,6 +150,42 @@ fn sender_can_read_attachment(
         }
     }
     Ok(false)
+}
+
+fn sender_scopes_root_subject(
+    tx: &mut dyn WriteTransaction,
+    assignment: &StoredAssignment,
+    task_ids: &[Id],
+    root: &crate::protocol::RootId,
+    subject: &Id,
+) -> Result<bool, StorageError> {
+    if subject == &root.0 {
+        return Ok(true);
+    }
+    if assignment.parent_id.is_none() {
+        return Ok(tx
+            .work()
+            .work(subject)?
+            .is_some_and(|work| work.parent_feature_id.as_ref() == Some(&root.0)));
+    }
+    if subject != &assignment.work_id.0 && !task_ids.contains(subject) {
+        return Ok(false);
+    }
+    let current_root = tx.sessions().work_root(root)?;
+    let current_task = tx
+        .sessions()
+        .work_root(&crate::protocol::RootId(subject.clone()))?;
+    Ok(current_root
+        .zip(current_task)
+        .is_some_and(|(root_work, task)| {
+            task.project_id == root_work.project_id
+                && task.kind != "feature"
+                && (if root_work.kind == "feature" {
+                    task.parent_feature_id.as_ref() == Some(&root_work.id)
+                } else {
+                    task.id == root_work.id
+                })
+        }))
 }
 
 fn query_source_assignment(
