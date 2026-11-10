@@ -35,6 +35,12 @@ pub struct McpWireSession {
     process: Option<OwnedProcessGuard>,
 }
 
+struct ConnectedSession {
+    key: Vec<u8>,
+    wire: McpWireSession,
+}
+type SessionSlot = Arc<tokio::sync::Mutex<Option<ConnectedSession>>>;
+
 struct OwnedProcessGuard {
     process: OwnedProcess,
     supervisor: Arc<ProcessSupervisor>,
@@ -84,7 +90,7 @@ pub struct NativeMcpClients {
     protected_roots: ProtectedRoots,
     protected_branches: Vec<String>,
     runtime: tokio::runtime::Handle,
-    sessions: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<McpWireSession>>>>>,
+    sessions: Mutex<HashMap<String, SessionSlot>>,
 }
 impl NativeMcpClients {
     #[allow(clippy::too_many_arguments)]
@@ -221,15 +227,28 @@ impl McpRemote for NativeMcpClients {
         context: &InvocationContext,
         endpoint: &McpEndpoint,
     ) -> Result<(), McpRemoteFault> {
-        self.disconnect(&endpoint.server_id)?;
-        let session = self.connect_wire(context, endpoint)?;
-        self.sessions
+        let key = serde_json::to_vec(&(endpoint.scope.key(), &endpoint.transport))
+            .map_err(|_| McpRemoteFault::InvalidConfiguration)?;
+        let slot = self
+            .sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(
-                endpoint.server_id.as_str().into(),
-                Arc::new(tokio::sync::Mutex::new(Some(session))),
-            );
+            .entry(endpoint.server_id.as_str().into())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None)))
+            .clone();
+        // Keep the same slot across reconnects. Concurrent callers either reuse this endpoint
+        // or wait for the changed endpoint to finish replacing its session.
+        let mut guard = self.runtime.block_on(slot.lock());
+        if guard.as_ref().is_some_and(|connected| connected.key == key) {
+            return Ok(());
+        }
+        if let Some(old) = guard.take() {
+            self.runtime
+                .block_on(old.wire.close())
+                .map_err(map_connect_fault)?;
+        }
+        let session = self.connect_wire(context, endpoint)?;
+        *guard = Some(ConnectedSession { key, wire: session });
         Ok(())
     }
 
@@ -248,6 +267,7 @@ impl McpRemote for NativeMcpClients {
                 guard
                     .as_ref()
                     .ok_or(ConnectFault::Protocol)?
+                    .wire
                     .discover()
                     .await
             })
@@ -318,6 +338,7 @@ impl McpRemote for NativeMcpClients {
             let guard = slot.lock().await;
             let session = guard.as_ref().ok_or(McpRemoteFault::Unreachable)?;
             session
+                .wire
                 .call_tool(name, arguments)
                 .await
                 .map_err(map_connect_fault)
@@ -339,7 +360,11 @@ impl McpRemote for NativeMcpClients {
         self.runtime.block_on(async {
             let guard = slot.lock().await;
             let session = guard.as_ref().ok_or(McpRemoteFault::Unreachable)?;
-            session.read_resource(uri).await.map_err(map_connect_fault)
+            session
+                .wire
+                .read_resource(uri)
+                .await
+                .map_err(map_connect_fault)
         })
     }
 
@@ -363,6 +388,7 @@ impl McpRemote for NativeMcpClients {
             let guard = slot.lock().await;
             let session = guard.as_ref().ok_or(McpRemoteFault::Unreachable)?;
             session
+                .wire
                 .get_prompt(name, arguments)
                 .await
                 .map_err(map_connect_fault)
@@ -374,11 +400,12 @@ impl McpRemote for NativeMcpClients {
             .sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(server_id.as_str());
+            .get(server_id.as_str())
+            .cloned();
         if let Some(slot) = slot {
             self.runtime.block_on(async {
                 if let Some(session) = slot.lock().await.take() {
-                    session.close().await.map_err(map_connect_fault)?;
+                    session.wire.close().await.map_err(map_connect_fault)?;
                 }
                 Ok(())
             })

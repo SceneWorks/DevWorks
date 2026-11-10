@@ -1504,11 +1504,14 @@ pub(crate) fn dispatch_one(
                 "native MCP client unavailable",
             )
         })?;
-        let operation_id = service.queue_selected_tool(ctx, key, &alias, arguments)?;
-        accepted(
-            serde_json::to_vec(&json!({"operationId": operation_id})).map_err(invalid)?,
-            operation_id,
-        )
+        match service.queue_selected_tool(ctx, key, &alias, arguments) {
+            Ok(operation_id) => accepted(
+                serde_json::to_vec(&json!({"operationId": operation_id})).map_err(invalid)?,
+                operation_id,
+            ),
+            Err(StorageError::InvalidRecord(_)) => failed("tool_invalid_arguments"),
+            Err(error) => return Err(error),
+        }
     } else {
         let result = match selected_builtin(schemas, &call) {
             Ok((descriptor, mode, revision)) => {

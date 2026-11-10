@@ -60,8 +60,6 @@ struct StoredServer {
     schemas: BTreeMap<String, Value>,
     #[serde(default)]
     resource_uris: BTreeMap<String, String>,
-    #[serde(default)]
-    auto_select_read_only: bool,
 }
 
 fn scope(
@@ -1413,36 +1411,29 @@ impl McpClientService {
                 "invalid MCP catalog identity".into(),
             ));
         }
-        let selected = if server.auto_select_read_only {
-            capabilities
-                .iter()
-                .filter(|cap| cap.kind.0 == "tool" && cap.read_only)
-                .map(|cap| cap.id.clone())
-                .collect::<Vec<_>>()
-        } else {
-            server
-                .public
-                .selected_tool_ids
-                .0
-                .iter()
-                .filter(|id| {
-                    let old = server.capabilities.iter().find(|cap| &cap.id == *id);
-                    let new = capabilities.iter().find(|cap| &cap.id == *id);
-                    matches!((old, new), (Some(old), Some(new))
-                        if serde_json::to_value(old).ok() == serde_json::to_value(new).ok())
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        };
+        // A remote read-only hint is untrusted. Discovery may keep an unchanged human selection,
+        // but only mcp.select_tools can make a newly discovered tool executable.
+        let selected = server
+            .public
+            .selected_tool_ids
+            .0
+            .iter()
+            .filter(|id| {
+                let old = server.capabilities.iter().find(|cap| &cap.id == *id);
+                let new = capabilities.iter().find(|cap| &cap.id == *id);
+                matches!((old, new), (Some(old), Some(new))
+                    if serde_json::to_value(old).ok() == serde_json::to_value(new).ok())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         if selected.len() > 128 {
             return Err(StorageError::InvalidRecord(
-                "MCP read-only selection exceeds contract bound".into(),
+                "MCP tool selection exceeds contract bound".into(),
             ));
         }
         server.capabilities = capabilities;
         server.schemas = schemas;
         server.resource_uris = resource_uris;
-        server.auto_select_read_only = false;
         server.public.selected_tool_ids = BoundedList(selected);
         server.public.catalog_revision = rev(server.public.catalog_revision.get() + 1);
         server.public.revision = rev(server.public.revision.get() + 1);
@@ -1520,7 +1511,6 @@ impl McpClientService {
                 server.public.selected_tool_ids = BoundedList(Vec::new());
                 server.capabilities.clear();
                 server.schemas.clear();
-                server.auto_select_read_only = true;
             }
             server.transport = input.transport.clone();
             server.public.clone()
@@ -1549,7 +1539,6 @@ impl McpClientService {
                 capabilities: Vec::new(),
                 schemas: BTreeMap::new(),
                 resource_uris: BTreeMap::new(),
-                auto_select_read_only: true,
             });
             public
         };

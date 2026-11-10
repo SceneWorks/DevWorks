@@ -414,7 +414,7 @@ fn configuration_is_durable_and_selection_rejects_unknown_tools() {
         )
     })
     .unwrap();
-    assert_eq!(published.selected_tool_ids.0, vec![id("mcp-read")]);
+    assert!(published.selected_tool_ids.0.is_empty());
     assert_eq!(published.catalog_revision.get(), 2);
     assert!(matches!(
         capabilities(&h, &store, &cases, &server.id, 2),
@@ -464,7 +464,7 @@ fn configuration_is_durable_and_selection_rejects_unknown_tools() {
 }
 
 #[test]
-fn discovery_rejects_more_default_read_only_tools_than_selection_can_hold() {
+fn discovery_keeps_untrusted_read_only_hints_unselected_beyond_selection_cap() {
     let h = Harness::new();
     let store = h.store();
     run_write(&store, WriteOptions::default(), |tx| {
@@ -515,13 +515,9 @@ fn discovery_rejects_more_default_read_only_tools_than_selection_can_hold() {
             catalog,
         )
     });
-    assert!(matches!(
-        result,
-        Err(devworks_core::ports::storage::StorageError::InvalidRecord(
-            _
-        ))
-    ));
-    assert_eq!(servers(&h, &store, &cases)[0].catalog_revision.get(), 1);
+    let published = result.unwrap();
+    assert_eq!(published.catalog_revision.get(), 2);
+    assert!(published.selected_tool_ids.0.is_empty());
 }
 
 #[test]
@@ -756,17 +752,7 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
         })
         .unwrap()
     };
-    assert_eq!(first.selected_tool_ids.0.len(), 1);
-    let selected = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
-        service.selected_tool_materials(&context(&store), snapshot)
-    })
-    .unwrap();
-    assert_eq!(selected.len(), 1);
-    assert_eq!(selected[0].schema["type"], "object");
-    assert_eq!(
-        selected[0].alias.capability_id.as_str().split('/').next(),
-        Some("mcp")
-    );
+    assert!(first.selected_tool_ids.0.is_empty());
     let first_cap = match capabilities(&h, &store, &cases, &server.id, 2) {
         DomainQueryReply::Result {
             result: OperationResult::McpCapabilities { value },
@@ -775,6 +761,34 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
         other => panic!("unexpected catalog: {other:?}"),
     };
     assert!(first_cap.input_schema.is_some());
+    let DomainDecision::Applied {
+        result: OperationResult::McpSelectTools {
+            value: selected_server,
+        },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "catalog-select",
+        "mcp.select_tools",
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,
+            "expectedRevision":"2","expectedCatalogRevision":"2",
+            "toolIds":[first_cap.id.clone()]}),
+    )
+    else {
+        panic!("human selection failed");
+    };
+    let selected = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+        service.selected_tool_materials(&context(&store), snapshot)
+    })
+    .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert!(selected[0].alias.wire_name.len() <= 64);
+    assert_eq!(selected[0].schema["type"], "object");
+    assert_eq!(
+        selected[0].alias.capability_id.as_str().split('/').next(),
+        Some("mcp")
+    );
     let second = {
         let service = service.clone();
         let server_id = server.id.clone();
@@ -789,7 +803,10 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
         })
         .unwrap()
     };
-    assert_eq!(second.selected_tool_ids.0, first.selected_tool_ids.0);
+    assert_eq!(
+        second.selected_tool_ids.0,
+        selected_server.selected_tool_ids.0
+    );
     let second_cap = match capabilities(&h, &store, &cases, &server.id, 3) {
         DomainQueryReply::Result {
             result: OperationResult::McpCapabilities { value },
@@ -820,7 +837,7 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
 }
 
 #[test]
-fn journaled_discovery_publishes_selected_read_only_catalog() {
+fn journaled_discovery_does_not_select_untrusted_read_only_hints() {
     let h = Harness::new();
     let store = Arc::new(h.store());
     run_write(&*store, WriteOptions::default(), |tx| {
@@ -888,13 +905,12 @@ fn journaled_discovery_publishes_selected_read_only_catalog() {
     ));
     let published = servers(&h, &store, &cases).pop().unwrap();
     assert_eq!(published.catalog_revision.get(), 2);
-    assert_eq!(published.selected_tool_ids.0.len(), 1);
+    assert!(published.selected_tool_ids.0.is_empty());
     let selected = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
         service.selected_tool_materials(&context(&store), snapshot)
     })
     .unwrap();
-    assert_eq!(selected.len(), 1);
-    assert!(selected[0].alias.wire_name.len() <= 64);
+    assert!(selected.is_empty());
     assert!(
         matches!(capabilities(&h, &store, &cases, &server.id, 2), DomainQueryReply::Result { result: OperationResult::McpCapabilities { value }, .. } if value.items.0.len() == 1)
     );
