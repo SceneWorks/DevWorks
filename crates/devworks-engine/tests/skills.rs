@@ -253,11 +253,21 @@ impl Fx {
         app: &Runtime,
         ctx: &InvocationContext,
         op: &str,
+        body: Value,
+    ) -> Result<Value, Value> {
+        self.query_at(app, ctx, op, 1, body)
+    }
+    fn query_at(
+        &self,
+        app: &Runtime,
+        ctx: &InvocationContext,
+        op: &str,
+        revision: u32,
         mut body: Value,
     ) -> Result<Value, Value> {
         body["kind"] = json!(op);
         let frame = serde_json::to_vec(
-            &json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"q","schemaRevision":1,"body":body}),
+            &json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"q","schemaRevision":revision,"body":body}),
         )
         .unwrap();
         match app.query(ctx, op, &frame).unwrap() {
@@ -402,6 +412,30 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
             devworks_core::fingerprint::sha256_hex(b"reference"),
             devworks_core::fingerprint::sha256_hex(b"#!/bin/sh\necho alpha\n"),
         ]);
+        // Revision 1 returns the plain artifact references; revision 3 returns each resource's
+        // skill-relative path and executable flag beside the same artifact, in the same order.
+        assert!(resources["items"].as_array().unwrap().iter().all(|r| r.get("path").is_none() && r.get("artifactId").is_some()), "{resources}");
+        let located = fx
+            .query_at(&app, &agent, "skills.resources", 3, json!({"instructionId":alpha["id"],"revision":alpha["revision"],"page":{"limit":10}}))
+            .unwrap();
+        let paths: Vec<_> = located["items"].as_array().unwrap().iter().map(|r| (r["path"].as_str().unwrap().to_owned(), r["executable"].as_bool().unwrap())).collect();
+        assert_eq!(paths, [("docs/ref.md".to_owned(), false), ("scripts/run.sh".to_owned(), false)], "{located}");
+        let artifacts: Vec<_> = located["items"].as_array().unwrap().iter().map(|r| r["artifact"].clone()).collect();
+        assert_eq!(&artifacts, resources["items"].as_array().unwrap());
+        // Revision 2 is not registered for skills.resources.
+        let r2 = fx.query_at(&app, &agent, "skills.resources", 2, json!({"instructionId":alpha["id"],"revision":alpha["revision"],"page":{"limit":10}}));
+        assert!(r2.is_err(), "{r2:?}");
+        // Paging at revision 3 continues in the same path order.
+        let first = fx
+            .query_at(&app, &agent, "skills.resources", 3, json!({"instructionId":alpha["id"],"revision":alpha["revision"],"page":{"limit":1}}))
+            .unwrap();
+        assert_eq!(first["items"][0]["path"], "docs/ref.md");
+        assert_eq!(first["hasMore"], true);
+        let second = fx
+            .query_at(&app, &agent, "skills.resources", 3, json!({"instructionId":alpha["id"],"revision":alpha["revision"],"page":{"limit":1,"cursor":first["nextCursor"]}}))
+            .unwrap();
+        assert_eq!(second["items"][0]["path"], "scripts/run.sh");
+        assert_eq!(second["hasMore"], false);
         // Agents adopting a skill can read its text and resources, even a workspace code
         // reviewer that is not the workspace coordinator.
         let read_artifact = |ctx: &InvocationContext, r: &Value| {
@@ -657,6 +691,12 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
         let (user, agent, reviewer) = fx.principals();
         let app = boot(fx.composition()).await.unwrap();
         let shared = find(&discover(&fx, &app, &agent), "alpha", "shared").clone();
+        // Revision 3 of skills.resources reports each resource's execute permission.
+        let located = fx
+            .query_at(&app, &agent, "skills.resources", 3, json!({"instructionId":shared["id"],"revision":shared["revision"],"page":{"limit":10}}))
+            .unwrap();
+        let flags: Vec<_> = located["items"].as_array().unwrap().iter().map(|r| (r["path"].as_str().unwrap().to_owned(), r["executable"].as_bool().unwrap())).collect();
+        assert_eq!(flags, [("bin/tool".to_owned(), cfg!(unix)), ("scripts/run.sh".to_owned(), false)], "{located}");
         let content = fx.upload(&agent, "Do alpha, improved.");
         // A read-only reviewer cannot author skills.
         assert_eq!(

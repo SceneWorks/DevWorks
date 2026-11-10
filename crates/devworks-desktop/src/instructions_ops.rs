@@ -11,7 +11,7 @@ use devworks_core::{
     protocol::{
         DomainErrorCode,
         provider::ArtifactRef,
-        records::{ArtifactReadContent, InstructionRecord},
+        records::{ArtifactReadContent, InstructionRecord, SkillResource, SkillResourcePageResult},
         results::OperationResult,
     },
     services::instructions::{HARNESS_ROOT_ID, MAX_TEXT_BYTES, SHARED_ROOT_ID, role_item_id},
@@ -271,6 +271,11 @@ pub fn rollback_body(id: &str, expected: i64, target: i64) -> Value {
 pub fn query(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
     ops::query_frame(b, operation, body)
 }
+/// The `skills.resources` frame at schema revision 3, whose items carry each resource's
+/// skill-relative path beside its artifact.
+pub fn resources_query(b: &dyn Backend, body: Value) -> Vec<u8> {
+    ops::at_revision(ops::query_frame(b, "skills.resources", body), 3)
+}
 pub fn command(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
     ops::command_frame(b, operation, body)
 }
@@ -300,13 +305,22 @@ pub fn record(outcome: QueryOutcome) -> Result<InstructionRecord, Failure> {
     }
 }
 pub struct Resources {
-    pub items: Vec<ArtifactRef>,
+    pub items: Vec<SkillResource>,
     pub next: Option<String>,
 }
 pub fn resources(outcome: QueryOutcome) -> Result<Resources, Failure> {
     match ops::query_result(outcome)?.0 {
-        OperationResult::SkillsResources { value } => Ok(Resources {
+        OperationResult::SkillsResources {
+            value: SkillResourcePageResult::Current(value),
+        } => Ok(Resources {
             items: value.items.0,
+            next: value.next_cursor.map(|c| c.0).filter(|_| value.has_more),
+        }),
+        // An empty page reads the same in both shapes.
+        OperationResult::SkillsResources {
+            value: SkillResourcePageResult::Legacy(value),
+        } if value.items.0.is_empty() => Ok(Resources {
+            items: Vec::new(),
             next: value.next_cursor.map(|c| c.0).filter(|_| value.has_more),
         }),
         other => Err(ops::unexpected("skills.resources", &other)),

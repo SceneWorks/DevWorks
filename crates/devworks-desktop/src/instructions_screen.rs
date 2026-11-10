@@ -5,8 +5,7 @@
 use crate::instructions_ops::{self as iop, Kind, Origin, State};
 use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
-use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::InstructionRecord;
+use devworks_core::protocol::records::{InstructionRecord, SkillResource};
 use devworks_core::settings::catalog::AgentRole;
 use eframe::egui::{self, RichText, Ui};
 use std::collections::BTreeMap;
@@ -66,8 +65,8 @@ pub struct Detail {
     /// The revision whose text is shown and its text (`None` while loading).
     pub shown: Option<i64>,
     pub text: Option<Result<String, String>>,
-    pub resources: Option<Result<Vec<ArtifactRef>, String>>,
-    pub resources_gathering: Vec<ArtifactRef>,
+    pub resources: Option<Result<Vec<SkillResource>, String>>,
+    pub resources_gathering: Vec<SkillResource>,
     /// The text and resources wait for the history: they load from its current revision, so
     /// the shown text and the save's expected revision come from one observation.
     pub follow_history: bool,
@@ -671,11 +670,14 @@ impl InstructionsPanel {
                             if list.len() == 1 { "" } else { "s" }
                         ),
                     );
-                    for a in list {
+                    for r in list {
+                        let a = &r.artifact;
                         widgets::caption(
                             ui,
                             format!(
-                                "{} · {} bytes · sha256 {}",
+                                "{}{} · {} · {} bytes · sha256 {}",
+                                r.path.0,
+                                if r.executable { " (executable)" } else { "" },
                                 a.media_type,
                                 a.byte_length.get(),
                                 &a.sha256.as_str()[..12]

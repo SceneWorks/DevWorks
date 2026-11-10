@@ -10,8 +10,9 @@ use crate::ports::storage::{
     ReadSnapshot, StorageError, StoredInstructionItem,
 };
 use crate::protocol::Id;
-use crate::protocol::provider::ArtifactRef;
-use crate::protocol::records::{InstructionRecord, PageRequest};
+use crate::protocol::records::{
+    InstructionRecord, PageRequest, SkillResource, SkillResourcePage, SkillResourcePageResult,
+};
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::services::sessions::Failure;
@@ -193,18 +194,31 @@ impl InstructionService {
                 let item =
                     visible_item(instructions, ctx, &i.instruction_id, InstructionKind::Skill)?;
                 let revision = visible_revision(instructions, ctx, &item, i.revision.get())?;
-                let refs: Vec<ArtifactRef> = revision
+                // Each resource keeps its skill-relative path; the gateway projects revision 1
+                // callers to the artifacts alone.
+                let resources: Vec<SkillResource> = revision
                     .resources
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .map(|r| serde_json::from_value(r["artifact"].clone()))
+                    .map(|r| {
+                        Ok::<_, serde_json::Error>(SkillResource {
+                            path: serde_json::from_value(r["path"].clone())?,
+                            artifact: serde_json::from_value(r["artifact"].clone())?,
+                            executable: r["executable"].as_bool().unwrap_or(false),
+                        })
+                    })
                     .collect::<Result<_, _>>()
                     .map_err(|e| StorageError::InvalidRecord(format!("skill resource: {e}")))?;
                 let binding = format!("{}-{}", item.id.as_str(), revision.revision);
+                let page = paged(resources, &i.page, &binding)?;
                 Ok((
                     OperationResult::SkillsResources {
-                        value: paged(refs, &i.page, &binding)?,
+                        value: SkillResourcePageResult::Current(SkillResourcePage {
+                            items: page.items,
+                            next_cursor: page.next_cursor,
+                            has_more: page.has_more,
+                        }),
                     },
                     item.version,
                 ))

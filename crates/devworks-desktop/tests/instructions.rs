@@ -145,3 +145,30 @@ fn roles_are_drafted_and_reset_and_harness_skills_are_created() {
         "the harness skill directory is written under the data root"
     );
 }
+
+#[test]
+fn a_skill_lists_its_resource_files_by_path() {
+    let root = Root::new("instruction-resources");
+    let dir = root.0.join("skills").join("lint");
+    std::fs::create_dir_all(dir.join("references")).unwrap();
+    std::fs::write(dir.join("SKILL.md"), "Run the linter.").unwrap();
+    std::fs::write(dir.join("references").join("setup.md"), "Install it.").unwrap();
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 1400.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, "Role instructions");
+    wait(
+        &mut h,
+        "skills listed",
+        |s| matches!(&s.settings.instructions.skills, Some(Ok(list)) if list.iter().any(|r| r.name.0 == "lint")),
+    );
+    click(&mut h, Role::Button, "lint");
+    // skills.resources at schema revision 3 carries each resource's skill-relative path.
+    wait(&mut h, "resources listed", |s| {
+        matches!(&s.settings.instructions.detail.resources, Some(Ok(list))
+            if list.len() == 1 && list[0].path.0 == "references/setup.md" && !list[0].executable)
+    });
+    settle(&mut h);
+    assert!(has_text(&h, "references/setup.md · text/markdown"));
+}

@@ -173,13 +173,7 @@ impl Shell {
             Slot::InstructionResources(generation),
             "Reading skill resources",
             "skills.resources",
-            move |b| {
-                iop::query(
-                    b,
-                    "skills.resources",
-                    iop::resources_body(&id, revision, cursor.as_deref()),
-                )
-            },
+            move |b| iop::resources_query(b, iop::resources_body(&id, revision, cursor.as_deref())),
         ) {
             self.panel().detail.resources = Some(Err("Not requested: DevWorks is offline.".into()));
         }

@@ -10671,6 +10671,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_SkillResource_0_500": {
+      "items": {
+        "$ref": "#/$defs/SkillResource"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_SourceEvidence_0_500": {
       "items": {
         "$ref": "#/$defs/SourceEvidence"
@@ -16610,6 +16618,56 @@
       "pattern": "^(0|-?[1-9][0-9]{0,18})$",
       "type": "string"
     },
+    "SkillResource": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "executable": {
+          "type": "boolean"
+        },
+        "path": {
+          "$ref": "#/$defs/RelativePath"
+        }
+      },
+      "required": [
+        "path",
+        "artifact",
+        "executable"
+      ],
+      "type": "object"
+    },
+    "SkillResourcePage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_SkillResource_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
+      ],
+      "type": "object"
+    },
+    "SkillResourcePageResult": {
+      "$ref": "#/$defs/SkillResourcePage",
+      "x-since": 3
+    },
     "SourceEvidence": {
       "additionalProperties": false,
       "properties": {
@@ -21836,7 +21894,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page23"
+          "$ref": "#/$defs/SkillResourcePageResult"
         }
       },
       "required": [
