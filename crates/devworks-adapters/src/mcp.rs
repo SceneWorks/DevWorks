@@ -148,10 +148,13 @@ impl NativeMcpClients {
                     .transpose()?;
                 let bearer = mcp_bearer(secret.as_ref())?;
                 self.runtime
-                    .block_on(tokio::time::timeout(
-                        timeout,
-                        McpWireSession::http(&endpoint.0, bearer.as_ref().map(|s| s.expose())),
-                    ))
+                    .block_on(async {
+                        tokio::time::timeout(
+                            timeout,
+                            McpWireSession::http(&endpoint.0, bearer.as_ref().map(|s| s.expose())),
+                        )
+                        .await
+                    })
                     .map_err(|_| McpRemoteFault::Deadline)?
                     .map_err(map_connect_fault)
             }
@@ -175,10 +178,18 @@ impl NativeMcpClients {
                     protected_branches: &self.protected_branches,
                 };
                 self.runtime
-                    .block_on(tokio::time::timeout(
-                        timeout,
-                        McpWireSession::stdio(self.supervisor.clone(), context, native, &policy),
-                    ))
+                    .block_on(async {
+                        tokio::time::timeout(
+                            timeout,
+                            McpWireSession::stdio(
+                                self.supervisor.clone(),
+                                context,
+                                native,
+                                &policy,
+                            ),
+                        )
+                        .await
+                    })
                     .map_err(|_| McpRemoteFault::Deadline)?
                     .map_err(map_connect_fault)
             }
@@ -257,9 +268,10 @@ impl McpRemote for NativeMcpClients {
             .clone();
         // Keep the same slot across reconnects. Concurrent callers either reuse this endpoint
         // or wait for the changed endpoint to finish replacing its session.
+        let timeout = remaining()?;
         let mut guard = self
             .runtime
-            .block_on(tokio::time::timeout(remaining()?, slot.lock()))
+            .block_on(async { tokio::time::timeout(timeout, slot.lock()).await })
             .map_err(|_| McpRemoteFault::Deadline)?;
         if guard
             .as_ref()
@@ -270,8 +282,9 @@ impl McpRemote for NativeMcpClients {
         if let Some(old) = guard.take()
             && !old.wire.client.is_closed()
         {
+            let timeout = remaining()?;
             self.runtime
-                .block_on(tokio::time::timeout(remaining()?, old.wire.close()))
+                .block_on(async { tokio::time::timeout(timeout, old.wire.close()).await })
                 .map_err(|_| McpRemoteFault::Deadline)?
                 .map_err(map_connect_fault)?;
         }
