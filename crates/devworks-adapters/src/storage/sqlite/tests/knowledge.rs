@@ -6335,3 +6335,45 @@ fn claims_about_claims_stay_and_edge_bound_whole_graph_pages_name_a_frontier() {
         seeded.claims.0.iter().map(|c| &c.id).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn claims_about_claims_spend_no_edge_budget() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let w = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [
+            {"clientId": "a", "label": "Hub A", "entityType": "service", "aliases": []},
+            {"clientId": "b", "label": "Hub B", "entityType": "service", "aliases": []}],
+        "evidence": [],
+        "claims": [{"kind": "Fact", "subjectId": "a", "predicate": "calls", "objectId": "b",
+            "confidence": 0.9, "evidenceIds": [], "tags": []}]}),
+    ));
+    let [a, b] = [0, 1].map(|i| w.entity_ids.0[i].clone());
+    // A newer claim about A whose object is the edge claim itself: later, so the store would
+    // return it first.
+    let later = fx.h.clock.0.load(std::sync::atomic::Ordering::SeqCst) + 60_000;
+    fx.h.clock
+        .0
+        .store(later, std::sync::atomic::Ordering::SeqCst);
+    fx.record(
+        &user,
+        proj("project-a"),
+        json!({"entities": [], "evidence": [], "claims": [
+            {"kind": "Fact", "subjectId": a, "predicate": "confirms",
+            "objectId": w.claim_ids.0[0], "confidence": 0.9, "evidenceIds": [], "tags": []}]}),
+    );
+    let graph = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.entity_graph",
+        json!({"scope": proj("project-a"),
+            "query": graph_query(json!({"entityIds": [a], "neighborLimit": 1, "maxDepth": 1}))}),
+    ));
+    assert!(
+        graph.entities.0.iter().any(|e| e.id == b),
+        "{:?}",
+        entity_labels(&graph)
+    );
+}

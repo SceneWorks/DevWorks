@@ -479,8 +479,9 @@ pub trait KnowledgeRead {
         scopes: &[String],
         limit: u16,
     ) -> Result<Vec<StoredClaim>, StorageError>;
-    /// Active claims of the given scope keys linking `entity` to another entity (an object is
-    /// set), newest update first, at most `limit` (the edge filter applies before the limit).
+    /// Active claims of the given scope keys linking `entity` to another entity (the object is a
+    /// live entity of those scopes, never a claim), newest update first, at most `limit` (the
+    /// edge filter applies before the limit).
     fn knowledge_entity_edges(
         &self,
         entity: &Id,
