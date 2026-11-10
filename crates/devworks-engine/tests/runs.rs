@@ -1516,6 +1516,35 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             devworks_engine::agent_turns::publish_first_context(&app, &context, &primary, &route)
                 .is_err()
         );
+        let (current_head, current_binding, _) = app
+            .recover_native_context_head(&context, &session.id)
+            .unwrap()
+            .unwrap();
+        let codex_binding = devworks_core::protocol::provider::NativeBinding {
+            connection_id: id("codex-connection"),
+            endpoint_profile:
+                devworks_core::protocol::provider::EndpointProfile::CodexSubscriptionResponses,
+            context_epoch: devworks_core::protocol::Counter::new(1).unwrap(),
+            ..current_binding.clone()
+        };
+        let converted = app
+            .change_provider_epoch(
+                &context,
+                &session.id,
+                &current_head,
+                &current_binding,
+                &codex_binding,
+            )
+            .unwrap();
+        let converted_context: devworks_core::providers::context::ProviderContext =
+            serde_json::from_slice(
+                &app.artifacts()
+                    .read_exact(app.store().as_ref(), &context, &converted, 8 * 1024 * 1024)
+                    .unwrap()
+                    .0,
+            )
+            .unwrap();
+        assert_eq!(converted_context.parameters.max_output_tokens, None);
         app.shutdown().await;
     });
 }

@@ -598,7 +598,7 @@ pub(crate) fn continuation_context(
     {
         return Err(invalid("foreign native state requires a new context epoch"));
     }
-    let (entries, updates, redirects, observed_sequence) =
+    let (entries, updates, after_turn, observed_sequence) =
         read_snapshot(store, &ReadOptions::default(), |read| {
             let session = read
                 .sessions()
@@ -620,7 +620,7 @@ pub(crate) fn continuation_context(
             let mut position = after_sequence;
             let mut selected = Vec::new();
             let mut updates = Vec::new();
-            let mut redirects = Vec::new();
+            let mut after_turn = Vec::new();
             while position < session.last_durable_sequence() {
                 if position - after_sequence >= 10_000 {
                     return Err(invalid("tool turn exceeds transcript scan bound"));
@@ -636,12 +636,6 @@ pub(crate) fn continuation_context(
                     position = entry.sequence;
                     let body: TranscriptBody =
                         serde_json::from_value(entry.body).map_err(invalid)?;
-                    if matches!(&body, TranscriptBody::HostNotice { .. }) {
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool continuation needs redirected context reconstruction",
-                        ));
-                    }
                     let belongs = match &body {
                         TranscriptBody::AssistantAttempt { attempt_id: id, .. } => id == attempt_id,
                         TranscriptBody::ToolCallRecorded { tool_call } => {
@@ -653,6 +647,7 @@ pub(crate) fn continuation_context(
                         }
                         TranscriptBody::OperationUpdate { .. } => true,
                         TranscriptBody::UserMessage { .. } => true,
+                        TranscriptBody::HostNotice { .. } => true,
                         TranscriptBody::NativeItem { artifact, .. } => {
                             let row = read
                                 .artifacts()
@@ -675,8 +670,11 @@ pub(crate) fn continuation_context(
                             | TranscriptBody::NativeItem { .. }
                     ) {
                         selected.push(body);
-                    } else if let TranscriptBody::UserMessage { content } = body {
-                        redirects.push(content);
+                    } else if matches!(
+                        &body,
+                        TranscriptBody::UserMessage { .. } | TranscriptBody::HostNotice { .. }
+                    ) {
+                        after_turn.push(body);
                     } else if let TranscriptBody::OperationUpdate {
                         operation_id,
                         revision,
@@ -693,7 +691,7 @@ pub(crate) fn continuation_context(
             Ok((
                 selected,
                 updates,
-                redirects,
+                after_turn,
                 session.last_durable_sequence(),
             ))
         })?;
@@ -824,34 +822,47 @@ pub(crate) fn continuation_context(
             }],
         });
     }
-    for content in redirects {
-        let blocks = content
-            .into_iter()
-            .map(|item| match item {
-                devworks_core::protocol::provider::UserContent::Text { text } => {
-                    ContentBlock::Text { text, cache: None }
-                }
-                devworks_core::protocol::provider::UserContent::Attachment { artifact }
-                    if artifact.media_type.starts_with("image/") =>
-                {
-                    ContentBlock::Image {
-                        artifact,
-                        detail: None,
-                        cache: None,
+    for entry in after_turn {
+        let blocks = match entry {
+            TranscriptBody::UserMessage { content } => content
+                .into_iter()
+                .map(|item| match item {
+                    devworks_core::protocol::provider::UserContent::Text { text } => {
+                        ContentBlock::Text { text, cache: None }
                     }
-                }
-                devworks_core::protocol::provider::UserContent::Attachment { artifact } => {
-                    ContentBlock::Text {
-                        text: format!(
-                            "User attachment: {} ({})",
-                            artifact.artifact_id.as_str(),
-                            artifact.media_type
-                        ),
-                        cache: None,
+                    devworks_core::protocol::provider::UserContent::Attachment { artifact }
+                        if artifact.media_type.starts_with("image/") =>
+                    {
+                        ContentBlock::Image {
+                            artifact,
+                            detail: None,
+                            cache: None,
+                        }
                     }
-                }
-            })
-            .collect();
+                    devworks_core::protocol::provider::UserContent::Attachment { artifact } => {
+                        ContentBlock::Text {
+                            text: format!(
+                                "User attachment: {} ({})",
+                                artifact.artifact_id.as_str(),
+                                artifact.media_type
+                            ),
+                            cache: None,
+                        }
+                    }
+                })
+                .collect(),
+            TranscriptBody::HostNotice { artifact, .. } => vec![ContentBlock::Text {
+                text: String::from_utf8(
+                    artifacts
+                        .read_exact(store, ctx, &artifact, 8_000)
+                        .map_err(|_| StorageError::ScopeDenied)?
+                        .0,
+                )
+                .map_err(invalid)?,
+                cache: None,
+            }],
+            _ => unreachable!(),
+        };
         context.messages.push(Message {
             role: MessageRole::User,
             content: blocks,
@@ -1140,7 +1151,9 @@ pub(crate) fn append_operation_updates(
                 let body: TranscriptBody = serde_json::from_value(entry.body).map_err(invalid)?;
                 if !matches!(
                     body,
-                    TranscriptBody::OperationUpdate { .. } | TranscriptBody::UserMessage { .. }
+                    TranscriptBody::OperationUpdate { .. }
+                        | TranscriptBody::UserMessage { .. }
+                        | TranscriptBody::HostNotice { .. }
                 ) {
                     return Err(StorageError::unavailable(
                         Unavailable::UnsupportedRuntime,
@@ -1205,6 +1218,16 @@ pub(crate) fn append_operation_updates(
                     }
                 })
                 .collect(),
+            TranscriptBody::HostNotice { artifact, .. } => vec![ContentBlock::Text {
+                text: String::from_utf8(
+                    artifacts
+                        .read_exact(store, ctx, &artifact, 8_000)
+                        .map_err(|_| StorageError::ScopeDenied)?
+                        .0,
+                )
+                .map_err(invalid)?,
+                cache: None,
+            }],
             _ => unreachable!(),
         };
         context.messages.push(Message {
