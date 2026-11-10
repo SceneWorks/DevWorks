@@ -783,6 +783,17 @@ impl AgentService {
             Ok(active) => active,
             Err(fenced) => return Ok(Err(fenced)),
         };
+        let root = tx
+            .sessions()
+            .work_root(&active.root_id)?
+            .ok_or_else(denied)?;
+        link_unlinked_redirect_attachments(
+            tx,
+            host,
+            &root.id,
+            &root.project_id,
+            &active.session_id,
+        )?;
         bind_child_authority(tx, host, assignment_id)?;
         retained::handover_item(tx, assignment_id)?;
         Ok(Ok(agent_record(tx.runs(), &active).map_err(failure)?))
