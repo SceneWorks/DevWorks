@@ -2,7 +2,9 @@
 //! deterministic identifiers, scripted handlers and executors. No inference, network or sleeps
 //! used as synchronization.
 #![allow(dead_code, clippy::result_large_err)]
-use devworks_adapters::storage::sqlite::{SqliteConfig, SqliteStore};
+use devworks_adapters::storage::sqlite::{
+    DATABASE_FILE, SqliteConfig, SqliteStore, seed_migrated_store,
+};
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::ports::storage::*;
 use devworks_core::ports::{
@@ -97,6 +99,16 @@ impl Harness {
             self.ids.clone(),
             ActorId(Id::new("host").unwrap()),
         );
+        // An empty root gets a migrated copy with the identity, ledger time and build a fresh
+        // bootstrap would write, instead of re-running every migration in every test.
+        if !self.root.join(DATABASE_FILE).exists() {
+            seed_migrated_store(
+                &self.root,
+                self.ids.next_id(IdKind::Store).as_str(),
+                self.now(),
+                &config.app_build,
+            );
+        }
         let readers = self.readers.load(Ordering::SeqCst);
         if readers > 0 {
             config.read_connections = readers;
