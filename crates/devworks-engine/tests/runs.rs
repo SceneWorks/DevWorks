@@ -925,6 +925,15 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
         Ok(())
     });
     applied(&fx.start(&fx.user, "root-i", 2, 1));
+    let attachment = seed_prestart_artifact(&fx);
+    applied(&fx.command(
+        &fx.user,
+        "runs.redirect",
+        json!({"mode":"Command", "protocol":PROTOCOL, "requestKey":fx.key(), "body":{
+            "kind":"runs.redirect", "rootId":"root-i",
+            "expectedControlRevision":fx.control("root-i").revision.to_string(),
+            "message":"Use the attached plan", "attachments":[attachment]}}),
+    ));
     let activation = fx.launch("coordinator-runner");
     let stale_actor = fx.agent.clone();
     let stale_id = activation.id.clone();
@@ -1055,6 +1064,21 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
             .delegate(tx, &agent, &request)
             .map_err(|error| StorageError::InvalidRecord(format!("delegate refused: {error:?}")))
     });
+    let child_session_id = read(&*fx.store, |snapshot| {
+        Ok(snapshot
+            .runs()
+            .assignment(&child.assignment_id)?
+            .unwrap()
+            .session_id)
+    });
+    let links = read(&*fx.store, |snapshot| {
+        snapshot.artifacts().links(&id("prestart-artifact"))
+    });
+    assert!(links.iter().any(|link| {
+        link.version_id == id("prestart-version")
+            && link.subject == SubjectKey::session(&child_session_id)
+            && link.purpose == LinkPurpose::Reference
+    }));
     let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
     let agents =
         devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
@@ -1379,10 +1403,7 @@ impl AgentTurnExecutor for ContextAwareCoordinator {
     }
 }
 
-#[test]
-fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
-    let _native_case = native_runtime_case();
-    let fx = Fx::new();
+fn seed_prestart_artifact(fx: &Fx) -> Value {
     const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     fx.tx(|_, tx| {
         tx.artifacts()
@@ -1416,8 +1437,15 @@ fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
             source: json!({}),
         })
     });
-    let attachment = json!({"artifactId":"prestart-artifact", "versionId":"prestart-version",
-        "sha256":DIGEST, "byteLength":"2", "mediaType":"application/json"});
+    json!({"artifactId":"prestart-artifact", "versionId":"prestart-version",
+        "sha256":DIGEST, "byteLength":"2", "mediaType":"application/json"})
+}
+
+#[test]
+fn agent_launcher_runs_a_bound_coordinator_and_settles_its_assignment() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let attachment = seed_prestart_artifact(&fx);
     let turns = Arc::new(ContextAwareCoordinator {
         store: fx.store.clone(),
         seen: Mutex::new(Vec::new()),
