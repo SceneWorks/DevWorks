@@ -50,16 +50,28 @@ fn commit(repo: &Path) {
     git(repo, &["commit", "-q", "-m", "actual review source"]);
 }
 fn wait(executor: &tokio::runtime::Runtime, store: &Arc<dyn ApplicationStore>, run: &str) {
-    executor.block_on(within("review index publishes", async {
-        loop {
-            let row = run_state(store, run);
-            if row.state == RUN_SUCCEEDED {
-                break;
+    wait_within(executor, store, run, std::time::Duration::from_secs(30));
+}
+fn wait_within(
+    executor: &tokio::runtime::Runtime,
+    store: &Arc<dyn ApplicationStore>,
+    run: &str,
+    timeout: std::time::Duration,
+) {
+    executor.block_on(async {
+        tokio::time::timeout(timeout, async {
+            loop {
+                let row = run_state(store, run);
+                if row.state == RUN_SUCCEEDED {
+                    break;
+                }
+                assert!(!run_terminal(&row.state), "{row:?}");
+                tokio::task::yield_now().await;
             }
-            assert!(!run_terminal(&row.state), "{row:?}");
-            tokio::task::yield_now().await;
-        }
-    }));
+        })
+        .await
+        .unwrap_or_else(|_| panic!("review index publishes: did not finish within {timeout:?}"));
+    });
 }
 fn scope(store: &dyn ApplicationStore, repository: &str) -> GraphScope {
     read(store, |r| {
@@ -109,7 +121,9 @@ fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is
     base_directory(&store, &ctx, &src);
     let repositories = discovered(&app, &ctx);
     let run = index(&app, &ctx, &repositories[0], "review-search-index");
-    wait(&executor, &store, &run);
+    // The real 21,000-node Windows index can exceed the ordinary 30-second failure guard.
+    // Completion and every graph result below remain asserted; this is not a timing test.
+    wait_within(&executor, &store, &run, std::time::Duration::from_secs(120));
     let selected = scope(&*store, &repositories[0]);
     let counts = read(&*store, |r| r.graph().graph_counts(&selected));
     assert!(
