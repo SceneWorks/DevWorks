@@ -250,10 +250,51 @@ pub(crate) fn visible_session(
     ctx: &InvocationContext,
     id: &Id,
 ) -> Result<StoredSession, Failure> {
+    let owner = bound_agent_session(read, ctx)?;
+    let session = project_session(read, ctx, id)?;
+    if owner.as_ref().is_none_or(|own| {
+        session.id == own.id
+            || (own.root_id.is_some()
+                && session.root_id == own.root_id
+                && session.project_id == own.project_id)
+    }) {
+        Ok(session)
+    } else {
+        Err(not_found("session", id).into())
+    }
+}
+
+fn project_session(
+    read: &dyn SessionRead,
+    ctx: &InvocationContext,
+    id: &Id,
+) -> Result<StoredSession, Failure> {
     match read.session(id)? {
-        Some(s) if project_visible(ctx, s.project_id.as_ref()) => Ok(s),
+        Some(session) if project_visible(ctx, session.project_id.as_ref()) => Ok(session),
         _ => Err(not_found("session", id).into()),
     }
+}
+
+fn bound_agent_session(
+    read: &dyn SessionRead,
+    ctx: &InvocationContext,
+) -> Result<Option<StoredSession>, Failure> {
+    if ctx.principal_kind() != PrincipalKind::Agent {
+        return Ok(None);
+    }
+    let Some(id) = ctx.session_id() else {
+        return Ok(None);
+    };
+    let own = read.session(id)?.ok_or_else(|| not_found("session", id))?;
+    if own.agent_id != *ctx.principal()
+        || !project_visible(ctx, own.project_id.as_ref())
+        || ctx
+            .root_id()
+            .is_some_and(|root| own.root_id.as_ref() != Some(root))
+    {
+        return Err(not_found("session", id).into());
+    }
+    Ok(Some(own))
 }
 
 /// The wire record of a session.
@@ -574,7 +615,7 @@ impl SessionService {
         ctx: &InvocationContext,
         input: &ops::EndInput,
     ) -> Result<DomainDecision, Failure> {
-        let mut session = visible_session(tx.sessions(), ctx, &input.session_id)?;
+        let mut session = project_session(tx.sessions(), ctx, &input.session_id)?;
         Self::may_act(tx, ctx, &session)?;
         if input.expected_revision.get() != session.revision {
             return Err(StorageError::conflict(
@@ -707,7 +748,7 @@ impl SessionService {
         ctx: &InvocationContext,
         input: &SessionCommandRequest,
     ) -> Result<DomainDecision, Failure> {
-        let session = visible_session(tx.sessions(), ctx, &input.session_id)?;
+        let session = project_session(tx.sessions(), ctx, &input.session_id)?;
         Self::may_act(tx, ctx, &session)?;
         if session.closed() {
             return Err(Refusal::new(
@@ -786,10 +827,29 @@ impl SessionService {
                 None => SessionScope::Workspace,
             },
         };
+        let scope = match bound_agent_session(read, ctx)? {
+            Some(own) => match (&scope, &own.project_id) {
+                (SessionScope::Project(requested), Some(project)) if requested == project => {
+                    match own.root_id {
+                        Some(root) => SessionScope::Root(project.clone(), root),
+                        None => SessionScope::One(own.id),
+                    }
+                }
+                (SessionScope::Workspace, None) => SessionScope::One(own.id),
+                _ => {
+                    return Err(
+                        Refusal::new(DomainErrorCode::PermissionDenied, "scope", None).into(),
+                    );
+                }
+            },
+            None => scope,
+        };
         let scope_part = match &scope {
             SessionScope::All => "all".to_owned(),
             SessionScope::Project(p) => format!("project:{}", p.0.as_str()),
             SessionScope::Workspace => "workspace".to_owned(),
+            SessionScope::Root(p, r) => format!("project:{}:root:{}", p.0.as_str(), r.0.as_str()),
+            SessionScope::One(id) => format!("session:{}", id.as_str()),
         };
         let closed_part = format!("{:?}", input.closed);
         let binding = CursorBinding::new(ctx, "sessions.list", &[&scope_part, &closed_part], 1);

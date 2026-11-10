@@ -190,10 +190,12 @@ fn sessions(
     limit: u16,
 ) -> Result<Vec<StoredSession>, StorageError> {
     let n = bounded(limit)?;
-    let (scope_kind, project) = match scope {
-        SessionScope::All => (0, None),
-        SessionScope::Project(p) => (1, Some(p.0.as_str())),
-        SessionScope::Workspace => (2, None),
+    let (scope_kind, project, root, one) = match scope {
+        SessionScope::All => (0, None, None, None),
+        SessionScope::Project(p) => (1, Some(p.0.as_str()), None, None),
+        SessionScope::Workspace => (2, None, None, None),
+        SessionScope::Root(p, r) => (3, Some(p.0.as_str()), Some(r.0.as_str()), None),
+        SessionScope::One(id) => (4, None, None, Some(id.as_str())),
     };
     let closed_kind = match closed {
         None => 0,
@@ -202,7 +204,8 @@ fn sessions(
     };
     let mut stmt = db(conn.prepare_cached(&format!(
         "SELECT {SESSION_COLUMNS} FROM sessions s
-         WHERE (?5=0 OR (?5=1 AND s.project_id=?1) OR (?5=2 AND s.project_id IS NULL))
+         WHERE (?5=0 OR (?5=1 AND s.project_id=?1) OR (?5=2 AND s.project_id IS NULL)
+                OR (?5=3 AND s.project_id=?1 AND s.root_id=?7) OR (?5=4 AND s.id=?8))
          AND (?6=0 OR (?6=1 AND s.closed_at IS NOT NULL) OR (?6=2 AND s.closed_at IS NULL))
          AND (?2 IS NULL OR s.created_at<?2 OR (s.created_at=?2 AND s.id<?3))
          ORDER BY s.created_at DESC,s.id DESC LIMIT ?4"
@@ -214,7 +217,9 @@ fn sessions(
             after.map(|a| a.id.as_str().to_owned()),
             n,
             scope_kind,
-            closed_kind
+            closed_kind,
+            root,
+            one
         ],
         session_row,
     ))?;

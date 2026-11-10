@@ -223,6 +223,10 @@ pub enum SessionScope {
     All,
     /// Sessions of one project.
     Project(ProjectId),
+    /// Sessions of one work root in a project.
+    Root(ProjectId, RootId),
+    /// One session, used when an agent has no work root.
+    One(Id),
     /// Workspace (Home) sessions without a project.
     Workspace,
 }
