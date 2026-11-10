@@ -286,15 +286,14 @@ async fn run_native_loop(
                         }],
                     });
                     for fact in facts {
-                        context
-                            .messages
-                            .push(crate::tool_turn::context_fact_message(
-                                runtime.store().as_ref(),
-                                runtime.artifacts(),
-                                ctx,
-                                session_id,
-                                fact,
-                            )?);
+                        crate::tool_turn::append_context_fact(
+                            &mut context,
+                            runtime.store().as_ref(),
+                            runtime.artifacts(),
+                            ctx,
+                            session_id,
+                            fact,
+                        )?;
                     }
                     crate::tool_turn::publish_continuation(
                         runtime.store().as_ref(),

@@ -824,22 +824,18 @@ pub(crate) fn continuation_context(
             content: results,
         });
     }
+    let linked = linked_operations(store, ctx, session_id)?;
     for (operation_id, revision, artifact) in updates {
-        context.messages.push(Message {
-            role: MessageRole::User,
-            content: vec![ContentBlock::Text {
-                text: operation_update_text(
-                    store,
-                    artifacts,
-                    ctx,
-                    session_id,
-                    &operation_id,
-                    &revision,
-                    &artifact,
-                )?,
-                cache: None,
-            }],
-        });
+        let text = operation_update_text(
+            store,
+            artifacts,
+            ctx,
+            session_id,
+            &operation_id,
+            &revision,
+            &artifact,
+        )?;
+        append_operation_result(&mut context, &linked, &operation_id, text)?;
     }
     for entry in after_turn {
         let blocks = match entry {
@@ -1090,13 +1086,61 @@ fn operation_update_text(
     ))
 }
 
-pub(crate) fn context_fact_message(
+fn append_operation_result(
+    context: &mut ProviderContext,
+    linked: &[StoredToolCall],
+    operation_id: &OperationId,
+    text: String,
+) -> Result<(), StorageError> {
+    let call_id = &linked
+        .iter()
+        .find(|call| call.operation_id.as_ref() == Some(operation_id))
+        .ok_or(StorageError::ScopeDenied)?
+        .native_call_id;
+    let result = context
+        .messages
+        .iter_mut()
+        .flat_map(|message| message.content.iter_mut())
+        .find(
+            |block| matches!(block, ContentBlock::ToolResult { call_id: id, .. } if id == call_id),
+        )
+        .ok_or(StorageError::ScopeDenied)?;
+    if let ContentBlock::ToolResult { content, .. } = result {
+        content.push(ResultBlock::Text { text });
+    }
+    Ok(())
+}
+
+pub(crate) fn append_context_fact(
+    context: &mut ProviderContext,
     store: &dyn ApplicationStore,
     artifacts: &Arc<ArtifactService>,
     ctx: &InvocationContext,
     session_id: &Id,
     body: TranscriptBody,
-) -> Result<Message, StorageError> {
+) -> Result<(), StorageError> {
+    if let TranscriptBody::OperationUpdate {
+        operation_id,
+        revision,
+        artifact,
+    } = body
+    {
+        let text = operation_update_text(
+            store,
+            artifacts,
+            ctx,
+            session_id,
+            &operation_id,
+            &revision,
+            &artifact,
+        )?;
+        return append_operation_result(
+            context,
+            &linked_operations(store, ctx, session_id)?,
+            &operation_id,
+            text,
+        );
+    }
     let content = match body {
         TranscriptBody::UserMessage { content } => content
             .into_iter()
@@ -1135,33 +1179,17 @@ pub(crate) fn context_fact_message(
             .map_err(invalid)?,
             cache: None,
         }],
-        TranscriptBody::OperationUpdate {
-            operation_id,
-            revision,
-            artifact,
-        } => vec![ContentBlock::Text {
-            text: operation_update_text(
-                store,
-                artifacts,
-                ctx,
-                session_id,
-                &operation_id,
-                &revision,
-                &artifact,
-            )?,
-            cache: None,
-        }],
         _ => return Err(invalid("not a provider context fact")),
     };
-    Ok(Message {
+    context.messages.push(Message {
         role: MessageRole::User,
         content,
-    })
+    });
+    Ok(())
 }
 
-/// Reconcile later operation facts into an append-only provider context. A provider's first tool
-/// result remains immutable; each subsequent journal revision enters as a separate host-labeled
-/// message. Any other transcript entry requires the caller to rebuild redirected context.
+/// Reconcile later operation facts into a provider context. Server-authored updates stay inside
+/// the original tool result so every provider encodes them as untrusted tool output.
 pub(crate) fn append_operation_updates(
     store: &dyn ApplicationStore,
     artifacts: &Arc<ArtifactService>,
@@ -1277,14 +1305,15 @@ pub(crate) fn append_operation_updates(
     if updates.is_empty() {
         return Ok(source.clone());
     }
+    let linked = linked_operations(store, ctx, session_id)?;
     for update in updates {
         let blocks = match update {
             TranscriptBody::OperationUpdate {
                 operation_id,
                 revision,
                 artifact,
-            } => vec![ContentBlock::Text {
-                text: operation_update_text(
+            } => {
+                let text = operation_update_text(
                     store,
                     artifacts,
                     ctx,
@@ -1292,9 +1321,10 @@ pub(crate) fn append_operation_updates(
                     &operation_id,
                     &revision,
                     &artifact,
-                )?,
-                cache: None,
-            }],
+                )?;
+                append_operation_result(&mut context, &linked, &operation_id, text)?;
+                continue;
+            }
             TranscriptBody::UserMessage { content } => content
                 .into_iter()
                 .map(|item| match item {

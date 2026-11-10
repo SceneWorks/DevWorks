@@ -2149,9 +2149,11 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
         assert_eq!(first.version_id, source.version_id);
         let material: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
             f.store.as_ref(), &f.context, &first, 1024 * 1024).unwrap().0).unwrap();
-        assert_eq!(material.messages.len(), 4);
-        assert!(matches!(&material.messages[3].content[0], ContentBlock::Text { text, .. }
-            if text.contains("Tool operation update:") && text.contains("accepted-operation")));
+        assert_eq!(material.messages.len(), 3);
+        assert!(material.messages[2].content.iter().any(|block| matches!(block,
+            ContentBlock::ToolResult { content, .. } if content.iter().any(|result| matches!(result,
+                ResultBlock::Text { text } if text.contains("Tool operation update:")
+                    && text.contains("accepted-operation"))))));
         let replay = app.refresh_native_tool_context(&f.context, &id("session"), &first).unwrap();
         assert_eq!(replay.version_id, first.version_id);
         let prior_binding = progress.provider.result.binding.unwrap();
@@ -2176,9 +2178,10 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
             &prior_binding, &next_binding).unwrap();
         let changed_context: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
             f.store.as_ref(), &f.context, &changed, 1024 * 1024).unwrap().0).unwrap();
-        assert_eq!(changed_context.messages.len(), 5);
-        assert!(matches!(&changed_context.messages[4].content[0], ContentBlock::Text { text, .. }
-            if text.contains("Preflighted")));
+        assert_eq!(changed_context.messages.len(), 3);
+        assert!(changed_context.messages[2].content.iter().any(|block| matches!(block,
+            ContentBlock::ToolResult { content, .. } if content.iter().any(|result| matches!(result,
+                ResultBlock::Text { text } if text.contains("Preflighted"))))));
         let operation_for_write = operation_id.clone();
         write(f.store.as_ref(), move |tx| {
             use devworks_core::protocol::OperationState;
@@ -2206,9 +2209,11 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
         assert_eq!(app.recover_native_context_head(&f.context, &id("session")).unwrap().unwrap().0.version_id, second.version_id);
         let material: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
             f.store.as_ref(), &f.context, &second, 1024 * 1024).unwrap().0).unwrap();
-        assert_eq!(material.messages.len(), 6);
-        assert!(matches!(&material.messages[5].content[0], ContentBlock::Text { text, .. }
-            if text.contains("full result in artifact") && text.contains("artifactId")));
+        assert_eq!(material.messages.len(), 3);
+        assert!(material.messages[2].content.iter().any(|block| matches!(block,
+            ContentBlock::ToolResult { content, .. } if content.iter().any(|result| matches!(result,
+                ResultBlock::Text { text } if text.contains("full result in artifact")
+                    && text.contains("artifactId"))))));
         let update: devworks_core::protocol::provider::ArtifactRef = serde_json::from_value(
             f.transcript().iter().rfind(|entry| entry.kind == "OperationUpdate")
                 .unwrap().body["artifact"].clone()).unwrap();
