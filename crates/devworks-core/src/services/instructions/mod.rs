@@ -39,7 +39,7 @@ mod queries;
 pub mod scan;
 mod sync;
 
-pub use adoption::{EffectiveSkill, EffectiveSkills, effective_skills};
+pub use adoption::{EffectiveSkill, EffectiveSkills, SkillConflict, effective_skills};
 pub use sync::SyncReport;
 
 use crate::context::{InvocationContext, PrincipalKind};
@@ -256,12 +256,12 @@ pub fn role_item_id(role: AgentRole, scope: &ConfigScope) -> Id {
 }
 
 /// The wire record of one revision. `applicability` carries the item's visible status labels
-/// (`origin:*`, `state:*`, `active`, `effective`/`overridden`, `disabled`, `missing`) followed by
+/// (`origin:*`, `state:*`, `active`, `effective`/`overridden`/`conflict`, `disabled`, `missing`) followed by
 /// role applicability, so every surface shows origin and which version is active.
 pub(crate) fn record(
     item: &StoredInstructionItem,
     revision: &StoredInstructionRevision,
-    effective: Option<bool>,
+    standing: Option<queries::Standing>,
 ) -> Result<InstructionRecord, Failure> {
     let content: ArtifactRef = serde_json::from_value(revision.content.clone())
         .map_err(|e| StorageError::InvalidRecord(format!("instruction content: {e}")))?;
@@ -272,10 +272,8 @@ pub(crate) fn record(
     if item.active_revision == Some(revision.revision) {
         labels.push("active".into());
     }
-    match effective {
-        Some(true) => labels.push("effective".into()),
-        Some(false) => labels.push("overridden".into()),
-        None => {}
+    if let Some(standing) = standing {
+        labels.push(standing.label().into());
     }
     if !item.enabled {
         labels.push("disabled".into());
@@ -362,7 +360,7 @@ impl QueryHandler for InstructionService {
     fn prepare(
         &self,
         _ctx: &InvocationContext,
-        _query: &AdmittedQuery,
+        query: &AdmittedQuery,
         env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, DomainFault> {
         // Observe changed skill files and role settings before answering, so discovery shows
@@ -374,7 +372,7 @@ impl QueryHandler for InstructionService {
                 self.correlation(),
             ));
         }
-        self.sync()
+        self.sync_kind(kind_of(query.input()))
             .map_err(|e| query_fault(e.into(), "instruction", self.correlation()))?;
         Ok(None)
     }

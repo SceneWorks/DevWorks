@@ -1585,6 +1585,72 @@ impl Runtime {
     ) -> Option<&Result<devworks_core::services::instructions::SyncReport, StorageError>> {
         self.instruction_boot.as_ref()
     }
+    /// Records the skill set a session adopts at a safe step. When the current effective set
+    /// differs from `adopted` (what the session last recorded), a `SkillRevisionsAdopted` event
+    /// is appended to the session's history with the selected skills, their exact revisions
+    /// and digests, the transitions and any unresolved conflicts; completed steps keep the
+    /// revisions they used. Returns the current set and whether it changed.
+    pub fn adopt_skills(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        adopted: Option<&devworks_core::services::instructions::EffectiveSkills>,
+    ) -> Result<(devworks_core::services::instructions::EffectiveSkills, bool), StorageError> {
+        if ctx.session_id() != Some(session_id) {
+            return Err(StorageError::ScopeDenied);
+        }
+        let current = self.effective_skills()?;
+        if adopted.is_some_and(|a| a.digest == current.digest) {
+            return Ok((current, false));
+        }
+        let transitions = match adopted {
+            Some(previous) => current.transitions(previous),
+            None => current.skills.iter().map(|s| s.name.clone()).collect(),
+        };
+        let payload = serde_json::json!({
+            "digest": current.digest,
+            "previousDigest": adopted.map(|a| a.digest.clone()),
+            "skills": current.skills.iter().map(|s| serde_json::json!({
+                "name": s.name, "instructionId": s.instruction_id.as_str(), "rootId": s.root_id,
+                "revision": s.revision, "contentDigest": s.content_digest,
+            })).collect::<Vec<_>>(),
+            "transitions": transitions,
+            "conflicts": current.conflicts,
+        });
+        let (session, actor) = (session_id.clone(), ctx.principal().clone());
+        devworks_core::ports::storage::run_write(
+            self.store.as_ref(),
+            devworks_core::ports::storage::WriteOptions::default(),
+            move |tx| {
+                let stored = tx
+                    .sessions()
+                    .session(&session)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                if stored.closed() {
+                    return Err(StorageError::ScopeDenied);
+                }
+                let id = devworks_core::protocol::EventId(
+                    tx.new_id(devworks_core::ports::IdKind::Event),
+                );
+                tx.history()
+                    .append(devworks_core::ports::storage::NewEvent {
+                        id,
+                        actor,
+                        project_id: stored.project_id.clone(),
+                        root_id: stored.root_id.clone(),
+                        operation_id: None,
+                        aggregate_kind:
+                            devworks_core::services::sessions::transcript::SESSION_AGGREGATE.into(),
+                        aggregate_id: stored.id.as_str().to_owned(),
+                        aggregate_revision: stored.revision,
+                        kind: "SkillRevisionsAdopted".into(),
+                        payload,
+                    })?;
+                Ok(())
+            },
+        )?;
+        Ok((current, true))
+    }
     /// The skill set a running agent adopts at its next safe step: sources are observed first,
     /// so a saved, approved or externally changed skill is current; unapproved proposals are
     /// never included. The caller records the returned digest and revisions in its session and

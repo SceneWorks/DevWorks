@@ -126,30 +126,42 @@ impl InstructionService {
         }
     }
 
-    /// Observes every source once. Called before instruction queries and by the host at boot.
+    /// Observes every source once. Called by the host at boot and before adoption.
     pub fn sync(&self) -> Result<SyncReport, StorageError> {
+        self.sync_kind(None)
+    }
+
+    /// Observes the sources of one family (`None`: both).
+    pub(crate) fn sync_kind(
+        &self,
+        kind: Option<InstructionKind>,
+    ) -> Result<SyncReport, StorageError> {
         let _guard = self
             .sync_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut report = SyncReport::default();
-        let harness = self
-            .files
-            .root()
-            .ok()
-            .or_else(|| Some(self.roots.harness.clone()));
-        for (origin, root) in [
-            (InstructionOrigin::Shared, self.roots.shared.clone()),
-            (InstructionOrigin::Harness, harness),
-        ] {
-            let Some(root) = root else { continue };
-            if let Err(e) = self.sync_root(origin, &root, &mut report) {
-                report
-                    .failures
-                    .push(format!("{} skills: {e}", origin.as_str().to_lowercase()));
+        if kind != Some(InstructionKind::Role) {
+            let harness = self
+                .files
+                .root()
+                .ok()
+                .or_else(|| Some(self.roots.harness.clone()));
+            for (origin, root) in [
+                (InstructionOrigin::Shared, self.roots.shared.clone()),
+                (InstructionOrigin::Harness, harness),
+            ] {
+                let Some(root) = root else { continue };
+                if let Err(e) = self.sync_root(origin, &root, &mut report) {
+                    report
+                        .failures
+                        .push(format!("{} skills: {e}", origin.as_str().to_lowercase()));
+                }
             }
         }
-        if let Err(e) = self.sync_roles(&mut report) {
+        if kind != Some(InstructionKind::Skill)
+            && let Err(e) = self.sync_roles(&mut report)
+        {
             report.failures.push(format!("roles: {e}"));
         }
         Ok(report)

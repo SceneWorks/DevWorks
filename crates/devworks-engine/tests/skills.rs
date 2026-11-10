@@ -397,6 +397,20 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
         let second = app.effective_skills().unwrap();
         assert_ne!(first.digest, second.digest);
         assert_eq!(second.transitions(&first), ["alpha"]);
+        // A session records the revisions it adopts, and only real transitions.
+        let session = applied(fx.command(&app, &user, "sessions.start", json!({"scope":{"kind":"Workspace"},"title":"Skills"})));
+        let session_id = id(session["id"].as_str().unwrap());
+        let in_session = user.clone().with_session(session_id.clone());
+        let (adopted, changed) = app.adopt_skills(&in_session, &session_id, Some(&first)).unwrap();
+        assert!(changed);
+        let (_, again) = app.adopt_skills(&in_session, &session_id, Some(&adopted)).unwrap();
+        assert!(!again, "an unchanged set is not a new adoption");
+        let events = read(&*fx.store, |s| s.history().page(&EventFilter::Aggregate{kind:"session".into(),id:session_id.as_str().into()},0,500));
+        let adoptions: Vec<_> = events.events.iter().filter(|e| e.kind == "SkillRevisionsAdopted").collect();
+        assert_eq!(adoptions.len(), 1);
+        assert_eq!(adoptions[0].payload["transitions"], json!(["alpha"]));
+        assert_eq!(adoptions[0].payload["skills"][0]["revision"], 2);
+        assert!(app.adopt_skills(&user, &session_id, None).is_err(), "another session cannot record");
         // Idempotent: unchanged sources record nothing new.
         assert_eq!(app.instructions().unwrap().sync().unwrap().observed, 0);
         // A human restores the earlier captured revision; the shared file is not touched.
@@ -479,6 +493,12 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
         assert!(kinds.contains(&("InstructionProposed", "agent".into())));
         assert!(kinds.contains(&("InstructionProposalApproved", "user".into())));
         assert!(kinds.contains(&("InstructionActivated", "agent".into())), "the replay keeps its original actor");
+        // Once an override exists, edits go through its identity and revision, never the shared
+        // item's, so a concurrent override edit cannot be overwritten silently.
+        assert_eq!(
+            refused(fx.command(&app, &agent, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":shared["id"],"expectedRevision":"1","name":"alpha","content":fx.upload(&agent, "Another.")}))),
+            "Conflict"
+        );
         // A rejected proposal leaves the active revision unchanged.
         let item = read(&*fx.store, |s| s.instructions().instruction_item(&id(draft["id"].as_str().unwrap()))).unwrap();
         let second = applied(fx.command(&app, &agent, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":draft["id"],"expectedRevision":item.latest_revision.to_string(),"name":"alpha","content":fx.upload(&agent, "Worse alpha.")})));

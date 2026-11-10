@@ -41,11 +41,32 @@ fn paged<T>(all: Vec<T>, page: &PageRequest, binding: &str) -> Result<Page<T>, F
     })
 }
 
-/// Every skill item, with which one of each name is effective (a present, enabled, active
-/// harness skill over a shared skill of the same name).
+/// How a skill item stands among the items sharing its (case-insensitive) name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Standing {
+    /// The one in effect: a present, enabled, active harness skill over a shared one.
+    Effective,
+    /// A higher-precedence item of the same name is in effect.
+    Overridden,
+    /// Two or more items share the highest precedence (names that differ only in case on a
+    /// case-sensitive filesystem): a material conflict. None of them is in effect until the
+    /// user resolves it by renaming or removing one.
+    Conflict,
+}
+impl Standing {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Effective => "effective",
+            Self::Overridden => "overridden",
+            Self::Conflict => "conflict",
+        }
+    }
+}
+
+/// Every skill item with its standing.
 pub(crate) fn skill_items(
     read: &dyn InstructionRead,
-) -> Result<Vec<(StoredInstructionItem, bool)>, StorageError> {
+) -> Result<Vec<(StoredInstructionItem, Standing)>, StorageError> {
     let mut all = Vec::new();
     let mut after: Option<Id> = None;
     loop {
@@ -66,18 +87,19 @@ pub(crate) fn skill_items(
         }
     }
     let usable = |i: &StoredInstructionItem| i.present && i.enabled && i.active_revision.is_some();
-    let mut winner: BTreeMap<String, (u8, Id)> = BTreeMap::new();
+    let rank = |i: &StoredInstructionItem| u8::from(i.origin != InstructionOrigin::Harness);
+    // Per folded name: the best rank and every usable item holding it.
+    let mut best: BTreeMap<String, (u8, Vec<Id>)> = BTreeMap::new();
     for item in all.iter().filter(|i| usable(i)) {
-        let rank = if item.origin == InstructionOrigin::Harness {
-            0
-        } else {
-            1
-        };
-        let entry = winner
-            .entry(item.name.clone())
-            .or_insert((rank, item.id.clone()));
-        if rank < entry.0 {
-            *entry = (rank, item.id.clone());
+        let r = rank(item);
+        let entry = best
+            .entry(item.name.to_lowercase())
+            .or_insert((r, Vec::new()));
+        if r < entry.0 {
+            *entry = (r, Vec::new());
+        }
+        if r == entry.0 {
+            entry.1.push(item.id.clone());
         }
     }
     all.sort_by(|a, b| {
@@ -88,8 +110,12 @@ pub(crate) fn skill_items(
     Ok(all
         .into_iter()
         .map(|i| {
-            let effective = winner.get(&i.name).is_some_and(|(_, id)| *id == i.id);
-            (i, effective)
+            let standing = match best.get(&i.name.to_lowercase()) {
+                Some((_, ids)) if ids.len() > 1 && ids.contains(&i.id) => Standing::Conflict,
+                Some((_, ids)) if ids.len() == 1 && ids[0] == i.id => Standing::Effective,
+                _ => Standing::Overridden,
+            };
+            (i, standing)
         })
         .collect())
 }
@@ -115,7 +141,7 @@ impl InstructionService {
                 }
                 let mut records = Vec::new();
                 let mut fence = 0i64;
-                for (item, effective) in skill_items(instructions)? {
+                for (item, standing) in skill_items(instructions)? {
                     let root = if item.origin == InstructionOrigin::Shared {
                         SHARED_ROOT_ID
                     } else {
@@ -131,7 +157,7 @@ impl InstructionService {
                     }
                     fence = fence.max(item.version);
                     let revision = current_revision(instructions, &item)?;
-                    records.push(record(&item, &revision, Some(effective))?);
+                    records.push(record(&item, &revision, Some(standing))?);
                 }
                 let binding = crate::fingerprint::sha256_hex(
                     serde_json::to_string(
@@ -247,7 +273,7 @@ impl InstructionService {
             skill_items(read)?
                 .into_iter()
                 .find(|(i, _)| i.id == item.id)
-                .map(|(_, e)| e)
+                .map(|(_, standing)| standing)
         } else {
             None
         };
@@ -293,5 +319,111 @@ impl InstructionService {
             },
             item.version,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ports::storage::{InstructionRevisionState, StoredInstructionRevision};
+    use crate::protocol::ActorId;
+    use serde_json::json;
+
+    struct Items(Vec<StoredInstructionItem>);
+    impl InstructionRead for Items {
+        fn instruction_item(&self, id: &Id) -> Result<Option<StoredInstructionItem>, StorageError> {
+            Ok(self.0.iter().find(|i| i.id == *id).cloned())
+        }
+        fn instruction_items(
+            &self,
+            _: &InstructionFilter,
+            after: Option<&Id>,
+            _: u16,
+        ) -> Result<Vec<StoredInstructionItem>, StorageError> {
+            Ok(if after.is_some() {
+                Vec::new()
+            } else {
+                self.0.clone()
+            })
+        }
+        fn instruction_revision(
+            &self,
+            id: &Id,
+            revision: i64,
+        ) -> Result<Option<StoredInstructionRevision>, StorageError> {
+            Ok(Some(StoredInstructionRevision {
+                instruction_id: id.clone(),
+                revision,
+                content: json!({}),
+                content_digest: "a".repeat(64),
+                state: InstructionRevisionState::Approved,
+                author: ActorId(Id::new("host").unwrap()),
+                origin: json!({}),
+                resources: json!([]),
+                applicability: vec![],
+                approval_id: None,
+                created_at_ms: 0,
+                decided_at_ms: None,
+            }))
+        }
+        fn instruction_revisions(
+            &self,
+            _: &Id,
+            _: Option<i64>,
+            _: u16,
+        ) -> Result<Vec<StoredInstructionRevision>, StorageError> {
+            Ok(Vec::new())
+        }
+        fn instruction_revision_by_approval(
+            &self,
+            _: &Id,
+        ) -> Result<Option<StoredInstructionRevision>, StorageError> {
+            Ok(None)
+        }
+    }
+    fn item(id: &str, name: &str, origin: InstructionOrigin) -> StoredInstructionItem {
+        StoredInstructionItem {
+            id: Id::new(id).unwrap(),
+            kind: InstructionKind::Skill,
+            name: name.into(),
+            scope: ConfigScope::Workspace,
+            origin,
+            root_path: Some("/r".into()),
+            source_path: Some(format!("/r/{name}")),
+            latest_revision: 1,
+            active_revision: Some(1),
+            enabled: true,
+            materialized_digest: None,
+            observed_digest: None,
+            present: true,
+            version: 2,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn same_precedence_name_collisions_are_conflicts_and_never_effective() {
+        let read = Items(vec![
+            item("s-alpha", "alpha", InstructionOrigin::Shared),
+            item("s-alpha-upper", "Alpha", InstructionOrigin::Shared),
+            item("s-beta", "beta", InstructionOrigin::Shared),
+            item("h-beta", "Beta", InstructionOrigin::Harness),
+        ]);
+        let standing: BTreeMap<String, Standing> = skill_items(&read)
+            .unwrap()
+            .into_iter()
+            .map(|(i, s)| (i.id.as_str().to_owned(), s))
+            .collect();
+        assert_eq!(standing["s-alpha"], Standing::Conflict);
+        assert_eq!(standing["s-alpha-upper"], Standing::Conflict);
+        // A higher-precedence harness skill resolves the case collision with its shared source.
+        assert_eq!(standing["h-beta"], Standing::Effective);
+        assert_eq!(standing["s-beta"], Standing::Overridden);
+        let effective = crate::services::instructions::effective_skills(&read).unwrap();
+        assert_eq!(effective.skills.len(), 1);
+        assert_eq!(effective.conflicts.len(), 1);
+        assert_eq!(effective.conflicts[0].name, "alpha");
+        assert_eq!(effective.conflicts[0].instruction_ids.len(), 2);
     }
 }

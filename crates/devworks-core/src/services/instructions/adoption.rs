@@ -2,7 +2,7 @@
 //! revisions and digests. Only active (approved) revisions are ever part of it, so a pending or
 //! rejected proposal can never appear here; a change of the set's digest is the adoption
 //! boundary that a session records (SKILL-03, SKILL-05).
-use super::queries::skill_items;
+use super::queries::{Standing, skill_items};
 use super::{HARNESS_ROOT_ID, SHARED_ROOT_ID};
 use crate::fingerprint::sha256_hex;
 use crate::ports::storage::{InstructionOrigin, InstructionRead, StorageError};
@@ -28,9 +28,20 @@ pub struct EffectiveSkill {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EffectiveSkills {
-    /// SHA-256 over the ordered `(name, instruction, revision, digest)` tuples.
+    /// SHA-256 over the ordered `(name, instruction, revision, digest)` tuples and conflicts.
     pub digest: String,
     pub skills: Vec<EffectiveSkill>,
+    /// Material same-precedence conflicts, visible for reconciliation: each entry lists the
+    /// conflicting instruction items; none of them is in effect.
+    pub conflicts: Vec<SkillConflict>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillConflict {
+    /// The case-folded name the items share.
+    pub name: String,
+    pub instruction_ids: Vec<Id>,
 }
 impl EffectiveSkills {
     /// Names whose effective revision differs from `adopted` (added, changed or removed).
@@ -56,8 +67,20 @@ impl EffectiveSkills {
 /// The current effective skill set, one per name, harness overrides first.
 pub fn effective_skills(read: &dyn InstructionRead) -> Result<EffectiveSkills, StorageError> {
     let mut skills = Vec::new();
-    for (item, effective) in skill_items(read)? {
-        if !effective {
+    let mut conflicts: Vec<SkillConflict> = Vec::new();
+    for (item, standing) in skill_items(read)? {
+        if standing == Standing::Conflict {
+            let name = item.name.to_lowercase();
+            match conflicts.iter_mut().find(|c| c.name == name) {
+                Some(c) => c.instruction_ids.push(item.id.clone()),
+                None => conflicts.push(SkillConflict {
+                    name,
+                    instruction_ids: vec![item.id.clone()],
+                }),
+            }
+            continue;
+        }
+        if standing != Standing::Effective {
             continue;
         }
         let Some(active) = item.active_revision else {
@@ -96,7 +119,24 @@ pub fn effective_skills(read: &dyn InstructionRead) -> Result<EffectiveSkills, S
                 .collect::<Vec<_>>(),
         )
         .expect("digest input")
+        .chain_conflicts(&conflicts)
         .as_bytes(),
     );
-    Ok(EffectiveSkills { digest, skills })
+    Ok(EffectiveSkills {
+        digest,
+        skills,
+        conflicts,
+    })
+}
+
+trait ChainConflicts {
+    fn chain_conflicts(self, conflicts: &[SkillConflict]) -> String;
+}
+impl ChainConflicts for String {
+    fn chain_conflicts(mut self, conflicts: &[SkillConflict]) -> String {
+        if !conflicts.is_empty() {
+            self.push_str(&serde_json::to_string(conflicts).expect("conflicts"));
+        }
+        self
+    }
 }

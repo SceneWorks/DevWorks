@@ -396,20 +396,20 @@ impl InstructionService {
                     // An improvement to a shared skill becomes a same-name harness override; the
                     // shared original and its files stay untouched.
                     let overrides = Some((source.id.clone(), base.as_ref().map(|b| b.revision)));
-                    let (item, created) = match harness(tx)? {
-                        Some(item) => (item, false),
-                        None => (self.new_harness_item(tx, name, now)?, true),
-                    };
-                    let base = if created {
-                        base
-                    } else {
-                        current_revision(tx.instructions(), &item).ok().or(base)
-                    };
+                    // An existing override is edited through its own identity and revision, so a
+                    // concurrent edit of it can never be overwritten silently.
+                    if let Some(existing) = harness(tx)? {
+                        return Err(refusal(
+                            DomainErrorCode::Conflict,
+                            "skill_override",
+                            Some(&existing.id),
+                        ));
+                    }
                     Ok(Target {
-                        item,
+                        item: self.new_harness_item(tx, name, now)?,
                         base,
                         overrides,
-                        created,
+                        created: true,
                     })
                 } else {
                     Ok(Target {
