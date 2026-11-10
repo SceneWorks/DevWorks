@@ -1195,6 +1195,8 @@ pub fn ensure_membership_context(
     };
     context.instructions = fresh.instructions;
     context.instruction_stamps.clear();
+    // The replaced instructions carried the bound skills block too; binding adds it afresh.
+    context.skill_stamp = None;
     context.messages.push(Message {
         role: MessageRole::User,
         content: vec![ContentBlock::Text {

@@ -189,6 +189,57 @@ fn copy_entry(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Prefix of a swap journal: holds the skill name of an in-progress swap whose staging and
+/// retired trees carry the same tag.
+const JOURNAL: &str = ".skill.swap-";
+
+/// Removes a directory tree, a file or a link.
+fn remove_entry(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_dir() => remove_tree(path),
+        Ok(_) => fs::remove_file(path),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Completes or undoes every swap another process left behind. A live tree missing beside its
+/// retired tree is moved back, so its uncaptured files (which no revision records) are kept;
+/// otherwise the swap finished, and the retired and staging trees are leftovers. A journal of
+/// this process belongs to a swap still in progress here and is left alone.
+fn recover_swaps(root: &Path) -> io::Result<()> {
+    let own = format!("{}-", std::process::id());
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let file = entry.file_name();
+        let Some(tag) = file.to_str().and_then(|f| f.strip_prefix(JOURNAL)) else {
+            continue;
+        };
+        if tag.starts_with(&own) {
+            continue;
+        }
+        let retired = root.join(format!(".skill.old-{tag}"));
+        let staging = root.join(format!(".skill.new-{tag}"));
+        // A journal is complete before its live tree moves, so a partial one has no retired
+        // tree and only its staging tree is cleaned up.
+        let name = fs::read_to_string(entry.path()).unwrap_or_default();
+        let live = (valid_segment(&name) && !name.starts_with('.')).then(|| root.join(&name));
+        match live {
+            Some(live)
+                if fs::symlink_metadata(&live).is_err()
+                    && fs::symlink_metadata(&retired).is_ok() =>
+            {
+                rename(&retired, &live)?
+            }
+            _ => remove_entry(&retired)?,
+        }
+        remove_entry(&staging)?;
+        sync_dir(root)?;
+        fs::remove_file(entry.path())?;
+    }
+    Ok(())
+}
+
 impl SkillFiles for NativeSkillFiles {
     fn uncaptured_collision(
         &self,
@@ -219,7 +270,9 @@ impl SkillFiles for NativeSkillFiles {
     }
     fn root(&self) -> Result<PathBuf, SkillFileFault> {
         fs::create_dir_all(&self.root).map_err(io_fault)?;
-        fs::canonicalize(&self.root).map_err(io_fault)
+        let root = fs::canonicalize(&self.root).map_err(io_fault)?;
+        recover_swaps(&root).map_err(io_fault)?;
+        Ok(root)
     }
     fn materialize(&self, name: &str, files: &[SkillFile]) -> Result<(), SkillFileFault> {
         if !valid_segment(name) || name.starts_with('.') {
@@ -267,8 +320,23 @@ impl SkillFiles for NativeSkillFiles {
         }
         // Links in the managed root are never followed: a link at the live name is replaced.
         let had_live = fs::symlink_metadata(&live).is_ok();
+        // The journal names the skill before its live tree moves aside, so a process that dies
+        // between the two renames leaves a swap the next use of this root completes or undoes.
+        let journal = root.join(format!("{JOURNAL}{tag}"));
         if had_live {
+            let journaled = (|| -> io::Result<()> {
+                let mut out = File::create_new(&journal)?;
+                out.write_all(name.as_bytes())?;
+                out.sync_all()?;
+                sync_dir(&root)
+            })();
+            if let Err(e) = journaled {
+                let _ = fs::remove_file(&journal);
+                let _ = remove_tree(&staging);
+                return Err(io_fault(e));
+            }
             rename(&live, &retired).map_err(|e| {
+                let _ = fs::remove_file(&journal);
                 let _ = remove_tree(&staging);
                 io_fault(e)
             })?;
@@ -276,18 +344,16 @@ impl SkillFiles for NativeSkillFiles {
         if let Err(e) = rename(&staging, &live) {
             if had_live {
                 let _ = rename(&retired, &live);
+                let _ = fs::remove_file(&journal);
             }
             let _ = remove_tree(&staging);
             return Err(io_fault(e));
         }
         sync_dir(&root).map_err(io_fault)?;
-        if had_live {
-            let meta = fs::symlink_metadata(&retired).map_err(io_fault)?;
-            if meta.file_type().is_dir() {
-                let _ = remove_tree(&retired);
-            } else {
-                let _ = fs::remove_file(&retired);
-            }
+        // The swap is done; a retired tree that cannot be removed now keeps its journal, so a
+        // later process removes it.
+        if had_live && remove_entry(&retired).is_ok() {
+            let _ = fs::remove_file(&journal);
         }
         Ok(())
     }
@@ -306,6 +372,49 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
         dir
+    }
+
+    fn skill(path: &str, bytes: &[u8]) -> SkillFile {
+        SkillFile {
+            path: path.into(),
+            bytes: bytes.to_vec(),
+            executable: false,
+        }
+    }
+
+    #[test]
+    fn a_swap_interrupted_between_its_renames_keeps_uncaptured_files() {
+        let root = temp();
+        let files = NativeSkillFiles::new(&root);
+        files
+            .materialize("alpha", &[skill("SKILL.md", b"one")])
+            .unwrap();
+        let base = files.root().unwrap();
+        fs::write(base.join("alpha/.env"), b"secret").unwrap();
+        // Another process journaled the swap, moved the live tree aside and died before
+        // renaming its staging tree into place.
+        fs::write(base.join(".skill.swap-0-7"), b"alpha").unwrap();
+        fs::rename(base.join("alpha"), base.join(".skill.old-0-7")).unwrap();
+        fs::create_dir(base.join(".skill.new-0-7")).unwrap();
+        // A swap that finished but died before removing its retired tree.
+        files
+            .materialize("beta", &[skill("SKILL.md", b"b")])
+            .unwrap();
+        fs::create_dir(base.join(".skill.old-0-8")).unwrap();
+        fs::write(base.join(".skill.swap-0-8"), b"beta").unwrap();
+        files
+            .materialize("alpha", &[skill("SKILL.md", b"two")])
+            .unwrap();
+        assert_eq!(fs::read(base.join("alpha/.env")).unwrap(), b"secret");
+        assert_eq!(fs::read(base.join("alpha/SKILL.md")).unwrap(), b"two");
+        assert_eq!(fs::read(base.join("beta/SKILL.md")).unwrap(), b"b");
+        let mut left: Vec<String> = fs::read_dir(&base)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["alpha", "beta"]);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

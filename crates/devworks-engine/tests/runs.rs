@@ -1626,6 +1626,22 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
                 wire_calls.clone(),
             ))),
         );
+        // One shared skill, so every published context carries a bound skills block that the
+        // membership handoff must rebind rather than carry over.
+        let shared = fx.h.root.with_extension("shared-skills");
+        let harness = fx.h.root.with_extension("harness-skills");
+        let _ = std::fs::remove_dir_all(&shared);
+        let _ = std::fs::remove_dir_all(&harness);
+        std::fs::create_dir_all(shared.join("alpha")).unwrap();
+        std::fs::write(shared.join("alpha/SKILL.md"), "Do alpha.").unwrap();
+        composed.config.instructions = Some(devworks_engine::runtime::InstructionComposition {
+            source: Arc::new(devworks_adapters::index::NativeSourceTree::new()),
+            files: Arc::new(devworks_adapters::fs::skills::NativeSkillFiles::new(&harness)),
+            roots: devworks_core::services::instructions::SkillRoots {
+                shared: Some(shared.clone()),
+                harness: harness.clone(),
+            },
+        });
         let app = Arc::new(boot(composed).await.unwrap());
         applied(&fx.start(&fx.user, "root-i", 1, 1));
         let activation = fx.launch("coordinator-first-prompt");
@@ -1920,6 +1936,10 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             .0;
         let moved_prompt: devworks_core::providers::context::ProviderContext =
             serde_json::from_slice(&moved_bytes).unwrap();
+        assert_eq!(
+            moved_prompt.skill_stamp.as_ref().expect("skills rebound").skills[0].name,
+            "alpha"
+        );
         devworks_engine::agent_turns::ensure_membership_context(&app, &moved_context, &moved_agent)
             .unwrap();
         let (same_head, _, _) = app
