@@ -301,5 +301,14 @@ fn a_selected_server_samples_through_the_boot_installed_sampler_during_an_agent_
             );
             let _ = remote.cancel().await;
             app.shutdown().await;
+            // The installed sampler does not keep the MCP service, its native client or the
+            // store alive after the runtime is gone.
+            let (weak_service, native) = (
+                Arc::downgrade(&service),
+                Arc::downgrade(clients.get().unwrap()),
+            );
+            drop((app, clients, service));
+            assert!(weak_service.upgrade().is_none(), "MCP service retained");
+            assert!(native.upgrade().is_none(), "native MCP client retained");
         });
 }
