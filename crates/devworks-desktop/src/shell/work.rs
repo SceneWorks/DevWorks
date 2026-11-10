@@ -2935,8 +2935,10 @@ fn message_board(ui: &mut Ui, board: &mut MessageBoard, open: bool, actions: &mu
                 widgets::caption(ui, meta.join(" · "));
             }
             // Project history retains read questions after their inbox delivery is acknowledged.
-            // Keep their resolution actions available while the question remains open.
+            // Keep their resolution actions available while the question remains open; an
+            // unread question already offers them in the inbox above.
             if message.to_human
+                && !board.inbox.iter().any(|unread| unread.id == message.id)
                 && matches!(
                     message.kind,
                     devworks_core::protocol::records::RetainedMessageKind::Question
