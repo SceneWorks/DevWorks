@@ -4,7 +4,10 @@ use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, mcp as ops};
-use crate::ports::mcp::{McpEndpoint, McpRemote, McpRemoteFault, RemoteCatalog};
+use crate::ports::mcp::{
+    McpCallOrigin, McpEndpoint, McpRemote, McpRemoteFault, McpSampler, RemoteCatalog,
+    SamplingRefusal,
+};
 use crate::ports::packages::SchemaValidator;
 use crate::ports::storage::{
     ApplicationStore, ConfigScope, NewEvent, NewOperation, NewQueueEntry, OperationRecord,
@@ -45,6 +48,10 @@ pub const OPERATIONS: [&str; 8] = [
     "mcp.prompts",
 ];
 pub const EFFECT_CONSUMER: &str = "mcp_effects";
+/// Host-synthesized catalog entry a human selects to let a server request sampling. It is never
+/// a provider tool: tool exposure and tool admission only consider `kind == "tool"`.
+const SAMPLING_KIND: &str = "sampling";
+const SAMPLING_NAME: &str = "createMessage";
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 struct Configuration {
@@ -60,6 +67,30 @@ struct StoredServer {
     schemas: BTreeMap<String, Value>,
     #[serde(default)]
     resource_uris: BTreeMap<String, String>,
+}
+
+impl StoredServer {
+    fn samples(&self) -> bool {
+        capability_id(&self.public.id, SAMPLING_KIND, SAMPLING_NAME)
+            .is_ok_and(|id| self.public.selected_tool_ids.0.contains(&id))
+    }
+    fn endpoint(&self, scope: &ConfigScope) -> McpEndpoint {
+        McpEndpoint {
+            server_id: self.public.id.clone(),
+            scope: scope.clone(),
+            transport: self.transport.clone(),
+            sampling: self.samples(),
+        }
+    }
+}
+
+/// The agent invocation a sampling request runs under, rebuilt from its `mcp.tool` journal.
+pub struct SamplingGrant {
+    pub context: InvocationContext,
+    pub operation_id: OperationId,
+    pub attempt_id: Id,
+    pub call: ToolCallKey,
+    pub fences: Vec<AuthorityFence>,
 }
 
 fn scope(
@@ -704,11 +735,7 @@ impl McpClientService {
                 context,
             );
         }
-        let endpoint = McpEndpoint {
-            server_id: server_id.clone(),
-            scope: scope.clone(),
-            transport: server.transport,
-        };
+        let endpoint = server.endpoint(&scope);
         let outcome = native.remote.connect(&context, &endpoint);
         let successful = outcome.is_ok();
         let failure = outcome
@@ -942,9 +969,17 @@ impl McpClientService {
                 "MCP tool arguments no longer match the selected schema".into(),
             );
         }
+        let Some(attempt) = op.latest_attempt() else {
+            return McpEffectOutcome::Failed("MCP tool was not dispatched".into());
+        };
+        let origin = McpCallOrigin {
+            server_id: server_id.clone(),
+            operation_id: op.id.clone(),
+            attempt_id: attempt.id.0.clone(),
+        };
         let mut result = native
             .remote
-            .call_tool(&server_id, wire_name, arguments.clone());
+            .call_tool_with_origin(&origin, wire_name, arguments.clone());
         if matches!(result, Err(McpRemoteFault::Unreachable)) {
             let endpoint =
                 match read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
@@ -956,11 +991,7 @@ impl McpClientService {
                             server.public.id == server_id
                                 && server.public.revision.get() == server_revision
                         })
-                        .map(|server| McpEndpoint {
-                            server_id: server_id.clone(),
-                            scope: scope.clone(),
-                            transport: server.transport,
-                        })
+                        .map(|server| server.endpoint(&scope))
                         .ok_or(StorageError::ScopeDenied)
                 }) {
                     Ok(endpoint) => endpoint,
@@ -998,7 +1029,9 @@ impl McpClientService {
                             "MCP tool authority changed during reconnect".into(),
                         );
                     }
-                    native.remote.call_tool(&server_id, wire_name, arguments)
+                    native
+                        .remote
+                        .call_tool_with_origin(&origin, wire_name, arguments)
                 }
                 Err(fault) => Err(fault),
             };
@@ -1017,6 +1050,73 @@ impl McpClientService {
         }
     }
 
+    /// Attach the router-backed sampler to the one native connection owner.
+    pub fn install_sampler(&self, sampler: Arc<dyn McpSampler>) -> Result<(), &'static str> {
+        let native = self
+            .native
+            .get()
+            .ok_or("outgoing MCP remote is not installed")?;
+        native.remote.install_sampler(sampler);
+        Ok(())
+    }
+
+    /// Re-authorize one sampling request against its dispatching `mcp.tool` journal and the
+    /// server's current human selection. The decision is recorded on the tool call without
+    /// any prompt text.
+    pub fn authorize_sampling(
+        &self,
+        origin: &McpCallOrigin,
+        ordinal: u8,
+    ) -> Result<SamplingGrant, SamplingRefusal> {
+        let native = self
+            .native
+            .get()
+            .ok_or(SamplingRefusal::Unauthorized("mcp_runtime"))?;
+        let info = native.store.info();
+        let origin = origin.clone();
+        let decided = crate::ports::storage::run_write(
+            &*native.store,
+            crate::ports::storage::WriteOptions::default(),
+            move |tx| {
+                let Some(op) = tx.operations().operation(&origin.operation_id)? else {
+                    return Ok(Err("mcp_sampling_call"));
+                };
+                let decision = sampling_decision(tx, &op, &origin, &info)?;
+                let actor = tx.store().host_actor.clone();
+                let event_id = EventId(tx.new_id(IdKind::Event));
+                tx.history().append(NewEvent {
+                    id: event_id,
+                    actor,
+                    project_id: op
+                        .payload
+                        .get("projectId")
+                        .cloned()
+                        .and_then(|v| serde_json::from_value(v).ok())
+                        .flatten(),
+                    root_id: op.root_id.clone(),
+                    operation_id: Some(op.id.clone()),
+                    aggregate_kind: "mcp_tool_call".into(),
+                    aggregate_id: op.id.0.as_str().into(),
+                    aggregate_revision: 1 + i64::from(ordinal),
+                    kind: if decision.is_ok() {
+                        "McpSamplingAccepted"
+                    } else {
+                        "McpSamplingRefused"
+                    }
+                    .into(),
+                    payload: json!({"serverId":origin.server_id,"attemptId":origin.attempt_id,
+                        "ordinal":ordinal,"reason":decision.as_ref().err()}),
+                })?;
+                Ok(decision)
+            },
+        );
+        match decided {
+            Ok(Ok(grant)) => Ok(grant),
+            Ok(Err(reason)) => Err(SamplingRefusal::Unauthorized(reason)),
+            Err(_) => Err(SamplingRefusal::Unauthorized("mcp_sampling_unavailable")),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn execute_discover(
         self: &Arc<Self>,
@@ -1030,11 +1130,7 @@ impl McpClientService {
     ) -> McpEffectOutcome {
         // A saved transport may have changed while the native session stayed alive. Reconnect
         // under the current revision fence before reading a catalog from that server ID.
-        let endpoint = McpEndpoint {
-            server_id: server_id.clone(),
-            scope: scope.clone(),
-            transport: server.transport,
-        };
+        let endpoint = server.endpoint(&scope);
         let discovery = native
             .remote
             .connect(&context, &endpoint)
@@ -1363,6 +1459,19 @@ impl McpClientService {
                 false,
             )?);
         }
+        capabilities.push(capability(
+            previous,
+            capability_id(server_id, SAMPLING_KIND, SAMPLING_NAME)?,
+            server_id,
+            SAMPLING_KIND,
+            SAMPLING_NAME.into(),
+            "Let this server ask DevWorks for a text completion during a selected tool call. \
+             DevWorks chooses the model and charges the calling agent's work."
+                .into(),
+            None,
+            None,
+            false,
+        )?);
         self.write_catalog(
             tx,
             scope,
@@ -1420,7 +1529,10 @@ impl McpClientService {
         if capabilities.iter().any(|capability| {
             &capability.server_id != server_id
                 || !names.insert(capability.id.as_str())
-                || !matches!(capability.kind.0.as_str(), "tool" | "resource" | "prompt")
+                || !matches!(
+                    capability.kind.0.as_str(),
+                    "tool" | "resource" | "prompt" | SAMPLING_KIND
+                )
                 || (capability.kind.0 != "resource"
                     && !wire_names.insert((capability.kind.0.as_str(), capability.name.0.as_str())))
                 || capability.check().is_err()
@@ -1626,7 +1738,7 @@ impl McpClientService {
             !server
                 .capabilities
                 .iter()
-                .any(|cap| cap.kind.0 == "tool" && cap.id == *id)
+                .any(|cap| matches!(cap.kind.0.as_str(), "tool" | SAMPLING_KIND) && cap.id == *id)
         }) {
             return Err(Refusal::new(DomainErrorCode::InvalidArgument, "mcp_tool", None).into());
         }
@@ -1841,6 +1953,90 @@ impl McpClientService {
             operation_id: Some(operation),
         })
     }
+}
+
+/// A sampling request is accepted only from an Agent's in-flight call whose authority fences,
+/// session and the server's current sampling selection all still hold. The server revision is
+/// not compared: selection and connection edits bump it while the catalog stays the same.
+fn sampling_decision(
+    tx: &mut dyn WriteTransaction,
+    op: &OperationRecord,
+    origin: &McpCallOrigin,
+    info: &crate::ports::storage::StoreInfo,
+) -> Result<Result<SamplingGrant, &'static str>, StorageError> {
+    let payload = &op.payload;
+    if op.capability != "mcp.tool"
+        || op.state != OperationState::Dispatching
+        || op.latest_attempt().map(|attempt| &attempt.id.0) != Some(&origin.attempt_id)
+        || payload.get("serverId") != Some(&json!(origin.server_id))
+    {
+        return Ok(Err("mcp_sampling_call"));
+    }
+    if payload.get("principalKind").and_then(Value::as_str) != Some("Agent") {
+        return Ok(Err("mcp_sampling_principal"));
+    }
+    let field = |name: &str| payload.get(name).cloned().unwrap_or(Value::Null);
+    let parsed = (
+        serde_json::from_value::<ActorId>(field("principal")),
+        serde_json::from_value::<Id>(field("sessionId")),
+        serde_json::from_value::<Option<ProjectId>>(field("projectId")),
+        serde_json::from_value::<Vec<AuthorityFence>>(field("fences")),
+        serde_json::from_value::<ToolCallKey>(field("call")),
+        payload
+            .get("scope")
+            .and_then(Value::as_str)
+            .and_then(ConfigScope::from_key),
+        payload.get("catalogRevision").and_then(Value::as_i64),
+    );
+    let (
+        Ok(principal),
+        Ok(session_id),
+        Ok(project_id),
+        Ok(fences),
+        Ok(call),
+        Some(scope),
+        Some(catalog),
+    ) = parsed
+    else {
+        return Ok(Err("mcp_sampling_call"));
+    };
+    if tx.actors().actor_kind(&principal)? != Some(PrincipalKind::Agent)
+        || !crate::authority::fences_hold(tx, &fences)?
+    {
+        return Ok(Err("mcp_sampling_authority"));
+    }
+    if tx.sessions().session(&session_id)?.is_none_or(|session| {
+        session.closed() || session.agent_id != principal || session.project_id != project_id
+    }) {
+        return Ok(Err("mcp_sampling_session"));
+    }
+    let (_, state) = current(tx.configuration(), &scope)?;
+    if !state.servers.iter().any(|server| {
+        server.public.id == origin.server_id
+            && matches!(server.public.state, ItemState::Healthy)
+            && server.public.catalog_revision.get() == catalog
+            && server.samples()
+    }) {
+        return Ok(Err("mcp_sampling_selection"));
+    }
+    let context = InvocationContext::new(
+        principal,
+        PrincipalKind::Agent,
+        op.id.0.clone(),
+        Id::new("mcp-effects").expect("static ingress"),
+        info.store_id.clone(),
+        Counter::new(info.restore_epoch).expect("valid store epoch"),
+        rev(1),
+    )
+    .with_lineage(project_id, op.root_id.clone(), op.assignment_id.clone())
+    .with_session(session_id);
+    Ok(Ok(SamplingGrant {
+        context,
+        operation_id: op.id.clone(),
+        attempt_id: origin.attempt_id.clone(),
+        call,
+        fences,
+    }))
 }
 
 fn capability_id(server: &Id, kind: &str, wire_name: &str) -> Result<Id, StorageError> {
