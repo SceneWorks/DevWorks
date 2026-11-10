@@ -44,6 +44,27 @@ pub struct SkillConflict {
     pub instruction_ids: Vec<Id>,
 }
 impl EffectiveSkills {
+    /// The stamp a provider context binds; `None` when there is nothing to bind.
+    pub fn stamp(&self) -> Option<crate::providers::instructions::SkillStamp> {
+        if self.skills.is_empty() && self.conflicts.is_empty() {
+            return None;
+        }
+        Some(crate::providers::instructions::SkillStamp {
+            digest: self.digest.clone(),
+            skills: self
+                .skills
+                .iter()
+                .map(|s| crate::providers::instructions::SkillStampEntry {
+                    name: s.name.clone(),
+                    instruction_id: s.instruction_id.clone(),
+                    root_id: s.root_id.to_owned(),
+                    revision: s.revision,
+                    content_digest: s.content_digest.clone(),
+                })
+                .collect(),
+            conflicts: self.conflicts.iter().map(|c| c.name.clone()).collect(),
+        })
+    }
     /// Names whose effective revision differs from `adopted` (added, changed or removed).
     pub fn transitions(&self, adopted: &EffectiveSkills) -> Vec<String> {
         let mut changed: Vec<String> = Vec::new();

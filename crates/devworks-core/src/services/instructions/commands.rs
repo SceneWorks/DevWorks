@@ -647,6 +647,14 @@ impl InstructionService {
                         Some(&item.id),
                     ));
                 }
+                // A shared skill's files are never written: restoring a revision other than the
+                // one on disk becomes a harness override with that revision's files, so what is
+                // in effect is what is executed.
+                if item.origin == InstructionOrigin::Shared
+                    && item.observed_digest.as_deref() != Some(target.content_digest.as_str())
+                {
+                    return self.restore_into_override(ctx, tx, &item, &target);
+                }
                 None
             }
         };
@@ -704,6 +712,79 @@ impl InstructionService {
         )?;
         Ok(DomainDecision::Applied {
             result: result(kind, Op::Rollback, record(&item, &target, None)?),
+        })
+    }
+}
+
+impl InstructionService {
+    fn restore_into_override(
+        &self,
+        ctx: &InvocationContext,
+        tx: &mut dyn WriteTransaction,
+        shared: &StoredInstructionItem,
+        target: &StoredInstructionRevision,
+    ) -> Result<DomainDecision, Failure> {
+        let now = tx.now_ms();
+        let existing = tx
+            .instructions()
+            .instruction_items(
+                &InstructionFilter {
+                    kind: Some(InstructionKind::Skill),
+                    scopes: vec![ConfigScope::Workspace],
+                    name: Some(shared.name.clone()),
+                },
+                None,
+                16,
+            )?
+            .into_iter()
+            .find(|i| i.origin == InstructionOrigin::Harness);
+        let mut item = match existing {
+            Some(item) => item,
+            None => self.new_harness_item(tx, &shared.name, now)?,
+        };
+        let revision = StoredInstructionRevision {
+            instruction_id: item.id.clone(),
+            revision: item.latest_revision + 1,
+            content: target.content.clone(),
+            content_digest: target.content_digest.clone(),
+            state: InstructionRevisionState::Approved,
+            author: ctx.principal().clone(),
+            origin: json!({
+                "kind": "Rollback",
+                "restoredFrom": {"instructionId": shared.id.as_str(), "revision": target.revision},
+                "provenance": provenance(ctx),
+            }),
+            resources: target.resources.clone(),
+            applicability: target.applicability.clone(),
+            approval_id: None,
+            created_at_ms: now,
+            decided_at_ms: Some(now),
+        };
+        tx.instructions().insert_instruction_revision(&revision)?;
+        let previous = item.active_revision;
+        item.latest_revision = revision.revision;
+        item.active_revision = Some(revision.revision);
+        item.version += 1;
+        item.updated_at_ms = now;
+        tx.instructions().update_instruction_item(&item)?;
+        event(
+            tx,
+            ctx.principal(),
+            &item,
+            "InstructionActivated",
+            json!({
+                "revision": revision.revision, "previousActiveRevision": previous,
+                "contentDigest": revision.content_digest,
+                "restoredFrom": {"instructionId": shared.id.as_str(), "revision": target.revision},
+                "provenance": provenance(ctx),
+            }),
+        )?;
+        Ok(DomainDecision::Applied {
+            result: result(
+                InstructionKind::Skill,
+                Op::Rollback,
+                record(&item, &revision, None)?,
+            ),
         })
     }
 }

@@ -452,10 +452,19 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
         }
         // Idempotent: unchanged sources record nothing new.
         assert_eq!(app.instructions().unwrap().sync().unwrap().observed, 0);
-        // A human restores the earlier captured revision; the shared file is not touched.
+        // A human restores the earlier captured revision. The shared file is not touched, so the
+        // restored revision becomes a harness override whose files match it exactly.
         let restored = applied(fx.command(&app, &user, "skills.rollback", json!({"instructionId":alpha2["id"],"expectedRevision":"2","targetRevision":"1"})));
-        assert_eq!(restored["revision"], "1");
-        assert!(labels(&restored).contains(&"active".into()));
+        assert!(labels(&restored).contains(&"origin:harness".into()) && labels(&restored).contains(&"active".into()));
+        assert_eq!(
+            std::fs::read(fx.harness.join("alpha/SKILL.md")).unwrap(),
+            b"---\nname: alpha\ndescription: Alpha skill\n---\nDo alpha."
+        );
+        assert_eq!(std::fs::read(fx.harness.join("alpha/docs/ref.md")).unwrap(), b"reference");
+        let restored_set = app.effective_skills().unwrap();
+        let alpha_now = restored_set.skills.iter().find(|s| s.name == "alpha").unwrap();
+        assert_eq!(alpha_now.root_id, "skills-harness");
+        assert_eq!(alpha_now.content_digest, first.skills[0].content_digest, "the restored files are in effect");
         let mut shared_now = shared_before.clone();
         shared_now.iter_mut().find(|(p, _)| p == "alpha/SKILL.md").unwrap().1 = b"Do alpha better.".to_vec();
         assert_eq!(tree(&fx.shared), shared_now);
@@ -726,6 +735,163 @@ fn role_saves_adopt_at_once_and_agent_role_edits_need_approval() {
         assert_eq!(override_role["content"]["sha256"], devworks_core::fingerprint::sha256_hex(b"Project worker rules."));
         let first = read(&*fx.store, |s| s.instructions().instruction_revision(&project_id, 1)).unwrap();
         assert_eq!(first.origin["kind"], "SettingsObserved");
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn provider_contexts_bind_skills_gate_dispatch_and_adopt_changes_at_an_epoch() {
+    let fx = Fx::new();
+    write_skill(&fx.shared, "alpha", &[("SKILL.md", "Do alpha.")]);
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let base = devworks_core::providers::context::ProviderContext {
+            version: 1,
+            instructions: vec![devworks_core::providers::context::TextBlock {
+                text: "role".into(),
+                cache: None,
+            }],
+            instruction_stamps: vec![],
+            skill_stamp: None,
+            messages: vec![devworks_core::providers::context::Message {
+                role: devworks_core::providers::context::MessageRole::User,
+                content: vec![devworks_core::providers::context::ContentBlock::Text {
+                    text: "work".into(),
+                    cache: None,
+                }],
+            }],
+            parameters: Default::default(),
+        };
+        // Binding puts the effective skill catalog after the role prefix, stamped exactly.
+        let bound = app
+            .bind_provider_instructions(&user, base.clone(), &[])
+            .unwrap();
+        let stamp = bound.skill_stamp.clone().expect("skills bound");
+        assert_eq!(stamp.skills[0].name, "alpha");
+        assert_eq!(bound.instructions[0].text, "role");
+        assert!(
+            bound.instructions[1]
+                .text
+                .contains("- alpha (skills-shared, revision 1")
+        );
+        let mut forged = bound.clone();
+        forged.instructions[1]
+            .text
+            .push_str("- beta (skills-shared, revision 9)\n");
+        assert!(
+            forged.validate().is_err(),
+            "the catalog block must match its stamp"
+        );
+        // The dispatch gate accepts the current set and refuses a context without it.
+        app.verify_instruction_context(&user, &bound, None).unwrap();
+        assert!(
+            app.verify_instruction_context(&user, &base, None).is_err(),
+            "skills in effect must be bound"
+        );
+        // A session adopts a changed skill set at an explicit epoch, recorded in its history.
+        // Epochs are published by the host for the session's turn.
+        let session_id = id("skill-session");
+        let host = principal(&*fx.store, "skill-host", PrincipalKind::Host)
+            .with_session(session_id.clone());
+        let (actor, sid) = (host.principal().clone(), session_id.clone());
+        write(&*fx.store, move |tx| {
+            let now = tx.now_ms();
+            tx.sessions().insert_session(&StoredSession {
+                id: sid,
+                conversation_id: id("skill-conversation"),
+                agent_id: actor.clone(),
+                project_id: None,
+                root_id: None,
+                title: "Skills".into(),
+                context_epoch: 0,
+                revision: 1,
+                created_by: actor,
+                created_at_ms: now,
+                closed_at_ms: None,
+                closed_by: None,
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            })
+        })
+        .unwrap();
+        let staged = app
+            .artifacts()
+            .stage_host_bytes(
+                &*fx.store,
+                &serde_json::to_vec(&bound).unwrap(),
+                json!({"fixture":"context"}),
+            )
+            .unwrap()
+            .unwrap();
+        let (artifacts, file) = (app.artifacts().clone(), staged.clone());
+        let version = write(&*fx.store, move |tx| {
+            artifacts.commit_host_bytes(
+                tx,
+                &file,
+                "Context",
+                "application/vnd.devworks.provider-context+json",
+                json!({"fixture":true}),
+            )
+        })
+        .unwrap();
+        app.artifacts().settle_host_bytes(&*fx.store, &staged, true);
+        let previous = devworks_core::services::artifacts::version_ref(&version);
+        let binding = devworks_core::protocol::provider::NativeBinding {
+            connection_id: id("provider"),
+            account_revision: devworks_core::protocol::Revision::new(1).unwrap(),
+            endpoint_profile: devworks_core::protocol::provider::EndpointProfile::CompatibleChat,
+            model_id: id("model"),
+            context_epoch: devworks_core::protocol::Counter::new(0).unwrap(),
+        };
+        let same = app
+            .adopt_instruction_epoch(&host, &session_id, &previous, &binding, &[])
+            .unwrap();
+        assert_eq!(
+            same.version_id, previous.version_id,
+            "an unchanged skill set keeps the context"
+        );
+        std::fs::write(fx.shared.join("alpha/SKILL.md"), "Do alpha, revised.").unwrap();
+        let adopted = app
+            .adopt_instruction_epoch(&host, &session_id, &previous, &binding, &[])
+            .unwrap();
+        assert_ne!(adopted.version_id, previous.version_id);
+        assert!(
+            app.verify_instruction_context(&user, &bound, None).is_err(),
+            "a context bound to the old skill set is not dispatched"
+        );
+        let epoch = read(&*fx.store, |s| s.sessions().epoch(&session_id, 1)).unwrap();
+        assert_eq!(epoch.reason, "InstructionAdoption");
+        let bytes = app
+            .artifacts()
+            .read_exact(&*fx.store, &host, &adopted, 1024 * 1024)
+            .unwrap()
+            .0;
+        let fresh: devworks_core::providers::context::ProviderContext =
+            serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(fresh.skill_stamp.as_ref().unwrap().skills[0].revision, 2);
+        assert_eq!(fresh.instructions[0].text, "role");
+        assert_eq!(
+            fresh.instructions.len(),
+            2,
+            "the old catalog block was replaced, not appended"
+        );
+        let events = read(&*fx.store, |s| {
+            s.history().page(
+                &EventFilter::Aggregate {
+                    kind: "session".into(),
+                    id: session_id.as_str().into(),
+                },
+                0,
+                500,
+            )
+        });
+        let adoption = events
+            .events
+            .iter()
+            .find(|e| e.kind == "SkillRevisionsAdopted")
+            .expect("recorded");
+        assert_eq!(adoption.payload["transitions"], json!(["alpha"]));
         app.shutdown().await;
     });
 }

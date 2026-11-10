@@ -953,7 +953,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 crate::instruction_guard::InstructionGuard::new(
                     store.clone(),
                     index_supervisor.as_ref().map(|ix| ix.env().source.clone()),
-                ),
+                )
+                .with_skills(instructions.clone()),
             ));
             let connections = use_cases.connection_service().ok_or_else(|| {
                 BootError::Composition(StorageError::unavailable(
@@ -1605,19 +1606,49 @@ impl Runtime {
         if adopted.is_some_and(|a| a.digest == current.digest) {
             return Ok((current, false));
         }
-        let transitions = match adopted {
-            Some(previous) => current.transitions(previous),
-            None => current.skills.iter().map(|s| s.name.clone()).collect(),
+        self.record_skill_adoption(
+            ctx,
+            session_id,
+            adopted.and_then(|a| a.stamp()).as_ref(),
+            current.stamp().as_ref(),
+        )?;
+        Ok((current, true))
+    }
+    /// Appends the `SkillRevisionsAdopted` session event of a skill-set change.
+    fn record_skill_adoption(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        before: Option<&devworks_core::providers::instructions::SkillStamp>,
+        after: Option<&devworks_core::providers::instructions::SkillStamp>,
+    ) -> Result<(), StorageError> {
+        let names = |s: Option<&devworks_core::providers::instructions::SkillStamp>| {
+            s.map(|s| {
+                s.skills
+                    .iter()
+                    .map(|e| (e.name.clone(), (e.instruction_id.clone(), e.revision)))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            })
+            .unwrap_or_default()
         };
+        let (old, new) = (names(before), names(after));
+        let transitions: Vec<String> = old
+            .keys()
+            .chain(new.keys())
+            .filter(|n| old.get(*n) != new.get(*n))
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let payload = serde_json::json!({
-            "digest": current.digest,
-            "previousDigest": adopted.map(|a| a.digest.clone()),
-            "skills": current.skills.iter().map(|s| serde_json::json!({
-                "name": s.name, "instructionId": s.instruction_id.as_str(), "rootId": s.root_id,
-                "revision": s.revision, "contentDigest": s.content_digest,
-            })).collect::<Vec<_>>(),
+            "digest": after.map(|s| s.digest.clone()),
+            "previousDigest": before.map(|s| s.digest.clone()),
+            "skills": after.map(|s| s.skills.iter().map(|e| serde_json::json!({
+                "name": e.name, "instructionId": e.instruction_id.as_str(), "rootId": e.root_id,
+                "revision": e.revision, "contentDigest": e.content_digest,
+            })).collect::<Vec<_>>()).unwrap_or_default(),
             "transitions": transitions,
-            "conflicts": current.conflicts,
+            "conflicts": after.map(|s| s.conflicts.clone()).unwrap_or_default(),
         });
         let (session, actor) = (session_id.clone(), ctx.principal().clone());
         devworks_core::ports::storage::run_write(
@@ -1650,9 +1681,9 @@ impl Runtime {
                     })?;
                 Ok(())
             },
-        )?;
-        Ok((current, true))
+        )
     }
+
     /// The skill set a running agent adopts at its next safe step: sources are observed first,
     /// so a saved, approved or externally changed skill is current; unapproved proposals are
     /// never included. The caller records the returned digest and revisions in its session and
@@ -2066,9 +2097,21 @@ impl Runtime {
         let old_count: usize = old.iter().map(|stamp| stamp.sources.len()).sum();
         base.instructions
             .truncate(base.instructions.len() - old_count);
+        let old_skills = base.skill_stamp.take();
+        if old_skills.is_some() {
+            base.instructions.pop();
+        }
         let rebound = self.bind_provider_instructions(ctx, base, targets)?;
-        if rebound.instruction_stamps == old {
+        if rebound.instruction_stamps == old && rebound.skill_stamp == old_skills {
             return Ok(source.artifact);
+        }
+        if rebound.skill_stamp != old_skills {
+            self.record_skill_adoption(
+                ctx,
+                session_id,
+                old_skills.as_ref(),
+                rebound.skill_stamp.as_ref(),
+            )?;
         }
         let next_binding = devworks_core::protocol::provider::NativeBinding {
             context_epoch: devworks_core::protocol::Counter::new(
@@ -2144,6 +2187,22 @@ impl Runtime {
         .resolve(ctx, repository_id, target_paths)
     }
 
+    /// The provider dispatch gate for instruction material, as the provider driver applies it:
+    /// repository guidance and the skill set bound to `context` must still be current.
+    pub fn verify_instruction_context(
+        &self,
+        ctx: &InvocationContext,
+        context: &devworks_core::providers::context::ProviderContext,
+        targets: Option<&[(Id, Vec<String>)]>,
+    ) -> Result<(), StorageError> {
+        crate::instruction_guard::InstructionGuard::new(
+            self.store.clone(),
+            self.indexing.as_ref().map(|ix| ix.env().source.clone()),
+        )
+        .with_skills(self.instructions.clone())
+        .verify(ctx, context, targets)
+    }
+
     /// Compose the effective instruction prefix and its exact source stamps for one provider
     /// request. The trusted turn caller supplies its authorized repository and target paths;
     /// an empty path set means repository-root guidance only.
@@ -2189,6 +2248,14 @@ impl Runtime {
             };
             bundles.push(self.effective_instructions(ctx, repository, &scope)?);
         }
+        let base = match crate::instruction_guard::InstructionGuard::new(self.store.clone(), None)
+            .with_skills(self.instructions.clone())
+            .current_skills()?
+        {
+            Some(stamp) => devworks_core::providers::instructions::bind_skills(base, stamp)
+                .map_err(|e| StorageError::InvalidRecord(format!("skill binding: {e:?}")))?,
+            None => base,
+        };
         devworks_core::providers::instructions::bind_context(base, &bundles)
             .map_err(|error| StorageError::InvalidRecord(format!("instruction binding: {error:?}")))
     }

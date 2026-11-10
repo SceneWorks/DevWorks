@@ -98,6 +98,87 @@ impl InstructionStamp {
     }
 }
 
+/// The effective skill set bound into a provider context: the exact revisions an agent adopted
+/// at its last safe step. A changed set is a new adoption boundary (a new context epoch).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkillStamp {
+    /// SHA-256 over the ordered set (and its unresolved conflicts).
+    pub digest: String,
+    pub skills: Vec<SkillStampEntry>,
+    /// Case-folded names of unresolved same-precedence conflicts (none of them is in effect).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkillStampEntry {
+    pub name: String,
+    pub instruction_id: Id,
+    pub root_id: String,
+    pub revision: i64,
+    pub content_digest: String,
+}
+impl SkillStamp {
+    pub fn validate(&self) -> bool {
+        let digest = |v: &str| v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit());
+        digest(&self.digest)
+            && self.skills.len() <= 512
+            && self.conflicts.len() <= 512
+            && self.skills.iter().all(|s| {
+                !s.name.is_empty()
+                    && s.name.chars().count() <= 128
+                    && !s.name.contains('\n')
+                    && s.revision >= 1
+                    && digest(&s.content_digest)
+                    && !s.root_id.is_empty()
+                    && s.root_id.len() <= 128
+            })
+            && self
+                .conflicts
+                .iter()
+                .all(|c| !c.is_empty() && c.chars().count() <= 128 && !c.contains('\n'))
+    }
+    /// The catalog block a provider context carries for this set.
+    pub fn text_block(&self) -> TextBlock {
+        let mut text = format!(
+            "Available skills (revision set sha256 {}). Read a skill with skills.read and its files \
+             with skills.resources; a skill grants no tools or permissions.\n",
+            self.digest
+        );
+        for s in &self.skills {
+            text.push_str(&format!(
+                "- {} ({}, revision {}, sha256 {}, id {})\n",
+                s.name,
+                s.root_id,
+                s.revision,
+                s.content_digest,
+                s.instruction_id.as_str()
+            ));
+        }
+        for c in &self.conflicts {
+            text.push_str(&format!("- unresolved conflict, not in effect: {c}\n"));
+        }
+        TextBlock { text, cache: None }
+    }
+}
+
+/// Binds the effective skill set after the role prefix and before repository guidance.
+pub fn bind_skills(
+    mut base: crate::providers::context::ProviderContext,
+    stamp: SkillStamp,
+) -> Result<crate::providers::context::ProviderContext, crate::providers::ProviderError> {
+    if base.skill_stamp.is_some() || !base.instruction_stamps.is_empty() {
+        return Err(crate::providers::ProviderError::InvalidInput(
+            "skills_already_bound",
+        ));
+    }
+    base.instructions.push(stamp.text_block());
+    base.skill_stamp = Some(stamp);
+    base.validate()?;
+    Ok(base)
+}
+
 /// The stamp is evidence only when its rendered instruction suffix contains the exact bytes
 /// whose digests it claims. Role instructions precede that suffix and remain separate.
 pub fn stamps_match_context(instructions: &[TextBlock], stamps: &[InstructionStamp]) -> bool {
@@ -434,6 +515,7 @@ mod tests {
                 cache: None,
             }],
             instruction_stamps: vec![],
+            skill_stamp: None,
             messages: vec![Message {
                 role: MessageRole::User,
                 content: vec![ContentBlock::Text {

@@ -10,13 +10,41 @@ use std::sync::Arc;
 pub(crate) struct InstructionGuard {
     store: Arc<dyn ApplicationStore>,
     source: Option<Arc<dyn SourceTree>>,
+    skills: Option<Arc<devworks_core::services::instructions::InstructionService>>,
 }
 impl InstructionGuard {
     pub(crate) fn new(
         store: Arc<dyn ApplicationStore>,
         source: Option<Arc<dyn SourceTree>>,
     ) -> Self {
-        Self { store, source }
+        Self {
+            store,
+            source,
+            skills: None,
+        }
+    }
+    /// Also gate dispatch on the effective skill set when skills are composed.
+    pub(crate) fn with_skills(
+        mut self,
+        skills: Option<Arc<devworks_core::services::instructions::InstructionService>>,
+    ) -> Self {
+        self.skills = skills;
+        self
+    }
+    /// The skill stamp a context must carry now (`None`: no skills in effect).
+    pub(crate) fn current_skills(
+        &self,
+    ) -> Result<Option<devworks_core::providers::instructions::SkillStamp>, StorageError> {
+        let Some(service) = &self.skills else {
+            return Ok(None);
+        };
+        service.sync()?;
+        let set = devworks_core::ports::storage::read_snapshot(
+            self.store.as_ref(),
+            &devworks_core::ports::storage::ReadOptions::default(),
+            |read| devworks_core::services::instructions::effective_skills(read.instructions()),
+        )?;
+        Ok(set.stamp())
     }
 
     pub(crate) fn verify(
@@ -108,6 +136,14 @@ impl InstructionGuard {
                     "repository guidance is not bound to this context",
                 ));
             }
+        }
+        // Saved, approved or externally changed skills are adopted at a safe boundary: a context
+        // bound to another skill set (or none while skills are in effect) is not dispatched.
+        if self.skills.is_some() && context.skill_stamp != self.current_skills()? {
+            return Err(StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "skills changed before provider dispatch",
+            ));
         }
         for stamp in &context.instruction_stamps {
             let current = self.resolve(ctx, &stamp.repository_id, &stamp.targets)?;
