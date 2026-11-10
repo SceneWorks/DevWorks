@@ -978,13 +978,17 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
             input: &decoded.input,
             fingerprint: &decoded.fingerprint,
         };
-        assert!(matches!(
-            fx.authority().decide(ctx, &request),
-            Err(auth::Denied {
-                reason: devworks_core::authority::DenialReason::OutOfAssignmentScope,
-                ..
-            })
-        ));
+        let decision = fx.authority().decide(ctx, &request);
+        assert!(
+            matches!(
+                &decision,
+                Err(auth::Denied {
+                    reason: devworks_core::authority::DenialReason::OutOfAssignmentScope,
+                    ..
+                })
+            ),
+            "{operation}: {decision:?}"
+        );
     };
     denied_scope(
         &coordinator,
@@ -1011,6 +1015,35 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
             "headRef":"refs/heads/codex/task-a","baseRef":"refs/heads/main",
             "expectedHead":{"format":"Sha1","hex":"0123456789abcdef0123456789abcdef01234567"},
             "description":sibling.clone()}}),
+    );
+    let schema = descriptor("tools.overrides").unwrap().schema_ref();
+    fx.write(move |tx| {
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            "settings",
+            1,
+            1,
+            json!({"values":{"tools.overrides":{"schema":schema,"value":{
+                "devworks/browser.navigate":true,"devworks/browser.upload":true}}}}),
+        )?;
+        Ok(())
+    });
+    denied_scope(
+        &worker,
+        "browser.navigate",
+        Mode::Command,
+        json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"cross-root-browser-page",
+            "body":{"kind":"browser.navigate","sessionId":"scope-worker-session",
+            "expectedRevision":"1","location":{"kind":"Artifact","artifact":sibling.clone()}}}),
+    );
+    denied_scope(
+        &worker,
+        "browser.upload",
+        Mode::Command,
+        json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"cross-root-browser-upload",
+            "body":{"kind":"browser.upload","node":{"target":{"sessionId":"scope-worker-session",
+            "targetId":"browser-target","frameId":"browser-frame","documentRevision":"1"},
+            "nodeId":"file-input","snapshotRevision":"1"},"files":[sibling.clone()]}}),
     );
     let sessions = UseCases::new().with_sessions(Arc::new(
         devworks_core::services::sessions::SessionService::new(fx.h.ids.clone(), fx.store.clone()),
@@ -1171,6 +1204,48 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
         .with_session(id("scope-primary-session"))
         .with_activation(id("scope-worker-execution"), 1);
     fx.source(
+        "session-delivery-source",
+        "session-delivery.txt",
+        b"session delivery",
+        SourceOrigin::default(),
+    );
+    let session_delivery = saved(fx.save(
+        &sibling_user,
+        "project-a",
+        "Session delivery",
+        "text/plain",
+        "session-delivery-source",
+        b"session delivery",
+    ))
+    .artifact;
+    assert_eq!(
+        fault(fx.query(
+            &coordinator,
+            "artifacts.read",
+            version_query("Read", &session_delivery),
+            None
+        ))
+        .code,
+        DomainErrorCode::PermissionDenied
+    );
+    let delivered_version = session_delivery.version_id.clone();
+    fx.write(move |tx| {
+        tx.artifacts().add_link(&ArtifactLink {
+            version_id: delivered_version,
+            subject: SubjectKey::session(&id("scope-primary-session")),
+            purpose: LinkPurpose::Reference,
+        })
+    });
+    assert!(matches!(
+        fx.query(
+            &coordinator,
+            "artifacts.read",
+            version_query("Read", &session_delivery),
+            None
+        ),
+        DomainQueryReply::Result { .. }
+    ));
+    fx.source(
         "coordinator-source",
         "coordinator.txt",
         b"coordinator",
@@ -1262,6 +1337,34 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
             },
         )
     });
+    // A completed membership handoff keeps the assignment identity and the artifact's
+    // original provenance, while moving the live assignment and session to the new root.
+    fx.h.raw()
+        .execute(
+            "UPDATE assignments SET root_id='root-c' WHERE id='scope-worker'",
+            [],
+        )
+        .unwrap();
+    fx.h.raw()
+        .execute(
+            "UPDATE sessions SET root_id='root-c' WHERE id='scope-worker-session'",
+            [],
+        )
+        .unwrap();
+    let transferred_worker = worker.clone().with_lineage(
+        Some(project("project-a")),
+        Some(RootId(id("root-c"))),
+        Some(devworks_core::protocol::AssignmentId(id("scope-worker"))),
+    );
+    assert!(matches!(
+        fx.query(
+            &transferred_worker,
+            "artifacts.read",
+            version_query("Read", &own),
+            None
+        ),
+        DomainQueryReply::Result { .. }
+    ));
     fx.write(|tx| {
         let id = devworks_core::protocol::AssignmentId(id("scope-worker"));
         let before = tx.runs().assignment(&id)?.unwrap();

@@ -6,7 +6,7 @@ use super::policy::{
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::operations::{
-    OperationInput, approvals, artifacts, features, git, history, issues, next_work, runs,
+    OperationInput, approvals, artifacts, browser, features, git, history, issues, next_work, runs,
     sessions, tasks,
 };
 use crate::ports::storage::{
@@ -20,6 +20,7 @@ use crate::ports::{
 };
 use crate::protocol::data::{ArtifactCommand, ArtifactDeletion, ArtifactQuery, GitCommand};
 use crate::protocol::provider::UserContent;
+use crate::protocol::records::BrowserLocation;
 use crate::protocol::{ActorId, EventId, Id, ProjectId, RootId, Subject};
 use crate::registry::{self, Mode};
 use crate::settings::catalog::AgentRole;
@@ -326,15 +327,20 @@ fn agent_assignment_scope(
             | OperationInput::History(_)
             | OperationInput::Indexing(_)
             | OperationInput::Git(git::Input::Commit(_) | git::Input::PullRequest(_))
+            | OperationInput::Browser(browser::Input::Navigate(_) | browser::Input::Upload(_))
             | OperationInput::Sessions(sessions::Input::AppendMessage(_))
     ) {
         return Ok(());
     }
-    // A root lineage without a delegated assignment retains the pre-existing project artifact,
-    // reviewed-job and approval policies. New coordinator/Worker turns carry an assignment below.
+    // A root lineage without a delegated assignment retains the pre-existing policies.
+    // New coordinator/Worker turns carry an assignment below.
     if matches!(
         request.input,
-        OperationInput::Artifacts(_) | OperationInput::Jobs(_) | OperationInput::Approvals(_)
+        OperationInput::Artifacts(_)
+            | OperationInput::Jobs(_)
+            | OperationInput::Approvals(_)
+            | OperationInput::Git(git::Input::Commit(_) | git::Input::PullRequest(_))
+            | OperationInput::Browser(browser::Input::Navigate(_) | browser::Input::Upload(_))
     ) && assignment.is_none()
     {
         return Ok(());
@@ -391,9 +397,9 @@ fn agent_assignment_scope(
             .artifact(id)
             .map_err(|_| DenialReason::AuthorityUnavailable)?;
         Ok(artifact.is_some_and(|a| {
-            a.origin_work_id.as_ref() == Some(root)
-                && (coordinator
-                    || a.provenance["assignmentId"].as_str() == Some(assignment_id.0.as_str()))
+            a.origin_project_id.as_ref() == ctx.project_id()
+                && (a.provenance["assignmentId"].as_str() == Some(assignment_id.0.as_str())
+                    || coordinator && a.origin_work_id.as_ref() == Some(root))
         }))
     };
     let readable_artifact = |id: &Id, version: &Id| -> Result<bool, DenialReason> {
@@ -409,6 +415,7 @@ fn agent_assignment_scope(
                 continue;
             }
             if link.subject.kind == "root" && scoped(&link.subject.id)?
+                || link.subject.kind == "session" && link.subject.id == assignment.session_id
                 || link.subject.kind == "assignment"
                     && (link.subject.id == assignment_id.0
                         || coordinator
@@ -439,7 +446,8 @@ fn agent_assignment_scope(
         }
         OperationInput::Git(git::Input::Commit(input)) => match &input.command {
             GitCommand::Commit { message, .. } => {
-                readable_artifact(&message.artifact_id, &message.version_id)?
+                ctx.reviewed_operation().is_some()
+                    || readable_artifact(&message.artifact_id, &message.version_id)?
             }
             _ => false,
         },
@@ -449,6 +457,19 @@ fn agent_assignment_scope(
             }
             _ => false,
         },
+        OperationInput::Browser(browser::Input::Navigate(input)) => match &input.location {
+            BrowserLocation::Artifact { artifact } => {
+                readable_artifact(&artifact.artifact_id, &artifact.version_id)?
+            }
+            _ => true,
+        },
+        OperationInput::Browser(browser::Input::Upload(input)) => {
+            input.files.0.iter().try_fold(true, |allowed, artifact| {
+                Ok::<_, DenialReason>(
+                    allowed && readable_artifact(&artifact.artifact_id, &artifact.version_id)?,
+                )
+            })?
+        }
         OperationInput::History(input) => {
             let history_scoped = |id: &RootId| {
                 if !coordinator && id == root && assignment.work_id != *root {
