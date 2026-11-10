@@ -748,6 +748,25 @@ impl AgentService {
         if input.instruction.0.trim().is_empty() {
             return Err(Refusal::new(DomainErrorCode::InvalidArgument, "instruction", None).into());
         }
+        if parent_role == AgentRole::Worker {
+            let parent_assignment = tx.runs().assignment(&parent)?.ok_or_else(denied)?;
+            let parent_tasks: Vec<crate::protocol::Id> =
+                serde_json::from_value(parent_context.task_ids.clone())
+                    .map_err(|_| StorageError::InvalidRecord("invalid parent task scope".into()))?;
+            if input.task_ids.0.is_empty() && parent_assignment.work_id != root.id {
+                return Err(Refusal::new(DomainErrorCode::PermissionDenied, "task", None).into());
+            }
+            for task in &input.task_ids.0 {
+                if task != &parent_assignment.work_id.0 && !parent_tasks.contains(task) {
+                    return Err(Refusal::new(
+                        DomainErrorCode::PermissionDenied,
+                        "task",
+                        Some(task.clone()),
+                    )
+                    .into());
+                }
+            }
+        }
         for task in &input.task_ids.0 {
             let work = tx
                 .sessions()

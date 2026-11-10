@@ -1741,7 +1741,7 @@ fn feature_delegate_binds_single_task_as_child_work_scope() {
             Some(rid("root-f")),
             Some(primary.assignment_id),
         )
-        .with_activation(activation.id, epoch);
+        .with_activation(activation.id.clone(), epoch);
     let request = devworks_core::operations::agents::DelegateInput {
         root_id: rid("root-f"),
         expected_control_revision: Revision::new(fx.control("root-f").revision).unwrap(),
@@ -1770,6 +1770,68 @@ fn feature_delegate_binds_single_task_as_child_work_scope() {
     })
     .unwrap();
     assert!(delivery.handed_over);
+    let human = fx.user.clone();
+    let sibling = fx.tx(move |_, tx| {
+        devworks_core::services::agents::retained::post_message(
+            tx,
+            &human,
+            &devworks_core::services::agents::retained::PostSpec {
+                project: ProjectId(id("project-a")),
+                body: "Private sibling task question".into(),
+                kind: devworks_core::services::agents::retained::MessageKind::Question,
+                item: Some(rid("task-f2")),
+                feature: None,
+                resource: None,
+                to_session: None,
+                to_human: false,
+                blocking: false,
+                in_reply_to: None,
+                resolves: None,
+                idempotency_key: None,
+            },
+        )
+    });
+    assert_eq!(sibling.recipients, 0);
+    let child_session = read(&*fx.store, |snapshot| {
+        snapshot.sessions().session(&assignment.session_id)
+    })
+    .unwrap();
+    let child_agent = devworks_core::context::HostIngress::new(&*fx.store)
+        .context(
+            child_session.agent_id,
+            PrincipalKind::Agent,
+            id("delegate-sibling"),
+            id("delegate-ingress"),
+            devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(child_session.id)
+        .with_lineage(
+            Some(ProjectId(id("project-a"))),
+            Some(rid("root-f")),
+            Some(child.assignment_id),
+        )
+        .with_activation(activation.id, epoch);
+    let sibling_request = devworks_core::operations::agents::DelegateInput {
+        root_id: rid("root-f"),
+        expected_control_revision: Revision::new(fx.control("root-f").revision).unwrap(),
+        task_ids: devworks_core::protocol::support::BoundedList(vec![id("task-f2")]),
+        role_id: id("worker"),
+        instruction: devworks_core::protocol::support::BoundedText("Read sibling task".into()),
+        source_checkpoint_id: None,
+    };
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let mut unscoped_request = sibling_request.clone();
+    unscoped_request.task_ids = devworks_core::protocol::support::BoundedList(vec![]);
+    let unscoped_agent = child_agent.clone();
+    assert!(fx.tx(move |_, tx| {
+        Ok(agents
+            .delegate(tx, &unscoped_agent, &unscoped_request)
+            .is_err())
+    }));
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    assert!(fx.tx(move |_, tx| Ok(agents.delegate(tx, &child_agent, &sibling_request).is_err())));
+    assert_eq!(fx.inspection("root-f").assignments.len(), 2);
 }
 
 struct DelegatingCoordinator {
