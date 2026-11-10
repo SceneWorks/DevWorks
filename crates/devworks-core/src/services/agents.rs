@@ -113,21 +113,21 @@ fn sender_can_read_attachment(
     };
     let assignment = tx.runs().assignment(sender)?.ok_or_else(denied)?;
     let coordinator = assignment.parent_id.is_none();
-    if tx
-        .artifacts()
-        .artifact(&reference.artifact_id)?
-        .is_some_and(|artifact| {
-            artifact.origin_work_id.as_ref() == Some(root)
-                && (coordinator
-                    || artifact.provenance["assignmentId"].as_str() == Some(sender.0.as_str()))
-        })
-    {
-        return Ok(true);
-    }
     let context = tx
         .runs()
         .agent_assignment_context(sender)?
         .ok_or_else(denied)?;
+    if tx
+        .artifacts()
+        .artifact(&reference.artifact_id)?
+        .is_some_and(|artifact| {
+            artifact.origin_project_id.as_ref() == Some(&context.project_id)
+                && (artifact.provenance["assignmentId"].as_str() == Some(sender.0.as_str())
+                    || coordinator && artifact.origin_work_id.as_ref() == Some(root))
+        })
+    {
+        return Ok(true);
+    }
     let task_ids: Vec<Id> = serde_json::from_value(context.task_ids)
         .map_err(|_| StorageError::InvalidRecord("assignment task scope".into()))?;
     for link in tx.artifacts().links(&reference.artifact_id)? {
@@ -138,6 +138,7 @@ fn sender_can_read_attachment(
         }
         if link.subject.kind == "root"
             && sender_scopes_root_subject(tx, &assignment, &task_ids, root, &link.subject.id)?
+            || link.subject.kind == "session" && link.subject.id == assignment.session_id
             || link.subject.kind == "assignment"
                 && (link.subject.id == sender.0
                     || coordinator
