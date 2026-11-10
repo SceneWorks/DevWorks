@@ -890,6 +890,34 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
         })
     };
     assert!(oversized.is_err(), "oversized catalog was retained");
+    // The host sampling entry does not take one of the 500 remote catalog slots.
+    let tools = |count: usize| RemoteCatalog {
+        tools: (0..count)
+            .map(|index| RemoteTool {
+                name: format!("bounded-{index}"),
+                description: String::new(),
+                input_schema: json!({"type":"object"}),
+                output_schema: None,
+                read_only_hint: false,
+            })
+            .collect(),
+        resources: vec![],
+        prompts: vec![],
+    };
+    for (count, accepted) in [(501, false), (500, true)] {
+        let service = service.clone();
+        let server_id = server.id.clone();
+        let published = run_write(&*store, WriteOptions::default(), move |tx| {
+            service.publish_remote_catalog(
+                tx,
+                &ConfigScope::Workspace,
+                &server_id,
+                &Revision::new(3).unwrap(),
+                tools(count),
+            )
+        });
+        assert_eq!(published.is_ok(), accepted, "{count} remote entries");
+    }
 }
 
 #[test]

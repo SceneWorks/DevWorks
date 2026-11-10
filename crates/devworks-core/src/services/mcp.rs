@@ -1512,7 +1512,14 @@ impl McpClientService {
                 current: server.public.catalog_revision.clone(),
             })));
         }
-        if capabilities.len() > 500 {
+        // The 500-entry bound applies to remote entries; the one host sampling entry is extra.
+        let sampling_id = capability_id(server_id, SAMPLING_KIND, SAMPLING_NAME)?;
+        if capabilities
+            .iter()
+            .filter(|capability| capability.id != sampling_id)
+            .count()
+            > 500
+        {
             return Err(StorageError::InvalidRecord(
                 "MCP catalog exceeds page bound".into(),
             ));
@@ -1535,6 +1542,7 @@ impl McpClientService {
                 )
                 || (capability.kind.0 != "resource"
                     && !wire_names.insert((capability.kind.0.as_str(), capability.name.0.as_str())))
+                || ((capability.kind.0 == SAMPLING_KIND) != (capability.id == sampling_id))
                 || capability.check().is_err()
         }) {
             return Err(StorageError::InvalidRecord(
