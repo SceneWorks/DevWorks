@@ -7,7 +7,7 @@ use devworks_core::{
     fingerprint::sha256_hex,
     ports::{IdKind, storage::*},
     protocol::{
-        AttemptId, CONTRACT, CommandReply, Id, OperationId, RetryAdvice, Revision,
+        AttemptId, CONTRACT, CommandReply, Id, OperationId, OperationState, RetryAdvice, Revision,
         provider::{
             ArtifactRef, CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody,
         },
@@ -1844,12 +1844,30 @@ pub(crate) fn record_operation_update(
             .operations()
             .operation(operation_id)?
             .ok_or(StorageError::ScopeDenied)?;
-        Ok((operation.state, operation.revision))
+        let remote_content = (operation.capability == "mcp.tool"
+            && operation.state == OperationState::ObservedComplete)
+            .then(|| {
+                operation
+                    .latest_attempt()?
+                    .observations
+                    .iter()
+                    .rev()
+                    .filter_map(|observation| {
+                        observation
+                            .get("effect")
+                            .or_else(|| observation.get("reconciliation"))
+                    })
+                    .find(|effect| effect["outcome"] == "completed")
+                    .and_then(|effect| effect.get("evidence").cloned())
+            })
+            .flatten();
+        Ok((operation.state, operation.revision, remote_content))
     })?;
     let bytes = serde_json::to_vec(&json!({
         "operationId": operation_id,
         "revision": observed.1,
         "state": observed.0,
+        "untrustedRemoteContent": observed.2,
     }))
     .map_err(invalid)?;
     let staged = artifacts
@@ -1913,7 +1931,7 @@ pub(crate) fn record_operation_update(
             .operations()
             .operation(&operation_for_write)?
             .ok_or(StorageError::ScopeDenied)?;
-        if (operation.state, operation.revision) != observed {
+        if (operation.state, operation.revision) != (observed.0, observed.1) {
             return Err(StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
                 "tool operation changed during update publication",

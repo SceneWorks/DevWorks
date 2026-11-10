@@ -193,6 +193,35 @@ impl RegisteredSchemas {
         })
     }
 
+    /// The provider caller's full currently selected, durably dispatchable inventory. Keep
+    /// external aliases behind the same selection and authority check as the tool dispatcher.
+    pub fn selected_agent_tools(
+        &self,
+        ctx: &InvocationContext,
+    ) -> Result<Vec<ToolSchema>, StorageError> {
+        let mut tools = self.selected_builtins(ctx)?;
+        if self.cases.mcp_service().is_some() {
+            tools.extend(self.selected_mcp_tools(ctx)?);
+        }
+        tools.sort_by(|a, b| {
+            a.capability_id
+                .as_str()
+                .cmp(b.capability_id.as_str())
+                .then_with(|| a.wire_name.cmp(&b.wire_name))
+        });
+        let mut names = std::collections::HashSet::new();
+        let mut ids = std::collections::HashSet::new();
+        if tools
+            .iter()
+            .any(|tool| !names.insert(&tool.wire_name) || !ids.insert(tool.capability_id.as_str()))
+        {
+            return Err(StorageError::InvalidRecord(
+                "ambiguous selected agent tool".into(),
+            ));
+        }
+        Ok(tools)
+    }
+
     fn selected_mcp_materials(
         &self,
         ctx: &InvocationContext,

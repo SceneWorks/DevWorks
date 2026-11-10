@@ -28,7 +28,7 @@ use crate::services::artifacts::ArtifactService;
 use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 mod content;
 
@@ -131,6 +131,50 @@ fn current(
     let config = serde_json::from_value(revision.body)
         .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
     Ok((revision.revision, config))
+}
+
+/// Credential handles retained by current outgoing MCP server configurations. The connection
+/// owner's secret collector shares this namespace and must include these references.
+pub fn credential_references(read: &dyn ReadSnapshot) -> Result<BTreeSet<String>, StorageError> {
+    use crate::ports::storage::{ACTIVE, ARCHIVED, DELETED, ProjectFilter, ProjectPosition};
+    let mut references = BTreeSet::new();
+    let mut scopes = vec![ConfigScope::Workspace];
+    let mut after: Option<ProjectPosition> = None;
+    loop {
+        let projects = read.projects().projects(
+            &ProjectFilter {
+                only: None,
+                lifecycles: vec![ACTIVE.into(), ARCHIVED.into(), DELETED.into()],
+            },
+            after.as_ref(),
+            500,
+        )?;
+        scopes.extend(
+            projects
+                .iter()
+                .map(|project| ConfigScope::Project(project.id.clone())),
+        );
+        if projects.len() < 500 {
+            break;
+        }
+        after = projects.last().map(|project| ProjectPosition {
+            created_at_ms: project.created_at_ms,
+            id: project.id.clone(),
+        });
+    }
+    for scope in scopes {
+        let (_, configuration) = current(read.configuration(), &scope)?;
+        for server in configuration.servers {
+            if let McpTransport::Http {
+                credential_ref: Some(handle),
+                ..
+            } = server.transport
+            {
+                references.insert(handle.as_str().to_owned());
+            }
+        }
+    }
+    Ok(references)
 }
 
 fn page<T: Clone>(
@@ -986,18 +1030,17 @@ impl McpClientService {
         server: StoredServer,
         context: InvocationContext,
     ) -> McpEffectOutcome {
-        let mut discovery = native.remote.discover(&server_id);
-        if matches!(discovery, Err(McpRemoteFault::Unreachable)) {
-            let endpoint = McpEndpoint {
-                server_id: server_id.clone(),
-                scope: scope.clone(),
-                transport: server.transport,
-            };
-            discovery = native
-                .remote
-                .connect(&context, &endpoint)
-                .and_then(|_| native.remote.discover(&server_id));
-        }
+        // A saved transport may have changed while the native session stayed alive. Reconnect
+        // under the current revision fence before reading a catalog from that server ID.
+        let endpoint = McpEndpoint {
+            server_id: server_id.clone(),
+            scope: scope.clone(),
+            transport: server.transport,
+        };
+        let discovery = native
+            .remote
+            .connect(&context, &endpoint)
+            .and_then(|_| native.remote.discover(&server_id));
         let catalog = match discovery {
             Ok(catalog) => catalog,
             Err(fault) => {
@@ -1651,7 +1694,7 @@ impl McpClientService {
             event_id: event,
             root_id: ctx.root_id().cloned(),
             operation_id: Some(operation.clone()),
-            partition: Some(format!("mcp:{}", input.server_id.as_str())),
+            partition: None,
             priority: 0,
             ready_at_ms: now,
             payload: json!({"serverId":input.server_id}),
@@ -1751,7 +1794,7 @@ impl McpClientService {
             event_id: event,
             root_id: ctx.root_id().cloned(),
             operation_id: Some(operation.clone()),
-            partition: Some(format!("mcp:{}", input.server_id.as_str())),
+            partition: None,
             priority: 0,
             ready_at_ms: now,
             payload: json!({"serverId":input.server_id}),

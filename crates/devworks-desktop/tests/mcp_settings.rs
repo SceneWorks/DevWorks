@@ -2,8 +2,11 @@
 mod common;
 use common::*;
 use devworks_core::ports::secrets::SessionSecrets;
-use devworks_core::ports::storage::{StoredProject, WriteOptions, run_write};
+use devworks_core::ports::storage::{
+    ReadOptions, StoredProject, WriteOptions, read_snapshot, run_write,
+};
 use devworks_core::protocol::{Id, ProjectId};
+use devworks_core::services::mcp::credential_references;
 use devworks_core::settings::catalog::Category;
 use devworks_desktop::host::Engine;
 use eframe::egui::accesskit::Role;
@@ -55,6 +58,13 @@ fn settings_adds_and_lists_an_outgoing_mcp_server() {
     );
     assert!(h.state().settings.mcp.selected.is_some());
     assert_eq!(secrets.len(), 1);
+    let references = read_snapshot(
+        &**engine.host().runtime().store(),
+        &ReadOptions::default(),
+        credential_references,
+    )
+    .expect("saved MCP credential references");
+    assert_eq!(references.len(), 1);
 }
 
 #[test]

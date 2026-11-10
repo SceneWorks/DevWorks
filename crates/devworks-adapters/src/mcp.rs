@@ -6,13 +6,14 @@ use devworks_core::ports::mcp::{
     McpEndpoint, McpRemote, McpRemoteFault, RemoteCatalog, RemotePrompt, RemoteResource, RemoteTool,
 };
 use devworks_core::ports::process::ProcessSpec;
-use devworks_core::ports::secrets::{SecretKey, SecretStore};
+use devworks_core::ports::secrets::{Secret, SecretKey, SecretStore};
 use devworks_core::protocol::Id;
 use devworks_core::protocol::records::McpTransport;
 use devworks_core::services::process::tools::{BindingRefusal, ToolBindings};
 use devworks_core::services::process::{
     LaunchPolicy, LaunchRequest, OwnedProcess, ProcessSupervisor,
 };
+use devworks_core::services::router::connections::auth::Credential;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, ClientConfig, GetPromptRequestParams,
     GetPromptResponse, PaginatedRequestParams, Prompt, ReadResourceRequestParams,
@@ -130,10 +131,11 @@ impl NativeMcpClients {
                             .ok_or(McpRemoteFault::MissingCredential)
                     })
                     .transpose()?;
+                let bearer = mcp_bearer(secret.as_ref())?;
                 self.runtime
                     .block_on(McpWireSession::http(
                         &endpoint.0,
-                        secret.as_ref().map(|s| s.expose()),
+                        bearer.as_ref().map(|s| s.expose()),
                     ))
                     .map_err(map_connect_fault)
             }
@@ -196,6 +198,15 @@ fn bounded_result(result: &impl serde::Serialize) -> Result<serde_json::Value, C
         return Err(ConnectFault::TooLarge);
     }
     serde_json::from_slice(&bytes).map_err(|_| ConnectFault::Protocol)
+}
+
+fn mcp_bearer(stored: Option<&Secret>) -> Result<Option<Secret>, McpRemoteFault> {
+    stored
+        .map(|value| match Credential::parse(value) {
+            Some(Credential::ApiKey(key)) => Ok(key),
+            _ => Err(McpRemoteFault::MissingCredential),
+        })
+        .transpose()
 }
 
 impl McpRemote for NativeMcpClients {
@@ -652,6 +663,18 @@ async fn connect_pipes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_bearer_uses_only_the_key_from_a_staged_credential() {
+        let stored = Credential::ApiKey(Secret::new("mcp-test-token")).to_secret();
+        let bearer = mcp_bearer(Some(&stored)).unwrap().unwrap();
+        assert_eq!(bearer.expose(), "mcp-test-token");
+        assert!(mcp_bearer(None).unwrap().is_none());
+        assert_eq!(
+            mcp_bearer(Some(&Secret::new("unrecognized secret"))).err(),
+            Some(McpRemoteFault::MissingCredential)
+        );
+    }
 
     struct EmptyServer;
     impl rmcp::ServerHandler for EmptyServer {

@@ -1581,7 +1581,11 @@ impl ConnectionService {
         if handles.is_empty() {
             return;
         }
-        let Ok(refs) = self.read(|s| referenced(s.router())) else {
+        let Ok(refs) = self.read(|s| {
+            let mut refs = referenced(s.router())?;
+            refs.extend(crate::services::mcp::credential_references(s)?);
+            Ok(refs)
+        }) else {
             return;
         };
         for h in handles {
@@ -1599,7 +1603,11 @@ impl ConnectionService {
         let now = self.now();
         let listed = self.noted(self.secrets.list(&self.namespace()))?;
         let refs = self
-            .read(|s| referenced(s.router()))
+            .read(|s| {
+                let mut refs = referenced(s.router())?;
+                refs.extend(crate::services::mcp::credential_references(s)?);
+                Ok(refs)
+            })
             .map_err(|e| SecretError::Failed(format!("{e:?}")))?;
         let mut removed = 0;
         for h in listed {
@@ -1623,7 +1631,11 @@ impl ConnectionService {
             }
             // Re-read the references: a publish may have committed meanwhile.
             let still = self
-                .read(|s| referenced(s.router()))
+                .read(|s| {
+                    let mut refs = referenced(s.router())?;
+                    refs.extend(crate::services::mcp::credential_references(s)?);
+                    Ok(refs)
+                })
                 .map_err(|e| SecretError::Failed(format!("{e:?}")))?;
             if still.contains(h.as_str()) {
                 continue;

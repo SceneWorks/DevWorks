@@ -2085,7 +2085,7 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
         write(f.store.as_ref(), move |tx| {
             tx.operations().record_intent(NewOperation {
                 id: operation_for_write.clone(), root_id: None, assignment_id: None,
-                capability: "fixture/accepted".into(), schema_version: 1,
+                capability: "mcp.tool".into(), schema_version: 1,
                 args_digest: "a".repeat(64), payload: json!({}),
             })?;
             let session = tx.sessions().session(&id("session"))?.unwrap();
@@ -2152,8 +2152,11 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
             use devworks_core::protocol::OperationState;
             let operation = tx.operations().operation(&operation_for_write)?.unwrap();
             let fence = operation.latest_attempt().unwrap().fence();
-            tx.operations().transition(&operation_for_write, operation.revision, Some(&fence),
-                OperationState::CancelledBeforeDispatch, None)?;
+            let dispatched = tx.operations().transition(&operation_for_write, operation.revision,
+                Some(&fence), OperationState::Dispatching, None)?;
+            tx.operations().transition(&operation_for_write, dispatched.revision, Some(&fence),
+                OperationState::ObservedComplete, Some(json!({"effect":{"outcome":"completed",
+                    "evidence":{"content":[{"type":"text","text":"remote answer"}]}}})))?;
             Ok(())
         }).unwrap();
         let second = app.refresh_native_tool_context(&f.context, &id("session"), &changed).unwrap();
@@ -2172,6 +2175,8 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
         let material: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
             f.store.as_ref(), &f.context, &second, 1024 * 1024).unwrap().0).unwrap();
         assert_eq!(material.messages.len(), 6);
+        assert!(matches!(&material.messages[5].content[0], ContentBlock::Text { text, .. }
+            if text.contains("untrustedRemoteContent") && text.contains("remote answer")));
         assert_eq!(f.transcript().iter().filter(|entry| entry.kind == "OperationUpdate").count(), 3);
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
         let ctx = f.context.clone();

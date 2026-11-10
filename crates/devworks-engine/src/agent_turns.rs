@@ -181,7 +181,7 @@ async fn run_native_loop(
                     .providers()
                     .ok_or(StorageError::ScopeDenied)?
                     .schemas()
-                    .selected_builtins(ctx)?
+                    .selected_agent_tools(ctx)?
                     .is_empty();
                 let route = route_context_head(runtime, ctx, session_id, 0, None, tools_required)?;
                 let (head, binding) = publish_first_context(runtime, ctx, agent, &route)?;
@@ -193,7 +193,7 @@ async fn run_native_loop(
             .providers()
             .ok_or(StorageError::ScopeDenied)?
             .schemas()
-            .selected_builtins(ctx)?
+            .selected_agent_tools(ctx)?
             .len();
         let tools_required = selected_count != 0;
         let windows = tool_window_count(selected_count);
@@ -551,7 +551,7 @@ pub fn publish_first_context(
         .providers()
         .ok_or(StorageError::ScopeDenied)?
         .schemas()
-        .selected_builtins(ctx)?
+        .selected_agent_tools(ctx)?
         .len();
     if tool_window_count(selected_count) > 1 {
         prompt.instructions.push(TextBlock {
@@ -595,7 +595,7 @@ pub fn plan_generation_window(
         return Err(StorageError::ScopeDenied);
     }
     let providers = runtime.providers().ok_or(StorageError::ScopeDenied)?;
-    let selected = providers.schemas().selected_builtins(ctx)?;
+    let selected = providers.schemas().selected_agent_tools(ctx)?;
     let tools = tool_window(&selected, window)?.to_vec();
     let tool_bytes = serde_json::to_vec(&tools)
         .map_err(|error| StorageError::InvalidRecord(format!("tool schemas: {error}")))?
