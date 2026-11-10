@@ -428,8 +428,17 @@ fn the_coordinator_sidebar_is_the_home_conversation_and_stays_open_until_closed_
     type_into(&mut h, COMPOSER_LABEL, "shared ");
     click_nav(&mut h, "Settings");
     assert!(!h.state().coordinator_open(), "navigation never opens it");
+    assert!(
+        transcript(&*backend, &session).is_empty(),
+        "closed-sidebar navigation appends nothing"
+    );
     click(&mut h, Role::Button, "Workspace coordinator");
     assert!(h.state().coordinator_open());
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        1,
+        "opening appends current screen once"
+    );
     assert!(has_text(&h, "same conversation as Chat"));
     // Same draft, same session: typing in the sidebar continues the Home draft.
     type_into(&mut h, COMPOSER_LABEL, "draft");
@@ -438,20 +447,67 @@ fn the_coordinator_sidebar_is_the_home_conversation_and_stays_open_until_closed_
         h.state().coordinator_open(),
         "it stays open across navigation"
     );
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        2,
+        "meaningful navigation appends once"
+    );
+    settle(&mut h);
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        2,
+        "unchanged frames add no notice"
+    );
+    assert_eq!(
+        h.query_all_by_label_contains("Current screen: Artifacts")
+            .count(),
+        1
+    );
+    assert_eq!(
+        h.query_all_by_label_contains("Current screen: Settings")
+            .count(),
+        0,
+        "the UI projects only the latest notice"
+    );
     click(&mut h, Role::Button, SEND_LABEL);
     let bodies = transcript(&*backend, &session);
     assert!(
-        matches!(&bodies[..], [TranscriptBody::UserMessage { content }] if matches!(&content[0], UserContent::Text { text } if text == "shared draft")),
+        matches!(&bodies[..],
+        [TranscriptBody::HostNotice{..},TranscriptBody::HostNotice{..},TranscriptBody::UserMessage { content }]
+        if matches!(&content[0], UserContent::Text { text } if text == "shared draft")),
         "{bodies:?}"
     );
     // Returning Home closes it and shows the same conversation in the centre.
     click_nav(&mut h, "Chat");
     assert!(!h.state().coordinator_open());
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        3,
+        "returning Home adds no notice"
+    );
     assert_eq!(h.state().chat.selected.as_deref(), Some(session.as_str()));
     assert!(has_text(&h, "shared draft"));
+    assert_eq!(
+        h.query_all_by_label_contains("Current screen: Artifacts")
+            .count(),
+        1,
+        "Home retains only the latest recorded screen context"
+    );
     // Closing explicitly preserves the session; later navigation does not reopen it.
     click_nav(&mut h, "Approvals");
     click(&mut h, Role::Button, "Workspace coordinator");
+    assert_eq!(transcript(&*backend, &session).len(), 4);
+    h.query_all_by_role_and_label(Role::Button, "History")
+        .find(|n| n.rect().left() > devworks_desktop::theme::NAV)
+        .expect("Approvals history subview")
+        .click();
+    settle(&mut h);
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        5,
+        "changing a subview while open appends its context"
+    );
+    assert_eq!(h.query_all_by_label_contains("Subview: History").count(), 1);
     type_into(&mut h, COMPOSER_LABEL, "kept");
     click(
         &mut h,
@@ -461,6 +517,11 @@ fn the_coordinator_sidebar_is_the_home_conversation_and_stays_open_until_closed_
     assert!(!h.state().coordinator_open());
     click_nav(&mut h, "Knowledge");
     assert!(!h.state().coordinator_open());
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        5,
+        "closed-sidebar browsing adds no notice"
+    );
     click_nav(&mut h, "Chat");
     assert_eq!(
         h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
@@ -1071,7 +1132,7 @@ fn the_shell_reaches_only_validated_operations() {
 }
 
 #[test]
-fn closing_the_window_with_an_active_root_leaves_it_held_for_continue_after_reopen() {
+fn closing_the_window_keeps_a_live_root_or_its_existing_policy_hold() {
     let root = Root::new("close-holds-runs");
     let engine = start(&root);
     // A standalone issue root (work items arrive with later items; seeded here directly).
@@ -1133,11 +1194,6 @@ fn closing_the_window_with_an_active_root_leaves_it_held_for_continue_after_reop
         }
         std::thread::sleep(Duration::from_millis(2));
     }
-    assert_eq!(
-        held_before_persisting,
-        Some(1),
-        "held before the window state was persisted"
-    );
     drop(h);
     // Reopen: the root is held, and only an explicit Continue runs it again.
     let engine = start(&root);
@@ -1150,6 +1206,21 @@ fn closing_the_window_with_an_active_root_leaves_it_held_for_continue_after_reop
         .as_bytes(),
     );
     let text = format!("{inspected:?}");
+    if held_before_persisting == Some(0) {
+        // The native agent executor can reach a policy hold before the window closes.
+        // A stopped activation already has a durable hold and needs no restart hold.
+        assert!(
+            text.contains("phase: Stopped") && text.contains("cause: Policy"),
+            "{text}"
+        );
+        assert!(!text.contains("cause: RestartContinue"), "{text}");
+        return;
+    }
+    assert_eq!(
+        held_before_persisting,
+        Some(1),
+        "live root held before window persistence"
+    );
     assert!(
         text.contains("desired_state: Paused") && text.contains("cause: RestartContinue"),
         "{text}"

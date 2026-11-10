@@ -249,8 +249,24 @@ impl GitService {
             Some(id) => tx.runs().assignment(id)?,
             None => None,
         };
+        let delegated_task = if let Some(assignment) = assignment.as_ref()
+            && assignment.purpose == AssignmentPurpose::Child
+        {
+            tx.runs()
+                .agent_assignment_context(&assignment.id)?
+                .is_some_and(|context| {
+                    context.project_id == work.project_id
+                        && context.task_ids.as_array().is_some_and(|tasks| {
+                            tasks
+                                .iter()
+                                .any(|task| task.as_str() == Some(work.id.as_str()))
+                        })
+                })
+        } else {
+            false
+        };
         let assignment_matches = assignment.as_ref().is_some_and(|a| {
-            a.work_id.0 == work.id
+            (a.work_id.0 == work.id || delegated_task)
                 && Some(&a.root_id) == ctx.root_id()
                 && a.state.is_live()
                 && Some(&a.session_id) == ctx.session_id()

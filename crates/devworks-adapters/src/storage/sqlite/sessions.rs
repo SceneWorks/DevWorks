@@ -190,10 +190,12 @@ fn sessions(
     limit: u16,
 ) -> Result<Vec<StoredSession>, StorageError> {
     let n = bounded(limit)?;
-    let (scope_kind, project) = match scope {
-        SessionScope::All => (0, None),
-        SessionScope::Project(p) => (1, Some(p.0.as_str())),
-        SessionScope::Workspace => (2, None),
+    let (scope_kind, project, root, one) = match scope {
+        SessionScope::All => (0, None, None, None),
+        SessionScope::Project(p) => (1, Some(p.0.as_str()), None, None),
+        SessionScope::Workspace => (2, None, None, None),
+        SessionScope::Root(p, r) => (3, Some(p.0.as_str()), Some(r.0.as_str()), None),
+        SessionScope::One(id) => (4, None, None, Some(id.as_str())),
     };
     let closed_kind = match closed {
         None => 0,
@@ -202,7 +204,8 @@ fn sessions(
     };
     let mut stmt = db(conn.prepare_cached(&format!(
         "SELECT {SESSION_COLUMNS} FROM sessions s
-         WHERE (?5=0 OR (?5=1 AND s.project_id=?1) OR (?5=2 AND s.project_id IS NULL))
+         WHERE (?5=0 OR (?5=1 AND s.project_id=?1) OR (?5=2 AND s.project_id IS NULL)
+                OR (?5=3 AND s.project_id=?1 AND s.root_id=?7) OR (?5=4 AND s.id=?8))
          AND (?6=0 OR (?6=1 AND s.closed_at IS NOT NULL) OR (?6=2 AND s.closed_at IS NULL))
          AND (?2 IS NULL OR s.created_at<?2 OR (s.created_at=?2 AND s.id<?3))
          ORDER BY s.created_at DESC,s.id DESC LIMIT ?4"
@@ -214,7 +217,9 @@ fn sessions(
             after.map(|a| a.id.as_str().to_owned()),
             n,
             scope_kind,
-            closed_kind
+            closed_kind,
+            root,
+            one
         ],
         session_row,
     ))?;
@@ -460,6 +465,33 @@ fn context_sources(
             })
         })
         .collect()
+}
+
+fn provider_context_head(
+    conn: &Connection,
+    session: &Id,
+) -> Result<Option<StoredProviderContextHead>, StorageError> {
+    type Raw = (i64, i64, String, Option<String>, String, String, i64);
+    let raw: Option<Raw> = db(conn.query_row(
+        "SELECT context_epoch,observed_sequence,kind,attempt_id,binding_json,artifact_json,revision FROM session_provider_context_heads WHERE session_id=?1",
+        [session.as_str()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+    ).optional())?;
+    raw.map(
+        |(context_epoch, observed_sequence, kind, attempt_id, binding, artifact, revision)| {
+            Ok(StoredProviderContextHead {
+                session_id: session.clone(),
+                context_epoch,
+                observed_sequence,
+                kind,
+                attempt_id: attempt_id.map(id_of).transpose()?,
+                binding: json_of(&binding)?,
+                artifact: json_of(&artifact)?,
+                revision,
+            })
+        },
+    )
+    .transpose()
 }
 
 fn latest_checkpoint(
@@ -998,6 +1030,26 @@ macro_rules! session_reads {
             fn session(&self, id: &Id) -> Result<Option<StoredSession>, StorageError> {
                 session(self.conn, id)
             }
+            fn session_repository_scope(&self, id: &Id) -> Result<Vec<Id>, StorageError> {
+                let raw: Option<String> = db(self.conn.query_row(
+                    "SELECT repository_ids_json FROM sessions WHERE id=?1",
+                    [id.as_str()], |row| row.get(0),
+                ).optional())?;
+                let raw = raw.ok_or(StorageError::ScopeDenied)?;
+                let ids: Vec<Id> = serde_json::from_str::<Vec<String>>(&raw)
+                    .map_err(|_| corrupt("session repository scope"))?
+                    .into_iter().map(id_of).collect::<Result<_, _>>()?;
+                if ids.windows(2).any(|pair| pair[0].as_str() >= pair[1].as_str()) {
+                    return Err(corrupt("unordered session repository scope"));
+                }
+                Ok(ids)
+            }
+            fn session_activity_at_ms(&self, id: &Id) -> Result<Option<i64>, StorageError> {
+                db(self.conn.query_row(
+                    "SELECT last_seen_at FROM sessions WHERE id=?1",
+                    [id.as_str()], |row| row.get(0),
+                ).optional())?.ok_or(StorageError::ScopeDenied)
+            }
             fn sessions(
                 &self,
                 scope: &SessionScope,
@@ -1143,6 +1195,12 @@ macro_rules! session_reads {
             fn epoch(&self, session: &Id, e: i64) -> Result<Option<StoredEpoch>, StorageError> {
                 epoch(self.conn, session, e)
             }
+            fn provider_context_head(
+                &self,
+                session: &Id,
+            ) -> Result<Option<StoredProviderContextHead>, StorageError> {
+                provider_context_head(self.conn, session)
+            }
             fn context_sources(
                 &self,
                 session: &Id,
@@ -1280,8 +1338,27 @@ impl SessionRepository for Unit<'_> {
             s.root_id.as_ref().map(|r| r.0.as_str()),
             s.created_at_ms
         ]))?;
+        // A migration-compatibility reader may open an older store before migration 44 added
+        // the immutable repository scope. Its existing sessions still use the historical shape.
+        let schema_version: i64 = db(self.conn.query_row(
+            "SELECT schema_version FROM store_meta WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        ))?;
+        if schema_version < 44 {
+            db(db(self.conn.prepare_cached(
+                "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,pin_json,project_id,title,created_by,created_at,closed_at,closed_by,next_seq,checkpoint_seq) VALUES(?1,?2,?3,?4,?5,?6,NULL,?7,?8,?9,?10,?11,?12,?13,?14)",
+            ))?.execute(params![
+                s.id.as_str(), s.conversation_id.as_str(), s.agent_id.0.as_str(),
+                s.root_id.as_ref().map(|r| r.0.as_str()), s.context_epoch, s.revision,
+                s.project_id.as_ref().map(|p| p.0.as_str()), s.title,
+                s.created_by.0.as_str(), s.created_at_ms, s.closed_at_ms,
+                s.closed_by.as_ref().map(|a| a.0.as_str()), s.next_sequence, s.checkpoint_sequence,
+            ]))?;
+            return Ok(());
+        }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,pin_json,project_id,title,created_by,created_at,closed_at,closed_by,next_seq,checkpoint_seq) VALUES(?1,?2,?3,?4,?5,?6,NULL,?7,?8,?9,?10,?11,?12,?13,?14)",
+            "INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,pin_json,project_id,title,created_by,created_at,closed_at,closed_by,next_seq,checkpoint_seq,repository_ids_json) VALUES(?1,?2,?3,?4,?5,?6,NULL,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
         ))?
         .execute(params![
             s.id.as_str(),
@@ -1297,7 +1374,20 @@ impl SessionRepository for Unit<'_> {
             s.closed_at_ms,
             s.closed_by.as_ref().map(|a| a.0.as_str()),
             s.next_sequence,
-            s.checkpoint_sequence
+            s.checkpoint_sequence,
+            {
+                let repositories: Vec<String> = match &s.root_id {
+                    Some(root) => {
+                        let mut statement = db(self.conn.prepare(
+                            "SELECT repository_id FROM work_repositories WHERE work_id=?1 ORDER BY repository_id"
+                        ))?;
+                        let rows = db(statement.query_map([root.0.as_str()], |row| row.get::<_, String>(0)))?;
+                        rows.map(db).collect::<Result<Vec<_>, _>>()?
+                    }
+                    None => Vec::new(),
+                };
+                serde_json::to_string(&repositories).map_err(|_| invalid("session repository scope"))?
+            }
         ]))?;
         Ok(())
     }
@@ -1325,6 +1415,20 @@ impl SessionRepository for Unit<'_> {
                 kind: "session",
                 id: s.id.as_str().to_owned(),
             });
+        }
+        Ok(())
+    }
+
+    fn touch_session_activity(&mut self, id: &Id, at_ms: i64) -> Result<(), StorageError> {
+        if at_ms < 0 {
+            return Err(invalid("negative session activity time"));
+        }
+        let updated = db(self.conn.execute(
+            "UPDATE sessions SET last_seen_at=MAX(COALESCE(last_seen_at, created_at), ?2) WHERE id=?1 AND closed_at IS NULL",
+            params![id.as_str(), at_ms],
+        ))?;
+        if updated != 1 {
+            return Err(StorageError::ScopeDenied);
         }
         Ok(())
     }
@@ -1468,6 +1572,49 @@ impl SessionRepository for Unit<'_> {
             e.sequence,
             e.created_at_ms
         ]))?;
+        Ok(())
+    }
+
+    fn put_provider_context_head(
+        &mut self,
+        head: &StoredProviderContextHead,
+        expected_revision: Option<i64>,
+    ) -> Result<(), StorageError> {
+        if head.context_epoch < 0
+            || head.observed_sequence < 0
+            || expected_revision.unwrap_or(0).checked_add(1) != Some(head.revision)
+            || !matches!(
+                head.kind.as_str(),
+                "ProviderInitialContext"
+                    | "ProviderTurnContinuation"
+                    | "ProviderOperationUpdateContext"
+            )
+            || match head.kind.as_str() {
+                "ProviderInitialContext" => {
+                    head.context_epoch != 0
+                        || head.observed_sequence != 0
+                        || head.attempt_id.is_some()
+                }
+                "ProviderTurnContinuation" => head.attempt_id.is_none(),
+                "ProviderOperationUpdateContext" => head.attempt_id.is_some(),
+                _ => true,
+            }
+        {
+            return Err(invalid("provider context head revision or position"));
+        }
+        let binding = json_text(&head.binding);
+        let artifact = json_text(&head.artifact);
+        let changed = match expected_revision {
+            Some(expected) => db(db(self.conn.prepare_cached(
+                "UPDATE session_provider_context_heads SET context_epoch=?2,observed_sequence=?3,kind=?4,attempt_id=?5,binding_json=?6,artifact_json=?7,revision=?8 WHERE session_id=?1 AND revision=?9",
+            ))?.execute(params![head.session_id.as_str(),head.context_epoch,head.observed_sequence,head.kind,head.attempt_id.as_ref().map(Id::as_str),binding,artifact,head.revision,expected]))?,
+            None => db(db(self.conn.prepare_cached(
+                "INSERT INTO session_provider_context_heads(session_id,context_epoch,observed_sequence,kind,attempt_id,binding_json,artifact_json,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            ))?.execute(params![head.session_id.as_str(),head.context_epoch,head.observed_sequence,head.kind,head.attempt_id.as_ref().map(Id::as_str),binding,artifact,head.revision]))?,
+        };
+        if changed != 1 {
+            return Err(StorageError::ScopeDenied);
+        }
         Ok(())
     }
 

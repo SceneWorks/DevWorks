@@ -5665,7 +5665,7 @@
       "attribute": "HttpPost(\"messages\")",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.messages"
+        "agents.post"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",
@@ -5690,7 +5690,7 @@
       "attribute": "HttpPost(\"ack\")",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.acknowledge"
+        "agents.ack"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",
@@ -5715,7 +5715,7 @@
       "attribute": "HttpGet(\"inbox\")",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.inbox"
+        "agents.receive"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",
@@ -6065,7 +6065,7 @@
       "attribute": "HttpGet",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.messages"
+        "agents.events"
       ],
       "disposition": "adapt",
       "reason": "Retain application behavior through native operations/streams; GitHub polling replaces inbound webhook hosting where applicable",
@@ -6140,7 +6140,7 @@
       "attribute": "HttpGet(\"messages\")",
       "group": "HISTORY",
       "targetOperations": [
-        "agents.messages"
+        "agents.history"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",
@@ -12142,7 +12142,7 @@
       "argumentType": "typeof(PostRequest)",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.messages"
+        "agents.post"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",
@@ -12161,7 +12161,7 @@
       "argumentType": "typeof(InboxRequest)",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.inbox"
+        "agents.receive"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",
@@ -12180,7 +12180,7 @@
       "argumentType": "typeof(AckRequest)",
       "group": "SESSIONS",
       "targetOperations": [
-        "agents.acknowledge"
+        "agents.ack"
       ],
       "disposition": "native",
       "reason": "Retain behavior through the shared native operation boundary",

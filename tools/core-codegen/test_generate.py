@@ -82,7 +82,10 @@ class SchemaRevisionRules(unittest.TestCase):
             'schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
             'schemas.configure', 'database.configure_sensitive_columns',
             'projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
-            'projects.purge_status', 'history.command_receipt'})
+            'projects.purge_status', 'history.command_receipt', 'agents.post', 'agents.receive', 'agents.ack',
+            'agents.history', 'agents.events'})
+        for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):
+            self.assertEqual(carried[name], {7})
         for name in ('projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
                      'projects.purge_status', 'history.command_receipt'):
             self.assertEqual(carried[name], {6})

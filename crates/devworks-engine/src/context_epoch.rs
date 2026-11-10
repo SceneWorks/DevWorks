@@ -142,7 +142,8 @@ pub(crate) fn current_source(
     let tracked = matches!(
         provenance["derived"]["kind"].as_str(),
         Some(
-            "ProviderTurnContinuation"
+            "ProviderInitialContext"
+                | "ProviderTurnContinuation"
                 | "ProviderToolContinuation"
                 | "ProviderOperationUpdateContext"
                 | "ProviderContextEpoch"
@@ -214,8 +215,13 @@ pub(crate) fn provider_change(
         previous_context,
         previous_binding,
     )?;
-    let (converted, omitted) = source
-        .context
+    let mut context = source.context;
+    if ctx.assignment_id().is_some() {
+        // Agent bootstrap supplies this value for the first route. Later routes use their own
+        // response headroom, and some endpoints do not accept a max-output override at all.
+        context.parameters.max_output_tokens = None;
+    }
+    let (converted, omitted) = context
         .converted_for_new_epoch(previous_binding, next_binding)
         .map_err(|e| StorageError::InvalidRecord(format!("provider context conversion: {e:?}")))?;
     publish(

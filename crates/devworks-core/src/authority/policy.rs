@@ -242,6 +242,8 @@ pub enum DenialReason {
     WebFetchDisabled,
     /// The invocation is outside the principal's bound project.
     OutOfProjectScope,
+    /// A bound agent requested work outside its root or delegated task references.
+    OutOfAssignmentScope,
     /// Project scope has no qualified confined launcher for native execution.
     EnforcementUnavailable,
     /// Force-pushing main/master is never allowed.
@@ -270,6 +272,7 @@ impl DenialReason {
             Self::WebToolsDisabled => "WebToolsDisabled",
             Self::WebFetchDisabled => "WebFetchDisabled",
             Self::OutOfProjectScope => "OutOfProjectScope",
+            Self::OutOfAssignmentScope => "OutOfAssignmentScope",
             Self::EnforcementUnavailable => "EnforcementUnavailable",
             Self::ProtectedBranch => "ProtectedBranch",
             Self::ApprovalRequired => "ApprovalRequired",
@@ -301,6 +304,7 @@ impl DenialReason {
             Self::WebToolsDisabled => "Web search is turned off in Agent tools settings.",
             Self::WebFetchDisabled => "Web page fetching is turned off in Agent tools settings.",
             Self::OutOfProjectScope => "The request is outside the agent's project.",
+            Self::OutOfAssignmentScope => "The request is outside this agent's assigned work.",
             Self::EnforcementUnavailable => {
                 "Project scope cannot confine native execution here; grant a bounded native exception to run it with your user rights."
             }
@@ -389,6 +393,43 @@ pub fn registered_tool_visibility(
     let fam = family(op);
     let class = selected.authority;
     let command = selected.mode == Mode::Command;
+    // These project-wide operations have no target that can be narrowed to the running root.
+    // Agents use addressed reads and writes for their root and delegated task references.
+    if kind == PrincipalKind::Agent
+        && ctx.root_id().is_some()
+        && matches!(
+            op,
+            "features.list"
+                | "features.create"
+                | "features.prioritize"
+                | "features.dependencies"
+                | "issues.list"
+                | "issues.create"
+                | "issues.prioritize"
+                | "tasks.list"
+                | "tasks.prioritize"
+                | "tasks.dependency_links"
+        )
+    {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
+    if kind == PrincipalKind::Agent && ctx.assignment_id().is_some() && op == "artifacts.list" {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
+    if kind == PrincipalKind::Agent && ctx.assignment_id().is_some() && op.starts_with("jobs.") {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
+    if kind == PrincipalKind::Agent
+        && ctx.assignment_id().is_some()
+        && matches!(op, "approvals.list" | "approvals.review_queue")
+    {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
+    // Project-wide message views belong to the human UI. Agent sessions use their addressed
+    // inbox; never advertise a project history or event feed they cannot read.
+    if matches!(op, "agents.history" | "agents.events") && kind != PrincipalKind::Human {
+        return Verdict::Deny(DenialReason::HumanOnly);
+    }
 
     match kind {
         PrincipalKind::Human => return Verdict::Allow,
@@ -423,6 +464,38 @@ pub fn registered_tool_visibility(
         }
         (_, None) => None,
     };
+    // A task or feature assignment never grants project administration. Rootless agents retain
+    // their existing project policy and approval path; humans retain direct authority above.
+    if kind == PrincipalKind::Agent
+        && ctx.root_id().is_some()
+        && command
+        && (matches!(fam, "projects" | "workflows" | "roles")
+            || op == "repositories.remove_index"
+            || op == "next_work.claim_project_queue"
+            || class == AuthorityClass::Configuration)
+        && (role != Some(AgentRole::WorkspaceCoordinator) || ctx.root_id().is_some())
+    {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
+    if ctx.root_id().is_some()
+        && role == Some(AgentRole::Worker)
+        && matches!(
+            op,
+            "runs.start"
+                | "runs.pause"
+                | "runs.continue"
+                | "runs.redirect"
+                | "runs.stop"
+                | "tasks.create"
+                | "tasks.sync_plan"
+                | "features.edit"
+                | "features.edit_plan"
+                | "features.request_plan_approval"
+                | "next_work.claim_feature_task"
+        )
+    {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
     match class {
         AuthorityClass::HumanConfiguration
         | AuthorityClass::HumanDecision
@@ -441,7 +514,10 @@ pub fn registered_tool_visibility(
     {
         return Verdict::Deny(DenialReason::ToolNotSelected);
     }
-    if kind == PrincipalKind::Agent && !policy.tool_selected(&format!("devworks/{op}"), true) {
+    let default_selected = !matches!(fam, "desktop" | "browser");
+    if kind == PrincipalKind::Agent
+        && !policy.tool_selected(&format!("devworks/{op}"), default_selected)
+    {
         return Verdict::Deny(DenialReason::ToolNotSelected);
     }
     let read_only_role = role.is_some_and(AgentRole::read_only);

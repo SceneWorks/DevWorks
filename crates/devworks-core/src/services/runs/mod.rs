@@ -871,6 +871,15 @@ impl ControlService {
         // its work: a manual Done label is not verified completion.
         if purpose == ActivationPurpose::Implementation {
             prerequisite_gate(runs, &root.id, root_subject.clone(), &mut c)?;
+            if runs.open_blocking_question(&root.id)? {
+                c.push(derived(
+                    "human-question",
+                    root_subject.clone(),
+                    control.revision,
+                    HoldCause::Dependency,
+                    "an open blocking question awaits the project's human",
+                ));
+            }
         }
         let mut readiness_revision = None;
         let assignment = match target {
@@ -916,21 +925,45 @@ impl ControlService {
                     .iter()
                     .map(stored),
             );
-            if a.work_id != root.id {
+            // A child can act on every delegated task, not only its first work_id. Each task's
+            // current holds and prerequisites must gate the whole assignment's implementation.
+            let delegated: Vec<Id> = runs
+                .agent_assignment_context(&a.id)?
+                .map(|context| {
+                    serde_json::from_value(context.task_ids).map_err(|_| {
+                        StorageError::InvalidRecord("assignment task references".into())
+                    })
+                })
+                .transpose()?
+                .unwrap_or_default();
+            let work_ids: Vec<RootId> = if delegated.is_empty() {
+                vec![a.work_id.clone()]
+            } else {
+                delegated.into_iter().map(RootId).collect()
+            };
+            for work_id in work_ids {
+                if work_id == root.id {
+                    continue;
+                }
+                let work_subject = if work_id == a.work_id {
+                    subject.clone()
+                } else {
+                    Subject::Root(work_id.clone())
+                };
                 // The card's own holds travel with it (an unlink pause survives relinking), a
                 // card that left this root is fenced, and its unsatisfied prerequisites hold
                 // its implementation.
                 c.extend(
-                    active_blockers(runs, &BlockerFilter::RootLevel(a.work_id.clone()))?
+                    active_blockers(runs, &BlockerFilter::RootLevel(work_id.clone()))?
                         .iter()
                         .map(stored),
                 );
-                if let Some(parent) = runs.work_parent(&a.work_id)?
+                if let Some(parent) = runs.work_parent(&work_id)?
                     && parent.as_ref() != Some(&root.id)
                 {
                     c.push(derived(
                         "membership",
-                        subject.clone(),
+                        work_subject.clone(),
                         a.revision,
                         HoldCause::Policy,
                         "the work is no longer part of this root",
@@ -941,26 +974,35 @@ impl ControlService {
                     && let Some((_, readiness)) =
                         runs.feature_plan(&root.id)?.and_then(|p| p.readiness)
                     && let Some(f) =
-                        crate::services::work::readiness::gating_finding(&readiness, &a.work_id.0)
+                        crate::services::work::readiness::gating_finding(&readiness, &work_id.0)
                 {
                     c.push(derived(
                         "finding-gate",
-                        subject.clone(),
+                        work_subject.clone(),
                         a.revision,
                         HoldCause::Policy,
                         &format!("readiness finding {f} gates this work"),
                     ));
                 }
                 if purpose == ActivationPurpose::Implementation {
-                    if is_feature(root) {
-                        repository_gate(runs, &root.id, &a.work_id, subject.clone(), &mut c)?;
-                        inherited_scope_gate(runs, &plan, &a.work_id, subject.clone(), &mut c)?;
+                    if runs.open_blocking_question(&work_id)? {
+                        c.push(derived(
+                            "human-question",
+                            work_subject.clone(),
+                            a.revision,
+                            HoldCause::Dependency,
+                            "an open blocking question awaits the project's human",
+                        ));
                     }
-                    let open = runs.open_prerequisites(&a.work_id)?;
+                    if is_feature(root) {
+                        repository_gate(runs, &root.id, &work_id, work_subject.clone(), &mut c)?;
+                        inherited_scope_gate(runs, &plan, &work_id, work_subject.clone(), &mut c)?;
+                    }
+                    let open = runs.open_prerequisites(&work_id)?;
                     if let Some(p) = open.first() {
                         c.push(derived(
                             "prerequisites",
-                            subject.clone(),
+                            work_subject.clone(),
                             open.len() as i64,
                             HoldCause::Dependency,
                             &format!(

@@ -70,6 +70,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
+mod agents;
 mod artifacts;
 mod authority;
 mod browser;
@@ -96,6 +97,7 @@ mod schemas;
 mod sessions;
 mod usage;
 mod work;
+pub use agents::*;
 pub use artifacts::*;
 pub use authority::*;
 pub use browser::*;
@@ -591,8 +593,15 @@ pub trait ReadSnapshot {
 // ---------------------------------------------------------------------------------------------
 // Actors and store identity
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredActor {
+    pub kind: PrincipalKind,
+    pub display_name: String,
+}
+
 pub trait ActorRead {
     fn actor_kind(&self, actor: &ActorId) -> Result<Option<PrincipalKind>, StorageError>;
+    fn actor(&self, actor: &ActorId) -> Result<Option<StoredActor>, StorageError>;
 }
 pub trait ActorRegistry: ActorRead {
     /// Records a host-resolved principal for attribution. Idempotent for the same kind; a

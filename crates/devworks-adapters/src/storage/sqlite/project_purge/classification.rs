@@ -31,9 +31,29 @@ const CONTAINER_EXTENSION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/architecture/validation/project-purge/schema39-extension.json"
 ));
-const INSTRUCTION_EXTENSION: &str = include_str!(concat!(
+const ASSIGNMENT_EXTENSION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/architecture/validation/project-purge/schema40-extension.json"
+));
+const MESSAGE_EXTENSION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/architecture/validation/project-purge/schema41-extension.json"
+));
+const ASSIGNMENT_CONTEXT_EXTENSION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/architecture/validation/project-purge/schema42-extension.json"
+));
+const PROVIDER_CONTEXT_EXTENSION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/architecture/validation/project-purge/schema46-extension.json"
+));
+const MESSAGE_HEAD_EXTENSION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/architecture/validation/project-purge/schema47-extension.json"
+));
+const INSTRUCTION_EXTENSION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/architecture/validation/project-purge/schema49-extension.json"
 ));
 pub(super) type Key = (String, String);
 fn invalid() -> StorageError {
@@ -93,6 +113,48 @@ fn policies(conn: &Connection) -> Result<BTreeMap<String, (String, String)>, Sto
             .is_some()
         {
             return Err(invalid());
+        }
+    }
+    let message_extension: Value =
+        serde_json::from_str(MESSAGE_EXTENSION).map_err(|_| invalid())?;
+    for row in message_extension["additionalTables"]
+        .as_array()
+        .ok_or_else(invalid)?
+    {
+        let table = row["table"].as_str().ok_or_else(invalid)?;
+        let class = row["class"].as_str().ok_or_else(invalid)?;
+        let disposition = row["disposition"].as_str().ok_or_else(invalid)?;
+        if known
+            .insert(table.into(), (class.into(), disposition.into()))
+            .is_some()
+        {
+            return Err(invalid());
+        }
+    }
+    let assignment_context_extension: Value =
+        serde_json::from_str(ASSIGNMENT_CONTEXT_EXTENSION).map_err(|_| invalid())?;
+    let provider_context_extension: Value =
+        serde_json::from_str(PROVIDER_CONTEXT_EXTENSION).map_err(|_| invalid())?;
+    let message_head_extension: Value =
+        serde_json::from_str(MESSAGE_HEAD_EXTENSION).map_err(|_| invalid())?;
+    for extension in [
+        &assignment_context_extension,
+        &provider_context_extension,
+        &message_head_extension,
+    ] {
+        for row in extension["additionalTables"]
+            .as_array()
+            .ok_or_else(invalid)?
+        {
+            let table = row["table"].as_str().ok_or_else(invalid)?;
+            let class = row["class"].as_str().ok_or_else(invalid)?;
+            let disposition = row["disposition"].as_str().ok_or_else(invalid)?;
+            if known
+                .insert(table.into(), (class.into(), disposition.into()))
+                .is_some()
+            {
+                return Err(invalid());
+            }
         }
     }
     let mut statement = db(conn.prepare("SELECT name FROM main.sqlite_schema WHERE type='table'"))?;
@@ -677,7 +739,9 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
         "extension":devworks_core::fingerprint::sha256_hex(EXTENSION.as_bytes()),
         "stagingExtension":devworks_core::fingerprint::sha256_hex(STAGING_EXTENSION.as_bytes()),
         "recoveryExtension":devworks_core::fingerprint::sha256_hex(RECOVERY_EXTENSION.as_bytes()),
+        "assignmentExtension":devworks_core::fingerprint::sha256_hex(ASSIGNMENT_EXTENSION.as_bytes()),
         "containerExtension":devworks_core::fingerprint::sha256_hex(CONTAINER_EXTENSION.as_bytes()),
+        "messageExtension":devworks_core::fingerprint::sha256_hex(MESSAGE_EXTENSION.as_bytes()),
         "instructionExtension":devworks_core::fingerprint::sha256_hex(INSTRUCTION_EXTENSION.as_bytes()),
         "scrubPolicy":scrub_policy,"clientKeepers":super::client_keepers::digest(keepers),"selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
     })).map_err(|_|invalid())?.as_bytes());

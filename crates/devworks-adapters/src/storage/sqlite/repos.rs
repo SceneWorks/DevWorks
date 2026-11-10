@@ -175,6 +175,22 @@ pub(crate) fn actor_kind(
     kind.as_deref().map(parse_principal).transpose()
 }
 
+fn actor_profile(conn: &Connection, actor: &ActorId) -> Result<Option<StoredActor>, StorageError> {
+    let row: Option<(String, String)> = db(stmt(
+        conn,
+        "SELECT kind,display_name FROM actors WHERE id=?1",
+    )?
+    .query_row([actor.0.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
+    .optional())?;
+    row.map(|(kind, display_name)| {
+        Ok(StoredActor {
+            kind: parse_principal(&kind)?,
+            display_name,
+        })
+    })
+    .transpose()
+}
+
 fn receipt_reply(
     conn: &Connection,
     identity: &ReceiptIdentity,
@@ -945,6 +961,9 @@ macro_rules! read_impls {
         impl ActorRead for $t {
             fn actor_kind(&self, actor: &ActorId) -> Result<Option<PrincipalKind>, StorageError> {
                 actor_kind(self.conn, actor)
+            }
+            fn actor(&self, actor: &ActorId) -> Result<Option<StoredActor>, StorageError> {
+                actor_profile(self.conn, actor)
             }
         }
         impl CommandLedgerRead for $t {

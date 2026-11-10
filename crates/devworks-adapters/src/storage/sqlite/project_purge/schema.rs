@@ -20,9 +20,11 @@ fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
 pub(super) fn verify(conn: &Connection) -> Result<(), StorageError> {
     // A later build must extend the ownership policy deliberately, rather than
     // blessing a newly migrated owning table merely because it is in MIGRATIONS.
-    if MIGRATIONS.last().map(|migration| migration.version) != Some(40) {
+    // Migration 48 rebuilds session_context_epochs to add MembershipHandoff to its reason
+    // constraint; it adds no table or ownership edge. Its rows keep their session owner.
+    if MIGRATIONS.last().map(|migration| migration.version) != Some(49) {
         return Err(StorageError::IncompatibleSchema(
-            "project purge ownership policy requires schema 40".into(),
+            "project purge ownership policy requires schema 49".into(),
         ));
     }
     static EXPECTED: OnceLock<Result<Definitions, String>> = OnceLock::new();

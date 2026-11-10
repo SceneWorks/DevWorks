@@ -485,26 +485,36 @@ impl NativeProviders {
             return Err(StorageError::ScopeDenied);
         }
         let mut turn_start_sequence = None;
-        if let InferenceInput::Generation { session_id, .. } = &request.input {
-            let (owner, observed_sequence) =
-                read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
-                    read.sessions()
-                        .session(session_id)?
-                        .map(|session| {
-                            let sequence = session.last_durable_sequence();
-                            (session.agent_id, sequence)
-                        })
-                        .ok_or(StorageError::ScopeDenied)
-                })?;
+        let mut context_head_fence = None;
+        if let InferenceInput::Generation {
+            session_id,
+            context: source,
+            ..
+        } = &request.input
+        {
+            let owner = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                read.sessions()
+                    .session(session_id)?
+                    .map(|session| session.agent_id)
+                    .ok_or(StorageError::ScopeDenied)
+            })?;
             if owner != *context.principal() || context.session_id() != Some(session_id) {
                 // A host-origin request cannot borrow an agent session to bypass its role and
                 // shared tool selection before the provider sees a tool schema.
                 return Err(StorageError::ScopeDenied);
             }
             if !compaction {
+                let fence = crate::tool_turn::require_current_head_for_new_request(
+                    self.store.as_ref(),
+                    &context,
+                    session_id,
+                    &request.request_id,
+                    source,
+                )?;
                 // Capture before dispatch. Even an empty completion must have a cursor, and a
                 // concurrent redirect must be visible when continuation scans this turn.
-                turn_start_sequence = Some(observed_sequence);
+                turn_start_sequence = Some(fence.sequence);
+                context_head_fence = Some(fence);
             }
         }
         if let ModelSelection::Model { model_id } = &request.options.selection
@@ -666,6 +676,7 @@ impl NativeProviders {
             shared: shared.clone(),
             inner: None,
             source_fences: source_fences.clone(),
+            context_head_fence,
             instruction_targets: instruction_targets.clone(),
         };
         let sink = LazySink {
@@ -1132,6 +1143,7 @@ struct LazySource {
     shared: SharedPrepared,
     inner: Option<NativeProviderSource>,
     source_fences: Vec<devworks_core::ports::AuthorityFence>,
+    context_head_fence: Option<crate::tool_turn::ContextHeadFence>,
     instruction_targets: Option<InstructionTargets>,
 }
 impl OwnedInferenceSource for LazySource {
@@ -1171,6 +1183,7 @@ impl OwnedInferenceSource for LazySource {
         let publication = prepared.clone();
         let expected_revision = connection.revision;
         let source_fences = self.source_fences.clone();
+        let context_head_fence = self.context_head_fence.clone();
         let instruction_request = self.request.clone();
         let instruction_targets = self.instruction_targets.clone();
         source = source.with_send_gate(Box::new(move || {
@@ -1197,11 +1210,15 @@ impl OwnedInferenceSource for LazySource {
             let captured = captured.clone();
             let publication = publication.clone();
             let source_fences = source_fences.clone();
+            let context_head_fence = context_head_fence.clone();
             owner
                 .usage
                 .accounting_fence()
                 .write(owner.store.as_ref(), move |tx| {
                     super::sink::validate(tx, &context, &captured)?;
+                    if let Some(fence) = &context_head_fence {
+                        fence.check(tx)?;
+                    }
                     if !devworks_core::authority::fences_hold(tx, &source_fences)? {
                         return Err(StorageError::ScopeDenied);
                     }

@@ -164,6 +164,7 @@ fn assignment(store: &dyn ApplicationStore, name: &str, worker: bool, state: Ass
     let name = name.to_owned();
     write(store, move |tx| {
         tx.runs().insert_assignment(&StoredAssignment {
+            purpose: devworks_core::ports::storage::AssignmentPurpose::Primary,
             id: AssignmentId(id(&format!("asg-{name}"))),
             root_id: RootId(id("root")),
             work_id: RootId(id(if worker { "worker" } else { "root" })),

@@ -381,6 +381,12 @@ impl Fx {
         let cases = UseCases::new()
             .with_router(router)
             .with_connections(connections.clone())
+            .with_agents(Arc::new(
+                devworks_core::services::agents::AgentService::new(
+                    h.ids.clone(),
+                    Arc::new(ControlService::new(h.ids.clone())),
+                ),
+            ))
             .with_sessions(Arc::new(
                 devworks_core::services::sessions::SessionService::new(
                     h.ids.clone(),
@@ -789,6 +795,155 @@ fn native_generation_persists_text_usage_and_exact_receipt_replay_without_second
 }
 
 #[test]
+fn fresh_native_request_uses_published_context_head_before_transport() {
+    runtime().block_on(async {
+        let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let f = Fx::new("CompatibleChat", Script::sse(wire), false);
+        let mut request = f.generation(vec![]);
+        let source = match &request.input {
+            InferenceInput::Generation { context, .. } => context,
+            _ => unreachable!(),
+        };
+        let bytes = f
+            .artifacts
+            .read_exact(f.store.as_ref(), &f.context, source, 1024 * 1024)
+            .unwrap()
+            .0;
+        let prompt: ProviderContext = serde_json::from_slice(&bytes).unwrap();
+        let binding = NativeBinding {
+            connection_id: id("connection"),
+            account_revision: Revision::new(1).unwrap(),
+            endpoint_profile: EndpointProfile::CompatibleChat,
+            model_id: f.model.clone(),
+            context_epoch: Counter::new(0).unwrap(),
+        };
+        let app = devworks_engine::boot(tool_runtime_composition(&f))
+            .await
+            .unwrap();
+        let first = app
+            .publish_initial_native_context(&f.context, &id("session"), &binding, &prompt)
+            .unwrap();
+        let invoke = |request| {
+            f.native_invocation(
+                request,
+                PricingContext {
+                    input_semantics: InputSemantics::Unknown,
+                    cache_read_possible: false,
+                    cache_write_possible: false,
+                    cache_write_ttl_ms: None,
+                },
+                vec!["Text".into()],
+                None,
+                None,
+                false,
+            )
+        };
+        assert!(app
+            .produce_and_dispatch_native_turn(invoke(request.clone()), None)
+            .await
+            .is_err());
+        assert!(f.http.lock().unwrap().requests.lock().unwrap().is_empty());
+        if let InferenceInput::Generation { context, .. } = &mut request.input {
+            *context = first;
+        }
+        let progress = app
+            .produce_and_dispatch_native_turn(invoke(request), None)
+            .await
+            .unwrap();
+        assert_eq!(progress.provider.result.outcome, Some(AttemptEnd::Completed));
+        assert!(progress.continuation.is_some());
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn initial_native_context_is_durable_idempotent_and_bound_to_first_prompt() {
+    runtime().block_on(async {
+        let f = Fx::new("CompatibleChat", Script::sse("data: [DONE]\n\n"), false);
+        let request = f.generation(vec![]);
+        let source = match &request.input {
+            InferenceInput::Generation { context, .. } => context,
+            _ => unreachable!(),
+        };
+        let bytes = f
+            .artifacts
+            .read_exact(f.store.as_ref(), &f.context, source, 1024 * 1024)
+            .unwrap()
+            .0;
+        let prompt: ProviderContext = serde_json::from_slice(&bytes).unwrap();
+        let binding = NativeBinding {
+            connection_id: id("connection"),
+            account_revision: Revision::new(1).unwrap(),
+            endpoint_profile: EndpointProfile::CompatibleChat,
+            model_id: f.model.clone(),
+            context_epoch: Counter::new(0).unwrap(),
+        };
+        let app = devworks_engine::boot(tool_runtime_composition(&f))
+            .await
+            .unwrap();
+        assert!(
+            app.recover_native_context_head(&f.context, &id("session"))
+                .unwrap()
+                .is_none()
+        );
+        let first = app
+            .publish_initial_native_context(&f.context, &id("session"), &binding, &prompt)
+            .unwrap();
+        let retry = app
+            .publish_initial_native_context(&f.context, &id("session"), &binding, &prompt)
+            .unwrap();
+        assert_eq!(retry.version_id, first.version_id);
+        let head = read(f.store.as_ref(), |snapshot| {
+            snapshot.sessions().provider_context_head(&id("session"))
+        })
+        .unwrap();
+        assert_eq!(head.kind, "ProviderInitialContext");
+        assert_eq!(head.revision, 1);
+        assert_eq!(head.observed_sequence, 0);
+        let (recovered, recovered_binding, cursor) = app
+            .recover_native_context_head(&f.context, &id("session"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.version_id, first.version_id);
+        assert_eq!(recovered_binding, binding);
+        assert_eq!(cursor, 0);
+        let mut different_prompt = prompt.clone();
+        different_prompt.messages.push(Message {
+            role: MessageRole::User,
+            content: vec![ContentBlock::Text {
+                text: "different request".into(),
+                cache: None,
+            }],
+        });
+        assert!(
+            app.publish_initial_native_context(
+                &f.context,
+                &id("session"),
+                &binding,
+                &different_prompt,
+            )
+            .is_err()
+        );
+        app.shutdown().await;
+        let restarted = devworks_engine::boot(tool_runtime_composition(&f))
+            .await
+            .unwrap();
+        assert_eq!(
+            restarted
+                .recover_native_context_head(&f.context, &id("session"))
+                .unwrap()
+                .unwrap()
+                .0
+                .version_id,
+            first.version_id,
+        );
+        assert!(f.http.lock().unwrap().requests.lock().unwrap().is_empty());
+        restarted.shutdown().await;
+    });
+}
+
+#[test]
 fn empty_completed_turn_keeps_a_cursor_and_replays_without_transport() {
     runtime().block_on(async {
         let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
@@ -819,13 +974,28 @@ fn empty_completed_turn_keeps_a_cursor_and_replays_without_transport() {
         let first = app.produce_and_dispatch_native_turn(invoke(request.clone()), None).await.unwrap();
         assert!(matches!(first.provider.accounting, DriveOutcome::AlreadyDispatched));
         let continuation = first.continuation.unwrap();
+        let head = read(f.store.as_ref(), |snapshot| {
+            snapshot.sessions().provider_context_head(&id("session"))
+        }).unwrap();
+        assert_eq!(head.context_epoch, 0);
+        assert_eq!(head.observed_sequence, 0);
+        assert_eq!(head.attempt_id, Some(produced.result.attempt_id.as_ref().unwrap().0.clone()));
+        assert_eq!(head.artifact, json!(continuation));
+        assert_eq!(head.revision, 1);
         let old = f.artifacts.read_exact(f.store.as_ref(), &f.context, &previous, 1024 * 1024).unwrap().0;
         let next = f.artifacts.read_exact(f.store.as_ref(), &f.context, &continuation, 1024 * 1024).unwrap().0;
         assert_eq!(next, old);
         let replay = app.produce_and_dispatch_native_turn(invoke(request), None).await.unwrap();
         assert_eq!(replay.continuation.unwrap().sha256, continuation.sha256);
+        assert_eq!(read(f.store.as_ref(), |snapshot| snapshot.sessions().provider_context_head(&id("session"))).unwrap().revision, 1);
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
         app.shutdown().await;
+        let recovered = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        let (artifact, binding, cursor) = recovered.recover_native_context_head(&f.context, &id("session")).unwrap().unwrap();
+        assert_eq!(artifact.sha256, continuation.sha256);
+        assert_eq!(binding.context_epoch.get(), 0);
+        assert_eq!(cursor, 0);
+        recovered.shutdown().await;
     });
 }
 
@@ -885,6 +1055,17 @@ fn provider_epoch_publishes_responses_context_without_old_cache_hints() {
         let epoch = read(f.store.as_ref(), |s| s.sessions().epoch(&id("session"), 1)).unwrap();
         assert_eq!(epoch.reason, "ProviderChange");
         app.shutdown().await;
+        let restarted = devworks_engine::boot(tool_runtime_composition(&f))
+            .await
+            .unwrap();
+        let (source, binding, cursor) = restarted
+            .recover_native_context_head(&f.context, &id("session"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(source.sha256, published.sha256);
+        assert_eq!(binding, next);
+        assert_eq!(cursor, epoch.sequence);
+        restarted.shutdown().await;
     });
 }
 
@@ -1046,9 +1227,145 @@ fn compaction_result_is_artifact_only_and_does_not_enter_session_transcript() {
     });
 }
 #[test]
+fn reviewer_agent_context_head_routes_with_its_existing_model_pin() {
+    runtime().block_on(async {
+        let f = Fx::new("CompatibleChat", Script::aggregate("{}"), false);
+        let human = principal(f.store.as_ref(), "route-owner", PrincipalKind::Human);
+        let agent = principal(f.store.as_ref(), "routed-agent", PrincipalKind::Agent)
+            .with_session(id("agent-session"));
+        write(f.store.as_ref(), {
+            let model = f.model.clone();
+            move |tx| {
+                bind_principal(
+                    tx,
+                    &human,
+                    NewPrincipalBinding {
+                        actor: ActorId(id("routed-agent")),
+                        kind: PrincipalKind::Agent,
+                        role: Some(devworks_core::settings::catalog::AgentRole::CodeReviewer),
+                        project_id: None,
+                        tool_families: None,
+                        bound_by: ActorId(id("route-owner")),
+                    },
+                    None,
+                )
+                .map_err(|error| StorageError::InvalidRecord(format!("binding: {error:?}")))?;
+                tx.sessions().insert_session(&StoredSession {
+                    id: id("agent-session"),
+                    conversation_id: id("agent-conversation"),
+                    agent_id: ActorId(id("routed-agent")),
+                    project_id: None,
+                    root_id: None,
+                    title: "Agent route".into(),
+                    context_epoch: 0,
+                    revision: 1,
+                    created_by: ActorId(id("route-owner")),
+                    created_at_ms: T0,
+                    closed_at_ms: None,
+                    closed_by: None,
+                    next_sequence: 1,
+                    checkpoint_sequence: 0,
+                })?;
+                tx.router().put_session_pin(
+                    &StoredPin {
+                        session_id: id("agent-session"),
+                        pin_id: id("agent-pin"),
+                        revision: 1,
+                        model_id: model,
+                        connection_id: id("connection"),
+                        upstream_model_id: Some("fixture-model".into()),
+                        endpoint_profile: Some("CompatibleChat".into()),
+                        identity_origin: "Resolved".into(),
+                        intent: serde_json::to_string(
+                            &devworks_core::protocol::records::RouteIntent::Model {
+                                model_id: id("model"),
+                            },
+                        )
+                        .unwrap(),
+                        requested_effort: "Default".into(),
+                        effective_effort: "Default".into(),
+                        required_capabilities: vec![],
+                        replaced_pin_id: None,
+                        reason: "Initial".into(),
+                        updated_at_ms: T0,
+                    },
+                    None,
+                )?;
+                Ok(())
+            }
+        })
+        .unwrap();
+        let app = devworks_engine::boot(tool_runtime_composition(&f))
+            .await
+            .unwrap();
+        let route = devworks_engine::agent_turns::route_context_head(
+            &app,
+            &agent,
+            &id("agent-session"),
+            0,
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(route.model_id, f.model);
+        assert_eq!(route.pin_id, id("agent-pin"));
+        assert_eq!(
+            read(f.store.as_ref(), |snapshot| {
+                snapshot.router().session_pin(&id("agent-session"))
+            })
+            .unwrap()
+            .required_capabilities,
+            ["tools"]
+        );
+        let replay = devworks_engine::agent_turns::route_context_head(
+            &app,
+            &agent,
+            &id("agent-session"),
+            0,
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(replay.pin_id, route.pin_id);
+        write(f.store.as_ref(), |tx| {
+            let mut model = tx.router().route_model(&id("model"))?.unwrap();
+            let expected = model.revision;
+            model.image_input = true;
+            model.revision += 1;
+            tx.router().put_route_model(&model, Some(expected))?;
+            Ok(())
+        })
+        .unwrap();
+        let image_route = devworks_engine::agent_turns::route_context_head(
+            &app,
+            &agent,
+            &id("agent-session"),
+            0,
+            None,
+            true,
+            true,
+        )
+        .unwrap();
+        assert_eq!(image_route.model_id, f.model);
+        assert_eq!(
+            read(f.store.as_ref(), |snapshot| {
+                snapshot.router().session_pin(&id("agent-session"))
+            })
+            .unwrap()
+            .required_capabilities,
+            ["tools", "vision"]
+        );
+        app.shutdown().await;
+    });
+}
+
+#[test]
 fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
     let f = Fx::new("CompatibleChat", Script::aggregate("{}"), false);
     let human = principal(f.store.as_ref(), "tool-selector", PrincipalKind::Human);
+    assert!(f.driver.schemas().selected_builtins(&human).is_err());
     let agent = principal(f.store.as_ref(), "selected-worker", PrincipalKind::Agent);
     let binding = NewPrincipalBinding {
         actor: ActorId(id("selected-worker")),
@@ -1074,6 +1391,57 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
         )
         .unwrap();
     assert!(f.driver.schemas().tool(&agent, &alias).is_ok());
+    let initial_tools = f.driver.schemas().selected_builtins(&agent).unwrap();
+    assert!(initial_tools.iter().any(|tool| {
+        tool.capability_id.as_str() == "devworks-query/sessions.get"
+            && tool.wire_name == "sessions_get_query"
+    }));
+    assert!(
+        !initial_tools
+            .iter()
+            .any(|tool| tool.capability_id.as_str() == "devworks-query/agents.history")
+    );
+    assert!(!initial_tools.iter().any(|tool| {
+        tool.capability_id
+            .as_str()
+            .starts_with("devworks-query/desktop.")
+            || tool
+                .capability_id
+                .as_str()
+                .starts_with("devworks-command/desktop.")
+            || tool.capability_id.as_str() == "devworks-command/browser.upload"
+    }));
+    assert_eq!(
+        serde_json::to_value(&initial_tools).unwrap(),
+        serde_json::to_value(f.driver.schemas().selected_builtins(&agent).unwrap()).unwrap()
+    );
+    let visibility = |name: &str, mode| {
+        read(f.store.as_ref(), |snapshot| {
+            let binding = snapshot.authority().principal(agent.principal())?.unwrap();
+            let policy =
+                devworks_core::authority::policy::resolve_policy(snapshot.configuration(), None)?;
+            let descriptor = devworks_core::registry::find(name).unwrap();
+            let selected = descriptor.binding(mode).unwrap();
+            Ok(
+                devworks_core::authority::policy::registered_tool_visibility(
+                    &agent,
+                    Some(&binding),
+                    &policy,
+                    descriptor,
+                    selected,
+                    selected.effect,
+                ),
+            )
+        })
+    };
+    assert!(!matches!(
+        visibility("desktop.capture", devworks_core::registry::Mode::Query),
+        devworks_core::authority::policy::Verdict::Allow
+    ));
+    assert!(!matches!(
+        visibility("browser.upload", devworks_core::registry::Mode::Command),
+        devworks_core::authority::policy::Verdict::Allow
+    ));
     let descriptor = devworks_core::settings::catalog::descriptor("tools.overrides").unwrap();
     let schema = descriptor.schema_ref();
     write(f.store.as_ref(), move |tx| {
@@ -1083,12 +1451,30 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
             1,
             1,
             json!({"values": {"tools.overrides": {"schema":schema,
-                "value":{"devworks/sessions.get":false}}}}),
+                "value":{"devworks/sessions.get":false,
+                    "devworks/desktop.capture":true,
+                    "devworks/browser.upload":true}}}}),
         )?;
         Ok(())
     })
     .unwrap();
     assert!(f.driver.schemas().tool(&agent, &alias).is_err());
+    assert!(
+        !f.driver
+            .schemas()
+            .selected_builtins(&agent)
+            .unwrap()
+            .iter()
+            .any(|tool| tool.capability_id.as_str() == "devworks-query/sessions.get")
+    );
+    assert!(matches!(
+        visibility("desktop.capture", devworks_core::registry::Mode::Query),
+        devworks_core::authority::policy::Verdict::Allow
+    ));
+    assert!(matches!(
+        visibility("browser.upload", devworks_core::registry::Mode::Command),
+        devworks_core::authority::policy::Verdict::Allow
+    ));
     let policy = read(f.store.as_ref(), |s| {
         devworks_core::authority::policy::resolve_policy(s.configuration(), None)
     });
@@ -1115,6 +1501,52 @@ fn shared_settings_tool_choice_is_rechecked_for_agent_schema_materialization() {
         devworks_core::authority::Verdict::Deny(
             devworks_core::authority::DenialReason::ToolNotSelected
         )
+    ));
+    for name in ["agents.history", "agents.events"] {
+        let hidden = read(f.store.as_ref(), |s| {
+            let binding = s.authority().principal(agent.principal())?.unwrap();
+            let operation = devworks_core::registry::find(name).unwrap();
+            let selected = operation
+                .binding(devworks_core::registry::Mode::Query)
+                .unwrap();
+            Ok(
+                devworks_core::authority::policy::registered_tool_visibility(
+                    &agent,
+                    Some(&binding),
+                    &policy,
+                    operation,
+                    selected,
+                    selected.effect,
+                ),
+            )
+        });
+        assert!(matches!(
+            hidden,
+            devworks_core::authority::Verdict::Deny(
+                devworks_core::authority::DenialReason::HumanOnly
+            )
+        ));
+    }
+    let receive_visibility = read(f.store.as_ref(), |s| {
+        let binding = s.authority().principal(agent.principal())?.unwrap();
+        let operation = devworks_core::registry::find("agents.receive").unwrap();
+        let selected = operation
+            .binding(devworks_core::registry::Mode::Command)
+            .unwrap();
+        Ok(
+            devworks_core::authority::policy::registered_tool_visibility(
+                &agent,
+                Some(&binding),
+                &policy,
+                operation,
+                selected,
+                selected.effect,
+            ),
+        )
+    });
+    assert!(matches!(
+        receive_visibility,
+        devworks_core::authority::Verdict::Allow
     ));
     write(f.store.as_ref(), |tx| {
         let mut session = tx.sessions().session(&id("session"))?.unwrap();
@@ -1609,6 +2041,28 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
 }
 
 #[test]
+fn a_provider_turn_cannot_emit_more_than_sixteen_delegations() {
+    runtime().block_on(async {
+        let calls: Vec<_> = (0..17)
+            .map(|index| {
+                json!({"index":index,"id":format!("delegate-{index}"),"type":"function",
+                    "function":{"name":"delegate_agent","arguments":"{}"}})
+            })
+            .collect();
+        let event = json!({"choices":[{"index":0,"delta":{"tool_calls":calls},"finish_reason":null}]});
+        let wire = format!("data: {event}\n\ndata: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n");
+        let f = Fx::new("CompatibleChat", Script::sse(&wire), false);
+        let mut tool = f.driver.schemas().builtin("agents.delegate", devworks_core::registry::Mode::Command,
+            devworks_core::registry::SchemaRevision(1), "delegate_agent").unwrap();
+        tool.capability_id = devworks_core::protocol::provider::QualifiedId::try_from(
+            "devworks-command/agents.delegate".to_owned(),
+        ).unwrap();
+        let result = f.produce(f.generation(vec![tool])).await;
+        assert!(result.is_err(), "a seventeenth delegation must fail provider admission");
+    });
+}
+
+#[test]
 fn fresh_native_tool_turn_publishes_context_and_holds_on_user_redirection() {
     runtime().block_on(async {
         let event = json!({"choices":[{"index":0,"delta":{"tool_calls":[
@@ -1658,10 +2112,12 @@ fn fresh_native_tool_turn_publishes_context_and_holds_on_user_redirection() {
             Ok(())
         }).unwrap();
         let result = &progress.provider.result;
-        assert!(app.tool_continuation_context(&f.context, &id("session"),
+        let redirected = app.tool_continuation_context(&f.context, &id("session"),
             result.attempt_id.as_ref().unwrap(), result.turn_start_sequence.unwrap(),
-            result.binding.as_ref().unwrap(), &previous).is_err());
-        assert!(app.produce_and_dispatch_native_turn(invoke(request), None).await.is_err());
+            result.binding.as_ref().unwrap(), &previous).unwrap();
+        assert!(redirected.messages.iter().flat_map(|message| &message.content).any(|block|
+            matches!(block, ContentBlock::Text { text, .. } if text == "Change direction")));
+        assert!(app.produce_and_dispatch_native_turn(invoke(request), None).await.is_ok());
         assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
         app.shutdown().await;
     });
@@ -1809,6 +2265,18 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
             Ok(())
         }).unwrap();
         let second = app.refresh_native_tool_context(&f.context, &id("session"), &changed).unwrap();
+        let head = read(f.store.as_ref(), |snapshot| snapshot.sessions().provider_context_head(&id("session"))).unwrap();
+        assert_eq!(head.kind, "ProviderOperationUpdateContext");
+        assert_eq!(head.context_epoch, 1);
+        assert_eq!(head.artifact, json!(second));
+        assert_eq!(app.refresh_native_tool_context(&f.context, &id("session"), &changed).unwrap().version_id, second.version_id);
+        let (recovered, recovered_binding, cursor) = app.recover_native_context_head(&f.context, &id("session")).unwrap().unwrap();
+        assert_eq!(recovered.version_id, second.version_id);
+        assert_eq!(recovered_binding, next_binding);
+        assert_eq!(cursor, head.observed_sequence);
+        app.shutdown().await;
+        let app = devworks_engine::boot(tool_runtime_composition(&f)).await.unwrap();
+        assert_eq!(app.recover_native_context_head(&f.context, &id("session")).unwrap().unwrap().0.version_id, second.version_id);
         let material: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
             f.store.as_ref(), &f.context, &second, 1024 * 1024).unwrap().0).unwrap();
         assert_eq!(material.messages.len(), 6);
@@ -1826,7 +2294,22 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
                 BatchOutcome::Accepted(_)));
             Ok(())
         }).unwrap();
-        assert!(app.refresh_native_tool_context(&f.context, &id("session"), &second).is_err());
+        let redirected = app.refresh_native_tool_context(&f.context, &id("session"), &second).unwrap();
+        let redirected_context: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
+            f.store.as_ref(), &f.context, &redirected, 1024 * 1024).unwrap().0).unwrap();
+        assert!(matches!(&redirected_context.messages.last().unwrap().content[0],
+            ContentBlock::Text { text, .. } if text == "Redirect"));
+        assert_eq!(app.refresh_native_tool_context(&f.context, &id("session"), &redirected)
+            .unwrap().version_id, redirected.version_id);
+        devworks_core::services::sessions::notice::append_screen_context(
+            f.store.as_ref(), &f.artifacts, &f.context, &id("session"),
+            "overview", "Current screen: Overview",
+        ).unwrap();
+        let noticed = app.refresh_native_tool_context(&f.context, &id("session"), &redirected).unwrap();
+        let noticed_context: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
+            f.store.as_ref(), &f.context, &noticed, 1024 * 1024).unwrap().0).unwrap();
+        assert!(matches!(&noticed_context.messages.last().unwrap().content[0],
+            ContentBlock::Text { text, .. } if text == "Current screen: Overview"));
         app.shutdown().await;
     });
 }

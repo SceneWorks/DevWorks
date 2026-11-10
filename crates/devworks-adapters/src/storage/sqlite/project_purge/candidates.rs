@@ -207,6 +207,14 @@ pub(super) fn selection(project: &ProjectId) -> Result<Selection, StorageError> 
         "owned_containers".into(),
         Value::String("project_id=?1".into()),
     );
+    for table in [
+        "agent_messages",
+        "agent_message_deliveries",
+        "agent_message_events",
+        "agent_assignment_context",
+    ] {
+        predicates.insert(table.into(), Value::String("project_id=?1".into()));
+    }
     // A workspace item or revision a project-confined agent drafted is confined to (and purged
     // with) that project until a person approves it.
     predicates.insert(

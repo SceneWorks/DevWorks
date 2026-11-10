@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-02",
+  "date": "2026-11-09",
   "status": "Frozen source bytes and schema/ownership bindings verified; method argument/result semantics and actual native parity remain CAP acceptance work",
   "frozenRevision": "afe73560215bbe7593fc59451de5cc3237e3eeca",
   "currentRepositoryHead": "bec77ed044d3ace42366c8143444fa82dafde7aa",
@@ -7,7 +7,7 @@
   "sourceEntries": 558,
   "retainedEntries": 494,
   "excludedEntries": 64,
-  "qualifiedOperations": 347,
+  "qualifiedOperations": 369,
   "unboundOperationInputs": 0,
   "unboundOperationResults": 0,
   "files": [
@@ -4170,7 +4170,7 @@
         "spanSha256": "b1afc4fb77f2623274591e068aeb5bb7af59de879446b3c562e93b6fa9c608c2"
       },
       "operations": [
-        "agents.messages"
+        "agents.post"
       ],
       "implementationSlices": [
         "delegation"
@@ -4188,7 +4188,7 @@
         "spanSha256": "11dc7e2e8d12cbae9629b098584d25f63201ce742e4acd501cdb30bcb47273c4"
       },
       "operations": [
-        "agents.acknowledge"
+        "agents.ack"
       ],
       "implementationSlices": [
         "delegation"
@@ -4206,7 +4206,7 @@
         "spanSha256": "bd71d8175eb95c54c1be4e6f719d67c17466cf99a8edff9e153e419c3731bfd4"
       },
       "operations": [
-        "agents.inbox"
+        "agents.receive"
       ],
       "implementationSlices": [
         "delegation"
@@ -4462,7 +4462,7 @@
         "spanSha256": "133969b7cf9229e85f1c1588f3066ca6b69deb86b0fef77d90b143ba7c642c24"
       },
       "operations": [
-        "agents.messages"
+        "agents.events"
       ],
       "implementationSlices": [
         "delegation"
@@ -4516,7 +4516,7 @@
         "spanSha256": "2de3809822543c1061d89e2f25005d830ff48f09add0a26d5fa8a9240f3854bb"
       },
       "operations": [
-        "agents.messages"
+        "agents.history"
       ],
       "implementationSlices": [
         "delegation"
@@ -9236,7 +9236,7 @@
         "spanSha256": "d29da07a610ca3282b0146236b1596493c6888a8cd5d26e7e2cd7e8bfade314d"
       },
       "operations": [
-        "agents.messages"
+        "agents.post"
       ],
       "implementationSlices": [
         "delegation"
@@ -9254,7 +9254,7 @@
         "spanSha256": "453379a07f832e263c285c2bff7ce48806b4d65905e8a97d59482093cca00b3a"
       },
       "operations": [
-        "agents.inbox"
+        "agents.receive"
       ],
       "implementationSlices": [
         "delegation"
@@ -9272,7 +9272,7 @@
         "spanSha256": "b04568e37178e2148d4310a57860dff943b590e856783ffe0b59295b3c586a60"
       },
       "operations": [
-        "agents.acknowledge"
+        "agents.ack"
       ],
       "implementationSlices": [
         "delegation"
@@ -10480,10 +10480,10 @@
     }
   ],
   "inputSha256": {
-    "docs/architecture/codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
-    "docs/architecture/contracts/family-coverage.json": "e164c2cb951a6af4e9db33155abc6cef76311883b4ae7ffc32b6c943100ea457",
-    "docs/architecture/implementation-plan.json": "c0dbb5b8616d426bbbc78ecaf0b3501d9a02095b85905614526707eb0955891e",
-    "docs/architecture/devworks-capability-catalog.json": "070309952777af3c44c10fbd13f5bed9b584ca7b1617e335b859116770a897c1"
+    "docs/architecture/codegraph-capability-inventory.json": "54da948de48de4a7d00353ae14d7464feac80cca9bdab6d2a6bb2679caae2c09",
+    "docs/architecture/contracts/family-coverage.json": "075d702bed7fc7a1e2fd74aa5c022c04125b8baa19b459da831c32ba9d872fb8",
+    "docs/architecture/implementation-plan.json": "c9759d96de0fc12083d97c747a1a93c2effc827e00511ef347c053a728401e29",
+    "docs/architecture/devworks-capability-catalog.json": "8714599ea1a066c303665e012145cd7e51e92dc259ef31975bd9a73924dcf172"
   },
   "noInference": true,
   "allPassed": true

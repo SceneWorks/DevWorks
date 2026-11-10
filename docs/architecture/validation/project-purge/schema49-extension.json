@@ -1,0 +1,20 @@
+{
+  "schema": 49,
+  "policy": "dw34-instructions-v1",
+  "additionalTables": [
+    {
+      "table": "instructions",
+      "class": "instruction_ownership",
+      "disposition": "project_owner",
+      "purpose": "Project-scoped skill and role instruction items, and workspace items a project-confined agent created that nothing has approved yet (confined_project_id), are deleted with their project; every other workspace item is never a candidate."
+    },
+    {
+      "table": "instruction_revisions",
+      "class": "instruction_ownership",
+      "disposition": "project_owner",
+      "purpose": "Immutable revisions of a deleted instruction item follow their item; an unapproved draft a project-confined agent wrote on a workspace item (confined_project_id) is deleted with that project."
+    }
+  ],
+  "readerFloor": 48,
+  "writerFloor": 49
+}

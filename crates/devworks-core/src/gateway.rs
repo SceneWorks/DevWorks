@@ -217,6 +217,17 @@ pub struct Gateway<'p> {
     pub ids: &'p dyn IdSource,
 }
 
+struct CommandPreparation {
+    admitted: AdmittedCommand,
+    authorization: Authorization,
+    handler: Arc<dyn CommandHandler>,
+    options: WriteOptions,
+    request_key: RequestKey,
+}
+
+/// Opaque, read-only preparation for a retained inbox wait. It carries no staged effect.
+pub struct PreparedReceive(CommandPreparation);
+
 impl Gateway<'_> {
     fn correlation(&self) -> CorrelationId {
         CorrelationId(self.ids.next_id(IdKind::Correlation))
@@ -441,6 +452,56 @@ impl Gateway<'_> {
         handler: Arc<dyn CommandHandler>,
         options: WriteOptions,
     ) -> CommandOutcome {
+        let prepared = match self.prepare_command(ctx, operation, raw, handler, options) {
+            Ok(prepared) => prepared,
+            Err(outcome) => return outcome,
+        };
+        self.finish_command(ctx, prepared)
+    }
+
+    /// Prepare a selected retained receive outside the runtime's shutdown admission fence.
+    /// It only reads snapshots and can be abandoned if shutdown closes before the final write.
+    pub fn prepare_receive(
+        &self,
+        ctx: &InvocationContext,
+        raw: &[u8],
+        handler: Arc<dyn CommandHandler>,
+        options: WriteOptions,
+    ) -> Result<PreparedReceive, CommandOutcome> {
+        let prepared = self.prepare_command(ctx, "agents.receive", raw, handler, options)?;
+        if prepared.admitted.prepared.is_some() {
+            let env = Preparation::new(
+                self.store,
+                prepared.options.cancellation.as_ref(),
+                prepared.options.deadline_ms,
+            );
+            prepared
+                .handler
+                .settle(ctx, prepared.admitted.prepared.as_ref(), None, &env);
+            return Err(Err(GatewayFailure::HandlerContract(
+                "retained receive preparation cannot stage an effect".into(),
+            )));
+        }
+        Ok(PreparedReceive(prepared))
+    }
+
+    /// Decide a prepared receive while the runtime holds its short admission fence.
+    pub fn finish_receive(
+        &self,
+        ctx: &InvocationContext,
+        prepared: PreparedReceive,
+    ) -> CommandOutcome {
+        self.finish_command(ctx, prepared.0)
+    }
+
+    fn prepare_command(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        handler: Arc<dyn CommandHandler>,
+        options: WriteOptions,
+    ) -> Result<CommandPreparation, CommandOutcome> {
         let decoded = match admission::decode(
             Selection {
                 operation,
@@ -450,13 +511,13 @@ impl Gateway<'_> {
         ) {
             Ok(d) => d,
             Err(refusal) => {
-                return self.address(refusal, |s, key, error| s.command_rejected(key, error));
+                return Err(self.address(refusal, |s, key, error| s.command_rejected(key, error)));
             }
         };
         let CallerKey::Command(request_key) = decoded.key else {
-            return Err(GatewayFailure::HandlerContract(
+            return Err(Err(GatewayFailure::HandlerContract(
                 "command admitted with a query key".into(),
-            ));
+            )));
         };
         let request = AuthorityRequest {
             descriptor: decoded.descriptor,
@@ -479,13 +540,13 @@ impl Gateway<'_> {
                 if let AuthorityDenial::Policy(reason) = denial {
                     self.record_denial(ctx, decoded.descriptor.name, reason, &correlation_id);
                 }
-                return Ok(CommandReply::Rejected {
+                return Err(Ok(CommandReply::Rejected {
                     protocol: Protocol::Draft1,
                     request_key,
                     code,
                     retry: RetryAdvice::Never,
                     correlation_id,
-                });
+                }));
             }
         };
         let mut admitted = AdmittedCommand {
@@ -536,9 +597,36 @@ impl Gateway<'_> {
                     StorageError::IncompatibleSchema(_) => RetryAdvice::Never,
                     _ => RetryAdvice::SameCommand,
                 };
-                return Ok(self.rejected(request_key, Rejection::StorageUnavailable, retry));
+                return Err(Ok(self.rejected(
+                    request_key,
+                    Rejection::StorageUnavailable,
+                    retry,
+                )));
             }
         }
+        Ok(CommandPreparation {
+            admitted,
+            authorization,
+            handler,
+            options,
+            request_key,
+        })
+    }
+
+    fn finish_command(
+        &self,
+        ctx: &InvocationContext,
+        prepared_command: CommandPreparation,
+    ) -> CommandOutcome {
+        let CommandPreparation {
+            admitted,
+            authorization,
+            handler,
+            options,
+            request_key,
+        } = prepared_command;
+        let cancellation = options.cancellation.clone();
+        let env = Preparation::new(self.store, cancellation.as_ref(), options.deadline_ms);
         // The use case settles what it prepared once the outcome is known (for example a staged
         // file whose metadata a refusal or rollback never committed).
         let prepared = admitted.prepared.clone();

@@ -26,6 +26,21 @@ pub type Waker = Box<dyn Fn() + Send + Sync>;
 
 /// The application operations the shell may use.
 pub trait Backend: Send + Sync {
+    /// Trusted host-only append of the selected coordinator conversation's screen context.
+    fn append_coordinator_notice(
+        &self,
+        _session: &Id,
+        _screen: &str,
+        _context: &str,
+    ) -> Result<(), String> {
+        Err("coordinator context notices are unavailable".into())
+    }
+    fn read_coordinator_notice(
+        &self,
+        _reference: &devworks_core::protocol::provider::ArtifactRef,
+    ) -> Result<String, String> {
+        Err("coordinator context is unavailable".into())
+    }
     /// Admits a query frame for `operation` with the host-bound user context.
     fn query(&self, operation: &str, frame: &[u8]) -> QueryOutcome;
     /// Only a host that forwards the token to the real gateway may advertise this seam.
@@ -416,6 +431,11 @@ pub enum Slot {
     WorkCards(String),
     /// The project change feed (Activity) of a project.
     WorkActivity(String, Option<String>, u64),
+    WorkMessagesHistory(String),
+    WorkMessagesInbox(String),
+    WorkMessagesEvents(String),
+    WorkMessagePost(String),
+    WorkMessageAck(String, String),
     /// One work item's current record (readiness included).
     WorkDetail(String),
     WorkGit(String),

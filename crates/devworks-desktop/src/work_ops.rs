@@ -9,7 +9,8 @@ use crate::ops::{
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::protocol::records::{
     AllocationClaimRecord, AllocationQueueSnapshot, AllocationSelection, MutationSummary,
-    ProposalRecord, RootSnapshot, StatusRecord, WorkRecord,
+    ProposalRecord, RetainedAckResult, RetainedEventPage, RetainedHistoryPage, RetainedInboxResult,
+    RetainedPostResult, RootSnapshot, StatusRecord, WorkRecord,
 };
 use devworks_core::protocol::results::OperationResult;
 use devworks_core::protocol::{Cause, Event};
@@ -17,6 +18,97 @@ use serde_json::{Value, json};
 
 /// Work records include authored task types and labels from schema revision 3.
 pub const WORK_REVISION: u64 = 3;
+pub const MESSAGE_REVISION: u64 = 7;
+
+pub fn message_history(backend: &dyn Backend, project: &str, before: Option<i64>) -> Vec<u8> {
+    let mut body = json!({"projectId":project,"limit":"100"});
+    if let Some(before) = before {
+        body["before"] = json!(before.to_string());
+    }
+    at_revision(
+        query_frame(backend, "agents.history", body),
+        MESSAGE_REVISION,
+    )
+}
+
+pub fn message_history_page(outcome: QueryOutcome) -> Result<RetainedHistoryPage, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::AgentsHistory { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("agents.history", &other)),
+    }
+}
+
+pub fn message_inbox(backend: &dyn Backend, project: &str, cursor: Option<&str>) -> Vec<u8> {
+    let mut body = json!({"projectId":project,"limit":"100","waitSeconds":0});
+    if let Some(cursor) = cursor {
+        body["cursor"] = json!(cursor);
+    }
+    at_revision(
+        command_frame(backend, "agents.receive", body),
+        MESSAGE_REVISION,
+    )
+}
+
+pub fn message_inbox_page(outcome: CommandOutcome) -> Result<RetainedInboxResult, Failure> {
+    match command_result(outcome)? {
+        OperationResult::AgentsReceive { value } => Ok(value),
+        other => Err(unexpected("agents.receive", &other)),
+    }
+}
+
+pub fn message_post(backend: &dyn Backend, project: &str, body: Value) -> Vec<u8> {
+    let mut body = body;
+    body["projectId"] = json!(project);
+    at_revision(
+        command_frame(backend, "agents.post", body),
+        MESSAGE_REVISION,
+    )
+}
+
+pub fn message_posted(outcome: CommandOutcome) -> Result<RetainedPostResult, Failure> {
+    match command_result(outcome)? {
+        OperationResult::AgentsPost { value } => Ok(value),
+        other => Err(unexpected("agents.post", &other)),
+    }
+}
+
+pub fn message_ack(
+    backend: &dyn Backend,
+    project: &str,
+    message: &str,
+    resolution: Option<&str>,
+) -> Vec<u8> {
+    let mut body = json!({"projectId":project,"messages":[message]});
+    if let Some(resolution) = resolution {
+        body["resolution"] = json!(resolution);
+    }
+    at_revision(command_frame(backend, "agents.ack", body), MESSAGE_REVISION)
+}
+
+pub fn message_acked(outcome: CommandOutcome) -> Result<RetainedAckResult, Failure> {
+    match command_result(outcome)? {
+        OperationResult::AgentsAck { value } => Ok(value),
+        other => Err(unexpected("agents.ack", &other)),
+    }
+}
+
+pub fn message_events(backend: &dyn Backend, project: &str, after: Option<i64>) -> Vec<u8> {
+    let mut body = json!({"projectId":project,"limit":"100"});
+    if let Some(after) = after {
+        body["after"] = json!(after.to_string());
+    }
+    at_revision(
+        query_frame(backend, "agents.events", body),
+        MESSAGE_REVISION,
+    )
+}
+
+pub fn message_events_page(outcome: QueryOutcome) -> Result<RetainedEventPage, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::AgentsEvents { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("agents.events", &other)),
+    }
+}
 
 /// A page of `features.list`, `issues.list` or `tasks.list` of `project` (schema revision 3).
 pub fn work_list(
