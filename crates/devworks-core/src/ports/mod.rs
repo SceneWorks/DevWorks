@@ -13,6 +13,7 @@ pub mod files;
 pub mod git_transport;
 pub mod http;
 pub mod indexing;
+pub mod mcp;
 pub mod os_notifications;
 pub mod packages;
 pub mod process;

@@ -52,6 +52,7 @@ pub mod host;
 pub mod instructions_ops;
 pub mod instructions_screen;
 pub mod knowledge_screen;
+pub mod mcp_panel;
 pub mod memory;
 pub mod native_notifications;
 pub mod notifications;

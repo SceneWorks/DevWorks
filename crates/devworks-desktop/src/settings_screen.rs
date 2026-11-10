@@ -4,6 +4,7 @@
 //! the view; saving submits the view's exact `settings.save_revision` input. Configured values,
 //! drafts, validation and runtime health are kept apart.
 use crate::connections_screen::{ConnectionAction, ConnectionsPanel};
+use crate::mcp_panel::{McpAction, McpPanel};
 use crate::memory::SettingsMemory;
 use crate::theme;
 use crate::web_panel::{WebAction, WebPanel, WebSettings};
@@ -54,6 +55,7 @@ pub struct SettingsScreen {
     pub show_connections: bool,
     /// The web search and fetch section of Agent tools.
     pub web: WebPanel,
+    pub mcp: McpPanel,
     pub container_capabilities: Option<Vec<ContainerCapability>>,
     pub container_error: Option<String>,
     /// Roles and skills (DW-34).
@@ -86,6 +88,7 @@ pub enum SettingsAction {
     Web(WebAction),
     /// Roles and skills (DW-34).
     Instructions(crate::instructions_screen::InstructionAction),
+    Mcp(McpAction),
 }
 
 impl SettingsScreen {
@@ -446,6 +449,9 @@ impl SettingsScreen {
                 let mut web = Vec::new();
                 self.web.ui(ui, &settings, online, &mut web);
                 actions.extend(web.into_iter().map(SettingsAction::Web));
+                let mut mcp = Vec::new();
+                self.mcp.ui(ui, online.is_ok(), &mut mcp);
+                actions.extend(mcp.into_iter().map(SettingsAction::Mcp));
             }
         });
         scrolls.record("settings-items", out.state.clamped_offset().y);
@@ -902,7 +908,7 @@ fn self_editor(
                     }
                 }
             });
-            ui.label("Package and MCP tools use their exact capability IDs after discovery.");
+            ui.label("Package tools use exact capability IDs. Select external MCP tools in the server panel below.");
             let mut remove = None;
             for (key, value) in &mut choices {
                 if key.starts_with("devworks/") {
@@ -925,9 +931,7 @@ fn self_editor(
             }
             let buffer = buffers.entry(d.key).or_default();
             ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(buffer).hint_text("package/id or mcp/server.tool"),
-                );
+                ui.add(egui::TextEdit::singleline(buffer).hint_text("package/id"));
                 if ui.button("Add tool").clicked() && !buffer.is_empty() {
                     choices.insert(std::mem::take(buffer), json!(true));
                     changed = true;

@@ -831,6 +831,24 @@ impl ConnectionService {
         self.write_handle(principal, true, &Credential::ApiKey(Secret::new(trimmed)))
     }
 
+    /// MCP bearer handles use a separate purpose marker inside this store's secret namespace.
+    /// A remote MCP endpoint may never consume an ordinary provider connection handle.
+    pub fn stage_mcp_api_key(&self, principal: &ActorId, key: Secret) -> Result<Id, SecretError> {
+        let trimmed = key.expose().trim();
+        if trimmed.is_empty() {
+            return Err(SecretError::Failed("empty key".into()));
+        }
+        let minted = self.ids.next_id(IdKind::Credential);
+        let handle = Id::new(format!("mcp-{}", minted.as_str()))
+            .map_err(|_| SecretError::Failed("MCP credential handle unavailable".into()))?;
+        self.write_handle_reserved(
+            principal,
+            true,
+            &Credential::ApiKey(Secret::new(trimmed)),
+            handle,
+        )
+    }
+
     /// Writes `credential` under a new handle, registered as staged first so a concurrent
     /// reconcile never deletes it before it is published.
     fn write_handle(
@@ -1581,7 +1599,11 @@ impl ConnectionService {
         if handles.is_empty() {
             return;
         }
-        let Ok(refs) = self.read(|s| referenced(s.router())) else {
+        let Ok(refs) = self.read(|s| {
+            let mut refs = referenced(s.router())?;
+            refs.extend(crate::services::mcp::credential_references(s)?);
+            Ok(refs)
+        }) else {
             return;
         };
         for h in handles {
@@ -1599,7 +1621,11 @@ impl ConnectionService {
         let now = self.now();
         let listed = self.noted(self.secrets.list(&self.namespace()))?;
         let refs = self
-            .read(|s| referenced(s.router()))
+            .read(|s| {
+                let mut refs = referenced(s.router())?;
+                refs.extend(crate::services::mcp::credential_references(s)?);
+                Ok(refs)
+            })
             .map_err(|e| SecretError::Failed(format!("{e:?}")))?;
         let mut removed = 0;
         for h in listed {
@@ -1623,7 +1649,11 @@ impl ConnectionService {
             }
             // Re-read the references: a publish may have committed meanwhile.
             let still = self
-                .read(|s| referenced(s.router()))
+                .read(|s| {
+                    let mut refs = referenced(s.router())?;
+                    refs.extend(crate::services::mcp::credential_references(s)?);
+                    Ok(refs)
+                })
                 .map_err(|e| SecretError::Failed(format!("{e:?}")))?;
             if still.contains(h.as_str()) {
                 continue;

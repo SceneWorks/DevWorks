@@ -2225,7 +2225,8 @@
         "state": "ItemState",
         "transport": "Label",
         "selected_tool_ids": "Items<Id>",
-        "catalog_revision": "Revision"
+        "catalog_revision": "Revision",
+        "last_failure": "?Text"
       }
     },
     "McpTransport": {
@@ -10071,6 +10072,7 @@
       "operation": "mcp.connect",
       "mode": "Command",
       "fields": {
+        "scope": "DataScope",
         "server_id": "Id",
         "expected_revision": "Revision"
       },
@@ -10083,6 +10085,7 @@
       "operation": "mcp.discover",
       "mode": "Command",
       "fields": {
+        "scope": "DataScope",
         "server_id": "Id",
         "expected_catalog_revision": "Revision"
       },
@@ -10095,6 +10098,7 @@
       "operation": "mcp.select_tools",
       "mode": "Command",
       "fields": {
+        "scope": "DataScope",
         "server_id": "Id",
         "expected_revision": "Revision",
         "expected_catalog_revision": "Revision",
@@ -10109,6 +10113,7 @@
       "operation": "mcp.resources",
       "mode": "Query",
       "fields": {
+        "scope": "DataScope",
         "server_id": "Id",
         "catalog_revision": "Revision",
         "uri": "?Text",
@@ -10123,6 +10128,7 @@
       "operation": "mcp.prompts",
       "mode": "Query",
       "fields": {
+        "scope": "DataScope",
         "server_id": "Id",
         "catalog_revision": "Revision",
         "name": "?Label",
@@ -10138,6 +10144,7 @@
       "operation": "mcp.capabilities",
       "mode": "Query",
       "fields": {
+        "scope": "DataScope",
         "server_id": "Id",
         "catalog_revision": "Revision",
         "page": "PageRequest"

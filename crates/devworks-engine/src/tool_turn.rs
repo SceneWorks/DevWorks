@@ -7,7 +7,7 @@ use devworks_core::{
     fingerprint::sha256_hex,
     ports::{IdKind, storage::*},
     protocol::{
-        AttemptId, CONTRACT, CommandReply, Id, OperationId, RetryAdvice, Revision,
+        AttemptId, CONTRACT, CommandReply, Id, OperationId, OperationState, RetryAdvice, Revision,
         provider::{
             ArtifactRef, CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody,
         },
@@ -796,6 +796,12 @@ fn continuation_context_at_epoch(
     }
     let mut results = Vec::new();
     for item in resolved {
+        let operation_id = match &item.outcome {
+            ToolOutcome::OperationAccepted { operation_id, .. }
+            | ToolOutcome::ApprovalRequired { operation_id, .. }
+            | ToolOutcome::OutcomeUnknown { operation_id, .. } => Some(operation_id.clone()),
+            _ => None,
+        };
         let (content, is_error) = match item.outcome {
             ToolOutcome::Completed { artifacts: refs }
             | ToolOutcome::OperationAccepted {
@@ -833,6 +839,7 @@ fn continuation_context_at_epoch(
         };
         results.push(ContentBlock::ToolResult {
             call_id: item.call.call.native_call_id,
+            operation_id,
             content,
             is_error,
             cache: None,
@@ -850,22 +857,18 @@ fn continuation_context_at_epoch(
             content: results,
         });
     }
+    let linked = linked_operations(store, ctx, session_id)?;
     for (operation_id, revision, artifact) in updates {
-        context.messages.push(Message {
-            role: MessageRole::User,
-            content: vec![ContentBlock::Text {
-                text: operation_update_text(
-                    store,
-                    artifacts,
-                    ctx,
-                    session_id,
-                    &operation_id,
-                    &revision,
-                    &artifact,
-                )?,
-                cache: None,
-            }],
-        });
+        let text = operation_update_text(
+            store,
+            artifacts,
+            ctx,
+            session_id,
+            &operation_id,
+            &revision,
+            &artifact,
+        )?;
+        append_operation_result(&mut context, &linked, &operation_id, text)?;
     }
     for entry in after_turn {
         let blocks = match entry {
@@ -1073,11 +1076,27 @@ fn operation_update_text(
             .ok_or(StorageError::ScopeDenied)
     })?;
     if !version.live()
+        || version.id != artifact.version_id
         || version.artifact_id != artifact.artifact_id
+        || version.blob_digest != artifact.sha256.as_str()
+        || version.byte_count != artifact.byte_length.get()
+        || version.media_type != artifact.media_type
         || version.source["principalKind"] != "Host"
         || version.source["producedBy"] != store.info().host_actor.0.as_str()
+        || version.source["source"]["kind"] != "ToolOperationUpdate"
+        || version.source["source"]["sessionId"] != session_id.as_str()
+        || version.source["source"]["operationId"] != operation_id.0.as_str()
+        || version.source["source"]["revision"] != revision.get()
     {
         return Err(StorageError::ScopeDenied);
+    }
+    if artifact.byte_length.get() > 1024 * 1024 {
+        // The update artifact holds the complete result. Keep the provider continuation bounded
+        // and give the agent its exact reference instead of failing a 1 MiB context read.
+        return Ok(format!(
+            "Tool operation update: full result in artifact {}",
+            serde_json::to_string(artifact).map_err(invalid)?
+        ));
     }
     let (bytes, provenance) = artifacts
         .read_exact(store, ctx, artifact, 1024 * 1024)
@@ -1100,13 +1119,89 @@ fn operation_update_text(
     ))
 }
 
-pub(crate) fn context_fact_message(
+fn append_operation_result(
+    context: &mut ProviderContext,
+    linked: &[StoredToolCall],
+    operation_id: &OperationId,
+    text: String,
+) -> Result<(), StorageError> {
+    let call_id = &linked
+        .iter()
+        .find(|call| call.operation_id.as_ref() == Some(operation_id))
+        .ok_or(StorageError::ScopeDenied)?
+        .native_call_id;
+    let tagged = context
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter(|block| {
+            matches!(block, ContentBlock::ToolResult { call_id: id, operation_id: Some(op), .. }
+            if id == call_id && op == operation_id)
+        })
+        .count();
+    let legacy = context
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter(|block| {
+            matches!(block, ContentBlock::ToolResult { call_id: id, operation_id: None, .. }
+            if id == call_id)
+        })
+        .count();
+    if tagged != 1 && (tagged != 0 || legacy != 1) {
+        return Err(StorageError::ScopeDenied);
+    }
+    let result = context
+        .messages
+        .iter_mut()
+        .flat_map(|message| message.content.iter_mut())
+        .find(|block| match block {
+            ContentBlock::ToolResult {
+                call_id: id,
+                operation_id: op,
+                ..
+            } if id == call_id => {
+                op.as_ref() == Some(operation_id) || (tagged == 0 && op.is_none())
+            }
+            _ => false,
+        })
+        .ok_or(StorageError::ScopeDenied)?;
+    if let ContentBlock::ToolResult { content, .. } = result {
+        content.push(ResultBlock::Text { text });
+    }
+    Ok(())
+}
+
+pub(crate) fn append_context_fact(
+    context: &mut ProviderContext,
     store: &dyn ApplicationStore,
     artifacts: &Arc<ArtifactService>,
     ctx: &InvocationContext,
     session_id: &Id,
     body: TranscriptBody,
-) -> Result<Message, StorageError> {
+) -> Result<(), StorageError> {
+    if let TranscriptBody::OperationUpdate {
+        operation_id,
+        revision,
+        artifact,
+    } = body
+    {
+        let text = operation_update_text(
+            store,
+            artifacts,
+            ctx,
+            session_id,
+            &operation_id,
+            &revision,
+            &artifact,
+        )?;
+        return append_operation_result(
+            context,
+            &linked_operations(store, ctx, session_id)?,
+            &operation_id,
+            text,
+        );
+    }
     let content = match body {
         TranscriptBody::UserMessage { content } => content
             .into_iter()
@@ -1145,33 +1240,17 @@ pub(crate) fn context_fact_message(
             .map_err(invalid)?,
             cache: None,
         }],
-        TranscriptBody::OperationUpdate {
-            operation_id,
-            revision,
-            artifact,
-        } => vec![ContentBlock::Text {
-            text: operation_update_text(
-                store,
-                artifacts,
-                ctx,
-                session_id,
-                &operation_id,
-                &revision,
-                &artifact,
-            )?,
-            cache: None,
-        }],
         _ => return Err(invalid("not a provider context fact")),
     };
-    Ok(Message {
+    context.messages.push(Message {
         role: MessageRole::User,
         content,
-    })
+    });
+    Ok(())
 }
 
-/// Reconcile later operation facts into an append-only provider context. A provider's first tool
-/// result remains immutable; each subsequent journal revision enters as a separate host-labeled
-/// message. Any other transcript entry requires the caller to rebuild redirected context.
+/// Reconcile later operation facts into a provider context. Server-authored updates stay inside
+/// the original tool result so every provider encodes them as untrusted tool output.
 pub(crate) fn append_operation_updates(
     store: &dyn ApplicationStore,
     artifacts: &Arc<ArtifactService>,
@@ -1287,14 +1366,15 @@ pub(crate) fn append_operation_updates(
     if updates.is_empty() {
         return Ok(source.clone());
     }
+    let linked = linked_operations(store, ctx, session_id)?;
     for update in updates {
         let blocks = match update {
             TranscriptBody::OperationUpdate {
                 operation_id,
                 revision,
                 artifact,
-            } => vec![ContentBlock::Text {
-                text: operation_update_text(
+            } => {
+                let text = operation_update_text(
                     store,
                     artifacts,
                     ctx,
@@ -1302,9 +1382,10 @@ pub(crate) fn append_operation_updates(
                     &operation_id,
                     &revision,
                     &artifact,
-                )?,
-                cache: None,
-            }],
+                )?;
+                append_operation_result(&mut context, &linked, &operation_id, text)?;
+                continue;
+            }
             TranscriptBody::UserMessage { content } => content
                 .into_iter()
                 .map(|item| match item {
@@ -1679,116 +1760,160 @@ pub(crate) fn dispatch_one(
     if cancellation.is_some_and(Cancellation::is_cancelled) {
         return Err(StorageError::Cancelled);
     }
-    let result = match selected_builtin(schemas, &call) {
-        Ok((descriptor, mode, revision)) => {
-            // Missing or unreadable input material is a recovery hold. It must not become a
-            // permanent Failed response just because the local artifact read is unavailable.
-            let bytes = artifacts
-                .read_exact(store, ctx, &call.arguments, 8 * 1024 * 1024)
-                .map_err(|_| StorageError::ScopeDenied)?
-                .0;
-            match devworks_core::framing::parse(&bytes) {
-                Ok(args) => frame(session_id, key, descriptor, mode, revision, args)
-                    .map(|raw| (descriptor, mode, raw)),
-                Err(_) => Err("invalid tool arguments"),
-            }
-        }
-        // A recorded alias whose implementation is not composed here (for example a package
-        // tool) is not a provider argument error. Leave it unanswered for a qualified dispatcher
-        // rather than permanently closing the call with a false failure.
-        Err(_) => {
-            return Err(StorageError::unavailable(
-                Unavailable::UnsupportedRuntime,
-                "recorded tool binding unavailable",
-            ));
-        }
-    };
-    if cancellation.is_some_and(Cancellation::is_cancelled) {
-        return Err(StorageError::Cancelled);
-    }
-    if result.is_ok() {
+    let (outcome, bytes) = if call.capability_id.as_str().starts_with("mcp/") {
+        let alias = schemas
+            .selected_mcp_tools(ctx)?
+            .into_iter()
+            .find(|alias| {
+                alias.capability_id == call.capability_id
+                    && alias.input_schema.schema_id == call.input_schema.schema_id
+                    && alias.input_schema.revision == call.input_schema.revision
+                    && alias.input_schema.sha256 == call.input_schema.sha256
+            })
+            .ok_or_else(|| {
+                StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "recorded MCP tool binding is no longer selected",
+                )
+            })?;
+        let raw = artifacts
+            .read_exact(store, ctx, &call.arguments, 8 * 1024 * 1024)
+            .map_err(|_| StorageError::ScopeDenied)?
+            .0;
+        let arguments = devworks_core::framing::parse(&raw)
+            .map_err(|_| invalid("recorded MCP tool arguments are invalid"))?;
         mark_dispatch_started(store, ctx, session_id, key, cancellation)?;
         if cancellation.is_some_and(Cancellation::is_cancelled) {
             return Err(StorageError::Cancelled);
         }
-    }
-    let (outcome, bytes) = match result {
-        Ok((descriptor, Mode::Query, raw)) => match runtime.query_with(
-            ctx,
-            descriptor.name,
-            &raw,
-            &ReadOptions {
-                cancellation: cancellation.cloned(),
-                deadline_ms: None,
+        let service = runtime.mcp_service().ok_or_else(|| {
+            StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                "native MCP client unavailable",
+            )
+        })?;
+        match service.queue_selected_tool(ctx, key, &alias, arguments) {
+            Ok(operation_id) => accepted(
+                serde_json::to_vec(&json!({"operationId": operation_id})).map_err(invalid)?,
+                operation_id,
+            ),
+            Err(StorageError::InvalidRecord(_)) => failed("tool_invalid_arguments"),
+            Err(error) => return Err(error),
+        }
+    } else {
+        let result = match selected_builtin(schemas, &call) {
+            Ok((descriptor, mode, revision)) => {
+                // Missing or unreadable input material is a recovery hold. It must not become a
+                // permanent Failed response just because the local artifact read is unavailable.
+                let bytes = artifacts
+                    .read_exact(store, ctx, &call.arguments, 8 * 1024 * 1024)
+                    .map_err(|_| StorageError::ScopeDenied)?
+                    .0;
+                match devworks_core::framing::parse(&bytes) {
+                    Ok(args) => frame(session_id, key, descriptor, mode, revision, args)
+                        .map(|raw| (descriptor, mode, raw)),
+                    Err(_) => Err("invalid tool arguments"),
+                }
+            }
+            // A recorded alias whose implementation is not composed here (for example a package
+            // tool) is not a provider argument error. Leave it unanswered for a qualified dispatcher
+            // rather than permanently closing the call with a false failure.
+            Err(_) => {
+                return Err(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "recorded tool binding unavailable",
+                ));
+            }
+        };
+        if cancellation.is_some_and(Cancellation::is_cancelled) {
+            return Err(StorageError::Cancelled);
+        }
+        if result.is_ok() {
+            mark_dispatch_started(store, ctx, session_id, key, cancellation)?;
+            if cancellation.is_some_and(Cancellation::is_cancelled) {
+                return Err(StorageError::Cancelled);
+            }
+        }
+        match result {
+            Ok((descriptor, Mode::Query, raw)) => match runtime.query_with(
+                ctx,
+                descriptor.name,
+                &raw,
+                &ReadOptions {
+                    cancellation: cancellation.cloned(),
+                    deadline_ms: None,
+                },
+            ) {
+                Ok(reply @ DomainQueryReply::Result { .. }) => {
+                    completed(serde_json::to_vec(&reply).map_err(invalid)?)
+                }
+                Ok(DomainQueryReply::Rejected { fault, .. }) => {
+                    if fault.code == DomainErrorCode::Cancelled
+                        && cancellation.is_some_and(Cancellation::is_cancelled)
+                    {
+                        // The marker was already durable. Keep this call available for recovery;
+                        // a cancellation cannot retroactively prove no query effect occurred.
+                        return Err(StorageError::Cancelled);
+                    }
+                    if fault.code == DomainErrorCode::ApprovalRequired {
+                        return Err(StorageError::unavailable(
+                            Unavailable::UnsupportedRuntime,
+                            "tool query approval lacks a durable approval and operation identity",
+                        ));
+                    }
+                    if let Some(blocked) = blocked_outcome(&fault)? {
+                        (blocked, None)
+                    } else if needs_recovery(fault.retry) {
+                        return Err(StorageError::unavailable(
+                            Unavailable::UnsupportedRuntime,
+                            "tool query requires retry or reconciliation",
+                        ));
+                    } else {
+                        failed(&format!("domain_{:?}", fault.code))
+                    }
+                }
+                Err(_) => {
+                    return Err(StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "tool query gateway failed before a durable response",
+                    ));
+                }
             },
-        ) {
-            Ok(reply @ DomainQueryReply::Result { .. }) => {
-                completed(serde_json::to_vec(&reply).map_err(invalid)?)
-            }
-            Ok(DomainQueryReply::Rejected { fault, .. }) => {
-                if fault.code == DomainErrorCode::Cancelled
-                    && cancellation.is_some_and(Cancellation::is_cancelled)
-                {
-                    // The marker was already durable. Keep this call available for recovery;
-                    // a cancellation cannot retroactively prove no query effect occurred.
-                    return Err(StorageError::Cancelled);
+            Ok((descriptor, Mode::Command, raw)) => {
+                match runtime.command(ctx, descriptor.name, &raw) {
+                    Ok(CommandReply::CommandStatusUnknown { .. }) => {
+                        // Same host key is retried on recovery until the gateway returns its receipt.
+                        return Err(StorageError::unavailable(
+                            Unavailable::UnsupportedRuntime,
+                            "tool command status unknown",
+                        ));
+                    }
+                    Ok(CommandReply::ReceiptPurged { .. }) => {
+                        return Err(StorageError::unavailable(
+                            Unavailable::UnsupportedRuntime,
+                            "tool command receipt purged before outcome reconciliation",
+                        ));
+                    }
+                    Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
+                    Ok(CommandReply::Rejected { code, retry, .. }) => {
+                        if needs_recovery(retry) {
+                            return Err(StorageError::unavailable(
+                                Unavailable::UnsupportedRuntime,
+                                "tool command rejection requires reconciliation",
+                            ));
+                        }
+                        failed(&format!("command_{code:?}"))
+                    }
+                    Err(_) => {
+                        return Err(StorageError::unavailable(
+                            Unavailable::UnsupportedRuntime,
+                            "tool command gateway failed before receipt reconciliation",
+                        ));
+                    }
                 }
-                if fault.code == DomainErrorCode::ApprovalRequired {
-                    return Err(StorageError::unavailable(
-                        Unavailable::UnsupportedRuntime,
-                        "tool query approval lacks a durable approval and operation identity",
-                    ));
-                }
-                if let Some(blocked) = blocked_outcome(&fault)? {
-                    (blocked, None)
-                } else if needs_recovery(fault.retry) {
-                    return Err(StorageError::unavailable(
-                        Unavailable::UnsupportedRuntime,
-                        "tool query requires retry or reconciliation",
-                    ));
-                } else {
-                    failed(&format!("domain_{:?}", fault.code))
-                }
             }
-            Err(_) => {
-                return Err(StorageError::unavailable(
-                    Unavailable::UnsupportedRuntime,
-                    "tool query gateway failed before a durable response",
-                ));
-            }
-        },
-        Ok((descriptor, Mode::Command, raw)) => match runtime.command(ctx, descriptor.name, &raw) {
-            Ok(CommandReply::CommandStatusUnknown { .. }) => {
-                // Same host key is retried on recovery until the gateway returns its receipt.
-                return Err(StorageError::unavailable(
-                    Unavailable::UnsupportedRuntime,
-                    "tool command status unknown",
-                ));
-            }
-            Ok(CommandReply::ReceiptPurged { .. }) => {
-                return Err(StorageError::unavailable(
-                    Unavailable::UnsupportedRuntime,
-                    "tool command receipt purged before outcome reconciliation",
-                ));
-            }
-            Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
-            Ok(CommandReply::Rejected { code, retry, .. }) => {
-                if needs_recovery(retry) {
-                    return Err(StorageError::unavailable(
-                        Unavailable::UnsupportedRuntime,
-                        "tool command rejection requires reconciliation",
-                    ));
-                }
-                failed(&format!("command_{code:?}"))
-            }
-            Err(_) => {
-                return Err(StorageError::unavailable(
-                    Unavailable::UnsupportedRuntime,
-                    "tool command gateway failed before receipt reconciliation",
-                ));
-            }
-        },
-        Err(_) => failed("tool_invalid_arguments"),
+            Err(_) => failed("tool_invalid_arguments"),
+        }
     };
     let staged =
         if let Some(bytes) = &bytes {
@@ -2010,12 +2135,30 @@ pub(crate) fn record_operation_update(
             .operations()
             .operation(operation_id)?
             .ok_or(StorageError::ScopeDenied)?;
-        Ok((operation.state, operation.revision))
+        let remote_content = (operation.capability == "mcp.tool"
+            && operation.state == OperationState::ObservedComplete)
+            .then(|| {
+                operation
+                    .latest_attempt()?
+                    .observations
+                    .iter()
+                    .rev()
+                    .filter_map(|observation| {
+                        observation
+                            .get("effect")
+                            .or_else(|| observation.get("reconciliation"))
+                    })
+                    .find(|effect| effect["outcome"] == "completed")
+                    .and_then(|effect| effect.get("evidence").cloned())
+            })
+            .flatten();
+        Ok((operation.state, operation.revision, remote_content))
     })?;
     let bytes = serde_json::to_vec(&json!({
         "operationId": operation_id,
         "revision": observed.1,
         "state": observed.0,
+        "untrustedRemoteContent": observed.2,
     }))
     .map_err(invalid)?;
     let staged = artifacts
@@ -2079,7 +2222,7 @@ pub(crate) fn record_operation_update(
             .operations()
             .operation(&operation_for_write)?
             .ok_or(StorageError::ScopeDenied)?;
-        if (operation.state, operation.revision) != observed {
+        if (operation.state, operation.revision) != (observed.0, observed.1) {
             return Err(StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
                 "tool operation changed during update publication",
@@ -2271,6 +2414,57 @@ mod tests {
     use devworks_core::protocol::{
         AttemptId, CommandId, CorrelationId, Counter, HoldId, Protocol, Receipt, Revision,
     };
+
+    #[test]
+    fn operation_update_uses_durable_identity_when_native_call_ids_repeat() {
+        let first = OperationId(Id::new("operation-first").unwrap());
+        let second = OperationId(Id::new("operation-second").unwrap());
+        let result = |operation_id: Option<OperationId>| ContentBlock::ToolResult {
+            call_id: "reused-call-id".into(),
+            operation_id,
+            content: vec![ResultBlock::Text {
+                text: "initial".into(),
+            }],
+            is_error: false,
+            cache: None,
+        };
+        let context = ProviderContext {
+            version: 1,
+            instructions: vec![],
+            instruction_stamps: vec![],
+            skill_stamp: None,
+            messages: vec![Message {
+                role: MessageRole::User,
+                content: vec![result(Some(first.clone())), result(Some(second.clone()))],
+            }],
+            parameters: Default::default(),
+        };
+        let mut recovered: ProviderContext =
+            serde_json::from_slice(&serde_json::to_vec(&context).unwrap()).unwrap();
+        let linked = [StoredToolCall {
+            session_id: Id::new("session").unwrap(),
+            attempt_id: Id::new("attempt").unwrap(),
+            native_call_id: "reused-call-id".into(),
+            ordinal: 0,
+            capability_id: "mcp.tool".into(),
+            call_sequence: 1,
+            response_sequence: Some(2),
+            outcome: Some("OperationAccepted".into()),
+            operation_id: Some(second.clone()),
+        }];
+        append_operation_result(&mut recovered, &linked, &second, "later update".into()).unwrap();
+        let results = &recovered.messages[0].content;
+        assert!(
+            matches!(&results[0], ContentBlock::ToolResult { content, .. } if content.len() == 1)
+        );
+        assert!(
+            matches!(&results[1], ContentBlock::ToolResult { content, .. } if content.len() == 2)
+        );
+        recovered.messages[0].content = vec![result(None), result(None)];
+        assert!(
+            append_operation_result(&mut recovered, &linked, &second, "ambiguous".into()).is_err()
+        );
+    }
 
     fn key(native: &str) -> ToolCallKey {
         ToolCallKey {

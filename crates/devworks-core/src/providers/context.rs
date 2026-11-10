@@ -1,6 +1,7 @@
 //! Closed V1 material referenced by InferenceInput::Generation.context. No authority or billing.
 use super::{ProviderError, ResponseMode};
 use crate::ports::storage::{StorageError, StoredEntry};
+use crate::protocol::OperationId;
 use crate::protocol::provider::{ArtifactRef, EndpointProfile, NativeBinding};
 use crate::protocol::provider::{ToolOutcome, TranscriptBody, UserContent};
 use serde::{Deserialize, Serialize};
@@ -63,6 +64,8 @@ pub enum ContentBlock {
     },
     ToolResult {
         call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation_id: Option<OperationId>,
         content: Vec<ResultBlock>,
         is_error: bool,
         #[serde(default)]
@@ -294,6 +297,15 @@ impl ProviderContext {
                 }
                 TranscriptBody::ToolDispatchStarted { .. } => continue,
                 TranscriptBody::ToolResponseRecorded { call, outcome } => {
+                    let operation_id =
+                        if let ToolOutcome::OperationAccepted { operation_id, .. }
+                        | ToolOutcome::ApprovalRequired { operation_id, .. }
+                        | ToolOutcome::OutcomeUnknown { operation_id, .. } = &outcome
+                        {
+                            Some(operation_id.clone())
+                        } else {
+                            None
+                        };
                     let (content, is_error) = match outcome {
                         ToolOutcome::Completed { artifacts } => {
                             let mut blocks = Vec::new();
@@ -330,6 +342,7 @@ impl ProviderContext {
                         MessageRole::User,
                         vec![ContentBlock::ToolResult {
                             call_id: call.native_call_id,
+                            operation_id,
                             content,
                             is_error,
                             cache: None,
@@ -340,13 +353,21 @@ impl ProviderContext {
                     MessageRole::Assistant,
                     vec![ContentBlock::Native { binding, artifact }],
                 ),
-                TranscriptBody::OperationUpdate { artifact, .. } => (
-                    MessageRole::User,
-                    vec![ContentBlock::Text {
-                        text: read_text(&artifact)?,
-                        cache: None,
-                    }],
-                ),
+                TranscriptBody::OperationUpdate {
+                    operation_id,
+                    artifact,
+                    ..
+                } => {
+                    let result = messages.iter_mut().flat_map(|message: &mut Message| message.content.iter_mut())
+                        .find(|block| matches!(block, ContentBlock::ToolResult { operation_id: Some(id), .. } if id == &operation_id))
+                        .ok_or_else(|| StorageError::InvalidRecord("missing operation tool result".into()))?;
+                    if let ContentBlock::ToolResult { content, .. } = result {
+                        content.push(ResultBlock::Text {
+                            text: read_text(&artifact)?,
+                        });
+                    }
+                    continue;
+                }
                 TranscriptBody::ContextEpochChanged { .. } => {
                     return Err(StorageError::InvalidRecord(
                         "context epoch snapshot required".into(),

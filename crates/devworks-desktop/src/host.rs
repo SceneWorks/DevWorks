@@ -17,6 +17,7 @@ use devworks_adapters::fs::artifacts::NativeArtifactFiles;
 use devworks_adapters::fs::sources::{HostArtifactSources, IssueRefusal};
 use devworks_adapters::index::NativeSourceTree;
 use devworks_adapters::index::treesitter::TreeSitterParser;
+use devworks_adapters::mcp::NativeMcpClients;
 use devworks_adapters::packages::{
     BundleIndexVerifier, BundleInspector, JsonSchemaValidator, NativeIndexTransport,
     NativePackageFiles, host_target_triple,
@@ -46,6 +47,7 @@ use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::history::HistoryService;
 use devworks_core::services::indexing::IndexSettings;
 use devworks_core::services::knowledge::KnowledgeService;
+use devworks_core::services::mcp::McpClientService;
 use devworks_core::services::packages::PackageService;
 use devworks_core::services::process::ShutdownReport;
 use devworks_core::services::resources::ResourceService;
@@ -170,6 +172,7 @@ pub struct DesktopConfig {
     /// Explicit host grants for process environment credential handles. An unregistered
     /// credentialRef is refused; the generic provider connection handles are not exported.
     pub process_credentials: Vec<devworks_core::services::process::tools::RegisteredCredential>,
+    pub process_working_roots: Vec<devworks_core::services::process::tools::RegisteredWorkingRoot>,
     /// Explicit grants for container workload environment and registry credentials. Process
     /// grants do not imply access to these handles.
     pub container_credentials: Vec<devworks_core::services::process::tools::RegisteredCredential>,
@@ -223,6 +226,7 @@ impl DesktopConfig {
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),
             process_credentials: Vec::new(),
+            process_working_roots: Vec::new(),
             container_credentials: Vec::new(),
             desktop_platform: None,
             connections: None,
@@ -383,6 +387,7 @@ async fn compose(
     ));
     let run_control = Arc::new(ControlService::new(id_source.clone()));
     let agents = Arc::new(AgentService::new(id_source.clone(), run_control.clone()));
+    let mcp_service = Arc::new(McpClientService::new(id_source.clone()));
     let use_cases = UseCases::new()
         .with_queue()
         .with_settings(settings)
@@ -400,6 +405,7 @@ async fn compose(
             directory,
         )))
         .with_connections(connections.clone())
+        .with_mcp(mcp_service)
         .with_knowledge(knowledge.clone());
     let authority = Arc::new(StoreAuthority {
         store: store.clone(),
@@ -520,24 +526,42 @@ async fn compose(
             },
         });
     }
+    let mcp_bindings = devworks_core::services::process::tools::ToolBindings::new(
+        executables.clone(),
+        config.process_working_roots.clone(),
+    )
+    .and_then(|bindings| bindings.with_credentials(config.process_credentials.clone()))
+    .map_err(|reason| StartError::Thread(reason.into()))?;
     if !executables.is_empty() {
-        let bindings = devworks_core::services::process::tools::ToolBindings::new(
-            executables,
-            std::iter::empty(),
-        )
-        .and_then(|bindings| bindings.with_credentials(config.process_credentials.clone()))
-        .map_err(|reason| StartError::Thread(reason.into()))?;
         runtime_config.process_tools = Some(devworks_engine::runtime::ProcessToolComposition {
-            bindings,
+            bindings: mcp_bindings.clone(),
             filesystem: Arc::new(NativeFilesystem::new()),
             protected_roots: ProtectedRoots::new(
                 Vec::new(),
                 Vec::new(),
                 Some(config.data_root.display().to_string()),
             ),
-            secrets,
+            secrets: secrets.clone(),
         });
     }
+    let mcp_secrets = secrets.clone();
+    let mcp_namespace = store.info().store_id.0.as_str().to_owned();
+    let mcp_data_root = config.data_root.display().to_string();
+    runtime_config.mcp = Some(devworks_engine::runtime::McpComposition {
+        validator: Arc::new(JsonSchemaValidator),
+        factory: Arc::new(move |supervisor, handle| {
+            Arc::new(NativeMcpClients::new(
+                supervisor,
+                mcp_bindings.clone(),
+                mcp_secrets.clone(),
+                mcp_namespace.clone(),
+                Arc::new(NativeFilesystem::new()),
+                ProtectedRoots::new(Vec::new(), Vec::new(), Some(mcp_data_root.clone())),
+                Vec::new(),
+                handle,
+            ))
+        }),
+    });
     runtime_config.providers = Some(match config.providers.clone() {
         Some(providers) => providers,
         None => devworks_engine::providers::driver::ProviderComposition::new(Arc::new(
@@ -1222,6 +1246,12 @@ impl Backend for DesktopBackend {
         self.host
             .connections
             .stage_api_key(self.host.ctx.principal(), key)
+            .map_err(|e| e.to_string())
+    }
+    fn stage_mcp_api_key(&self, key: Secret) -> Result<Id, String> {
+        self.host
+            .connections
+            .stage_mcp_api_key(self.host.ctx.principal(), key)
             .map_err(|e| e.to_string())
     }
     fn generate_database_encryption_key(&self) -> Result<Secret, String> {

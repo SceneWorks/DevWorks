@@ -201,6 +201,9 @@ pub trait Backend: Send + Sync {
     fn stage_api_key(&self, _key: Secret) -> Result<Id, String> {
         Err("credential entry is not available".into())
     }
+    fn stage_mcp_api_key(&self, _key: Secret) -> Result<Id, String> {
+        Err("MCP credential entry is not available".into())
+    }
     /// Attaches the `code#state` value the user pasted to their open browser sign-in, for the
     /// `CompleteSignIn` command that follows (user ingress only; kept in memory).
     fn submit_sign_in_code(&self, _flow: &Id, _pasted: Secret) -> Result<(), String> {
@@ -337,6 +340,10 @@ pub enum Slot {
     WebSearch,
     /// The recent web activity record.
     WebActivity,
+    McpServers(String, Option<String>),
+    McpOperation(String),
+    McpCapabilities(String, String, Option<String>),
+    McpCommand,
     /// Active and archived projects.
     ProjectsList,
     /// Deleted projects (their tombstones).
@@ -658,6 +665,10 @@ pub const COMMANDS: &[&str] = &[
     "router.configure",
     "router.pin",
     "router.route",
+    "mcp.configure",
+    "mcp.connect",
+    "mcp.discover",
+    "mcp.select_tools",
     "projects.create",
     "projects.edit",
     "projects.membership",
