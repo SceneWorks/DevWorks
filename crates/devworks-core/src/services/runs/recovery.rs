@@ -242,6 +242,7 @@ impl ControlService {
             if a.state == AssignmentState::Active {
                 let mut dormant = a.clone();
                 dormant.state = AssignmentState::Waiting;
+                dormant.slot_held = false;
                 dormant.revision += 1;
                 tx.runs().update_assignment(&dormant, a.revision)?;
             }
