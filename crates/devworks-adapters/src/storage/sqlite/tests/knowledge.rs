@@ -5887,3 +5887,79 @@ fn an_entity_graph_bundle_fits_its_row_budget_with_the_center() {
     assert!(g.truncated);
     assert_eq!(g.frontier.0, std::slice::from_ref(&hub));
 }
+
+#[test]
+fn entity_bundles_continue_past_the_neighbor_bound_and_text_seeds_reach_requested_history() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let edge = |o: &str| {
+        json!({"kind": "Fact", "subjectId": "a", "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let written = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+            "entities": [
+                {"clientId": "a", "label": "Node A", "entityType": "service", "aliases": []},
+                {"clientId": "b", "label": "Node B", "entityType": "service", "aliases": []},
+                {"clientId": "c", "label": "Node C", "entityType": "service", "aliases": []}],
+            "evidence": [],
+            "claims": [edge("b"), edge("c"),
+                with(draft("Fact", "zebra migration memo"), json!({"subjectId": "a"}))]}),
+    ));
+    let [a, b, c] = [0, 1, 2].map(|i| written.entity_ids.0[i].clone());
+    let memo = written.claim_ids.0[2].clone();
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    // The neighbor the bound drops is a continuation point, with the center.
+    let one = q(
+        "knowledge.entity_bundle",
+        json!({"entityIds": [a], "neighborLimit": 1}),
+    );
+    assert!(one.truncated);
+    let kept: Vec<&Id> = one
+        .entities
+        .0
+        .iter()
+        .map(|e| &e.id)
+        .filter(|id| **id != a)
+        .collect();
+    assert_eq!(kept.len(), 1);
+    let dropped = if *kept[0] == b { &c } else { &b };
+    assert!(
+        one.frontier.0.contains(&a) && one.frontier.0.contains(dropped),
+        "{:?}",
+        one.frontier
+    );
+    assert!(
+        q("knowledge.entity_bundle", json!({"entityIds": [a]}))
+            .frontier
+            .0
+            .is_empty()
+    );
+    // A retracted claim's words seed a text read only when the request asks for retracted claims.
+    let rev = fx.revision(&memo);
+    receipt(fx.cmd(
+        &user,
+        "knowledge.retract",
+        json!({"scope": proj("project-a"), "claimId": memo,
+        "expectedRevision": rev.to_string(), "reason": "wrong", "evidenceIds": []}),
+    ));
+    let active = q("knowledge.subgraph", json!({"text": "zebra"}));
+    assert!(!active.claims.0.iter().any(|x| x.id == memo));
+    let history = q(
+        "knowledge.subgraph",
+        json!({"text": "zebra", "states": ["Retracted"]}),
+    );
+    assert!(
+        history.claims.0.iter().any(|x| x.id == memo),
+        "{:?}",
+        history.claims
+    );
+}

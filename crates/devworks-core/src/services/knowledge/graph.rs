@@ -76,11 +76,25 @@ impl ClaimFilter {
             confidence_min: q.confidence_min.as_ref().map(probability),
         }
     }
-    fn admits(&self, c: &StoredClaim, wire: &KnowledgeClaim) -> bool {
-        let retracted_asked = self
-            .states
+    fn retracted_asked(&self) -> bool {
+        self.states
             .iter()
-            .any(|s| matches!(s, KnowledgeState::Retracted));
+            .any(|s| matches!(s, KnowledgeState::Retracted))
+    }
+    /// The stored lifecycles this filter can admit, so a text seed search reaches the
+    /// historical claims a request explicitly asks for.
+    fn lifecycles(&self) -> Vec<String> {
+        let mut out = vec!["Active".to_owned()];
+        if self.include_superseded {
+            out.push("Superseded".into());
+        }
+        if self.retracted_asked() {
+            out.push("Retracted".into());
+        }
+        out
+    }
+    fn admits(&self, c: &StoredClaim, wire: &KnowledgeClaim) -> bool {
+        let retracted_asked = self.retracted_asked();
         match c.lifecycle.as_str() {
             "Deleted" => return false,
             "Superseded" if !self.include_superseded => return false,
@@ -163,6 +177,7 @@ fn seeds(
     c: &Ctx<'_>,
     q: &KnowledgeQuery,
     text_limit: usize,
+    filter: &ClaimFilter,
 ) -> Result<(Vec<Id>, Vec<Id>), Failure> {
     let mut entities: Vec<Id> = Vec::new();
     let mut claims: Vec<Id> = Vec::new();
@@ -193,7 +208,7 @@ fn seeds(
             let found = c.k.knowledge_claims(
                 &ClaimQuery {
                     scopes: c.keys.clone(),
-                    lifecycles: vec!["Active".into()],
+                    lifecycles: filter.lifecycles(),
                     words,
                     entity_limit: Some(text_limit as u16),
                     ..Default::default()
@@ -744,7 +759,7 @@ impl KnowledgeService {
                 Read::Bundle(full_graph(&c, ctx, q, revision, &filter)?)
             }
             "knowledge.subgraph" => {
-                let (e, cl) = seeds(&c, q, clamp(q.entity_limit.get(), 1, 10))?;
+                let (e, cl) = seeds(&c, q, clamp(q.entity_limit.get(), 1, 10), &filter)?;
                 let bounds = Bounds {
                     hops: q.max_depth.get().min(MAX_HOPS),
                     entities: clamp(q.entity_limit.get(), 1, 100),
@@ -756,7 +771,7 @@ impl KnowledgeService {
             }
             "knowledge.query" => {
                 let max_e = clamp(q.entity_limit.get(), 1, 50);
-                let (e, cl) = seeds(&c, q, max_e.min(10))?;
+                let (e, cl) = seeds(&c, q, max_e.min(10), &filter)?;
                 if e.is_empty() && cl.is_empty() {
                     let mut b = empty_bundle(&c)?;
                     b.summary = Some(content(NO_MEMORIES));
@@ -780,7 +795,7 @@ impl KnowledgeService {
                 if q.entity_ids.0.is_empty() && q.claim_ids.0.is_empty() {
                     return Err(invalid("frontier"));
                 }
-                let (e, cl) = seeds(&c, &no_text(q), 0)?;
+                let (e, cl) = seeds(&c, &no_text(q), 0, &filter)?;
                 let limit = clamp(q.neighbor_limit.get(), 1, 100);
                 let bounds = Bounds {
                     hops: q.max_depth.get().clamp(1, MAX_HOPS),
@@ -796,7 +811,7 @@ impl KnowledgeService {
                 if q.entity_ids.0.is_empty() && q.claim_ids.0.is_empty() {
                     return Err(invalid("summary_seeds"));
                 }
-                let (e, cl) = seeds(&c, &no_text(q), 0)?;
+                let (e, cl) = seeds(&c, &no_text(q), 0, &filter)?;
                 let n = e.len() + cl.len();
                 let bounds = Bounds {
                     hops: 1,
@@ -858,6 +873,8 @@ impl KnowledgeService {
                 let mut truncated = all.len() >= MAX_ROWS as usize;
                 let mut entities: Vec<(StoredEntity, u32, i64)> = vec![(center.clone(), 0, 100)];
                 let mut claims = Vec::new();
+                // Neighbors the bound drops stay reachable: they and the center are the frontier.
+                let mut omitted: Vec<Id> = Vec::new();
                 for claim in all.into_iter().take(500) {
                     let wire = claim_wire(k, &claim, &th)?;
                     if !filter.admits(&claim, &wire) {
@@ -874,16 +891,24 @@ impl KnowledgeService {
                     {
                         if entities.len() > neighbors {
                             truncated = true;
+                            if !omitted.contains(&other) && c.entity(&other)?.is_some() {
+                                omitted.push(other);
+                            }
                         } else if let Some(e) = c.entity(&other)? {
                             entities.push((e, 1, entity_score(1, false)));
                         }
                     }
                     claims.push((claim, wire, 100));
                 }
+                let frontier = if truncated {
+                    std::iter::once(center.id.clone()).chain(omitted).collect()
+                } else {
+                    Vec::new()
+                };
                 let s = Selection {
                     entities,
                     claims,
-                    frontier: Vec::new(),
+                    frontier,
                     truncated,
                 };
                 Read::Bundle(bundle(&c, q, &s, q.include_conflicts)?)
