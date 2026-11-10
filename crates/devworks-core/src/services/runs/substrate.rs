@@ -829,6 +829,42 @@ impl ControlService {
                 }
             }
         }
+        if purpose == AssignmentPurpose::Child {
+            // Limit queued children as well as active slots. A finite lifetime bound also stops
+            // repeated completed-child fan-out; both limits belong to this root, not the app.
+            let allowance =
+                crate::settings::service::max_subagents(tx.configuration(), &root.project_id)?;
+            let total_limit = allowance.max(256);
+            let outstanding_limit = allowance.saturating_mul(2).min(total_limit);
+            let assignments = root_assignments(tx.runs(), &root.id, false)?;
+            let total = assignments
+                .iter()
+                .filter(|a| a.purpose == AssignmentPurpose::Child)
+                .count();
+            let outstanding = assignments
+                .iter()
+                .filter(|a| a.purpose == AssignmentPurpose::Child && a.state.is_live())
+                .count();
+            if total >= total_limit || outstanding >= outstanding_limit {
+                return Ok(Err(Fenced::Invalid(format!(
+                    "the root's child assignment limit is reached ({outstanding_limit} outstanding, {total_limit} total)"
+                ))));
+            }
+            let mut ancestor = new.parent.clone();
+            let mut depth = 0;
+            while let Some(id) = ancestor {
+                depth += 1;
+                if depth > 8 {
+                    return Ok(Err(Fenced::Invalid(
+                        "child delegation depth exceeds 8".into(),
+                    )));
+                }
+                let parent = tx.runs().assignment(&id)?.ok_or_else(|| {
+                    StorageError::InvalidRecord("missing assignment ancestor".into())
+                })?;
+                ancestor = parent.parent_id;
+            }
+        }
         match tx.sessions().session(&new.session)? {
             Some(s) if s.root_id.as_ref() == Some(&root.id) => {}
             _ => {

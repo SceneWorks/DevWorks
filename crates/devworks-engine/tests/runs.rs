@@ -749,6 +749,102 @@ fn standalone_issue_can_register_children_without_replacing_its_primary_owner() 
 }
 
 #[test]
+fn child_registration_bounds_outstanding_and_lifetime_fanout_in_one_write_owner() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let primary = fx.assign("root-i", "root-i", None, None);
+    let session = fx.session("root-i");
+    fx.tx(move |service, tx| {
+        let host = tx.store().host_actor.clone();
+        let new_child = || NewRunAssignment {
+            root: rid("root-i"),
+            work: rid("root-i"),
+            parent: Some(primary.id.clone()),
+            session: session.clone(),
+            scope_key: None,
+        };
+        let mut children = Vec::new();
+        for _ in 0..20 {
+            children.push(
+                service
+                    .register_child_assignment(tx, &host, new_child())?
+                    .expect("within outstanding limit"),
+            );
+        }
+        assert!(matches!(
+            service.register_child_assignment(tx, &host, new_child())?,
+            Err(Fenced::Invalid(_))
+        ));
+        for child in children {
+            let mut done = child.clone();
+            done.state = AssignmentState::Completed;
+            done.revision += 1;
+            tx.runs().update_assignment(&done, child.revision)?;
+        }
+        // Completed children release queue capacity, but not the root's lifetime bound.
+        for _ in 20..256 {
+            let child = service
+                .register_child_assignment(tx, &host, new_child())?
+                .expect("within lifetime limit");
+            let mut done = child.clone();
+            done.state = AssignmentState::Completed;
+            done.revision += 1;
+            tx.runs().update_assignment(&done, child.revision)?;
+        }
+        assert!(matches!(
+            service.register_child_assignment(tx, &host, new_child())?,
+            Err(Fenced::Invalid(_))
+        ));
+        Ok(())
+    });
+}
+
+#[test]
+fn child_registration_bounds_recursive_depth() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let primary = fx.assign("root-i", "root-i", None, None);
+    let session = fx.session("root-i");
+    fx.tx(move |service, tx| {
+        let host = tx.store().host_actor.clone();
+        let mut parent = primary.id;
+        for _ in 0..8 {
+            parent = service
+                .register_child_assignment(
+                    tx,
+                    &host,
+                    NewRunAssignment {
+                        root: rid("root-i"),
+                        work: rid("root-i"),
+                        parent: Some(parent),
+                        session: session.clone(),
+                        scope_key: None,
+                    },
+                )?
+                .expect("within depth limit")
+                .id;
+        }
+        assert!(matches!(
+            service.register_child_assignment(
+                tx,
+                &host,
+                NewRunAssignment {
+                    root: rid("root-i"),
+                    work: rid("root-i"),
+                    parent: Some(parent),
+                    session,
+                    scope_key: None,
+                },
+            )?,
+            Err(Fenced::Invalid(_))
+        ));
+        Ok(())
+    });
+}
+
+#[test]
 fn transient_activation_retry_releases_interrupted_child_slot() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
