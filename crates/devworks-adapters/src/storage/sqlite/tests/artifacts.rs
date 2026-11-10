@@ -943,6 +943,56 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
             ..
         }
     ));
+    fx.source(
+        "delivered-source",
+        "delivered.txt",
+        b"delivered",
+        SourceOrigin::default(),
+    );
+    let delivered = saved(fx.save(
+        &sibling_user,
+        "project-a",
+        "Delivered",
+        "text/plain",
+        "delivered-source",
+        b"delivered",
+    ))
+    .artifact;
+    assert_eq!(
+        fault(fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &delivered),
+            None
+        ))
+        .code,
+        DomainErrorCode::PermissionDenied
+    );
+    let sender =
+        fx.user()
+            .with_lineage(Some(project("project-a")), Some(RootId(id("root-a"))), None);
+    let attachment = delivered.clone();
+    fx.write(move |tx| {
+        devworks_core::services::agents::post_assignment(
+            tx,
+            &sender,
+            &devworks_core::operations::agents::MessagesInput {
+                recipient_assignment_id: devworks_core::protocol::AssignmentId(id("scope-worker")),
+                message_class: devworks_core::protocol::records::MessageClass::Status,
+                content: devworks_core::protocol::support::BoundedText("See attachment".into()),
+                attachments: devworks_core::protocol::support::BoundedList(vec![attachment]),
+            },
+        )
+    });
+    assert!(matches!(
+        fx.query(
+            &worker,
+            "artifacts.read",
+            version_query("Read", &delivered),
+            None
+        ),
+        DomainQueryReply::Result { .. }
+    ));
     fx.write(|tx| {
         let id = devworks_core::protocol::AssignmentId(id("scope-worker"));
         let before = tx.runs().assignment(&id)?.unwrap();

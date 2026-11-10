@@ -356,7 +356,10 @@ impl ProviderSink {
             .find(|t| t.wire_name == call.name)
             .ok_or(StorageError::ScopeDenied)?
             .clone();
-        if tool.capability_id.as_str() == "devworks/agents.delegate" {
+        if matches!(
+            tool.capability_id.as_str(),
+            "devworks-command/agents.delegate" | "devworks/agents.delegate"
+        ) {
             if self.delegate_calls >= MAX_DELEGATE_CALLS_PER_TURN {
                 return Err(invalid("delegate calls exceed per-turn limit"));
             }

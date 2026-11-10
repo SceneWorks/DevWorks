@@ -321,7 +321,7 @@ fn agent_assignment_scope(
         serde_json::from_value(context.task_ids).map_err(|_| DenialReason::AuthorityUnavailable)?;
     let coordinator = assignment.parent_id.is_none();
     let scoped = |id: &Id| -> Result<bool, DenialReason> {
-        if id == &root.0 || id == &assignment.work_id.0 || task_ids.contains(id) {
+        if id == &root.0 {
             return Ok(true);
         }
         if coordinator {
@@ -331,7 +331,28 @@ fn agent_assignment_scope(
                 .map_err(|_| DenialReason::AuthorityUnavailable)?
                 .is_some_and(|w| w.parent_feature_id.as_ref() == Some(&root.0)));
         }
-        Ok(false)
+        if id != &assignment.work_id.0 && !task_ids.contains(id) {
+            return Ok(false);
+        }
+        let current_root = s
+            .sessions()
+            .work_root(root)
+            .map_err(|_| DenialReason::AuthorityUnavailable)?;
+        let current_task = s
+            .sessions()
+            .work_root(&crate::protocol::RootId(id.clone()))
+            .map_err(|_| DenialReason::AuthorityUnavailable)?;
+        Ok(current_root
+            .zip(current_task)
+            .is_some_and(|(root_work, task)| {
+                task.project_id == root_work.project_id
+                    && task.kind != "feature"
+                    && (if root_work.kind == "feature" {
+                        task.parent_feature_id.as_ref() == Some(&root_work.id)
+                    } else {
+                        task.id == root_work.id
+                    })
+            }))
     };
     let owned_artifact = |id: &Id| -> Result<bool, DenialReason> {
         let artifact = s

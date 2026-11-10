@@ -1577,6 +1577,20 @@ pub fn post_assignment(
             return Err(denied());
         }
     }
+    // Delivery itself grants the exact immutable version to this recipient. Record that grant
+    // with the message in the same transaction so an inbox reference is immediately readable.
+    for attachment in &input.attachments.0 {
+        crate::services::artifacts::reference_from_host_owner(
+            tx,
+            ctx,
+            attachment,
+            &crate::ports::storage::SubjectKey {
+                kind: "assignment",
+                id: recipient.id.0.clone(),
+            },
+            Some(recipient.root_id.clone()),
+        )?;
+    }
     let now = tx.now_ms();
     let message = StoredAgentMessage {
         id: tx.new_id(IdKind::Event),

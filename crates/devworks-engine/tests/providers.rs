@@ -381,6 +381,12 @@ impl Fx {
         let cases = UseCases::new()
             .with_router(router)
             .with_connections(connections.clone())
+            .with_agents(Arc::new(
+                devworks_core::services::agents::AgentService::new(
+                    h.ids.clone(),
+                    Arc::new(ControlService::new(h.ids.clone())),
+                ),
+            ))
             .with_sessions(Arc::new(
                 devworks_core::services::sessions::SessionService::new(
                     h.ids.clone(),
@@ -1983,6 +1989,28 @@ fn native_tool_broker_keeps_independent_results_and_recovery_has_no_second_respo
         assert!(matches!(reply, devworks_core::protocol::CommandReply::Recorded { receipt, .. }
             if matches!(receipt.decision, devworks_core::protocol::results::DomainDecision::Applied { .. })));
         restarted.shutdown().await;
+    });
+}
+
+#[test]
+fn a_provider_turn_cannot_emit_more_than_sixteen_delegations() {
+    runtime().block_on(async {
+        let calls: Vec<_> = (0..17)
+            .map(|index| {
+                json!({"index":index,"id":format!("delegate-{index}"),"type":"function",
+                    "function":{"name":"delegate_agent","arguments":"{}"}})
+            })
+            .collect();
+        let event = json!({"choices":[{"index":0,"delta":{"tool_calls":calls},"finish_reason":null}]});
+        let wire = format!("data: {event}\n\ndata: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n");
+        let f = Fx::new("CompatibleChat", Script::sse(&wire), false);
+        let mut tool = f.driver.schemas().builtin("agents.delegate", devworks_core::registry::Mode::Command,
+            devworks_core::registry::SchemaRevision(1), "delegate_agent").unwrap();
+        tool.capability_id = devworks_core::protocol::provider::QualifiedId::try_from(
+            "devworks-command/agents.delegate".to_owned(),
+        ).unwrap();
+        let result = f.produce(f.generation(vec![tool])).await;
+        assert!(result.is_err(), "a seventeenth delegation must fail provider admission");
     });
 }
 
