@@ -1222,7 +1222,19 @@ impl QueryHandler for SettingsService {
                 )));
             }
         };
-        let answered = require_scope(read, &scope).and_then(|()| match input {
+        let answered = if ctx.principal_kind() == PrincipalKind::Agent
+            && scope.project_id() != ctx.project_id()
+        {
+            Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "configuration_scope",
+                Some(scope.target_id()),
+            )
+            .into())
+        } else {
+            require_scope(read, &scope)
+        }
+        .and_then(|()| match input {
             ops::Input::ReadEffective(i) => self.read_effective(read, &scope, i),
             ops::Input::Validate(i) => self.validate(read, &scope, i),
             ops::Input::ExplainSource(i) => self.explain(read, &scope, i),
