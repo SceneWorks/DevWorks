@@ -63,9 +63,11 @@ pub struct MessageBoard {
     pub history: Vec<RetainedMessage>,
     pub history_before: Option<i64>,
     pub history_loaded: bool,
+    pub history_refresh_pending: bool,
     pub inbox: Vec<RetainedMessage>,
     pub inbox_cursor: Option<String>,
     pub inbox_loaded: bool,
+    pub inbox_refresh_pending: bool,
     pub inbox_has_more: bool,
     pub events: Vec<RetainedMessageEvent>,
     pub event_after: Option<i64>,
@@ -1074,6 +1076,10 @@ impl Shell {
         };
         if reset || self.work.messages.project.as_deref() != Some(project.as_str()) {
             let same_project = self.work.messages.project.as_deref() == Some(project.as_str());
+            let history_refresh_pending =
+                same_project && self.pending(&Slot::WorkMessagesHistory(project.clone()));
+            let inbox_refresh_pending =
+                same_project && self.pending(&Slot::WorkMessagesInbox(project.clone()));
             let (draft, events, event_after, event_poll_at) = if same_project {
                 (
                     self.work.messages.draft.clone(),
@@ -1090,6 +1096,8 @@ impl Shell {
                 events,
                 event_after,
                 event_poll_at,
+                history_refresh_pending,
+                inbox_refresh_pending,
                 ..MessageBoard::default()
             };
         }
@@ -1716,6 +1724,11 @@ impl Shell {
                 if self.work.messages.project.as_deref() != Some(project.as_str()) {
                     return None;
                 }
+                if self.work.messages.history_refresh_pending {
+                    self.work.messages.history_refresh_pending = false;
+                    self.load_messages(true);
+                    return None;
+                }
                 match wops::message_history_page(reply) {
                     Ok(page) => {
                         let board = &mut self.work.messages;
@@ -1736,6 +1749,11 @@ impl Shell {
             }
             (Slot::WorkMessagesInbox(project), Reply::Command(reply)) => {
                 if self.work.messages.project.as_deref() != Some(project.as_str()) {
+                    return None;
+                }
+                if self.work.messages.inbox_refresh_pending {
+                    self.work.messages.inbox_refresh_pending = false;
+                    self.load_messages(true);
                     return None;
                 }
                 match wops::message_inbox_page(reply) {

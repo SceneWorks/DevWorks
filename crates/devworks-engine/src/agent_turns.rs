@@ -7,7 +7,9 @@ use devworks_core::ports::storage::{
     read_snapshot,
 };
 use devworks_core::ports::usage::{PriceQuery, PriceResolver};
-use devworks_core::protocol::provider::{ArtifactRef, EndpointProfile, NativeBinding};
+use devworks_core::protocol::provider::{
+    ArtifactRef, EndpointProfile, NativeBinding, TranscriptBody,
+};
 use devworks_core::protocol::provider::{
     Attribution, EffortOption, InferenceInput, InferenceOptions, InferencePurpose,
     InferenceRequest, ModelSelection,
@@ -16,7 +18,7 @@ use devworks_core::protocol::records::{
     AgentRecord, EffortName, RouteChoice, RouteIntent, TierName,
 };
 use devworks_core::protocol::results::{DomainDecision, OperationResult};
-use devworks_core::protocol::{CommandReply, Counter, Id, Protocol, Revision};
+use devworks_core::protocol::{AttemptId, CommandReply, Counter, Id, Protocol, Revision};
 use devworks_core::providers::context::{
     ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext, TextBlock,
 };
@@ -174,7 +176,7 @@ async fn run_native_loop(
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
-        let (mut head, mut binding, _) = match recovered.take() {
+        let (mut head, mut binding, observed_sequence) = match recovered.take() {
             Some(value) => value,
             None => {
                 let tools_required = !runtime
@@ -188,6 +190,48 @@ async fn run_native_loop(
                 (head, binding, 0)
             }
         };
+        if let Some((attempt_id, has_tools)) =
+            unpublished_turn(runtime.store().as_ref(), ctx, session_id, observed_sequence)?
+        {
+            if has_tools {
+                runtime.dispatch_pending_tool_calls_cancellable(
+                    ctx,
+                    session_id,
+                    Some(cancellation),
+                )?;
+                if !crate::tool_turn::pending_calls(runtime.store().as_ref(), ctx, session_id)?
+                    .is_empty()
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    recovered = Some((head, binding, observed_sequence));
+                    continue;
+                }
+            }
+            let material = crate::tool_turn::continuation_context(
+                runtime.store().as_ref(),
+                runtime.artifacts(),
+                ctx,
+                crate::tool_turn::TurnSource {
+                    session_id,
+                    attempt_id: &attempt_id,
+                    after_sequence: observed_sequence,
+                    has_tools,
+                },
+                &binding,
+                &head,
+            )?;
+            crate::tool_turn::publish_continuation(
+                runtime.store().as_ref(),
+                runtime.artifacts(),
+                ctx,
+                session_id,
+                &attempt_id,
+                &binding,
+                material,
+            )?;
+            recovered = runtime.recover_native_context_head(ctx, session_id)?;
+            continue;
+        }
         head = runtime.refresh_native_tool_context(ctx, session_id, &head)?;
         let selected_count = runtime
             .providers()
@@ -257,7 +301,7 @@ async fn run_native_loop(
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 recovered = runtime
                     .recover_native_context_head(ctx, session_id)?
-                    .or(Some((head, binding, 0)));
+                    .or(Some((head, binding, observed_sequence)));
             }
             Some(AttemptEnd::Cancelled) => return Err(StorageError::Cancelled),
             outcome => {
@@ -268,6 +312,68 @@ async fn run_native_loop(
             }
         }
     }
+}
+
+/// A provider exchange can be durable before its next context head is published. Recover that
+/// exchange from the transcript cursor first; a refresh only accepts operation updates.
+fn unpublished_turn(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    after_sequence: i64,
+) -> Result<Option<(AttemptId, bool)>, StorageError> {
+    read_snapshot(store, &ReadOptions::default(), |read| {
+        let session = read
+            .sessions()
+            .session(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if session.agent_id != *ctx.principal() || session.closed() {
+            return Err(StorageError::ScopeDenied);
+        }
+        let mut position = after_sequence;
+        let mut attempt = None;
+        let mut has_tools = false;
+        while position < session.last_durable_sequence() {
+            if position - after_sequence >= 10_000 {
+                return Err(StorageError::InvalidRecord(
+                    "unpublished turn exceeds scan bound".into(),
+                ));
+            }
+            let page = read.sessions().entries(session_id, position, 500)?;
+            if page.is_empty() {
+                return Err(StorageError::InvalidRecord(
+                    "unpublished turn transcript gap".into(),
+                ));
+            }
+            for entry in page {
+                if entry.sequence != position + 1 {
+                    return Err(StorageError::InvalidRecord(
+                        "unpublished turn transcript gap".into(),
+                    ));
+                }
+                position = entry.sequence;
+                match serde_json::from_value::<TranscriptBody>(entry.body)
+                    .map_err(|_| StorageError::ScopeDenied)?
+                {
+                    TranscriptBody::AssistantAttempt { attempt_id, .. } => {
+                        if attempt.replace(attempt_id).is_some() {
+                            return Err(StorageError::InvalidRecord(
+                                "multiple unpublished turns".into(),
+                            ));
+                        }
+                    }
+                    TranscriptBody::ToolCallRecorded { .. } => has_tools = true,
+                    _ => {}
+                }
+            }
+        }
+        if has_tools && attempt.is_none() {
+            return Err(StorageError::InvalidRecord(
+                "tool call lacks provider attempt".into(),
+            ));
+        }
+        Ok(attempt.map(|attempt| (attempt, has_tools)))
+    })
 }
 
 fn binding_for_route(
@@ -559,7 +665,9 @@ pub fn publish_first_context(
             cache: None,
         });
     }
-    prompt.parameters.max_output_tokens = Some(headroom as u32);
+    if binding.endpoint_profile != EndpointProfile::CodexSubscriptionResponses {
+        prompt.parameters.max_output_tokens = Some(headroom as u32);
+    }
     let bound = runtime.bind_provider_instructions(ctx, prompt, &[])?;
     let head = runtime.publish_initial_native_context(ctx, session_id, &binding, &bound)?;
     Ok((head, binding))

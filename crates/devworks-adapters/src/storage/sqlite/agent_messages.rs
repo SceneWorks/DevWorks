@@ -459,7 +459,7 @@ pub(super) fn open_blocking_question(
 }
 pub(super) fn delivery_head(conn: &Connection) -> Result<i64, StorageError> {
     db(conn.query_row(
-        "SELECT coalesce(max(sequence),0) FROM agent_message_deliveries",
+        "SELECT head FROM agent_message_sequence_heads WHERE kind='delivery'",
         [],
         |r| r.get(0),
     ))
@@ -483,10 +483,21 @@ pub(super) fn events(
 }
 pub(super) fn event_head(conn: &Connection) -> Result<i64, StorageError> {
     db(conn.query_row(
-        "SELECT coalesce(max(sequence),0) FROM agent_message_events",
+        "SELECT head FROM agent_message_sequence_heads WHERE kind='event'",
         [],
         |r| r.get(0),
     ))
+}
+
+fn advance_head(conn: &Connection, kind: &str, sequence: i64) -> Result<(), StorageError> {
+    let changed = db(conn.execute(
+        "UPDATE agent_message_sequence_heads SET head=?2 WHERE kind=?1 AND head=?2-1",
+        params![kind, sequence],
+    ))?;
+    if changed != 1 {
+        return Err(corrupt("sequence head"));
+    }
+    Ok(())
 }
 
 pub(super) fn insert_message(
@@ -684,6 +695,7 @@ pub(super) fn insert_delivery(
     {
         return Err(StorageError::ScopeDenied);
     }
+    advance_head(conn, "delivery", d.sequence)?;
     db(conn.execute("INSERT INTO agent_message_deliveries(sequence,message_id,project_id,recipient_assignment_id,recipient_human,state,revision,delivered_at,read_at,recipient_session_id,handed_over,resolved_at,handed_to_session_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",params![d.sequence,d.message_id.as_str(),d.project_id.0.as_str(),d.recipient_assignment_id.as_ref().map(|a|a.0.as_str()),d.recipient_human,d.state,d.revision,d.delivered_at_ms,d.read_at_ms,d.recipient_session_id.as_ref().map(Id::as_str),d.handed_over,d.resolved_at_ms,d.handed_to_session_id.as_ref().map(Id::as_str)]))?;
     Ok(())
 }
@@ -786,6 +798,7 @@ pub(super) fn insert_event(
     {
         return Err(StorageError::ScopeDenied);
     }
+    advance_head(conn, "event", e.sequence)?;
     db(conn.execute("INSERT INTO agent_message_events(sequence,project_id,message_id,kind,actor_id,recipient_assignment_id,created_at,recipient_session_id,recipient_human) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![e.sequence,e.project_id.0.as_str(),e.message_id.as_str(),e.kind,e.actor_id.0.as_str(),e.recipient_assignment_id.as_ref().map(|a|a.0.as_str()),e.created_at_ms,e.recipient_session_id.as_ref().map(Id::as_str),e.recipient_human]))?;
     Ok(())
 }

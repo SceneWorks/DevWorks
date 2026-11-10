@@ -164,7 +164,7 @@ fn recipients(
             let Some(work) = tx.sessions().work_root(&assignment.work_id)? else {
                 continue;
             };
-            if work.parent_feature_id.as_ref() != Some(feature) {
+            if assignment.work_id != *feature && work.parent_feature_id.as_ref() != Some(feature) {
                 continue;
             }
         } else if let Some(item) = item

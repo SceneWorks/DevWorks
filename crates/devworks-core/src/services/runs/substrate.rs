@@ -943,9 +943,7 @@ impl ControlService {
                 let occupied = root_assignments(tx.runs(), &root.id, true)?
                     .into_iter()
                     .filter(|other| {
-                        other.id != a.id
-                            && other.parent_id.is_some()
-                            && other.state == AssignmentState::Active
+                        other.id != a.id && other.parent_id.is_some() && other.slot_held
                     })
                     .count();
                 if occupied >= limit {

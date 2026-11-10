@@ -20,9 +20,11 @@ fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
 pub(super) fn verify(conn: &Connection) -> Result<(), StorageError> {
     // A later build must extend the ownership policy deliberately, rather than
     // blessing a newly migrated owning table merely because it is in MIGRATIONS.
-    if MIGRATIONS.last().map(|migration| migration.version) != Some(46) {
+    // Migration 47 adds global cursor high-water marks with no project ownership or foreign
+    // keys. Purging a project must keep those marks so other projects' cursors stay valid.
+    if MIGRATIONS.last().map(|migration| migration.version) != Some(47) {
         return Err(StorageError::IncompatibleSchema(
-            "project purge ownership policy requires schema 46".into(),
+            "project purge ownership policy requires schema 47".into(),
         ));
     }
     static EXPECTED: OnceLock<Result<Definitions, String>> = OnceLock::new();
