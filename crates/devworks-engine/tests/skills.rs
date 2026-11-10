@@ -561,6 +561,23 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
             .iter().map(|a| a["name"].as_str().unwrap().to_owned()).collect();
         assert!(names.contains(&"Repository summary".to_owned()), "{names:?}");
         assert!(!names.iter().any(|n| n.starts_with("Skill ") || n.starts_with("Role ")), "{names:?}");
+        // A save whose text with the carried resources would exceed what discovery captures is
+        // refused; a save that fits is applied.
+        let mib = 1024 * 1024;
+        std::fs::create_dir_all(fx.harness.join("epsilon/assets")).unwrap();
+        std::fs::write(fx.harness.join("epsilon/SKILL.md"), "Do epsilon.").unwrap();
+        for i in 0..8 {
+            let size = if i == 7 { 4 * mib - 100 * 1024 } else { 4 * mib };
+            std::fs::write(fx.harness.join(format!("epsilon/assets/blob-{i}.bin")), vec![b'x'; size]).unwrap();
+        }
+        let epsilon = find(&discover(&fx, &app, &user), "epsilon", "harness").clone();
+        let big = "y".repeat(150 * 1024);
+        assert_eq!(
+            refused(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":epsilon["id"],"expectedRevision":epsilon["revision"],"name":"epsilon","content":fx.upload(&user, &big)}))),
+            "InvalidArgument"
+        );
+        applied(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":epsilon["id"],"expectedRevision":epsilon["revision"],"name":"epsilon","content":fx.upload(&user, "Do epsilon well.")})));
+        std::fs::remove_dir_all(fx.harness.join("epsilon")).unwrap();
         // A creation that would take the harness root past what discovery reads is refused, so
         // the existing harness skills stay editable.
         let present = std::fs::read_dir(&fx.harness).unwrap().count();

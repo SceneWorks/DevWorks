@@ -277,6 +277,17 @@ impl InstructionService {
                 )
             })
             .collect();
+        // The new text with the carried resources must stay within what discovery captures, or
+        // the saved skill could never be observed (and so never saved or restored) again.
+        let total = resources
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| r["byteCount"].as_u64().unwrap_or(0))
+            .fold(prepared.text.len() as u64, u64::saturating_add);
+        if kind == InstructionKind::Skill && total > scan::MAX_SKILL_TOTAL_BYTES {
+            return Err(invalid("skill_size"));
+        }
         let digest =
             scan::revision_digest(&sha256_hex(prepared.text.as_bytes()), &resource_digests);
         if human
