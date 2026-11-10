@@ -5885,7 +5885,10 @@ fn an_entity_graph_bundle_fits_its_row_budget_with_the_center() {
     ));
     assert_eq!(g.entities.0.len(), 500, "center plus 499 neighbors");
     assert!(g.truncated);
-    assert_eq!(g.frontier.0, std::slice::from_ref(&hub));
+    // The center, then the neighbor the row budget left out.
+    assert_eq!(g.frontier.0.len(), 2);
+    assert_eq!(g.frontier.0[0], hub);
+    assert!(!g.entities.0.iter().any(|e| e.id == g.frontier.0[1]));
 }
 
 #[test]
@@ -6043,4 +6046,94 @@ fn text_seeds_skip_ineligible_matches_and_capped_conflicts_report_truncation() {
     assert_eq!(crowded.relations.as_ref().unwrap().0.len(), 500);
     assert_eq!(crowded.conflicts.0.len(), 500);
     assert!(crowded.truncated);
+}
+
+#[test]
+fn graph_reads_probe_past_seed_budgets_continue_through_omitted_edges_and_carry_cited_evidence() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    // Eleven disconnected matches, ten seed slots: the search reports that it stopped early.
+    for i in 0..11 {
+        fx.fact(
+            &user,
+            proj("project-a"),
+            &format!("Island {i}"),
+            draft("Fact", "wombat tunnel"),
+        );
+    }
+    let wide = q(
+        "knowledge.subgraph",
+        json!({"text": "wombat", "entityLimit": 50, "claimLimit": 100}),
+    );
+    assert_eq!(wide.claims.0.len(), 10);
+    assert!(wide.truncated);
+    // A has edges to B and C; with one edge allowed the other neighbor is a continuation.
+    let edge = |o: &str| {
+        json!({"kind": "Fact", "subjectId": "a", "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let w = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [
+            {"clientId": "a", "label": "Hub A", "entityType": "service", "aliases": []},
+            {"clientId": "b", "label": "Hub B", "entityType": "service", "aliases": []},
+            {"clientId": "c", "label": "Hub C", "entityType": "service", "aliases": []}],
+        "evidence": [], "claims": [edge("b"), edge("c")]}),
+    ));
+    let [a, b, c] = [0, 1, 2].map(|i| w.entity_ids.0[i].clone());
+    let g = q(
+        "knowledge.entity_graph",
+        json!({"entityIds": [a], "neighborLimit": 1}),
+    );
+    assert!(g.truncated);
+    let shown = if g.entities.0.iter().any(|e| e.id == b) {
+        &b
+    } else {
+        &c
+    };
+    let hidden = if *shown == b { &c } else { &b };
+    assert!(
+        g.frontier.0.contains(&a) && g.frontier.0.contains(hidden),
+        "{:?}",
+        g.frontier
+    );
+    // Evidence cited only by a returned claim's challenge or a returned relation is included.
+    let r = receipt(fx.record(&user, proj("project-a"), json!({
+        "entities": [{"clientId": "s", "entityType": "module", "label": "subject", "aliases": []},
+            {"clientId": "elsewhere", "entityType": "module", "label": "elsewhere", "aliases": []}],
+        "evidence": [
+            {"id": "e1", "source": {"kind": "Observation", "sourceRef": "log:1"}, "snippet": "challenge evidence"},
+            {"id": "e2", "source": {"kind": "Observation", "sourceRef": "log:2"}, "snippet": "relation evidence"}],
+        "claims": [draft("Fact", "a disputed fact"), draft("Fact", "a related fact"),
+            with(draft("Fact", "carrier"), json!({"subjectId": "elsewhere", "evidenceIds": ["e1", "e2"]}))]})));
+    let [disputed, related, carrier] = [0, 1, 2].map(|i| r.claim_ids.0[i].clone());
+    let cited: Vec<Id> = fx
+        .read_claim(&user, proj("project-a"), &carrier)
+        .evidence
+        .0
+        .iter()
+        .map(|e| e.id.clone())
+        .collect();
+    receipt(fx.cmd(&user, "knowledge.challenge", json!({"scope": proj("project-a"), "claimId": disputed,
+        "expectedRevision": fx.revision(&disputed).to_string(), "reason": "disputed", "evidenceIds": [cited[0]]})));
+    receipt(fx.cmd(&user, "knowledge.relate", json!({"scope": proj("project-a"),
+        "subjectId": disputed, "predicate": "supports", "objectId": related, "evidenceIds": [cited[1]]})));
+    let both = q(
+        "knowledge.subgraph",
+        json!({"claimIds": [disputed, related], "maxDepth": 0}),
+    );
+    let got: Vec<&Id> = both.evidence.0.iter().map(|e| &e.id).collect();
+    assert!(
+        cited.iter().all(|id| got.contains(&id)),
+        "{got:?} vs {cited:?}"
+    );
 }

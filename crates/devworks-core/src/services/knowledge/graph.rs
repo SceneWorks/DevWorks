@@ -240,6 +240,12 @@ fn seeds(
                     if !filter.admits(&claim, &wire) || claims.contains(&claim.id) {
                         continue;
                     }
+                    // A full budget probes on: one more admitted match means the seeds omit
+                    // eligible knowledge.
+                    if admitted >= text_limit {
+                        more = true;
+                        break 'scan;
+                    }
                     if !entities.contains(&claim.subject_id)
                         && c.entity(&claim.subject_id)?.is_some()
                     {
@@ -247,9 +253,6 @@ fn seeds(
                     }
                     claims.push(claim.id);
                     admitted += 1;
-                    if admitted >= text_limit {
-                        break 'scan;
-                    }
                 }
                 if last {
                     break;
@@ -567,27 +570,6 @@ fn bundle(
     include_conflicts: bool,
 ) -> Result<KnowledgeBundle, StorageError> {
     let mut truncated = s.truncated;
-    let mut evidence: Vec<SourceEvidence> = Vec::new();
-    if q.include_evidence {
-        let limit = clamp(q.evidence_limit.get(), 1, 500);
-        'outer: for (claim, wire, _) in &s.claims {
-            for id in &wire.evidence_ids.0 {
-                if evidence.iter().any(|e| e.id == *id) {
-                    continue;
-                }
-                if evidence.len() >= limit {
-                    truncated = true;
-                    break 'outer;
-                }
-                if let Some(e) = c.k.knowledge_evidence(id)?
-                    && e.deleted_at_ms.is_none()
-                    && c.scoped.sees(&e.scope)
-                {
-                    evidence.push(evidence_wire(&e, Some(&claim.id))?);
-                }
-            }
-        }
-    }
     let conflicts = if include_conflicts {
         let (found, cut) = conflicts(c, &s.claims)?;
         truncated |= cut;
@@ -617,7 +599,10 @@ fn bundle(
                     subject_id: r.subject_id.clone(),
                     predicate: label(&r.predicate, "-"),
                     object_id: r.object_id.clone(),
-                    evidence_ids: BoundedList(r.evidence_ids.iter().take(128).cloned().collect()),
+                    evidence_ids: {
+                        truncated |= r.evidence_ids.len() > 128;
+                        BoundedList(r.evidence_ids.iter().take(128).cloned().collect())
+                    },
                     author_id: r.author.clone(),
                     created_at_ms: counter(r.created_at_ms),
                 });
@@ -626,6 +611,48 @@ fn bundle(
     }
     // Capped lists say so: an incomplete conflict or relation view never reads as complete.
     truncated |= conflicts.len() > 500 || relations.len() > 500;
+    relations.truncate(500);
+    // Evidence of every returned claim, its challenges and the returned relations (as a claim
+    // bundle shows it), visible, deduplicated and within the evidence budget.
+    let mut evidence: Vec<SourceEvidence> = Vec::new();
+    if q.include_evidence {
+        let limit = clamp(q.evidence_limit.get(), 1, 500);
+        let cited = s
+            .claims
+            .iter()
+            .flat_map(|(claim, wire, _)| {
+                let challenges = wire
+                    .challenges
+                    .iter()
+                    .flat_map(|list| &list.0)
+                    .flat_map(|ch| &ch.evidence_ids.0);
+                wire.evidence_ids
+                    .0
+                    .iter()
+                    .chain(challenges)
+                    .map(move |id| (id, &claim.id))
+            })
+            .chain(
+                relations
+                    .iter()
+                    .flat_map(|r| r.evidence_ids.0.iter().map(move |id| (id, &r.subject_id))),
+            );
+        for (id, owner) in cited {
+            if evidence.iter().any(|e| e.id == *id) {
+                continue;
+            }
+            if evidence.len() >= limit {
+                truncated = true;
+                break;
+            }
+            if let Some(e) = c.k.knowledge_evidence(id)?
+                && e.deleted_at_ms.is_none()
+                && c.scoped.sees(&e.scope)
+            {
+                evidence.push(evidence_wire(&e, Some(owner))?);
+            }
+        }
+    }
     Ok(KnowledgeBundle {
         entities: BoundedList(s.entities.iter().map(|(e, _, _)| entity_wire(e)).collect()),
         claims: BoundedList(s.claims.iter().map(|(_, w, _)| w.clone()).collect()),
@@ -636,7 +663,7 @@ fn bundle(
         conflicts: BoundedList(conflicts.into_iter().take(500).collect()),
         supersession_ids: BoundedList(supersession.into_iter().take(128).collect()),
         summary: None,
-        relations: Some(BoundedList(relations.into_iter().take(500).collect())),
+        relations: Some(BoundedList(relations)),
         revisions: Some(BoundedList(Vec::new())),
         scope_revision: Some(rev(c.k.knowledge_scope_revision(&c.scoped.exact)?)),
     })
@@ -963,10 +990,14 @@ impl KnowledgeService {
                     let center = c
                         .entity(id)?
                         .ok_or_else(|| not_found("knowledge_entity", id))?;
-                    let (found, mut more) = c.edges(&center.id, edges)?;
+                    // Every edge up to the store page is read, so the neighbors beyond the bound
+                    // are known: they join the frontier and expanding them reaches their edges.
+                    let found = k.knowledge_entity_edges(&center.id, &c.keys, MAX_ROWS)?;
+                    let mut more = found.len() >= MAX_ROWS as usize;
                     let mut entities: Vec<(StoredEntity, u32, i64)> =
                         vec![(center.clone(), 0, 100)];
                     let mut claims = Vec::new();
+                    let mut omitted: Vec<Id> = Vec::new();
                     for claim in found {
                         let wire = claim_wire(k, &claim, &th)?;
                         if !filter.admits(&claim, &wire) {
@@ -977,15 +1008,20 @@ impl KnowledgeService {
                         } else {
                             claim.subject_id.clone()
                         };
-                        if !entities.iter().any(|(e, _, _)| e.id == other) {
-                            // The bundle holds at most the store page, center included.
-                            if entities.len() >= MAX_ROWS as usize {
-                                more = true;
-                                continue;
+                        let known = entities.iter().any(|(e, _, _)| e.id == other);
+                        // The bundle holds `neighborLimit` edges and at most the store page of
+                        // entities, center included.
+                        if claims.len() >= edges as usize
+                            || (!known && entities.len() >= MAX_ROWS as usize)
+                        {
+                            more = true;
+                            if !known && !omitted.contains(&other) && c.entity(&other)?.is_some() {
+                                omitted.push(other);
                             }
-                            if let Some(e) = c.entity(&other)? {
-                                entities.push((e, 1, entity_score(1, false)));
-                            }
+                            continue;
+                        }
+                        if !known && let Some(e) = c.entity(&other)? {
+                            entities.push((e, 1, entity_score(1, false)));
                         }
                         claims.push((claim, wire, claim_score(1, false)));
                     }
@@ -993,7 +1029,7 @@ impl KnowledgeService {
                         entities,
                         claims,
                         frontier: if more {
-                            vec![center.id.clone()]
+                            std::iter::once(center.id.clone()).chain(omitted).collect()
                         } else {
                             Vec::new()
                         },
