@@ -11250,6 +11250,16 @@
         "id": {
           "$ref": "#/$defs/Id"
         },
+        "lastFailure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "name": {
           "$ref": "#/$defs/Text1To256"
         },

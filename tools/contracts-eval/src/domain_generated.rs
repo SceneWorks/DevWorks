@@ -6080,6 +6080,8 @@ pub struct McpServer {
     pub transport: Label,
     pub selected_tool_ids: Items<Id>,
     pub catalog_revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failure: Option<Text>,
 }
 impl Check for McpServer {
     fn check(&self) -> Result<(), String> {
@@ -6090,6 +6092,7 @@ impl Check for McpServer {
         self.transport.check()?;
         self.selected_tool_ids.check()?;
         self.catalog_revision.check()?;
+        self.last_failure.check()?;
         super::domain_rules::record(
             "McpServer",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -18659,6 +18662,7 @@ pub enum DomainQuery {
     McpServers { scope: DataScope, page: PageRequest },
     #[serde(rename = "mcp.resources")]
     McpResources {
+        scope: DataScope,
         server_id: Id,
         catalog_revision: Revision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18667,6 +18671,7 @@ pub enum DomainQuery {
     },
     #[serde(rename = "mcp.prompts")]
     McpPrompts {
+        scope: DataScope,
         server_id: Id,
         catalog_revision: Revision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18677,6 +18682,7 @@ pub enum DomainQuery {
     },
     #[serde(rename = "mcp.capabilities")]
     McpCapabilities {
+        scope: DataScope,
         server_id: Id,
         catalog_revision: Revision,
         page: PageRequest,
@@ -20073,23 +20079,27 @@ impl Check for DomainQuery {
                 page.check()?;
             }
             Self::McpResources {
+                scope,
                 server_id,
                 catalog_revision,
                 uri,
                 page,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 catalog_revision.check()?;
                 uri.check()?;
                 page.check()?;
             }
             Self::McpPrompts {
+                scope,
                 server_id,
                 catalog_revision,
                 name,
                 arguments,
                 page,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 catalog_revision.check()?;
                 name.check()?;
@@ -20097,10 +20107,12 @@ impl Check for DomainQuery {
                 page.check()?;
             }
             Self::McpCapabilities {
+                scope,
                 server_id,
                 catalog_revision,
                 page,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 catalog_revision.check()?;
                 page.check()?;
@@ -22132,16 +22144,19 @@ pub enum DomainCommand {
     },
     #[serde(rename = "mcp.connect")]
     McpConnect {
+        scope: DataScope,
         server_id: Id,
         expected_revision: Revision,
     },
     #[serde(rename = "mcp.discover")]
     McpDiscover {
+        scope: DataScope,
         server_id: Id,
         expected_catalog_revision: Revision,
     },
     #[serde(rename = "mcp.select_tools")]
     McpSelectTools {
+        scope: DataScope,
         server_id: Id,
         expected_revision: Revision,
         expected_catalog_revision: Revision,
@@ -24199,25 +24214,31 @@ impl Check for DomainCommand {
                 transport.check()?;
             }
             Self::McpConnect {
+                scope,
                 server_id,
                 expected_revision,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 expected_revision.check()?;
             }
             Self::McpDiscover {
+                scope,
                 server_id,
                 expected_catalog_revision,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 expected_catalog_revision.check()?;
             }
             Self::McpSelectTools {
+                scope,
                 server_id,
                 expected_revision,
                 expected_catalog_revision,
                 tool_ids,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 expected_revision.check()?;
                 expected_catalog_revision.check()?;
