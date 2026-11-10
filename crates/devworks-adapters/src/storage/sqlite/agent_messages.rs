@@ -317,7 +317,7 @@ pub(super) fn assignment_thread(
         None => (i64::MAX, "~"),
     };
     let mut stmt=db(conn.prepare(
-        "SELECT m.id FROM agent_messages m LEFT JOIN agent_message_deliveries d ON d.message_id=m.id AND d.recipient_assignment_id=?2 AND d.recipient_session_id IS NULL WHERE m.project_id=?1 AND ((?3='Inbound' AND d.sequence IS NOT NULL) OR (?3='Outbound' AND m.from_assignment_id=?2) OR (?3='Both' AND (d.sequence IS NOT NULL OR m.from_assignment_id=?2))) AND (NOT ?4 OR d.state IN ('Pending','Delivered')) AND (m.created_at<?5 OR (m.created_at=?5 AND m.id<?6)) ORDER BY m.created_at DESC,m.id DESC LIMIT ?7"
+        "SELECT m.id FROM agent_messages m LEFT JOIN agent_message_deliveries d ON d.message_id=m.id AND d.recipient_assignment_id=?2 AND d.recipient_session_id IS NULL WHERE m.project_id=?1 AND m.channel='Assignment' AND ((?3='Inbound' AND d.sequence IS NOT NULL) OR (?3='Outbound' AND m.from_assignment_id=?2) OR (?3='Both' AND (d.sequence IS NOT NULL OR m.from_assignment_id=?2))) AND (NOT ?4 OR d.state IN ('Pending','Delivered')) AND (m.created_at<?5 OR (m.created_at=?5 AND m.id<?6)) ORDER BY m.created_at DESC,m.id DESC LIMIT ?7"
     ))?;
     let mut rows = db(stmt.query(params![
         project.0.as_str(),

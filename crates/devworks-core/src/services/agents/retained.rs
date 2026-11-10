@@ -400,6 +400,9 @@ pub fn handover_item(
     if !assignment.state.is_live() {
         return Err(StorageError::ScopeDenied);
     }
+    if assignment.purpose != crate::ports::storage::AssignmentPurpose::Primary {
+        return Ok(0);
+    }
     let item = &assignment.work_id;
     let session_id = &assignment.session_id;
     let work = tx
@@ -426,6 +429,7 @@ pub fn handover_item(
         let page_len = page.len();
         for message in page {
             if message.target_item_id.as_ref() != Some(item)
+                || message.target_session_id.is_some()
                 || message.state.as_deref() != Some("Open")
                 || !matches!(message.message_class.as_str(), "Question" | "Request")
                 || message.to_human
