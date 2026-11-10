@@ -6,8 +6,8 @@ use super::policy::{
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::operations::{
-    OperationInput, approvals, artifacts, features, history, issues, next_work, runs, sessions,
-    tasks,
+    OperationInput, approvals, artifacts, features, git, history, issues, next_work, runs,
+    sessions, tasks,
 };
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
@@ -18,7 +18,7 @@ use crate::ports::{
     AuthorityDenial, AuthorityFence, AuthorityPort, AuthorityRequest, Authorization, Clock,
     GrantUse, IdKind,
 };
-use crate::protocol::data::{ArtifactCommand, ArtifactDeletion, ArtifactQuery};
+use crate::protocol::data::{ArtifactCommand, ArtifactDeletion, ArtifactQuery, GitCommand};
 use crate::protocol::provider::UserContent;
 use crate::protocol::{ActorId, EventId, Id, ProjectId, RootId, Subject};
 use crate::registry::{self, Mode};
@@ -324,6 +324,8 @@ fn agent_assignment_scope(
             | OperationInput::NextWork(_)
             | OperationInput::Runs(_)
             | OperationInput::History(_)
+            | OperationInput::Indexing(_)
+            | OperationInput::Git(git::Input::Commit(_) | git::Input::PullRequest(_))
             | OperationInput::Sessions(sessions::Input::AppendMessage(_))
     ) {
         return Ok(());
@@ -435,6 +437,18 @@ fn agent_assignment_scope(
                     )
                 })?
         }
+        OperationInput::Git(git::Input::Commit(input)) => match &input.command {
+            GitCommand::Commit { message, .. } => {
+                readable_artifact(&message.artifact_id, &message.version_id)?
+            }
+            _ => false,
+        },
+        OperationInput::Git(git::Input::PullRequest(input)) => match &input.command {
+            GitCommand::OpenPullRequest { description, .. } => {
+                readable_artifact(&description.artifact_id, &description.version_id)?
+            }
+            _ => false,
+        },
         OperationInput::History(input) => {
             let history_scoped = |id: &RootId| {
                 if !coordinator && id == root && assignment.work_id != *root {
@@ -658,7 +672,16 @@ fn agent_assignment_scope(
                     }
                 }
             }
-            runs::Input::Redirect(i) => coordinator && &i.root_id == root,
+            runs::Input::Redirect(i) => {
+                coordinator
+                    && &i.root_id == root
+                    && i.attachments.0.iter().try_fold(true, |allowed, artifact| {
+                        Ok::<_, DenialReason>(
+                            allowed
+                                && readable_artifact(&artifact.artifact_id, &artifact.version_id)?,
+                        )
+                    })?
+            }
             runs::Input::Stop(i) => coordinator && &i.root_id == root,
             runs::Input::Inspect(i) | runs::Input::Eligibility(i) => match &i.query {
                 crate::protocol::Query::Root { root_id } => root_id == root,
@@ -673,6 +696,7 @@ fn agent_assignment_scope(
                 _ => false,
             },
         },
+        OperationInput::Indexing(_) => false,
         _ => true,
     };
     if allowed {

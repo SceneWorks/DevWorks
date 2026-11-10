@@ -340,6 +340,44 @@ fn moving_a_secondary_delegated_task_fences_the_worker_without_moving_its_primar
 }
 
 #[test]
+fn a_split_delegated_scope_retires_instead_of_blocking_the_destination_forever() {
+    let m = MovedWorker::new();
+    m.f.seed("secondary", Some("feature-a"), "task", 1);
+    let worker = m.worker.id.clone();
+    write(&*m.f.store, move |tx| {
+        tx.runs()
+            .insert_agent_assignment_context(&StoredAgentAssignmentContext {
+                assignment_id: worker,
+                project_id: ProjectId(id("project")),
+                role_id: id("worker"),
+                role_instructions: "Work on both tasks".into(),
+                role_revisions: json!({}),
+                brief: "Work on both tasks".into(),
+                task_ids: json!(["moving", "secondary"]),
+                source_checkpoint_id: None,
+                created_at_ms: 1,
+            })
+    })
+    .unwrap();
+    m.change(Some("feature-b"));
+    m.settle();
+    m.reconcile();
+    let retired = m.assignment();
+    assert_eq!(retired.state, AssignmentState::Superseded);
+    assert_eq!(retired.root_id, RootId(id("feature-a")));
+    assert_eq!(retired.checkpoint, m.worker.checkpoint);
+    assert!(
+        read(&*m.f.store, |s| {
+            devworks_core::services::runs::active_blockers(
+                s.runs(),
+                &BlockerFilter::RootLevel(RootId(id("moving"))),
+            )
+        })
+        .is_empty()
+    );
+}
+
+#[test]
 fn a_feature_transfer_preserves_worker_session_and_checkpoint_and_fences_old_epoch_and_root() {
     let m = MovedWorker::new();
     m.change(Some("feature-b"));
