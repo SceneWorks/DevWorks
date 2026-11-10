@@ -564,10 +564,15 @@ fn visible_artifact(
 }
 
 /// A receipt's reply is never deleted, shared, moved or replaced through the artifact use cases.
+/// Host-captured Help topics and skill/role instruction versions are retained the same way: they
+/// are the exact evidence their owners' history refers to, and they stay out of user listings.
 fn retained_help(artifact: &StoredArtifact, host: &crate::protocol::ActorId) -> bool {
     artifact.provenance["principalKind"] == "Host"
         && artifact.provenance["producedBy"].as_str() == Some(host.0.as_str())
-        && artifact.provenance["derived"]["kind"] == "HelpTopic"
+        && matches!(
+            artifact.provenance["derived"]["kind"].as_str(),
+            Some("HelpTopic" | "Instruction")
+        )
 }
 
 /// Only actual trusted-Host convention derivatives are immutable through public artifact

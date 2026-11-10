@@ -684,7 +684,7 @@ pub(crate) fn record_capture(
             crate::services::artifacts::host::HostArtifactPublication {
                 title: &format!("{} {path}", recorded.title),
                 media_type: media,
-                provenance: json!({"instructionId": item.id.as_str(), "path": path}),
+                provenance: json!({"kind": "Instruction", "instructionId": item.id.as_str(), "path": path}),
                 scope: scope.clone(),
                 owner: owner.clone(),
             },

@@ -197,6 +197,9 @@ pub struct DesktopConfig {
     pub web: WebPortsFactory,
     /// Index supervision bounds (run concurrency, discovery and housekeeping intervals).
     pub indexing: IndexingConfig,
+    /// The user's shared skill folder read in place (`~/.agents/skills` by default); `None`
+    /// reads no shared skills. Harness skills always live under `<data_root>/skills`.
+    pub shared_skills: Option<PathBuf>,
 }
 impl std::fmt::Debug for DesktopConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -228,6 +231,9 @@ impl DesktopConfig {
             connection_tick: Some(CONNECTION_TICK),
             web: Arc::new(native_ports),
             indexing: IndexingConfig::default(),
+            shared_skills: std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".agents").join("skills")),
         }
     }
 }
@@ -469,13 +475,7 @@ async fn compose(
             config.data_root.join("skills"),
         )),
         roots: devworks_core::services::instructions::SkillRoots {
-            shared: std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .map(|home| {
-                    std::path::PathBuf::from(home)
-                        .join(".agents")
-                        .join("skills")
-                }),
+            shared: config.shared_skills.clone(),
             harness: config.data_root.join("skills"),
         },
     });

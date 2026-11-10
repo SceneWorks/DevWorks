@@ -262,7 +262,7 @@ fn list(
            AND (?8 IS NULL OR a.scope_kind='Workspace' OR a.owner_actor_id IS NULL OR a.owner_actor_id=?8)
            AND NOT (json_extract(a.provenance_json,'$.principalKind') IS 'Host'
                     AND json_extract(a.provenance_json,'$.producedBy') IS ?7
-                    AND json_extract(a.provenance_json,'$.derived.kind') IS 'HelpTopic')
+                    AND json_extract(a.provenance_json,'$.derived.kind') IN ('HelpTopic','Instruction'))
            AND (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND a.id<?3))
            AND (?6=0 OR (SELECT COUNT(*) FROM artifact_tags t WHERE t.artifact_id=a.id
                          AND t.tag IN (SELECT value FROM json_each(?5)))=?6)
@@ -304,7 +304,7 @@ fn list_workspace(
            AND a.retention='Explicit' AND (?1 IS NULL OR a.owner_actor_id=?1)
            AND NOT (json_extract(a.provenance_json,'$.principalKind') IS 'Host'
                     AND json_extract(a.provenance_json,'$.producedBy') IS ?7
-                    AND json_extract(a.provenance_json,'$.derived.kind') IS 'HelpTopic')
+                    AND json_extract(a.provenance_json,'$.derived.kind') IN ('HelpTopic','Instruction'))
            AND (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND a.id<?3))
            AND (?6=0 OR (SELECT COUNT(*) FROM artifact_tags t WHERE t.artifact_id=a.id
                          AND t.tag IN (SELECT value FROM json_each(?5)))=?6)

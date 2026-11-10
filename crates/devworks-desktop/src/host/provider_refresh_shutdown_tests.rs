@@ -141,6 +141,7 @@ pub(super) fn run_case(writer_race: bool) {
         config.shutdown_bound = Duration::from_millis(30);
         config.connection_tick = None;
         config.indexing.discover_at_boot = false;
+        config.shared_skills = None;
         config.secrets = Some(secrets.clone());
         config.http = Some(http.clone());
         config.providers =
