@@ -368,12 +368,15 @@ async fn compose(
     // Unified Knowledge. Retrieval is lexical until an embedding route exists (vector search is
     // never reported as run); imports read their saved artifact version. A large delete by
     // source continues through its durable consumer, registered with the dispatcher below.
-    let knowledge = Arc::new(KnowledgeService::new(
-        id_source.clone(),
-        clock.clone(),
-        Some(artifact_files),
-        Arc::new(NoVectorIndex),
-    ));
+    let knowledge = Arc::new(
+        KnowledgeService::new(
+            id_source.clone(),
+            clock.clone(),
+            Some(artifact_files),
+            Arc::new(NoVectorIndex),
+        )
+        .with_summaries(store.clone(), artifacts.clone()),
+    );
     let use_cases = UseCases::new()
         .with_queue()
         .with_settings(settings)

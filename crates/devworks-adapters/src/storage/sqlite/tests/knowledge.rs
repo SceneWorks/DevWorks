@@ -119,12 +119,15 @@ impl Fx {
             h.clock.clone(),
             h.ids.clone(),
         ));
-        let knowledge = Arc::new(KnowledgeService::new(
-            h.ids.clone(),
-            h.clock.clone(),
-            Some(files),
-            Arc::new(NoVectorIndex),
-        ));
+        let knowledge = Arc::new(
+            KnowledgeService::new(
+                h.ids.clone(),
+                h.clock.clone(),
+                Some(files),
+                Arc::new(NoVectorIndex),
+            )
+            .with_summaries(store.clone(), artifacts.clone()),
+        );
         let cases = UseCases::new()
             .with_artifacts(artifacts)
             .with_knowledge(knowledge.clone());
@@ -5365,4 +5368,231 @@ fn purge_planning_source_heads_follow_all_surviving_basis_without_copying_source
             .0,
         "independent claim"
     );
+}
+
+fn graph_query(extra: Value) -> Value {
+    with(
+        json!({"entityIds": [], "claimIds": [], "predicates": [], "tags": [], "states": [],
+            "maxDepth": 2, "page": {"limit": 100}, "entityLimit": 100, "claimLimit": 200,
+            "evidenceLimit": 100, "neighborLimit": 100, "includeSuperseded": false,
+            "includeConflicts": true, "includeSupersessionChain": true, "includeEvidence": true}),
+        extra,
+    )
+}
+fn bundle_of_reply(reply: DomainQueryReply) -> KnowledgeBundle {
+    match result(reply) {
+        OperationResult::KnowledgeSubgraph { value }
+        | OperationResult::KnowledgeEntityBundle { value }
+        | OperationResult::KnowledgeEntityGraph { value }
+        | OperationResult::KnowledgeClaimBundle { value }
+        | OperationResult::KnowledgeExpandFrontier { value }
+        | OperationResult::KnowledgeQuery { value } => value,
+        other => panic!("{other:?}"),
+    }
+}
+fn entity_labels(b: &KnowledgeBundle) -> Vec<String> {
+    let mut v: Vec<String> = b.entities.0.iter().map(|e| e.label.0.clone()).collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn graph_reads_are_scope_first_bounded_and_keep_retained_shapes() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // A chain A -calls-> B -calls-> C -calls-> D in project A, two conflicting facts about A.
+    let edge = |s: &str, o: &str| {
+        json!({"kind": "Fact", "subjectId": s, "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let written = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+            "entities": [
+                {"clientId": "a", "label": "Service A", "entityType": "service", "aliases": []},
+                {"clientId": "b", "label": "Service B", "entityType": "service", "aliases": []},
+                {"clientId": "c", "label": "Service C", "entityType": "service", "aliases": []},
+                {"clientId": "d", "label": "Service D", "entityType": "service", "aliases": []}],
+            "evidence": [],
+            "claims": [edge("a", "b"), edge("b", "c"), edge("c", "d"),
+                with(draft("Fact", "port 8080"), json!({"subjectId": "a"})),
+                with(draft("Fact", "port 9090"), json!({"subjectId": "a", "confidence": 0.2}))]}),
+    ));
+    let [a, b, c, d] = [0, 1, 2, 3].map(|i| written.entity_ids.0[i].clone());
+    let port = written.claim_ids.0[3].clone();
+    // Another project's Knowledge never enters the traversal.
+    fx.fact(
+        &user,
+        proj("project-b"),
+        "Hidden",
+        draft("Fact", "secret port"),
+    );
+    let sub = |depth: u32, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            "knowledge.subgraph",
+            json!({"scope": proj("project-a"),
+            "query": graph_query(with(json!({"entityIds": [a], "maxDepth": depth}), extra))}),
+        ))
+    };
+    let one = sub(1, json!({}));
+    assert_eq!(entity_labels(&one), ["Service A", "Service B"]);
+    assert_eq!(
+        one.frontier.0,
+        std::slice::from_ref(&b),
+        "the depth boundary is the frontier"
+    );
+    assert_eq!(
+        one.conflicts.0.len(),
+        1,
+        "conflicting active claims stay visible"
+    );
+    assert_eq!(
+        one.claims.0.len(),
+        3,
+        "a->b and both facts; b->c leaves the selection"
+    );
+    let two = sub(2, json!({}));
+    assert_eq!(entity_labels(&two), ["Service A", "Service B", "Service C"]);
+    let bounded = sub(5, json!({"entityLimit": 2}));
+    assert!(bounded.truncated && bounded.entities.0.len() == 2);
+    // Filters are enforced (predicates, confidence).
+    let edges_only = sub(5, json!({"predicates": ["calls"]}));
+    assert!(edges_only.claims.0.iter().all(|c| c.predicate.0 == "calls"));
+    let confident = sub(1, json!({"confidenceMin": 0.5}));
+    assert!(
+        confident
+            .claims
+            .0
+            .iter()
+            .all(|c| c.value.as_ref().is_none_or(|v| v.0 != "port 9090"))
+    );
+    // Frontier expansion adds only new nodes beyond the frontier.
+    let more = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.expand_frontier",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"entityIds": [c], "maxDepth": 1, "neighborLimit": 10}))}),
+    ));
+    let added = entity_labels(&more);
+    assert!(
+        added.contains(&"Service D".into()) && !added.contains(&"Service C".into()),
+        "{added:?}"
+    );
+    let refused_frontier = query_fault(fx.q(
+        &user,
+        "knowledge.expand_frontier",
+        json!({"scope": proj("project-a"), "query": graph_query(json!({}))}),
+    ));
+    assert_eq!(refused_frontier.code, DomainErrorCode::InvalidArgument);
+    // Entity bundle and entity graph around B.
+    let around = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.entity_bundle",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"entityIds": [b]}))}),
+    ));
+    assert_eq!(
+        entity_labels(&around),
+        ["Service A", "Service B", "Service C"]
+    );
+    assert_eq!(around.claims.0.len(), 2);
+    let graph = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.entity_graph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"entityIds": [b]}))}),
+    ));
+    assert_eq!(
+        entity_labels(&graph),
+        ["Service A", "Service B", "Service C"]
+    );
+    // A seedless subgraph pages the whole visible graph without repeats or other projects.
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut page = json!({"limit": 3});
+        if let Some(c) = &cursor {
+            page["cursor"] = json!(c);
+        }
+        let g = bundle_of_reply(fx.q(
+            &user,
+            "knowledge.subgraph",
+            json!({"scope": proj("project-a"),
+            "query": graph_query(json!({"page": page}))}),
+        ));
+        seen.extend(entity_labels(&g));
+        match g.next_cursor {
+            Some(c) => cursor = Some(c.0),
+            None => break,
+        }
+    }
+    seen.sort();
+    assert_eq!(seen, ["Service A", "Service B", "Service C", "Service D"]);
+    // Claim bundle honours its flags.
+    let plain = bundle_of_reply(fx.q(&user, "knowledge.claim_bundle", json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"claimIds": [port], "includeConflicts": false, "includeEvidence": false}))})));
+    assert!(plain.conflicts.0.is_empty() && plain.claims.0.len() == 1);
+    let full = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.claim_bundle",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"claimIds": [port]}))}),
+    ));
+    assert_eq!(full.conflicts.0.len(), 1);
+    // Query renders the retained Markdown summary; nothing matched is the retained answer.
+    let answered = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.query",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"text": "port", "entityLimit": 5}))}),
+    ));
+    let text = answered.summary.unwrap().0;
+    assert!(
+        text.starts_with("## Relevant Memory") && text.contains("**Service A** (service)"),
+        "{text}"
+    );
+    assert!(text.contains("⚠️ CONFLICT (unresolved)"), "{text}");
+    let none = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.query",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"text": "nonexistentword"}))}),
+    ));
+    assert_eq!(
+        none.summary.unwrap().0,
+        devworks_core::services::knowledge::NO_MEMORIES
+    );
+    // A rendered summary is published as an artifact of the caller's scope.
+    let summary = match result(fx.q(
+        &user,
+        "knowledge.render_summary",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"entityIds": [a]}))}),
+    )) {
+        OperationResult::KnowledgeRenderSummary { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert!(summary.media_type.starts_with("text/markdown") && summary.byte_length.get() > 0);
+    assert_eq!(
+        query_fault(fx.q(
+            &user,
+            "knowledge.render_summary",
+            json!({"scope": proj("project-a"),
+            "query": graph_query(json!({}))})
+        ))
+        .code,
+        DomainErrorCode::InvalidArgument
+    );
+    // Scope first: an agent of project B cannot name project A's entities.
+    let other = fx.agent("agent-b", Some("project-b"));
+    let denied = query_fault(fx.q(
+        &other,
+        "knowledge.subgraph",
+        json!({"scope": proj("project-b"),
+        "query": graph_query(json!({"entityIds": [a]}))}),
+    ));
+    assert_eq!(denied.code, DomainErrorCode::NotFound);
+    let _ = d;
 }

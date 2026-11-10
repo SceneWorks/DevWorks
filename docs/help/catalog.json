@@ -180,7 +180,14 @@
       "knowledge.revise",
       "knowledge.challenge",
       "knowledge.promote",
-      "knowledge.relate"
+      "knowledge.relate",
+      "knowledge.subgraph",
+      "knowledge.entity_bundle",
+      "knowledge.entity_graph",
+      "knowledge.claim_bundle",
+      "knowledge.expand_frontier",
+      "knowledge.render_summary",
+      "knowledge.query"
     ]
   },
   {
