@@ -549,6 +549,18 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
         fx.command(&app, &user, "skills.rollback", json!({"instructionId":gone["id"],"expectedRevision":gone["revision"],"targetRevision":delta2["revision"]}));
         assert_eq!(std::fs::read(fx.harness.join("delta/docs/ref.md")).unwrap(), b"nested");
         assert!(!labels(find(&discover(&fx, &app, &user), "delta", "harness")).contains(&"missing".into()));
+        // A directory that is there but no longer a capturable skill (its SKILL.md removed, a
+        // resource edited) is not missing: restoring over it is refused and the edit stays.
+        std::fs::remove_file(fx.harness.join("delta/SKILL.md")).unwrap();
+        std::fs::write(fx.harness.join("delta/docs/ref.md"), "edited on disk").unwrap();
+        let occupied = find(&discover(&fx, &app, &user), "delta", "harness").clone();
+        assert!(labels(&occupied).contains(&"missing".into()), "{occupied}");
+        assert_eq!(
+            refused(fx.command(&app, &user, "skills.rollback", json!({"instructionId":occupied["id"],"expectedRevision":occupied["revision"],"targetRevision":delta2["revision"]}))),
+            "Conflict"
+        );
+        assert_eq!(std::fs::read(fx.harness.join("delta/docs/ref.md")).unwrap(), b"edited on disk");
+        std::fs::remove_dir_all(fx.harness.join("delta")).unwrap();
         // Captured skill versions stay out of artifact listings; other host artifacts remain.
         let staged = fx.artifacts.stage_host_bytes(&*fx.store, b"repository summary", json!({"kind":"Test"})).unwrap().unwrap();
         let (artifacts, s2) = (fx.artifacts.clone(), staged.clone());
@@ -580,10 +592,25 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
         std::fs::remove_dir_all(fx.harness.join("epsilon")).unwrap();
         // A creation that would take the harness root past what discovery reads is refused, so
         // the existing harness skills stay editable.
+        // An agent draft adds no directory, so the root's room is checked again when it is
+        // activated: here another entry filled the root in between.
         let present = std::fs::read_dir(&fx.harness).unwrap().count();
-        for i in present..512 {
+        for i in present..511 {
             std::fs::create_dir(fx.harness.join(format!("filler-{i}"))).unwrap();
         }
+        let late = applied(fx.command(&app, &agent, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"late","content":fx.upload(&agent, "Do it late.")})));
+        assert!(!fx.harness.join("late").exists());
+        std::fs::create_dir(fx.harness.join("filler-last")).unwrap();
+        let proposal = applied(fx.command(&app, &agent, "skills.propose", json!({"instructionId":late["id"],"expectedRevision":"1","contentDigest":digest_of(&late)})));
+        let decision = serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+            "requestKey":fx.h.ids.next_id(IdKind::Link),"body":{"kind":"approvals.record_human_decision",
+            "proposalId":proposal["id"],"expectedRevision":proposal["revision"],"contentDigest":proposal["contentDigest"],
+            "decision":"Approve","rationale":"Reviewed"}})).unwrap();
+        applied(app.record_human_decision(&user, &decision).unwrap());
+        app.approval_resumes().tick().await.unwrap();
+        // The approved activation is refused for lack of room: nothing is written or effective.
+        assert!(!fx.harness.join("late").exists());
+        assert!(!app.effective_skills().unwrap().skills.iter().any(|s| s.name == "late"));
         assert_eq!(
             refused(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"name":"overflow","content":fx.upload(&user, "one too many")}))),
             "Conflict"

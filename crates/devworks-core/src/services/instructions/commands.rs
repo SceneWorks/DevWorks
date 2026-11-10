@@ -299,6 +299,8 @@ impl InstructionService {
                 .instruction_revision(&item.id, active)?
                 .ok_or_else(|| not_found_failure(kind, &item.id))?;
             if current.content_digest == digest {
+                // An unchanged save still rewrites a missing directory: check it like a change.
+                self.check_materializable(&item, &current.resources)?;
                 return Ok(DomainDecision::NoChange {
                     result: result(kind, Op::Draft, record(&item, &current, None)?),
                 });
@@ -470,32 +472,11 @@ impl InstructionService {
         name: &str,
         now: i64,
     ) -> Result<StoredInstructionItem, Failure> {
+        self.check_directory(name, None)?;
         let root = self
             .files
             .root()
             .unwrap_or_else(|_| self.roots.harness.clone());
-        // Materializing a new item replaces its directory: one that already exists without a
-        // discovered skill (no SKILL.md, or unreadable) holds files history never captured.
-        match self.source.canonical_dir(&root.join(name)) {
-            Err(SourceFault::Missing) => {}
-            _ => return Err(refusal(DomainErrorCode::Conflict, "skill_directory", None)),
-        }
-        // Discovery refuses a root with more than `MAX_SKILLS` entries (and with it every later
-        // save), so a creation that would cross that bound is refused instead.
-        let entries = match self.source.list_dir(&root, scan::MAX_SKILLS + 1) {
-            Ok(entries) => entries.len(),
-            Err(SourceFault::Missing) => 0,
-            Err(_) => {
-                return Err(refusal(
-                    DomainErrorCode::SourceChanged,
-                    "skill_source",
-                    None,
-                ));
-            }
-        };
-        if entries >= scan::MAX_SKILLS {
-            return Err(refusal(DomainErrorCode::Conflict, "skill_capacity", None));
-        }
         let item = StoredInstructionItem {
             id: tx.new_id(IdKind::Operation),
             kind: InstructionKind::Skill,
@@ -697,6 +678,7 @@ impl InstructionService {
             .instruction_revision(&item.id, a.target)?
             .ok_or_else(|| not_found_failure(kind, &item.id))?;
         if item.active_revision == Some(target.revision) {
+            self.check_materializable(&item, &target.resources)?;
             return Ok(DomainDecision::NoChange {
                 result: result(kind, Op::Rollback, record(&item, &target, None)?),
             });
@@ -755,6 +737,37 @@ impl InstructionService {
     /// Refuses activating a harness skill revision whose files would collide with entries of
     /// its live directory that capture never records (a revision file `docs` beside a live
     /// `docs/.env`): materializing it would fail after the activation committed, or drop them.
+    /// Whether a harness skill directory `name` may be written for `item` (`None`: an item
+    /// about to be created). An existing directory is replaceable only while it holds the
+    /// item's captured skill; any other occupant (no `SKILL.md`, unreadable, a file or link)
+    /// holds what history never captured. A missing one is added, so the root must have room
+    /// below the bound discovery reads, or every later save would be refused.
+    fn check_directory(
+        &self,
+        name: &str,
+        item: Option<&StoredInstructionItem>,
+    ) -> Result<(), Failure> {
+        let root = self
+            .files
+            .root()
+            .unwrap_or_else(|_| self.roots.harness.clone());
+        let id = item.map(|i| &i.id);
+        match self.source.canonical_dir(&root.join(name)) {
+            Ok(_) if item.is_some_and(|i| i.present) => return Ok(()),
+            Err(SourceFault::Missing) => {}
+            _ => return Err(refusal(DomainErrorCode::Conflict, "skill_directory", id)),
+        }
+        let entries = match self.source.list_dir(&root, scan::MAX_SKILLS + 1) {
+            Ok(entries) => entries.len(),
+            Err(SourceFault::Missing) => 0,
+            Err(_) => return Err(refusal(DomainErrorCode::SourceChanged, "skill_source", id)),
+        };
+        if entries >= scan::MAX_SKILLS {
+            return Err(refusal(DomainErrorCode::Conflict, "skill_capacity", id));
+        }
+        Ok(())
+    }
+
     fn check_materializable(
         &self,
         item: &StoredInstructionItem,
@@ -763,6 +776,7 @@ impl InstructionService {
         if item.kind != InstructionKind::Skill || item.origin != InstructionOrigin::Harness {
             return Ok(());
         }
+        self.check_directory(&item.name, Some(item))?;
         let mut paths = vec![scan::SKILL_FILE.to_owned()];
         for resource in resources.as_array().into_iter().flatten() {
             paths.push(
