@@ -117,13 +117,19 @@ pub struct InstructionService {
     pub(crate) sync_lock: Mutex<()>,
 }
 
+/// The host's skill directories and their file access.
+#[derive(Clone)]
+pub struct SkillAccess {
+    pub source: Arc<dyn SourceTree>,
+    pub files: Arc<dyn SkillFiles>,
+    pub roots: SkillRoots,
+}
+
 impl InstructionService {
     pub fn new(
         store: Arc<dyn ApplicationStore>,
         artifacts: Arc<ArtifactService>,
-        source: Arc<dyn SourceTree>,
-        files: Arc<dyn SkillFiles>,
-        roots: SkillRoots,
+        access: SkillAccess,
         ids: Arc<dyn IdSource>,
         roles: Arc<dyn PrincipalRoles>,
         clock: Arc<dyn crate::ports::Clock>,
@@ -131,9 +137,9 @@ impl InstructionService {
         Self {
             store,
             artifacts,
-            source,
-            files,
-            roots,
+            source: access.source,
+            files: access.files,
+            roots: access.roots,
             ids,
             roles,
             clock,

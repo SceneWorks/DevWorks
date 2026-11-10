@@ -902,9 +902,11 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             devworks_core::services::instructions::InstructionService::new(
                 store.clone(),
                 artifacts.clone(),
-                c.source,
-                c.files,
-                c.roots,
+                devworks_core::services::instructions::SkillAccess {
+                    source: c.source,
+                    files: c.files,
+                    roots: c.roots,
+                },
                 ids.clone(),
                 Arc::new(devworks_core::authority::HostRoles {
                     store: store.clone(),

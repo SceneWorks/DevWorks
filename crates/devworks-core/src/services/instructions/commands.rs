@@ -100,7 +100,7 @@ impl InstructionService {
                 if item.kind != InstructionKind::Role {
                     return Ok(None);
                 }
-                Ok::<_, StorageError>(read.instructions().instruction_revision(id, target)?)
+                read.instructions().instruction_revision(id, target)
             })())
         })??;
         let text = match revision {
