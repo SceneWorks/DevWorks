@@ -35,6 +35,22 @@ fn sync_dir(dir: &Path) -> io::Result<()> {
         Ok(())
     }
 }
+/// Renames, retrying briefly on Windows, where another process (an indexer or scanner) can
+/// hold a just-written file open and make a directory rename fail with a sharing violation.
+fn rename(from: &Path, to: &Path) -> io::Result<()> {
+    let mut attempt = 0;
+    loop {
+        match fs::rename(from, to) {
+            Err(e)
+                if cfg!(windows) && e.kind() == io::ErrorKind::PermissionDenied && attempt < 20 =>
+            {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(25 * attempt));
+            }
+            other => return other,
+        }
+    }
+}
 fn valid_segment(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\', ':', '\0'])
 }
@@ -169,14 +185,14 @@ impl SkillFiles for NativeSkillFiles {
         // Links in the managed root are never followed: a link at the live name is replaced.
         let had_live = fs::symlink_metadata(&live).is_ok();
         if had_live {
-            fs::rename(&live, &retired).map_err(|e| {
+            rename(&live, &retired).map_err(|e| {
                 let _ = fs::remove_dir_all(&staging);
                 io_fault(e)
             })?;
         }
-        if let Err(e) = fs::rename(&staging, &live) {
+        if let Err(e) = rename(&staging, &live) {
             if had_live {
-                let _ = fs::rename(&retired, &live);
+                let _ = rename(&retired, &live);
             }
             let _ = fs::remove_dir_all(&staging);
             return Err(io_fault(e));

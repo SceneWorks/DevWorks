@@ -82,7 +82,7 @@ fn tree(root: &Path) -> Vec<(String, Vec<u8>)> {
                         .strip_prefix(root)
                         .unwrap()
                         .to_string_lossy()
-                        .into_owned(),
+                        .replace('\\', "/"),
                     std::fs::read(e.path()).unwrap(),
                 ));
             }
@@ -351,6 +351,8 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
         &[("README.md", "no SKILL.md here")],
     );
     // A resource name the harness directory could never be written with is not captured.
+    // (Unix only: NTFS reads `notes:today.md` as an alternate data stream of `notes`.)
+    #[cfg(unix)]
     write_skill(
         &fx.shared,
         "colon",
@@ -362,6 +364,7 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
         let app = boot(fx.composition()).await.unwrap();
         let boot_sync = app.instruction_boot_sync().unwrap().as_ref().unwrap();
         assert!(boot_sync.failures.is_empty());
+        #[cfg(unix)]
         assert!(
             boot_sync.skipped.iter().any(|(n, reason)| n == "colon" && reason.contains("unsupported file name")),
             "{boot_sync:?}"
