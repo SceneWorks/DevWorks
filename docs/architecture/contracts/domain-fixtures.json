@@ -12180,6 +12180,97 @@
     "schemaValid": true
   },
   {
+    "id": "r3-input-skills.resources",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"skills.resources\",\"instructionId\":\"id-a\",\"revision\":\"1\",\"page\":{\"limit\":20}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-skills.resources",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"skills.resources\",\"value\":{\"items\":[{\"path\":\"references/setup.md\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"executable\":false},{\"path\":\"scripts/run.sh\",\"artifact\":{\"artifactId\":\"artifact-b\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"executable\":true}],\"hasMore\":true,\"nextCursor\":\"cursor-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-skills.resources-empty",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"skills.resources\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r1-result-skills.resources-refs",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"skills.resources\",\"value\":{\"items\":[{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-skills.resources-paths",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"skills.resources\",\"value\":{\"items\":[{\"path\":\"references/setup.md\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"executable\":false},{\"path\":\"scripts/run.sh\",\"artifact\":{\"artifactId\":\"artifact-b\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"executable\":true}],\"hasMore\":true,\"nextCursor\":\"cursor-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-skills.resources-paths",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"skills.resources\",\"value\":{\"items\":[{\"path\":\"references/setup.md\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"executable\":false},{\"path\":\"scripts/run.sh\",\"artifact\":{\"artifactId\":\"artifact-b\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"executable\":true}],\"hasMore\":true,\"nextCursor\":\"cursor-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-result-skills.resources-plain-refs",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"skills.resources\",\"value\":{\"items\":[{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-result-skills.resources-path-0",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"skills.resources\",\"value\":{\"items\":[{\"path\":\"/etc/passwd\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"executable\":false}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-result-skills.resources-path-1",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"skills.resources\",\"value\":{\"items\":[{\"path\":\"../escape.md\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"executable\":false}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-result-skills.resources-path-2",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"skills.resources\",\"value\":{\"items\":[{\"path\":\"C:\\\\x.md\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"executable\":false}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-result-skills.resources-path-3",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"skills.resources\",\"value\":{\"items\":[{\"path\":\"a//b.md\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"executable\":false}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-result-skills.resources-path-4",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"skills.resources\",\"value\":{\"items\":[{\"path\":\"\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"executable\":false}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-result-skills.resources-no-executable",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"skills.resources\",\"value\":{\"items\":[{\"path\":\"references/setup.md\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
     "id": "dw13-r3-admission-router.connections-Query",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.connections\",\"page\":{\"limit\":20}},\"schemaRevision\":3}",

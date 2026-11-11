@@ -346,11 +346,7 @@ impl McpClientService {
                     .remote
                     .connect_with_timeout(
                         ctx,
-                        &McpEndpoint {
-                            server_id: server.public.id.clone(),
-                            scope: scope.clone(),
-                            transport: server.transport.clone(),
-                        },
+                        &server.endpoint(scope),
                         self.content_budget(env, deadline)?,
                     )
                     .map_err(|fault| self.remote_content_fault(fault))?;

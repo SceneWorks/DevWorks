@@ -443,6 +443,18 @@ pub(crate) fn visible_in(
             }
         });
     }
+    // A host-captured skill or role version is the content of an instruction its scope's agents
+    // adopt: readable by every authorized principal of that scope (and only there). No other
+    // host artifact gains visibility, and public saves can never mint this provenance.
+    if instruction_capture(artifact) {
+        return Ok(match (&viewer.authorized, &artifact.scope, project) {
+            (None, _, _) => false,
+            (Some(_), ArtifactScope::Workspace, _) => true,
+            (Some(_), ArtifactScope::Project(owner), Some(p)) => owner == p,
+            (Some(AuthorizedScope::Workspace), ArtifactScope::Project(_), None) => true,
+            (Some(AuthorizedScope::Project(p)), ArtifactScope::Project(owner), None) => owner == p,
+        });
+    }
     if matches!(artifact.scope, ArtifactScope::Project(_))
         && artifact.owner.is_some()
         && !viewer.sees_owned(artifact.owner.as_ref())
@@ -462,6 +474,16 @@ pub(crate) fn visible_in(
                 || read.repository_text_readers(&artifact.id)?.contains(p)
         }
     })
+}
+
+/// A skill/role version captured by the host for the instruction owner.
+fn instruction_capture(artifact: &StoredArtifact) -> bool {
+    artifact.provenance["principalKind"] == "Host"
+        && artifact.provenance["derived"]["kind"] == "Instruction"
+        && artifact
+            .owner
+            .as_ref()
+            .is_some_and(|o| artifact.provenance["producedBy"].as_str() == Some(o.0.as_str()))
 }
 
 /// Shares the artifact of `reference` with `project` for a workspace-authorized caller that
@@ -564,10 +586,15 @@ fn visible_artifact(
 }
 
 /// A receipt's reply is never deleted, shared, moved or replaced through the artifact use cases.
+/// Host-captured Help topics and skill/role instruction versions are retained the same way: they
+/// are the exact evidence their owners' history refers to, and they stay out of user listings.
 fn retained_help(artifact: &StoredArtifact, host: &crate::protocol::ActorId) -> bool {
     artifact.provenance["principalKind"] == "Host"
         && artifact.provenance["producedBy"].as_str() == Some(host.0.as_str())
-        && artifact.provenance["derived"]["kind"] == "HelpTopic"
+        && matches!(
+            artifact.provenance["derived"]["kind"].as_str(),
+            Some("HelpTopic" | "Instruction")
+        )
 }
 
 /// Only actual trusted-Host convention derivatives are immutable through public artifact

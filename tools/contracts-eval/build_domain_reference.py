@@ -29,7 +29,7 @@ for name,d in TYPES.items():
  if d['kind']=='record':lines += ['| Field | Type |','| --- | --- |',*['| `'+re.sub(r'_([a-z])',lambda m:m[1].upper(),n)+'` | `'+t+'`'+(f" · *revision {d['since'][n]}+*" if n in d.get('since',{}) else '')+' |' for n,t in d['fields'].items()]]
  elif d['kind']=='enum':lines += [', '.join('`'+x+'`' for x in d['values'])+'.']
  elif d['kind']=='versioned':
-  projection='Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.' if d.get('projection','').startswith('help_') else 'Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.'
+  projection=f'Each item projects to its `{d.get("itemField")}` member, keeping item order and the continuation.' if d.get('projection')=='page_field' else 'Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.' if d.get('projection','').startswith('help_') else 'Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.'
   lines += [f'Before revision {d["revision"]}: exact legacy `{d["legacy"]}`. Revision {d["revision"]} and later: `{d["current"]}`. '+projection]
  else:
   lines += ['| Kind | Fields |','| --- | --- |',*['| `'+kind+'` | '+fields(fs)+' |' for kind,fs in d['variants'].items()]]

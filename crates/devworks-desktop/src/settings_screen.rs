@@ -58,6 +58,8 @@ pub struct SettingsScreen {
     pub mcp: McpPanel,
     pub container_capabilities: Option<Vec<ContainerCapability>>,
     pub container_error: Option<String>,
+    /// Roles and skills (DW-34).
+    pub instructions: crate::instructions_screen::InstructionsPanel,
 }
 
 /// What the screen asks the shell to do.
@@ -84,6 +86,8 @@ pub enum SettingsAction {
     Connection(ConnectionAction),
     /// A web search, fetch or activity load from the Agent tools section.
     Web(WebAction),
+    /// Roles and skills (DW-34).
+    Instructions(crate::instructions_screen::InstructionAction),
     Mcp(McpAction),
 }
 
@@ -415,7 +419,14 @@ impl SettingsScreen {
                 );
             }
             if self.category == Some(Category::Instructions) || self.category.is_none() {
-                role_governance(ui);
+                let mut instruction_actions = Vec::new();
+                self.instructions
+                    .ui(ui, online.is_ok(), &mut instruction_actions);
+                actions.extend(
+                    instruction_actions
+                        .into_iter()
+                        .map(SettingsAction::Instructions),
+                );
             }
             for key in keys {
                 self.item_ui(ui, key, actions);
@@ -1052,32 +1063,6 @@ fn short(v: &Value) -> String {
     } else {
         first.to_owned()
     }
-}
-
-/// SET-03..06: what role-instruction governance the settings service supports today.
-fn role_governance(ui: &mut Ui) {
-    egui::Frame::new()
-        .stroke(theme::soft_line())
-        .corner_radius(theme::radius())
-        .inner_margin(theme::margin(12, 8))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new("Role instructions and proposals").strong());
-            widgets::caption(
-                ui,
-                "Every role's instructions are edited and saved here; harness policies and \
-                 selected tools still apply, and running agents adopt saved changes at their \
-                 next safe step.",
-            );
-            widgets::state_block(
-                ui,
-                &ViewState::Unavailable {
-                    what: "agent-drafted proposals, approval, version history and rollback".into(),
-                    owner: "DW-14 (approvals) and DW-34 (roles)".into(),
-                },
-            );
-        });
-    ui.add_space(8.0);
 }
 
 /// `SettingsView` exposes visible items for the current filter; health checks need every item.

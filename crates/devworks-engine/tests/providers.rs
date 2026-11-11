@@ -477,6 +477,7 @@ impl Fx {
                 cache: None,
             }],
             instruction_stamps: vec![],
+            skill_stamp: None,
             messages: vec![Message {
                 role: MessageRole::User,
                 content: vec![ContentBlock::Text {
@@ -709,6 +710,7 @@ impl Fx {
             category: ReportCategory::Assistant,
             attempt,
             request,
+            nested: None,
         }
     }
     fn transcript(&self) -> Vec<StoredEntry> {
@@ -2626,7 +2628,7 @@ fn actual_connection_endpoint_aba_and_public_replacement_cannot_relabel_native_c
 use devworks_core::providers::materialize::{OwnedMaterials,Materials};
 let f=Fx::new("CompatibleChat",Script::sse("data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"retained actual native reasoning\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"),false);
 assert_eq!(f.produce(f.generation(vec![])).await.unwrap().result.outcome,Some(AttemptEnd::Completed));let rows=f.transcript();let actual=rows.iter().find(|r|r.kind=="NativeItem").expect("actual response must produce a bound native artifact");let binding:NativeBinding=serde_json::from_value(actual.body["binding"].clone()).unwrap();let native:ArtifactRef=serde_json::from_value(actual.body["artifact"].clone()).unwrap();
-let request_for=|request_id:&str,binding:NativeBinding,artifact:ArtifactRef|{let c=ProviderContext{version:1,instructions:vec![],instruction_stamps:vec![],messages:vec![Message{role:MessageRole::Assistant,content:vec![ContentBlock::Native{binding,artifact}]}],parameters:Default::default()};let mut request=f.request(InferenceInput::Generation{session_id:id("session"),context:f.bytes(&serde_json::to_vec(&c).unwrap()),context_epoch:Counter::new(0).unwrap(),tools:vec![],response_headroom_tokens:Revision::new(10).unwrap(),requires_images:false,requires_parallel_tools:false});request.request_id=id(request_id);request};
+let request_for=|request_id:&str,binding:NativeBinding,artifact:ArtifactRef|{let c=ProviderContext{version:1,instructions:vec![],instruction_stamps:vec![],skill_stamp:None,messages:vec![Message{role:MessageRole::Assistant,content:vec![ContentBlock::Native{binding,artifact}]}],parameters:Default::default()};let mut request=f.request(InferenceInput::Generation{session_id:id("session"),context:f.bytes(&serde_json::to_vec(&c).unwrap()),context_epoch:Counter::new(0).unwrap(),tools:vec![],response_headroom_tokens:Revision::new(10).unwrap(),requires_images:false,requires_parallel_tools:false});request.request_id=id(request_id);request};
 f.http.lock().unwrap().body=VecDeque::from([b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"accepted\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec()]);assert_eq!(f.produce(request_for("good-native",binding.clone(),native.clone())).await.unwrap().result.outcome,Some(AttemptEnd::Completed));assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(),2);
 // Public version publication preserves artifact creation provenance but attributes these new
 // bytes to the Human; checking only artifact-level provenance would wrongly qualify them.
@@ -2832,3 +2834,9 @@ mod selection_refresh;
 
 #[path = "providers/convention_index_compatibility.rs"]
 mod convention_index_compatibility;
+
+#[path = "providers/mcp_sampling.rs"]
+mod mcp_sampling;
+
+#[path = "providers/mcp_end_to_end.rs"]
+mod mcp_end_to_end;

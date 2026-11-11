@@ -1428,3 +1428,6 @@ mod native_provider_fences;
 
 #[path = "auxiliary_embedding.rs"]
 mod auxiliary_embedding;
+
+#[path = "mcp_sampling_budget.rs"]
+mod mcp_sampling_budget;

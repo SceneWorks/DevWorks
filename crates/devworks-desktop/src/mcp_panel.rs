@@ -15,6 +15,7 @@ pub enum McpAction {
     Connect(Id, i64),
     Discover(Id, i64),
     Select(Id, i64, i64, Vec<Id>),
+    Sampling(Id, i64, i64, Vec<Id>),
 }
 
 #[cfg(test)]
@@ -63,6 +64,9 @@ pub struct McpPanel {
     pub stdio: bool,
     pub process_spec: String,
     pub editing: bool,
+    /// A saved sampling selection reconnects its server, so the next handshake advertises the
+    /// changed client capabilities.
+    pub reconnect: Option<Id>,
     selection: Vec<Id>,
 }
 
@@ -210,6 +214,7 @@ impl McpPanel {
             let server_idle = self.pending_server.as_ref() != Some(&server_id);
             let revision = server.revision.get();
             let catalog_revision = server.catalog_revision.get();
+            let saved = server.selected_tool_ids.0.clone();
             ui.label(format!(
                 "Status: {:?} · Transport: {} · Catalog revision: {}",
                 server.state, server.transport.0, catalog_revision
@@ -245,6 +250,43 @@ impl McpPanel {
                     actions.push(McpAction::Catalog(server_id.clone(), catalog_revision));
                 }
             });
+            let sampling: Vec<McpCapability> = self
+                .capabilities
+                .iter()
+                .filter(|cap| cap.kind.0 == "sampling")
+                .cloned()
+                .collect();
+            for cap in &sampling {
+                let mut checked = self.selection.contains(&cap.id);
+                if ui
+                    .add_enabled(
+                        online && !self.busy && server_idle,
+                        egui::Checkbox::new(
+                            &mut checked,
+                            "Let this server request model text during selected tool calls",
+                        ),
+                    )
+                    .on_hover_text(&cap.description.0)
+                    .changed()
+                {
+                    let mut selection = saved.clone();
+                    selection.retain(|id| id != &cap.id);
+                    if checked {
+                        selection.push(cap.id.clone());
+                    }
+                    self.selection.retain(|id| id != &cap.id);
+                    if checked {
+                        self.selection.push(cap.id.clone());
+                    }
+                    self.busy = true;
+                    actions.push(McpAction::Sampling(
+                        server_id.clone(),
+                        revision,
+                        catalog_revision,
+                        selection,
+                    ));
+                }
+            }
             let tools: Vec<_> = self
                 .capabilities
                 .iter()
@@ -253,10 +295,14 @@ impl McpPanel {
             if !tools.is_empty() {
                 ui.horizontal(|ui| {
                     if ui.button("Select all").clicked() {
-                        self.selection = tools.iter().map(|cap| cap.id.clone()).collect();
+                        self.selection
+                            .retain(|id| sampling.iter().any(|cap| &cap.id == id));
+                        self.selection
+                            .extend(tools.iter().map(|cap| cap.id.clone()));
                     }
                     if ui.button("Deselect all").clicked() {
-                        self.selection.clear();
+                        self.selection
+                            .retain(|id| sampling.iter().any(|cap| &cap.id == id));
                     }
                 });
                 for cap in tools {

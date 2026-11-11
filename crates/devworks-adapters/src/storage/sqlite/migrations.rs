@@ -523,6 +523,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0048_membership_context_epoch.sql"),
         rebuilds_tables: true,
     },
+    // Prior writers cannot preserve instruction revision approval and activation invariants.
+    Migration {
+        version: 49,
+        minimum_reader: 48,
+        minimum_writer: 49,
+        sql: include_str!("migrations/0049_instructions.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

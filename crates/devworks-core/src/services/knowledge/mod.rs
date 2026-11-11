@@ -56,9 +56,12 @@
 //! test data to `knowledge.delete_by_source` and `.delete_selected`, and `import_knowledge` to
 //! `knowledge.import_user_data`. CodeGraph's `acknowledge` is superseded by KNOW-03 (autonomous
 //! decisions never ask to be acknowledged).
+mod graph;
 pub mod import;
 pub mod model;
 mod writes;
+
+pub use graph::NO_MEMORIES;
 
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
@@ -117,7 +120,7 @@ fn cleanup_source<'a>(
 }
 
 /// The operations [`KnowledgeService`] is registered for.
-pub const OPERATIONS: [&str; 17] = [
+pub const OPERATIONS: [&str; 23] = [
     "knowledge.search",
     "knowledge.read",
     "knowledge.record",
@@ -135,7 +138,15 @@ pub const OPERATIONS: [&str; 17] = [
     "knowledge.promote",
     "knowledge.challenge",
     "knowledge.tagged_lessons",
+    "knowledge.subgraph",
+    "knowledge.entity_bundle",
+    "knowledge.entity_graph",
+    "knowledge.claim_bundle",
+    "knowledge.expand_frontier",
+    "knowledge.query",
 ];
+/// Registered only when summary publication is composed ([`KnowledgeService::with_summaries`]).
+pub const SUMMARY_OPERATION: &str = "knowledge.render_summary";
 
 /// The setting that configures how many distinct source events make an inferred lesson a rule.
 pub const THRESHOLD_KEY: &str = "knowledge.lessonRecurrenceThreshold";
@@ -190,6 +201,12 @@ pub struct KnowledgeService {
     /// Reads the bytes of an import's immutable artifact version (`None`: imports refused).
     files: Option<Arc<dyn ArtifactFiles>>,
     vectors: Arc<dyn VectorIndex>,
+    /// Publishes rendered summaries as artifacts (`None`: `knowledge.render_summary` is not
+    /// offered).
+    summaries: Option<(
+        Arc<dyn crate::ports::storage::ApplicationStore>,
+        Arc<crate::services::artifacts::ArtifactService>,
+    )>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -682,7 +699,21 @@ impl KnowledgeService {
             clock,
             files,
             vectors,
+            summaries: None,
         }
+    }
+    /// Offers `knowledge.render_summary`: summaries are published as artifacts of the
+    /// invocation's scope through the artifact store's observed-content publication.
+    pub fn with_summaries(
+        mut self,
+        store: Arc<dyn crate::ports::storage::ApplicationStore>,
+        artifacts: Arc<crate::services::artifacts::ArtifactService>,
+    ) -> Self {
+        self.summaries = Some((store, artifacts));
+        self
+    }
+    pub fn offers_summaries(&self) -> bool {
+        self.summaries.is_some()
     }
     fn correlation(&self) -> CorrelationId {
         CorrelationId(self.ids.next_id(IdKind::Correlation))
@@ -1332,6 +1363,44 @@ fn knowledge_read(snapshot: &dyn ReadSnapshot) -> &dyn KnowledgeRead {
     snapshot.knowledge()
 }
 
+/// A summary published during preparation.
+struct PublishedSummary {
+    reference: ArtifactRef,
+    revision: i64,
+}
+
+impl KnowledgeService {
+    fn graph_bundle(
+        &self,
+        snapshot: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        operation: &'static str,
+        scope: &DataScope,
+        query: &crate::protocol::records::KnowledgeQuery,
+    ) -> Result<(OperationResult, i64), Failure> {
+        let (read, revision) = self.graph_read(snapshot, ctx, operation, scope, query)?;
+        let graph::Read::Bundle(value) = read else {
+            return Err(Refusal::new(
+                DomainErrorCode::InvalidArgument,
+                "knowledge_operation",
+                None,
+            )
+            .into());
+        };
+        Ok((
+            match operation {
+                "knowledge.subgraph" => OperationResult::KnowledgeSubgraph { value },
+                "knowledge.entity_bundle" => OperationResult::KnowledgeEntityBundle { value },
+                "knowledge.entity_graph" => OperationResult::KnowledgeEntityGraph { value },
+                "knowledge.claim_bundle" => OperationResult::KnowledgeClaimBundle { value },
+                "knowledge.expand_frontier" => OperationResult::KnowledgeExpandFrontier { value },
+                _ => OperationResult::KnowledgeQuery { value },
+            },
+            revision,
+        ))
+    }
+}
+
 /// A claim with its entities, evidence, conflicts, supersession chain, relations and history,
 /// restricted to what the invocation may see.
 pub(crate) fn bundle_of(
@@ -1579,6 +1648,80 @@ pub(crate) fn no_applicability() -> Applicability {
 }
 
 impl QueryHandler for KnowledgeService {
+    /// `knowledge.render_summary` renders from one snapshot and publishes the text as an
+    /// artifact of the invocation's scope before the answer (bounded, recoverable publication).
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        query: &AdmittedQuery,
+        env: &Preparation<'_>,
+    ) -> Result<Option<Prepared>, DomainFault> {
+        let OperationInput::Knowledge(ops::Input::RenderSummary(i)) = query.input() else {
+            return Ok(None);
+        };
+        let Some((store, artifacts)) = &self.summaries else {
+            return Err(Refusal::new(
+                DomainErrorCode::UnsupportedCapability,
+                "knowledge_summary",
+                None,
+            )
+            .fault(self.correlation()));
+        };
+        let rendered = env
+            .read(|snapshot| {
+                Ok(self.graph_read(
+                    snapshot,
+                    ctx,
+                    "knowledge.render_summary",
+                    &i.scope,
+                    &i.query,
+                ))
+            })
+            .map_err(|e| query_fault(e.into(), CLAIM, self.correlation()))?
+            .map_err(|f| query_fault(f, CLAIM, self.correlation()))?;
+        let (graph::Read::Summary(text), revision) = rendered else {
+            return Err(
+                Refusal::new(DomainErrorCode::InvalidArgument, "knowledge_summary", None)
+                    .fault(self.correlation()),
+            );
+        };
+        let project = match &i.scope {
+            DataScope::Workspace => None,
+            DataScope::Project { project_id } => Some(project_id.clone()),
+        };
+        let published = artifacts.publish_observed(
+            &**store,
+            ctx,
+            query.authorization(),
+            crate::services::artifacts::observed::Observed {
+                project,
+                title: "Knowledge summary".into(),
+                media_type: "text/markdown; charset=utf-8".into(),
+                tags: vec!["knowledge-summary".into()],
+                source: serde_json::json!({
+                    "kind": "KnowledgeSummary",
+                    "entityIds": i.query.entity_ids,
+                    "claimIds": i.query.claim_ids,
+                    "scopeRevision": revision,
+                }),
+                actor_audience: true,
+            },
+            text.as_bytes(),
+            |_, _| Ok(()),
+        );
+        match published {
+            Ok((reference, ())) => Ok(Some(Prepared::new(PublishedSummary {
+                reference,
+                revision,
+            }))),
+            Err(crate::services::artifacts::observed::ObservedFailure::Refused(r)) => {
+                Err(r.fault(self.correlation()))
+            }
+            Err(crate::services::artifacts::observed::ObservedFailure::Storage(e)) => {
+                Err(query_fault(e.into(), CLAIM, self.correlation()))
+            }
+        }
+    }
     fn query(
         &self,
         ctx: &InvocationContext,
@@ -1597,6 +1740,42 @@ impl QueryHandler for KnowledgeService {
             ops::Input::Diagnostics(i) => self.diagnostics(snapshot, ctx, i),
             ops::Input::WriteStatus(i) => self.write_status(snapshot, ctx, i),
             ops::Input::TaggedLessons(i) => self.tagged_lessons(snapshot, ctx, i),
+            ops::Input::Subgraph(i) => {
+                self.graph_bundle(snapshot, ctx, "knowledge.subgraph", &i.scope, &i.query)
+            }
+            ops::Input::EntityBundle(i) => {
+                self.graph_bundle(snapshot, ctx, "knowledge.entity_bundle", &i.scope, &i.query)
+            }
+            ops::Input::EntityGraph(i) => {
+                self.graph_bundle(snapshot, ctx, "knowledge.entity_graph", &i.scope, &i.query)
+            }
+            ops::Input::ClaimBundle(i) => {
+                self.graph_bundle(snapshot, ctx, "knowledge.claim_bundle", &i.scope, &i.query)
+            }
+            ops::Input::ExpandFrontier(i) => self.graph_bundle(
+                snapshot,
+                ctx,
+                "knowledge.expand_frontier",
+                &i.scope,
+                &i.query,
+            ),
+            ops::Input::Query(i) => {
+                self.graph_bundle(snapshot, ctx, "knowledge.query", &i.scope, &i.query)
+            }
+            ops::Input::RenderSummary(_) => match query.prepared::<PublishedSummary>() {
+                Some(p) => Ok((
+                    OperationResult::KnowledgeRenderSummary {
+                        value: p.reference.clone(),
+                    },
+                    p.revision,
+                )),
+                None => Err(Refusal::new(
+                    DomainErrorCode::UnsupportedCapability,
+                    "knowledge_summary",
+                    None,
+                )
+                .into()),
+            },
             _ => {
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into())
             }

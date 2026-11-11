@@ -6080,6 +6080,8 @@ pub struct McpServer {
     pub transport: Label,
     pub selected_tool_ids: Items<Id>,
     pub catalog_revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failure: Option<Text>,
 }
 impl Check for McpServer {
     fn check(&self) -> Result<(), String> {
@@ -6090,6 +6092,7 @@ impl Check for McpServer {
         self.transport.check()?;
         self.selected_tool_ids.check()?;
         self.catalog_revision.check()?;
+        self.last_failure.check()?;
         super::domain_rules::record(
             "McpServer",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -15239,6 +15242,99 @@ impl Revisioned for HelpTopicPageResult {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkillResource {
+    pub path: RelativePath,
+    pub artifact: ArtifactRef,
+    pub executable: bool,
+}
+impl Check for SkillResource {
+    fn check(&self) -> Result<(), String> {
+        self.path.check()?;
+        self.artifact.check()?;
+        self.executable.check()?;
+        super::domain_rules::record(
+            "SkillResource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkillResourcePage {
+    pub items: Rows<SkillResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for SkillResourcePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        super::domain_rules::record(
+            "SkillResourcePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
+pub enum SkillResourcePageResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(Page<ArtifactRef>),
+    #[schemars(extend("x-since" = 3))]
+    Current(SkillResourcePage),
+}
+impl Check for SkillResourcePageResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for SkillResourcePageResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let legacy: Option<Page<ArtifactRef>> = match self {
+                Self::Current(page) => Some(Page {
+                    items: BoundedList(
+                        page.items
+                            .0
+                            .iter()
+                            .map(|item| item.artifact.clone())
+                            .collect(),
+                    ),
+                    next_cursor: page.next_cursor.clone(),
+                    has_more: page.has_more,
+                }),
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) if !value.items.0.is_empty() && revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum CodeSchemaOrigin {
     Declared,
     Observed,
@@ -18659,6 +18755,7 @@ pub enum DomainQuery {
     McpServers { scope: DataScope, page: PageRequest },
     #[serde(rename = "mcp.resources")]
     McpResources {
+        scope: DataScope,
         server_id: Id,
         catalog_revision: Revision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18667,6 +18764,7 @@ pub enum DomainQuery {
     },
     #[serde(rename = "mcp.prompts")]
     McpPrompts {
+        scope: DataScope,
         server_id: Id,
         catalog_revision: Revision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18677,6 +18775,7 @@ pub enum DomainQuery {
     },
     #[serde(rename = "mcp.capabilities")]
     McpCapabilities {
+        scope: DataScope,
         server_id: Id,
         catalog_revision: Revision,
         page: PageRequest,
@@ -20073,23 +20172,27 @@ impl Check for DomainQuery {
                 page.check()?;
             }
             Self::McpResources {
+                scope,
                 server_id,
                 catalog_revision,
                 uri,
                 page,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 catalog_revision.check()?;
                 uri.check()?;
                 page.check()?;
             }
             Self::McpPrompts {
+                scope,
                 server_id,
                 catalog_revision,
                 name,
                 arguments,
                 page,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 catalog_revision.check()?;
                 name.check()?;
@@ -20097,10 +20200,12 @@ impl Check for DomainQuery {
                 page.check()?;
             }
             Self::McpCapabilities {
+                scope,
                 server_id,
                 catalog_revision,
                 page,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 catalog_revision.check()?;
                 page.check()?;
@@ -22132,16 +22237,19 @@ pub enum DomainCommand {
     },
     #[serde(rename = "mcp.connect")]
     McpConnect {
+        scope: DataScope,
         server_id: Id,
         expected_revision: Revision,
     },
     #[serde(rename = "mcp.discover")]
     McpDiscover {
+        scope: DataScope,
         server_id: Id,
         expected_catalog_revision: Revision,
     },
     #[serde(rename = "mcp.select_tools")]
     McpSelectTools {
+        scope: DataScope,
         server_id: Id,
         expected_revision: Revision,
         expected_catalog_revision: Revision,
@@ -24199,25 +24307,31 @@ impl Check for DomainCommand {
                 transport.check()?;
             }
             Self::McpConnect {
+                scope,
                 server_id,
                 expected_revision,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 expected_revision.check()?;
             }
             Self::McpDiscover {
+                scope,
                 server_id,
                 expected_catalog_revision,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 expected_catalog_revision.check()?;
             }
             Self::McpSelectTools {
+                scope,
                 server_id,
                 expected_revision,
                 expected_catalog_revision,
                 tool_ids,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 expected_revision.check()?;
                 expected_catalog_revision.check()?;
@@ -25342,7 +25456,7 @@ pub enum OperationResult {
     #[serde(rename = "skills.discover")]
     SkillsDiscover { value: Page<InstructionRecord> },
     #[serde(rename = "skills.resources")]
-    SkillsResources { value: Page<ArtifactRef> },
+    SkillsResources { value: SkillResourcePageResult },
     #[serde(rename = "approvals.list")]
     ApprovalsList { value: Page<ApprovalViewRecord> },
     #[serde(rename = "approvals.inspect")]
@@ -26604,6 +26718,7 @@ impl Revisioned for OperationResult {
             Self::ConventionsDeleteResource { value } => value.retain_revision(revision),
             Self::ConventionsImport { value } => value.retain_revision(revision),
             Self::ConventionsMove { value } => value.retain_revision(revision),
+            Self::SkillsResources { value } => value.retain_revision(revision),
             Self::ApprovalsList { value } => value.retain_revision(revision),
             Self::ApprovalsInspect { value } => value.retain_revision(revision),
             Self::ApprovalsPropose { value } => value.retain_revision(revision),
@@ -26749,6 +26864,7 @@ impl Revisioned for OperationResult {
             Self::ConventionsDeleteResource { value } => value.check_revision(revision),
             Self::ConventionsImport { value } => value.check_revision(revision),
             Self::ConventionsMove { value } => value.check_revision(revision),
+            Self::SkillsResources { value } => value.check_revision(revision),
             Self::RouterUsage { value } => value.check_revision(revision),
             Self::RouterPriceStatus { value } => value.check_revision(revision),
             Self::RouterPriceOverride { value } => value.check_revision(revision),

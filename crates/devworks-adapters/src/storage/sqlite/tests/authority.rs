@@ -2268,6 +2268,9 @@ impl WriteTransaction for Lying<'_> {
     fn help(&mut self) -> &mut dyn HelpRepository {
         self.inner.help()
     }
+    fn instructions(&mut self) -> &mut dyn InstructionRepository {
+        self.inner.instructions()
+    }
     fn github(&mut self) -> &mut dyn GithubRepository {
         self.inner.github()
     }
@@ -3231,4 +3234,58 @@ fn automatic_task_force_push_is_owned_current_and_fenced() {
         devworks_core::services::git::context::bind_worktree(&*fx.store, owned, &id("work-a"))
             .is_err()
     );
+}
+
+/// Which outgoing MCP operations an agent is offered as built-in tools.
+fn offered_mcp_operations(fx: &Fx, who: &str) -> Vec<String> {
+    use devworks_core::authority::policy;
+    let ctx = fx.agent(who);
+    read_snapshot(&*fx.store, &ReadOptions::default(), |snapshot| {
+        let principal = snapshot.authority().principal(ctx.principal())?;
+        let effective = policy::resolve_policy(snapshot.configuration(), ctx.project_id())?;
+        let mut offered = Vec::new();
+        for descriptor in devworks_core::registry::all()
+            .iter()
+            .filter(|descriptor| descriptor.name.starts_with("mcp."))
+        {
+            for binding in descriptor.modes {
+                if matches!(
+                    policy::registered_tool_visibility(
+                        &ctx,
+                        principal.as_ref(),
+                        &effective,
+                        descriptor,
+                        binding,
+                        binding.effect,
+                    ),
+                    policy::Verdict::Allow
+                ) {
+                    offered.push(format!("{}:{:?}", descriptor.name, binding.mode));
+                }
+            }
+        }
+        offered.sort();
+        Ok(offered)
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_worker_is_offered_the_mcp_reads_and_connection_commands_but_never_configuration() {
+    let fx = Fx::new();
+    // Configuration and tool selection stay human-only (Configuration authority); a worker may
+    // read servers, catalogs, resources and prompts, and connect or discover (Scoped).
+    assert_eq!(
+        offered_mcp_operations(&fx, "agent-a"),
+        [
+            "mcp.capabilities:Query",
+            "mcp.connect:Command",
+            "mcp.discover:Command",
+            "mcp.prompts:Query",
+            "mcp.resources:Query",
+            "mcp.servers:Query",
+        ]
+    );
+    // A read-only reviewer is offered none: remote MCP content is an unverified read.
+    assert!(offered_mcp_operations(&fx, "reviewer-a").is_empty());
 }

@@ -928,6 +928,7 @@ pub fn initial_context(
             }]
         },
         instruction_stamps: Vec::new(),
+        skill_stamp: None,
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![
@@ -982,6 +983,10 @@ pub fn initial_context(
         .map_err(|e| StorageError::InvalidRecord(format!("agent provider context: {e:?}")))?;
     Ok(context)
 }
+
+/// Host guidance after the role text when the selected tools span several windows. It is not
+/// part of the role: adopting a changed role keeps it.
+pub(crate) const TOOL_WINDOW_NOTICE: &str = "Selected tools are presented in successive windows. A completed response may be followed by another turn with the remaining tools before the assignment closes. If a needed tool is absent, state the intended operation and continue when the next window appears.";
 
 /// A membership handoff advances the session epoch in the same transaction as its root change.
 /// Rebuild the provider root before the destination child sends another native request.
@@ -1194,6 +1199,8 @@ pub fn ensure_membership_context(
     };
     context.instructions = fresh.instructions;
     context.instruction_stamps.clear();
+    // The replaced instructions carried the bound skills block too; binding adds it afresh.
+    context.skill_stamp = None;
     context.messages.push(Message {
         role: MessageRole::User,
         content: vec![ContentBlock::Text {
@@ -1481,7 +1488,7 @@ pub fn publish_first_context(
         .len();
     if tool_window_count(selected_count) > 1 {
         prompt.instructions.push(TextBlock {
-            text: "Selected tools are presented in successive windows. A completed response may be followed by another turn with the remaining tools before the assignment closes. If a needed tool is absent, state the intended operation and continue when the next window appears.".into(),
+            text: TOOL_WINDOW_NOTICE.into(),
             cache: None,
         });
     }
@@ -1776,6 +1783,7 @@ pub fn plan_generation_window(
         category: ReportCategory::Assistant,
         attempt,
         request: inference,
+        nested: None,
     })
 }
 

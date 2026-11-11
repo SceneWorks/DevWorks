@@ -37,6 +37,7 @@ pub mod decisions;
 pub mod graph;
 pub mod help;
 pub mod indexing;
+mod instructions;
 pub mod jobs;
 mod live_text;
 mod project_purge;
@@ -1881,6 +1882,9 @@ impl Shell {
         let Some((slot, reply)) = self.apply_conventions(slot, reply) else {
             return;
         };
+        let Some((slot, reply)) = self.apply_instructions(slot, reply) else {
+            return;
+        };
         let Some((slot, reply)) = self.apply_databases(slot, reply) else {
             return;
         };
@@ -2222,7 +2226,8 @@ impl Shell {
                         | TaskOutput::PackagePrepared { .. }
                         | TaskOutput::Refreshed
                         | TaskOutput::TextPreview(_)
-                        | TaskOutput::Convention(_),
+                        | TaskOutput::Convention(_)
+                        | TaskOutput::Instruction(_),
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
                 };
@@ -2286,7 +2291,8 @@ impl Shell {
                             | TaskOutput::PackagePrepared { .. }
                             | TaskOutput::Refreshed
                             | TaskOutput::TextPreview(_)
-                            | TaskOutput::Convention(_),
+                            | TaskOutput::Convention(_)
+                            | TaskOutput::Instruction(_),
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }
@@ -2515,16 +2521,23 @@ impl Shell {
                     Ok((message, operation, configured)) => {
                         self.settings.mcp.message = Some(message);
                         self.settings.mcp.error = None;
-                        if let Some(id) = configured {
-                            self.settings.mcp.selected = Some(id);
+                        let reconnect = self.settings.mcp.reconnect.take();
+                        if let Some(server) = &configured {
+                            self.settings.mcp.selected = Some(server.id.clone());
                         }
                         self.settings.mcp.pending_operation = operation;
                         if self.settings.mcp.pending_operation.is_none() {
                             self.settings.mcp.pending_server = None;
                         }
                         self.load_mcp_servers(None);
+                        if let Some(server) =
+                            configured.filter(|s| reconnect.as_ref() == Some(&s.id))
+                        {
+                            self.mcp_action(McpAction::Connect(server.id, server.revision.get()));
+                        }
                     }
                     Err(error) => {
+                        self.settings.mcp.reconnect = None;
                         self.settings.mcp.pending_server = None;
                         self.settings.mcp.pending_operation = None;
                         self.settings.mcp.error = Some(error.describe());
@@ -3302,6 +3315,7 @@ impl Shell {
                 SettingsAction::OpenHelp(topic) => self.open_help_context(&topic),
                 SettingsAction::Connection(a) => self.connection_action(a),
                 SettingsAction::Web(action) => self.web_action(action),
+                SettingsAction::Instructions(action) => self.instruction_action(action),
                 SettingsAction::Mcp(action) => self.mcp_action(action),
             }
         }
@@ -3365,6 +3379,9 @@ impl Shell {
     }
 
     fn mcp_action(&mut self, action: McpAction) {
+        if let McpAction::Sampling(id, ..) = &action {
+            self.settings.mcp.reconnect = Some(id.clone());
+        }
         match action {
             McpAction::Reload => self.load_mcp_servers(None),
             McpAction::Catalog(id, _revision) => self.load_mcp_capabilities(id, None),
@@ -3383,7 +3400,8 @@ impl Shell {
                         None,
                         Some(id),
                     ),
-                    McpAction::Select(id, revision, catalog, tools) => (
+                    McpAction::Select(id, revision, catalog, tools)
+                    | McpAction::Sampling(id, revision, catalog, tools) => (
                         "mcp.select_tools",
                         serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string(),"expectedCatalogRevision":catalog.to_string(),"toolIds":tools}),
                         None,
@@ -3417,6 +3435,7 @@ impl Shell {
                 };
                 if !submitted {
                     self.settings.mcp.busy = false;
+                    self.settings.mcp.reconnect = None;
                     self.settings.mcp.error = Some("MCP command could not be submitted.".into());
                 } else {
                     self.settings.mcp.pending_server = pending_server;

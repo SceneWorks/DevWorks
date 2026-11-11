@@ -19,6 +19,7 @@ pub struct NativeOwnerPreviews {
     packages: Option<Arc<PackageService>>,
     jobs: Option<Arc<JobService>>,
     desktop: Option<Arc<DesktopService>>,
+    instructions: Option<Arc<crate::services::instructions::InstructionService>>,
     evidence: Option<(
         Arc<dyn crate::ports::storage::ApplicationStore>,
         Arc<crate::services::artifacts::ArtifactService>,
@@ -35,6 +36,7 @@ impl NativeOwnerPreviews {
             packages,
             jobs,
             desktop: None,
+            instructions: None,
             evidence: None,
         }
     }
@@ -59,6 +61,13 @@ impl NativeOwnerPreviews {
         self.desktop = desktop;
         self
     }
+    pub fn with_instructions(
+        mut self,
+        instructions: Option<Arc<crate::services::instructions::InstructionService>>,
+    ) -> Self {
+        self.instructions = instructions;
+        self
+    }
 }
 fn unsupported() -> Failure {
     Refusal::new(
@@ -76,6 +85,7 @@ impl SavedOperationOwners for NativeOwnerPreviews {
             | "addons.configure" => self.packages.is_some(),
             "jobs.create" | "jobs.edit" | "jobs.enable" | "jobs.run_now" => self.jobs.is_some(),
             "desktop.request_control" => self.desktop.is_some(),
+            "skills.rollback" | "roles.rollback" => self.instructions.is_some(),
             _ => false,
         }
     }
@@ -106,6 +116,11 @@ impl SavedOperationOwners for NativeOwnerPreviews {
                 .approval_preview(ctx, request, env),
             "desktop" => self
                 .desktop
+                .as_ref()
+                .ok_or_else(unsupported)?
+                .approval_preview(ctx, request, env),
+            "skills" | "roles" => self
+                .instructions
                 .as_ref()
                 .ok_or_else(unsupported)?
                 .approval_preview(ctx, request, env),
@@ -170,6 +185,11 @@ impl SavedOperationOwners for NativeOwnerPreviews {
                 .as_ref()
                 .ok_or_else(unsupported)?
                 .validate_approval_preview(tx, ctx, request, preview),
+            "skills" | "roles" => self
+                .instructions
+                .as_ref()
+                .ok_or_else(unsupported)?
+                .validate_approval(tx, ctx, request, preview),
             _ => Err(unsupported()),
         }
     }
@@ -181,15 +201,23 @@ impl SavedOperationOwners for NativeOwnerPreviews {
         preview: &OwnerPreview,
         approve: bool,
     ) -> Result<(), Failure> {
-        if request.descriptor.family != "addons" {
+        if !matches!(request.descriptor.family, "skills" | "roles" | "addons") {
             return Ok(());
         }
+        // A review sealed into evidence is decided over its complete original binding.
         let expanded = if approve {
             crate::services::approvals::review_evidence::expand(tx.artifacts(), preview)?
         } else {
             crate::services::approvals::review_evidence::expand_historical(preview)?
         };
         let preview = &expanded;
+        if matches!(request.descriptor.family, "skills" | "roles") {
+            return self
+                .instructions
+                .as_ref()
+                .ok_or_else(unsupported)?
+                .decide_approval(tx, human, request, preview, approve);
+        }
         if request.descriptor.family == "addons" {
             return self
                 .packages

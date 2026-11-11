@@ -312,6 +312,24 @@ pub struct RuntimeConfig {
     pub providers: Option<crate::providers::driver::ProviderComposition>,
     /// Durable notification catch-up interval; focus and committed commands also wake it.
     pub notification_interval: Duration,
+    /// File-backed skills and role instructions (`skills.*`, `roles.*`). Absent: neither family
+    /// is registered.
+    pub instructions: Option<InstructionComposition>,
+}
+
+/// The skill roots and their file access, supplied by the host.
+#[derive(Clone)]
+pub struct InstructionComposition {
+    pub source: Arc<dyn devworks_core::ports::indexing::SourceTree>,
+    pub files: Arc<dyn devworks_core::ports::skill_files::SkillFiles>,
+    pub roots: devworks_core::services::instructions::SkillRoots,
+}
+impl std::fmt::Debug for InstructionComposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstructionComposition")
+            .field("roots", &self.roots)
+            .finish_non_exhaustive()
+    }
 }
 impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
@@ -340,6 +358,7 @@ impl RuntimeConfig {
             native_notifications: None,
             providers: None,
             notification_interval: Duration::from_secs(5),
+            instructions: None,
         }
     }
 }
@@ -428,6 +447,9 @@ pub struct Runtime {
     providers: Option<Arc<crate::providers::driver::NativeProviders>>,
     embedding_probes: Option<Arc<crate::conventions::probes::ProbeRuntime>>,
     conventions: Arc<devworks_core::services::conventions::ConventionService>,
+    instructions: Option<Arc<devworks_core::services::instructions::InstructionService>>,
+    instruction_boot:
+        Option<Result<devworks_core::services::instructions::SyncReport, StorageError>>,
     schemas: Option<Arc<devworks_core::services::schemas::SchemaService>>,
     usage_task: Mutex<Option<JoinHandle<()>>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
@@ -909,6 +931,28 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .with_approval_control(runs.service.clone()),
     );
     let use_cases = use_cases.with_jobs(jobs.clone());
+    let instructions = config.instructions.clone().map(|c| {
+        Arc::new(
+            devworks_core::services::instructions::InstructionService::new(
+                store.clone(),
+                artifacts.clone(),
+                devworks_core::services::instructions::SkillAccess {
+                    source: c.source,
+                    files: c.files,
+                    roots: c.roots,
+                },
+                ids.clone(),
+                Arc::new(devworks_core::authority::HostRoles {
+                    store: store.clone(),
+                }),
+                clock.clone(),
+            ),
+        )
+    });
+    let use_cases = match &instructions {
+        Some(service) => use_cases.with_instructions(service.clone()),
+        None => use_cases,
+    };
     let approvals = Arc::new(
         ApprovalService::new(
             ids.clone(),
@@ -926,6 +970,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 Some(jobs.clone()),
             )
             .with_desktop(desktop.clone())
+            .with_instructions(instructions.clone())
             .with_control(runs.service.clone())
             .with_evidence(store.clone(), artifacts.clone()),
         )),
@@ -942,7 +987,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 crate::instruction_guard::InstructionGuard::new(
                     store.clone(),
                     index_supervisor.as_ref().map(|ix| ix.env().source.clone()),
-                ),
+                )
+                .with_skills(instructions.clone()),
             ));
             let connections = use_cases.connection_service().ok_or_else(|| {
                 BootError::Composition(StorageError::unavailable(
@@ -967,6 +1013,23 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         }
         None => None,
     };
+    if let (Some(provider), Some(service), Some(router), Some(_)) = (
+        &providers,
+        use_cases.mcp_service(),
+        use_cases.inference_router(),
+        config.mcp.as_ref(),
+    ) {
+        service
+            .install_sampler(Arc::new(crate::mcp_sampling::EngineSampler::new(
+                &service,
+                provider,
+                store.clone(),
+                artifacts.clone(),
+                router,
+                tokio::runtime::Handle::current(),
+            )))
+            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))?;
+    }
     if let (Some(provider), Some(service), Some(worker)) =
         (&providers, &embedding_spaces, &embedding_probes)
     {
@@ -1365,6 +1428,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         providers,
         embedding_probes,
         conventions,
+        instruction_boot: instructions.as_ref().map(|service| service.sync()),
+        instructions,
         schemas,
         usage_task: Mutex::new(Some(usage_task)),
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
@@ -1566,6 +1631,104 @@ impl Runtime {
     }
     pub fn conventions(&self) -> &Arc<devworks_core::services::conventions::ConventionService> {
         &self.conventions
+    }
+    /// The skill and role instruction owner, when composed.
+    pub fn instructions(
+        &self,
+    ) -> Option<&Arc<devworks_core::services::instructions::InstructionService>> {
+        self.instructions.as_ref()
+    }
+    /// What the boot observation of skill directories and role settings found.
+    pub fn instruction_boot_sync(
+        &self,
+    ) -> Option<&Result<devworks_core::services::instructions::SyncReport, StorageError>> {
+        self.instruction_boot.as_ref()
+    }
+    /// Records the skill set a session adopts at a safe step. When the current effective set
+    /// differs from `adopted` (what the session last recorded), a `SkillRevisionsAdopted` event
+    /// is appended to the session's history with the selected skills, their exact revisions
+    /// and digests, the transitions and any unresolved conflicts; completed steps keep the
+    /// revisions they used. Returns the current set and whether it changed.
+    pub fn adopt_skills(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        adopted: Option<&devworks_core::services::instructions::EffectiveSkills>,
+    ) -> Result<(devworks_core::services::instructions::EffectiveSkills, bool), StorageError> {
+        if ctx.session_id() != Some(session_id) {
+            return Err(StorageError::ScopeDenied);
+        }
+        let current = self.effective_skills()?;
+        if adopted.is_some_and(|a| a.digest == current.digest) {
+            return Ok((current, false));
+        }
+        self.record_skill_adoption(
+            ctx,
+            session_id,
+            adopted.and_then(|a| a.stamp()).as_ref(),
+            current.stamp().as_ref(),
+        )?;
+        Ok((current, true))
+    }
+    /// Appends the `SkillRevisionsAdopted` session event of a skill-set change.
+    fn record_skill_adoption(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        before: Option<&devworks_core::providers::instructions::SkillStamp>,
+        after: Option<&devworks_core::providers::instructions::SkillStamp>,
+    ) -> Result<(), StorageError> {
+        let payload = skill_adoption_payload(before, after);
+        let (session, actor) = (session_id.clone(), ctx.principal().clone());
+        devworks_core::ports::storage::run_write(
+            self.store.as_ref(),
+            devworks_core::ports::storage::WriteOptions::default(),
+            move |tx| {
+                let stored = tx
+                    .sessions()
+                    .session(&session)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                if stored.closed() {
+                    return Err(StorageError::ScopeDenied);
+                }
+                let id = devworks_core::protocol::EventId(
+                    tx.new_id(devworks_core::ports::IdKind::Event),
+                );
+                tx.history()
+                    .append(devworks_core::ports::storage::NewEvent {
+                        id,
+                        actor,
+                        project_id: stored.project_id.clone(),
+                        root_id: stored.root_id.clone(),
+                        operation_id: None,
+                        aggregate_kind:
+                            devworks_core::services::sessions::transcript::SESSION_AGGREGATE.into(),
+                        aggregate_id: stored.id.as_str().to_owned(),
+                        aggregate_revision: stored.revision,
+                        kind: "SkillRevisionsAdopted".into(),
+                        payload,
+                    })?;
+                Ok(())
+            },
+        )
+    }
+
+    /// The skill set a running agent adopts at its next safe step: sources are observed first,
+    /// so a saved, approved or externally changed skill is current; unapproved proposals are
+    /// never included. The caller records the returned digest and revisions in its session and
+    /// starts a new instruction context epoch when the digest differs from what it adopted.
+    pub fn effective_skills(
+        &self,
+    ) -> Result<devworks_core::services::instructions::EffectiveSkills, StorageError> {
+        let service = self.instructions.as_ref().ok_or_else(|| {
+            StorageError::unavailable(Unavailable::UnsupportedRuntime, "skills are not composed")
+        })?;
+        service.sync()?;
+        devworks_core::ports::storage::read_snapshot(
+            self.store.as_ref(),
+            &devworks_core::ports::storage::ReadOptions::default(),
+            |read| devworks_core::services::instructions::effective_skills(read.instructions()),
+        )
     }
     pub fn providers(&self) -> Option<&Arc<crate::providers::driver::NativeProviders>> {
         self.providers.as_ref()
@@ -2005,10 +2168,27 @@ impl Runtime {
         let old_count: usize = old.iter().map(|stamp| stamp.sources.len()).sum();
         base.instructions
             .truncate(base.instructions.len() - old_count);
+        let old_skills = base.skill_stamp.take();
+        if old_skills.is_some() {
+            base.instructions.pop();
+        }
+        // An assignment's context starts with its role's instructions, captured when the work
+        // began; a role changed since is adopted here, like changed guidance and skills.
+        let mut role_changed = false;
+        if let Some(role) = self.current_role_prefix(ctx)?
+            && let Some(rebound) = with_role(&base.instructions, role)
+        {
+            base.instructions = rebound;
+            role_changed = true;
+        }
         let rebound = self.bind_provider_instructions(ctx, base, targets)?;
-        if rebound.instruction_stamps == old {
+        if !role_changed && rebound.instruction_stamps == old && rebound.skill_stamp == old_skills {
             return Ok(source.artifact);
         }
+        // Recorded in the transaction that publishes the epoch: a refused or failed transition
+        // records no adoption, and a retry records it once.
+        let adoption = (rebound.skill_stamp != old_skills)
+            .then(|| skill_adoption_payload(old_skills.as_ref(), rebound.skill_stamp.as_ref()));
         let next_binding = devworks_core::protocol::provider::NativeBinding {
             context_epoch: devworks_core::protocol::Counter::new(
                 previous_epoch
@@ -2034,6 +2214,48 @@ impl Runtime {
                 reason: devworks_core::protocol::provider::ContextChangeReason::InstructionAdoption,
                 context: converted,
                 omitted,
+                adoption,
+            },
+        )
+    }
+
+    /// The current role instructions of the agent assignment `ctx` runs, as the role prefix of
+    /// its provider context (empty when the role has no instructions); `None` outside an agent
+    /// assignment.
+    fn current_role_prefix(
+        &self,
+        ctx: &InvocationContext,
+    ) -> Result<Option<Vec<devworks_core::providers::context::TextBlock>>, StorageError> {
+        let Some(assignment) = ctx.assignment_id() else {
+            return Ok(None);
+        };
+        devworks_core::ports::storage::read_snapshot(
+            self.store.as_ref(),
+            &devworks_core::ports::storage::ReadOptions::default(),
+            |read| {
+                let Some(source) = read.runs().agent_assignment_context(assignment)? else {
+                    return Ok(None);
+                };
+                let role =
+                    devworks_core::settings::catalog::AgentRole::parse(source.role_id.as_str())
+                        .ok_or_else(|| StorageError::InvalidRecord("assignment role".into()))?;
+                let text = devworks_core::settings::service::role_instructions(
+                    read.configuration(),
+                    role,
+                    Some(&source.project_id),
+                )
+                .map_err(|failure| match failure {
+                    devworks_core::settings::service::Failure::Storage(e) => e,
+                    devworks_core::settings::service::Failure::Refused(_) => {
+                        StorageError::InvalidRecord("role instructions".into())
+                    }
+                })?
+                .text;
+                Ok(Some(if text.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![devworks_core::providers::context::TextBlock { text, cache: None }]
+                }))
             },
         )
     }
@@ -2083,6 +2305,22 @@ impl Runtime {
         .resolve(ctx, repository_id, target_paths)
     }
 
+    /// The provider dispatch gate for instruction material, as the provider driver applies it:
+    /// repository guidance and the skill set bound to `context` must still be current.
+    pub fn verify_instruction_context(
+        &self,
+        ctx: &InvocationContext,
+        context: &devworks_core::providers::context::ProviderContext,
+        targets: Option<&[(Id, Vec<String>)]>,
+    ) -> Result<(), StorageError> {
+        crate::instruction_guard::InstructionGuard::new(
+            self.store.clone(),
+            self.indexing.as_ref().map(|ix| ix.env().source.clone()),
+        )
+        .with_skills(self.instructions.clone())
+        .verify(ctx, context, targets)
+    }
+
     /// Compose the effective instruction prefix and its exact source stamps for one provider
     /// request. The trusted turn caller supplies its authorized repository and target paths;
     /// an empty path set means repository-root guidance only.
@@ -2128,6 +2366,14 @@ impl Runtime {
             };
             bundles.push(self.effective_instructions(ctx, repository, &scope)?);
         }
+        let base = match crate::instruction_guard::InstructionGuard::new(self.store.clone(), None)
+            .with_skills(self.instructions.clone())
+            .current_skills()?
+        {
+            Some(stamp) => devworks_core::providers::instructions::bind_skills(base, stamp)
+                .map_err(|e| StorageError::InvalidRecord(format!("skill binding: {e:?}")))?,
+            None => base,
+        };
         devworks_core::providers::instructions::bind_context(base, &bundles)
             .map_err(|error| StorageError::InvalidRecord(format!("instruction binding: {error:?}")))
     }
@@ -2946,5 +3192,96 @@ impl ResumeAdmission for Admitter {
     ) -> CommandOutcome {
         // Unknown outcomes wait for the periodic sweep, never a self-notification hot loop.
         self.command_with_wakeup(context, operation, frame, options, false)
+    }
+}
+
+/// The `SkillRevisionsAdopted` payload of a skill-set change: the selected skills with exact
+/// revisions and digests, the transitions and any unresolved conflicts.
+/// The role prefix replaced by `role` when its text differs, keeping the host-authored blocks
+/// that follow it (they are not part of the role); `None` when the role is unchanged.
+fn with_role(
+    instructions: &[devworks_core::providers::context::TextBlock],
+    role: Vec<devworks_core::providers::context::TextBlock>,
+) -> Option<Vec<devworks_core::providers::context::TextBlock>> {
+    let host = |b: &devworks_core::providers::context::TextBlock| {
+        b.text == crate::agent_turns::TOOL_WINDOW_NOTICE
+    };
+    let current: Vec<&str> = instructions
+        .iter()
+        .filter(|b| !host(b))
+        .map(|b| b.text.as_str())
+        .collect();
+    if current == role.iter().map(|b| b.text.as_str()).collect::<Vec<_>>() {
+        return None;
+    }
+    Some(
+        role.into_iter()
+            .chain(instructions.iter().filter(|b| host(b)).cloned())
+            .collect(),
+    )
+}
+
+fn skill_adoption_payload(
+    before: Option<&devworks_core::providers::instructions::SkillStamp>,
+    after: Option<&devworks_core::providers::instructions::SkillStamp>,
+) -> serde_json::Value {
+    let names = |s: Option<&devworks_core::providers::instructions::SkillStamp>| {
+        s.map(|s| {
+            s.skills
+                .iter()
+                .map(|e| (e.name.clone(), (e.instruction_id.clone(), e.revision)))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        })
+        .unwrap_or_default()
+    };
+    let (old, new) = (names(before), names(after));
+    let transitions: Vec<String> = old
+        .keys()
+        .chain(new.keys())
+        .filter(|n| old.get(*n) != new.get(*n))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    serde_json::json!({
+        "digest": after.map(|s| s.digest.clone()),
+        "previousDigest": before.map(|s| s.digest.clone()),
+        "skills": after.map(|s| s.skills.iter().map(|e| serde_json::json!({
+            "name": e.name, "instructionId": e.instruction_id.as_str(), "rootId": e.root_id,
+            "revision": e.revision, "contentDigest": e.content_digest,
+        })).collect::<Vec<_>>()).unwrap_or_default(),
+        "transitions": transitions,
+        "conflicts": after.map(|s| s.conflicts.clone()).unwrap_or_default(),
+    })
+}
+
+#[cfg(test)]
+mod role_adoption_tests {
+    use super::with_role;
+    use devworks_core::providers::context::TextBlock;
+
+    fn block(text: &str) -> TextBlock {
+        TextBlock {
+            text: text.into(),
+            cache: None,
+        }
+    }
+
+    #[test]
+    fn a_role_change_keeps_the_host_tool_window_notice() {
+        let notice = crate::agent_turns::TOOL_WINDOW_NOTICE;
+        let current = [block("old role"), block(notice)];
+        // An unchanged role is not a change, though the notice follows it.
+        assert!(with_role(&current, vec![block("old role")]).is_none());
+        let rebound = with_role(&current, vec![block("new role")]).expect("changed");
+        let texts: Vec<&str> = rebound.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(texts, ["new role", notice]);
+        // A role cleared to nothing keeps the notice alone; one set later leads again.
+        let cleared = with_role(&current, Vec::new()).expect("cleared");
+        assert_eq!(cleared.len(), 1);
+        assert_eq!(cleared[0].text, notice);
+        let set = with_role(&cleared, vec![block("role")]).expect("set");
+        assert_eq!(set[0].text, "role");
+        assert_eq!(set[1].text, notice);
     }
 }

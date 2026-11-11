@@ -204,34 +204,31 @@ pub fn mcp_command(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u
     command_frame(backend, operation, body)
 }
 
+/// The message, any accepted operation, and the configured or reselected server.
 pub fn mcp_command_status(
     outcome: CommandOutcome,
 ) -> Result<
     (
         String,
         Option<devworks_core::protocol::OperationId>,
-        Option<devworks_core::protocol::Id>,
+        Option<devworks_core::protocol::records::McpServer>,
     ),
     Failure,
 > {
+    let server = |result| match result {
+        OperationResult::McpConfigure { value } | OperationResult::McpSelectTools { value } => {
+            Some(value)
+        }
+        _ => None,
+    };
     match outcome.map_err(gateway)? {
         CommandReply::Recorded { receipt, .. } => match receipt.decision {
-            DomainDecision::Applied { result } => Ok((
-                "MCP configuration applied".into(),
-                None,
-                match result {
-                    OperationResult::McpConfigure { value } => Some(value.id),
-                    _ => None,
-                },
-            )),
-            DomainDecision::NoChange { result } => Ok((
-                "MCP configuration unchanged".into(),
-                None,
-                match result {
-                    OperationResult::McpConfigure { value } => Some(value.id),
-                    _ => None,
-                },
-            )),
+            DomainDecision::Applied { result } => {
+                Ok(("MCP configuration applied".into(), None, server(result)))
+            }
+            DomainDecision::NoChange { result } => {
+                Ok(("MCP configuration unchanged".into(), None, server(result)))
+            }
             DomainDecision::Accepted { operation_id } => Ok((
                 format!("MCP operation {} accepted", operation_id.0.as_str()),
                 Some(operation_id),

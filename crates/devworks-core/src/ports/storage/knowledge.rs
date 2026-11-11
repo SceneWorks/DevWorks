@@ -471,6 +471,31 @@ pub trait KnowledgeRead {
         entity: &Id,
         limit: u16,
     ) -> Result<Vec<StoredClaim>, StorageError>;
+    /// Non-deleted claims of the given scope keys that name `entity` as subject or object,
+    /// newest update first, at most `limit` (the scopes apply before the limit).
+    fn knowledge_entity_claims(
+        &self,
+        entity: &Id,
+        scopes: &[String],
+        limit: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError>;
+    /// Active claims of the given scope keys linking `entity` to another entity (the object is a
+    /// live entity of those scopes, never a claim), newest update first, at most `limit` (the
+    /// edge filter applies before the limit).
+    fn knowledge_entity_edges(
+        &self,
+        entity: &Id,
+        scopes: &[String],
+        limit: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError>;
+    /// Live entities of the given scope keys, ordered by `(update time, id)` descending,
+    /// strictly after `after`, at most `limit` (1..=[`KNOWLEDGE_PAGE_MAX`]).
+    fn knowledge_entities(
+        &self,
+        scopes: &[String],
+        after: Option<(i64, &str)>,
+        limit: u16,
+    ) -> Result<Vec<StoredEntity>, StorageError>;
     fn knowledge_evidence(&self, id: &Id) -> Result<Option<StoredEvidence>, StorageError>;
     /// The claims that cite `evidence`, at most `limit`.
     fn knowledge_evidence_users(&self, evidence: &Id, limit: u16) -> Result<Vec<Id>, StorageError>;
