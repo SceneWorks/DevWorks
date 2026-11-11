@@ -17704,3 +17704,195 @@ impl Check for DesktopAccessibilitySnapshot {
         Ok(())
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum WatcherState {
+    Active,
+    Stopping,
+    Settled,
+    Cancelled,
+}
+impl Check for WatcherState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum WatchSourceKind {
+    Process,
+}
+impl Check for WatchSourceKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum WatchOutcomeKind {
+    Succeeded,
+    Failed,
+    Cancelled,
+    TimedOut,
+    Interrupted,
+    Lost,
+    Uncertain,
+}
+impl Check for WatchOutcomeKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchOutcome {
+    pub kind: WatchOutcomeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<Text>,
+}
+impl Check for WatchOutcome {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.exit_code.check()?;
+        self.signal.check()?;
+        self.detail.check()?;
+        crate::protocol::rules::record(
+            "WatchOutcome",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchProcessSource {
+    pub process_id: Id,
+    pub executable_ref: Id,
+}
+impl Check for WatchProcessSource {
+    fn check(&self) -> Result<(), String> {
+        self.process_id.check()?;
+        self.executable_ref.check()?;
+        crate::protocol::rules::record(
+            "WatchProcessSource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum WatchDeliveryState {
+    Pending,
+    Delivered,
+    Acknowledged,
+}
+impl Check for WatchDeliveryState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchEvent {
+    pub id: Id,
+    pub state: WatchDeliveryState,
+    pub created_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acknowledged_at_ms: Option<Counter>,
+}
+impl Check for WatchEvent {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.state.check()?;
+        self.created_at_ms.check()?;
+        self.delivered_at_ms.check()?;
+        self.acknowledged_at_ms.check()?;
+        crate::protocol::rules::record(
+            "WatchEvent",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatcherPage {
+    pub items: Rows<WatcherRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for WatcherPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        crate::protocol::rules::record(
+            "WatcherPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatcherRecord {
+    pub id: Id,
+    pub revision: Revision,
+    pub state: WatcherState,
+    pub source_kind: WatchSourceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<WatchProcessSource>,
+    pub session_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    pub created_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_at_ms: Option<Counter>,
+    pub elapsed_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<WatchOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tail: Option<Content>,
+    pub output_truncated: bool,
+    pub stop_requested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<WatchEvent>,
+}
+impl Check for WatcherRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.state.check()?;
+        self.source_kind.check()?;
+        self.process.check()?;
+        self.session_id.check()?;
+        self.project_id.check()?;
+        self.created_at_ms.check()?;
+        self.settled_at_ms.check()?;
+        self.elapsed_ms.check()?;
+        self.outcome.check()?;
+        self.duration_ms.check()?;
+        self.output_tail.check()?;
+        self.output_truncated.check()?;
+        self.stop_requested.check()?;
+        self.event.check()?;
+        crate::protocol::rules::record(
+            "WatcherRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}

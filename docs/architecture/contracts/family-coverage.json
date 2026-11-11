@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
-  "date": "2026-11-10",
-  "catalogSha256": "8714599ea1a066c303665e012145cd7e51e92dc259ef31975bd9a73924dcf172",
-  "familyCount": 49,
-  "operationCount": 369,
-  "concreteInputCandidates": 369,
+  "date": "2026-11-11",
+  "catalogSha256": "5fc5d7da3c910be05ea893710603b6c731b9236b33b6365864df1a57bffc4d72",
+  "familyCount": 50,
+  "operationCount": 373,
+  "concreteInputCandidates": 373,
   "domainInputsPending": 0,
   "families": [
     {
@@ -19244,6 +19244,201 @@
           "effect": "Local",
           "semanticRules": "Read immutable reports for one currently visible session through bounded, scope-revalidated pagination. Historical reports retain their source watermark, supplied measurement digest, suite snapshot, per-step revision attribution, explicit outcomes and coverage; no report is recomputed or adopted by this query.",
           "familyRules": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        }
+      ]
+    },
+    {
+      "family": "watch",
+      "owner": "WatchService",
+      "effectAndAuthority": "Scoped watchers launch through process.execute authority and wake the owning session with a host-only message; reviewer roles cannot launch or stop processes",
+      "operations": [
+        {
+          "introducedRevision": 8,
+          "operation": "watch.create",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "watch.create",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "watch.create"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "External"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "watch.create"
+          },
+          "resultValueType": "WatcherRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 8,
+              "inputSchema": "domain-request.r8.schema.json",
+              "resultSchema": "operation-result.r8.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r8.schema.json",
+              "completionSchema": "operation-completion.r8.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "External",
+          "semanticRules": "Launches the watched process through the process.execute domain service (same bindings, preflight, native grant and output bounds) and answers the watcher before the process exits. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles cannot launch a process through a watcher.",
+          "familyRules": "Watchers observe a source on an agent's behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor observed.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 8,
+          "operation": "watch.list",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "watch.list",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "watch.list"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "watch.list"
+          },
+          "resultValueType": "WatcherPage",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 8,
+              "inputSchema": "domain-request.r8.schema.json",
+              "resultSchema": "operation-result.r8.schema.json",
+              "queryReplySchema": "domain-query-reply.r8.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "An agent lists its own session's watchers; a human lists watchers visible in the current project scope. Newest first.",
+          "familyRules": "Watchers observe a source on an agent's behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor observed.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 8,
+          "operation": "watch.inspect",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "watch.inspect",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "watch.inspect"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "watch.inspect"
+          },
+          "resultValueType": "WatcherRecord",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 8,
+              "inputSchema": "domain-request.r8.schema.json",
+              "resultSchema": "operation-result.r8.schema.json",
+              "queryReplySchema": "domain-query-reply.r8.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "State, source, elapsed time, outcome and the redacted output tail (live while the process runs).",
+          "familyRules": "Watchers observe a source on an agent's behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor observed.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 8,
+          "operation": "watch.cancel",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "watch.cancel",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "watch.cancel"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Journaled"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "watch.cancel"
+          },
+          "resultValueType": "WatcherRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 8,
+              "inputSchema": "domain-request.r8.schema.json",
+              "resultSchema": "operation-result.r8.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r8.schema.json",
+              "completionSchema": "operation-completion.r8.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Journaled",
+          "semanticRules": "Without stop_process the watcher stops observing and delivers nothing; the process keeps running under its owner. With stop_process the launched process is cancelled through process.cancel and the observed Cancelled outcome is delivered. Reviewer roles cannot stop a process through a watcher.",
+          "familyRules": "Watchers observe a source on an agent's behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor observed.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
           "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",

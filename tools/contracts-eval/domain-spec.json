@@ -6397,6 +6397,95 @@
         "nodes": "Rows<DesktopAccessibilityNode>",
         "truncated": "bool"
       }
+    },
+    "WatcherState": {
+      "kind": "enum",
+      "values": [
+        "Active",
+        "Stopping",
+        "Settled",
+        "Cancelled"
+      ]
+    },
+    "WatchSourceKind": {
+      "kind": "enum",
+      "values": [
+        "Process"
+      ]
+    },
+    "WatchOutcomeKind": {
+      "kind": "enum",
+      "values": [
+        "Succeeded",
+        "Failed",
+        "Cancelled",
+        "TimedOut",
+        "Interrupted",
+        "Lost",
+        "Uncertain"
+      ]
+    },
+    "WatchOutcome": {
+      "kind": "record",
+      "fields": {
+        "kind": "WatchOutcomeKind",
+        "exit_code": "?i32",
+        "signal": "?i32",
+        "detail": "?Text"
+      }
+    },
+    "WatchProcessSource": {
+      "kind": "record",
+      "fields": {
+        "process_id": "Id",
+        "executable_ref": "Id"
+      }
+    },
+    "WatchDeliveryState": {
+      "kind": "enum",
+      "values": [
+        "Pending",
+        "Delivered",
+        "Acknowledged"
+      ]
+    },
+    "WatchEvent": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "state": "WatchDeliveryState",
+        "created_at_ms": "Counter",
+        "delivered_at_ms": "?Counter",
+        "acknowledged_at_ms": "?Counter"
+      }
+    },
+    "WatcherPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<WatcherRecord>",
+        "next_cursor": "?Cursor"
+      }
+    },
+    "WatcherRecord": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "state": "WatcherState",
+        "source_kind": "WatchSourceKind",
+        "process": "?WatchProcessSource",
+        "session_id": "Id",
+        "project_id": "?ProjectId",
+        "created_at_ms": "Counter",
+        "settled_at_ms": "?Counter",
+        "elapsed_ms": "Counter",
+        "outcome": "?WatchOutcome",
+        "duration_ms": "?Counter",
+        "output_tail": "?Content",
+        "output_truncated": "bool",
+        "stop_requested": "bool",
+        "event": "?WatchEvent"
+      }
     }
   },
   "operations": {
@@ -11014,6 +11103,59 @@
       "authority": "Scoped",
       "rules": "Observe logical and physical completion and retryable holds honestly; preserve the original purge and operation identity.",
       "introducedRevision": 6
+    },
+    "watch.create": {
+      "operation": "watch.create",
+      "mode": "Command",
+      "fields": {
+        "process": "ProcessSpec",
+        "tail_bytes": "?ByteLimit"
+      },
+      "result": "WatcherRecord",
+      "effect": "External",
+      "authority": "Scoped",
+      "rules": "Launches the watched process through the process.execute domain service (same bindings, preflight, native grant and output bounds) and answers the watcher before the process exits. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles cannot launch a process through a watcher.",
+      "introducedRevision": 8
+    },
+    "watch.list": {
+      "operation": "watch.list",
+      "mode": "Query",
+      "fields": {
+        "session_id": "?Id",
+        "states": "?Items<WatcherState>",
+        "page": "PageRequest"
+      },
+      "result": "WatcherPage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "An agent lists its own session's watchers; a human lists watchers visible in the current project scope. Newest first.",
+      "introducedRevision": 8
+    },
+    "watch.inspect": {
+      "operation": "watch.inspect",
+      "mode": "Query",
+      "fields": {
+        "watcher_id": "Id"
+      },
+      "result": "WatcherRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "State, source, elapsed time, outcome and the redacted output tail (live while the process runs).",
+      "introducedRevision": 8
+    },
+    "watch.cancel": {
+      "operation": "watch.cancel",
+      "mode": "Command",
+      "fields": {
+        "watcher_id": "Id",
+        "expected_revision": "Revision",
+        "stop_process": "bool"
+      },
+      "result": "WatcherRecord",
+      "effect": "Journaled",
+      "authority": "Scoped",
+      "rules": "Without stop_process the watcher stops observing and delivers nothing; the process keeps running under its owner. With stop_process the launched process is cancelled through process.cancel and the observed Cancelled outcome is delivered. Reviewer roles cannot stop a process through a watcher.",
+      "introducedRevision": 8
     }
   },
   "earlierInputResults": {
@@ -11883,6 +12025,18 @@
     "desktop.release_control": [
       1,
       3
+    ],
+    "watch.create": [
+      8
+    ],
+    "watch.list": [
+      8
+    ],
+    "watch.inspect": [
+      8
+    ],
+    "watch.cancel": [
+      8
     ]
   },
   "familyRules": {
@@ -11934,6 +12088,7 @@
     "code": "Existing exact-view read DTOs and source result/citation contracts remain authoritative; visibility before traversal, no main/view fallback and no raw graph query escape.",
     "artifacts": "Existing immutable source/version/reference/deletion DTOs remain authoritative. Explicit deletion tombstones first, preserves surviving references, and never reactivates an old version.",
     "mcp_server": "Incoming MCP adapter uses shared application services. Internal human configuration only; not automatically MCP-exposed. stdio/loopback HTTP, current principal/grant, explicit scope, read-default policy, receipts and publication revocation apply. Protocol/session/client labels never mint authority.",
-    "evals": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions."
+    "evals": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
+    "watch": "Watchers observe a source on an agent's behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor observed."
   }
 }

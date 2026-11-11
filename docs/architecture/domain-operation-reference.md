@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 369 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 373 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -717,6 +717,17 @@ All 369 qualified operations have typed input/result candidates. Existing input 
 | --- | --- | --- |
 | `evals.grade` | **Command**<br>`sessionId`: `Id`<br>`suite`: `EvalSuiteSnapshot` | `EvalReport` |
 | `evals.results` | **Query**<br>`sessionId`: `Id`<br>`page`: `PageRequest` | `EvalReportPage` |
+
+### Watch
+
+**Owner:** WatchService. Watchers observe a source on an agent's behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor observed.
+
+| Operation | Mode and input fields | Typed result value |
+| --- | --- | --- |
+| `watch.create` | **Command**<br>`process`: `ProcessSpec`<br>`tailBytes`: `?ByteLimit`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
+| `watch.list` | **Query**<br>`sessionId`: `?Id`<br>`states`: `?Items<WatcherState>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherPage` |
+| `watch.inspect` | **Query**<br>`watcherId`: `Id`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
+| `watch.cancel` | **Command**<br>`watcherId`: `Id`<br>`expectedRevision`: `Revision`<br>`stopProcess`: `bool`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
 
 ## Domain types
 
@@ -5477,6 +5488,76 @@ Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `Conven
 | `platform` | `Label` |
 | `nodes` | `Rows<DesktopAccessibilityNode>` |
 | `truncated` | `bool` |
+
+### WatcherState
+
+`Active`, `Stopping`, `Settled`, `Cancelled`.
+
+### WatchSourceKind
+
+`Process`.
+
+### WatchOutcomeKind
+
+`Succeeded`, `Failed`, `Cancelled`, `TimedOut`, `Interrupted`, `Lost`, `Uncertain`.
+
+### WatchOutcome
+
+| Field | Type |
+| --- | --- |
+| `kind` | `WatchOutcomeKind` |
+| `exitCode` | `?i32` |
+| `signal` | `?i32` |
+| `detail` | `?Text` |
+
+### WatchProcessSource
+
+| Field | Type |
+| --- | --- |
+| `processId` | `Id` |
+| `executableRef` | `Id` |
+
+### WatchDeliveryState
+
+`Pending`, `Delivered`, `Acknowledged`.
+
+### WatchEvent
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `state` | `WatchDeliveryState` |
+| `createdAtMs` | `Counter` |
+| `deliveredAtMs` | `?Counter` |
+| `acknowledgedAtMs` | `?Counter` |
+
+### WatcherPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<WatcherRecord>` |
+| `nextCursor` | `?Cursor` |
+
+### WatcherRecord
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `state` | `WatcherState` |
+| `sourceKind` | `WatchSourceKind` |
+| `process` | `?WatchProcessSource` |
+| `sessionId` | `Id` |
+| `projectId` | `?ProjectId` |
+| `createdAtMs` | `Counter` |
+| `settledAtMs` | `?Counter` |
+| `elapsedMs` | `Counter` |
+| `outcome` | `?WatchOutcome` |
+| `durationMs` | `?Counter` |
+| `outputTail` | `?Content` |
+| `outputTruncated` | `bool` |
+| `stopRequested` | `bool` |
+| `event` | `?WatchEvent` |
 
 ## Machine sources
 

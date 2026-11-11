@@ -17711,6 +17711,198 @@ impl Check for DesktopAccessibilitySnapshot {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum WatcherState {
+    Active,
+    Stopping,
+    Settled,
+    Cancelled,
+}
+impl Check for WatcherState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum WatchSourceKind {
+    Process,
+}
+impl Check for WatchSourceKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum WatchOutcomeKind {
+    Succeeded,
+    Failed,
+    Cancelled,
+    TimedOut,
+    Interrupted,
+    Lost,
+    Uncertain,
+}
+impl Check for WatchOutcomeKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchOutcome {
+    pub kind: WatchOutcomeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<Text>,
+}
+impl Check for WatchOutcome {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.exit_code.check()?;
+        self.signal.check()?;
+        self.detail.check()?;
+        super::domain_rules::record(
+            "WatchOutcome",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchProcessSource {
+    pub process_id: Id,
+    pub executable_ref: Id,
+}
+impl Check for WatchProcessSource {
+    fn check(&self) -> Result<(), String> {
+        self.process_id.check()?;
+        self.executable_ref.check()?;
+        super::domain_rules::record(
+            "WatchProcessSource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum WatchDeliveryState {
+    Pending,
+    Delivered,
+    Acknowledged,
+}
+impl Check for WatchDeliveryState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchEvent {
+    pub id: Id,
+    pub state: WatchDeliveryState,
+    pub created_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acknowledged_at_ms: Option<Counter>,
+}
+impl Check for WatchEvent {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.state.check()?;
+        self.created_at_ms.check()?;
+        self.delivered_at_ms.check()?;
+        self.acknowledged_at_ms.check()?;
+        super::domain_rules::record(
+            "WatchEvent",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatcherPage {
+    pub items: Rows<WatcherRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for WatcherPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        super::domain_rules::record(
+            "WatcherPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatcherRecord {
+    pub id: Id,
+    pub revision: Revision,
+    pub state: WatcherState,
+    pub source_kind: WatchSourceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<WatchProcessSource>,
+    pub session_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    pub created_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_at_ms: Option<Counter>,
+    pub elapsed_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<WatchOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tail: Option<Content>,
+    pub output_truncated: bool,
+    pub stop_requested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<WatchEvent>,
+}
+impl Check for WatcherRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.state.check()?;
+        self.source_kind.check()?;
+        self.process.check()?;
+        self.session_id.check()?;
+        self.project_id.check()?;
+        self.created_at_ms.check()?;
+        self.settled_at_ms.check()?;
+        self.elapsed_ms.check()?;
+        self.outcome.check()?;
+        self.duration_ms.check()?;
+        self.output_tail.check()?;
+        self.output_truncated.check()?;
+        self.stop_requested.check()?;
+        self.event.check()?;
+        super::domain_rules::record(
+            "WatcherRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DomainQuery {
     #[serde(rename = "projects.list")]
@@ -19060,6 +19252,18 @@ pub enum DomainQuery {
         project_id: ProjectId,
         manifest_id: Id,
     },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "watch.list")]
+    WatchList {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        states: Option<Items<WatcherState>>,
+        page: PageRequest,
+    },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "watch.inspect")]
+    WatchInspect { watcher_id: Id },
 }
 impl DomainQuery {
     pub fn operation(&self) -> &'static str {
@@ -19210,6 +19414,8 @@ impl DomainQuery {
             Self::RouterEmbeddingSpaces { .. } => "router.embedding_spaces",
             Self::ProjectsPurgeManifest { .. } => "projects.purge_manifest",
             Self::ProjectsPurgeStatus { .. } => "projects.purge_status",
+            Self::WatchList { .. } => "watch.list",
+            Self::WatchInspect { .. } => "watch.inspect",
         }
     }
 }
@@ -20406,6 +20612,18 @@ impl Check for DomainQuery {
                 project_id.check()?;
                 manifest_id.check()?;
             }
+            Self::WatchList {
+                session_id,
+                states,
+                page,
+            } => {
+                session_id.check()?;
+                states.check()?;
+                page.check()?;
+            }
+            Self::WatchInspect { watcher_id } => {
+                watcher_id.check()?;
+            }
         }
         super::domain_rules::input(
             self.operation(),
@@ -20801,6 +21019,12 @@ impl Revisioned for DomainQuery {
                 Err("operation predates its introduction".into())
             }
             Self::ProjectsPurgeStatus { .. } if revision < 6 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::WatchList { .. } if revision < 8 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::WatchInspect { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
             Self::RepositoriesNodes { scope, .. } if revision >= 3 && scope.is_none() => {
@@ -22575,6 +22799,20 @@ pub enum DomainCommand {
         expected_project_revision: Revision,
         confirm: bool,
     },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "watch.create")]
+    WatchCreate {
+        process: ProcessSpec,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tail_bytes: Option<ByteLimit>,
+    },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "watch.cancel")]
+    WatchCancel {
+        watcher_id: Id,
+        expected_revision: Revision,
+        stop_process: bool,
+    },
 }
 impl DomainCommand {
     pub fn operation(&self) -> &'static str {
@@ -22753,6 +22991,8 @@ impl DomainCommand {
             Self::NotificationsMarkRead { .. } => "notifications.mark_read",
             Self::ProjectsPreparePurge { .. } => "projects.prepare_purge",
             Self::ProjectsPurge { .. } => "projects.purge",
+            Self::WatchCreate { .. } => "watch.create",
+            Self::WatchCancel { .. } => "watch.cancel",
         }
     }
 }
@@ -24658,6 +24898,22 @@ impl Check for DomainCommand {
                 expected_project_revision.check()?;
                 confirm.check()?;
             }
+            Self::WatchCreate {
+                process,
+                tail_bytes,
+            } => {
+                process.check()?;
+                tail_bytes.check()?;
+            }
+            Self::WatchCancel {
+                watcher_id,
+                expected_revision,
+                stop_process,
+            } => {
+                watcher_id.check()?;
+                expected_revision.check()?;
+                stop_process.check()?;
+            }
         }
         super::domain_rules::input(
             self.operation(),
@@ -25067,6 +25323,12 @@ impl Revisioned for DomainCommand {
                 Err("operation predates its introduction".into())
             }
             Self::ProjectsPurge { .. } if revision < 6 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::WatchCreate { .. } if revision < 8 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::WatchCancel { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
             Self::DesktopInput { action, .. } => {
@@ -25765,6 +26027,18 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 6))]
     #[serde(rename = "projects.purge_status")]
     ProjectsPurgeStatus { value: ProjectPurgeManifest },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "watch.create")]
+    WatchCreate { value: WatcherRecord },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "watch.list")]
+    WatchList { value: WatcherPage },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "watch.inspect")]
+    WatchInspect { value: WatcherRecord },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "watch.cancel")]
+    WatchCancel { value: WatcherRecord },
     #[serde(rename = "runs.start")]
     RunsStart { value: RootSnapshot },
     #[serde(rename = "runs.pause")]
@@ -26200,6 +26474,10 @@ impl OperationResult {
             Self::ProjectsPurgeManifest { .. } => "projects.purge_manifest",
             Self::ProjectsPurge { .. } => "projects.purge",
             Self::ProjectsPurgeStatus { .. } => "projects.purge_status",
+            Self::WatchCreate { .. } => "watch.create",
+            Self::WatchList { .. } => "watch.list",
+            Self::WatchInspect { .. } => "watch.inspect",
+            Self::WatchCancel { .. } => "watch.cancel",
             Self::RunsStart { .. } => "runs.start",
             Self::RunsPause { .. } => "runs.pause",
             Self::RunsContinue { .. } => "runs.continue",
@@ -26575,6 +26853,10 @@ impl Check for OperationResult {
             Self::ProjectsPurgeManifest { value } => value.check()?,
             Self::ProjectsPurge { value } => value.check()?,
             Self::ProjectsPurgeStatus { value } => value.check()?,
+            Self::WatchCreate { value } => value.check()?,
+            Self::WatchList { value } => value.check()?,
+            Self::WatchInspect { value } => value.check()?,
+            Self::WatchCancel { value } => value.check()?,
             Self::RunsStart { value } => value.check()?,
             Self::RunsPause { value } => value.check()?,
             Self::RunsContinue { value } => value.check()?,
@@ -26847,6 +27129,18 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::ProjectsPurgeStatus { .. } if revision < 6 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::WatchCreate { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::WatchList { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::WatchInspect { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::WatchCancel { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),

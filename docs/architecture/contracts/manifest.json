@@ -1,6 +1,6 @@
 {
   "contract": "1.0-draft.1",
-  "date": "2026-11-10",
+  "date": "2026-11-11",
   "status": "Adopted architecture candidate; not public SDK v1, production service or platform proof",
   "schemaSource": "../../../tools/contracts-eval/src/lib.rs",
   "schemaSources": [
@@ -118,6 +118,10 @@
       "sha256": "1903de8be95b7f4a93094053da4c89605606641f4d6741305fbe69cc64f2a81f"
     },
     {
+      "file": "domain-command-reply.r8.schema.json",
+      "sha256": "ab7fdab8561f4e1893b03257fc41fdeeaafaf528930822529fef17988a43905b"
+    },
+    {
       "file": "domain-command-reply.schema.json",
       "sha256": "a77cc7537528c50c187f857db5acfce17ab159e2365e9482302247e73300c1e5"
     },
@@ -146,6 +150,10 @@
       "sha256": "15ef0c1d0120d2893b20f7d7b6fe895d43f51e3079c11aee32f43fb40f0b7dd1"
     },
     {
+      "file": "domain-query-reply.r8.schema.json",
+      "sha256": "8b0689df39706715311cc24773158220800eda542bd96f2c835b43cb271acc77"
+    },
+    {
       "file": "domain-query-reply.schema.json",
       "sha256": "24b5443ad6fbc4f91ee4e40e2f2c45b2696a5e17ebc244b5e347dc269e68ed40"
     },
@@ -168,6 +176,10 @@
     {
       "file": "domain-request.r7.schema.json",
       "sha256": "3e517f3b34b568bbe4894bb466397297c41fe6ce8811a9dada6e8631cd8b3958"
+    },
+    {
+      "file": "domain-request.r8.schema.json",
+      "sha256": "dfd0b64d5fc67cb4e9c4fbfda25ca1ed34318a76c57835d32bdcb3f10f77840f"
     },
     {
       "file": "domain-request.schema.json",
@@ -250,6 +262,10 @@
       "sha256": "357db2a803a92224d353d527057ede4ab6258045423bb3383229cb9b2f8ba727"
     },
     {
+      "file": "operation-completion.r8.schema.json",
+      "sha256": "624b213feb53ee134f515b0dbf560a46601582b9b0341c9513944f08e2d59cf9"
+    },
+    {
       "file": "operation-completion.schema.json",
       "sha256": "b6727480940838e8277062bb94621459ac6678f4e15db0efeb360b0800d8943c"
     },
@@ -276,6 +292,10 @@
     {
       "file": "operation-result.r7.schema.json",
       "sha256": "410891569bfa156878c5fbb0a9be22d17ca7f03108248b125653ec69816d8336"
+    },
+    {
+      "file": "operation-result.r8.schema.json",
+      "sha256": "a9a240f72f08eacf02fa5e64e02a92da1ba34c800d124dcc62a3d38271aad824"
     },
     {
       "file": "operation-result.schema.json",

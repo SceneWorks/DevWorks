@@ -20,7 +20,7 @@ use crate::protocol::support::*;
 use crate::registry::Mode;
 use serde_json::Value;
 
-pub(super) const FAMILIES: [&str; 49] = [
+pub(super) const FAMILIES: [&str; 50] = [
     "projects",
     "features",
     "issues",
@@ -70,9 +70,10 @@ pub(super) const FAMILIES: [&str; 49] = [
     "repository_docs",
     "mcp_server",
     "evals",
+    "watch",
 ];
 
-pub(super) static CATALOG: [OperationDescriptor; 369] = [
+pub(super) static CATALOG: [OperationDescriptor; 373] = [
     OperationDescriptor {
         name: "projects.list",
         family: "projects",
@@ -8355,6 +8356,94 @@ pub(super) static CATALOG: [OperationDescriptor; 369] = [
         completion: false,
         revisions: &[SchemaRevision(1)],
     },
+    OperationDescriptor {
+        name: "watch.create",
+        family: "watch",
+        owner: "WatchService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "watch.create",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Command,
+            authority: AuthorityClass::Scoped,
+            effect: EffectClass::External,
+            input_type: "watch::CreateInput",
+            decode: decode_watch_create_command,
+            input_schema: schema_of::<ops::watch::CreateInput>,
+        }],
+        result_type: "WatcherRecord",
+        result_schema: schema_of::<WatcherRecord>,
+        completion: true,
+        revisions: &[SchemaRevision(8)],
+    },
+    OperationDescriptor {
+        name: "watch.list",
+        family: "watch",
+        owner: "WatchService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "watch.list",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Query,
+            authority: AuthorityClass::ScopedRead,
+            effect: EffectClass::ReadOnly,
+            input_type: "watch::ListInput",
+            decode: decode_watch_list_query,
+            input_schema: schema_of::<ops::watch::ListInput>,
+        }],
+        result_type: "WatcherPage",
+        result_schema: schema_of::<WatcherPage>,
+        completion: false,
+        revisions: &[SchemaRevision(8)],
+    },
+    OperationDescriptor {
+        name: "watch.inspect",
+        family: "watch",
+        owner: "WatchService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "watch.inspect",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Query,
+            authority: AuthorityClass::ScopedRead,
+            effect: EffectClass::ReadOnly,
+            input_type: "watch::InspectInput",
+            decode: decode_watch_inspect_query,
+            input_schema: schema_of::<ops::watch::InspectInput>,
+        }],
+        result_type: "WatcherRecord",
+        result_schema: schema_of::<WatcherRecord>,
+        completion: false,
+        revisions: &[SchemaRevision(8)],
+    },
+    OperationDescriptor {
+        name: "watch.cancel",
+        family: "watch",
+        owner: "WatchService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "watch.cancel",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Command,
+            authority: AuthorityClass::Scoped,
+            effect: EffectClass::Journaled,
+            input_type: "watch::CancelInput",
+            decode: decode_watch_cancel_command,
+            input_schema: schema_of::<ops::watch::CancelInput>,
+        }],
+        result_type: "WatcherRecord",
+        result_schema: schema_of::<WatcherRecord>,
+        completion: true,
+        revisions: &[SchemaRevision(8)],
+    },
 ];
 
 pub(super) fn index_of(name: &str) -> Option<usize> {
@@ -8728,6 +8817,10 @@ pub(super) fn index_of(name: &str) -> Option<usize> {
         "mcp_server.set_client_access" => Some(366),
         "evals.grade" => Some(367),
         "evals.results" => Some(368),
+        "watch.create" => Some(369),
+        "watch.list" => Some(370),
+        "watch.inspect" => Some(371),
+        "watch.cancel" => Some(372),
         _ => None,
     }
 }
@@ -12668,5 +12761,34 @@ fn decode_evals_results_query(
 ) -> Result<Decoded, AdmissionError> {
     decode_domain_body::<ops::evals::ResultsInput>("evals.results", Mode::Query, revision, v, |i| {
         OperationInput::Evals(ops::evals::Input::Results(i))
+    })
+}
+fn decode_watch_create_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::watch::CreateInput>("watch.create", Mode::Command, revision, v, |i| {
+        OperationInput::Watch(ops::watch::Input::Create(i))
+    })
+}
+fn decode_watch_list_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::watch::ListInput>("watch.list", Mode::Query, revision, v, |i| {
+        OperationInput::Watch(ops::watch::Input::List(i))
+    })
+}
+fn decode_watch_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::watch::InspectInput>("watch.inspect", Mode::Query, revision, v, |i| {
+        OperationInput::Watch(ops::watch::Input::Inspect(i))
+    })
+}
+fn decode_watch_cancel_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::watch::CancelInput>("watch.cancel", Mode::Command, revision, v, |i| {
+        OperationInput::Watch(ops::watch::Input::Cancel(i))
     })
 }
