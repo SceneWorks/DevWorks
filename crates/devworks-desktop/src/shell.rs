@@ -2524,6 +2524,7 @@ impl Shell {
                         let reconnect = self.settings.mcp.reconnect.take();
                         if let Some(server) = &configured {
                             self.release_dropped_mcp_credentials(server);
+                            self.settings.mcp.saved(server);
                         }
                         if let Some(server) = &configured {
                             self.settings.mcp.selected = Some(server.id.clone());

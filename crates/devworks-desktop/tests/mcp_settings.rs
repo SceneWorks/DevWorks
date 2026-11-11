@@ -309,6 +309,19 @@ fn settings_shows_a_saved_server_renames_it_in_place_and_removes_its_token() {
         })
     ));
     assert_eq!(cleared.catalog_revision, saved.catalog_revision);
+    // The open update form follows the saved server, so a later rename cannot resend the
+    // removed handle.
+    assert_eq!(h.state().settings.mcp.credential_ref, "");
+    h.state_mut().settings.mcp.name = "Renamed again".into();
+    click(&mut h, Role::Button, "Update server");
+    settle(&mut h);
+    assert!(matches!(
+        &h.state().settings.mcp.servers[0].configuration,
+        Some(McpTransport::Http {
+            credential_ref: None,
+            ..
+        })
+    ));
     assert!(has_text(
         &h,
         "Endpoint: https://mcp.example.test/mcp · Bearer token: not set"

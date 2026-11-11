@@ -116,6 +116,14 @@ pub struct McpPanel {
 }
 
 impl McpPanel {
+    /// After a saved change, an open update form follows the saved server, so a later update
+    /// never resends a removed or replaced credential handle.
+    pub fn saved(&mut self, server: &McpServer) {
+        if self.editing {
+            self.form_from = Some(server.clone());
+        }
+    }
+
     /// Fill the add/update form from a saved server so an update resends what is saved.
     pub fn fill_form(&mut self, server: &McpServer) {
         self.name = server.name.0.clone();
