@@ -116,6 +116,8 @@ atspi = { version = "=0.29.0", default-features = false }
 # An in-memory server proves the outgoing stdio protocol handshake without requiring Node,
 # Python or an installed external MCP runtime in the test suite.
 rmcp = { version = "=3.9.0", default-features = false, features = ["server"] }
+# The stdio MCP fixture server reads the process's own standard input and output.
+tokio = { version = "=1.54.1", default-features = false, features = ["io-std"] }
 # A throwaway certificate authority for the local TLS server the transport tests connect to.
 rcgen = { version = "=0.13.2", default-features = false, features = ["ring", "pem"] }
 devworks-core = { path = "../devworks-core", features = ["contract-suite"] }
@@ -160,3 +162,10 @@ windows-sys = { version = "=0.61.2", features = [
     "Win32_System_Power",
     "Win32_System_Threading",
 ] }
+
+# Launches its own executable as a stdio MCP server through the native client and process
+# supervisor (no test harness, so the child's standard output carries only protocol bytes).
+[[test]]
+name = "mcp_stdio"
+path = "tests/mcp_stdio.rs"
+harness = false
