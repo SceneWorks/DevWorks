@@ -479,9 +479,15 @@ impl TailOutput {
 }
 
 /// Redacts a tail whose front may be cut: a credential's suffix at the start of the retained
-/// bytes is withheld along with complete matches.
-pub(crate) fn redacted_tail(bytes: &[u8], values: &[String], cut_front: bool) -> Vec<u8> {
-    let mut redacted = redacted_output(bytes, values, false);
+/// bytes is withheld along with complete matches. While the process still runs (`open_end`) a
+/// credential's prefix at the end is withheld too, since its remainder may not be written yet.
+pub(crate) fn redacted_tail(
+    bytes: &[u8],
+    values: &[String],
+    cut_front: bool,
+    open_end: bool,
+) -> Vec<u8> {
+    let mut redacted = redacted_output(bytes, values, open_end);
     if cut_front
         && !values
             .iter()
@@ -1000,7 +1006,7 @@ impl ProcessToolService {
             .cloned()?;
         let tail = tail.lock().unwrap_or_else(|p| p.into_inner());
         Some((
-            redacted_tail(&tail.retained(), &redactions, tail.truncated()),
+            redacted_tail(&tail.retained(), &redactions, tail.truncated(), true),
             tail.truncated(),
         ))
     }
@@ -1718,7 +1724,7 @@ impl ProcessToolService {
         }
         if let Some(tail) = &tail {
             let tail = tail.lock().unwrap_or_else(|p| p.into_inner());
-            let bytes = redacted_tail(&tail.retained(), &redactions, tail.truncated());
+            let bytes = redacted_tail(&tail.retained(), &redactions, tail.truncated(), false);
             evidence["tailBase64"] = json!(base64::engine::general_purpose::STANDARD.encode(bytes));
             evidence["tailTruncated"] = json!(tail.truncated());
         }
@@ -2770,12 +2776,15 @@ mod tests {
         // A complete credential is redacted; one cut at the front of a truncated tail is
         // withheld rather than shown as a suffix.
         let secret = vec!["s3cret-token".to_owned()];
-        let whole = redacted_tail(b"key=s3cret-token done", &secret, false);
+        let whole = redacted_tail(b"key=s3cret-token done", &secret, false, false);
         assert!(!String::from_utf8_lossy(&whole).contains("s3cret"));
-        let cut = redacted_tail(b"et-token done", &secret, true);
+        let cut = redacted_tail(b"et-token done", &secret, true, false);
         assert_eq!(cut, b" done");
-        let kept = redacted_tail(b"et-token done", &secret, false);
+        let kept = redacted_tail(b"et-token done", &secret, false, false);
         assert_eq!(kept, b"et-token done");
+        // A running process may not have written a credential's remainder yet.
+        let live = redacted_tail(b"key=s3cret", &secret, false, true);
+        assert_eq!(live, b"key=");
     }
 
     #[test]

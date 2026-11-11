@@ -40,6 +40,10 @@ use base64::Engine;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+/// Store bound on an event body (`watcher_events.payload_json`), with room for its envelope.
+const MAX_EVENT_PAYLOAD_BYTES: usize = 200_000;
+/// Host notices are read into provider context up to this many bytes (`tool_turn`).
+const MAX_NOTICE_BYTES: usize = 8_000;
 /// Default output tail a watcher keeps when `tail_bytes` is omitted.
 pub const DEFAULT_TAIL_BYTES: u32 = 4_096;
 const PAGE: u16 = 100;
@@ -198,10 +202,8 @@ impl WatchService {
                 // Delivery to an ended session is decided with session lifecycle (DW-99).
                 return Ok(false);
             }
-            // The notice belongs to the agent the watcher works for, so its turns can read it.
-            let Some(watcher) = tx.watchers().watcher(&event.watcher_id)? else {
-                return Ok(false);
-            };
+            // The notice belongs to the session's agent, whose turns read it; the watcher keeps
+            // the launching actor for attribution.
             let scope = session
                 .project_id
                 .clone()
@@ -214,7 +216,7 @@ impl WatchService {
                     media_type: "text/plain; charset=utf-8",
                     provenance: json!({"kind":"WatcherEvent","eventId":event.id.as_str(),"watcherId":event.watcher_id.as_str()}),
                     scope,
-                    owner: watcher.actor.clone(),
+                    owner: session.agent_id.clone(),
                 },
             )?;
             let sequence = session.next_sequence;
@@ -403,6 +405,26 @@ impl WatchService {
                     .into()),
                 );
             };
+            // A process that already ended keeps its observed outcome: there is nothing to stop,
+            // and the next pass settles the watcher with what actually happened.
+            let ended = tx.operations().operation(&process)?.is_some_and(|op| {
+                matches!(
+                    op.state,
+                    OperationState::ObservedComplete
+                        | OperationState::Failed
+                        | OperationState::CancelledBeforeDispatch
+                )
+            });
+            if ended {
+                return decided(
+                    tx,
+                    Ok(DomainDecision::NoChange {
+                        result: OperationResult::WatchCancel {
+                            value: record_of(&watcher, None, now, None),
+                        },
+                    }),
+                );
+            }
             let stop = self.processes.request_cancel(ctx, &process.0, tx)?;
             if let DomainDecision::Refused { fault } = stop.decision {
                 return Ok(Decided {
@@ -640,8 +662,7 @@ fn settle_in(tx: &mut dyn WriteTransaction, id: &Id) -> Result<bool, StorageErro
         session_id: watcher.session_id.clone(),
         project_id: watcher.project_id.clone(),
         state: WatchEventState::Pending,
-        payload: serde_json::to_value(record_of(&watcher, None, now, None))
-            .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
+        payload: bounded_payload(&watcher, now)?,
         transcript_sequence: None,
         carried_turn_id: None,
         created_at_ms: now,
@@ -658,6 +679,27 @@ fn settle_in(tx: &mut dyn WriteTransaction, id: &Id) -> Result<bool, StorageErro
         json!({"eventId": event.id.as_str(), "outcome": outcome}),
     )?;
     Ok(true)
+}
+
+/// The event body, its encoded size within the store's bound: JSON escaping can grow a tail
+/// several times, so the tail keeps its end and loses its front until the record fits.
+fn bounded_payload(watcher: &StoredWatcher, now: i64) -> Result<Value, StorageError> {
+    let mut record = record_of(watcher, None, now, None);
+    loop {
+        let value = serde_json::to_value(&record)
+            .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+        if value.to_string().len() <= MAX_EVENT_PAYLOAD_BYTES {
+            return Ok(value);
+        }
+        let Some(tail) = record.output_tail.as_mut() else {
+            return Err(StorageError::InvalidRecord(
+                "watcher event exceeds its bound".into(),
+            ));
+        };
+        let chars = tail.0.chars().count();
+        tail.0 = tail.0.chars().skip(chars.div_ceil(2).max(1)).collect();
+        record.output_truncated = true;
+    }
 }
 
 struct Observed {
@@ -734,8 +776,9 @@ fn observe(
                 .get("durationMs")
                 .and_then(Value::as_i64)
                 .or(duration_ms);
-            let kind = if watcher.stop_requested {
-                outcome("Cancelled", exit_code, signal, None)
+            // A requested stop is the cause only when the process did not exit on its own first.
+            let kind = if watcher.stop_requested && exit_code.is_none() {
+                outcome("Cancelled", None, signal, None)
             } else if evidence.get("timedOut").and_then(Value::as_bool) == Some(true) {
                 outcome(
                     "TimedOut",
@@ -945,17 +988,28 @@ fn notice_text(event: &StoredWatchEvent) -> String {
         text.push_str(&format!("\nDetail: {}", s("/outcome/detail")));
     }
     if let Some(tail) = p.get("outputTail").and_then(Value::as_str) {
-        let omitted = p.get("outputTruncated").and_then(Value::as_bool) == Some(true);
-        text.push_str(&format!(
-            "\nOutput tail{}:\n{tail}",
-            if omitted {
-                " (earlier output omitted)"
-            } else {
-                ""
-            }
-        ));
+        let mut omitted = p.get("outputTruncated").and_then(Value::as_bool) == Some(true);
+        // The whole notice must fit what a provider context reads; keep the tail's end.
+        let heading = "\nOutput tail (earlier output omitted):\n";
+        let budget = MAX_NOTICE_BYTES.saturating_sub(text.len() + heading.len());
+        let mut start = tail.len().saturating_sub(budget);
+        while !tail.is_char_boundary(start) {
+            start += 1;
+        }
+        omitted |= start > 0;
+        text.push_str(if omitted { heading } else { "\nOutput tail:\n" });
+        text.push_str(&tail[start..]);
     }
+    text.truncate(floor_boundary(&text, MAX_NOTICE_BYTES));
     text
+}
+
+fn floor_boundary(text: &str, max: usize) -> usize {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
 }
 
 fn history(
@@ -979,4 +1033,68 @@ fn history(
         payload,
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::ActorId;
+
+    fn watcher(tail: Vec<u8>) -> StoredWatcher {
+        let id = |s: &str| Id::new(s).unwrap();
+        StoredWatcher {
+            id: id("w"),
+            revision: 2,
+            phase: WatcherPhase::Settled,
+            source_kind: "Process".into(),
+            project_id: None,
+            session_id: id("s"),
+            actor: ActorId(id("a")),
+            process_operation_id: Some(OperationId(id("op"))),
+            executable_ref: "sh".into(),
+            tail_bytes: 65_536,
+            outcome: Some(outcome("Failed", Some(1), None, None)),
+            duration_ms: Some(5),
+            output_tail: Some(tail),
+            output_truncated: false,
+            stop_requested: false,
+            created_at_ms: 0,
+            updated_at_ms: 1,
+            settled_at_ms: Some(1),
+        }
+    }
+
+    #[test]
+    fn an_escaping_heavy_tail_still_fits_the_event_bound_and_keeps_its_end() {
+        let mut tail = vec![0u8; 65_535];
+        tail.push(b'Z');
+        let payload = bounded_payload(&watcher(tail), 1).unwrap();
+        assert!(payload.to_string().len() <= MAX_EVENT_PAYLOAD_BYTES);
+        assert!(payload["outputTail"].as_str().unwrap().ends_with('Z'));
+        assert_eq!(payload["outputTruncated"], json!(true));
+    }
+
+    #[test]
+    fn a_notice_fits_what_a_provider_context_reads_and_keeps_the_tail_end() {
+        let mut tail = "x".repeat(65_000);
+        tail.push_str("THE END");
+        let event = StoredWatchEvent {
+            id: Id::new("e").unwrap(),
+            watcher_id: Id::new("w").unwrap(),
+            session_id: Id::new("s").unwrap(),
+            project_id: None,
+            state: WatchEventState::Pending,
+            payload: bounded_payload(&watcher(tail.into_bytes()), 1).unwrap(),
+            transcript_sequence: None,
+            carried_turn_id: None,
+            created_at_ms: 1,
+            delivered_at_ms: None,
+            acknowledged_at_ms: None,
+        };
+        let text = notice_text(&event);
+        assert!(text.len() <= MAX_NOTICE_BYTES);
+        assert!(text.ends_with("THE END"));
+        assert!(text.contains("(earlier output omitted)"));
+        assert!(text.contains("Failed (exit code 1)") && text.contains("Duration: 5 ms"));
+    }
 }
