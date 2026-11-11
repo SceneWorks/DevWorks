@@ -1045,6 +1045,21 @@ Created in CodeGraph project DW on 2026-11-11, all in `backlog` with the label `
 | F-020 graph traversal | DW-178 | bug | DW-F7 |
 | F-021 test durability | DW-179 | task | DW-F12 |
 
+## Tracker items for the medium and low findings
+
+Created on 2026-11-11 in four new features, all in `backlog` with the label `code-review-2026-11-11`. Each medium finding has one item; all low findings share one.
+
+| Feature | Findings | Items |
+|---|---|---|
+| DW-F15 Security hardening | F-022 to F-034 | DW-188 to DW-200, in finding order |
+| DW-F16 Defects and architecture | F-035 to F-045 | DW-201 to DW-211, in finding order |
+| DW-F17 Shared plumbing and duplication | F-046 to F-059 | DW-212 to DW-225, in finding order |
+| DW-F18 Unwired capability, documents, efficiency, tests and minor findings | F-014 | DW-226 |
+| | F-060 to F-065 | DW-227 to DW-232, in finding order |
+| | F-066 to F-087 (all low findings) | DW-233 |
+
+F-015 (outgoing MCP management) has no new item: DW-154, DW-155, DW-157 and DW-158 already track it.
+
 ---
 
 ## Themes and systemic observations
