@@ -527,6 +527,14 @@ pub fn registered_tool_visibility(
     {
         return Verdict::Deny(DenialReason::ToolNotSelected);
     }
+    // A watcher launches through process.execute: turning that tool off turns off launching
+    // through a watcher too.
+    if kind == PrincipalKind::Agent
+        && op == "watch.create"
+        && !policy.tool_selected("devworks/process.execute", true)
+    {
+        return Verdict::Deny(DenialReason::ToolNotSelected);
+    }
     let read_only_role = role.is_some_and(AgentRole::read_only);
     if read_only_role {
         if command || effect != EffectClass::ReadOnly {

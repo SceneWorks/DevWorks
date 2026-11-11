@@ -814,6 +814,18 @@ fn watchers_launch_and_stop_with_process_authority() {
             "{op}"
         );
     }
+    // Turning process.execute off for agents turns off launching through a watcher.
+    let mut no_execute = policy(AccessProfile::Full, true);
+    no_execute
+        .tool_overrides
+        .as_mut()
+        .unwrap()
+        .insert("devworks/process.execute".into(), false);
+    let (op, input) = &inputs[0];
+    assert_eq!(
+        verdict(op, input, AgentRole::Worker, &no_execute),
+        Verdict::Deny(DenialReason::ToolNotSelected)
+    );
     // Reading a watcher is not a launch or a stop.
     let (op, input) = &inputs[2];
     assert_eq!(
