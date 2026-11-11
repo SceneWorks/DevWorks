@@ -8,7 +8,7 @@
 //! to classify the selected effect (for example a force push and its target ref).
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
-use crate::operations::{OperationInput, git};
+use crate::operations::{OperationInput, git, watch};
 use crate::ports::AuthorityRequest;
 use crate::ports::storage::{
     ConfigScope, ConfigurationRead, GrantKind, PrincipalBinding, StorageError,
@@ -351,6 +351,17 @@ fn force_push_target(input: &OperationInput) -> Option<&str> {
     }
 }
 
+/// Whether the typed input is a watcher cancellation that also stops the watched process.
+fn stops_watched_process(input: &OperationInput) -> bool {
+    matches!(
+        input,
+        OperationInput::Watch(watch::Input::Cancel(watch::CancelInput {
+            stop_process: true,
+            ..
+        }))
+    )
+}
+
 /// Evaluates one request for a principal. `binding` is the principal's current host binding
 /// (required for every kind except Human and Host). Mandatory restrictions are evaluated first
 /// and hold under every profile.
@@ -663,6 +674,17 @@ pub(crate) fn evaluate_with_owned_task(
     );
     if !matches!(visible, Verdict::Allow) {
         return visible;
+    }
+    // Stopping a watched process is a process cancellation: it needs what process.cancel needs.
+    if stops_watched_process(request.input)
+        && !matches!(kind, PrincipalKind::Human | PrincipalKind::Host)
+        && (binding
+            .and_then(|b| b.tool_families.as_ref())
+            .is_some_and(|selected| !selected.iter().any(|f| f == "process"))
+            || (kind == PrincipalKind::Agent
+                && !policy.tool_selected("devworks/process.cancel", true)))
+    {
+        return Verdict::Deny(DenialReason::ToolNotSelected);
     }
     if matches!(kind, PrincipalKind::Human | PrincipalKind::Host)
         || request.binding.mode != Mode::Command

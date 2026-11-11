@@ -848,6 +848,50 @@ fn watchers_launch_and_stop_with_process_authority() {
         ),
         Verdict::Deny(DenialReason::ToolNotSelected)
     );
+    // Turning process.cancel off turns off stopping a watched process, not cancelling the watch.
+    let mut no_cancel = policy(AccessProfile::Full, true);
+    no_cancel
+        .tool_overrides
+        .as_mut()
+        .unwrap()
+        .insert("devworks/process.cancel".into(), false);
+    let (op, input) = &inputs[1];
+    assert_eq!(
+        verdict(op, input, AgentRole::Worker, &no_cancel),
+        Verdict::Deny(DenialReason::ToolNotSelected)
+    );
+    let observe_only = OperationInput::Watch(watch::Input::Cancel(
+        serde_json::from_value(json!({"watcherId":"w","expectedRevision":"1","stopProcess":false}))
+            .unwrap(),
+    ));
+    assert_eq!(
+        verdict(op, &observe_only, AgentRole::Worker, &no_cancel),
+        Verdict::Allow
+    );
+    // A watch-only binding cannot stop the watched process either, but can stop observing.
+    let descriptor = find("watch.cancel").unwrap();
+    let selected = descriptor.binding(Mode::Command).unwrap();
+    let cancel_as = |input: &OperationInput| {
+        evaluate(
+            &ctx,
+            Some(&watch_only),
+            &full,
+            &AuthorityRequest {
+                descriptor,
+                binding: selected,
+                effect: selected.effect,
+                action: None,
+                input,
+                fingerprint: &fingerprint,
+            },
+            &[],
+        )
+    };
+    assert_eq!(
+        cancel_as(input),
+        Verdict::Deny(DenialReason::ToolNotSelected)
+    );
+    assert_eq!(cancel_as(&observe_only), Verdict::Allow);
     // Reading a watcher is not a launch or a stop.
     let (op, input) = &inputs[2];
     assert_eq!(
