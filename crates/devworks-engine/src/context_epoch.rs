@@ -104,6 +104,8 @@ pub(crate) struct EpochChange {
     pub reason: ContextChangeReason,
     pub context: ProviderContext,
     pub omitted: Vec<ArtifactRef>,
+    /// A `SkillRevisionsAdopted` session event recorded atomically with the new epoch.
+    pub adoption: Option<serde_json::Value>,
 }
 
 pub(crate) struct EpochSource {
@@ -235,6 +237,7 @@ pub(crate) fn provider_change(
             reason: ContextChangeReason::ProviderChange,
             context: converted,
             omitted,
+            adoption: None,
         },
     )
 }
@@ -254,6 +257,7 @@ pub(crate) fn publish(
         reason,
         context: converted,
         omitted,
+        adoption,
     } = change;
     if ctx.session_id() != Some(session_id) || previous_epoch < 0 {
         return Err(StorageError::ScopeDenied);
@@ -402,7 +406,31 @@ pub(crate) fn publish(
         }))
         .collect();
         match SessionWriter::append_in(tx, &ctx_for_write, &record)? {
-            BatchOutcome::Accepted(_) => Ok(reference),
+            BatchOutcome::Accepted(_) => {
+                if let Some(payload) = adoption {
+                    let session = tx
+                        .sessions()
+                        .session(&session_for_write)?
+                        .ok_or(StorageError::ScopeDenied)?;
+                    let id = devworks_core::protocol::EventId(tx.new_id(IdKind::Event));
+                    tx.history()
+                        .append(devworks_core::ports::storage::NewEvent {
+                            id,
+                            actor: ctx_for_write.principal().clone(),
+                            project_id: session.project_id.clone(),
+                            root_id: session.root_id.clone(),
+                            operation_id: None,
+                            aggregate_kind:
+                                devworks_core::services::sessions::transcript::SESSION_AGGREGATE
+                                    .into(),
+                            aggregate_id: session.id.as_str().to_owned(),
+                            aggregate_revision: session.revision,
+                            kind: "SkillRevisionsAdopted".into(),
+                            payload,
+                        })?;
+                }
+                Ok(reference)
+            }
             BatchOutcome::Replayed(_) => Err(StorageError::InvalidRecord(
                 "provider context epoch batch unexpectedly replayed".into(),
             )),

@@ -1262,8 +1262,8 @@
 </tr>
 <tr>
 <td><code>skills.resources</code></td>
-<td><strong>Query</strong><br><code>instructionId</code>: <code>Id</code><br><code>revision</code>: <code>Revision</code><br><code>page</code>: <code>PageRequest</code></td>
-<td><code>Page&lt;ArtifactRef&gt;</code></td>
+<td><strong>Query</strong><br><code>instructionId</code>: <code>Id</code><br><code>revision</code>: <code>Revision</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><code>SkillResourcePageResult</code></td>
 </tr>
 <tr>
 <td><code>skills.draft</code></td>
@@ -13784,6 +13784,50 @@
 <p>Before revision 3: exact legacy <code>HelpTopic</code>. Revision 3 and later: <code>HelpReadView</code>. Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.</p>
 <h3 id="helptopicpageresult">HelpTopicPageResult</h3>
 <p>Before revision 3: exact legacy <code>Page&lt;HelpTopic&gt;</code>. Revision 3 and later: <code>HelpTopicPage</code>. Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.</p>
+<h3 id="skillresource">SkillResource</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>path</code></td>
+<td><code>RelativePath</code></td>
+</tr>
+<tr>
+<td><code>artifact</code></td>
+<td><code>ArtifactRef</code></td>
+</tr>
+<tr>
+<td><code>executable</code></td>
+<td><code>bool</code></td>
+</tr>
+</tbody></table>
+<h3 id="skillresourcepage">SkillResourcePage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>items</code></td>
+<td><code>Rows&lt;SkillResource&gt;</code></td>
+</tr>
+<tr>
+<td><code>nextCursor</code></td>
+<td><code>?Cursor</code></td>
+</tr>
+<tr>
+<td><code>hasMore</code></td>
+<td><code>bool</code></td>
+</tr>
+</tbody></table>
+<h3 id="skillresourcepageresult">SkillResourcePageResult</h3>
+<p>Before revision 3: exact legacy <code>Page&lt;ArtifactRef&gt;</code>. Revision 3 and later: <code>SkillResourcePage</code>. Each item projects to its <code>artifact</code> member, keeping item order and the continuation.</p>
 <h3 id="codeschemaorigin">CodeSchemaOrigin</h3>
 <p><code>Declared</code>, <code>Observed</code>.</p>
 <h3 id="codeoverviewtotals">CodeOverviewTotals</h3>

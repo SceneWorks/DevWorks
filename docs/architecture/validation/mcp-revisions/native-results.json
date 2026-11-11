@@ -53269,6 +53269,186 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
+      "id": "r3-input-skills.resources",
+      "normalized": {
+        "body": {
+          "instructionId": "id-a",
+          "kind": "skills.resources",
+          "page": {
+            "limit": 20
+          },
+          "revision": "1"
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 3
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-result-skills.resources",
+      "normalized": {
+        "kind": "skills.resources",
+        "value": {
+          "hasMore": true,
+          "items": [
+            {
+              "artifact": {
+                "artifactId": "artifact-a",
+                "byteLength": "8",
+                "mediaType": "text/plain",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "versionId": "version-a"
+              },
+              "executable": false,
+              "path": "references/setup.md"
+            },
+            {
+              "artifact": {
+                "artifactId": "artifact-b",
+                "byteLength": "8",
+                "mediaType": "text/plain",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "versionId": "version-a"
+              },
+              "executable": true,
+              "path": "scripts/run.sh"
+            }
+          ],
+          "nextCursor": "cursor-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-result-skills.resources-empty",
+      "normalized": {
+        "kind": "skills.resources",
+        "value": {
+          "hasMore": false,
+          "items": []
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r1-result-skills.resources-refs",
+      "normalized": {
+        "kind": "skills.resources",
+        "value": {
+          "hasMore": false,
+          "items": [
+            {
+              "artifactId": "artifact-a",
+              "byteLength": "8",
+              "mediaType": "text/plain",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "versionId": "version-a"
+            }
+          ]
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": "current result cannot be represented at this revision",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-result-skills.resources-paths",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "current result cannot be represented at this revision",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-result-skills.resources-paths",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": "legacy result requires its recorded revision",
+      "expectedSchemaValid": false,
+      "id": "reject-r3-result-skills.resources-plain-refs",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": "data did not match any variant of untagged enum SkillResourcePageResult",
+      "expectedSchemaValid": false,
+      "id": "reject-r3-result-skills.resources-path-0",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": "data did not match any variant of untagged enum SkillResourcePageResult",
+      "expectedSchemaValid": false,
+      "id": "reject-r3-result-skills.resources-path-1",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": "data did not match any variant of untagged enum SkillResourcePageResult",
+      "expectedSchemaValid": false,
+      "id": "reject-r3-result-skills.resources-path-2",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": "data did not match any variant of untagged enum SkillResourcePageResult",
+      "expectedSchemaValid": false,
+      "id": "reject-r3-result-skills.resources-path-3",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": "data did not match any variant of untagged enum SkillResourcePageResult",
+      "expectedSchemaValid": false,
+      "id": "reject-r3-result-skills.resources-path-4",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": "data did not match any variant of untagged enum SkillResourcePageResult",
+      "expectedSchemaValid": false,
+      "id": "reject-r3-result-skills.resources-no-executable",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r3",
+      "error": null,
+      "expectedSchemaValid": true,
       "id": "dw13-r3-admission-router.connections-Query",
       "normalized": {
         "body": {

@@ -25,6 +25,7 @@ use std::path::{Component, Path, PathBuf};
 pub mod artifacts;
 pub mod client_staging;
 pub mod purge;
+pub mod skills;
 pub mod sources;
 #[cfg(unix)]
 mod unix;

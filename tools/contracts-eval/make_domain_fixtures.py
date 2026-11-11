@@ -1149,6 +1149,19 @@ case('dw52-legacy-read-not-current','operation-result.r3',result('help.read','He
 # All graph revision-3 bindings, selected results and strict source/identity boundaries.
 from graph_fixtures import append_graph_cases
 append_graph_cases(case,sample,BASE)
+# Schema revision 3 of skills.resources (revision-2 documents are frozen): each resource carries
+# its skill-relative path and executable flag beside its artifact; revision 1 keeps plain refs.
+case('r3-input-skills.resources','domain-request.r3',domain('skills.resources',3))
+skill_resources={'items':[{'path':'references/setup.md','artifact':copy.deepcopy(ART),'executable':False},{'path':'scripts/run.sh','artifact':{**ART,'artifactId':'artifact-b'},'executable':True}],'hasMore':True,'nextCursor':'cursor-a'}
+case('r3-result-skills.resources','operation-result.r3',{'kind':'skills.resources','value':skill_resources})
+case('r3-result-skills.resources-empty','operation-result.r3',{'kind':'skills.resources','value':{'items':[],'hasMore':False}})
+case('r1-result-skills.resources-refs','operation-result',{'kind':'skills.resources','value':{'items':[copy.deepcopy(ART)],'hasMore':False}})
+case('reject-r1-result-skills.resources-paths','operation-result',{'kind':'skills.resources','value':skill_resources},False,False)
+case('reject-r2-result-skills.resources-paths','operation-result.r2',{'kind':'skills.resources','value':skill_resources},False,False)
+case('reject-r3-result-skills.resources-plain-refs','operation-result.r3',{'kind':'skills.resources','value':{'items':[copy.deepcopy(ART)],'hasMore':False}},False,False)
+for i,bad in enumerate(['/etc/passwd','../escape.md','C:\\x.md','a//b.md','']):
+ case(f'reject-r3-result-skills.resources-path-{i}','operation-result.r3',{'kind':'skills.resources','value':{'items':[{**skill_resources['items'][0],'path':bad}],'hasMore':False}},False,False)
+case('reject-r3-result-skills.resources-no-executable','operation-result.r3',{'kind':'skills.resources','value':{'items':[{k:v for k,v in skill_resources['items'][0].items() if k!='executable'}],'hasMore':False}},False,False)
 # Every newly registered domain revision has an admitted input and matching result fixture.
 for name,revisions in REVISIONS.items():
  if 3 not in revisions or name not in OPS:continue

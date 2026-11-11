@@ -1904,3 +1904,108 @@ fn saved_configuration_is_shown_to_humans_at_revision_eight_and_a_new_token_keep
     assert!(moved.catalog_revision.get() > published.catalog_revision.get());
     assert!(moved.selected_tool_ids.0.is_empty());
 }
+
+#[test]
+fn two_servers_with_the_same_tool_name_get_distinct_agent_aliases() {
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")
+    })
+    .unwrap();
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    let cases = UseCases::new().with_mcp(service.clone());
+    let mut servers = Vec::new();
+    for name in ["First server", "Second server"] {
+        let DomainDecision::Applied {
+            result: OperationResult::McpConfigure { value: server },
+        } = command(
+            &h,
+            &store,
+            &cases,
+            &format!("collision-{}", name.replace(' ', "-")),
+            "mcp.configure",
+            json!({"scope":{"kind":"Workspace"},"name":name,
+                "transport":{"kind":"Http","endpoint":format!(
+                    "https://{}.example.test/mcp", name.replace(' ', "-").to_lowercase())}}),
+        )
+        else {
+            panic!("server configuration failed");
+        };
+        let (service_for_write, server_id) = (service.clone(), server.id.clone());
+        run_write(&*store, WriteOptions::default(), move |tx| {
+            service_for_write.publish_remote_catalog(
+                tx,
+                &ConfigScope::Workspace,
+                &server_id,
+                &Revision::new(1).unwrap(),
+                RemoteCatalog {
+                    tools: vec![RemoteTool {
+                        name: "lookup".into(),
+                        description: "Read a record".into(),
+                        input_schema: json!({"type":"object"}),
+                        output_schema: None,
+                        read_only_hint: false,
+                    }],
+                    resources: vec![],
+                    prompts: vec![],
+                },
+            )
+        })
+        .unwrap();
+        let tool = match capabilities(&h, &store, &cases, &server.id, 2) {
+            DomainQueryReply::Result {
+                result: OperationResult::McpCapabilities { value },
+                ..
+            } => {
+                value
+                    .items
+                    .0
+                    .into_iter()
+                    .find(|cap| cap.kind.0 == "tool")
+                    .unwrap()
+                    .id
+            }
+            other => panic!("unexpected catalog: {other:?}"),
+        };
+        let DomainDecision::Applied { .. } = command(
+            &h,
+            &store,
+            &cases,
+            &format!("collision-select-{}", name.replace(' ', "-")),
+            "mcp.select_tools",
+            json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"2",
+                "expectedCatalogRevision":"2","toolIds":[tool]}),
+        ) else {
+            panic!("selection failed");
+        };
+        servers.push(server.id);
+    }
+    let materials = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+        service.selected_tool_materials(&context(&store), snapshot)
+    })
+    .unwrap();
+    // Both tools are offered under their own server identity and distinct provider aliases,
+    // while each keeps the server's own wire name for the call.
+    assert_eq!(materials.len(), 2);
+    assert!(
+        materials
+            .iter()
+            .all(|material| material.wire_name == "lookup")
+    );
+    assert_ne!(materials[0].alias.wire_name, materials[1].alias.wire_name);
+    assert_ne!(
+        materials[0].alias.capability_id,
+        materials[1].alias.capability_id
+    );
+    let mut owners: Vec<_> = materials.iter().map(|m| m.server_id.clone()).collect();
+    owners.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    servers.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    assert_eq!(owners, servers);
+    assert!(
+        materials
+            .iter()
+            .all(|material| material.alias.wire_name.len() <= 64)
+    );
+}

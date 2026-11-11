@@ -189,6 +189,7 @@ fn start_producer(engine: &Engine, session: Id) -> std::thread::JoinHandle<()> {
         version: 1,
         instructions: vec![],
         instruction_stamps: vec![],
+        skill_stamp: None,
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![ContentBlock::Text {

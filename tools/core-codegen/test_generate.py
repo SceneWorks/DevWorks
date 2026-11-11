@@ -87,7 +87,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'schemas.configure', 'database.configure_sensitive_columns',
             'projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
             'projects.purge_status', 'history.command_receipt', 'agents.post', 'agents.receive', 'agents.ack',
-            'agents.history', 'agents.events', *MCP})
+            'agents.history', 'agents.events', 'skills.resources', *MCP})
         for name in MCP:
             self.assertEqual(carried[name], {8})
         for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):
@@ -169,6 +169,18 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(generate.DOMAIN_OPS['features.edit_plan']['since']['budget'], 3)
         self.assertEqual(generate.TYPES['PendingFeaturePlan']['since']['budget'], 3)
         self.assertEqual(generate.TYPES['PendingFeaturePlan']['since']['plan_digest'], 3)
+
+    def test_skill_resources_project_each_item_to_its_artifact_below_revision_three(self):
+        result = generate.DOMAIN_OPS['skills.resources']['result']
+        self.assertEqual(result, 'SkillResourcePageResult')
+        self.assertEqual(generate.REVISIONS['skills.resources'], [1, 3])
+        rust = generate.gen_versioned(result, generate.TYPES[result], generate.TYPES)
+        self.assertIn('Legacy(Page<ArtifactRef>)', rust)
+        self.assertIn('Current(SkillResourcePage)', rust)
+        self.assertIn('.map(|item| item.artifact.clone())', rust)
+        # An empty page is the same JSON in both shapes, so it is admitted at revision 3.
+        self.assertIn('Self::Legacy(value) if !value.items.0.is_empty() && revision >= 3', rust)
+        self.assertEqual(set(generate.TYPES['SkillResource']['fields']), {'path', 'artifact', 'executable'})
 
     def test_an_operation_can_begin_at_revision_three_without_a_legacy_binding(self):
         operation = next(o for _, o in generate.operations() if o['operation'] == 'next_work.inspect_queue')

@@ -35,6 +35,9 @@ fn plain(p: PathBuf) -> PathBuf {
     }
 }
 
+/// Unlisted entries (non-UTF-8 names, unreadable types) a listing reads past before refusing.
+const MAX_UNLISTED: usize = 65_536;
+
 impl SourceTree for NativeSourceTree {
     fn canonical_dir(&self, path: &Path) -> Result<PathBuf, SourceFault> {
         let c = std::fs::canonicalize(path).map_err(|e| match e.kind() {
@@ -53,7 +56,20 @@ impl SourceTree for NativeSourceTree {
             _ => SourceFault::Io(e.kind().to_string()),
         })?;
         let mut out = Vec::new();
-        for entry in rd.take(limit.saturating_mul(2).max(1)) {
+        // Entries that cannot be listed (non-UTF-8 names, unreadable types) do not count
+        // toward `limit`, so reading stops at `limit` listed entries or the end of the
+        // directory: a short result is a complete one. A directory with so many unlisted
+        // entries that this bound is reached first is refused rather than returned short.
+        let raw_bound = limit.saturating_mul(2).saturating_add(MAX_UNLISTED);
+        for (raw, entry) in rd.enumerate() {
+            if out.len() >= limit {
+                break;
+            }
+            if raw >= raw_bound {
+                return Err(SourceFault::Refused(format!(
+                    "more than {MAX_UNLISTED} entries that cannot be listed"
+                )));
+            }
             let Ok(entry) = entry else { continue };
             // `file_type` never follows a link (symlinks and Windows junctions report as links).
             let Ok(t) = entry.file_type() else { continue };
@@ -173,5 +189,56 @@ impl SourceTree for NativeSourceTree {
     }
     fn home(&self) -> Option<PathBuf> {
         crate::fs::home_dir()
+    }
+    fn executable(&self, root: &Path, relative: &str) -> Result<bool, SourceFault> {
+        if relative
+            .split('/')
+            .any(|p| p.is_empty() || p == "." || p == "..")
+        {
+            return Err(SourceFault::Refused("invalid relative path".into()));
+        }
+        let meta = std::fs::symlink_metadata(root.join(relative)).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => SourceFault::Missing,
+            _ => SourceFault::Io(e.kind().to_string()),
+        })?;
+        if !meta.is_file() {
+            return Ok(false);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            Ok(meta.permissions().mode() & 0o111 != 0)
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(false)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Unlisted entries never use up a listing: a short result is the whole directory.
+    #[test]
+    fn listings_read_past_unlisted_entries() {
+        let dir = std::env::temp_dir().join(format!("devworks-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        #[cfg(target_os = "linux")]
+        for i in 0..200u16 {
+            use std::os::unix::ffi::OsStrExt;
+            let mut name = b"odd-\xff".to_vec();
+            name.extend_from_slice(i.to_string().as_bytes());
+            std::fs::write(dir.join(std::ffi::OsStr::from_bytes(&name)), b"").unwrap();
+        }
+        for i in 0..10 {
+            std::fs::write(dir.join(format!("file-{i}.md")), b"x").unwrap();
+        }
+        let listed = NativeSourceTree::new().list_dir(&dir, 11).unwrap();
+        assert_eq!(listed.len(), 10, "{listed:?}");
+        assert_eq!(NativeSourceTree::new().list_dir(&dir, 4).unwrap().len(), 4);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

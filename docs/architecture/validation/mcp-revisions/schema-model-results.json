@@ -1,12 +1,12 @@
 {
-  "date": "2026-11-10",
+  "date": "2026-11-11",
   "status": "Candidate schema/typed/binding checks passed; no production service, authority, source behavioral parity or platform acceptance",
   "host": "macOS-27.0.1-arm64-arm-64bit",
   "schemaFiles": 95,
-  "domainTypeDefinitions": 496,
+  "domainTypeDefinitions": 499,
   "catalogOperations": 369,
   "inputCandidates": 369,
-  "revisionBindings": 613,
+  "revisionBindings": 614,
   "revisionedOperations": [
     "addons.catalog",
     "addons.configure",
@@ -185,6 +185,7 @@
     "sessions.get",
     "sessions.list",
     "sessions.start",
+    "skills.resources",
     "tasks.acceptance_evidence",
     "tasks.assign",
     "tasks.create",
@@ -217,10 +218,10 @@
     "github.account",
     "browser.sessions"
   ],
-  "allMessageFixtures": 2285,
-  "newMessageFixtures": 1956,
-  "newPositiveFixtures": 1431,
-  "newNegativeFixtures": 525,
+  "allMessageFixtures": 2298,
+  "newMessageFixtures": 1969,
+  "newPositiveFixtures": 1435,
+  "newNegativeFixtures": 534,
   "coreAndPriorMessagesRerun": 329,
   "historicalHelperFramesReplayed": 55,
   "newHelperExecutionClaimed": false,
@@ -6426,7 +6427,26 @@
         "input-skills.resources-Query"
       ],
       "resultFixtureIds": [
-        "result-skills.resources"
+        "result-skills.resources",
+        "r1-result-skills.resources-refs"
+      ],
+      "modes": [
+        "Query"
+      ],
+      "wrongOperationPayloadChecked": true,
+      "wrongResultTagRejected": true
+    },
+    {
+      "operation": "skills.resources",
+      "schemaRevision": 3,
+      "inputSchema": "domain-request.r3.schema.json",
+      "resultSchema": "operation-result.r3.schema.json",
+      "inputFixtureIds": [
+        "r3-input-skills.resources"
+      ],
+      "resultFixtureIds": [
+        "r3-result-skills.resources",
+        "r3-result-skills.resources-empty"
       ],
       "modes": [
         "Query"
@@ -25420,6 +25440,97 @@
       "passed": true
     },
     {
+      "id": "r3-input-skills.resources",
+      "entry": "domain-request.r3",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r3-result-skills.resources",
+      "entry": "operation-result.r3",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r3-result-skills.resources-empty",
+      "entry": "operation-result.r3",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "r1-result-skills.resources-refs",
+      "entry": "operation-result",
+      "schemaValid": true,
+      "typedValid": true,
+      "passed": true
+    },
+    {
+      "id": "reject-r1-result-skills.resources-paths",
+      "entry": "operation-result",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r2-result-skills.resources-paths",
+      "entry": "operation-result.r2",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r3-result-skills.resources-plain-refs",
+      "entry": "operation-result.r3",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r3-result-skills.resources-path-0",
+      "entry": "operation-result.r3",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r3-result-skills.resources-path-1",
+      "entry": "operation-result.r3",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r3-result-skills.resources-path-2",
+      "entry": "operation-result.r3",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r3-result-skills.resources-path-3",
+      "entry": "operation-result.r3",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r3-result-skills.resources-path-4",
+      "entry": "operation-result.r3",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
+      "id": "reject-r3-result-skills.resources-no-executable",
+      "entry": "operation-result.r3",
+      "schemaValid": false,
+      "typedValid": false,
+      "passed": true
+    },
+    {
       "id": "dw13-r3-admission-router.connections-Query",
       "entry": "domain-request.r3",
       "schemaValid": true,
@@ -26941,22 +27052,22 @@
     "docs/architecture/contracts/provider-package-fixtures.json": "2646790fe630e1a84514bb48e49d787fcd056e093bcd8a46f92a943dda821b97",
     "docs/architecture/validation/provider-package-contracts/actual-frame-fixtures.json": "a8e38cbf3a4ccf3b957a32b2733b3db1e98ae9ee12b97d339447d51f73ab729e",
     "docs/architecture/contracts/data-delivery-fixtures.json": "54fc2fac8841b1591c0f2653f7548dbf5a79a16b4e4958b194be739d277083b6",
-    "docs/architecture/contracts/domain-fixtures.json": "288dbe02e37c9f5dd735a205fc5a21127cfcdb06fc3d012c77edd07c64a6c8e3",
-    "docs/architecture/contracts/family-coverage.json": "b5298f52ff6dc26eada783de1305e4b2840a398b22170912af47edb48ea3aba6",
-    "docs/architecture/contracts/manifest.json": "ab682b127395f303c32c83b4ebff8c15ac9c00d52e175f9d2981d390dee05f83",
+    "docs/architecture/contracts/domain-fixtures.json": "a5fd3b8fc27814628a49314fa58c2169396a74aea6b2ba502649ab2063040749",
+    "docs/architecture/contracts/family-coverage.json": "8a01620b6beadb9477362a5c60633ed4b033c7a4b1a59c100b3517ce57f6e953",
+    "docs/architecture/contracts/manifest.json": "9c99951f7fec5570d754bbe095e70aad2f9f5ba15121e427c7bfc53421633fd9",
     "docs/architecture/devworks-capability-catalog.json": "8714599ea1a066c303665e012145cd7e51e92dc259ef31975bd9a73924dcf172",
     "tools/contracts-eval/Cargo.lock": "cfb646cd5e037f4a97b1686830e7a582228b29c4ff3ba0ebcbc559b69786b34b",
     "tools/contracts-eval/domain_spec.py": "c04b2dd897dd1732f3628a84865b5010869b2112da46b395a987c01fdcd3f655",
-    "tools/contracts-eval/domain-spec.json": "69563b8f3319f93ad3abf66d1ebae7d2bd689d41a41b5fea192c53cbccb4ae80",
+    "tools/contracts-eval/domain-spec.json": "d64c2fdd33f89ec292d70870c33665912fb1b705c33e15c622ef09670c8fc6bf",
     "tools/contracts-eval/build_domain_contracts.py": "b0143966df3a9e820f4fa3f15fe36a6fa55df56a63b722013dee41bcd6342ecd",
-    "tools/contracts-eval/versioned_result.py": "7680a4009eabce213df21aefb31a1ea6109805374654b8eedfd427c336d32bd1",
+    "tools/contracts-eval/versioned_result.py": "882c959a7001d7321716a50067bfe01a6a6351893729b59be4afcc5350a1b1f3",
     "tools/contracts-eval/variant_revision.py": "ad4e53098d7dd8a1ed22dabf1b263c72fce4924d3a19e732ccfe81a0c6443982",
     "tools/contracts-eval/build_register.py": "b36d66db081ceb218a141ad9304ef4884fdc053d0664089cf6d27204db1173fc",
-    "tools/contracts-eval/build_domain_reference.py": "6c66a3e9b5321108644fb60c973a526519799cc0ade4461d22b75a45069c22f4",
-    "tools/contracts-eval/make_domain_fixtures.py": "c67ade2375e7ea0c1ab08922803f561b10eab447aff621d57afd8d21d2b856ce",
+    "tools/contracts-eval/build_domain_reference.py": "fcfa7e96db3490c590f2532166bb3b72129472b7746c87288a3b23b40f7e078a",
+    "tools/contracts-eval/make_domain_fixtures.py": "7353a203a942611efd4f7e499a81b49e8404e7c2b84691190d234b484a592bfe",
     "tools/contracts-eval/verify_domain_contracts.py": "718d0b2dd67a50eace433df60780998dc772384bfc56773d4f81a7ab31de19e4",
     "tools/contracts-eval/src/data_delivery.rs": "40b9a7ddf849473867ff5b6477c8542ee6a4b25ef2c636673744217dab3e232d",
-    "tools/contracts-eval/src/domain_generated.rs": "1b2d35e6c06f72f82f0db2619b19b2faaff4a9a7d9575e0d15680e3f8600affb",
+    "tools/contracts-eval/src/domain_generated.rs": "2a3e191e7446b66f0deb8fa6953af32715de5205aaed253a5024fb272df62828",
     "tools/contracts-eval/src/domain_rules.rs": "590e76dab9b3befeaa18100a708eee3de66e2f25ff379a1c6a7b762da816c527",
     "tools/contracts-eval/src/domain_support.rs": "23a0abb716a6d3af7e73122bc22b5b12e1b7ddd1265de6aac7b5c3409b26660a",
     "tools/contracts-eval/src/lib.rs": "8529c540f7a425823e92aa265d0d1bfac6920e036b83b21b89fe74cdb620d697",
@@ -26984,20 +27095,20 @@
     "docs/architecture/contracts/delivery-barrier.schema.json": "25aaa75a46cef7a0e3d055b8dff1a76fc25325f0a2efe5202abd80e3c28a72c2",
     "docs/architecture/contracts/delivery-snapshot.schema.json": "a5b59fd9d7dbed631c1445dbbda361b53a7c799f98717b9f9d131d6fee42806b",
     "docs/architecture/contracts/domain-command-reply.r2.schema.json": "1a44c4639bca2bd5d77b844a3e251e13496bf493d488dcc53b2494a48feefd0e",
-    "docs/architecture/contracts/domain-command-reply.r3.schema.json": "49968f75c56c39b8e4ec82a9e845aacfae0bbf47f4ced9da0725d489f50b3d6e",
-    "docs/architecture/contracts/domain-command-reply.r4.schema.json": "d460f7c7607a80df562c3dd00eb52054d2532431ee7e65dc277e5688551a5376",
-    "docs/architecture/contracts/domain-command-reply.r5.schema.json": "090aad837a9ef84f9f613d7b419b75699ac11b957e6d93cb380d030ba6186e8b",
-    "docs/architecture/contracts/domain-command-reply.r6.schema.json": "dfcfde28eb5b6cbfd368202c2738bcec94dede45db3905b34b69645fcac68767",
-    "docs/architecture/contracts/domain-command-reply.r7.schema.json": "236ce36eba88bf8bc92c9276aa203b362bcdc68c412989be084e62f973fb0334",
-    "docs/architecture/contracts/domain-command-reply.r8.schema.json": "194912174989aac5b53e0fc5fc5fa58f8a58018af79af7c4a801e099848e27e7",
+    "docs/architecture/contracts/domain-command-reply.r3.schema.json": "f24aec7ef1c3f25e04dc3a1692f6ddf5ea157fb082b457bd3b80caba589238e3",
+    "docs/architecture/contracts/domain-command-reply.r4.schema.json": "8c3a6a98a034f5ce3bae69f0320a8fde97c38161d4c5d417638ec51d18320bae",
+    "docs/architecture/contracts/domain-command-reply.r5.schema.json": "45253369ad3ffeb902dbed97dda04ba4f92d2d1f6601baa203cef794734a1966",
+    "docs/architecture/contracts/domain-command-reply.r6.schema.json": "e7b215b8701973111d8c96995323d4a83fcc4b42d6c6506fc3c70de706f41602",
+    "docs/architecture/contracts/domain-command-reply.r7.schema.json": "6c24321ea16587679f47b4b9dc0a070eac9dd5e9d80a1ea5c78cdfccba605cc8",
+    "docs/architecture/contracts/domain-command-reply.r8.schema.json": "a77f601adf401db9d20254d78274a462dc0416ad2691663e0b19633495ede11b",
     "docs/architecture/contracts/domain-command-reply.schema.json": "95ad06f87089daa0e8d5d0279c328ae7aa6f799e1d760b159d4f38f3d99d63db",
     "docs/architecture/contracts/domain-query-reply.r2.schema.json": "904dd6b04e75114f1f5c145b212b915bd37c35f20cce2a9c9a7ecc721b5ee2c3",
-    "docs/architecture/contracts/domain-query-reply.r3.schema.json": "a228b209996ae278d63b0615bfbd5ef1da1bc60322b612e58a8b720630031f91",
-    "docs/architecture/contracts/domain-query-reply.r4.schema.json": "64db3cc7a5ea5da4fbd19b2180dcf70ca4e9bd809266ed2e637ea4ed02c3c693",
-    "docs/architecture/contracts/domain-query-reply.r5.schema.json": "1fb04da3916f2241f58d17da9484e2baf0944d295916031150716f3e0d86ebea",
-    "docs/architecture/contracts/domain-query-reply.r6.schema.json": "49951e1a84defbe3b39b736a7190e26beacfb287d24d700de86d3952fb146143",
-    "docs/architecture/contracts/domain-query-reply.r7.schema.json": "2f0973948d33dc525a741d4bacfb32f4b3ffdcdacafc01c572f53830c841e20f",
-    "docs/architecture/contracts/domain-query-reply.r8.schema.json": "8bdc525b2c4dddab8ba4a010f25bc27c9ef25981b94eca3a913c485d4a284397",
+    "docs/architecture/contracts/domain-query-reply.r3.schema.json": "7fc63ee47e504b53414c5b26078a31fc8a34326e7cfc4e762b9ecfb508bac2a0",
+    "docs/architecture/contracts/domain-query-reply.r4.schema.json": "463408c82d4005edd49355dffe0f500e4f3eb1b394639d7f4281ac5530fc8b34",
+    "docs/architecture/contracts/domain-query-reply.r5.schema.json": "b2460981f62d7cd574f81cc3143b552cc024413bd513fa37258ad925e69277ca",
+    "docs/architecture/contracts/domain-query-reply.r6.schema.json": "49514a14290a6ba762b3eb78838530c3cf7dc73dfd9cfc949f60d2cccfe320d1",
+    "docs/architecture/contracts/domain-query-reply.r7.schema.json": "7a55f2ff8a9ef6f207c953101ab375480066890e6bba5c55e2d98e060187e698",
+    "docs/architecture/contracts/domain-query-reply.r8.schema.json": "5080bc58728ccea7ab94a80da9e6372387335fcbe4a130e8b4d84c101b95f83c",
     "docs/architecture/contracts/domain-query-reply.schema.json": "85293d83c93f630f920d29e906391cc6b25a416d6971d20cb08646a4dd5946b6",
     "docs/architecture/contracts/domain-request.r2.schema.json": "3cad78ba53390ac59ccc5ff554ceba98f3a0e16ef0fdb0e4e9c8b28ab38cba97",
     "docs/architecture/contracts/domain-request.r3.schema.json": "f6193beb1f7f865231a56030f84be0cb62640e090ae083a5794e8249cd92fcf9",
@@ -27020,20 +27131,20 @@
     "docs/architecture/contracts/inference-request.schema.json": "303b3a3d4bd49a39c44148658c2bc6320a4e77453960b75f07cfeb2051da8211",
     "docs/architecture/contracts/inference-spec.schema.json": "e4734b6a32933313adcdf74f07ada57c2a20f7d911eb676c7c63d44f1225d516",
     "docs/architecture/contracts/operation-completion.r2.schema.json": "9411fec6546983062a11da08b38a9932d86bcadb5eddf26a1d4c902c8818150a",
-    "docs/architecture/contracts/operation-completion.r3.schema.json": "08bbf7535035d3d1edb6159519452885b3ce4a2fff9b7c8f9c63febdc0d89c1d",
-    "docs/architecture/contracts/operation-completion.r4.schema.json": "f544ce7dbdb7df07d2e4b882eeb9f92824a59a0f4c2a24d7ef6022afb6f14649",
-    "docs/architecture/contracts/operation-completion.r5.schema.json": "17d46cc4fa1dd55d6042f11a4beb23b5d07a3b4faf86c948d27e04fd6a08b8e8",
-    "docs/architecture/contracts/operation-completion.r6.schema.json": "92c90f78ec636f3435084fb9dc1531167326533b78de0086b92b71ae4549788c",
-    "docs/architecture/contracts/operation-completion.r7.schema.json": "5b1eadf41bc978df5544a61de8e1981fda4a1dc8e79d8b6e93930b65b9032e99",
-    "docs/architecture/contracts/operation-completion.r8.schema.json": "dc8f4b51caaedaed46f325b6a5cc0f40dce93a59c2b5b5b3f138224874e017e3",
+    "docs/architecture/contracts/operation-completion.r3.schema.json": "93a3064d2a394d02938dc65de1b9022eb4bccc236ccf327cee49e0dce5cd4c26",
+    "docs/architecture/contracts/operation-completion.r4.schema.json": "2a6a9c08f0ce5ba998604437ee9c56299c8ace2737ca8d1f17d9152aafed68f5",
+    "docs/architecture/contracts/operation-completion.r5.schema.json": "5a9d93de156293bbffa87da3f600c52c0e4253d67a9b58574a1c8d64a5cb89a7",
+    "docs/architecture/contracts/operation-completion.r6.schema.json": "621f86c6c9b5dbb8c55255bb7b5ae4cf31fba6e87bfb8062d060e5ac6aa6f191",
+    "docs/architecture/contracts/operation-completion.r7.schema.json": "3e20ff115557099412ac64ba728405b6e3120dfd6b286fe7cfd58cacfe5441b9",
+    "docs/architecture/contracts/operation-completion.r8.schema.json": "92215fa4929bddf924b269a2ab037daab2e69dbd34fa94d2ffa661f8fb3fb7af",
     "docs/architecture/contracts/operation-completion.schema.json": "23701def793c30864cec4c056dd9fea5c234e076fdd7a7779ab22c9f2d0ada46",
     "docs/architecture/contracts/operation-result.r2.schema.json": "e944ac1fd9b104acdd3b546e7b234a2e1153a7d12f9a77bcde8d887f88fcfd20",
-    "docs/architecture/contracts/operation-result.r3.schema.json": "45a94f56f0b2b6bfd8874a891e0626a197677965883f3fa7de0f1e8dcf339374",
-    "docs/architecture/contracts/operation-result.r4.schema.json": "e3ba422f008d9031c3c965cccc804f70b233f9bbc1ae9ebd3357936f1f7b7ed7",
-    "docs/architecture/contracts/operation-result.r5.schema.json": "6c45b481bc3bca4ad77aa1d1cc6a42ef4edba615fcf5ae3274634b44f90b21e8",
-    "docs/architecture/contracts/operation-result.r6.schema.json": "4c8a4629ae05625e8a57c690bce4e6bf388c59c0dba4464181f70d13665ffe13",
-    "docs/architecture/contracts/operation-result.r7.schema.json": "264b17ca59303cfd0961018cf8861825047555fdb99b3e9cbe9d36a31a0ac6f5",
-    "docs/architecture/contracts/operation-result.r8.schema.json": "77735be0e286ec083a5552edcaca07e2e6b93f7902c38d905b57e2fe171b1756",
+    "docs/architecture/contracts/operation-result.r3.schema.json": "d58380c48884c6a96ce758c2fa64159d92dad4bb2e1ecf830103fb6076a45d7c",
+    "docs/architecture/contracts/operation-result.r4.schema.json": "bda50c305bfa3bfe9ed13207d5eef74120ac2a367f5b98a05a0088284af5e865",
+    "docs/architecture/contracts/operation-result.r5.schema.json": "431cf32c670b4a6a81967643123d08cc29abdd7e979c9bb95ececb368cfd3327",
+    "docs/architecture/contracts/operation-result.r6.schema.json": "54144f0c78fcee6d886052d06dfdb98e192caf8ac3a47c03b3a58b9ff16578d8",
+    "docs/architecture/contracts/operation-result.r7.schema.json": "668f59a0e567810ddd81277fd44d13518d0ea31b7b9c32509129703e3815e271",
+    "docs/architecture/contracts/operation-result.r8.schema.json": "d47868e4f4a864a7536cbbc64163b4dfcd007f6a64b6e1a1d87bd1f2569ad6a8",
     "docs/architecture/contracts/operation-result.schema.json": "37ad3a657bdb8b796531305a34ab8a6c9dfb19d149202cb457ff5994a1db3d0b",
     "docs/architecture/contracts/package-host-request.schema.json": "166f62f1500f9c014b66b002b79d800e0e9616ef12a8ddf96d5ac5a0be65f0b3",
     "docs/architecture/contracts/package-manifest.schema.json": "7f5989387bc31c599cb97ffe0b43dc52227aa2e36c075c54be55e69d6edd8b21",

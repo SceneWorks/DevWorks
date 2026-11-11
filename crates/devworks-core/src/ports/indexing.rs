@@ -77,6 +77,11 @@ pub trait SourceTree: Send + Sync {
     fn case_insensitive(&self, root: &Path) -> bool;
     /// The user's home directory (`~` in a configured base directory).
     fn home(&self) -> Option<PathBuf>;
+    /// Whether the regular file `relative` under `root` carries an execute permission (links
+    /// are not followed). A port that cannot tell answers `false`.
+    fn executable(&self, _root: &Path, _relative: &str) -> Result<bool, SourceFault> {
+        Ok(false)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

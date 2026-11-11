@@ -438,7 +438,7 @@ pub enum OperationResult {
     #[serde(rename = "skills.read")]
     SkillsRead { value: InstructionRecord },
     #[serde(rename = "skills.resources")]
-    SkillsResources { value: Page<ArtifactRef> },
+    SkillsResources { value: SkillResourcePageResult },
     #[serde(rename = "skills.draft")]
     SkillsDraft { value: InstructionRecord },
     #[serde(rename = "skills.propose")]
@@ -1634,6 +1634,7 @@ impl Revisioned for OperationResult {
             Self::ConventionsResources { value } => value.retain_revision(revision),
             Self::ConventionsDeleteResource { value } => value.retain_revision(revision),
             Self::ConventionsSearch { value } => value.retain_revision(revision),
+            Self::SkillsResources { value } => value.retain_revision(revision),
             Self::ApprovalsList { value } => value.retain_revision(revision),
             Self::ApprovalsInspect { value } => value.retain_revision(revision),
             Self::ApprovalsPropose { value } => value.retain_revision(revision),
@@ -1776,6 +1777,7 @@ impl Revisioned for OperationResult {
             Self::ConventionsResources { value } => value.check_revision(revision),
             Self::ConventionsDeleteResource { value } => value.check_revision(revision),
             Self::ConventionsSearch { value } => value.check_revision(revision),
+            Self::SkillsResources { value } => value.check_revision(revision),
             Self::RouterUsage { value } => value.check_revision(revision),
             Self::RouterPriceStatus { value } => value.check_revision(revision),
             Self::RouterPriceOverride { value } => value.check_revision(revision),

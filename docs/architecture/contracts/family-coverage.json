@@ -1,6 +1,6 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
-  "date": "2026-11-10",
+  "date": "2026-11-11",
   "catalogSha256": "8714599ea1a066c303665e012145cd7e51e92dc259ef31975bd9a73924dcf172",
   "familyCount": 49,
   "operationCount": 369,
@@ -10754,7 +10754,7 @@
             "pointer": "/kind",
             "equals": "skills.resources"
           },
-          "resultValueType": "Page<ArtifactRef>",
+          "resultValueType": "SkillResourcePageResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -10766,11 +10766,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Revision 3 returns each resource of the skill revision with its skill-relative path and executable flag beside its artifact; revision 1 returns the same artifacts, in the same order, without them.",
           "familyRules": "Shared files discovered in place, local overrides staged for exact approval and safe adoption. Package assets resolve from owning root.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

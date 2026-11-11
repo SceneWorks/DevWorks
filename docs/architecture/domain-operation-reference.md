@@ -362,7 +362,7 @@ All 369 qualified operations have typed input/result candidates. Existing input 
 | --- | --- | --- |
 | `skills.discover` | **Query**<br>`scope`: `DataScope`<br>`rootIds`: `Items<Id>`<br>`page`: `PageRequest` | `Page<InstructionRecord>` |
 | `skills.read` | **Query**<br>`instructionId`: `Id`<br>`revision`: `?Revision` | `InstructionRecord` |
-| `skills.resources` | **Query**<br>`instructionId`: `Id`<br>`revision`: `Revision`<br>`page`: `PageRequest` | `Page<ArtifactRef>` |
+| `skills.resources` | **Query**<br>`instructionId`: `Id`<br>`revision`: `Revision`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `SkillResourcePageResult` |
 | `skills.draft` | **Command**<br>`scope`: `DataScope`<br>`instructionId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`name`: `Label`<br>`content`: `ArtifactRef` | `InstructionRecord` |
 | `skills.propose` | **Command**<br>`instructionId`: `Id`<br>`expectedRevision`: `Revision`<br>`contentDigest`: `Digest` | `ProposalRecord` |
 | `skills.history` | **Query**<br>`instructionId`: `Id`<br>`page`: `PageRequest` | `Page<InstructionRecord>` |
@@ -4810,6 +4810,26 @@ Before revision 3: exact legacy `HelpTopic`. Revision 3 and later: `HelpReadView
 ### HelpTopicPageResult
 
 Before revision 3: exact legacy `Page<HelpTopic>`. Revision 3 and later: `HelpTopicPage`. Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.
+
+### SkillResource
+
+| Field | Type |
+| --- | --- |
+| `path` | `RelativePath` |
+| `artifact` | `ArtifactRef` |
+| `executable` | `bool` |
+
+### SkillResourcePage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<SkillResource>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+
+### SkillResourcePageResult
+
+Before revision 3: exact legacy `Page<ArtifactRef>`. Revision 3 and later: `SkillResourcePage`. Each item projects to its `artifact` member, keeping item order and the continuation.
 
 ### CodeSchemaOrigin
 
