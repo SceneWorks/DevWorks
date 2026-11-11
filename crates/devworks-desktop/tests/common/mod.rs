@@ -457,6 +457,8 @@ pub struct LoseAcks {
     requests: bool,
     losses: std::sync::atomic::AtomicUsize,
     pub frames: Mutex<Vec<Vec<u8>>>,
+    /// The runtime's actual replies to commands whose acknowledgment was lost.
+    pub lost_replies: Mutex<Vec<String>>,
 }
 impl LoseAcks {
     pub fn over(inner: Arc<dyn Backend>, operation: &'static str, losses: usize) -> Arc<Self> {
@@ -466,6 +468,7 @@ impl LoseAcks {
             requests: false,
             losses: std::sync::atomic::AtomicUsize::new(losses),
             frames: Mutex::new(Vec::new()),
+            lost_replies: Mutex::new(Vec::new()),
         })
     }
     /// Loses the first `losses` requests before they reach the runtime (nothing commits).
@@ -480,6 +483,7 @@ impl LoseAcks {
             requests: true,
             losses: std::sync::atomic::AtomicUsize::new(losses),
             frames: Mutex::new(Vec::new()),
+            lost_replies: Mutex::new(Vec::new()),
         })
     }
     /// Request keys of every admission of the command, in order.
@@ -515,6 +519,7 @@ impl Backend for LoseAcks {
             if !lose {
                 return out;
             }
+            self.lost_replies.lock().unwrap().push(format!("{out:?}"));
         }
         Ok(
             serde_json::from_value(serde_json::json!({"kind": "CommandStatusUnknown",

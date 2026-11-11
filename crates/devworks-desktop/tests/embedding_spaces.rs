@@ -131,7 +131,9 @@ fn setup_qualify_reopen(paid: bool, lose_acks: bool) {
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "qualification intent was not recorded: {current:?}"
+                "qualification intent was not recorded: {current:?}; replies to the lost \
+                 acknowledgments: {:?}",
+                lossy.lost_replies.lock().unwrap()
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         };
