@@ -615,9 +615,8 @@ fn without_exceptions(mut doc: Value) -> Value {
                 {
                     props.remove("configuration");
                 }
-                // MCP servers are project-scoped (`scope` became required on the six `mcp.*`
-                // requests that name a server) and report their last failure. Accepted as a breaking
-                // revision-1 change because nothing used the MCP operations yet.
+                // MCP revision 8 adds the server's last failure and an optional `scope` on the six
+                // `mcp.*` requests that name a server (DW-155).
                 if let Some(Value::Object(server)) = m.get_mut("McpServer")
                     && let Some(Value::Object(props)) = server.get_mut("properties")
                 {
