@@ -826,6 +826,28 @@ fn watchers_launch_and_stop_with_process_authority() {
         verdict(op, input, AgentRole::Worker, &no_execute),
         Verdict::Deny(DenialReason::ToolNotSelected)
     );
+    // A binding that selects the watch family but not the process family cannot launch.
+    let mut watch_only = binding(AgentRole::Worker);
+    watch_only.tool_families = Some(vec!["watch".into()]);
+    let descriptor = find("watch.create").unwrap();
+    let selected = descriptor.binding(Mode::Command).unwrap();
+    assert_eq!(
+        evaluate(
+            &ctx,
+            Some(&watch_only),
+            &full,
+            &AuthorityRequest {
+                descriptor,
+                binding: selected,
+                effect: selected.effect,
+                action: None,
+                input: &inputs[0].1,
+                fingerprint: &fingerprint,
+            },
+            &[],
+        ),
+        Verdict::Deny(DenialReason::ToolNotSelected)
+    );
     // Reading a watcher is not a launch or a stop.
     let (op, input) = &inputs[2];
     assert_eq!(

@@ -517,7 +517,9 @@ pub fn registered_tool_visibility(
         return Verdict::Deny(DenialReason::OutOfProjectScope);
     }
     if let Some(selected) = &binding.tool_families
-        && !selected.iter().any(|f| f == fam)
+        && (!selected.iter().any(|f| f == fam)
+            // A watcher launches through the process tools: it needs that family too.
+            || (op == "watch.create" && !selected.iter().any(|f| f == "process")))
     {
         return Verdict::Deny(DenialReason::ToolNotSelected);
     }
