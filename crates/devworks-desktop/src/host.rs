@@ -201,6 +201,9 @@ pub struct DesktopConfig {
     pub web: WebPortsFactory,
     /// Index supervision bounds (run concurrency, discovery and housekeeping intervals).
     pub indexing: IndexingConfig,
+    /// The user's shared skill folder read in place (`~/.agents/skills` by default); `None`
+    /// reads no shared skills. Harness skills always live under `<data_root>/skills`.
+    pub shared_skills: Option<PathBuf>,
 }
 impl std::fmt::Debug for DesktopConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -233,6 +236,9 @@ impl DesktopConfig {
             connection_tick: Some(CONNECTION_TICK),
             web: Arc::new(native_ports),
             indexing: IndexingConfig::default(),
+            shared_skills: std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".agents").join("skills")),
         }
     }
 }
@@ -373,12 +379,15 @@ async fn compose(
     // Unified Knowledge. Retrieval is lexical until an embedding route exists (vector search is
     // never reported as run); imports read their saved artifact version. A large delete by
     // source continues through its durable consumer, registered with the dispatcher below.
-    let knowledge = Arc::new(KnowledgeService::new(
-        id_source.clone(),
-        clock.clone(),
-        Some(artifact_files),
-        Arc::new(NoVectorIndex),
-    ));
+    let knowledge = Arc::new(
+        KnowledgeService::new(
+            id_source.clone(),
+            clock.clone(),
+            Some(artifact_files),
+            Arc::new(NoVectorIndex),
+        )
+        .with_summaries(store.clone(), artifacts.clone()),
+    );
     let run_control = Arc::new(ControlService::new(id_source.clone()));
     let agents = Arc::new(AgentService::new(id_source.clone(), run_control.clone()));
     let mcp_service = Arc::new(McpClientService::new(id_source.clone()));
@@ -473,6 +482,16 @@ async fn compose(
         client: purge_client.clone(),
     });
     runtime_config.shutdown_bound = config.shutdown_bound;
+    runtime_config.instructions = Some(devworks_engine::runtime::InstructionComposition {
+        source: Arc::new(NativeSourceTree::new()),
+        files: Arc::new(devworks_adapters::fs::skills::NativeSkillFiles::new(
+            config.data_root.join("skills"),
+        )),
+        roots: devworks_core::services::instructions::SkillRoots {
+            shared: config.shared_skills.clone(),
+            harness: config.data_root.join("skills"),
+        },
+    });
     runtime_config.schemas = Some(devworks_engine::schemas::SchemaComposition {
         reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
         secrets: secrets.clone(),

@@ -22,6 +22,7 @@ pub mod provider_http;
 pub mod retrieval;
 pub mod router;
 pub mod secrets;
+pub mod skill_files;
 pub mod storage;
 pub mod usage;
 pub mod web;

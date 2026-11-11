@@ -307,8 +307,8 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
 
     // The dependency command binds a live artifact to the exact manifest in a registered
     // repository and runs the package manager with project-local home/cache/target paths.
-    let manifest =
-        b"[package]\nname = \"dw-process-tool-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+    // Its own workspace root: the data root sits under this repository's `target/`.
+    let manifest = b"[package]\nname = \"dw-process-tool-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n";
     std::fs::write(repository.join("Cargo.toml"), manifest).expect("manifest");
     std::fs::create_dir_all(repository.join("src")).expect("crate source directory");
     std::fs::write(

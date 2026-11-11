@@ -119,12 +119,15 @@ impl Fx {
             h.clock.clone(),
             h.ids.clone(),
         ));
-        let knowledge = Arc::new(KnowledgeService::new(
-            h.ids.clone(),
-            h.clock.clone(),
-            Some(files),
-            Arc::new(NoVectorIndex),
-        ));
+        let knowledge = Arc::new(
+            KnowledgeService::new(
+                h.ids.clone(),
+                h.clock.clone(),
+                Some(files),
+                Arc::new(NoVectorIndex),
+            )
+            .with_summaries(store.clone(), artifacts.clone()),
+        );
         let cases = UseCases::new()
             .with_artifacts(artifacts)
             .with_knowledge(knowledge.clone());
@@ -5364,5 +5367,1013 @@ fn purge_planning_source_heads_follow_all_surviving_basis_without_copying_source
             .unwrap()
             .0,
         "independent claim"
+    );
+}
+
+fn graph_query(extra: Value) -> Value {
+    with(
+        json!({"entityIds": [], "claimIds": [], "predicates": [], "tags": [], "states": [],
+            "maxDepth": 2, "page": {"limit": 100}, "entityLimit": 100, "claimLimit": 200,
+            "evidenceLimit": 100, "neighborLimit": 100, "includeSuperseded": false,
+            "includeConflicts": true, "includeSupersessionChain": true, "includeEvidence": true}),
+        extra,
+    )
+}
+fn bundle_of_reply(reply: DomainQueryReply) -> KnowledgeBundle {
+    match result(reply) {
+        OperationResult::KnowledgeSubgraph { value }
+        | OperationResult::KnowledgeEntityBundle { value }
+        | OperationResult::KnowledgeEntityGraph { value }
+        | OperationResult::KnowledgeClaimBundle { value }
+        | OperationResult::KnowledgeExpandFrontier { value }
+        | OperationResult::KnowledgeQuery { value } => value,
+        other => panic!("{other:?}"),
+    }
+}
+fn entity_labels(b: &KnowledgeBundle) -> Vec<String> {
+    let mut v: Vec<String> = b.entities.0.iter().map(|e| e.label.0.clone()).collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn graph_reads_are_scope_first_bounded_and_keep_retained_shapes() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // A chain A -calls-> B -calls-> C -calls-> D in project A, two conflicting facts about A.
+    let edge = |s: &str, o: &str| {
+        json!({"kind": "Fact", "subjectId": s, "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let written = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+            "entities": [
+                {"clientId": "a", "label": "Service A", "entityType": "service", "aliases": []},
+                {"clientId": "b", "label": "Service B", "entityType": "service", "aliases": []},
+                {"clientId": "c", "label": "Service C", "entityType": "service", "aliases": []},
+                {"clientId": "d", "label": "Service D", "entityType": "service", "aliases": []}],
+            "evidence": [],
+            "claims": [edge("a", "b"), edge("b", "c"), edge("c", "d"),
+                with(draft("Fact", "port 8080"), json!({"subjectId": "a"})),
+                with(draft("Fact", "port 9090"), json!({"subjectId": "a", "confidence": 0.2}))]}),
+    ));
+    let [a, b, c, d] = [0, 1, 2, 3].map(|i| written.entity_ids.0[i].clone());
+    let port = written.claim_ids.0[3].clone();
+    // Another project's Knowledge never enters the traversal.
+    fx.fact(
+        &user,
+        proj("project-b"),
+        "Hidden",
+        draft("Fact", "secret port"),
+    );
+    let sub = |depth: u32, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            "knowledge.subgraph",
+            json!({"scope": proj("project-a"),
+            "query": graph_query(with(json!({"entityIds": [a], "maxDepth": depth}), extra))}),
+        ))
+    };
+    let one = sub(1, json!({}));
+    assert_eq!(entity_labels(&one), ["Service A", "Service B"]);
+    assert_eq!(
+        one.frontier.0,
+        std::slice::from_ref(&b),
+        "the depth boundary is the frontier"
+    );
+    assert_eq!(
+        one.conflicts.0.len(),
+        1,
+        "conflicting active claims stay visible"
+    );
+    assert_eq!(
+        one.claims.0.len(),
+        3,
+        "a->b and both facts; b->c leaves the selection"
+    );
+    let two = sub(2, json!({}));
+    assert_eq!(entity_labels(&two), ["Service A", "Service B", "Service C"]);
+    let bounded = sub(5, json!({"entityLimit": 2}));
+    assert!(bounded.truncated && bounded.entities.0.len() == 2);
+    // Filters are enforced (predicates, confidence).
+    let edges_only = sub(5, json!({"predicates": ["calls"]}));
+    assert!(edges_only.claims.0.iter().all(|c| c.predicate.0 == "calls"));
+    let confident = sub(1, json!({"confidenceMin": 0.5}));
+    assert!(
+        confident
+            .claims
+            .0
+            .iter()
+            .all(|c| c.value.as_ref().is_none_or(|v| v.0 != "port 9090"))
+    );
+    // Frontier expansion adds only new nodes beyond the frontier.
+    let more = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.expand_frontier",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"entityIds": [c], "maxDepth": 1, "neighborLimit": 10}))}),
+    ));
+    let added = entity_labels(&more);
+    assert!(
+        added.contains(&"Service D".into()) && !added.contains(&"Service C".into()),
+        "{added:?}"
+    );
+    let refused_frontier = query_fault(fx.q(
+        &user,
+        "knowledge.expand_frontier",
+        json!({"scope": proj("project-a"), "query": graph_query(json!({}))}),
+    ));
+    assert_eq!(refused_frontier.code, DomainErrorCode::InvalidArgument);
+    // Entity bundle and entity graph around B.
+    let around = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.entity_bundle",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"entityIds": [b]}))}),
+    ));
+    assert_eq!(
+        entity_labels(&around),
+        ["Service A", "Service B", "Service C"]
+    );
+    assert_eq!(around.claims.0.len(), 2);
+    let graph = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.entity_graph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"entityIds": [b]}))}),
+    ));
+    assert_eq!(
+        entity_labels(&graph),
+        ["Service A", "Service B", "Service C"]
+    );
+    // A seedless subgraph pages the whole visible graph without repeats or other projects.
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut page = json!({"limit": 3});
+        if let Some(c) = &cursor {
+            page["cursor"] = json!(c);
+        }
+        let g = bundle_of_reply(fx.q(
+            &user,
+            "knowledge.subgraph",
+            json!({"scope": proj("project-a"),
+            "query": graph_query(json!({"page": page}))}),
+        ));
+        seen.extend(entity_labels(&g));
+        match g.next_cursor {
+            Some(c) => cursor = Some(c.0),
+            None => break,
+        }
+    }
+    seen.sort();
+    assert_eq!(seen, ["Service A", "Service B", "Service C", "Service D"]);
+    // Claim bundle honours its flags.
+    let plain = bundle_of_reply(fx.q(&user, "knowledge.claim_bundle", json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"claimIds": [port], "includeConflicts": false, "includeEvidence": false}))})));
+    assert!(plain.conflicts.0.is_empty() && plain.claims.0.len() == 1);
+    let full = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.claim_bundle",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"claimIds": [port]}))}),
+    ));
+    assert_eq!(full.conflicts.0.len(), 1);
+    // Query renders the retained Markdown summary; nothing matched is the retained answer.
+    let answered = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.query",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"text": "port", "entityLimit": 5}))}),
+    ));
+    let text = answered.summary.unwrap().0;
+    assert!(
+        text.starts_with("## Relevant Memory") && text.contains("**Service A** (service)"),
+        "{text}"
+    );
+    assert!(text.contains("⚠️ CONFLICT (unresolved)"), "{text}");
+    let none = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.query",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"text": "nonexistentword"}))}),
+    ));
+    assert_eq!(
+        none.summary.unwrap().0,
+        devworks_core::services::knowledge::NO_MEMORIES
+    );
+    // A rendered summary is published as an artifact of the caller's scope.
+    let summary = match result(fx.q(
+        &user,
+        "knowledge.render_summary",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"entityIds": [a]}))}),
+    )) {
+        OperationResult::KnowledgeRenderSummary { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert!(summary.media_type.starts_with("text/markdown") && summary.byte_length.get() > 0);
+    assert_eq!(
+        query_fault(fx.q(
+            &user,
+            "knowledge.render_summary",
+            json!({"scope": proj("project-a"),
+            "query": graph_query(json!({}))})
+        ))
+        .code,
+        DomainErrorCode::InvalidArgument
+    );
+    // Scope first: an agent of project B cannot name project A's entities.
+    let other = fx.agent("agent-b", Some("project-b"));
+    let denied = query_fault(fx.q(
+        &other,
+        "knowledge.subgraph",
+        json!({"scope": proj("project-b"),
+        "query": graph_query(json!({"entityIds": [a]}))}),
+    ));
+    assert_eq!(denied.code, DomainErrorCode::NotFound);
+    let _ = d;
+}
+
+#[test]
+fn graph_reads_filter_seeds_keep_frontiers_and_bound_every_page() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let edge = |s: &str, o: &str| {
+        json!({"kind": "Fact", "subjectId": s, "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let written = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+            "entities": [
+                {"clientId": "a", "label": "Svc A", "entityType": "service", "aliases": []},
+                {"clientId": "b", "label": "Svc B", "entityType": "service", "aliases": []},
+                {"clientId": "c", "label": "Svc C", "entityType": "service", "aliases": []}],
+            "evidence": [],
+            "claims": [edge("a", "b"), edge("b", "c"),
+                with(draft("Fact", "uptime high"), json!({"subjectId": "a", "confidence": 0.2}))]}),
+    ));
+    let [a, b] = [0, 1].map(|i| written.entity_ids.0[i].clone());
+    let low = written.claim_ids.0[2].clone();
+    // Newer scalar facts about A never crowd its edge out of the neighbor budget.
+    for n in 0..3 {
+        receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": [], "evidence": [],
+            "claims": [with(draft("Fact", &format!("note {n}")), json!({"subjectId": a}))]}),
+        ));
+    }
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    let near = q(
+        "knowledge.subgraph",
+        json!({"entityIds": [a], "maxDepth": 1, "neighborLimit": 1}),
+    );
+    assert_eq!(entity_labels(&near), ["Svc A", "Svc B"]);
+    // Text-derived seed claims obey the filters too.
+    let filtered = q(
+        "knowledge.query",
+        json!({"text": "uptime", "confidenceMin": 0.5}),
+    );
+    assert!(
+        !filtered.claims.0.iter().any(|c| c.id == low),
+        "a low-confidence seed is filtered"
+    );
+    assert!(!filtered.summary.unwrap().0.contains("uptime high"));
+    // A bound that drops traversed entities keeps their discoverer on the frontier.
+    let cut = q(
+        "knowledge.subgraph",
+        json!({"entityIds": [a], "maxDepth": 5, "entityLimit": 2}),
+    );
+    assert!(cut.truncated);
+    assert_eq!(cut.frontier.0, std::slice::from_ref(&b));
+    // A superseded side of a recorded contradiction is not an open conflict.
+    let x = fx.claim_id(&user, proj("project-a"), "Ports", draft("Fact", "port 80"));
+    let y = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Ports",
+        draft("Fact", "never port 80"),
+    );
+    receipt(fx.cmd(
+        &user,
+        "knowledge.relate",
+        json!({"scope": proj("project-a"),
+        "subjectId": y, "predicate": "contradicts", "objectId": x, "evidenceIds": []}),
+    ));
+    let ports = fx.read_claim(&user, proj("project-a"), &x).entities.0[0]
+        .id
+        .clone();
+    receipt(fx.record(&user, proj("project-a"), json!({"entities": [], "evidence": [],
+        "claims": [with(draft("Fact", "port 8443"), json!({"subjectId": ports, "supersedes": x}))]})));
+    let hist = q(
+        "knowledge.subgraph",
+        json!({"claimIds": [x, y], "includeSuperseded": true}),
+    );
+    assert!(
+        !hist
+            .conflicts
+            .0
+            .iter()
+            .any(|c| c.claim_ids.0.contains(&x) && c.claim_ids.0.contains(&y)),
+        "{:?}",
+        hist.conflicts
+    );
+}
+
+#[test]
+fn whole_graph_pages_continue_at_the_store_maximum_and_cap_page_claims() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // 600 entities (more than one maximum page).
+    for batch in 0..6 {
+        let entities: Vec<Value> = (0..100)
+            .map(|i| {
+                json!({"clientId": format!("e{i}"), "label": format!("E{batch}-{i}"),
+                "entityType": "node", "aliases": []})
+            })
+            .collect();
+        let claims: Vec<Value> = (0..100)
+            .map(|i| with(draft("Fact", "x"), json!({"subjectId": format!("e{i}")})))
+            .collect();
+        receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": entities, "evidence": [], "claims": claims}),
+        ));
+    }
+    let page = |cursor: Option<String>| {
+        let mut p = json!({"limit": 500});
+        if let Some(c) = cursor {
+            p["cursor"] = json!(c);
+        }
+        bundle_of_reply(fx.q(
+            &user,
+            "knowledge.subgraph",
+            json!({"scope": proj("project-a"), "query": graph_query(json!({"page": p}))}),
+        ))
+    };
+    let first = page(None);
+    assert_eq!(first.entities.0.len(), 500);
+    let second = page(Some(
+        first.next_cursor.expect("continues at the maximum page").0,
+    ));
+    assert_eq!(second.entities.0.len(), 100);
+    assert!(second.next_cursor.is_none());
+    // A dense page reports its claim budget instead of overflowing the bundle.
+    let fx = Fx::new();
+    let dense: Vec<Value> = (0..32)
+        .map(|i| json!({"clientId": format!("n{i}"), "label": format!("N{i}"), "entityType": "node", "aliases": []}))
+        .collect();
+    let mut pairs = Vec::new();
+    for i in 0..32 {
+        for j in 0..32 {
+            if i != j {
+                pairs.push(
+                    json!({"kind": "Fact", "subjectId": format!("n{i}"), "predicate": "links",
+                    "objectId": format!("n{j}"), "confidence": 0.9, "evidenceIds": [], "tags": []}),
+                );
+            }
+        }
+    }
+    let user = fx.user();
+    let ids = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({"entities": dense, "evidence": [], "claims": pairs[..100].to_vec()}),
+    ))
+    .entity_ids;
+    let rest: Vec<Value> = pairs[100..]
+        .iter()
+        .map(|p| {
+            let mut p = p.clone();
+            for k in ["subjectId", "objectId"] {
+                let n: usize = p[k].as_str().unwrap()[1..].parse().unwrap();
+                p[k] = json!(ids.0[n]);
+            }
+            p
+        })
+        .collect();
+    for chunk in rest.chunks(100) {
+        receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": [], "evidence": [], "claims": chunk}),
+        ));
+    }
+    let g = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.subgraph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"page": {"limit": 32}}))}),
+    ));
+    assert_eq!(g.entities.0.len(), 32);
+    assert!(g.claims.0.len() <= 500 && g.truncated);
+}
+
+#[test]
+fn graph_reads_keep_continuations_budgets_filters_and_fresh_cursors() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let edge = |s: &str, o: &str, confidence: f64| {
+        json!({"kind": "Fact", "subjectId": s,
+        "predicate": "calls", "objectId": o, "confidence": confidence, "evidenceIds": [], "tags": []})
+    };
+    let written = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+            "entities": [
+                {"clientId": "a", "label": "Hub A", "entityType": "service", "aliases": []},
+                {"clientId": "b", "label": "Hub B", "entityType": "service", "aliases": []},
+                {"clientId": "c", "label": "Hub C", "entityType": "service", "aliases": []}],
+            "evidence": [],
+            "claims": [edge("a", "b", 0.9), edge("b", "c", 0.2),
+                with(draft("Fact", "one"), json!({"subjectId": "a"})),
+                with(draft("Fact", "two"), json!({"subjectId": "a"}))]}),
+    ));
+    let [a, b] = [0, 1].map(|i| written.entity_ids.0[i].clone());
+    let [one, two] = [2, 3].map(|i| written.claim_ids.0[i].clone());
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    // An addition that loses the ranking is still a continuation point.
+    let grown = q(
+        "knowledge.expand_frontier",
+        json!({"entityIds": [a], "maxDepth": 1, "neighborLimit": 1}),
+    );
+    assert!(grown.truncated);
+    assert!(grown.frontier.0.contains(&b), "{:?}", grown.frontier);
+    // Seed claims count against the claim budget.
+    let seeded = q(
+        "knowledge.subgraph",
+        json!({"claimIds": [one, two], "claimLimit": 1, "maxDepth": 0}),
+    );
+    assert_eq!(seeded.claims.0.len(), 1);
+    assert!(seeded.truncated);
+    // Direct graph reads apply the claim filters.
+    let graph = q(
+        "knowledge.entity_graph",
+        json!({"entityIds": [b], "confidenceMin": 0.5}),
+    );
+    assert_eq!(entity_labels(&graph), ["Hub A", "Hub B"]);
+    let page = q(
+        "knowledge.subgraph",
+        json!({"confidenceMin": 0.5, "page": {"limit": 10}}),
+    );
+    assert!(page.claims.0.iter().all(|c| c.confidence.get() >= 0.5));
+    // A whole-graph cursor expires when any readable scope (here the workspace) changes.
+    let first = q("knowledge.subgraph", json!({"page": {"limit": 1}}));
+    let cursor = first.next_cursor.expect("more").0;
+    fx.fact(&user, ws(), "General", draft("Fact", "general"));
+    let stale = query_fault(fx.q(
+        &user,
+        "knowledge.subgraph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"page": {"limit": 1, "cursor": cursor}}))}),
+    ));
+    assert_eq!(stale.code, DomainErrorCode::CursorExpired);
+}
+
+#[test]
+fn an_entity_graph_bundle_fits_its_row_budget_with_the_center() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let first = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [{"clientId": "hub", "label": "Hub", "entityType": "node", "aliases": []}],
+        "evidence": [], "claims": [with(draft("Fact", "hub"), json!({"subjectId": "hub"}))]}),
+    ));
+    let hub = first.entity_ids.0[0].clone();
+    for batch in 0..5 {
+        let entities: Vec<Value> = (0..100)
+            .map(|i| json!({"clientId": format!("n{i}"), "label": format!("N{batch}-{i}"), "entityType": "node", "aliases": []}))
+            .collect();
+        let claims: Vec<Value> = (0..100)
+            .map(|i| {
+                json!({"kind": "Fact", "subjectId": hub, "predicate": "links",
+                "objectId": format!("n{i}"), "confidence": 0.9, "evidenceIds": [], "tags": []})
+            })
+            .collect();
+        receipt(fx.record(
+            &user,
+            proj("project-a"),
+            json!({"entities": entities, "evidence": [], "claims": claims}),
+        ));
+    }
+    let g = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.entity_graph",
+        json!({"scope": proj("project-a"),
+        "query": graph_query(json!({"entityIds": [hub], "neighborLimit": 500}))}),
+    ));
+    assert_eq!(g.entities.0.len(), 500, "center plus 499 neighbors");
+    assert!(g.truncated);
+    // The center, then the neighbor the row budget left out.
+    assert_eq!(g.frontier.0.len(), 2);
+    assert_eq!(g.frontier.0[0], hub);
+    assert!(!g.entities.0.iter().any(|e| e.id == g.frontier.0[1]));
+}
+
+#[test]
+fn entity_bundles_continue_past_the_neighbor_bound_and_text_seeds_reach_requested_history() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let edge = |o: &str| {
+        json!({"kind": "Fact", "subjectId": "a", "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let written = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+            "entities": [
+                {"clientId": "a", "label": "Node A", "entityType": "service", "aliases": []},
+                {"clientId": "b", "label": "Node B", "entityType": "service", "aliases": []},
+                {"clientId": "c", "label": "Node C", "entityType": "service", "aliases": []}],
+            "evidence": [],
+            "claims": [edge("b"), edge("c"),
+                with(draft("Fact", "zebra migration memo"), json!({"subjectId": "a"}))]}),
+    ));
+    let [a, b, c] = [0, 1, 2].map(|i| written.entity_ids.0[i].clone());
+    let memo = written.claim_ids.0[2].clone();
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    // The neighbor the bound drops is a continuation point, with the center.
+    let one = q(
+        "knowledge.entity_bundle",
+        json!({"entityIds": [a], "neighborLimit": 1}),
+    );
+    assert!(one.truncated);
+    let kept: Vec<&Id> = one
+        .entities
+        .0
+        .iter()
+        .map(|e| &e.id)
+        .filter(|id| **id != a)
+        .collect();
+    assert_eq!(kept.len(), 1);
+    let dropped = if *kept[0] == b { &c } else { &b };
+    assert!(
+        one.frontier.0.contains(&a) && one.frontier.0.contains(dropped),
+        "{:?}",
+        one.frontier
+    );
+    assert!(
+        q("knowledge.entity_bundle", json!({"entityIds": [a]}))
+            .frontier
+            .0
+            .is_empty()
+    );
+    // A retracted claim's words seed a text read only when the request asks for retracted claims.
+    let rev = fx.revision(&memo);
+    receipt(fx.cmd(
+        &user,
+        "knowledge.retract",
+        json!({"scope": proj("project-a"), "claimId": memo,
+        "expectedRevision": rev.to_string(), "reason": "wrong", "evidenceIds": []}),
+    ));
+    let active = q("knowledge.subgraph", json!({"text": "zebra"}));
+    assert!(!active.claims.0.iter().any(|x| x.id == memo));
+    let history = q(
+        "knowledge.subgraph",
+        json!({"text": "zebra", "states": ["Retracted"]}),
+    );
+    assert!(
+        history.claims.0.iter().any(|x| x.id == memo),
+        "{:?}",
+        history.claims
+    );
+}
+
+#[test]
+fn text_seeds_skip_ineligible_matches_and_capped_conflicts_report_truncation() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    // Older eligible matches about B, then newer ineligible ones about A: the newer matches
+    // must not use up the single seed slot.
+    let tagged = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Node B",
+        with(
+            draft("Fact", "quokka rollout tagged"),
+            json!({"tags": ["ops"], "confidence": 0.9}),
+        ),
+    );
+    // Later in time, so the store returns it first.
+    let later = fx.h.clock.0.load(std::sync::atomic::Ordering::SeqCst) + 60_000;
+    fx.h.clock
+        .0
+        .store(later, std::sync::atomic::Ordering::SeqCst);
+    let untagged = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Node A",
+        with(
+            draft("Fact", "quokka rollout untagged"),
+            json!({"confidence": 0.1}),
+        ),
+    );
+    let ids = |b: &KnowledgeBundle| b.claims.0.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+    let by_tag = q(
+        "knowledge.subgraph",
+        json!({"text": "quokka", "tags": ["ops"], "entityLimit": 1}),
+    );
+    assert!(ids(&by_tag).contains(&tagged), "{:?}", ids(&by_tag));
+    let by_confidence = q(
+        "knowledge.subgraph",
+        json!({"text": "quokka", "confidenceMin": 0.5, "entityLimit": 1}),
+    );
+    assert!(
+        ids(&by_confidence).contains(&tagged),
+        "{:?}",
+        ids(&by_confidence)
+    );
+    assert!(!ids(&by_confidence).contains(&untagged));
+    // 33 claims contradicting each other pairwise: 528 relations and recorded conflicts, more
+    // than either list carries, so the bundle says it is incomplete.
+    let claims: Vec<Value> = (0..33)
+        .map(|i| draft("Fact", &format!("value {i}")))
+        .collect();
+    let written = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [{"clientId": "s", "label": "Crowded", "entityType": "topic", "aliases": []}],
+        "evidence": [], "claims": claims}),
+    ));
+    let all = written.claim_ids.0.clone();
+    for i in 0..all.len() {
+        for j in i + 1..all.len() {
+            receipt(fx.cmd(&user, "knowledge.relate", json!({"scope": proj("project-a"),
+                "subjectId": all[i], "predicate": "contradicts", "objectId": all[j], "evidenceIds": []})));
+        }
+    }
+    let crowded = q(
+        "knowledge.subgraph",
+        json!({"claimIds": all, "maxDepth": 0, "claimLimit": 200}),
+    );
+    assert_eq!(crowded.claims.0.len(), 33);
+    assert_eq!(crowded.relations.as_ref().unwrap().0.len(), 500);
+    assert_eq!(crowded.conflicts.0.len(), 500);
+    assert!(crowded.truncated);
+}
+
+#[test]
+fn graph_reads_probe_past_seed_budgets_continue_through_omitted_edges_and_carry_cited_evidence() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    // Eleven disconnected matches, ten seed slots: the search reports that it stopped early.
+    for i in 0..11 {
+        fx.fact(
+            &user,
+            proj("project-a"),
+            &format!("Island {i}"),
+            draft("Fact", "wombat tunnel"),
+        );
+    }
+    let wide = q(
+        "knowledge.subgraph",
+        json!({"text": "wombat", "entityLimit": 50, "claimLimit": 100}),
+    );
+    assert_eq!(wide.claims.0.len(), 10);
+    assert!(wide.truncated);
+    // A has edges to B and C; with one edge allowed the other neighbor is a continuation.
+    let edge = |o: &str| {
+        json!({"kind": "Fact", "subjectId": "a", "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let w = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [
+            {"clientId": "a", "label": "Hub A", "entityType": "service", "aliases": []},
+            {"clientId": "b", "label": "Hub B", "entityType": "service", "aliases": []},
+            {"clientId": "c", "label": "Hub C", "entityType": "service", "aliases": []}],
+        "evidence": [], "claims": [edge("b"), edge("c")]}),
+    ));
+    let [a, b, c] = [0, 1, 2].map(|i| w.entity_ids.0[i].clone());
+    let g = q(
+        "knowledge.entity_graph",
+        json!({"entityIds": [a], "neighborLimit": 1}),
+    );
+    assert!(g.truncated);
+    let shown = if g.entities.0.iter().any(|e| e.id == b) {
+        &b
+    } else {
+        &c
+    };
+    let hidden = if *shown == b { &c } else { &b };
+    assert!(
+        g.frontier.0.contains(&a) && g.frontier.0.contains(hidden),
+        "{:?}",
+        g.frontier
+    );
+    // Evidence cited only by a returned claim's challenge or a returned relation is included.
+    let r = receipt(fx.record(&user, proj("project-a"), json!({
+        "entities": [{"clientId": "s", "entityType": "module", "label": "subject", "aliases": []},
+            {"clientId": "elsewhere", "entityType": "module", "label": "elsewhere", "aliases": []}],
+        "evidence": [
+            {"id": "e1", "source": {"kind": "Observation", "sourceRef": "log:1"}, "snippet": "challenge evidence"},
+            {"id": "e2", "source": {"kind": "Observation", "sourceRef": "log:2"}, "snippet": "relation evidence"}],
+        "claims": [draft("Fact", "a disputed fact"), draft("Fact", "a related fact"),
+            with(draft("Fact", "carrier"), json!({"subjectId": "elsewhere", "evidenceIds": ["e1", "e2"]}))]})));
+    let [disputed, related, carrier] = [0, 1, 2].map(|i| r.claim_ids.0[i].clone());
+    let cited: Vec<Id> = fx
+        .read_claim(&user, proj("project-a"), &carrier)
+        .evidence
+        .0
+        .iter()
+        .map(|e| e.id.clone())
+        .collect();
+    receipt(fx.cmd(&user, "knowledge.challenge", json!({"scope": proj("project-a"), "claimId": disputed,
+        "expectedRevision": fx.revision(&disputed).to_string(), "reason": "disputed", "evidenceIds": [cited[0]]})));
+    receipt(fx.cmd(&user, "knowledge.relate", json!({"scope": proj("project-a"),
+        "subjectId": disputed, "predicate": "supports", "objectId": related, "evidenceIds": [cited[1]]})));
+    let both = q(
+        "knowledge.subgraph",
+        json!({"claimIds": [disputed, related], "maxDepth": 0}),
+    );
+    let got: Vec<&Id> = both.evidence.0.iter().map(|e| &e.id).collect();
+    assert!(
+        cited.iter().all(|id| got.contains(&id)),
+        "{got:?} vs {cited:?}"
+    );
+}
+
+#[test]
+fn seeded_traversals_continue_past_their_edge_bound_and_long_chains_report_truncation() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    let edge = |o: &str| {
+        json!({"kind": "Fact", "subjectId": "a", "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let w = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [
+            {"clientId": "a", "label": "Hub A", "entityType": "service", "aliases": []},
+            {"clientId": "b", "label": "Hub B", "entityType": "service", "aliases": []},
+            {"clientId": "c", "label": "Hub C", "entityType": "service", "aliases": []}],
+        "evidence": [], "claims": [edge("b"), edge("c")]}),
+    ));
+    let [a, b, c] = [0, 1, 2].map(|i| w.entity_ids.0[i].clone());
+    // One edge per entity: the neighbor behind the other edge is on the frontier, from a seeded
+    // subgraph and from expanding the seed with the same bound.
+    for op in ["knowledge.subgraph", "knowledge.expand_frontier"] {
+        let g = q(
+            op,
+            json!({"entityIds": [a], "neighborLimit": 1, "maxDepth": 1}),
+        );
+        assert!(g.truncated, "{op}");
+        let reached: Vec<&Id> = g.entities.0.iter().map(|e| &e.id).collect();
+        let hidden = [&b, &c]
+            .into_iter()
+            .find(|x| !reached.contains(x))
+            .expect("one is omitted");
+        assert!(g.frontier.0.contains(hidden), "{op}: {:?}", g.frontier);
+    }
+    // Six predecessors, five shown: the chain says it is incomplete.
+    let mut latest = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Chained",
+        draft("Fact", "version 0"),
+    );
+    let subject = fx.claim(&user, proj("project-a"), &latest).subject_id;
+    for i in 1..=6 {
+        latest = receipt(fx.record(&user, proj("project-a"), json!({"entities": [], "evidence": [],
+            "claims": [with(draft("Fact", &format!("version {i}")), json!({"subjectId": subject, "supersedes": latest}))]})))
+            .claim_ids
+            .0[0]
+            .clone();
+    }
+    let chained = q(
+        "knowledge.subgraph",
+        json!({"claimIds": [latest], "maxDepth": 0}),
+    );
+    assert_eq!(chained.supersession_ids.0.len(), 5);
+    assert!(chained.truncated);
+}
+
+#[test]
+fn claim_seeds_never_prune_the_walk_and_whole_graph_pages_keep_cross_page_edges() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    let edge = |s: &str, o: &str| {
+        json!({"kind": "Fact", "subjectId": s, "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let w = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [
+            {"clientId": "a", "label": "Hub A", "entityType": "service", "aliases": []},
+            {"clientId": "b", "label": "Hub B", "entityType": "service", "aliases": []},
+            {"clientId": "c", "label": "Hub C", "entityType": "service", "aliases": []}],
+        "evidence": [],
+        "claims": [edge("a", "b"), edge("b", "c"),
+            with(draft("Fact", "about b"), json!({"subjectId": "b"}))]}),
+    ));
+    let [a, c] = [0, 2].map(|i| w.entity_ids.0[i].clone());
+    let about_b = w.claim_ids.0[2].clone();
+    // A seed claim about B does not stop the walk from A through B to C.
+    let g = q(
+        "knowledge.subgraph",
+        json!({"entityIds": [a], "claimIds": [about_b], "maxDepth": 2}),
+    );
+    assert!(
+        g.entities.0.iter().any(|e| e.id == c),
+        "{:?}",
+        entity_labels(&g)
+    );
+    // The seed claim keeps the walk's depth bound: one hop from A never reaches C.
+    let shallow = q(
+        "knowledge.subgraph",
+        json!({"entityIds": [a], "claimIds": [about_b], "maxDepth": 1}),
+    );
+    assert!(!shallow.entities.0.iter().any(|e| e.id == c));
+    // One entity per page: following every cursor still returns both edges.
+    let mut edges = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut page = json!({"limit": 1});
+        if let Some(at) = &cursor {
+            page["cursor"] = json!(at);
+        }
+        let b = q("knowledge.subgraph", json!({"page": page}));
+        assert_eq!(b.entities.0.len(), 1);
+        edges.extend(
+            b.claims
+                .0
+                .iter()
+                .filter(|claim| claim.object_id.is_some())
+                .map(|claim| claim.id.clone()),
+        );
+        match b.next_cursor {
+            Some(next) => cursor = Some(next.0),
+            None => break,
+        }
+    }
+    edges.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    let mut expected = vec![w.claim_ids.0[0].clone(), w.claim_ids.0[1].clone()];
+    expected.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    assert_eq!(edges, expected);
+}
+
+#[test]
+fn claims_about_claims_stay_and_edge_bound_whole_graph_pages_name_a_frontier() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let q = |op: &str, extra: Value| {
+        bundle_of_reply(fx.q(
+            &user,
+            op,
+            json!({"scope": proj("project-a"), "query": graph_query(extra)}),
+        ))
+    };
+    let edge = |o: &str| {
+        json!({"kind": "Fact", "subjectId": "a", "predicate": "calls",
+        "objectId": o, "confidence": 0.9, "evidenceIds": [], "tags": []})
+    };
+    let w = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [
+            {"clientId": "a", "label": "Hub A", "entityType": "service", "aliases": []},
+            {"clientId": "b", "label": "Hub B", "entityType": "service", "aliases": []},
+            {"clientId": "c", "label": "Hub C", "entityType": "service", "aliases": []}],
+        "evidence": [], "claims": [edge("b"), edge("c")]}),
+    ));
+    let [a, b, c] = [0, 1, 2].map(|i| w.entity_ids.0[i].clone());
+    // All three entities on one page, one edge per entity: the omitted edge's neighbor is a
+    // continuation point.
+    let page = q(
+        "knowledge.subgraph",
+        json!({"neighborLimit": 1, "page": {"limit": 10}}),
+    );
+    assert_eq!(page.claims.0.len(), 1);
+    assert!(page.truncated);
+    assert!(page.next_cursor.is_none());
+    let shown = page.claims.0[0].object_id.clone().unwrap();
+    let hidden = if shown == b { &c } else { &b };
+    assert!(page.frontier.0.contains(hidden), "{:?}", page.frontier);
+    assert!(page.frontier.0.contains(&a), "{:?}", page.frontier);
+    // A claim about A whose object is another claim stays in an entity-seeded read.
+    let about = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({"entities": [], "evidence": [], "claims": [
+            {"kind": "Fact", "subjectId": a, "predicate": "confirms",
+            "objectId": w.claim_ids.0[0], "confidence": 0.9, "evidenceIds": [], "tags": []}]}),
+    ))
+    .claim_ids
+    .0[0]
+        .clone();
+    let seeded = q(
+        "knowledge.subgraph",
+        json!({"entityIds": [a], "maxDepth": 0}),
+    );
+    assert!(
+        seeded.claims.0.iter().any(|claim| claim.id == about),
+        "{:?}",
+        seeded.claims.0.iter().map(|c| &c.id).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn claims_about_claims_spend_no_edge_budget() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let w = receipt(fx.record(
+        &user,
+        proj("project-a"),
+        json!({
+        "entities": [
+            {"clientId": "a", "label": "Hub A", "entityType": "service", "aliases": []},
+            {"clientId": "b", "label": "Hub B", "entityType": "service", "aliases": []}],
+        "evidence": [],
+        "claims": [{"kind": "Fact", "subjectId": "a", "predicate": "calls", "objectId": "b",
+            "confidence": 0.9, "evidenceIds": [], "tags": []}]}),
+    ));
+    let [a, b] = [0, 1].map(|i| w.entity_ids.0[i].clone());
+    // A newer claim about A whose object is the edge claim itself: later, so the store would
+    // return it first.
+    let later = fx.h.clock.0.load(std::sync::atomic::Ordering::SeqCst) + 60_000;
+    fx.h.clock
+        .0
+        .store(later, std::sync::atomic::Ordering::SeqCst);
+    fx.record(
+        &user,
+        proj("project-a"),
+        json!({"entities": [], "evidence": [], "claims": [
+            {"kind": "Fact", "subjectId": a, "predicate": "confirms",
+            "objectId": w.claim_ids.0[0], "confidence": 0.9, "evidenceIds": [], "tags": []}]}),
+    );
+    let graph = bundle_of_reply(fx.q(
+        &user,
+        "knowledge.entity_graph",
+        json!({"scope": proj("project-a"),
+            "query": graph_query(json!({"entityIds": [a], "neighborLimit": 1, "maxDepth": 1}))}),
+    ));
+    assert!(
+        graph.entities.0.iter().any(|e| e.id == b),
+        "{:?}",
+        entity_labels(&graph)
     );
 }

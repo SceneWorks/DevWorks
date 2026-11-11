@@ -1626,6 +1626,22 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
                 wire_calls.clone(),
             ))),
         );
+        // One shared skill, so every published context carries a bound skills block that the
+        // membership handoff must rebind rather than carry over.
+        let shared = fx.h.root.with_extension("shared-skills");
+        let harness = fx.h.root.with_extension("harness-skills");
+        let _ = std::fs::remove_dir_all(&shared);
+        let _ = std::fs::remove_dir_all(&harness);
+        std::fs::create_dir_all(shared.join("alpha")).unwrap();
+        std::fs::write(shared.join("alpha/SKILL.md"), "Do alpha.").unwrap();
+        composed.config.instructions = Some(devworks_engine::runtime::InstructionComposition {
+            source: Arc::new(devworks_adapters::index::NativeSourceTree::new()),
+            files: Arc::new(devworks_adapters::fs::skills::NativeSkillFiles::new(&harness)),
+            roots: devworks_core::services::instructions::SkillRoots {
+                shared: Some(shared.clone()),
+                harness: harness.clone(),
+            },
+        });
         let app = Arc::new(boot(composed).await.unwrap());
         applied(&fx.start(&fx.user, "root-i", 1, 1));
         let activation = fx.launch("coordinator-first-prompt");
@@ -1920,6 +1936,10 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             .0;
         let moved_prompt: devworks_core::providers::context::ProviderContext =
             serde_json::from_slice(&moved_bytes).unwrap();
+        assert_eq!(
+            moved_prompt.skill_stamp.as_ref().expect("skills rebound").skills[0].name,
+            "alpha"
+        );
         devworks_engine::agent_turns::ensure_membership_context(&app, &moved_context, &moved_agent)
             .unwrap();
         let (same_head, _, _) = app
@@ -1933,6 +1953,62 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
         assert!(moved_prompt.messages.iter().any(|message| message.content.iter().any(|part| {
             matches!(part, devworks_core::providers::context::ContentBlock::Text { text, .. } if text == "Preserve this unissued handoff fact")
         })));
+        // A role changed while the assignment runs is adopted at the next safe boundary: the
+        // role prefix is rebound from the effective setting under a new epoch, and an unchanged
+        // role keeps the published context.
+        let assignment_context = read(&*fx.store, |snapshot| {
+            snapshot.runs().agent_assignment_context(&primary.assignment_id)
+        })
+    .unwrap();
+        let role = devworks_core::settings::catalog::AgentRole::parse(
+            assignment_context.role_id.as_str(),
+        )
+        .unwrap();
+        assert_ne!(
+            moved_prompt.instructions.first().map(|b| b.text.as_str()),
+            Some("Revised role rules.")
+        );
+        let editor = fx.user.clone();
+        let role_scope = devworks_core::ports::storage::ConfigScope::Project(
+            assignment_context.project_id.clone(),
+        );
+        fx.tx(move |_, tx| {
+            devworks_core::settings::service::mirror_role_instructions(
+                tx,
+                &editor,
+                &role_scope,
+                role,
+                "Revised role rules.",
+                serde_json::json!({"kind": "Test"}),
+            )
+            .map_err(|failure| StorageError::InvalidRecord(format!("role: {failure:?}")))?;
+            Ok(())
+        });
+        let adopted = app
+            .adopt_instruction_epoch(&moved_context, &session.id, &moved_head, &moved_binding, &[])
+            .unwrap();
+        assert_ne!(adopted.version_id, moved_head.version_id);
+        let (_, adopted_binding, _) = app
+            .recover_native_context_head(&moved_context, &session.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(adopted_binding.context_epoch.get(), 3);
+        let adopted_prompt: devworks_core::providers::context::ProviderContext =
+            serde_json::from_slice(
+                &app.artifacts()
+                    .read_exact(app.store().as_ref(), &moved_context, &adopted, 8 * 1024 * 1024)
+                    .unwrap()
+                    .0,
+            )
+            .unwrap();
+        assert_eq!(adopted_prompt.instructions[0].text, "Revised role rules.");
+        assert!(adopted_prompt.skill_stamp.is_some());
+        assert_eq!(
+            app.adopt_instruction_epoch(&moved_context, &session.id, &adopted, &adopted_binding, &[])
+                .unwrap()
+                .version_id,
+            adopted.version_id
+        );
 
         // A queued child can move before any provider call or transcript entry. Its epoch still
         // needs a real transcript position for the schema-48 foreign key.

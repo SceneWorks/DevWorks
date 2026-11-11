@@ -1195,6 +1195,134 @@ mod tests {
         server.abort();
     }
 
+    /// Lists one resource and one prompt with a required argument and answers both.
+    struct ContentServer;
+    impl rmcp::ServerHandler for ContentServer {
+        fn get_info(&self) -> rmcp::model::ServerConfig {
+            rmcp::model::ServerConfig::new(
+                rmcp::model::ServerCapabilities::builder()
+                    .enable_resources()
+                    .enable_prompts()
+                    .build(),
+            )
+        }
+
+        async fn list_resources(
+            &self,
+            _request: Option<PaginatedRequestParams>,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> Result<rmcp::model::ListResourcesResult, rmcp::ErrorData> {
+            let mut result = rmcp::model::ListResourcesResult::default();
+            result
+                .resources
+                .push(Resource::new("note://welcome", "Welcome note"));
+            Ok(result)
+        }
+
+        async fn read_resource(
+            &self,
+            request: ReadResourceRequestParams,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> Result<ReadResourceResponse, rmcp::ErrorData> {
+            Ok(ReadResourceResponse::Complete(
+                rmcp::model::ReadResourceResult::new(vec![rmcp::model::ResourceContents::text(
+                    "Hello from the note",
+                    request.uri,
+                )]),
+            ))
+        }
+
+        async fn list_prompts(
+            &self,
+            _request: Option<PaginatedRequestParams>,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> Result<rmcp::model::ListPromptsResult, rmcp::ErrorData> {
+            let mut topic = rmcp::model::PromptArgument::new("topic");
+            topic.required = Some(true);
+            let mut result = rmcp::model::ListPromptsResult::default();
+            result.prompts.push(Prompt::new(
+                "summarize",
+                Some("Summarize a topic"),
+                Some(vec![topic]),
+            ));
+            Ok(result)
+        }
+
+        async fn get_prompt(
+            &self,
+            request: GetPromptRequestParams,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> Result<GetPromptResponse, rmcp::ErrorData> {
+            let topic = request
+                .arguments
+                .as_ref()
+                .and_then(|arguments| arguments.get("topic"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("nothing")
+                .to_owned();
+            Ok(GetPromptResponse::Complete(
+                rmcp::model::GetPromptResult::new(vec![rmcp::model::PromptMessage::new_text(
+                    rmcp::model::Role::User,
+                    format!("Summarize {topic}"),
+                )]),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_native_client_discovers_and_reads_resources_and_prompts() {
+        let (client_reader, server_writer) = tokio::io::duplex(64 * 1024);
+        let (server_reader, client_writer) = tokio::io::duplex(64 * 1024);
+        let server = tokio::spawn(async move {
+            rmcp::serve_server(ContentServer, (server_reader, server_writer))
+                .await
+                .expect("local server handshake")
+        });
+        let client = connect_pipes(
+            client_reader,
+            client_writer,
+            SamplingClient::new(false, Arc::default()),
+        )
+        .await
+        .expect("native client handshake");
+        let session = McpWireSession {
+            client,
+            process: None,
+        };
+        let catalog = session.discover().await.expect("discovery");
+        assert!(catalog.tools.is_empty());
+        assert_eq!(catalog.resources.len(), 1);
+        assert_eq!(catalog.resources[0].uri, "note://welcome");
+        assert_eq!(catalog.prompts.len(), 1);
+        assert_eq!(catalog.prompts[0].name, "summarize");
+        let argument = &catalog.prompts[0].arguments.as_ref().unwrap()[0];
+        assert_eq!(
+            (argument.name.as_str(), argument.required),
+            ("topic", Some(true))
+        );
+
+        let resource = session
+            .read_resource("note://welcome")
+            .await
+            .expect("resource read");
+        assert_eq!(resource["contents"][0]["uri"], "note://welcome");
+        assert_eq!(resource["contents"][0]["text"], "Hello from the note");
+        let prompt = session
+            .get_prompt(
+                "summarize",
+                serde_json::Map::from_iter([("topic".into(), serde_json::json!("the release"))]),
+            )
+            .await
+            .expect("prompt read");
+        assert_eq!(prompt["messages"][0]["role"], "user");
+        assert_eq!(
+            prompt["messages"][0]["content"]["text"],
+            "Summarize the release"
+        );
+        let _ = session.close().await;
+        server.abort();
+    }
+
     #[derive(Default)]
     struct FakeSampler(Mutex<Vec<(McpCallOrigin, u8, usize)>>);
     impl McpSampler for FakeSampler {

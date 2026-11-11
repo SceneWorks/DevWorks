@@ -397,7 +397,8 @@ mod tests {
             | TaskOutput::PackagePrepared { .. }
             | TaskOutput::Refreshed
             | TaskOutput::TextPreview(_)
-            | TaskOutput::Convention(_) => {
+            | TaskOutput::Convention(_)
+            | TaskOutput::Instruction(_) => {
                 panic!("expected a preview")
             }
         }

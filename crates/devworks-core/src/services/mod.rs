@@ -21,6 +21,7 @@ pub mod graph;
 pub mod help;
 pub mod history;
 pub mod indexing;
+pub mod instructions;
 pub mod jobs;
 pub mod knowledge;
 pub mod mcp;
@@ -106,6 +107,14 @@ impl UseCases {
     pub fn with_approvals(mut self, service: Arc<approvals::ApprovalService>) -> Self {
         for op in approvals::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Skills and role instructions (`skills.*`, `roles.*`) through one owner on every surface.
+    pub fn with_instructions(mut self, service: Arc<instructions::InstructionService>) -> Self {
+        for operation in instructions::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
         }
         self
     }
@@ -319,6 +328,13 @@ impl UseCases {
     pub fn with_knowledge(mut self, service: Arc<knowledge::KnowledgeService>) -> Self {
         for op in knowledge::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        if service.offers_summaries() {
+            self.register(
+                knowledge::SUMMARY_OPERATION,
+                Some(service.clone()),
+                Some(service.clone()),
+            );
         }
         self
     }
