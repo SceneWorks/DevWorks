@@ -282,16 +282,18 @@ impl RegisteredSchemas {
         )>,
         ProviderError,
     > {
-        for d in registry::all() {
-            for selected in d.modes {
-                if !self.registered(d.name, selected.mode) {
-                    continue;
-                }
-                let revision = SchemaRevision(
-                    u32::try_from(reference.revision.get())
-                        .map_err(|_| ProviderError::MaterialUnavailable)?,
-                );
-                if !d.supports(revision) {
+        // The schema ID names the one operation and mode whose document can match, so only that
+        // binding is materialized and hashed.
+        let revision = SchemaRevision(
+            u32::try_from(reference.revision.get())
+                .map_err(|_| ProviderError::MaterialUnavailable)?,
+        );
+        let Some((name, mode)) = builtin_schema_binding(reference.schema_id.as_str()) else {
+            return Ok(None);
+        };
+        if let Some(d) = registry::find(name) {
+            for selected in d.modes.iter().filter(|binding| binding.mode == mode) {
+                if !self.registered(d.name, selected.mode) || !d.supports(revision) {
                     continue;
                 }
                 let schema: Value = selected.input_schema(revision).to_value();
@@ -500,6 +502,16 @@ fn schema_ref(
             .map_err(ProviderError::InvalidInput)?,
     })
 }
+/// The operation and mode a built-in `devworks/{op}.{mode}.input` schema ID names.
+fn builtin_schema_binding(schema_id: &str) -> Option<(&str, Mode)> {
+    let rest = schema_id.strip_prefix("devworks/")?;
+    if let Some(op) = rest.strip_suffix(".query.input") {
+        Some((op, Mode::Query))
+    } else {
+        rest.strip_suffix(".command.input")
+            .map(|op| (op, Mode::Command))
+    }
+}
 fn equal(a: &SchemaRef, b: &SchemaRef) -> bool {
     a.schema_id.as_str() == b.schema_id.as_str() && a.revision == b.revision && a.sha256 == b.sha256
 }
@@ -651,5 +663,28 @@ impl SchemaDocuments for RegisteredSchemas {
             schema,
             description,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_builtin_schema_id_names_exactly_its_operation_and_mode() {
+        for descriptor in registry::all() {
+            for binding in descriptor.modes {
+                let revision = *descriptor.revisions.last().unwrap();
+                let schema = binding.input_schema(revision).to_value();
+                let reference =
+                    schema_ref(descriptor.name, binding.mode, revision, &schema).unwrap();
+                assert_eq!(
+                    builtin_schema_binding(reference.schema_id.as_str()),
+                    Some((descriptor.name, binding.mode))
+                );
+            }
+        }
+        assert_eq!(builtin_schema_binding("mcp/server/lookup.input"), None);
+        assert_eq!(builtin_schema_binding("devworks/help.read.output"), None);
     }
 }
