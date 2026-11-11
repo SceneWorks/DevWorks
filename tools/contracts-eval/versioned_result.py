@@ -8,7 +8,7 @@ def generate(name, definition, types):
     current = definition['current']
     revision = definition['revision']
     variants = definition.get('claimVariants')
-    if variants is None and definition.get('projection') not in ('none', 'help_read', 'help_page', 'convention_record', 'convention_read', 'convention_page', 'convention_resources', 'convention_search', 'convention_mutation'):
+    if variants is None and definition.get('projection') not in ('none', 'help_read', 'help_page', 'convention_record', 'convention_read', 'convention_page', 'convention_resources', 'convention_search', 'convention_mutation', 'page_field'):
         raise ValueError(f'{name}: an explicit legacy projection strategy is required')
     conversion = ''
     if variants:
@@ -26,6 +26,8 @@ def generate(name, definition, types):
         conversion = help_conversion(definition, types)
     if definition.get('projection', '').startswith('convention_'):
         conversion = convention_conversion(definition)
+    if definition.get('projection') == 'page_field':
+        conversion = page_field_conversion(definition)
     def revisioned(ty, seen=None):
         seen = set() if seen is None else seen
         for token in re.findall(r'[A-Za-z_][A-Za-z0-9_]*', ty):
@@ -44,6 +46,9 @@ def generate(name, definition, types):
     earlier = definition.get('earlierName', legacy)
     legacy_error = 'legacy allocation result requires its recorded revision' if variants else 'legacy result requires its recorded revision'
     current_error = 'allocation outcome cannot be represented at this revision' if variants else 'current result cannot be represented at this revision'
+    # An empty page is the same JSON in both shapes (the untagged reader takes it as legacy), so
+    # a page_field result admits an empty legacy page at every revision.
+    legacy_arm = 'Self::Legacy(value) if !value.items.0.is_empty() &&' if definition.get('projection') == 'page_field' else 'Self::Legacy(_) if'
     return f'''#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 #[schemars(extend("x-earlier" = {json.dumps({'name': earlier, 'before': revision})}))]
@@ -64,7 +69,7 @@ impl Revisioned for {name} {{
     }}
     fn check_revision(&self, revision: u32) -> Result<(), String> {{
         match self {{
-            Self::Legacy(_) if revision >= {revision} => Err("{legacy_error}".into()),
+            {legacy_arm} revision >= {revision} => Err("{legacy_error}".into()),
             Self::Current(_) if revision < {revision} => Err("{current_error}".into()),
             _ => Ok(()),
         }}
@@ -136,6 +141,20 @@ def convention_conversion(definition):
     return f'''        if revision < {revision} {{
 {helpers}            let legacy: Option<{legacy}> = match self {{
                 {arm}
+                _ => None,
+            }};
+            if let Some(legacy) = legacy {{ *self = Self::Legacy(legacy); }}
+        }}
+'''
+
+
+def page_field_conversion(definition):
+    """Each current page item carries its legacy item as one field; keep that field, order and cursor."""
+    legacy, revision, field = (definition[k] for k in ('legacy', 'revision', 'itemField'))
+    return f'''        if revision < {revision} {{
+            let legacy: Option<{legacy}> = match self {{
+                Self::Current(page) => Some(Page {{ items: BoundedList(page.items.0.iter().map(|item| item.{field}.clone()).collect()),
+                    next_cursor: page.next_cursor.clone(), has_more: page.has_more }}),
                 _ => None,
             }};
             if let Some(legacy) = legacy {{ *self = Self::Legacy(legacy); }}

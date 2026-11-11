@@ -4662,10 +4662,10 @@ pub(super) static CATALOG: [OperationDescriptor; 369] = [
             decode: decode_skills_resources_query,
             input_schema: schema_of::<ops::skills::ResourcesInput>,
         }],
-        result_type: "Page<ArtifactRef>",
-        result_schema: schema_of::<Page<ArtifactRef>>,
+        result_type: "SkillResourcePageResult",
+        result_schema: schema_of::<SkillResourcePageResult>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "skills.draft",

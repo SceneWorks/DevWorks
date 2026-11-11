@@ -808,7 +808,7 @@ fn settings_are_categorized_searchable_validated_saved_and_keep_unsaved_changes(
         "keep-awake shows runtime health"
     );
 
-    // Role instructions (SET-03) are editable; proposals and history are reported honestly.
+    // Role instructions (SET-03) are editable; roles and skills have their own surface.
     h.get_by_role_and_label(Role::TextInput, "Search settings")
         .focus();
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
@@ -824,7 +824,14 @@ fn settings_are_categorized_searchable_validated_saved_and_keep_unsaved_changes(
             "{role}"
         );
     }
-    assert!(has_text(&h, "DW-14 (approvals) and DW-34 (roles)"));
+    // Roles and skills (DW-34) replaces the earlier unavailable placeholder.
+    assert!(has_text(&h, "Roles and skills"));
+    assert!(!has_text(&h, "DW-14 (approvals) and DW-34 (roles)"));
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Open Approvals")
+            .is_some(),
+        "agent proposals are routed to Approvals"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

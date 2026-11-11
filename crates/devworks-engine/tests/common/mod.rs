@@ -73,7 +73,10 @@ pub struct Harness {
 impl Harness {
     pub fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let root = std::env::temp_dir().join(format!(
+        // Cargo's per-target scratch directory, not the system temp directory: on GitHub's
+        // Windows runners %TEMP% is on the C: OS disk, whose flush latency stalls the hundreds of
+        // durable commits of native Help startup past the `within` guard.
+        let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
             "devworks-engine-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::SeqCst)

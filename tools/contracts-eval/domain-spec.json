@@ -5517,6 +5517,31 @@
       "projection": "help_page",
       "earlierName": "Page"
     },
+    "SkillResource": {
+      "kind": "record",
+      "fields": {
+        "path": "RelativePath",
+        "artifact": "ArtifactRef",
+        "executable": "bool"
+      }
+    },
+    "SkillResourcePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<SkillResource>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool"
+      }
+    },
+    "SkillResourcePageResult": {
+      "kind": "versioned",
+      "legacy": "Page<ArtifactRef>",
+      "current": "SkillResourcePage",
+      "revision": 3,
+      "projection": "page_field",
+      "itemField": "artifact",
+      "earlierName": "Page"
+    },
     "CodeSchemaOrigin": {
       "kind": "enum",
       "values": [
@@ -8853,10 +8878,10 @@
         "revision": "Revision",
         "page": "PageRequest"
       },
-      "result": "Page<ArtifactRef>",
+      "result": "SkillResourcePageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Revision 3 returns each resource of the skill revision with its skill-relative path and executable flag beside its artifact; revision 1 returns the same artifacts, in the same order, without them."
     },
     "approvals.list": {
       "operation": "approvals.list",
@@ -11473,6 +11498,10 @@
       2
     ],
     "knowledge.delete_by_source": [
+      1,
+      3
+    ],
+    "skills.resources": [
       1,
       3
     ],

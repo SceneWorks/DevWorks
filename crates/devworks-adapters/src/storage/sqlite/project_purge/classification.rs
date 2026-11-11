@@ -51,6 +51,10 @@ const MESSAGE_HEAD_EXTENSION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/architecture/validation/project-purge/schema47-extension.json"
 ));
+const INSTRUCTION_EXTENSION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/architecture/validation/project-purge/schema49-extension.json"
+));
 pub(super) type Key = (String, String);
 fn invalid() -> StorageError {
     StorageError::IncompatibleSchema("unmapped project purge ownership policy".into())
@@ -89,9 +93,17 @@ fn policies(conn: &Connection) -> Result<BTreeMap<String, (String, String)>, Sto
     }
     let container_extension: Value =
         serde_json::from_str(CONTAINER_EXTENSION).map_err(|_| invalid())?;
+    let instruction_extension: Value =
+        serde_json::from_str(INSTRUCTION_EXTENSION).map_err(|_| invalid())?;
     for row in container_extension["additionalTables"]
         .as_array()
         .ok_or_else(invalid)?
+        .iter()
+        .chain(
+            instruction_extension["additionalTables"]
+                .as_array()
+                .ok_or_else(invalid)?,
+        )
     {
         let table = row["table"].as_str().ok_or_else(invalid)?;
         let class = row["class"].as_str().ok_or_else(invalid)?;
@@ -730,6 +742,7 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
         "assignmentExtension":devworks_core::fingerprint::sha256_hex(ASSIGNMENT_EXTENSION.as_bytes()),
         "containerExtension":devworks_core::fingerprint::sha256_hex(CONTAINER_EXTENSION.as_bytes()),
         "messageExtension":devworks_core::fingerprint::sha256_hex(MESSAGE_EXTENSION.as_bytes()),
+        "instructionExtension":devworks_core::fingerprint::sha256_hex(INSTRUCTION_EXTENSION.as_bytes()),
         "scrubPolicy":scrub_policy,"clientKeepers":super::client_keepers::digest(keepers),"selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
     })).map_err(|_|invalid())?.as_bytes());
     Ok(Some(ProjectPurgePlanning {

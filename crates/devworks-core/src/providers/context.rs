@@ -12,6 +12,10 @@ pub struct ProviderContext {
     pub instructions: Vec<TextBlock>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instruction_stamps: Vec<super::instructions::InstructionStamp>,
+    /// The effective skill set bound before repository guidance (its catalog block is the
+    /// instruction block just before the repository suffix).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_stamp: Option<super::instructions::SkillStamp>,
     pub messages: Vec<Message>,
     pub parameters: GenerationParameters,
 }
@@ -376,6 +380,7 @@ impl ProviderContext {
             version: 1,
             instructions,
             instruction_stamps: Vec::new(),
+            skill_stamp: None,
             messages,
             parameters,
         };
@@ -403,6 +408,19 @@ impl ProviderContext {
             )
         {
             return Err(ProviderError::InvalidInput("instruction_stamps"));
+        }
+        if let Some(skills) = &self.skill_stamp {
+            let repository: usize = self
+                .instruction_stamps
+                .iter()
+                .map(|s| s.sources.len())
+                .sum();
+            let at = self.instructions.len().checked_sub(repository + 1);
+            if !skills.validate()
+                || at.is_none_or(|at| self.instructions[at].text != skills.text_block().text)
+            {
+                return Err(ProviderError::InvalidInput("skill_stamp"));
+            }
         }
         let p = &self.parameters;
         if p.temperature

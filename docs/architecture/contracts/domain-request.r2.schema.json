@@ -5367,12 +5367,16 @@
               "const": "mcp.connect",
               "type": "string"
             },
+            "scope": {
+              "$ref": "#/$defs/DataScope"
+            },
             "serverId": {
               "$ref": "#/$defs/Id"
             }
           },
           "required": [
             "kind",
+            "scope",
             "serverId",
             "expectedRevision"
           ],
@@ -5388,12 +5392,16 @@
               "const": "mcp.discover",
               "type": "string"
             },
+            "scope": {
+              "$ref": "#/$defs/DataScope"
+            },
             "serverId": {
               "$ref": "#/$defs/Id"
             }
           },
           "required": [
             "kind",
+            "scope",
             "serverId",
             "expectedCatalogRevision"
           ],
@@ -5412,6 +5420,9 @@
               "const": "mcp.select_tools",
               "type": "string"
             },
+            "scope": {
+              "$ref": "#/$defs/DataScope"
+            },
             "serverId": {
               "$ref": "#/$defs/Id"
             },
@@ -5421,6 +5432,7 @@
           },
           "required": [
             "kind",
+            "scope",
             "serverId",
             "expectedRevision",
             "expectedCatalogRevision",
@@ -9267,6 +9279,9 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "scope": {
+              "$ref": "#/$defs/DataScope"
+            },
             "serverId": {
               "$ref": "#/$defs/Id"
             },
@@ -9283,6 +9298,7 @@
           },
           "required": [
             "kind",
+            "scope",
             "serverId",
             "catalogRevision",
             "page"
@@ -9322,12 +9338,16 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "scope": {
+              "$ref": "#/$defs/DataScope"
+            },
             "serverId": {
               "$ref": "#/$defs/Id"
             }
           },
           "required": [
             "kind",
+            "scope",
             "serverId",
             "catalogRevision",
             "page"
@@ -9347,12 +9367,16 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "scope": {
+              "$ref": "#/$defs/DataScope"
+            },
             "serverId": {
               "$ref": "#/$defs/Id"
             }
           },
           "required": [
             "kind",
+            "scope",
             "serverId",
             "catalogRevision",
             "page"

@@ -1877,6 +1877,9 @@ impl WriteTransaction for HandlerTx<'_> {
     fn help(&mut self) -> &mut dyn crate::ports::storage::HelpRepository {
         self.inner.get_mut().help()
     }
+    fn instructions(&mut self) -> &mut dyn crate::ports::storage::InstructionRepository {
+        self.inner.get_mut().instructions()
+    }
     fn github(&mut self) -> &mut dyn crate::ports::storage::GithubRepository {
         self.inner.get_mut().github()
     }
