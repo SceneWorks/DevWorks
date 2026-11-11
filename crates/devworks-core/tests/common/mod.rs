@@ -3298,9 +3298,16 @@ impl WatcherRead for Unsupported {
         &self,
         _: &WatcherFilter,
         _: &[WatcherPhase],
-        _: Option<&Id>,
+        _: Option<(i64, &Id)>,
         _: u16,
     ) -> Result<Vec<StoredWatcher>, StorageError> {
+        nope()
+    }
+    fn pending_watch_events(
+        &self,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredWatchEvent>, StorageError> {
         nope()
     }
     fn open_watchers(&self, _: Option<&Id>, _: u16) -> Result<Vec<StoredWatcher>, StorageError> {
@@ -3337,7 +3344,13 @@ impl WatcherRepository for Unsupported {
     fn carry_watch_events(&mut self, _: &Id, _: &Id) -> Result<u64, StorageError> {
         nope()
     }
-    fn release_watch_events(&mut self, _: &Id, _: &Id, _: bool, _: i64) -> Result<u64, StorageError> {
+    fn release_watch_events(
+        &mut self,
+        _: &Id,
+        _: &Id,
+        _: bool,
+        _: i64,
+    ) -> Result<u64, StorageError> {
         nope()
     }
 }

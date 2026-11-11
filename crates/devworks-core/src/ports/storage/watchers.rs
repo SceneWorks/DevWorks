@@ -136,15 +136,22 @@ pub trait WatcherRead {
         &self,
         operation: &OperationId,
     ) -> Result<Option<StoredWatcher>, StorageError>;
-    /// Newest first (descending ID), exclusive cursor; `phases` empty means every phase; limit
-    /// is `1..=MAX_PAGE`.
+    /// Newest first (descending creation time, then ID), strictly after the exclusive
+    /// `before` position `(created_at_ms, id)`; `phases` empty means every phase; limit is
+    /// `1..=MAX_PAGE`.
     fn watchers(
         &self,
         filter: &WatcherFilter,
         phases: &[WatcherPhase],
-        before: Option<&Id>,
+        before: Option<(i64, &Id)>,
         limit: u16,
     ) -> Result<Vec<StoredWatcher>, StorageError>;
+    /// Pending (undelivered) events of every session, after `after` in ID order.
+    fn pending_watch_events(
+        &self,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredWatchEvent>, StorageError>;
     /// Open (Active or Stopping) watchers, oldest first, after `after`.
     fn open_watchers(
         &self,

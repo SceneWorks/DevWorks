@@ -159,8 +159,9 @@ async fn drive_agent_turn(
     bridge.abort();
     let control = runtime.runs().service().clone();
     let turn_id = turn.turn_id;
+    let completed = result.is_ok() && !cancellation.is_cancelled();
     let end = store::write(runtime.store(), move |tx| {
-        control.end_turn(tx, &session_id, &turn_id)
+        control.end_turn(tx, &session_id, &turn_id, completed)
     })
     .await;
     match end {

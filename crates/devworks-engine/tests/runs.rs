@@ -1802,7 +1802,7 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
         let turn_session = session.id.clone();
         fx.tx(move |service, tx| {
             service
-                .end_turn(tx, &turn_session, &turn_id)?
+                .end_turn(tx, &turn_session, &turn_id, true)?
                 .map_err(|fence| StorageError::InvalidRecord(format!("turn end: {fence:?}")))
         });
         let (_stop_tx, stop) = tokio::sync::watch::channel(false);
@@ -3886,7 +3886,8 @@ fn a_session_has_one_continuation_in_flight() {
     assert_eq!(won.len(), 1, "{results:?}");
     let turn = won[0].clone();
     let (s, t) = (coord.session_id.clone(), turn.turn_id.clone());
-    fx.tx(move |svc, tx| svc.end_turn(tx, &s, &t)).unwrap();
+    fx.tx(move |svc, tx| svc.end_turn(tx, &s, &t, true))
+        .unwrap();
     let (c2, a2) = (coord.clone(), a.clone());
     assert!(
         fx.tx(move |svc, tx| svc.begin_turn(tx, &c2.session_id, &c2.id, &a2.id, a2.owner_epoch))
@@ -8246,3 +8247,6 @@ mod usage_tests;
 
 #[path = "runs/auxiliary.rs"]
 mod auxiliary_tests;
+
+#[path = "runs/watch.rs"]
+mod watch_tests;

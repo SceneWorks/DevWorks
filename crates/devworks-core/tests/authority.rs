@@ -1,6 +1,7 @@
 //! Pure authority contracts: shell/declared-effect recognition, redaction, provider disclosure
 //! and the access-profile catalog. Real-store and real-filesystem cases live in
 //! `devworks-adapters`.
+mod common;
 use devworks_core::authority::destructive::{DestructiveKind, InputNeeded};
 use devworks_core::authority::disclosure::{Candidate, ContentKind, Exclusion, disclose};
 use devworks_core::authority::redact::{REDACTED, Redactor, SecretRef};
@@ -693,4 +694,144 @@ fn exact_git_executable_discovery_does_not_admit_relocation_or_extra_commands() 
             ShellAssessment::NeedsInput(_)
         ));
     }
+}
+
+/// WATCH-10: a watcher launches and stops processes with the process tools' authority. A
+/// read-only reviewer cannot launch or stop one, the shell-tools switch covers both, and under
+/// Project scope a launch needs a reviewed native grant like `process.execute`.
+#[test]
+fn watchers_launch_and_stop_with_process_authority() {
+    use devworks_core::authority::policy::evaluate;
+    use devworks_core::authority::{DenialReason, Verdict};
+    use devworks_core::context::{HostIngress, PrincipalKind};
+    use devworks_core::fingerprint::Fingerprint;
+    use devworks_core::operations::{OperationInput, watch};
+    use devworks_core::ports::AuthorityRequest;
+    use devworks_core::ports::storage::PrincipalBinding;
+    use devworks_core::protocol::{ActorId, Counter, Id, Revision};
+    use devworks_core::registry::{Mode, find};
+
+    let store = common::MemoryStore::new(&["watch-agent"]);
+    let ctx = HostIngress::new(&store)
+        .context(
+            ActorId(Id::new("watch-agent").unwrap()),
+            PrincipalKind::Agent,
+            Id::new("watch-invocation").unwrap(),
+            Id::new("watch-ingress").unwrap(),
+            Counter::new(0).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(Id::new("watch-session").unwrap());
+    let binding = |role| PrincipalBinding {
+        actor: ActorId(Id::new("watch-agent").unwrap()),
+        kind: PrincipalKind::Agent,
+        role: Some(role),
+        project_id: None,
+        tool_families: None,
+        active: true,
+        revision: 1,
+        bound_by: ActorId(Id::new("owner").unwrap()),
+        updated_at_ms: 0,
+    };
+    let policy = |profile, shell_tools| EffectivePolicy {
+        profile: Some(profile),
+        profile_source: None,
+        shell_tools,
+        web_tools: true,
+        web_fetch: true,
+        tool_overrides: Some(BTreeMap::new()),
+    };
+    let spec = json!({"executableRef":"sh","args":["-c","true"],
+        "workingDirectory":{"rootId":"root","relative":"work"},"environment":[],
+        "profile":"Full","timeoutMs":"1000","outputLimitBytes":"64"});
+    let inputs = [
+        (
+            "watch.create",
+            OperationInput::Watch(watch::Input::Create(
+                serde_json::from_value(json!({"process": spec})).unwrap(),
+            )),
+        ),
+        (
+            "watch.cancel",
+            OperationInput::Watch(watch::Input::Cancel(
+                serde_json::from_value(
+                    json!({"watcherId":"w","expectedRevision":"1","stopProcess":true}),
+                )
+                .unwrap(),
+            )),
+        ),
+        (
+            "watch.inspect",
+            OperationInput::Watch(watch::Input::Inspect(
+                serde_json::from_value(json!({"watcherId":"w"})).unwrap(),
+            )),
+        ),
+    ];
+    let fingerprint = Fingerprint::from_hex(&"0".repeat(64)).unwrap();
+    let verdict = |op: &str, input: &OperationInput, role, policy: &EffectivePolicy| {
+        let descriptor = find(op).unwrap();
+        let mode = if op == "watch.inspect" {
+            Mode::Query
+        } else {
+            Mode::Command
+        };
+        let selected = descriptor.binding(mode).unwrap();
+        evaluate(
+            &ctx,
+            Some(&binding(role)),
+            policy,
+            &AuthorityRequest {
+                descriptor,
+                binding: selected,
+                effect: selected.effect,
+                action: None,
+                input,
+                fingerprint: &fingerprint,
+            },
+            &[],
+        )
+    };
+    let full = policy(AccessProfile::Full, true);
+    for (op, input) in &inputs[..2] {
+        assert_eq!(
+            verdict(op, input, AgentRole::CodeReviewer, &full),
+            Verdict::Deny(DenialReason::ReadOnlyRole),
+            "{op}"
+        );
+        assert_eq!(
+            verdict(
+                op,
+                input,
+                AgentRole::Worker,
+                &policy(AccessProfile::Full, false)
+            ),
+            Verdict::Deny(DenialReason::ShellToolsDisabled),
+            "{op}"
+        );
+        assert_eq!(
+            verdict(op, input, AgentRole::Worker, &full),
+            Verdict::Allow,
+            "{op}"
+        );
+    }
+    // Reading a watcher is not a launch or a stop.
+    let (op, input) = &inputs[2];
+    assert_eq!(
+        verdict(op, input, AgentRole::CodeReviewer, &full),
+        Verdict::Allow
+    );
+    let (op, input) = &inputs[0];
+    assert!(matches!(
+        verdict(
+            op,
+            input,
+            AgentRole::Worker,
+            &policy(AccessProfile::ProjectScope, true)
+        ),
+        Verdict::NeedsGrant {
+            kind: GrantKind::NativeExecution,
+            exact: true,
+            ..
+        }
+    ));
 }

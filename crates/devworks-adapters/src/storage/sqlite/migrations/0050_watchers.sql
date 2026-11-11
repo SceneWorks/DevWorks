@@ -27,8 +27,8 @@ CREATE TABLE watchers (
  CHECK((phase='Settled')=(outcome_kind IS NOT NULL)),
  CHECK((phase IN ('Settled','Cancelled'))=(settled_at IS NOT NULL))
 ) STRICT;
-CREATE INDEX watchers_session ON watchers(session_id,id);
-CREATE INDEX watchers_project ON watchers(project_id,id);
+CREATE INDEX watchers_session ON watchers(session_id,created_at,id);
+CREATE INDEX watchers_project ON watchers(project_id,created_at,id);
 CREATE INDEX watchers_open ON watchers(id) WHERE phase IN ('Active','Stopping');
 
 CREATE TABLE watcher_events (
@@ -49,4 +49,5 @@ CREATE TABLE watcher_events (
  CHECK(carried_turn_id IS NULL OR state='Delivered')
 ) STRICT;
 CREATE INDEX watcher_events_session ON watcher_events(session_id,state,created_at,id);
+CREATE INDEX watcher_events_pending ON watcher_events(id) WHERE state='Pending';
 CREATE INDEX watcher_events_turn ON watcher_events(carried_turn_id) WHERE carried_turn_id IS NOT NULL;

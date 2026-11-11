@@ -163,9 +163,11 @@ impl MovedWorker {
         let service = self.f.control.clone();
         let sid = self.session.clone();
         let turn = self.old_turn.turn_id.clone();
-        write(&*self.f.store, move |tx| service.end_turn(tx, &sid, &turn))
-            .unwrap()
-            .unwrap();
+        write(&*self.f.store, move |tx| {
+            service.end_turn(tx, &sid, &turn, true)
+        })
+        .unwrap()
+        .unwrap();
     }
     fn assignment(&self) -> StoredAssignment {
         read(&*self.f.store, |s| s.runs().assignment(&self.worker.id)).unwrap()
@@ -492,7 +494,7 @@ fn a_feature_transfer_preserves_worker_session_and_checkpoint_and_fences_old_epo
                 .begin_turn(tx, &sid, &assignment, &a.id, a.owner_epoch)?
                 .is_err()
         );
-        service.end_turn(tx, &sid, &first.turn_id)?.unwrap();
+        service.end_turn(tx, &sid, &first.turn_id, true)?.unwrap();
         Ok(())
     })
     .unwrap();

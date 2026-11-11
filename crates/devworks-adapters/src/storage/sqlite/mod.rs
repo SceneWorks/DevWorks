@@ -35,7 +35,6 @@ mod decisions;
 mod diagnostics;
 mod embedding;
 mod evals;
-mod watchers;
 mod git;
 mod github;
 mod graph;
@@ -57,6 +56,7 @@ mod runs;
 mod schemas;
 mod sessions;
 mod usage;
+mod watchers;
 mod work;
 mod writer;
 

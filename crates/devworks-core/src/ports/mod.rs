@@ -111,6 +111,8 @@ pub enum IdKind {
     Credential,
     /// In-process sign-in flows.
     SignInFlow,
+    /// Watchers (DW-94).
+    Watcher,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {

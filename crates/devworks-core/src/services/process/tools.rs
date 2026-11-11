@@ -482,7 +482,11 @@ impl TailOutput {
 /// bytes is withheld along with complete matches.
 pub(crate) fn redacted_tail(bytes: &[u8], values: &[String], cut_front: bool) -> Vec<u8> {
     let mut redacted = redacted_output(bytes, values, false);
-    if cut_front && !values.iter().any(|value| !value.is_empty() && value.len() < 4) {
+    if cut_front
+        && !values
+            .iter()
+            .any(|value| !value.is_empty() && value.len() < 4)
+    {
         let mut trim = 0;
         for value in values {
             let secret = value.as_bytes();
@@ -514,9 +518,30 @@ struct ExecuteJob {
     /// A watcher's output tail budget; zero (omitted) for a plain `process.execute`.
     #[serde(default, skip_serializing_if = "is_zero")]
     tail_bytes: u32,
+    /// Set when `watch.create` admitted this launch: the effect re-authorizes that request (its
+    /// grant binds the watch.create fingerprint), not a `process.execute` request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    watch: Option<WatchOrigin>,
 }
 fn is_zero(value: &u32) -> bool {
     *value == 0
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct WatchOrigin {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    requested_tail_bytes: Option<u32>,
+}
+
+/// Who admitted a process launch, which decides its consumer and its re-authorization.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ExecuteOrigin {
+    /// `process.execute`.
+    Tool,
+    /// `watch.create`, with its effective and requested tail budgets.
+    Watch {
+        tail_bytes: u32,
+        requested: Option<u32>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -605,6 +630,7 @@ impl ExecuteJob {
             authority_sources: ctx.authority_sources().to_vec(),
             spec,
             tail_bytes: 0,
+            watch: None,
         }
     }
 
@@ -883,13 +909,24 @@ impl ProcessToolService {
         ctx: &InvocationContext,
         fingerprint: &Fingerprint,
         spec: &ProcessSpec,
-        tail_bytes: u32,
-        consumer: &str,
+        origin: ExecuteOrigin,
         tx: &mut dyn WriteTransaction,
     ) -> Result<OperationId, StorageError> {
         let operation = OperationId(tx.new_id(IdKind::Operation));
         let mut job = ExecuteJob::from_context(ctx, fingerprint, spec.clone());
-        job.tail_bytes = tail_bytes;
+        let consumer = match origin {
+            ExecuteOrigin::Tool => EFFECT_CONSUMER,
+            ExecuteOrigin::Watch {
+                tail_bytes,
+                requested,
+            } => {
+                job.tail_bytes = tail_bytes;
+                job.watch = Some(WatchOrigin {
+                    requested_tail_bytes: requested,
+                });
+                WATCH_CONSUMER
+            }
+        };
         let payload =
             serde_json::to_value(&job).map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
         tx.operations().record_intent(NewOperation {
@@ -1357,7 +1394,12 @@ impl ProcessToolService {
             return EffectOutcome::Failed("invalid process intent".into());
         };
         let ctx = job.context(&*self.store, &operation.id);
-        let Some(descriptor) = crate::registry::find("process.execute") else {
+        let admitted_by = if job.watch.is_some() {
+            "watch.create"
+        } else {
+            "process.execute"
+        };
+        let Some(descriptor) = crate::registry::find(admitted_by) else {
             return EffectOutcome::Failed("process descriptor unavailable".into());
         };
         let Some(binding) = descriptor.binding(Mode::Command) else {
@@ -1366,9 +1408,19 @@ impl ProcessToolService {
         let Some(fingerprint) = Fingerprint::from_hex(&job.fingerprint) else {
             return EffectOutcome::Failed("invalid process intent fingerprint".into());
         };
-        let input = OperationInput::Process(ops::Input::Execute(ops::ExecuteInput {
-            spec: job.spec.clone(),
-        }));
+        let input = match &job.watch {
+            Some(origin) => OperationInput::Watch(crate::operations::watch::Input::Create(
+                crate::operations::watch::CreateInput {
+                    process: job.spec.clone(),
+                    tail_bytes: origin
+                        .requested_tail_bytes
+                        .and_then(crate::protocol::support::ByteLimit::new),
+                },
+            )),
+            None => OperationInput::Process(ops::Input::Execute(ops::ExecuteInput {
+                spec: job.spec.clone(),
+            })),
+        };
         if self
             .authority
             .authorize(
@@ -1530,6 +1582,7 @@ impl ProcessToolService {
                 return EffectOutcome::Failed(format!("process launch refused: {reason:?}"));
             }
         };
+        let started = Instant::now();
         let output = Arc::new(Mutex::new(BoundedOutput::new(output_limit)));
         self.live_output
             .lock()
@@ -1541,7 +1594,10 @@ impl ProcessToolService {
             self.live_tails
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .insert(process.id.as_str().to_owned(), (tail.clone(), redactions.clone()));
+                .insert(
+                    process.id.as_str().to_owned(),
+                    (tail.clone(), redactions.clone()),
+                );
         }
         let _output_guard = LiveOutputGuard {
             service: self,
@@ -1602,6 +1658,7 @@ impl ProcessToolService {
             }
             std::thread::sleep(Duration::from_millis(10));
         };
+        let duration_ms = started.elapsed().as_millis();
         let Ok(StopOutcome::Reaped {
             exit_code, signal, ..
         }) = outcome
@@ -1652,6 +1709,7 @@ impl ProcessToolService {
             "outputBase64": base64::engine::general_purpose::STANDARD.encode(bytes),
             "truncated": truncated,
         });
+        evidence["durationMs"] = json!(u64::try_from(duration_ms).unwrap_or(u64::MAX));
         if timed_out {
             evidence["timedOut"] = json!(true);
         }
@@ -2298,8 +2356,7 @@ impl CommandHandler for ProcessToolService {
             ctx,
             command.fingerprint(),
             &input.spec,
-            0,
-            EFFECT_CONSUMER,
+            ExecuteOrigin::Tool,
             tx,
         )?;
         Ok(Decided {
@@ -2696,6 +2753,29 @@ mod tests {
             Err(BindingRefusal::UnknownCredential)
         );
         std::fs::remove_dir_all(base).expect("remove test root");
+    }
+
+    #[test]
+    fn a_watcher_tail_keeps_the_last_bytes_and_withholds_a_cut_credential_suffix() {
+        let mut tail = TailOutput::new(8);
+        tail.append(b"0123");
+        assert!(!tail.truncated());
+        tail.append(b"456789ab");
+        tail.append(b"c");
+        assert_eq!(tail.retained(), b"56789abc");
+        assert!(tail.truncated());
+        let mut big = TailOutput::new(4);
+        big.append(b"abcdefghij");
+        assert_eq!(big.retained(), b"ghij");
+        // A complete credential is redacted; one cut at the front of a truncated tail is
+        // withheld rather than shown as a suffix.
+        let secret = vec!["s3cret-token".to_owned()];
+        let whole = redacted_tail(b"key=s3cret-token done", &secret, false);
+        assert!(!String::from_utf8_lossy(&whole).contains("s3cret"));
+        let cut = redacted_tail(b"et-token done", &secret, true);
+        assert_eq!(cut, b" done");
+        let kept = redacted_tail(b"et-token done", &secret, false);
+        assert_eq!(kept, b"et-token done");
     }
 
     #[test]

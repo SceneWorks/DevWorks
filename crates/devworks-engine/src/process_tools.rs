@@ -6,7 +6,7 @@ use crate::dispatch::{
 };
 use devworks_core::ports::storage::{OperationRecord, StorageError, WriteTransaction};
 use devworks_core::services::process::tools::{
-    CANCEL_CONSUMER, EFFECT_CONSUMER, EffectOutcome, ProcessToolService,
+    CANCEL_CONSUMER, EFFECT_CONSUMER, EffectOutcome, ProcessToolService, WATCH_CONSUMER,
 };
 use std::sync::Arc;
 
@@ -72,5 +72,14 @@ pub fn consumer(service: Arc<ProcessToolService>) -> Consumer {
 pub fn cancel_consumer(service: Arc<ProcessToolService>) -> Consumer {
     let mut consumer = consumer(service);
     consumer.name = CANCEL_CONSUMER.into();
+    consumer
+}
+
+/// Watched processes run long by design (a dev server, a build), so they share neither the
+/// two `process.execute` slots nor the cancellation slots.
+pub fn watch_consumer(service: Arc<ProcessToolService>) -> Consumer {
+    let mut consumer = consumer(service);
+    consumer.name = WATCH_CONSUMER.into();
+    consumer.max_in_flight = Some(16);
     consumer
 }

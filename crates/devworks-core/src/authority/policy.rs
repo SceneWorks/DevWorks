@@ -45,11 +45,13 @@ pub const UNVERIFIED_READ_FAMILIES: [&str; 4] = ["mcp", "addons", "database", "b
 /// Commands that run arbitrary native code with the desktop user's rights. Under Project scope
 /// they need a reviewed native grant, because no confined launcher is qualified; there is no
 /// fallback to Full.
-pub const NATIVE_EXECUTION: [&str; 17] = [
+pub const NATIVE_EXECUTION: [&str; 18] = [
     "git.worktree",
     "git.commit",
     "git.push",
     "process.execute",
+    // A process watcher launches through process.execute.
+    "watch.create",
     "process.install_project_dependencies",
     "containers.build",
     "containers.pull",
@@ -535,7 +537,10 @@ pub fn registered_tool_visibility(
         }
     }
     if kind == PrincipalKind::Agent {
-        if fam == "process" && !policy.shell_tools {
+        // A process watcher launches and stops processes through the process tools.
+        if (fam == "process" || matches!(op, "watch.create" | "watch.cancel"))
+            && !policy.shell_tools
+        {
             return Verdict::Deny(DenialReason::ShellToolsDisabled);
         }
         // Each web tool has its own switch; no other web operation is allowed by them.

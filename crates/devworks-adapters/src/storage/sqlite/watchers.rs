@@ -82,7 +82,11 @@ impl WatcherRow {
             project_id: self.project_id.map(id).transpose()?.map(ProjectId),
             session_id: id(self.session_id)?,
             actor: ActorId(id(self.actor_id)?),
-            process_operation_id: self.process_operation_id.map(id).transpose()?.map(OperationId),
+            process_operation_id: self
+                .process_operation_id
+                .map(id)
+                .transpose()?
+                .map(OperationId),
             executable_ref: self.executable_ref,
             tail_bytes: self.tail_bytes,
             outcome: self.outcome_kind.map(|kind| StoredWatchOutcome {
@@ -109,8 +113,8 @@ fn watchers_where<P: rusqlite::Params>(
     let mut statement = db(conn.prepare_cached(&format!(
         "SELECT {WATCHER_COLUMNS} FROM watchers WHERE {tail}"
     )))?;
-    let rows = db(db(statement.query_map(params, watcher_row))?
-        .collect::<rusqlite::Result<Vec<_>>>())?;
+    let rows =
+        db(db(statement.query_map(params, watcher_row))?.collect::<rusqlite::Result<Vec<_>>>())?;
     rows.into_iter().map(WatcherRow::into_stored).collect()
 }
 
@@ -141,7 +145,19 @@ fn events_where<P: rusqlite::Params>(
     .collect::<rusqlite::Result<Vec<_>>>())?;
     rows.into_iter()
         .map(
-            |(event, watcher, session, project, state, payload, sequence, turn, created, delivered, acknowledged)| {
+            |(
+                event,
+                watcher,
+                session,
+                project,
+                state,
+                payload,
+                sequence,
+                turn,
+                created,
+                delivered,
+                acknowledged,
+            )| {
                 Ok(StoredWatchEvent {
                     id: id(event)?,
                     watcher_id: id(watcher)?,
@@ -172,7 +188,9 @@ macro_rules! watcher_reads {
     ($type:ty) => {
         impl WatcherRead for $type {
             fn watcher(&self, id: &Id) -> Result<Option<StoredWatcher>, StorageError> {
-                Ok(watchers_where(self.conn, "id=?1", [id.as_str()])?.into_iter().next())
+                Ok(watchers_where(self.conn, "id=?1", [id.as_str()])?
+                    .into_iter()
+                    .next())
             }
             fn watcher_for_process(
                 &self,
@@ -188,7 +206,7 @@ macro_rules! watcher_reads {
                 &self,
                 filter: &WatcherFilter,
                 phases: &[WatcherPhase],
-                before: Option<&Id>,
+                before: Option<(i64, &Id)>,
                 limit: u16,
             ) -> Result<Vec<StoredWatcher>, StorageError> {
                 let limit = page_limit(limit)?;
@@ -207,16 +225,22 @@ macro_rules! watcher_reads {
                         "project_id IS NULL AND ?1 IS NULL"
                     }
                 };
-                values.push(before.map_or(rusqlite::types::Value::Null, |b| {
+                values.push(before.map_or(rusqlite::types::Value::Null, |(at, _)| at.into()));
+                values.push(before.map_or(rusqlite::types::Value::Null, |(_, b)| {
                     b.as_str().to_owned().into()
                 }));
                 values.push(limit.into());
-                let mut tail = format!("{owner} AND (?2 IS NULL OR id<?2)");
+                let mut tail = format!(
+                    "{owner} AND (?2 IS NULL OR created_at<?2 OR (created_at=?2 AND id<?3))"
+                );
                 if !phases.is_empty() {
-                    tail.push_str(&format!(" AND phase IN ({})", placeholders(4, phases.len())));
+                    tail.push_str(&format!(
+                        " AND phase IN ({})",
+                        placeholders(5, phases.len())
+                    ));
                     values.extend(phases.iter().map(|p| p.as_str().to_owned().into()));
                 }
-                tail.push_str(" ORDER BY id DESC LIMIT ?3");
+                tail.push_str(" ORDER BY created_at DESC,id DESC LIMIT ?4");
                 watchers_where(self.conn, &tail, params_from_iter(values))
             }
             fn open_watchers(
@@ -230,16 +254,31 @@ macro_rules! watcher_reads {
                     params![after.map_or("", Id::as_str), page_limit(limit)?],
                 )
             }
+            fn pending_watch_events(
+                &self,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredWatchEvent>, StorageError> {
+                events_where(
+                    self.conn,
+                    "state='Pending' AND id>?1 ORDER BY id LIMIT ?2",
+                    params![after.map_or("", Id::as_str), page_limit(limit)?],
+                )
+            }
             fn watch_event(&self, id: &Id) -> Result<Option<StoredWatchEvent>, StorageError> {
-                Ok(events_where(self.conn, "id=?1", [id.as_str()])?.into_iter().next())
+                Ok(events_where(self.conn, "id=?1", [id.as_str()])?
+                    .into_iter()
+                    .next())
             }
             fn watch_event_for_watcher(
                 &self,
                 watcher: &Id,
             ) -> Result<Option<StoredWatchEvent>, StorageError> {
-                Ok(events_where(self.conn, "watcher_id=?1", [watcher.as_str()])?
-                    .into_iter()
-                    .next())
+                Ok(
+                    events_where(self.conn, "watcher_id=?1", [watcher.as_str()])?
+                        .into_iter()
+                        .next(),
+                )
             }
             fn watch_events(
                 &self,
@@ -250,8 +289,10 @@ macro_rules! watcher_reads {
                 if states.is_empty() {
                     return Ok(Vec::new());
                 }
-                let mut values: Vec<rusqlite::types::Value> =
-                    vec![session.as_str().to_owned().into(), page_limit(limit)?.into()];
+                let mut values: Vec<rusqlite::types::Value> = vec![
+                    session.as_str().to_owned().into(),
+                    page_limit(limit)?.into(),
+                ];
                 values.extend(states.iter().map(|s| s.as_str().to_owned().into()));
                 events_where(
                     self.conn,
@@ -269,9 +310,13 @@ watcher_reads!(Snapshot<'_>);
 watcher_reads!(Unit<'_>);
 
 fn check(watcher: &StoredWatcher) -> Result<(), StorageError> {
-    if watcher.revision < 1 || watcher.created_at_ms < 0 || watcher.updated_at_ms < watcher.created_at_ms
+    if watcher.revision < 1
+        || watcher.created_at_ms < 0
+        || watcher.updated_at_ms < watcher.created_at_ms
     {
-        return Err(invalid("watcher revision and times must be ordered and nonnegative"));
+        return Err(invalid(
+            "watcher revision and times must be ordered and nonnegative",
+        ));
     }
     if !(0..=MAX_WATCH_TAIL_BYTES as i64).contains(&watcher.tail_bytes)
         || watcher
@@ -405,6 +450,9 @@ impl WatcherRepository for Unit<'_> {
         } else {
             "UPDATE watcher_events SET carried_turn_id=NULL WHERE session_id=?1 AND carried_turn_id=?2 AND ?3 IS NOT NULL"
         };
-        Ok(db(self.conn.execute(sql, params![session.as_str(), turn.as_str(), at_ms]))? as u64)
+        Ok(db(self
+            .conn
+            .execute(sql, params![session.as_str(), turn.as_str(), at_ms]))?
+            as u64)
     }
 }
