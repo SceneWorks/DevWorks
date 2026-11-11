@@ -102,6 +102,21 @@ impl WatchService {
             };
             after = Some(last.id.clone());
             for watcher in &page {
+                // Most open watchers have nothing new: decide that from a snapshot and write only
+                // when an outcome is observed (the write re-checks it).
+                let observable = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+                    let Some(operation_id) = &watcher.process_operation_id else {
+                        return Ok(false);
+                    };
+                    let Some(operation) = read.operations().operation(operation_id)? else {
+                        return Ok(false);
+                    };
+                    let process = read.resources().process(&operation_id.0)?;
+                    Ok(observe(watcher, &operation, process.as_ref()).is_some())
+                })?;
+                if !observable {
+                    continue;
+                }
                 let id = watcher.id.clone();
                 let done = run_write(&*self.store, WriteOptions::default(), move |tx| {
                     settle_in(tx, &id)
@@ -145,6 +160,17 @@ impl WatchService {
         host: &InvocationContext,
         event: &StoredWatchEvent,
     ) -> Result<bool, StorageError> {
+        // Delivery to an ended session is decided with session lifecycle (DW-99); it is not
+        // staged again on every pass meanwhile.
+        let open = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            Ok(read
+                .sessions()
+                .session(&event.session_id)?
+                .is_some_and(|session| !session.closed()))
+        })?;
+        if !open {
+            return Ok(false);
+        }
         let text = notice_text(event);
         let staged = self
             .artifacts
@@ -890,11 +916,18 @@ fn record_of(
 fn notice_text(event: &StoredWatchEvent) -> String {
     let p = &event.payload;
     let s = |pointer: &str| p.pointer(pointer).and_then(Value::as_str).unwrap_or("");
+    // Counters are serialized as decimal strings.
+    let n = |pointer: &str| {
+        p.pointer(pointer).and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
+    };
     let mut outcome = s("/outcome/kind").to_owned();
-    if let Some(code) = p.pointer("/outcome/exitCode").and_then(Value::as_i64) {
+    if let Some(code) = n("/outcome/exitCode") {
         outcome.push_str(&format!(" (exit code {code})"));
     }
-    if let Some(signal) = p.pointer("/outcome/signal").and_then(Value::as_i64) {
+    if let Some(signal) = n("/outcome/signal") {
         outcome.push_str(&format!(" (signal {signal})"));
     }
     let mut text = format!(
@@ -905,7 +938,7 @@ fn notice_text(event: &StoredWatchEvent) -> String {
         process = s("/process/processId"),
         executable = s("/process/executableRef"),
     );
-    if let Some(duration) = p.get("durationMs").and_then(Value::as_i64) {
+    if let Some(duration) = n("/durationMs") {
         text.push_str(&format!(" Duration: {duration} ms."));
     }
     if !s("/outcome/detail").is_empty() {

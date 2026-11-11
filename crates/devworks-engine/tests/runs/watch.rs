@@ -578,7 +578,10 @@ fn a_watched_process_wakes_its_session_once_and_a_completed_turn_acknowledges_it
         assert!(!bodies.is_empty());
         let last = bodies.last().unwrap();
         assert!(
-            last.contains(&format!("Watcher event {event_id}")) && last.contains("Failed (exit code 3)"),
+            last.contains(&format!("Watcher event {event_id}"))
+                && last.contains("Failed (exit code 3)")
+                && last.contains(" Duration: ")
+                && last.contains("started\\nfinishing"),
             "{last}"
         );
         assert_eq!(last.matches(&format!("Watcher event {event_id}")).count(), 1);
