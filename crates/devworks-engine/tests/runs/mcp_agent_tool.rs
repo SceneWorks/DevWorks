@@ -147,7 +147,7 @@ fn an_agent_turn_calls_a_selected_mcp_tool_and_reads_its_result_in_the_next_requ
         .enable_all()
         .build()
         .unwrap()
-        .block_on(within("agent MCP tool turn", async {
+        .block_on(async {
             let mut composed = composition(&fx, None, Arc::new(FakePower::default()));
             let connections = Arc::new(
                 devworks_core::services::router::connections::ConnectionService::new(
@@ -421,10 +421,15 @@ fn an_agent_turn_calls_a_selected_mcp_tool_and_reads_its_result_in_the_next_requ
                 .wire_name;
             *wire.tool.lock().unwrap() = alias.clone();
 
+            // Boot-time Help generation holds the single store writer for several seconds in a
+            // debug build, so each turn write can wait behind it; this bound only catches a hang.
             let (_stop_tx, stop) = tokio::sync::watch::channel(false);
-            let end = NativeAgentTurnExecutor::new(&app)
-                .run(context.clone(), primary.clone(), stop)
-                .await;
+            let end = tokio::time::timeout(
+                std::time::Duration::from_secs(180),
+                NativeAgentTurnExecutor::new(&app).run(context.clone(), primary.clone(), stop),
+            )
+            .await
+            .expect("the agent turn finished within 180 s");
             assert!(
                 matches!(
                     end,
@@ -484,5 +489,5 @@ fn an_agent_turn_calls_a_selected_mcp_tool_and_reads_its_result_in_the_next_requ
                 .expect("runtime has one owner")
                 .shutdown()
                 .await;
-        }));
+        });
 }
