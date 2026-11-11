@@ -483,6 +483,7 @@ fn context_material(call: &SamplingCall, temperature: bool, stop: bool) -> Provi
         version: 1,
         instructions,
         instruction_stamps: vec![],
+        skill_stamp: None,
         messages: call
             .messages
             .iter()
