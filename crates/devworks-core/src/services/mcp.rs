@@ -1615,12 +1615,13 @@ impl McpClientService {
                     let mut unavailable = old.clone();
                     unavailable.input_schema = None;
                     unavailable.output_schema = None;
+                    // An identical placeholder keeps the revision already shown, so a repeated
+                    // discovery with the tool still absent changes nothing.
                     if let Some(shown) = server.capabilities.iter().find(|cap| &cap.id == id) {
-                        unavailable.revision = if same(shown, &unavailable) {
-                            shown.revision.clone()
-                        } else {
-                            rev(shown.revision.get() + 1)
-                        };
+                        unavailable.revision = shown.revision.clone();
+                        if !same(shown, &unavailable) {
+                            unavailable.revision = rev(shown.revision.get() + 1);
+                        }
                     }
                     retired.insert(id.as_str().to_owned(), old.clone());
                     capabilities.push(unavailable);

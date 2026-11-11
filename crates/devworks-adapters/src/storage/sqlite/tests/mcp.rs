@@ -1818,6 +1818,11 @@ fn a_vanished_selected_tool_stays_unavailable_and_returns_selected() {
     assert_eq!(unavailable.id, write);
     assert!(unavailable.input_schema.is_none());
     assert!(offered().is_empty());
+    // The same discovery again, with the tool still absent, changes nothing.
+    let repeated = publish(3, vec![tool("lookup", true)]);
+    assert_eq!(repeated.catalog_revision.get(), 3);
+    assert_eq!(repeated.revision, vanished.revision);
+    assert_eq!(tool_id(3, "write").revision, unavailable.revision);
 
     // It returns unchanged and is offered again under its original selection.
     let returned = publish(3, vec![tool("lookup", true), tool("write", false)]);
