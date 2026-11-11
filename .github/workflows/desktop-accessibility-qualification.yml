@@ -12,6 +12,11 @@ on:
 permissions:
   contents: read
 
+# Matches ci.yml: rust-cache hashes every CARGO* variable into the cache key.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   linux:
     if: inputs.target != 'windows'

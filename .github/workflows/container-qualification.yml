@@ -14,6 +14,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# Matches ci.yml: rust-cache hashes every CARGO* variable into the cache key.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 concurrency:
   group: native-containers-${{ github.ref }}
   cancel-in-progress: true
