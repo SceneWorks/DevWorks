@@ -29,7 +29,9 @@ jobs:
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
         with:
-          shared-key: native-containers
+          # PR-only workflow: restores the main branch's foundation cache, which builds the same adapters tests.
+          shared-key: test-foundation
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Qualify Docker ownership, resources and shutdown
         env:
           DW_NATIVE_DOCKER: /usr/bin/docker
@@ -49,7 +51,9 @@ jobs:
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
         with:
-          shared-key: native-containers
+          # PR-only workflow: restores the main branch's foundation cache, which builds the same adapters tests.
+          shared-key: test-foundation
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install and probe native Podman
         run: |
           sudo apt-get update -qq
