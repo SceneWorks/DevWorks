@@ -443,6 +443,59 @@ pub struct BoundedOutput {
 
 pub const EFFECT_CONSUMER: &str = "process_tool_effects";
 pub const CANCEL_CONSUMER: &str = "process_tool_cancellations";
+/// Processes launched by watchers run on their own consumer, so a long-running watched process
+/// never takes a `process.execute` worker slot.
+pub const WATCH_CONSUMER: &str = "watch_process_effects";
+
+/// The last `limit` bytes of a combined output stream (a watcher reports the end of a run).
+#[derive(Clone, Debug)]
+pub struct TailOutput {
+    bytes: std::collections::VecDeque<u8>,
+    seen: u64,
+    limit: usize,
+}
+impl TailOutput {
+    pub fn new(limit: usize) -> Self {
+        Self {
+            bytes: std::collections::VecDeque::with_capacity(limit),
+            seen: 0,
+            limit,
+        }
+    }
+    pub fn append(&mut self, chunk: &[u8]) {
+        self.seen = self.seen.saturating_add(chunk.len() as u64);
+        let keep = &chunk[chunk.len().saturating_sub(self.limit)..];
+        let overflow = (self.bytes.len() + keep.len()).saturating_sub(self.limit);
+        self.bytes.drain(..overflow.min(self.bytes.len()));
+        self.bytes.extend(keep);
+    }
+    /// Earlier bytes were discarded.
+    pub fn truncated(&self) -> bool {
+        self.seen > self.bytes.len() as u64
+    }
+    pub fn retained(&self) -> Vec<u8> {
+        self.bytes.iter().copied().collect()
+    }
+}
+
+/// Redacts a tail whose front may be cut: a credential's suffix at the start of the retained
+/// bytes is withheld along with complete matches.
+pub(crate) fn redacted_tail(bytes: &[u8], values: &[String], cut_front: bool) -> Vec<u8> {
+    let mut redacted = redacted_output(bytes, values, false);
+    if cut_front && !values.iter().any(|value| !value.is_empty() && value.len() < 4) {
+        let mut trim = 0;
+        for value in values {
+            let secret = value.as_bytes();
+            for length in 1..secret.len() {
+                if redacted.starts_with(&secret[secret.len() - length..]) {
+                    trim = trim.max(length);
+                }
+            }
+        }
+        redacted.drain(..trim);
+    }
+    redacted
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ExecuteJob {
@@ -458,6 +511,12 @@ struct ExecuteJob {
     #[serde(default)]
     authority_sources: Vec<Id>,
     spec: ProcessSpec,
+    /// A watcher's output tail budget; zero (omitted) for a plain `process.execute`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    tail_bytes: u32,
+}
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -545,6 +604,7 @@ impl ExecuteJob {
             fingerprint: fingerprint.as_str().to_owned(),
             authority_sources: ctx.authority_sources().to_vec(),
             spec,
+            tail_bytes: 0,
         }
     }
 
@@ -616,7 +676,9 @@ pub struct ProcessToolService {
     protected_roots: ProtectedRoots,
     ids: Arc<dyn IdSource>,
     live_output: Mutex<HashMap<String, Arc<Mutex<BoundedOutput>>>>,
+    live_tails: Mutex<HashMap<String, LiveTail>>,
 }
+type LiveTail = (Arc<Mutex<TailOutput>>, Arc<Vec<String>>);
 
 struct LiveOutputGuard<'a> {
     service: &'a ProcessToolService,
@@ -626,6 +688,11 @@ impl Drop for LiveOutputGuard<'_> {
     fn drop(&mut self) {
         self.service
             .live_output
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(self.id.as_str());
+        self.service
+            .live_tails
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(self.id.as_str());
@@ -661,6 +728,7 @@ impl ProcessToolService {
             protected_roots,
             ids,
             live_output: Mutex::new(HashMap::new()),
+            live_tails: Mutex::new(HashMap::new()),
         }
     }
 
@@ -796,6 +864,108 @@ impl ProcessToolService {
             }),
             _ => None,
         })
+    }
+
+    /// Binds a wire process spec to the host's registered executables and roots, as
+    /// `process.execute` preparation does.
+    pub fn bind_spec(
+        &self,
+        input: &ProcessSpec,
+        ctx: &InvocationContext,
+    ) -> Result<NativeProcessSpec, BindingRefusal> {
+        self.bound_spec(input, ctx)
+    }
+
+    /// Records a `process.execute` intent for `spec` and enqueues its effect on `consumer`, in
+    /// the caller's transaction. The returned operation ID is also the owned process's ID.
+    pub(crate) fn record_execute(
+        &self,
+        ctx: &InvocationContext,
+        fingerprint: &Fingerprint,
+        spec: &ProcessSpec,
+        tail_bytes: u32,
+        consumer: &str,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<OperationId, StorageError> {
+        let operation = OperationId(tx.new_id(IdKind::Operation));
+        let mut job = ExecuteJob::from_context(ctx, fingerprint, spec.clone());
+        job.tail_bytes = tail_bytes;
+        let payload =
+            serde_json::to_value(&job).map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+        tx.operations().record_intent(NewOperation {
+            id: operation.clone(),
+            root_id: ctx.root_id().cloned(),
+            assignment_id: ctx.assignment_id().cloned(),
+            capability: "process.execute".into(),
+            schema_version: 1,
+            args_digest: sha256_hex(payload.to_string().as_bytes()),
+            payload,
+        })?;
+        let event = EventId(tx.new_id(IdKind::Event));
+        tx.history().append(NewEvent {
+            id: event.clone(),
+            actor: ctx.principal().clone(),
+            project_id: ctx.project_id().cloned(),
+            root_id: ctx.root_id().cloned(),
+            operation_id: Some(operation.clone()),
+            aggregate_kind: "process_tool".into(),
+            aggregate_id: operation.0.as_str().into(),
+            aggregate_revision: 1,
+            kind: "ProcessRequested".into(),
+            payload: json!({"operationId": operation.0.as_str(), "executableRef": spec.executable_ref.as_str()}),
+        })?;
+        let entry = tx.new_id(IdKind::QueueEntry);
+        let now = tx.now_ms();
+        tx.queue().enqueue(NewQueueEntry {
+            id: entry,
+            consumer: consumer.into(),
+            event_id: event,
+            root_id: ctx.root_id().cloned(),
+            operation_id: Some(operation.clone()),
+            partition: None,
+            priority: 0,
+            ready_at_ms: now,
+            payload: json!({"operationId":operation.0.as_str()}),
+        })?;
+        Ok(operation)
+    }
+
+    /// Requests a stop of the process `process_id` launched, at its current revision, through
+    /// the `process.cancel` path (before launch it cancels the undispatched intent).
+    pub(crate) fn request_cancel(
+        &self,
+        ctx: &InvocationContext,
+        process_id: &Id,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        let revision = match tx.resources().process(process_id)? {
+            Some(process) => process.revision,
+            None => tx
+                .operations()
+                .operation(&OperationId(process_id.clone()))?
+                .map_or(1, |operation| operation.revision),
+        };
+        let input = ops::CancelInput {
+            process_id: process_id.clone(),
+            expected_revision: rev(revision),
+        };
+        self.decide_cancel(ctx, &input, tx)
+    }
+
+    /// The redacted output tail of a running watcher process, and whether earlier bytes were
+    /// discarded. `None` once the process settled (its tail is in the completion).
+    pub fn live_tail(&self, process_id: &Id) -> Option<(Vec<u8>, bool)> {
+        let (tail, redactions) = self
+            .live_tails
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(process_id.as_str())
+            .cloned()?;
+        let tail = tail.lock().unwrap_or_else(|p| p.into_inner());
+        Some((
+            redacted_tail(&tail.retained(), &redactions, tail.truncated()),
+            tail.truncated(),
+        ))
     }
 
     fn bound_spec(
@@ -1246,6 +1416,7 @@ impl ProcessToolService {
             spec,
             job.spec.timeout_ms.get(),
             job.spec.output_limit_bytes.get() as usize,
+            job.tail_bytes as usize,
             redactions,
             false,
         )
@@ -1300,6 +1471,7 @@ impl ProcessToolService {
             plan.spec,
             3_600_000,
             1_048_576,
+            0,
             Vec::new(),
             true,
         )
@@ -1313,6 +1485,7 @@ impl ProcessToolService {
         spec: NativeProcessSpec,
         timeout_ms: i64,
         output_limit: usize,
+        tail_limit: usize,
         redactions: Vec<String>,
         install: bool,
     ) -> EffectOutcome {
@@ -1362,6 +1535,14 @@ impl ProcessToolService {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .insert(process.id.as_str().to_owned(), output.clone());
+        let redactions = Arc::new(redactions);
+        let tail = (tail_limit > 0).then(|| Arc::new(Mutex::new(TailOutput::new(tail_limit))));
+        if let Some(tail) = &tail {
+            self.live_tails
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(process.id.as_str().to_owned(), (tail.clone(), redactions.clone()));
+        }
         let _output_guard = LiveOutputGuard {
             service: self,
             id: process.id.clone(),
@@ -1375,6 +1556,7 @@ impl ProcessToolService {
         let (drained_tx, drained_rx) = std::sync::mpsc::channel();
         for mut pipe in [stdout, stderr] {
             let output = output.clone();
+            let tail = tail.clone();
             let drained_tx = drained_tx.clone();
             std::thread::spawn(move || {
                 use std::io::Read;
@@ -1382,10 +1564,17 @@ impl ProcessToolService {
                 loop {
                     match pipe.read(&mut chunk) {
                         Ok(0) | Err(_) => break,
-                        Ok(n) => output
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner())
-                            .append(&chunk[..n]),
+                        Ok(n) => {
+                            output
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .append(&chunk[..n]);
+                            if let Some(tail) = &tail {
+                                tail.lock()
+                                    .unwrap_or_else(|p| p.into_inner())
+                                    .append(&chunk[..n]);
+                            }
+                        }
                     }
                 }
                 let _ = drained_tx.send(());
@@ -1393,6 +1582,7 @@ impl ProcessToolService {
         }
         drop(drained_tx);
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+        let mut timed_out = false;
         let outcome = loop {
             match self.processes.poll(&process) {
                 Ok(Some(outcome)) => break Ok(outcome),
@@ -1402,6 +1592,7 @@ impl ProcessToolService {
                 Err(_) => {}
             }
             if Instant::now() >= deadline {
+                timed_out = true;
                 break self
                     .processes
                     .cancel(&process, Duration::from_secs(1), Duration::from_secs(5))
@@ -1411,7 +1602,10 @@ impl ProcessToolService {
             }
             std::thread::sleep(Duration::from_millis(10));
         };
-        let Ok(StopOutcome::Reaped { exit_code, .. }) = outcome else {
+        let Ok(StopOutcome::Reaped {
+            exit_code, signal, ..
+        }) = outcome
+        else {
             return EffectOutcome::Unknown(match outcome {
                 Ok(StopOutcome::Uncertain(reason)) | Err(reason) => reason,
                 _ => "process outcome unknown".into(),
@@ -1449,7 +1643,7 @@ impl ProcessToolService {
             truncated,
         };
         drop(output);
-        EffectOutcome::Completed(json!({
+        let mut evidence = json!({
             "result": if install {
                 OperationResult::ProcessInstallProjectDependencies { value: record }
             } else {
@@ -1457,7 +1651,20 @@ impl ProcessToolService {
             },
             "outputBase64": base64::engine::general_purpose::STANDARD.encode(bytes),
             "truncated": truncated,
-        }))
+        });
+        if timed_out {
+            evidence["timedOut"] = json!(true);
+        }
+        if let Some(signal) = signal {
+            evidence["signal"] = json!(signal);
+        }
+        if let Some(tail) = &tail {
+            let tail = tail.lock().unwrap_or_else(|p| p.into_inner());
+            let bytes = redacted_tail(&tail.retained(), &redactions, tail.truncated());
+            evidence["tailBase64"] = json!(base64::engine::general_purpose::STANDARD.encode(bytes));
+            evidence["tailTruncated"] = json!(tail.truncated());
+        }
+        EffectOutcome::Completed(evidence)
     }
 
     /// An earlier boot's effect is observed from its owned-process record; it is never
@@ -1727,7 +1934,7 @@ impl ProcessToolService {
                     .into()),
                 );
             }
-            let page = tx.queue().deliveries(
+            let mut page = tx.queue().deliveries(
                 &DeliveryFilter {
                     consumer: Some(EFFECT_CONSUMER.into()),
                     operation_id: Some(operation_id.clone()),
@@ -1735,6 +1942,16 @@ impl ProcessToolService {
                 None,
                 2,
             )?;
+            if page.entries.is_empty() {
+                page = tx.queue().deliveries(
+                    &DeliveryFilter {
+                        consumer: Some(WATCH_CONSUMER.into()),
+                        operation_id: Some(operation_id.clone()),
+                    },
+                    None,
+                    2,
+                )?;
+            }
             if page.entries.len() != 1 {
                 return decided(
                     tx,
@@ -1999,7 +2216,7 @@ impl ProcessToolService {
     }
 }
 
-fn binding_refusal(reason: BindingRefusal) -> Refusal {
+pub(crate) fn binding_refusal(reason: BindingRefusal) -> Refusal {
     let (code, kind) = match reason {
         BindingRefusal::UnknownExecutable => (DomainErrorCode::NotFound, "process_executable"),
         BindingRefusal::UnknownRoot => (DomainErrorCode::NotFound, "process_root"),
@@ -2077,45 +2294,14 @@ impl CommandHandler for ProcessToolService {
         if let Err(reason) = prepared {
             return decided(tx, Err(binding_refusal(*reason).into()));
         }
-        let operation = OperationId(tx.new_id(IdKind::Operation));
-        let job = ExecuteJob::from_context(ctx, command.fingerprint(), input.spec.clone());
-        let payload =
-            serde_json::to_value(&job).map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
-        tx.operations().record_intent(NewOperation {
-            id: operation.clone(),
-            root_id: ctx.root_id().cloned(),
-            assignment_id: ctx.assignment_id().cloned(),
-            capability: "process.execute".into(),
-            schema_version: 1,
-            args_digest: sha256_hex(payload.to_string().as_bytes()),
-            payload,
-        })?;
-        let event = EventId(tx.new_id(IdKind::Event));
-        tx.history().append(NewEvent {
-            id: event.clone(),
-            actor: ctx.principal().clone(),
-            project_id: ctx.project_id().cloned(),
-            root_id: ctx.root_id().cloned(),
-            operation_id: Some(operation.clone()),
-            aggregate_kind: "process_tool".into(),
-            aggregate_id: operation.0.as_str().into(),
-            aggregate_revision: 1,
-            kind: "ProcessRequested".into(),
-            payload: json!({"operationId": operation.0.as_str(), "executableRef": input.spec.executable_ref.as_str()}),
-        })?;
-        let entry = tx.new_id(IdKind::QueueEntry);
-        let now = tx.now_ms();
-        tx.queue().enqueue(NewQueueEntry {
-            id: entry,
-            consumer: EFFECT_CONSUMER.into(),
-            event_id: event,
-            root_id: ctx.root_id().cloned(),
-            operation_id: Some(operation.clone()),
-            partition: None,
-            priority: 0,
-            ready_at_ms: now,
-            payload: json!({"operationId":operation.0.as_str()}),
-        })?;
+        let operation = self.record_execute(
+            ctx,
+            command.fingerprint(),
+            &input.spec,
+            0,
+            EFFECT_CONSUMER,
+            tx,
+        )?;
         Ok(Decided {
             decision: DomainDecision::Accepted {
                 operation_id: operation.clone(),

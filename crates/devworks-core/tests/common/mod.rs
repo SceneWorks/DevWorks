@@ -396,6 +396,9 @@ impl ReadSnapshot for MemSnapshot {
     fn evals(&self) -> &dyn EvalRead {
         &self.unsupported
     }
+    fn watchers(&self) -> &dyn WatcherRead {
+        &self.unsupported
+    }
     fn conventions(&self) -> &dyn ConventionRead {
         &self.unsupported
     }
@@ -518,6 +521,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn evals(&mut self) -> &mut dyn EvalRepository {
+        &mut self.unsupported
+    }
+    fn watchers(&mut self) -> &mut dyn WatcherRepository {
         &mut self.unsupported
     }
     fn conventions(&mut self) -> &mut dyn ConventionRepository {
@@ -3277,6 +3283,61 @@ impl EvalRead for Unsupported {
 }
 impl EvalRepository for Unsupported {
     fn insert_eval_run(&mut self, _: &StoredEvalRun) -> Result<(), StorageError> {
+        nope()
+    }
+}
+
+impl WatcherRead for Unsupported {
+    fn watcher(&self, _: &Id) -> Result<Option<StoredWatcher>, StorageError> {
+        nope()
+    }
+    fn watcher_for_process(&self, _: &OperationId) -> Result<Option<StoredWatcher>, StorageError> {
+        nope()
+    }
+    fn watchers(
+        &self,
+        _: &WatcherFilter,
+        _: &[WatcherPhase],
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredWatcher>, StorageError> {
+        nope()
+    }
+    fn open_watchers(&self, _: Option<&Id>, _: u16) -> Result<Vec<StoredWatcher>, StorageError> {
+        nope()
+    }
+    fn watch_event(&self, _: &Id) -> Result<Option<StoredWatchEvent>, StorageError> {
+        nope()
+    }
+    fn watch_event_for_watcher(&self, _: &Id) -> Result<Option<StoredWatchEvent>, StorageError> {
+        nope()
+    }
+    fn watch_events(
+        &self,
+        _: &Id,
+        _: &[WatchEventState],
+        _: u16,
+    ) -> Result<Vec<StoredWatchEvent>, StorageError> {
+        nope()
+    }
+}
+impl WatcherRepository for Unsupported {
+    fn insert_watcher(&mut self, _: &StoredWatcher) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_watcher(&mut self, _: &StoredWatcher) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_watch_event(&mut self, _: &StoredWatchEvent) -> Result<(), StorageError> {
+        nope()
+    }
+    fn deliver_watch_event(&mut self, _: &Id, _: i64, _: i64) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn carry_watch_events(&mut self, _: &Id, _: &Id) -> Result<u64, StorageError> {
+        nope()
+    }
+    fn release_watch_events(&mut self, _: &Id, _: &Id, _: bool, _: i64) -> Result<u64, StorageError> {
         nope()
     }
 }

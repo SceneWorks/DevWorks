@@ -259,6 +259,7 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
         },
         empty: false,
         exit_code: None,
+        signal: None,
         output,
         control,
         input,
@@ -305,6 +306,7 @@ struct UnixTree {
     identity: NativeIdentity,
     empty: bool,
     exit_code: Option<i32>,
+    signal: Option<i32>,
     output: Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)>,
     control: Option<ControlChannel>,
     input: Option<Box<dyn Write + Send>>,
@@ -369,6 +371,7 @@ impl ProcessTree for UnixTree {
                     Ok(Some(status)) => {
                         self.empty = true;
                         self.exit_code = status.code();
+                        self.signal = std::os::unix::process::ExitStatusExt::signal(&status);
                     }
                     Ok(None) => {}
                     Err(e) => return Err(ProcessError::Control(format!("collect the root: {e}"))),
@@ -378,6 +381,7 @@ impl ProcessTree for UnixTree {
         Ok(TreeStatus {
             empty: self.empty,
             exit_code: self.exit_code,
+            signal: self.signal,
         })
     }
     fn take_output(&mut self) -> Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)> {

@@ -918,6 +918,7 @@ impl devworks_core::ports::process::ProcessTree for StopHookTree {
             return Ok(devworks_core::ports::process::TreeStatus {
                 empty: false,
                 exit_code: None,
+                signal: None,
             });
         }
         self.inner.poll()

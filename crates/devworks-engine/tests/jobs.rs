@@ -184,6 +184,7 @@ impl ProcessTree for FakeTree {
         Ok(TreeStatus {
             empty: self.gone,
             exit_code: self.gone.then_some(0),
+            signal: None,
         })
     }
     fn take_output(

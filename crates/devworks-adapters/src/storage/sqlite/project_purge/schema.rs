@@ -22,9 +22,11 @@ pub(super) fn verify(conn: &Connection) -> Result<(), StorageError> {
     // blessing a newly migrated owning table merely because it is in MIGRATIONS.
     // Migration 48 rebuilds session_context_epochs to add MembershipHandoff to its reason
     // constraint; it adds no table or ownership edge. Its rows keep their session owner.
-    if MIGRATIONS.last().map(|migration| migration.version) != Some(49) {
+    // Migration 50 adds watchers and watcher_events, both owned by their project (schema50
+    // extension); a watcher outside any project is never a candidate.
+    if MIGRATIONS.last().map(|migration| migration.version) != Some(50) {
         return Err(StorageError::IncompatibleSchema(
-            "project purge ownership policy requires schema 49".into(),
+            "project purge ownership policy requires schema 50".into(),
         ));
     }
     static EXPECTED: OnceLock<Result<Definitions, String>> = OnceLock::new();

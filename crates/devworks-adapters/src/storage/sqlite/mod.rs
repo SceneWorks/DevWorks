@@ -35,6 +35,7 @@ mod decisions;
 mod diagnostics;
 mod embedding;
 mod evals;
+mod watchers;
 mod git;
 mod github;
 mod graph;

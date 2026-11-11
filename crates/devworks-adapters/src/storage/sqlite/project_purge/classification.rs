@@ -55,6 +55,10 @@ const INSTRUCTION_EXTENSION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/architecture/validation/project-purge/schema49-extension.json"
 ));
+const WATCHER_EXTENSION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/architecture/validation/project-purge/schema50-extension.json"
+));
 pub(super) type Key = (String, String);
 fn invalid() -> StorageError {
     StorageError::IncompatibleSchema("unmapped project purge ownership policy".into())
@@ -137,10 +141,13 @@ fn policies(conn: &Connection) -> Result<BTreeMap<String, (String, String)>, Sto
         serde_json::from_str(PROVIDER_CONTEXT_EXTENSION).map_err(|_| invalid())?;
     let message_head_extension: Value =
         serde_json::from_str(MESSAGE_HEAD_EXTENSION).map_err(|_| invalid())?;
+    let watcher_extension: Value =
+        serde_json::from_str(WATCHER_EXTENSION).map_err(|_| invalid())?;
     for extension in [
         &assignment_context_extension,
         &provider_context_extension,
         &message_head_extension,
+        &watcher_extension,
     ] {
         for row in extension["additionalTables"]
             .as_array()
@@ -743,6 +750,7 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
         "containerExtension":devworks_core::fingerprint::sha256_hex(CONTAINER_EXTENSION.as_bytes()),
         "messageExtension":devworks_core::fingerprint::sha256_hex(MESSAGE_EXTENSION.as_bytes()),
         "instructionExtension":devworks_core::fingerprint::sha256_hex(INSTRUCTION_EXTENSION.as_bytes()),
+        "watcherExtension":devworks_core::fingerprint::sha256_hex(WATCHER_EXTENSION.as_bytes()),
         "scrubPolicy":scrub_policy,"clientKeepers":super::client_keepers::digest(keepers),"selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
     })).map_err(|_|invalid())?.as_bytes());
     Ok(Some(ProjectPurgePlanning {
