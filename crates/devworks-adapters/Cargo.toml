@@ -9,6 +9,11 @@ publish.workspace = true
 # Database-driver dependencies live only in this crate (STORE-09). The bundled SQLite (built from
 # C sources by libsqlite3-sys) must be 3.51.3 or newer; rusqlite 0.41.1 bundles 3.54.1, verified
 # again at startup together with compile options and the sqlite-vec identity.
+[features]
+# Test builds of dependants: `storage::sqlite::seed_migrated_store` gives each test a migrated
+# store without re-running every migration.
+test-support = []
+
 [dependencies]
 devworks-core = { path = "../devworks-core" }
 base64 = "=0.22.1"

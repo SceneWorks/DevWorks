@@ -54,6 +54,8 @@ mod resources;
 mod router;
 mod runs;
 mod schemas;
+#[cfg(any(test, feature = "test-support"))]
+mod seed;
 mod sessions;
 mod usage;
 mod work;
@@ -74,6 +76,8 @@ pub use migrations::{
     MIGRATION_0029_SHA256, MIGRATION_0030_SHA256, MIGRATION_0031_SHA256, MIGRATION_0032_SHA256,
     MIGRATION_0033_SHA256, MIGRATION_0034_SHA256, MIGRATION_0035_SHA256, MIGRATIONS, Migration,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use seed::seed_migrated_store;
 
 use conn::{Role, db};
 use devworks_core::context::PrincipalKind;

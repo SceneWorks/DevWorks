@@ -84,7 +84,22 @@ impl Harness {
         (self.tune)(&mut c);
         c
     }
+    /// Opens the store. An empty root is first seeded with a migrated copy carrying the identity,
+    /// ledger time and build a fresh bootstrap would have written (see `seed`).
     pub(super) fn store(&self) -> SqliteStore {
+        let config = self.config();
+        if !config.data_root.join(DATABASE_FILE).exists() {
+            seed_migrated_store(
+                &config.data_root,
+                self.ids.next_id(IdKind::Store).as_str(),
+                self.now(),
+                &config.app_build,
+            );
+        }
+        SqliteStore::open(config).expect("open store")
+    }
+    /// Opens the store, bootstrapping an empty root by applying every migration.
+    pub(super) fn bootstrapped_store(&self) -> SqliteStore {
         SqliteStore::open(self.config()).expect("open store")
     }
     pub(super) fn raw(&self) -> Connection {
@@ -178,6 +193,65 @@ fn sequence(s: &dyn ApplicationStore) -> i64 {
 }
 
 // --- durability settings and runtime identity ---------------------------------------------------
+
+/// Every schema object and every row of every table (sorted), plus `user_version`.
+fn full_dump(conn: &Connection) -> Vec<String> {
+    let mut out = vec![format!(
+        "user_version={}",
+        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+    )];
+    let mut objects = conn
+        .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
+        .unwrap();
+    let objects: Vec<(String, String, String, Option<String>)> = objects
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    for (kind, name, table, sql) in &objects {
+        out.push(format!("{kind} {name} on {table}: {sql:?}"));
+        let virtual_table = sql
+            .as_deref()
+            .is_some_and(|s| s.starts_with("CREATE VIRTUAL TABLE"));
+        if kind != "table" || virtual_table {
+            continue;
+        }
+        let mut rows = conn.prepare(&format!("SELECT * FROM \"{name}\"")).unwrap();
+        let width = rows.column_count();
+        let mut dumped: Vec<String> = rows
+            .query_map([], |r| {
+                (0..width)
+                    .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .unwrap()
+            .map(|row| format!("{name}: {:?}", row.unwrap()))
+            .collect();
+        dumped.sort();
+        out.extend(dumped);
+    }
+    out
+}
+
+#[test]
+fn seeded_store_matches_a_fresh_bootstrap() {
+    let fresh = Harness::new();
+    let seeded = Harness::new();
+    for h in [&fresh, &seeded] {
+        h.set_now(T0 + 1234);
+    }
+    drop(fresh.bootstrapped_store());
+    drop(seeded.store());
+    assert_eq!(
+        fresh.ids.0.load(Ordering::SeqCst),
+        seeded.ids.0.load(Ordering::SeqCst),
+        "the same identities were drawn in the same order"
+    );
+    let (fresh, seeded) = (full_dump(&fresh.raw()), full_dump(&seeded.raw()));
+    assert!(fresh.len() > 100, "the dump covers the shipped schema");
+    assert_eq!(fresh, seeded);
+}
 
 #[test]
 fn effective_durability_settings_are_verified() {
