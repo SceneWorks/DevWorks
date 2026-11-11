@@ -421,6 +421,8 @@ pub struct CollectionPass {
 struct Collector {
     trigger: Notify,
     observation_stop: Notify,
+    /// Wakes the watcher loop's wait between passes when the runtime stops.
+    watch_stop: Notify,
     stopping: AtomicBool,
     status: watch::Sender<Option<CollectionPass>>,
 }
@@ -429,6 +431,7 @@ impl Collector {
         self.stopping.store(true, Ordering::SeqCst);
         self.trigger.notify_one();
         self.observation_stop.notify_one();
+        self.watch_stop.notify_one();
     }
 }
 
@@ -1218,6 +1221,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let collector = Arc::new(Collector {
         trigger: Notify::new(),
         observation_stop: Notify::new(),
+        watch_stop: Notify::new(),
         stopping: AtomicBool::new(false),
         status,
     });
@@ -1281,7 +1285,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         let every = config.watch_interval;
         tasks.push(tokio::spawn(async move {
             while !stopping.stopping.load(Ordering::Acquire) {
-                tokio::time::sleep(every).await;
+                tokio::select! {
+                    () = tokio::time::sleep(every) => {}
+                    () = stopping.watch_stop.notified() => break,
+                }
                 let pass = supervisor.clone();
                 let _ = tokio::task::spawn_blocking(move || pass.tick()).await;
             }
