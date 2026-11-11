@@ -2,9 +2,12 @@
 //! power adapters) booted in a temporary data root, the shell driven headlessly by
 //! `egui_kittest`, and scripted native dialogs. No window, GPU, inference or network.
 #![allow(dead_code)]
+use devworks_adapters::storage::sqlite::{DATABASE_FILE, seed_migrated_store};
+use devworks_core::ports::{IdKind, IdSource};
 use devworks_desktop::backend::Backend;
 use devworks_desktop::host::{DesktopConfig, Engine};
 use devworks_desktop::memory;
+use devworks_desktop::platform::HostIds;
 use devworks_desktop::shell::{Dialogs, HostControl, Shell, ShellInit};
 use eframe::egui;
 use egui_kittest::Harness;
@@ -88,6 +91,21 @@ impl Drop for Root {
 
 pub fn config(root: &Path) -> DesktopConfig {
     let mut c = DesktopConfig::new(root);
+    // A fresh store applies every migration with its checks and flushed commits, seconds per
+    // root on CI. An empty root instead gets a copy of one store migrated once per test binary,
+    // equal to what the host would bootstrap; a root that already holds a store is left alone.
+    if !root.join(DATABASE_FILE).exists() {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after the epoch")
+            .as_millis() as i64;
+        seed_migrated_store(
+            root,
+            HostIds::new().next_id(IdKind::Store).as_str(),
+            now_ms,
+            &c.app_build,
+        );
+    }
     c.user_name = "Test user".into();
     c.shutdown_bound = Duration::from_secs(5);
     // Tests never scan the user's real repository base directory.
