@@ -456,6 +456,9 @@ impl Drop for SqliteStore {
         if let Some(mut w) = self.writer.take() {
             w.stop();
         }
+        // Unlock explicitly: Windows releases a lock left on a closing handle only after a delay
+        // that depends on system load, so an immediate reopen could see `DataRootInUse`.
+        let _ = self._lock.unlock();
     }
 }
 
