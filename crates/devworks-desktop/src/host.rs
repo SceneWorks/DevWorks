@@ -1238,6 +1238,10 @@ impl Backend for DesktopBackend {
             .stage_mcp_api_key(self.host.ctx.principal(), key)
             .map_err(|e| e.to_string())
     }
+    fn release_mcp_credentials(&self, handles: Vec<Id>) -> Result<(), String> {
+        self.host.connections.release_mcp_credentials(&handles);
+        Ok(())
+    }
     fn generate_database_encryption_key(&self) -> Result<Secret, String> {
         self.host
             .runtime

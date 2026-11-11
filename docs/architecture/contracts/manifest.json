@@ -1,6 +1,6 @@
 {
   "contract": "1.0-draft.1",
-  "date": "2026-11-09",
+  "date": "2026-11-10",
   "status": "Adopted architecture candidate; not public SDK v1, production service or platform proof",
   "schemaSource": "../../../tools/contracts-eval/src/lib.rs",
   "schemaSources": [
@@ -118,6 +118,10 @@
       "sha256": "236ce36eba88bf8bc92c9276aa203b362bcdc68c412989be084e62f973fb0334"
     },
     {
+      "file": "domain-command-reply.r8.schema.json",
+      "sha256": "194912174989aac5b53e0fc5fc5fa58f8a58018af79af7c4a801e099848e27e7"
+    },
+    {
       "file": "domain-command-reply.schema.json",
       "sha256": "95ad06f87089daa0e8d5d0279c328ae7aa6f799e1d760b159d4f38f3d99d63db"
     },
@@ -146,6 +150,10 @@
       "sha256": "2f0973948d33dc525a741d4bacfb32f4b3ffdcdacafc01c572f53830c841e20f"
     },
     {
+      "file": "domain-query-reply.r8.schema.json",
+      "sha256": "8bdc525b2c4dddab8ba4a010f25bc27c9ef25981b94eca3a913c485d4a284397"
+    },
+    {
       "file": "domain-query-reply.schema.json",
       "sha256": "85293d83c93f630f920d29e906391cc6b25a416d6971d20cb08646a4dd5946b6"
     },
@@ -168,6 +176,10 @@
     {
       "file": "domain-request.r7.schema.json",
       "sha256": "0f36203865d734930b1b92a7b74a110c4e7ff9c361f881de215b14d58de0f7b3"
+    },
+    {
+      "file": "domain-request.r8.schema.json",
+      "sha256": "c3c7780b92732c2629b54f71b99522a04f9b8000f352132ab4d2a55a2384d6e5"
     },
     {
       "file": "domain-request.schema.json",
@@ -250,6 +262,10 @@
       "sha256": "5b1eadf41bc978df5544a61de8e1981fda4a1dc8e79d8b6e93930b65b9032e99"
     },
     {
+      "file": "operation-completion.r8.schema.json",
+      "sha256": "dc8f4b51caaedaed46f325b6a5cc0f40dce93a59c2b5b5b3f138224874e017e3"
+    },
+    {
       "file": "operation-completion.schema.json",
       "sha256": "23701def793c30864cec4c056dd9fea5c234e076fdd7a7779ab22c9f2d0ada46"
     },
@@ -276,6 +292,10 @@
     {
       "file": "operation-result.r7.schema.json",
       "sha256": "264b17ca59303cfd0961018cf8861825047555fdb99b3e9cbe9d36a31a0ac6f5"
+    },
+    {
+      "file": "operation-result.r8.schema.json",
+      "sha256": "77735be0e286ec083a5552edcaca07e2e6b93f7902c38d905b57e2fe171b1756"
     },
     {
       "file": "operation-result.schema.json",

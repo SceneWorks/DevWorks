@@ -241,3 +241,84 @@ fn settings_sampling_toggle_saves_the_selection_then_reconnects() {
         .clone();
     assert_eq!(saved, vec![sampling]);
 }
+
+#[test]
+fn settings_shows_a_saved_server_renames_it_in_place_and_removes_its_token() {
+    use devworks_core::protocol::records::McpTransport;
+    let _case = native_runtime_case();
+    let root = Root::new("mcp-settings-edit");
+    let mut configuration = config(&root.0);
+    let secrets = Arc::new(SessionSecrets::new());
+    configuration.secrets = Some(secrets.clone());
+    let engine = Engine::start(configuration).expect("desktop runtime boots");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1800.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, Category::Tools.label());
+    settle(&mut h);
+    type_into(&mut h, "MCP server name", "Read server");
+    type_into(&mut h, "MCP HTTPS endpoint", "https://mcp.example.test/mcp");
+    h.get_by_role_and_label(Role::PasswordInput, "New MCP bearer token")
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::PasswordInput, "New MCP bearer token")
+        .type_text("mcp-test-token");
+    h.step();
+    click(&mut h, Role::Button, "Add server");
+    settle(&mut h);
+    let saved = h.state().settings.mcp.servers[0].clone();
+    let Some(McpTransport::Http {
+        credential_ref: Some(handle),
+        ..
+    }) = saved.configuration.clone()
+    else {
+        panic!("saved transport not returned: {saved:?}");
+    };
+    assert!(has_text(
+        &h,
+        "Endpoint: https://mcp.example.test/mcp · Bearer token: set"
+    ));
+
+    // The update form starts from the saved server, so a rename resends the same transport.
+    click(&mut h, Role::CheckBox, "Update selected server");
+    assert_eq!(
+        h.state().settings.mcp.endpoint,
+        "https://mcp.example.test/mcp"
+    );
+    assert_eq!(h.state().settings.mcp.credential_ref, handle.as_str());
+    h.state_mut().settings.mcp.name = "Renamed server".into();
+    click(&mut h, Role::Button, "Update server");
+    settle(&mut h);
+    let renamed = h.state().settings.mcp.servers[0].clone();
+    assert_eq!(renamed.name.0, "Renamed server");
+    assert_eq!(renamed.catalog_revision, saved.catalog_revision);
+    assert_eq!(format!("{:?}", renamed.state), format!("{:?}", saved.state));
+    assert!(matches!(&renamed.configuration,
+        Some(McpTransport::Http { credential_ref: Some(kept), .. }) if kept == &handle));
+    assert_eq!(secrets.len(), 1);
+
+    // Removing the token drops the reference and deletes the stored secret.
+    click(&mut h, Role::Button, "Remove token");
+    settle(&mut h);
+    let cleared = h.state().settings.mcp.servers[0].clone();
+    assert!(matches!(
+        &cleared.configuration,
+        Some(McpTransport::Http {
+            credential_ref: None,
+            ..
+        })
+    ));
+    assert_eq!(cleared.catalog_revision, saved.catalog_revision);
+    assert!(has_text(
+        &h,
+        "Endpoint: https://mcp.example.test/mcp · Bearer token: not set"
+    ));
+    assert_eq!(secrets.len(), 0);
+    let references = read_snapshot(
+        &**engine.host().runtime().store(),
+        &ReadOptions::default(),
+        credential_references,
+    )
+    .expect("saved MCP credential references");
+    assert!(references.is_empty());
+}

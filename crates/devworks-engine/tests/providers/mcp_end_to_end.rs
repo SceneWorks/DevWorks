@@ -60,7 +60,7 @@ fn decision(
     mut body: Value,
 ) -> DomainDecision {
     body["kind"] = json!(op);
-    let frame = json!({"mode":"Command","protocol":"1.0-draft.1",
+    let frame = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":8,
         "requestKey":format!("e2e-{}", op.replace(['.', '_'], "-")),"body":body});
     match app.command(ctx, op, frame.to_string().as_bytes()) {
         Ok(CommandReply::Recorded { receipt, .. }) => receipt.decision,

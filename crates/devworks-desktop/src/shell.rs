@@ -2509,6 +2509,12 @@ impl Shell {
                 self.settings.mcp.pending_server = None;
                 self.settings.mcp.error = Some(error);
             }
+            (Slot::McpRelease, Reply::Task(Err(error))) => {
+                self.settings.mcp.error = Some(format!(
+                    "The removed MCP token could not be deleted: {error}"
+                ));
+            }
+            (Slot::McpRelease, Reply::Task(Ok(_))) => {}
             (Slot::McpCommand, Reply::Command(c)) => {
                 self.settings.mcp.busy = false;
                 match ops::mcp_command_status(c) {
@@ -2516,6 +2522,9 @@ impl Shell {
                         self.settings.mcp.message = Some(message);
                         self.settings.mcp.error = None;
                         let reconnect = self.settings.mcp.reconnect.take();
+                        if let Some(server) = &configured {
+                            self.release_dropped_mcp_credentials(server);
+                        }
                         if let Some(server) = &configured {
                             self.settings.mcp.selected = Some(server.id.clone());
                         }
@@ -3369,6 +3378,42 @@ impl Shell {
                 )
             },
         );
+    }
+
+    /// A removed or replaced bearer token leaves its stored secret unreferenced once the new
+    /// configuration is saved; delete it then.
+    fn release_dropped_mcp_credentials(
+        &mut self,
+        saved: &devworks_core::protocol::records::McpServer,
+    ) {
+        let Some(old) = self
+            .settings
+            .mcp
+            .servers
+            .iter()
+            .find(|server| server.id == saved.id)
+        else {
+            return;
+        };
+        let kept = crate::mcp_panel::credential_handles(saved);
+        let dropped: Vec<Id> = crate::mcp_panel::credential_handles(old)
+            .into_iter()
+            .filter(|handle| !kept.contains(handle))
+            .collect();
+        if dropped.is_empty() {
+            return;
+        }
+        if let Some(client) = self.client.as_mut() {
+            client.task(
+                Slot::McpRelease,
+                "Removing MCP credential",
+                move |backend| {
+                    backend.release_mcp_credentials(dropped)?;
+                    // Nothing to submit: the release reply only reports a failure.
+                    Ok(TaskOutput::Prepared { frame: Vec::new() })
+                },
+            );
+        }
     }
 
     fn mcp_action(&mut self, action: McpAction) {

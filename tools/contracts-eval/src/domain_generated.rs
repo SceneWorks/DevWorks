@@ -6080,6 +6080,20 @@ pub struct McpServer {
     pub transport: Label,
     pub selected_tool_ids: Items<Id>,
     pub catalog_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 8))]
+    pub last_failure: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "McpTransport", extend("x-since" = 8))]
+    pub configuration: Option<McpTransport>,
 }
 impl Check for McpServer {
     fn check(&self) -> Result<(), String> {
@@ -6090,11 +6104,24 @@ impl Check for McpServer {
         self.transport.check()?;
         self.selected_tool_ids.check()?;
         self.catalog_revision.check()?;
+        self.last_failure.check()?;
+        self.configuration.check()?;
         super::domain_rules::record(
             "McpServer",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for McpServer {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.last_failure = None;
+        }
+        if revision < 8 {
+            self.configuration = None;
+        }
     }
 }
 
@@ -18659,6 +18686,13 @@ pub enum DomainQuery {
     McpServers { scope: DataScope, page: PageRequest },
     #[serde(rename = "mcp.resources")]
     McpResources {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 8))]
+        scope: Option<DataScope>,
         server_id: Id,
         catalog_revision: Revision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18667,6 +18701,13 @@ pub enum DomainQuery {
     },
     #[serde(rename = "mcp.prompts")]
     McpPrompts {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 8))]
+        scope: Option<DataScope>,
         server_id: Id,
         catalog_revision: Revision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18677,6 +18718,13 @@ pub enum DomainQuery {
     },
     #[serde(rename = "mcp.capabilities")]
     McpCapabilities {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 8))]
+        scope: Option<DataScope>,
         server_id: Id,
         catalog_revision: Revision,
         page: PageRequest,
@@ -20073,23 +20121,27 @@ impl Check for DomainQuery {
                 page.check()?;
             }
             Self::McpResources {
+                scope,
                 server_id,
                 catalog_revision,
                 uri,
                 page,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 catalog_revision.check()?;
                 uri.check()?;
                 page.check()?;
             }
             Self::McpPrompts {
+                scope,
                 server_id,
                 catalog_revision,
                 name,
                 arguments,
                 page,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 catalog_revision.check()?;
                 name.check()?;
@@ -20097,10 +20149,12 @@ impl Check for DomainQuery {
                 page.check()?;
             }
             Self::McpCapabilities {
+                scope,
                 server_id,
                 catalog_revision,
                 page,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 catalog_revision.check()?;
                 page.check()?;
@@ -20580,6 +20634,21 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 3 {
                     *snapshot_ids = None;
+                }
+            }
+            Self::McpResources { scope, .. } => {
+                if revision < 8 {
+                    *scope = None;
+                }
+            }
+            Self::McpPrompts { scope, .. } => {
+                if revision < 8 {
+                    *scope = None;
+                }
+            }
+            Self::McpCapabilities { scope, .. } => {
+                if revision < 8 {
+                    *scope = None;
                 }
             }
             Self::HelpRead {
@@ -22132,16 +22201,37 @@ pub enum DomainCommand {
     },
     #[serde(rename = "mcp.connect")]
     McpConnect {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 8))]
+        scope: Option<DataScope>,
         server_id: Id,
         expected_revision: Revision,
     },
     #[serde(rename = "mcp.discover")]
     McpDiscover {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 8))]
+        scope: Option<DataScope>,
         server_id: Id,
         expected_catalog_revision: Revision,
     },
     #[serde(rename = "mcp.select_tools")]
     McpSelectTools {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 8))]
+        scope: Option<DataScope>,
         server_id: Id,
         expected_revision: Revision,
         expected_catalog_revision: Revision,
@@ -24199,25 +24289,31 @@ impl Check for DomainCommand {
                 transport.check()?;
             }
             Self::McpConnect {
+                scope,
                 server_id,
                 expected_revision,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 expected_revision.check()?;
             }
             Self::McpDiscover {
+                scope,
                 server_id,
                 expected_catalog_revision,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 expected_catalog_revision.check()?;
             }
             Self::McpSelectTools {
+                scope,
                 server_id,
                 expected_revision,
                 expected_catalog_revision,
                 tool_ids,
             } => {
+                scope.check()?;
                 server_id.check()?;
                 expected_revision.check()?;
                 expected_catalog_revision.check()?;
@@ -24866,6 +24962,21 @@ impl Revisioned for DomainCommand {
             }
             Self::RouterConfigure { action, .. } => {
                 action.retain_revision(revision);
+            }
+            Self::McpConnect { scope, .. } => {
+                if revision < 8 {
+                    *scope = None;
+                }
+            }
+            Self::McpDiscover { scope, .. } => {
+                if revision < 8 {
+                    *scope = None;
+                }
+            }
+            Self::McpSelectTools { scope, .. } => {
+                if revision < 8 {
+                    *scope = None;
+                }
             }
             Self::WorkspaceRecordDiagnostic {
                 operation,
@@ -26646,6 +26757,10 @@ impl Revisioned for OperationResult {
             Self::RouterUsage { value } => value.retain_revision(revision),
             Self::RouterPriceStatus { value } => value.retain_revision(revision),
             Self::RouterPriceOverride { value } => value.retain_revision(revision),
+            Self::McpServers { value } => value.retain_revision(revision),
+            Self::McpConfigure { value } => value.retain_revision(revision),
+            Self::McpConnect { value } => value.retain_revision(revision),
+            Self::McpSelectTools { value } => value.retain_revision(revision),
             Self::AddonsCatalog { value } => value.retain_revision(revision),
             Self::AddonsConfigure { value } => value.retain_revision(revision),
             Self::HelpSearch { value } => value.retain_revision(revision),

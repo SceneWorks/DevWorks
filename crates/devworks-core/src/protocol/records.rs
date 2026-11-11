@@ -6081,8 +6081,20 @@ pub struct McpServer {
     pub transport: Label,
     pub selected_tool_ids: Items<Id>,
     pub catalog_revision: Revision,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 8))]
     pub last_failure: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "McpTransport", extend("x-since" = 8))]
+    pub configuration: Option<McpTransport>,
 }
 impl Check for McpServer {
     fn check(&self) -> Result<(), String> {
@@ -6094,11 +6106,23 @@ impl Check for McpServer {
         self.selected_tool_ids.check()?;
         self.catalog_revision.check()?;
         self.last_failure.check()?;
+        self.configuration.check()?;
         crate::protocol::rules::record(
             "McpServer",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for McpServer {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.last_failure = None;
+        }
+        if revision < 8 {
+            self.configuration = None;
+        }
     }
 }
 
