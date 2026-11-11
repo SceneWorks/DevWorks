@@ -2515,16 +2515,23 @@ impl Shell {
                     Ok((message, operation, configured)) => {
                         self.settings.mcp.message = Some(message);
                         self.settings.mcp.error = None;
-                        if let Some(id) = configured {
-                            self.settings.mcp.selected = Some(id);
+                        let reconnect = self.settings.mcp.reconnect.take();
+                        if let Some(server) = &configured {
+                            self.settings.mcp.selected = Some(server.id.clone());
                         }
                         self.settings.mcp.pending_operation = operation;
                         if self.settings.mcp.pending_operation.is_none() {
                             self.settings.mcp.pending_server = None;
                         }
                         self.load_mcp_servers(None);
+                        if let Some(server) =
+                            configured.filter(|s| reconnect.as_ref() == Some(&s.id))
+                        {
+                            self.mcp_action(McpAction::Connect(server.id, server.revision.get()));
+                        }
                     }
                     Err(error) => {
+                        self.settings.mcp.reconnect = None;
                         self.settings.mcp.pending_server = None;
                         self.settings.mcp.pending_operation = None;
                         self.settings.mcp.error = Some(error.describe());
@@ -3365,6 +3372,9 @@ impl Shell {
     }
 
     fn mcp_action(&mut self, action: McpAction) {
+        if let McpAction::Sampling(id, ..) = &action {
+            self.settings.mcp.reconnect = Some(id.clone());
+        }
         match action {
             McpAction::Reload => self.load_mcp_servers(None),
             McpAction::Catalog(id, _revision) => self.load_mcp_capabilities(id, None),
@@ -3383,7 +3393,8 @@ impl Shell {
                         None,
                         Some(id),
                     ),
-                    McpAction::Select(id, revision, catalog, tools) => (
+                    McpAction::Select(id, revision, catalog, tools)
+                    | McpAction::Sampling(id, revision, catalog, tools) => (
                         "mcp.select_tools",
                         serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string(),"expectedCatalogRevision":catalog.to_string(),"toolIds":tools}),
                         None,
@@ -3417,6 +3428,7 @@ impl Shell {
                 };
                 if !submitted {
                     self.settings.mcp.busy = false;
+                    self.settings.mcp.reconnect = None;
                     self.settings.mcp.error = Some("MCP command could not be submitted.".into());
                 } else {
                     self.settings.mcp.pending_server = pending_server;

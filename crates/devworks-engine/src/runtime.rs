@@ -967,6 +967,23 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         }
         None => None,
     };
+    if let (Some(provider), Some(service), Some(router), Some(_)) = (
+        &providers,
+        use_cases.mcp_service(),
+        use_cases.inference_router(),
+        config.mcp.as_ref(),
+    ) {
+        service
+            .install_sampler(Arc::new(crate::mcp_sampling::EngineSampler::new(
+                &service,
+                provider,
+                store.clone(),
+                artifacts.clone(),
+                router,
+                tokio::runtime::Handle::current(),
+            )))
+            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))?;
+    }
     if let (Some(provider), Some(service), Some(worker)) =
         (&providers, &embedding_spaces, &embedding_probes)
     {

@@ -147,3 +147,97 @@ fn settings_can_select_and_configure_a_project_scoped_server() {
     assert_eq!(h.state().settings.mcp.servers.len(), 1);
     assert_eq!(h.state().settings.mcp.servers[0].name.0, "Project server");
 }
+
+#[test]
+fn settings_sampling_toggle_saves_the_selection_then_reconnects() {
+    use devworks_core::ports::mcp::RemoteCatalog;
+    use devworks_core::ports::storage::{ConfigScope, EventFilter};
+    use devworks_core::protocol::Revision;
+    let _case = native_runtime_case();
+    let root = Root::new("mcp-settings-sampling");
+    let engine = Engine::start(config(&root.0)).expect("desktop runtime boots");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1800.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, Category::Tools.label());
+    settle(&mut h);
+    type_into(&mut h, "MCP server name", "Sampling server");
+    // A closed loopback port: the reconnect fails locally without leaving this machine.
+    type_into(&mut h, "MCP HTTPS endpoint", "http://127.0.0.1:9/mcp");
+    click(&mut h, Role::Button, "Add server");
+    settle(&mut h);
+    let server = h.state().settings.mcp.selected.clone().expect("server");
+    let service = engine.host().runtime().mcp_service().expect("MCP service");
+    let store = engine.host().runtime().store().clone();
+    let discovered = server.clone();
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        service.publish_remote_catalog(
+            tx,
+            &ConfigScope::Workspace,
+            &discovered,
+            &Revision::new(1).unwrap(),
+            RemoteCatalog {
+                tools: vec![],
+                resources: vec![],
+                prompts: vec![],
+            },
+        )
+    })
+    .unwrap();
+    click(&mut h, Role::Button, "Refresh MCP servers");
+    settle(&mut h);
+    click(&mut h, Role::Button, "Refresh capabilities");
+    settle(&mut h);
+    let sampling = h
+        .state()
+        .settings
+        .mcp
+        .capabilities
+        .iter()
+        .find(|cap| cap.kind.0 == "sampling")
+        .expect("sampling capability")
+        .id
+        .clone();
+    let events = |store: &Arc<dyn devworks_core::ports::storage::ApplicationStore>| {
+        read_snapshot(&**store, &ReadOptions::default(), |s| {
+            Ok(s.history()
+                .page(
+                    &EventFilter::Aggregate {
+                        kind: "mcp_server".into(),
+                        id: server.as_str().into(),
+                    },
+                    0,
+                    50,
+                )?
+                .events
+                .into_iter()
+                .filter(|event| event.kind == "McpConnectRequested")
+                .count())
+        })
+        .unwrap()
+    };
+    assert_eq!(events(&store), 0);
+    click(
+        &mut h,
+        Role::CheckBox,
+        "Let this server request model text during selected tool calls",
+    );
+    settle(&mut h);
+    assert_eq!(
+        events(&store),
+        1,
+        "the saved selection reconnects the server"
+    );
+    let saved = h
+        .state()
+        .settings
+        .mcp
+        .servers
+        .iter()
+        .find(|record| record.id == server)
+        .unwrap()
+        .selected_tool_ids
+        .0
+        .clone();
+    assert_eq!(saved, vec![sampling]);
+}

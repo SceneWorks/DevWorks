@@ -1318,6 +1318,7 @@ dependencies = [
  "devworks-core",
  "devworks-extension-protocol",
  "ed25519-dalek",
+ "rmcp",
  "rusqlite",
  "semver",
  "serde_json",

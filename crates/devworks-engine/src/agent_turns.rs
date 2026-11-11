@@ -1776,6 +1776,7 @@ pub fn plan_generation_window(
         category: ReportCategory::Assistant,
         attempt,
         request: inference,
+        nested: None,
     })
 }
 

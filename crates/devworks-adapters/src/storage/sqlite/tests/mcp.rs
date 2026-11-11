@@ -25,8 +25,8 @@ use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::mcp::{McpClientService, McpEffectOutcome};
 use serde_json::{Value, json};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct RecordedRemote(
@@ -34,14 +34,16 @@ struct RecordedRemote(
     bool,
     Option<Arc<super::TestClock>>,
     AtomicUsize,
+    Mutex<Vec<bool>>,
 );
 impl McpRemote for RecordedRemote {
     fn connect(
         &self,
         _context: &InvocationContext,
-        _endpoint: &McpEndpoint,
+        endpoint: &McpEndpoint,
     ) -> Result<(), McpRemoteFault> {
         self.0.fetch_add(1, Ordering::SeqCst);
+        self.4.lock().unwrap().push(endpoint.sampling);
         if self.1 {
             Err(McpRemoteFault::MissingCredential)
         } else {
@@ -635,6 +637,7 @@ fn failed_connection_persists_a_safe_diagnostic_for_settings() {
                 true,
                 None,
                 AtomicUsize::new(0),
+                Mutex::default(),
             )),
             Arc::new(JsonSchemaValidator),
             artifacts(&h),
@@ -772,7 +775,12 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
         DomainQueryReply::Result {
             result: OperationResult::McpCapabilities { value },
             ..
-        } => value.items.0.into_iter().next().unwrap(),
+        } => value
+            .items
+            .0
+            .into_iter()
+            .find(|cap| cap.kind.0 == "tool")
+            .unwrap(),
         other => panic!("unexpected catalog: {other:?}"),
     };
     assert!(first_cap.input_schema.is_some());
@@ -828,7 +836,12 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
         DomainQueryReply::Result {
             result: OperationResult::McpCapabilities { value },
             ..
-        } => value.items.0.into_iter().next().unwrap(),
+        } => value
+            .items
+            .0
+            .into_iter()
+            .find(|cap| cap.kind.0 == "tool")
+            .unwrap(),
         other => panic!("unexpected catalog: {other:?}"),
     };
     assert_eq!(second_cap.revision, first_cap.revision);
@@ -877,6 +890,34 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
         })
     };
     assert!(oversized.is_err(), "oversized catalog was retained");
+    // The host sampling entry does not take one of the 500 remote catalog slots.
+    let tools = |count: usize| RemoteCatalog {
+        tools: (0..count)
+            .map(|index| RemoteTool {
+                name: format!("bounded-{index}"),
+                description: String::new(),
+                input_schema: json!({"type":"object"}),
+                output_schema: None,
+                read_only_hint: false,
+            })
+            .collect(),
+        resources: vec![],
+        prompts: vec![],
+    };
+    for (count, accepted) in [(501, false), (500, true)] {
+        let service = service.clone();
+        let server_id = server.id.clone();
+        let published = run_write(&*store, WriteOptions::default(), move |tx| {
+            service.publish_remote_catalog(
+                tx,
+                &ConfigScope::Workspace,
+                &server_id,
+                &Revision::new(3).unwrap(),
+                tools(count),
+            )
+        });
+        assert_eq!(published.is_ok(), accepted, "{count} remote entries");
+    }
 }
 
 #[test]
@@ -990,7 +1031,7 @@ fn journaled_discovery_does_not_select_untrusted_read_only_hints() {
     .unwrap();
     assert!(selected.is_empty());
     assert!(
-        matches!(capabilities(&h, &store, &cases, &server.id, 2), DomainQueryReply::Result { result: OperationResult::McpCapabilities { value }, .. } if value.items.0.len() == 1)
+        matches!(capabilities(&h, &store, &cases, &server.id, 2), DomainQueryReply::Result { result: OperationResult::McpCapabilities { value }, .. } if value.items.0.len() == 2)
     );
 }
 
@@ -1165,6 +1206,7 @@ fn resource_query_stops_when_deadline_expires_during_a_remote_read() {
         false,
         Some(h.clock.clone()),
         AtomicUsize::new(0),
+        Mutex::default(),
     ));
     service
         .install_remote(
@@ -1239,4 +1281,431 @@ fn resource_query_stops_when_deadline_expires_during_a_remote_read() {
         .unwrap();
     assert!(matches!(reply, DomainQueryReply::Rejected { .. }));
     assert_eq!(remote.3.load(Ordering::SeqCst), 1);
+}
+
+fn sampling_capability(h: &Harness, store: &SqliteStore, cases: &UseCases, server: &Id) -> Id {
+    match capabilities(h, store, cases, server, 2) {
+        DomainQueryReply::Result {
+            result: OperationResult::McpCapabilities { value },
+            ..
+        } => {
+            let sampling: Vec<_> = value
+                .items
+                .0
+                .into_iter()
+                .filter(|cap| cap.kind.0 == "sampling")
+                .collect();
+            assert_eq!(sampling.len(), 1);
+            assert_eq!(sampling[0].name.0, "createMessage");
+            assert!(sampling[0].input_schema.is_none());
+            sampling[0].id.clone()
+        }
+        other => panic!("unexpected catalog: {other:?}"),
+    }
+}
+
+/// A connected and discovered workspace server. Returns its ID and current revision.
+fn discovered_server(
+    h: &Harness,
+    store: &SqliteStore,
+    cases: &UseCases,
+    service: &Arc<McpClientService>,
+) -> (Id, i64) {
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: server },
+    } = command(
+        h,
+        store,
+        cases,
+        "sampling-server",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"name":"Sampling server",
+            "transport":{"kind":"Http","endpoint":"https://mcp.example.test/mcp"}}),
+    )
+    else {
+        panic!("server configuration failed");
+    };
+    for (key, operation, body) in [
+        (
+            "sampling-connect",
+            "mcp.connect",
+            json!({"expectedRevision":"1"}),
+        ),
+        (
+            "sampling-discover",
+            "mcp.discover",
+            json!({"expectedCatalogRevision":"1"}),
+        ),
+    ] {
+        let mut body = body;
+        body["scope"] = json!({"kind":"Workspace"});
+        body["serverId"] = json!(server.id);
+        let DomainDecision::Accepted { operation_id } =
+            command(h, store, cases, key, operation, body)
+        else {
+            panic!("{operation} was not accepted");
+        };
+        assert!(matches!(
+            service.execute(&dispatched(store, &operation_id)),
+            McpEffectOutcome::Completed(_)
+        ));
+    }
+    let current = servers(h, store, cases).remove(0);
+    assert_eq!(current.catalog_revision.get(), 2);
+    (server.id, current.revision.get())
+}
+
+fn select(
+    h: &Harness,
+    store: &SqliteStore,
+    cases: &UseCases,
+    key: &str,
+    server: &Id,
+    ids: Vec<Id>,
+) -> i64 {
+    let revision = servers(h, store, cases)[0].revision.get();
+    let DomainDecision::Applied {
+        result: OperationResult::McpSelectTools { value },
+    } = command(
+        h,
+        store,
+        cases,
+        key,
+        "mcp.select_tools",
+        json!({"scope":{"kind":"Workspace"},"serverId":server,
+            "expectedRevision":revision.to_string(),"expectedCatalogRevision":"2","toolIds":ids}),
+    )
+    else {
+        panic!("selection failed");
+    };
+    value.revision.get()
+}
+
+#[test]
+fn sampling_selection_is_advertised_survives_rediscovery_and_clears_on_transport_change() {
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")
+    })
+    .unwrap();
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    let remote = Arc::new(RecordedRemote::default());
+    service
+        .install_remote(
+            store.clone(),
+            remote.clone(),
+            Arc::new(JsonSchemaValidator),
+            artifacts(&h),
+        )
+        .unwrap();
+    let cases = UseCases::new().with_mcp(service.clone());
+    let (server, _) = discovered_server(&h, &store, &cases, &service);
+    let sampling = sampling_capability(&h, &store, &cases, &server);
+    assert!(
+        servers(&h, &store, &cases)[0]
+            .selected_tool_ids
+            .0
+            .is_empty()
+    );
+    let revision = select(
+        &h,
+        &store,
+        &cases,
+        "select-sampling",
+        &server,
+        vec![sampling.clone()],
+    );
+    // The sampling entry is never a provider tool.
+    let materials = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+        service.selected_tool_materials(&context(&store), snapshot)
+    })
+    .unwrap();
+    assert!(materials.is_empty());
+    let DomainDecision::Accepted { operation_id } = command(
+        &h,
+        &store,
+        &cases,
+        "sampling-reconnect",
+        "mcp.connect",
+        json!({"scope":{"kind":"Workspace"},"serverId":server,
+            "expectedRevision":revision.to_string()}),
+    ) else {
+        panic!("reconnect was not accepted");
+    };
+    service.execute(&dispatched(&store, &operation_id));
+    assert_eq!(*remote.4.lock().unwrap(), [false, false, true]);
+    let DomainDecision::Accepted { operation_id } = command(
+        &h,
+        &store,
+        &cases,
+        "sampling-rediscover",
+        "mcp.discover",
+        json!({"scope":{"kind":"Workspace"},"serverId":server,"expectedCatalogRevision":"2"}),
+    ) else {
+        panic!("rediscovery was not accepted");
+    };
+    service.execute(&dispatched(&store, &operation_id));
+    let current = servers(&h, &store, &cases).remove(0);
+    assert_eq!(current.catalog_revision.get(), 2);
+    assert_eq!(current.selected_tool_ids.0, vec![sampling.clone()]);
+    assert_eq!(remote.4.lock().unwrap().last(), Some(&true));
+    let changed = command(
+        &h,
+        &store,
+        &cases,
+        "sampling-transport",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"serverId":server,
+            "expectedRevision":current.revision.get().to_string(),"name":"Sampling server",
+            "transport":{"kind":"Http","endpoint":"https://other.example.test/mcp"}}),
+    );
+    assert!(matches!(changed, DomainDecision::Applied { .. }));
+    assert!(
+        servers(&h, &store, &cases)[0]
+            .selected_tool_ids
+            .0
+            .is_empty()
+    );
+}
+
+fn agent_session(store: &SqliteStore, session: &str, closed: bool) {
+    let session = id(session);
+    run_write(store, WriteOptions::default(), move |tx| {
+        tx.sessions()
+            .insert_session(&devworks_core::ports::storage::StoredSession {
+                id: session.clone(),
+                conversation_id: session,
+                agent_id: ActorId(id("mcp-agent")),
+                project_id: None,
+                root_id: None,
+                title: "Agent session".into(),
+                context_epoch: 0,
+                revision: 1,
+                created_by: ActorId(id("mcp-user")),
+                created_at_ms: 1,
+                closed_at_ms: closed.then_some(2),
+                closed_by: closed.then(|| ActorId(id("mcp-user"))),
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            })
+    })
+    .unwrap();
+}
+
+fn bind_agent(store: &SqliteStore, expected: Option<i64>) -> i64 {
+    let by = context(store);
+    run_write(store, WriteOptions::default(), move |tx| {
+        devworks_core::authority::service::bind_principal(
+            tx,
+            &by,
+            devworks_core::ports::storage::NewPrincipalBinding {
+                actor: ActorId(id("mcp-agent")),
+                kind: PrincipalKind::Agent,
+                role: Some(devworks_core::settings::catalog::AgentRole::Worker),
+                project_id: None,
+                tool_families: None,
+                bound_by: ActorId(id("mcp-user")),
+            },
+            expected,
+        )
+        .map(|binding| binding.revision)
+        .map_err(|e| devworks_core::ports::storage::StorageError::InvalidRecord(format!("{e:?}")))
+    })
+    .unwrap()
+}
+
+/// An attributed `mcp.tool` journal as `queue_selected_tool` records it.
+fn tool_call(
+    store: &SqliteStore,
+    name: &str,
+    server: &Id,
+    edit: impl FnOnce(&mut Value),
+    dispatch: bool,
+) -> devworks_core::ports::mcp::McpCallOrigin {
+    let revision = read_snapshot(store, &ReadOptions::default(), |s| {
+        Ok(s.authority()
+            .principal(&ActorId(id("mcp-agent")))?
+            .unwrap()
+            .revision)
+    })
+    .unwrap();
+    let mut payload = json!({
+        "scope":ConfigScope::Workspace.key(),"serverId":server,"serverRevision":1,
+        "catalogRevision":2,"principal":"mcp-agent","principalKind":"Agent",
+        "sessionId":"agent-session","projectId":null,
+        "fences":[devworks_core::ports::AuthorityFence::Principal {
+            actor: ActorId(id("mcp-agent")), revision }],
+        "call":{"attemptId":"provider-attempt","nativeCallId":name,"ordinal":"0"},
+    });
+    edit(&mut payload);
+    let operation = OperationId(id(name));
+    let intent = operation.clone();
+    run_write(store, WriteOptions::default(), move |tx| {
+        tx.operations()
+            .record_intent(devworks_core::ports::storage::NewOperation {
+                id: intent,
+                root_id: None,
+                assignment_id: None,
+                capability: "mcp.tool".into(),
+                schema_version: 1,
+                args_digest: "a".repeat(64),
+                payload,
+            })
+            .map(|_| ())
+    })
+    .unwrap();
+    let attempt = if dispatch {
+        dispatched(store, &operation)
+            .latest_attempt()
+            .unwrap()
+            .id
+            .0
+            .clone()
+    } else {
+        id("journal-attempt")
+    };
+    devworks_core::ports::mcp::McpCallOrigin {
+        server_id: server.clone(),
+        operation_id: operation,
+        attempt_id: attempt,
+    }
+}
+
+#[test]
+fn sampling_is_authorized_only_for_the_dispatching_agent_call_with_current_selection() {
+    use devworks_core::ports::mcp::SamplingRefusal::Unauthorized;
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
+        tx.actors()
+            .register(&ActorId(id("mcp-agent")), PrincipalKind::Agent, "MCP agent")
+    })
+    .unwrap();
+    bind_agent(&store, None);
+    agent_session(&store, "agent-session", false);
+    agent_session(&store, "closed-session", true);
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    service
+        .install_remote(
+            store.clone(),
+            Arc::new(RecordedRemote::default()),
+            Arc::new(JsonSchemaValidator),
+            artifacts(&h),
+        )
+        .unwrap();
+    let cases = UseCases::new().with_mcp(service.clone());
+    let (server, _) = discovered_server(&h, &store, &cases, &service);
+    let sampling = sampling_capability(&h, &store, &cases, &server);
+    let call = tool_call(&store, "mcp-call", &server, |_| {}, true);
+    assert_eq!(
+        service.authorize_sampling(&call, 1).err(),
+        Some(Unauthorized("mcp_sampling_selection"))
+    );
+    select(
+        &h,
+        &store,
+        &cases,
+        "select-sampling",
+        &server,
+        vec![sampling],
+    );
+    let grant = service
+        .authorize_sampling(&call, 2)
+        .expect("selected agent call");
+    assert_eq!(grant.context.principal(), &ActorId(id("mcp-agent")));
+    assert_eq!(grant.context.principal_kind(), PrincipalKind::Agent);
+    assert_eq!(grant.context.session_id(), Some(&id("agent-session")));
+    assert_eq!(grant.operation_id, call.operation_id);
+    assert_eq!(grant.call.native_call_id, "mcp-call");
+    let other_attempt = devworks_core::ports::mcp::McpCallOrigin {
+        attempt_id: id("other-attempt"),
+        ..call.clone()
+    };
+    let other_server = devworks_core::ports::mcp::McpCallOrigin {
+        server_id: id("other-server"),
+        ..call.clone()
+    };
+    let queued = tool_call(&store, "queued-call", &server, |_| {}, false);
+    let host = tool_call(
+        &store,
+        "host-call",
+        &server,
+        |p| p["principalKind"] = json!("Host"),
+        true,
+    );
+    let closed = tool_call(
+        &store,
+        "closed-call",
+        &server,
+        |p| p["sessionId"] = json!("closed-session"),
+        true,
+    );
+    let stale = tool_call(
+        &store,
+        "stale-call",
+        &server,
+        |p| p["catalogRevision"] = json!(1),
+        true,
+    );
+    for (origin, reason) in [
+        (&other_attempt, "mcp_sampling_call"),
+        (&other_server, "mcp_sampling_call"),
+        (&queued, "mcp_sampling_call"),
+        (&host, "mcp_sampling_principal"),
+        (&closed, "mcp_sampling_session"),
+        (&stale, "mcp_sampling_selection"),
+    ] {
+        assert_eq!(
+            service.authorize_sampling(origin, 1).err(),
+            Some(Unauthorized(reason))
+        );
+    }
+    let revision = read_snapshot(&*store, &ReadOptions::default(), |s| {
+        Ok(s.authority()
+            .principal(&ActorId(id("mcp-agent")))?
+            .unwrap()
+            .revision)
+    })
+    .unwrap();
+    bind_agent(&store, Some(revision));
+    assert_eq!(
+        service.authorize_sampling(&call, 3).err(),
+        Some(Unauthorized("mcp_sampling_authority"))
+    );
+    let kinds = read_snapshot(&*store, &ReadOptions::default(), |s| {
+        Ok(s.history()
+            .page(
+                &devworks_core::ports::storage::EventFilter::Aggregate {
+                    kind: "mcp_tool_call".into(),
+                    id: "mcp-call".into(),
+                },
+                0,
+                50,
+            )?
+            .events
+            .into_iter()
+            .map(|event| (event.kind, event.payload["reason"].clone()))
+            .collect::<Vec<_>>())
+    })
+    .unwrap();
+    assert_eq!(
+        kinds,
+        [
+            (
+                "McpSamplingRefused".to_owned(),
+                json!("mcp_sampling_selection")
+            ),
+            ("McpSamplingAccepted".to_owned(), Value::Null),
+            ("McpSamplingRefused".to_owned(), json!("mcp_sampling_call")),
+            ("McpSamplingRefused".to_owned(), json!("mcp_sampling_call")),
+            (
+                "McpSamplingRefused".to_owned(),
+                json!("mcp_sampling_authority")
+            ),
+        ]
+    );
 }
