@@ -116,14 +116,20 @@ impl WatchService {
                         return Ok(false);
                     };
                     let process = read.resources().process(&operation_id.0)?;
-                    Ok(observe(watcher, &operation, process.as_ref()).is_some())
+                    let monitoring = self.processes.is_monitoring(operation_id);
+                    Ok(observe(watcher, &operation, process.as_ref(), monitoring).is_some())
                 })?;
                 if !observable {
                     continue;
                 }
                 let id = watcher.id.clone();
+                // Checked before the write: a monitor records its outcome before it lets go.
+                let monitoring = watcher
+                    .process_operation_id
+                    .as_ref()
+                    .is_some_and(|op| self.processes.is_monitoring(op));
                 let done = run_write(&*self.store, WriteOptions::default(), move |tx| {
-                    settle_in(tx, &id)
+                    settle_in(tx, &id, monitoring)
                 })?;
                 settled += usize::from(done);
             }
@@ -407,14 +413,12 @@ impl WatchService {
             };
             // A process that already ended keeps its observed outcome: there is nothing to stop,
             // and the next pass settles the watcher with what actually happened.
-            let ended = tx.operations().operation(&process)?.is_some_and(|op| {
-                matches!(
-                    op.state,
-                    OperationState::ObservedComplete
-                        | OperationState::Failed
-                        | OperationState::CancelledBeforeDispatch
-                )
-            });
+            let monitoring = self.processes.is_monitoring(&process);
+            let record = tx.resources().process(&process.0)?;
+            let ended = tx
+                .operations()
+                .operation(&process)?
+                .is_some_and(|op| observe(&watcher, &op, record.as_ref(), monitoring).is_some());
             if ended {
                 return decided(
                     tx,
@@ -629,7 +633,11 @@ pub fn turn_input(
 
 /// Settles one open watcher whose process outcome is observed: the watcher's state change, its
 /// event and its history commit together. `false` when nothing is observed yet.
-fn settle_in(tx: &mut dyn WriteTransaction, id: &Id) -> Result<bool, StorageError> {
+fn settle_in(
+    tx: &mut dyn WriteTransaction,
+    id: &Id,
+    monitoring: bool,
+) -> Result<bool, StorageError> {
     let Some(mut watcher) = tx.watchers().watcher(id)? else {
         return Ok(false);
     };
@@ -643,7 +651,7 @@ fn settle_in(tx: &mut dyn WriteTransaction, id: &Id) -> Result<bool, StorageErro
         return Ok(false);
     };
     let process = tx.resources().process(&operation_id.0)?;
-    let Some(observed) = observe(&watcher, &operation, process.as_ref()) else {
+    let Some(observed) = observe(&watcher, &operation, process.as_ref(), monitoring) else {
         return Ok(false);
     };
     let now = tx.now_ms();
@@ -729,6 +737,7 @@ fn observe(
     watcher: &StoredWatcher,
     operation: &OperationRecord,
     process: Option<&StoredProcess>,
+    monitoring: bool,
 ) -> Option<Observed> {
     let duration_ms = process
         .filter(|p| matches!(p.phase, ProcessPhase::Reaped))
@@ -747,13 +756,63 @@ fn observe(
         tail: None,
         truncated: false,
     };
+    // A watched process's effect ends at launch; its monitor records what it observed.
+    let monitored = operation.attempts.iter().rev().find_map(|attempt| {
+        attempt
+            .observations
+            .iter()
+            .rev()
+            .find_map(|o| o.get("watchOutcome").cloned())
+    });
     match operation.state {
         OperationState::ObservedComplete => {
-            let evidence = effect
+            let launched = effect
                 .as_ref()
-                .and_then(|e| e.get("evidence"))
-                .cloned()
-                .unwrap_or(Value::Null);
+                .and_then(|e| e.pointer("/evidence/launched"))
+                == Some(&Value::Bool(true));
+            let evidence = match (monitored, launched) {
+                (Some(evidence), _) => evidence,
+                (None, true) if monitoring => return None,
+                // No monitor recorded it: the process record says what became of it.
+                (None, true) => {
+                    let (kind, detail) = match process.map(|p| (p.phase, p.detail.as_deref())) {
+                        Some((ProcessPhase::Reaped, Some("killed by boot recovery"))) => {
+                            ("Interrupted", "DevWorks restarted and stopped the process")
+                        }
+                        Some((ProcessPhase::Uncertain, _)) => {
+                            ("Uncertain", "the process could not be verified stopped")
+                        }
+                        Some((ProcessPhase::Failed, _)) => {
+                            ("Failed", "the process failed before a verified result")
+                        }
+                        Some((ProcessPhase::Reaped | ProcessPhase::Lost, _)) => (
+                            "Lost",
+                            "the process ended without its outcome being observed",
+                        ),
+                        // Still running under an owner that no monitor observes (an earlier
+                        // boot's tree awaiting recovery): not observed yet.
+                        _ => return None,
+                    };
+                    return Some(plain(outcome(kind, None, None, Some(detail))));
+                }
+                (None, false) => effect
+                    .as_ref()
+                    .and_then(|e| e.get("evidence"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            };
+            if let Some(reason) = evidence
+                .get("unknown")
+                .or_else(|| evidence.get("failed"))
+                .and_then(Value::as_str)
+            {
+                let kind = if evidence.get("failed").is_some() {
+                    "Failed"
+                } else {
+                    "Uncertain"
+                };
+                return Some(plain(outcome(kind, None, None, Some(reason))));
+            }
             let exit_code = evidence
                 .pointer("/result/value/exitCode")
                 .and_then(Value::as_i64);
@@ -762,14 +821,13 @@ fn observe(
                 .get("tailBase64")
                 .and_then(Value::as_str)
                 .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
-                .map(|mut bytes| {
-                    bytes.truncate(MAX_WATCH_TAIL_BYTES);
-                    bytes
-                });
+                .map(|bytes| keep_end(bytes, MAX_WATCH_TAIL_BYTES));
             let truncated = evidence
                 .get("tailTruncated")
                 .and_then(Value::as_bool)
-                .unwrap_or(false);
+                .unwrap_or(false)
+                || tail.as_ref().is_some_and(|(_, cut)| *cut);
+            let tail = tail.map(|(bytes, _)| bytes);
             let lost = evidence.get("outputLost").and_then(Value::as_bool) == Some(true);
             // Measured on a monotonic clock around the run; the store-clock span otherwise.
             let duration_ms = evidence
@@ -1004,6 +1062,20 @@ fn notice_text(event: &StoredWatchEvent) -> String {
     text
 }
 
+/// The last `max` bytes, starting at a UTF-8 boundary when the cut lands inside a character;
+/// `true` when bytes were dropped (redaction can make a tail longer than its budget).
+fn keep_end(bytes: Vec<u8>, max: usize) -> (Vec<u8>, bool) {
+    if bytes.len() <= max {
+        return (bytes, false);
+    }
+    let mut start = bytes.len() - max;
+    let limit = (start + 3).min(bytes.len());
+    while start < limit && (bytes[start] & 0b1100_0000) == 0b1000_0000 {
+        start += 1;
+    }
+    (bytes[start..].to_vec(), true)
+}
+
 fn floor_boundary(text: &str, max: usize) -> usize {
     let mut end = text.len().min(max);
     while !text.is_char_boundary(end) {
@@ -1096,5 +1168,22 @@ mod tests {
         assert!(text.ends_with("THE END"));
         assert!(text.contains("(earlier output omitted)"));
         assert!(text.contains("Failed (exit code 1)") && text.contains("Duration: 5 ms"));
+    }
+}
+
+#[cfg(test)]
+mod bound_tests {
+    use super::keep_end;
+
+    #[test]
+    fn a_bounded_tail_keeps_its_end_at_a_character_boundary() {
+        assert_eq!(keep_end(b"short".to_vec(), 8), (b"short".to_vec(), false));
+        assert_eq!(
+            keep_end(b"0123456789".to_vec(), 4),
+            (b"6789".to_vec(), true)
+        );
+        // "é" is two bytes; a cut through it starts after it.
+        let (kept, cut) = keep_end("aéb".as_bytes().to_vec(), 2);
+        assert_eq!((kept, cut), (b"b".to_vec(), true));
     }
 }

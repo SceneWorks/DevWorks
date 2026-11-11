@@ -22,7 +22,7 @@ impl EffectExecutor for Effects {
     fn execute(&self, operation: OperationRecord) -> EffectFuture {
         let service = self.0.clone();
         Box::pin(async move {
-            match tokio::task::spawn_blocking(move || service.execute(&operation)).await {
+            match tokio::task::spawn_blocking(move || service.execute_detached(&operation)).await {
                 Ok(value) => outcome(value),
                 Err(_) => EffectResult::Unknown("process effect panicked".into()),
             }
@@ -75,11 +75,11 @@ pub fn cancel_consumer(service: Arc<ProcessToolService>) -> Consumer {
     consumer
 }
 
-/// Watched processes run long by design (a dev server, a build), so they share neither the
-/// two `process.execute` slots nor the cancellation slots.
+/// Watched processes run long by design (a dev server, a build). Their effect ends once the
+/// process is launched (a monitor thread records the outcome), so they hold a dispatcher worker
+/// only for the launch and never starve cancellation or other consumers.
 pub fn watch_consumer(service: Arc<ProcessToolService>) -> Consumer {
     let mut consumer = consumer(service);
     consumer.name = WATCH_CONSUMER.into();
-    consumer.max_in_flight = Some(16);
     consumer
 }

@@ -642,3 +642,55 @@ fn only_the_host_writes_a_watcher_message() {
         app.shutdown().await;
     });
 }
+
+/// Watched processes hold a dispatcher worker only to launch: more long-running watchers than
+/// the dispatcher has workers still leave capacity for their stops.
+#[test]
+fn long_running_watchers_never_block_their_own_stops() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-capacity-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watchers: Vec<Value> = (0..6)
+            .map(|n| create(&app, &ctx, "sleep 300", 600_000, &format!("long-{n}")))
+            .collect();
+        // Every process is running (launched) before any stop is requested.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        for watcher in &watchers {
+            let process = watcher["process"]["processId"].as_str().unwrap().to_owned();
+            while read(&**app.store(), |s| s.resources().process(&id(&process)))
+                .is_none_or(|p| p.phase != ProcessPhase::Running)
+            {
+                assert!(std::time::Instant::now() < deadline, "watched process never ran");
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+        for (n, watcher) in watchers.iter().enumerate() {
+            let stop = command(
+                &app,
+                &ctx,
+                "watch.cancel",
+                json!({"watcherId": watcher["id"], "expectedRevision": watcher["revision"], "stopProcess": true}),
+                &format!("stop-{n}"),
+            );
+            assert_eq!(stop["state"], json!("Stopping"));
+        }
+        let ids: Vec<String> = watchers
+            .iter()
+            .map(|w| w["id"].as_str().unwrap().to_owned())
+            .collect();
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        settle_all(&app, &ctx, &refs).await;
+        for watcher in &refs {
+            assert_eq!(inspect(&app, &ctx, watcher)["outcome"]["kind"], json!("Cancelled"));
+        }
+        app.shutdown().await;
+    });
+}

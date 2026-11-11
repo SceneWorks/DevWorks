@@ -709,6 +709,8 @@ pub struct ProcessToolService {
     ids: Arc<dyn IdSource>,
     live_output: Mutex<HashMap<String, Arc<Mutex<BoundedOutput>>>>,
     live_tails: Mutex<HashMap<String, LiveTail>>,
+    /// Watched processes whose monitor thread has not yet recorded their outcome.
+    monitoring: Mutex<HashSet<String>>,
 }
 type LiveTail = (Arc<Mutex<TailOutput>>, Arc<Vec<String>>);
 
@@ -761,6 +763,7 @@ impl ProcessToolService {
             ids,
             live_output: Mutex::new(HashMap::new()),
             live_tails: Mutex::new(HashMap::new()),
+            monitoring: Mutex::new(HashSet::new()),
         }
     }
 
@@ -1385,6 +1388,86 @@ impl ProcessToolService {
 
     /// Runs the committed effect once. An unknown observation never launches a second tree.
     pub fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
+        self.execute_reporting(operation, None)
+    }
+
+    /// Like [`Self::execute`], except that a watcher's process does not hold the caller (a
+    /// dispatcher worker) for its lifetime: once it is launched this answers `launched`, and a
+    /// monitor thread records the observed outcome on the operation as `watchOutcome`.
+    pub fn execute_detached(self: &Arc<Self>, operation: &OperationRecord) -> EffectOutcome {
+        let watched = operation.capability == "process.execute"
+            && serde_json::from_value::<ExecuteJob>(operation.payload.clone())
+                .is_ok_and(|job| job.watch.is_some());
+        if !watched {
+            return self.execute(operation);
+        }
+        let (report, launched) = std::sync::mpsc::channel();
+        let service = self.clone();
+        let monitored = operation.clone();
+        self.monitoring
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(operation.id.0.as_str().to_owned());
+        std::thread::spawn(move || {
+            let outcome = service.execute_reporting(&monitored, Some(report.clone()));
+            // The launch was already reported (the caller stopped listening): the outcome is
+            // this monitor's to record. Otherwise the caller receives it as the effect result.
+            let reported_launch = report.send(Some(outcome.clone())).is_err();
+            if reported_launch {
+                service.record_watch_outcome(&monitored, &outcome);
+            }
+            service
+                .monitoring
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(monitored.id.0.as_str());
+        });
+        match launched.recv() {
+            Ok(None) => {
+                drop(launched);
+                EffectOutcome::Completed(json!({"launched": true}))
+            }
+            Ok(Some(outcome)) => outcome,
+            Err(_) => EffectOutcome::Unknown("watched process launch was not reported".into()),
+        }
+    }
+
+    /// Whether a monitor thread of this boot still owns the watched process `operation`.
+    pub fn is_monitoring(&self, operation: &OperationId) -> bool {
+        self.monitoring
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains(operation.0.as_str())
+    }
+
+    fn record_watch_outcome(&self, operation: &OperationRecord, outcome: &EffectOutcome) {
+        let evidence = match outcome {
+            EffectOutcome::Completed(evidence) => evidence.clone(),
+            EffectOutcome::Failed(reason) => json!({"failed": reason}),
+            EffectOutcome::Unknown(reason) => json!({"unknown": reason}),
+        };
+        let id = operation.id.clone();
+        let _ = crate::ports::storage::run_write(
+            &*self.store,
+            crate::ports::storage::WriteOptions::default(),
+            move |tx| {
+                let Some(current) = tx.operations().operation(&id)? else {
+                    return Ok(());
+                };
+                let Some(attempt) = current.latest_attempt().map(|a| a.attempt_no) else {
+                    return Ok(());
+                };
+                tx.operations()
+                    .observe(&id, attempt, json!({"watchOutcome": evidence}))
+            },
+        );
+    }
+
+    fn execute_reporting(
+        &self,
+        operation: &OperationRecord,
+        launched: Option<std::sync::mpsc::Sender<Option<EffectOutcome>>>,
+    ) -> EffectOutcome {
         if operation.capability == "process.cancel" {
             return self.execute_cancel(operation);
         }
@@ -1477,6 +1560,7 @@ impl ProcessToolService {
             job.tail_bytes as usize,
             redactions,
             false,
+            launched,
         )
     }
 
@@ -1532,6 +1616,7 @@ impl ProcessToolService {
             0,
             Vec::new(),
             true,
+            None,
         )
     }
 
@@ -1546,6 +1631,7 @@ impl ProcessToolService {
         tail_limit: usize,
         redactions: Vec<String>,
         install: bool,
+        launched: Option<std::sync::mpsc::Sender<Option<EffectOutcome>>>,
     ) -> EffectOutcome {
         if install {
             let Some(root) = spec.cwd.as_ref() else {
@@ -1578,7 +1664,12 @@ impl ProcessToolService {
             &policy,
             operation.id.0.clone(),
         ) {
-            Ok(process) => process,
+            Ok(process) => {
+                if let Some(report) = &launched {
+                    let _ = report.send(None);
+                }
+                process
+            }
             Err(LaunchRefusal::Storage(error)) => {
                 return EffectOutcome::Unknown(format!(
                     "process launch record unavailable: {error}"
