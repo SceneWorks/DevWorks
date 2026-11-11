@@ -92,6 +92,8 @@ pub fn config(root: &Path) -> DesktopConfig {
     c.shutdown_bound = Duration::from_secs(5);
     // Tests never scan the user's real repository base directory.
     c.indexing.discover_at_boot = false;
+    // Nor the user's shared skill folder.
+    c.shared_skills = None;
     // Never the real OS secret store or the network.
     c.secrets = Some(Arc::new(
         devworks_core::ports::secrets::SessionSecrets::new(),

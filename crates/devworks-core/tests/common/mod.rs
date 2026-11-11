@@ -405,6 +405,9 @@ impl ReadSnapshot for MemSnapshot {
     fn help(&self) -> &dyn HelpRead {
         &self.unsupported
     }
+    fn instructions(&self) -> &dyn InstructionRead {
+        &self.unsupported
+    }
     fn github(&self) -> &dyn GithubRead {
         &self.unsupported
     }
@@ -524,6 +527,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn help(&mut self) -> &mut dyn HelpRepository {
+        &mut self.unsupported
+    }
+    fn instructions(&mut self) -> &mut dyn InstructionRepository {
         &mut self.unsupported
     }
     fn github(&mut self) -> &mut dyn GithubRepository {
@@ -3581,6 +3587,73 @@ impl HelpRead for Unsupported {
         _: i64,
         _: u32,
     ) -> Result<Option<StoredHelpPassage>, StorageError> {
+        nope()
+    }
+}
+impl InstructionRead for Unsupported {
+    fn instruction_item(&self, _: &Id) -> Result<Option<StoredInstructionItem>, StorageError> {
+        nope()
+    }
+    fn instruction_items(
+        &self,
+        _: &InstructionFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredInstructionItem>, StorageError> {
+        nope()
+    }
+    fn instruction_revision(
+        &self,
+        _: &Id,
+        _: i64,
+    ) -> Result<Option<StoredInstructionRevision>, StorageError> {
+        nope()
+    }
+    fn instruction_revisions(
+        &self,
+        _: &Id,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<StoredInstructionRevision>, StorageError> {
+        nope()
+    }
+    fn instruction_revision_by_approval(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredInstructionRevision>, StorageError> {
+        nope()
+    }
+}
+impl InstructionRepository for Unsupported {
+    fn insert_instruction_item(&mut self, _: &StoredInstructionItem) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_instruction_item(&mut self, _: &StoredInstructionItem) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_instruction_revision(
+        &mut self,
+        _: &StoredInstructionRevision,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn set_instruction_revision_state(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: InstructionRevisionState,
+        _: InstructionRevisionState,
+        _: Option<&Id>,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn release_instruction_revision(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &serde_json::Value,
+    ) -> Result<(), StorageError> {
         nope()
     }
 }

@@ -615,6 +615,36 @@ fn without_exceptions(mut doc: Value) -> Value {
                 {
                     props.remove("configuration");
                 }
+                // MCP servers are project-scoped (`scope` became required on the six `mcp.*`
+                // requests that name a server) and report their last failure. Accepted as a breaking
+                // revision-1 change because nothing used the MCP operations yet.
+                if let Some(Value::Object(server)) = m.get_mut("McpServer")
+                    && let Some(Value::Object(props)) = server.get_mut("properties")
+                {
+                    props.remove("lastFailure");
+                }
+                if m.get("properties")
+                    .and_then(|p| p.pointer("/kind/const"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|k| {
+                        matches!(
+                            k,
+                            "mcp.capabilities"
+                                | "mcp.connect"
+                                | "mcp.discover"
+                                | "mcp.prompts"
+                                | "mcp.resources"
+                                | "mcp.select_tools"
+                        )
+                    })
+                {
+                    if let Some(Value::Object(props)) = m.get_mut("properties") {
+                        props.remove("scope");
+                    }
+                    if let Some(Value::Array(required)) = m.get_mut("required") {
+                        required.retain(|r| r != "scope");
+                    }
+                }
                 m.values_mut().for_each(walk);
             }
             Value::Array(a) => a.iter_mut().for_each(walk),
@@ -677,8 +707,8 @@ fn revision_1_documents_are_byte_identical_to_the_recorded_ones_but_the_document
         );
         exceptions.push(*file);
     }
-    // The documents carrying the new operation, a relative path or the activation's
-    // configuration.
+    // The documents carrying the new operation, a relative path, the activation's
+    // configuration or the MCP server scope and last failure.
     assert_eq!(
         exceptions,
         [

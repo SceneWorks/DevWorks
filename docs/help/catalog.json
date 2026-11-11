@@ -535,7 +535,7 @@
   },
   {
     "id": "settings-Instructions",
-    "title": "Role instructions and adoption",
+    "title": "Role instructions, skills and adoption",
     "file": "topics/settings-Instructions.md",
     "screenIds": [],
     "settingsSections": [
@@ -545,7 +545,19 @@
       "settings.read_effective",
       "settings.validate",
       "settings.save_revision",
-      "settings.explain_source"
+      "settings.explain_source",
+      "roles.read",
+      "roles.draft",
+      "roles.propose",
+      "roles.history",
+      "roles.rollback",
+      "skills.discover",
+      "skills.read",
+      "skills.resources",
+      "skills.draft",
+      "skills.propose",
+      "skills.history",
+      "skills.rollback"
     ]
   },
   {
