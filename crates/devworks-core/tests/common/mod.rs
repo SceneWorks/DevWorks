@@ -2915,6 +2915,30 @@ impl KnowledgeRead for Unsupported {
     ) -> Result<Vec<StoredClaim>, StorageError> {
         nope()
     }
+    fn knowledge_entity_claims(
+        &self,
+        _: &Id,
+        _: &[String],
+        _: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_entity_edges(
+        &self,
+        _: &Id,
+        _: &[String],
+        _: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_entities(
+        &self,
+        _: &[String],
+        _: Option<(i64, &str)>,
+        _: u16,
+    ) -> Result<Vec<StoredEntity>, StorageError> {
+        nope()
+    }
     fn knowledge_entity_users(&self, _: &Id, _: u16) -> Result<Vec<StoredClaim>, StorageError> {
         nope()
     }

@@ -329,6 +329,13 @@ impl UseCases {
         for op in knowledge::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
+        if service.offers_summaries() {
+            self.register(
+                knowledge::SUMMARY_OPERATION,
+                Some(service.clone()),
+                Some(service.clone()),
+            );
+        }
         self
     }
 
