@@ -2226,7 +2226,12 @@
         "transport": "Label",
         "selected_tool_ids": "Items<Id>",
         "catalog_revision": "Revision",
-        "last_failure": "?Text"
+        "last_failure": "?Text",
+        "configuration": "?McpTransport"
+      },
+      "since": {
+        "last_failure": 8,
+        "configuration": 8
       }
     },
     "McpTransport": {
@@ -10091,15 +10096,18 @@
       "result": "McpServer",
       "effect": "Local",
       "authority": "Configuration",
-      "rules": "Declared optional external runtime, transport and credentials; outgoing connection only, distinct from mcp_server administration. Configuration cannot self-grant selected tools."
+      "rules": "Declared optional external runtime, transport and credentials; outgoing connection only, distinct from mcp_server administration. Configuration cannot self-grant selected tools. Revision 8 returns the saved transport as configuration to a human or host caller only (credential handles, never secret values)."
     },
     "mcp.connect": {
       "operation": "mcp.connect",
       "mode": "Command",
       "fields": {
-        "scope": "DataScope",
+        "scope": "?DataScope",
         "server_id": "Id",
         "expected_revision": "Revision"
+      },
+      "since": {
+        "scope": 8
       },
       "result": "McpServer",
       "effect": "External",
@@ -10110,9 +10118,12 @@
       "operation": "mcp.discover",
       "mode": "Command",
       "fields": {
-        "scope": "DataScope",
+        "scope": "?DataScope",
         "server_id": "Id",
         "expected_catalog_revision": "Revision"
+      },
+      "since": {
+        "scope": 8
       },
       "result": "Page<McpCapability>",
       "effect": "External",
@@ -10123,11 +10134,14 @@
       "operation": "mcp.select_tools",
       "mode": "Command",
       "fields": {
-        "scope": "DataScope",
+        "scope": "?DataScope",
         "server_id": "Id",
         "expected_revision": "Revision",
         "expected_catalog_revision": "Revision",
         "tool_ids": "Items<Id>"
+      },
+      "since": {
+        "scope": 8
       },
       "result": "McpServer",
       "effect": "Local",
@@ -10138,11 +10152,14 @@
       "operation": "mcp.resources",
       "mode": "Query",
       "fields": {
-        "scope": "DataScope",
+        "scope": "?DataScope",
         "server_id": "Id",
         "catalog_revision": "Revision",
         "uri": "?Text",
         "page": "PageRequest"
+      },
+      "since": {
+        "scope": 8
       },
       "result": "Page<McpResource>",
       "effect": "ExternalRead",
@@ -10153,12 +10170,15 @@
       "operation": "mcp.prompts",
       "mode": "Query",
       "fields": {
-        "scope": "DataScope",
+        "scope": "?DataScope",
         "server_id": "Id",
         "catalog_revision": "Revision",
         "name": "?Label",
         "arguments": "?SchemaValue",
         "page": "PageRequest"
+      },
+      "since": {
+        "scope": 8
       },
       "result": "Page<McpPrompt>",
       "effect": "ExternalRead",
@@ -10169,10 +10189,13 @@
       "operation": "mcp.capabilities",
       "mode": "Query",
       "fields": {
-        "scope": "DataScope",
+        "scope": "?DataScope",
         "server_id": "Id",
         "catalog_revision": "Revision",
         "page": "PageRequest"
+      },
+      "since": {
+        "scope": 8
       },
       "result": "Page<McpCapability>",
       "effect": "Local",
@@ -11223,6 +11246,38 @@
     "web.fetch": [
       1,
       2
+    ],
+    "mcp.servers": [
+      1,
+      8
+    ],
+    "mcp.configure": [
+      1,
+      8
+    ],
+    "mcp.connect": [
+      1,
+      8
+    ],
+    "mcp.discover": [
+      1,
+      8
+    ],
+    "mcp.select_tools": [
+      1,
+      8
+    ],
+    "mcp.resources": [
+      1,
+      8
+    ],
+    "mcp.prompts": [
+      1,
+      8
+    ],
+    "mcp.capabilities": [
+      1,
+      8
     ],
     "indexing.status": [
       1,

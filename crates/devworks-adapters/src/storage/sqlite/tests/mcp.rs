@@ -156,7 +156,7 @@ fn command(
     mut body: Value,
 ) -> DomainDecision {
     body["kind"] = json!(op);
-    let frame = json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":key,"body":body});
+    let frame = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":8,"requestKey":key,"body":body});
     let authority = HostAuthority {
         store,
         clock: &*h.clock,
@@ -191,7 +191,7 @@ fn servers(
         store,
         ids: &*h.ids,
     };
-    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"mcp-list","body":{
+    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":8,"queryId":"mcp-list","body":{
         "kind":"mcp.servers","scope":{"kind":"Workspace"},"page":{"limit":10}
     }});
     match cases
@@ -228,7 +228,7 @@ fn capabilities(
         store,
         ids: &*h.ids,
     };
-    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"mcp-catalog","body":{
+    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":8,"queryId":"mcp-catalog","body":{
         "kind":"mcp.capabilities","scope":{"kind":"Workspace"},"serverId":server_id,
         "catalogRevision":catalog_revision.to_string(),"page":{"limit":10}
     }});
@@ -1116,7 +1116,7 @@ fn resource_and_prompt_queries_publish_bounded_untrusted_content() {
         ids: &*h.ids,
     };
     let query = |operation: &str, body: Value| {
-        let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"mcp-content-read",
+        let frame = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":8,"queryId":"mcp-content-read",
             "body":body});
         cases
             .query(
@@ -1273,7 +1273,7 @@ fn resource_query_stops_when_deadline_expires_during_a_remote_read() {
         store: &*store,
         ids: &*h.ids,
     };
-    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"deadline-read",
+    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":8,"queryId":"deadline-read",
         "body":{"kind":"mcp.resources","scope":{"kind":"Workspace"},
             "serverId":server.id,"catalogRevision":"2","page":{"limit":10}}});
     let reply = gateway
@@ -2066,4 +2066,199 @@ fn two_servers_with_the_same_tool_name_get_distinct_agent_aliases() {
             .iter()
             .all(|material| material.alias.wire_name.len() <= 64)
     );
+}
+
+#[test]
+fn saved_configuration_is_shown_to_humans_at_revision_eight_and_a_new_token_keeps_the_catalog() {
+    use devworks_core::authority::service::bind_principal;
+    use devworks_core::ports::storage::NewPrincipalBinding;
+    use devworks_core::protocol::records::{ItemState, McpTransport};
+    use devworks_core::settings::catalog::AgentRole;
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
+        tx.actors().register(
+            &ActorId(id("mcp-worker")),
+            PrincipalKind::Agent,
+            "MCP worker",
+        )
+    })
+    .unwrap();
+    let human = context(&store);
+    let binder = human.clone();
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        bind_principal(
+            tx,
+            &binder,
+            NewPrincipalBinding {
+                actor: ActorId(id("mcp-worker")),
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::Worker),
+                project_id: None,
+                tool_families: None,
+                bound_by: ActorId(id("mcp-user")),
+            },
+            None,
+        )
+        .map_err(|error| {
+            devworks_core::ports::storage::StorageError::InvalidRecord(format!("{error:?}"))
+        })
+    })
+    .unwrap();
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    let cases = UseCases::new().with_mcp(service.clone());
+    let transport = |credential: Option<&str>| {
+        let mut transport = json!({"kind":"Http","endpoint":"https://mcp.example.test/mcp"});
+        if let Some(handle) = credential {
+            transport["credentialRef"] = json!(handle);
+        }
+        transport
+    };
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: server },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "saved-config-create",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"name":"Token server",
+            "transport":transport(Some("mcp-first-token"))}),
+    )
+    else {
+        panic!("server configuration failed");
+    };
+    let (service_for_write, server_id) = (service.clone(), server.id.clone());
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        service_for_write.publish_remote_catalog(
+            tx,
+            &ConfigScope::Workspace,
+            &server_id,
+            &Revision::new(1).unwrap(),
+            RemoteCatalog {
+                tools: vec![RemoteTool {
+                    name: "lookup".into(),
+                    description: "Read a record".into(),
+                    input_schema: json!({"type":"object"}),
+                    output_schema: None,
+                    read_only_hint: true,
+                }],
+                resources: vec![],
+                prompts: vec![],
+            },
+        )
+    })
+    .unwrap();
+    let tool = match capabilities(&h, &store, &cases, &server.id, 2) {
+        DomainQueryReply::Result {
+            result: OperationResult::McpCapabilities { value },
+            ..
+        } => {
+            value
+                .items
+                .0
+                .into_iter()
+                .find(|cap| cap.kind.0 == "tool")
+                .unwrap()
+                .id
+        }
+        other => panic!("unexpected catalog: {other:?}"),
+    };
+    let DomainDecision::Applied {
+        result: OperationResult::McpSelectTools { value: published },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "saved-config-select",
+        "mcp.select_tools",
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"2",
+            "expectedCatalogRevision":"2","toolIds":[tool]}),
+    )
+    else {
+        panic!("selection failed");
+    };
+    assert_eq!(published.selected_tool_ids.0.len(), 1);
+
+    let listed = |ctx: &InvocationContext, revision: u32| {
+        let authority = HostAuthority {
+            store: &*store,
+            clock: &*h.clock,
+            protected_branches: &[],
+        };
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*store,
+            ids: &*h.ids,
+        };
+        let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"saved-config-list",
+            "schemaRevision":revision,"body":{"kind":"mcp.servers","scope":{"kind":"Workspace"},
+            "page":{"limit":10}}});
+        match cases
+            .query(&gateway, ctx, "mcp.servers", frame.to_string().as_bytes())
+            .expect("MCP query registered")
+        {
+            DomainQueryReply::Result {
+                result: OperationResult::McpServers { value },
+                ..
+            } => value.items.0.into_iter().next().unwrap(),
+            other => panic!("expected MCP server page: {other:?}"),
+        }
+    };
+    let agent = HostIngress::new(&*store).context(
+        ActorId(id("mcp-worker")),
+        PrincipalKind::Agent,
+        id("mcp-invocation"),
+        id("mcp-agent"),
+        Counter::new(store.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    // A human at revision 8 sees the saved transport with its handle; revision 1 and agents
+    // never see it.
+    assert!(matches!(listed(&human, 8).configuration,
+        Some(McpTransport::Http { credential_ref: Some(handle), .. })
+            if handle.as_str() == "mcp-first-token"));
+    assert!(listed(&human, 1).configuration.is_none());
+    assert!(listed(&agent, 8).configuration.is_none());
+
+    // Replacing the token keeps the same server's catalog and selection, and disables it until
+    // it reconnects with the new credential.
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: retokened },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "saved-config-token",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"3",
+            "name":"Token server","transport":transport(Some("mcp-second-token"))}),
+    )
+    else {
+        panic!("token replacement failed");
+    };
+    assert_eq!(retokened.catalog_revision, published.catalog_revision);
+    assert_eq!(retokened.selected_tool_ids.0, published.selected_tool_ids.0);
+    assert!(matches!(retokened.state, ItemState::Disabled));
+
+    // A new endpoint is a different server: its catalog and selection are cleared.
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: moved },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "saved-config-endpoint",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"4",
+            "name":"Token server",
+            "transport":{"kind":"Http","endpoint":"https://other.example.test/mcp"}}),
+    )
+    else {
+        panic!("endpoint change failed");
+    };
+    assert!(moved.catalog_revision.get() > published.catalog_revision.get());
+    assert!(moved.selected_tool_ids.0.is_empty());
 }

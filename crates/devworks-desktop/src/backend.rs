@@ -204,6 +204,10 @@ pub trait Backend: Send + Sync {
     fn stage_mcp_api_key(&self, _key: Secret) -> Result<Id, String> {
         Err("MCP credential entry is not available".into())
     }
+    /// Deletes the stored secrets of MCP handles that no saved server references any more.
+    fn release_mcp_credentials(&self, _handles: Vec<Id>) -> Result<(), String> {
+        Ok(())
+    }
     /// Attaches the `code#state` value the user pasted to their open browser sign-in, for the
     /// `CompleteSignIn` command that follows (user ingress only; kept in memory).
     fn submit_sign_in_code(&self, _flow: &Id, _pasted: Secret) -> Result<(), String> {
@@ -344,6 +348,8 @@ pub enum Slot {
     McpOperation(String),
     McpCapabilities(String, String, Option<String>),
     McpCommand,
+    /// Deletes MCP secrets a configuration change left unreferenced.
+    McpRelease,
     /// Active and archived projects.
     ProjectsList,
     /// Deleted projects (their tombstones).
