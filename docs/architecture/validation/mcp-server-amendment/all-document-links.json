@@ -29,7 +29,7 @@
     },
     {
       "path": "docs/architecture/devworks-architecture.html",
-      "localLinks": 172,
+      "localLinks": 180,
       "images": 44,
       "pageErrors": []
     },
@@ -47,19 +47,19 @@
     },
     {
       "path": "docs/architecture/domain-operation-contracts.html",
-      "localLinks": 11,
+      "localLinks": 16,
       "images": 2,
       "pageErrors": []
     },
     {
       "path": "docs/architecture/domain-operation-reference.html",
-      "localLinks": 21,
+      "localLinks": 33,
       "images": 0,
       "pageErrors": []
     },
     {
       "path": "docs/architecture/implementation-plan.html",
-      "localLinks": 68,
+      "localLinks": 84,
       "images": 1,
       "pageErrors": []
     },
@@ -83,13 +83,19 @@
     },
     {
       "path": "docs/architecture/shared-operation-contracts.html",
-      "localLinks": 15,
+      "localLinks": 17,
+      "images": 0,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/planning/auto-routing-plan.html",
+      "localLinks": 9,
       "images": 0,
       "pageErrors": []
     },
     {
       "path": "docs/planning/devworks-requirements.html",
-      "localLinks": 50,
+      "localLinks": 51,
       "images": 3,
       "pageErrors": []
     },
@@ -100,13 +106,25 @@
       "pageErrors": []
     },
     {
+      "path": "docs/planning/latest-model-plan.html",
+      "localLinks": 4,
+      "images": 0,
+      "pageErrors": []
+    },
+    {
       "path": "docs/planning/mockup-gallery.html",
-      "localLinks": 50,
-      "images": 44,
+      "localLinks": 55,
+      "images": 47,
+      "pageErrors": []
+    },
+    {
+      "path": "docs/planning/ui-reference.html",
+      "localLinks": 5,
+      "images": 0,
       "pageErrors": []
     }
   ],
-  "localTargetsChecked": 414,
-  "images": 101,
+  "localTargetsChecked": 481,
+  "images": 104,
   "visibleTabsOpened": 0
 }

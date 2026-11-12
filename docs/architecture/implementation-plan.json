@@ -12,21 +12,21 @@
   "sourceSha256": {
     "implementation-slices.json": "c515967038575693f979b65cccdb37e86a7f00115adec842c1184b61fbc51949",
     "devworks-capability-catalog.json": "5fc5d7da3c910be05ea893710603b6c731b9236b33b6365864df1a57bffc4d72",
-    "devworks-requirements-traceability.json": "23d4eaab9420af10bd850fcafd2025cd99498cd371aec8554aac4db09c4de407",
+    "devworks-requirements-traceability.json": "fdf6d27d17f61c1a41ea87d686314d315b9ed0099e185b2f095f61df9e0aa660",
     "codegraph-capability-inventory.json": "54da948de48de4a7d00353ae14d7464feac80cca9bdab6d2a6bb2679caae2c09",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "012593410ebaf12a0801ba4a6e444eae08858a538cb57965cc4d4f3275ce7fb6",
+    "contracts/family-coverage.json": "ed41c56bd7f8881cebe19f8a5123c8d53d321a80376a48384c05d2fd4ec7bc8f",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
-    "codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4"
+    "codegraph-work-map.json": "7adfb3650fbc6bde7d6a580464ba32015b47edc121a52dfab88ac052b3e46949"
   },
   "counts": {
     "slices": 80,
     "operationFamilies": 50,
     "operations": 373,
-    "requirements": 377,
+    "requirements": 378,
     "requirementsByStatus": {
-      "Confirmed": 230,
+      "Confirmed": 231,
       "Proposed": 147
     },
     "inputSchemaCandidates": 373,
@@ -2601,7 +2601,8 @@
         "KNOW-05",
         "KNOW-06",
         "KNOW-07",
-        "KNOW-08"
+        "KNOW-08",
+        "KNOW-09"
       ],
       "supportingRequirements": [
         "CONTEXT-01",
@@ -2740,6 +2741,7 @@
         "KNOW-06",
         "KNOW-07",
         "KNOW-08",
+        "KNOW-09",
         "GRAPH-01",
         "GRAPH-02",
         "GRAPH-03",
@@ -2831,7 +2833,8 @@
         "KNOW-05",
         "KNOW-06",
         "KNOW-07",
-        "KNOW-08"
+        "KNOW-08",
+        "KNOW-09"
       ],
       "capabilityCases": [
         "CAP-DREAMING"
@@ -8964,6 +8967,24 @@
       "validationFamily": "Tagged identity, source revision and scope tests",
       "validationGate": "G06",
       "plannedCase": "AT-KNOW-08",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "knowledge",
+      "supportingSlices": [
+        "knowledge_graph",
+        "dreaming"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "KNOW-09",
+      "requirementStatus": "Confirmed",
+      "statement": "Knowledge search must let an agent bound one page of results by a token budget, filled with the best-ranked claims first. The budget sets the page size and must not make any claim unreachable: the remaining claims stay available on later pages. The default budget and the largest budget a caller may pass must be configurable, inherited Workspace then Project; a caller may pass its own budget on a call within the allowed range. A person searching in the app is not limited by the budget.",
+      "sourceSection": "15 Context memory knowledge lessons and rules",
+      "architectureSection": "knowledge-documents-and-dreaming",
+      "owner": "KnowledgeService",
+      "validationFamily": "Tagged identity, source revision and scope tests",
+      "validationGate": "G06",
+      "plannedCase": "AT-KNOW-09",
       "designStatus": "Proposed architecture mapping; not an implementation/test result",
       "primarySlice": "knowledge",
       "supportingSlices": [

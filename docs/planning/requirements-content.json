@@ -1697,6 +1697,12 @@
       ],
       [
         "req",
+        "KNOW-09",
+        "Confirmed",
+        "Knowledge search must let an agent bound one page of results by a token budget, filled with the best-ranked claims first. The budget sets the page size and must not make any claim unreachable: the remaining claims stay available on later pages. The default budget and the largest budget a caller may pass must be configurable, inherited Workspace then Project; a caller may pass its own budget on a call within the allowed range. A person searching in the app is not limited by the budget."
+      ],
+      [
+        "req",
         "CONTEXT-01",
         "Proposed",
         "Context assembly must combine the work brief, current plan, instructions, relevant code and graph results, scoped knowledge, applicable lessons, prior evidence, and handover state within a deliberate token budget. It must preserve provenance instead of indiscriminately replaying all repository content and chat history."
