@@ -16482,7 +16482,7 @@
           ],
           "authority": "Scoped",
           "effect": "External",
-          "semanticRules": "Catalog changes invalidate old selected schema revisions before use. No discovered tool becomes enabled solely by discovery.",
+          "semanticRules": "Catalog changes invalidate old selected schema revisions before use. The first discovery of a newly added server selects its read-only-hinted tools (MCP-06); later discoveries never add to the human selection, and a hint is never a verified read.",
           "familyRules": "Outgoing client; optional declared runtime. Remote hints are not verified-read proof; discovery never self-enables tools or expands host policy.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

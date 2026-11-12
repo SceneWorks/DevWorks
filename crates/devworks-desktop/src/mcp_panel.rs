@@ -407,11 +407,18 @@ impl McpPanel {
                 });
                 for cap in tools {
                     let mut checked = self.selection.contains(&cap.id);
+                    // A selected tool the server stopped listing keeps its selection without a
+                    // schema; agents are not offered it until the server lists it again.
                     let label = format!(
-                        "{}{}",
+                        "{}{}{}",
                         cap.name.0,
                         if cap.read_only {
                             " · read-only hint"
+                        } else {
+                            ""
+                        },
+                        if cap.input_schema.is_none() {
+                            " · unavailable: the server no longer lists it"
                         } else {
                             ""
                         }
