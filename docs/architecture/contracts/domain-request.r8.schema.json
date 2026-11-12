@@ -6382,6 +6382,70 @@
         {
           "additionalProperties": false,
           "properties": {
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "mcp.disable",
+              "type": "string"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataScope"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "serverId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "serverId",
+            "expectedRevision"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "mcp.remove",
+              "type": "string"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataScope"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "serverId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "serverId",
+            "expectedRevision"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "expectedCatalogRevision": {
               "$ref": "#/$defs/Revision"
             },

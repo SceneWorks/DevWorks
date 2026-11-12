@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 373 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 375 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -591,6 +591,8 @@ All 373 qualified operations have typed input/result candidates. Existing input 
 | `mcp.servers` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<McpServer>` |
 | `mcp.configure` | **Command**<br>`scope`: `DataScope`<br>`serverId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`name`: `Label`<br>`transport`: `McpTransport`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `McpServer` |
 | `mcp.connect` | **Command**<br>`scope`: `?DataScope`<br>`serverId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `McpServer` |
+| `mcp.disable` | **Command**<br>`scope`: `?DataScope`<br>`serverId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `McpServer` |
+| `mcp.remove` | **Command**<br>`scope`: `?DataScope`<br>`serverId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `McpServer` |
 | `mcp.discover` | **Command**<br>`scope`: `?DataScope`<br>`serverId`: `Id`<br>`expectedCatalogRevision`: `Revision`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<McpCapability>` |
 | `mcp.select_tools` | **Command**<br>`scope`: `?DataScope`<br>`serverId`: `Id`<br>`expectedRevision`: `Revision`<br>`expectedCatalogRevision`: `Revision`<br>`toolIds`: `Items<Id>`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `McpServer` |
 | `mcp.resources` | **Query**<br>`scope`: `?DataScope`<br>`serverId`: `Id`<br>`catalogRevision`: `Revision`<br>`uri`: `?Text`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<McpResource>` |
@@ -2427,6 +2429,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `catalogRevision` | `Revision` |
 | `lastFailure` | `?Text` · *revision 8+* |
 | `configuration` | `?McpTransport` · *revision 8+* |
+| `disabled` | `?bool` · *revision 8+* |
 
 ### McpTransport
 

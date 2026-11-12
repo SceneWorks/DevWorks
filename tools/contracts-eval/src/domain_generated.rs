@@ -6094,6 +6094,13 @@ pub struct McpServer {
     )]
     #[schemars(with = "McpTransport", extend("x-since" = 8))]
     pub configuration: Option<McpTransport>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 8))]
+    pub disabled: Option<bool>,
 }
 impl Check for McpServer {
     fn check(&self) -> Result<(), String> {
@@ -6106,6 +6113,7 @@ impl Check for McpServer {
         self.catalog_revision.check()?;
         self.last_failure.check()?;
         self.configuration.check()?;
+        self.disabled.check()?;
         super::domain_rules::record(
             "McpServer",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -6121,6 +6129,9 @@ impl Revisioned for McpServer {
         }
         if revision < 8 {
             self.configuration = None;
+        }
+        if revision < 8 {
+            self.disabled = None;
         }
     }
 }
@@ -22528,6 +22539,22 @@ pub enum DomainCommand {
         server_id: Id,
         expected_revision: Revision,
     },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "mcp.disable")]
+    McpDisable {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<DataScope>,
+        server_id: Id,
+        expected_revision: Revision,
+    },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "mcp.remove")]
+    McpRemove {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<DataScope>,
+        server_id: Id,
+        expected_revision: Revision,
+    },
     #[serde(rename = "mcp.discover")]
     McpDiscover {
         #[serde(
@@ -23036,6 +23063,8 @@ impl DomainCommand {
             Self::RouterDecide { .. } => "router.decide",
             Self::McpConfigure { .. } => "mcp.configure",
             Self::McpConnect { .. } => "mcp.connect",
+            Self::McpDisable { .. } => "mcp.disable",
+            Self::McpRemove { .. } => "mcp.remove",
             Self::McpDiscover { .. } => "mcp.discover",
             Self::McpSelectTools { .. } => "mcp.select_tools",
             Self::AddonsConfigure { .. } => "addons.configure",
@@ -24630,6 +24659,24 @@ impl Check for DomainCommand {
                 server_id.check()?;
                 expected_revision.check()?;
             }
+            Self::McpDisable {
+                scope,
+                server_id,
+                expected_revision,
+            } => {
+                scope.check()?;
+                server_id.check()?;
+                expected_revision.check()?;
+            }
+            Self::McpRemove {
+                scope,
+                server_id,
+                expected_revision,
+            } => {
+                scope.check()?;
+                server_id.check()?;
+                expected_revision.check()?;
+            }
             Self::McpDiscover {
                 scope,
                 server_id,
@@ -25406,6 +25453,12 @@ impl Revisioned for DomainCommand {
             Self::AgentsAck { .. } if revision < 7 => {
                 Err("operation predates its introduction".into())
             }
+            Self::McpDisable { .. } if revision < 8 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::McpRemove { .. } if revision < 8 => {
+                Err("operation predates its introduction".into())
+            }
             Self::NotificationsMarkRead { .. } if revision < 3 => {
                 Err("operation predates its introduction".into())
             }
@@ -25987,6 +26040,12 @@ pub enum OperationResult {
     McpConfigure { value: McpServer },
     #[serde(rename = "mcp.connect")]
     McpConnect { value: McpServer },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "mcp.disable")]
+    McpDisable { value: McpServer },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "mcp.remove")]
+    McpRemove { value: McpServer },
     #[serde(rename = "mcp.discover")]
     McpDiscover { value: Page<McpCapability> },
     #[serde(rename = "mcp.select_tools")]
@@ -26503,6 +26562,8 @@ impl OperationResult {
             Self::McpServers { .. } => "mcp.servers",
             Self::McpConfigure { .. } => "mcp.configure",
             Self::McpConnect { .. } => "mcp.connect",
+            Self::McpDisable { .. } => "mcp.disable",
+            Self::McpRemove { .. } => "mcp.remove",
             Self::McpDiscover { .. } => "mcp.discover",
             Self::McpSelectTools { .. } => "mcp.select_tools",
             Self::McpResources { .. } => "mcp.resources",
@@ -26882,6 +26943,8 @@ impl Check for OperationResult {
             Self::McpServers { value } => value.check()?,
             Self::McpConfigure { value } => value.check()?,
             Self::McpConnect { value } => value.check()?,
+            Self::McpDisable { value } => value.check()?,
+            Self::McpRemove { value } => value.check()?,
             Self::McpDiscover { value } => value.check()?,
             Self::McpSelectTools { value } => value.check()?,
             Self::McpResources { value } => value.check()?,
@@ -27136,6 +27199,8 @@ impl Revisioned for OperationResult {
             Self::McpServers { value } => value.retain_revision(revision),
             Self::McpConfigure { value } => value.retain_revision(revision),
             Self::McpConnect { value } => value.retain_revision(revision),
+            Self::McpDisable { value } => value.retain_revision(revision),
+            Self::McpRemove { value } => value.retain_revision(revision),
             Self::McpSelectTools { value } => value.retain_revision(revision),
             Self::AddonsCatalog { value } => value.retain_revision(revision),
             Self::AddonsConfigure { value } => value.retain_revision(revision),
@@ -27199,6 +27264,12 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::McpDisable { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::McpRemove { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {

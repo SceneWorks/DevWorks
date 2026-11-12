@@ -37,10 +37,12 @@ mod content;
 
 const NAMESPACE: &str = "outgoing_mcp";
 const SCHEMA_VERSION: i64 = 1;
-pub const OPERATIONS: [&str; 8] = [
+pub const OPERATIONS: [&str; 10] = [
     "mcp.servers",
     "mcp.configure",
     "mcp.connect",
+    "mcp.disable",
+    "mcp.remove",
     "mcp.discover",
     "mcp.select_tools",
     "mcp.capabilities",
@@ -616,6 +618,9 @@ impl McpClientService {
         if op.capability == "mcp.tool" {
             return self.execute_tool(op);
         }
+        if matches!(op.capability.as_str(), "mcp.disable" | "mcp.remove") {
+            return self.execute_disconnect(op);
+        }
         if !matches!(op.capability.as_str(), "mcp.connect" | "mcp.discover") {
             return McpEffectOutcome::Failed("unsupported MCP effect".into());
         }
@@ -845,6 +850,50 @@ impl McpClientService {
         }
     }
 
+    /// Close the live session of a server a human disabled or removed. The disconnect happens
+    /// only while the server is still disabled or still gone, so a reconnect the human asked for
+    /// after this operation keeps its session. Repeating it is harmless.
+    fn execute_disconnect(&self, op: &OperationRecord) -> McpEffectOutcome {
+        let Some(native) = self.native.get() else {
+            return McpEffectOutcome::NotApplied("native MCP client is unavailable".into());
+        };
+        let (Some(scope), Some(server_id), Some(server)) = (
+            op.payload
+                .get("scope")
+                .and_then(Value::as_str)
+                .and_then(ConfigScope::from_key),
+            op.payload
+                .get("serverId")
+                .cloned()
+                .and_then(|v| serde_json::from_value::<Id>(v).ok()),
+            op.payload.get("server").cloned(),
+        ) else {
+            return McpEffectOutcome::Failed("invalid MCP disconnect payload".into());
+        };
+        let removing = op.capability == "mcp.remove";
+        let still_off = read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
+            let (_, state) = current(snapshot.configuration(), &scope)?;
+            Ok(
+                match state.servers.iter().find(|s| s.public.id == server_id) {
+                    None => true,
+                    Some(saved) => !removing && saved.public.disabled == Some(true),
+                },
+            )
+        });
+        match still_off {
+            Ok(true) => match native.remote.disconnect(&server_id) {
+                Ok(()) => McpEffectOutcome::Completed(server),
+                Err(fault) => {
+                    McpEffectOutcome::Unknown(format!("MCP session did not close: {fault:?}"))
+                }
+            },
+            Ok(false) => McpEffectOutcome::Completed(server),
+            Err(error) => McpEffectOutcome::NotApplied(format!(
+                "MCP configuration could not be read before disconnect: {error}"
+            )),
+        }
+    }
+
     fn execute_tool(&self, op: &OperationRecord) -> McpEffectOutcome {
         let Some(native) = self.native.get() else {
             return McpEffectOutcome::NotApplied("native MCP client is unavailable".into());
@@ -1048,6 +1097,19 @@ impl McpClientService {
                                 .ok_or(StorageError::ScopeDenied)
                         });
                     if still_authorized.is_err() {
+                        // A server disabled or removed while this call reconnected must not keep
+                        // the session this call opened.
+                        let serving =
+                            read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
+                                let (_, state) = current(snapshot.configuration(), &scope)?;
+                                Ok(state.servers.iter().any(|server| {
+                                    server.public.id == server_id
+                                        && matches!(server.public.state, ItemState::Healthy)
+                                }))
+                            });
+                        if !matches!(serving, Ok(true)) {
+                            let _ = native.remote.disconnect(&server_id);
+                        }
                         return McpEffectOutcome::Failed(
                             "MCP tool authority changed during reconnect".into(),
                         );
@@ -1313,6 +1375,9 @@ impl McpClientService {
     }
 
     pub fn observe(&self, op: &OperationRecord) -> McpEffectOutcome {
+        if matches!(op.capability.as_str(), "mcp.disable" | "mcp.remove") {
+            return self.execute_disconnect(op);
+        }
         if matches!(op.capability.as_str(), "mcp.connect" | "mcp.discover")
             && let Some(native) = self.native.get()
             && let (Some(scope), Some(server_id), Some(pending_revision)) = (
@@ -1776,6 +1841,7 @@ impl McpClientService {
                 catalog_revision: rev(1),
                 last_failure: None,
                 configuration: None,
+                disabled: None,
             };
             let stored = StoredServer {
                 public,
@@ -1899,6 +1965,18 @@ impl McpClientService {
             }))
             .into());
         }
+        // Connecting a server a human disabled enables it again, which only a human may do.
+        if server.public.disabled == Some(true) {
+            if ctx.principal_kind() != PrincipalKind::Human {
+                return Err(Refusal::new(
+                    DomainErrorCode::PermissionDenied,
+                    "mcp_server_disabled",
+                    Some(input.server_id.clone()),
+                )
+                .into());
+            }
+            server.public.disabled = None;
+        }
         server.public.revision = rev(server.public.revision.get() + 1);
         server.public.state = ItemState::Unavailable;
         server.public.last_failure = None;
@@ -1965,6 +2043,173 @@ impl McpClientService {
                 operation_id: operation.clone(),
             },
             operation_id: Some(operation),
+        })
+    }
+
+    /// `mcp.disable` and `mcp.remove`: save the change, then close the live session through the
+    /// effect queue. Without a native client there is no session, so the change is final.
+    fn switch_off(
+        &self,
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, Failure> {
+        let (operation, requested, server_id, expected_revision) = match command.input() {
+            OperationInput::Mcp(ops::Input::Disable(input)) => (
+                "mcp.disable",
+                &input.scope,
+                &input.server_id,
+                &input.expected_revision,
+            ),
+            OperationInput::Mcp(ops::Input::Remove(input)) => (
+                "mcp.remove",
+                &input.scope,
+                &input.server_id,
+                &input.expected_revision,
+            ),
+            _ => {
+                return Err(Refusal::new(
+                    DomainErrorCode::UnsupportedCapability,
+                    "operation",
+                    None,
+                )
+                .into());
+            }
+        };
+        if ctx.principal_kind() != PrincipalKind::Human {
+            return Err(
+                Refusal::new(DomainErrorCode::PermissionDenied, "mcp_configuration", None).into(),
+            );
+        }
+        let requested = requested_scope(requested);
+        scope(ctx, &requested, tx.projects())?;
+        let scope = active_server_scope(ctx, &requested, tx.projects())?;
+        let (version, mut state) = current(tx.configuration(), &scope)?;
+        let index = state
+            .servers
+            .iter()
+            .position(|s| &s.public.id == server_id)
+            .ok_or_else(|| {
+                Refusal::new(
+                    DomainErrorCode::NotFound,
+                    "mcp_server",
+                    Some(server_id.clone()),
+                )
+            })?;
+        let server = &mut state.servers[index];
+        if &server.public.revision != expected_revision {
+            return Err(StorageError::RevisionConflict(Box::new(RevisionConflict {
+                dimension: RevisionDimension::Configuration,
+                target_kind: "mcp_server",
+                target_id: server_id.clone(),
+                expected: expected_revision.clone(),
+                current: server.public.revision.clone(),
+            }))
+            .into());
+        }
+        server.public.revision = rev(server.public.revision.get() + 1);
+        server.public.state = ItemState::Disabled;
+        server.public.disabled = Some(true);
+        server.public.last_failure = None;
+        let result = server.view(ctx);
+        let removing = operation == "mcp.remove";
+        if removing {
+            state.servers.remove(index);
+        }
+        let body = serde_json::to_value(state)
+            .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
+        tx.configuration()
+            .append_revision(&scope, NAMESPACE, version, SCHEMA_VERSION, body)?;
+        let value = || {
+            if removing {
+                OperationResult::McpRemove {
+                    value: result.clone(),
+                }
+            } else {
+                OperationResult::McpDisable {
+                    value: result.clone(),
+                }
+            }
+        };
+        let kind = if removing {
+            "McpRemoved"
+        } else {
+            "McpDisabled"
+        };
+        if self.native.get().is_none() {
+            let event = EventId(tx.new_id(IdKind::Event));
+            tx.history().append(NewEvent {
+                id: event,
+                actor: ctx.principal().clone(),
+                project_id: ctx.project_id().cloned(),
+                root_id: ctx.root_id().cloned(),
+                operation_id: None,
+                aggregate_kind: "mcp_server".into(),
+                aggregate_id: server_id.as_str().into(),
+                aggregate_revision: result.revision.get(),
+                kind: kind.into(),
+                payload: json!({"serverId":server_id,"scope":scope.key()}),
+            })?;
+            return Ok(Decided {
+                decision: DomainDecision::Applied { result: value() },
+                operation_id: None,
+            });
+        }
+        let operation_id = OperationId(tx.new_id(IdKind::Operation));
+        let event = EventId(tx.new_id(IdKind::Event));
+        tx.operations().record_intent(NewOperation {
+            id: operation_id.clone(),
+            root_id: ctx.root_id().cloned(),
+            assignment_id: ctx.assignment_id().cloned(),
+            capability: operation.into(),
+            schema_version: 1,
+            args_digest: sha256_hex(
+                format!(
+                    "{}|{}|{}",
+                    scope.key(),
+                    server_id.as_str(),
+                    expected_revision.get()
+                )
+                .as_bytes(),
+            ),
+            payload: json!({
+                "scope": scope.key(),
+                "serverId": server_id,
+                "server": result,
+                "principal": ctx.principal(),
+                "fences": command.authorization().fences(),
+            }),
+        })?;
+        tx.history().append(NewEvent {
+            id: event.clone(),
+            actor: ctx.principal().clone(),
+            project_id: ctx.project_id().cloned(),
+            root_id: ctx.root_id().cloned(),
+            operation_id: Some(operation_id.clone()),
+            aggregate_kind: "mcp_server".into(),
+            aggregate_id: server_id.as_str().into(),
+            aggregate_revision: result.revision.get(),
+            kind: kind.into(),
+            payload: json!({"serverId":server_id,"scope":scope.key()}),
+        })?;
+        let now = tx.now_ms();
+        let queue_id = tx.new_id(IdKind::QueueEntry);
+        tx.queue().enqueue(NewQueueEntry {
+            id: queue_id,
+            consumer: EFFECT_CONSUMER.into(),
+            event_id: event,
+            root_id: ctx.root_id().cloned(),
+            operation_id: Some(operation_id.clone()),
+            partition: None,
+            priority: 0,
+            ready_at_ms: now,
+            payload: json!({"serverId":server_id}),
+        })?;
+        Ok(Decided {
+            decision: DomainDecision::Accepted {
+                operation_id: operation_id.clone(),
+            },
+            operation_id: Some(operation_id),
         })
     }
 
@@ -2372,6 +2617,12 @@ impl CommandHandler for McpClientService {
             }
             OperationInput::Mcp(ops::Input::Discover(input)) => {
                 match self.discover(ctx, command, tx, input) {
+                    Ok(decision) => Ok(decision),
+                    Err(error) => decided(tx, Err(error)),
+                }
+            }
+            OperationInput::Mcp(ops::Input::Disable(_) | ops::Input::Remove(_)) => {
+                match self.switch_off(ctx, command, tx) {
                     Ok(decision) => Ok(decision),
                     Err(error) => decided(tx, Err(error)),
                 }

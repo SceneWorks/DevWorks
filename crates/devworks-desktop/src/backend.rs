@@ -673,6 +673,8 @@ pub const COMMANDS: &[&str] = &[
     "router.route",
     "mcp.configure",
     "mcp.connect",
+    "mcp.disable",
+    "mcp.remove",
     "mcp.discover",
     "mcp.select_tools",
     "projects.create",

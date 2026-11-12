@@ -11533,6 +11533,10 @@
           "$ref": "#/$defs/McpTransport",
           "x-since": 8
         },
+        "disabled": {
+          "type": "boolean",
+          "x-since": 8
+        },
         "id": {
           "$ref": "#/$defs/Id"
         },
@@ -16576,6 +16580,42 @@
             "value"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "mcp.disable",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/McpServer"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "mcp.remove",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/McpServer"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
         },
         {
           "additionalProperties": false,

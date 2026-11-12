@@ -11,8 +11,15 @@ use std::time::Instant;
 pub enum McpAction {
     Reload,
     Catalog(Id, i64),
-    Configure { body: Value, secret: Option<Secret> },
+    Configure {
+        body: Value,
+        secret: Option<Secret>,
+    },
     Connect(Id, i64),
+    /// Disconnect a server and stop offering its tools until a human connects it again.
+    Disable(Id, i64),
+    /// Delete a saved server; the credential handles it referenced are released afterwards.
+    Remove(Id, i64, Vec<Id>),
     Discover(Id, i64),
     Select(Id, i64, i64, Vec<Id>),
     Sampling(Id, i64, i64, Vec<Id>),
@@ -113,6 +120,10 @@ pub struct McpPanel {
     selection: Vec<Id>,
     /// A server whose saved configuration fills the form on the next frame.
     form_from: Option<McpServer>,
+    /// The server whose removal waits for a second click.
+    confirm_remove: Option<Id>,
+    /// Credential handles of the server being removed, released once the removal is saved.
+    pub removing: Option<Vec<Id>>,
 }
 
 impl McpPanel {
@@ -292,10 +303,23 @@ impl McpPanel {
             let revision = server.revision.get();
             let catalog_revision = server.catalog_revision.get();
             let saved = server.selected_tool_ids.0.clone();
+            let disabled = server.disabled == Some(true);
             ui.label(format!(
-                "Status: {:?} · Transport: {} · Catalog revision: {}",
-                server.state, server.transport.0, catalog_revision
+                "Status: {} · Transport: {} · Catalog revision: {}",
+                if disabled {
+                    "Disabled by you".to_owned()
+                } else {
+                    format!("{:?}", server.state)
+                },
+                server.transport.0,
+                catalog_revision
             ));
+            if disabled {
+                ui.label(
+                    "Its tools are not offered to agents. Enable it to reconnect with the same \
+                     tool selection.",
+                );
+            }
             if let Some(configuration) = &server.configuration {
                 ui.label(describe(configuration));
             }
@@ -329,12 +353,57 @@ impl McpPanel {
                 if ui
                     .add_enabled(
                         online && !self.busy && server_idle,
-                        egui::Button::new("Connect or reconnect"),
+                        egui::Button::new(if disabled {
+                            "Enable"
+                        } else {
+                            "Connect or reconnect"
+                        }),
                     )
                     .clicked()
                 {
                     self.busy = true;
                     actions.push(McpAction::Connect(server_id.clone(), revision));
+                }
+                if !disabled
+                    && ui
+                        .add_enabled(
+                            online && !self.busy && server_idle,
+                            egui::Button::new("Disable"),
+                        )
+                        .clicked()
+                {
+                    self.busy = true;
+                    self.error = None;
+                    actions.push(McpAction::Disable(server_id.clone(), revision));
+                }
+                if self.confirm_remove.as_ref() == Some(&server_id) {
+                    if ui
+                        .add_enabled(
+                            online && !self.busy && server_idle,
+                            egui::Button::new("Confirm remove"),
+                        )
+                        .clicked()
+                    {
+                        self.busy = true;
+                        self.error = None;
+                        self.confirm_remove = None;
+                        actions.push(McpAction::Remove(
+                            server_id.clone(),
+                            revision,
+                            credential_handles(server),
+                        ));
+                    }
+                    if ui.button("Keep server").clicked() {
+                        self.confirm_remove = None;
+                    }
+                } else if ui
+                    .add_enabled(
+                        online && !self.busy && server_idle,
+                        egui::Button::new("Remove server"),
+                    )
+                    .clicked()
+                {
+                    self.confirm_remove = Some(server_id.clone());
                 }
                 if ui
                     .add_enabled(

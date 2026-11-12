@@ -6095,6 +6095,13 @@ pub struct McpServer {
     )]
     #[schemars(with = "McpTransport", extend("x-since" = 8))]
     pub configuration: Option<McpTransport>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 8))]
+    pub disabled: Option<bool>,
 }
 impl Check for McpServer {
     fn check(&self) -> Result<(), String> {
@@ -6107,6 +6114,7 @@ impl Check for McpServer {
         self.catalog_revision.check()?;
         self.last_failure.check()?;
         self.configuration.check()?;
+        self.disabled.check()?;
         crate::protocol::rules::record(
             "McpServer",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -6122,6 +6130,9 @@ impl Revisioned for McpServer {
         }
         if revision < 8 {
             self.configuration = None;
+        }
+        if revision < 8 {
+            self.disabled = None;
         }
     }
 }

@@ -2227,11 +2227,13 @@
         "selected_tool_ids": "Items<Id>",
         "catalog_revision": "Revision",
         "last_failure": "?Text",
-        "configuration": "?McpTransport"
+        "configuration": "?McpTransport",
+        "disabled": "?bool"
       },
       "since": {
         "last_failure": 8,
-        "configuration": 8
+        "configuration": 8,
+        "disabled": 8
       }
     },
     "McpTransport": {
@@ -10203,6 +10205,34 @@
       "authority": "Scoped",
       "rules": ""
     },
+    "mcp.disable": {
+      "operation": "mcp.disable",
+      "mode": "Command",
+      "fields": {
+        "scope": "?DataScope",
+        "server_id": "Id",
+        "expected_revision": "Revision"
+      },
+      "result": "McpServer",
+      "effect": "External",
+      "authority": "Configuration",
+      "rules": "Human only. Disconnects the server's live session; its tools are no longer offered or dispatched, and it keeps its configuration, catalog and selection. Only a human mcp.connect enables it again.",
+      "introducedRevision": 8
+    },
+    "mcp.remove": {
+      "operation": "mcp.remove",
+      "mode": "Command",
+      "fields": {
+        "scope": "?DataScope",
+        "server_id": "Id",
+        "expected_revision": "Revision"
+      },
+      "result": "McpServer",
+      "effect": "External",
+      "authority": "Configuration",
+      "rules": "Human only. Deletes the saved server and disconnects its live session; calls already dispatched settle, later calls fail. The removed record is returned once; its credential handles are no longer referenced.",
+      "introducedRevision": 8
+    },
     "mcp.discover": {
       "operation": "mcp.discover",
       "mode": "Command",
@@ -11399,6 +11429,12 @@
     ],
     "mcp.connect": [
       1,
+      8
+    ],
+    "mcp.disable": [
+      8
+    ],
+    "mcp.remove": [
       8
     ],
     "mcp.discover": [

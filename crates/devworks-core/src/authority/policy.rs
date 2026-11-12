@@ -443,7 +443,12 @@ pub fn registered_tool_visibility(
     // inbox; never advertise a project history or event feed they cannot read.
     if matches!(
         op,
-        "agents.history" | "agents.events" | "mcp.configure" | "mcp.select_tools"
+        "agents.history"
+            | "agents.events"
+            | "mcp.configure"
+            | "mcp.select_tools"
+            | "mcp.disable"
+            | "mcp.remove"
     ) && kind != PrincipalKind::Human
     {
         return Verdict::Deny(DenialReason::HumanOnly);

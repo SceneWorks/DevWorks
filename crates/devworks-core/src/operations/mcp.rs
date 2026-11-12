@@ -92,6 +92,48 @@ impl Revisioned for ConnectInput {
     }
 }
 
+/// `mcp.disable` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DisableInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<DataScope>,
+    pub server_id: Id,
+    pub expected_revision: Revision,
+}
+impl Check for DisableInput {
+    fn check(&self) -> Result<(), String> {
+        self.scope.check()?;
+        self.server_id.check()?;
+        self.expected_revision.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for DisableInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `mcp.remove` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoveInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<DataScope>,
+    pub server_id: Id,
+    pub expected_revision: Revision,
+}
+impl Check for RemoveInput {
+    fn check(&self) -> Result<(), String> {
+        self.scope.check()?;
+        self.server_id.check()?;
+        self.expected_revision.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for RemoveInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// `mcp.discover` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -270,6 +312,10 @@ pub enum Input {
     Configure(ConfigureInput),
     /// `mcp.connect` (Command).
     Connect(ConnectInput),
+    /// `mcp.disable` (Command).
+    Disable(DisableInput),
+    /// `mcp.remove` (Command).
+    Remove(RemoveInput),
     /// `mcp.discover` (Command).
     Discover(DiscoverInput),
     /// `mcp.select_tools` (Command).
@@ -287,6 +333,8 @@ impl Input {
             Self::Servers(_) => "mcp.servers",
             Self::Configure(_) => "mcp.configure",
             Self::Connect(_) => "mcp.connect",
+            Self::Disable(_) => "mcp.disable",
+            Self::Remove(_) => "mcp.remove",
             Self::Discover(_) => "mcp.discover",
             Self::SelectTools(_) => "mcp.select_tools",
             Self::Resources(_) => "mcp.resources",
@@ -299,6 +347,8 @@ impl Input {
             Self::Servers(_) => Mode::Query,
             Self::Configure(_) => Mode::Command,
             Self::Connect(_) => Mode::Command,
+            Self::Disable(_) => Mode::Command,
+            Self::Remove(_) => Mode::Command,
             Self::Discover(_) => Mode::Command,
             Self::SelectTools(_) => Mode::Command,
             Self::Resources(_) => Mode::Query,

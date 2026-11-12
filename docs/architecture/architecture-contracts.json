@@ -1328,6 +1328,8 @@
         "servers",
         "configure",
         "connect",
+        "disable",
+        "remove",
         "discover",
         "select_tools",
         "resources",
