@@ -2123,3 +2123,93 @@ fn ten_thousand_events_show_the_newest_page_after_one_native_request() {
             .all(|v| v.pointer("/query/newestFirst") == Some(&json!(true)))
     );
 }
+
+/// DW-251: the acknowledgement reply and an older inbox reply reach the shell in one batch,
+/// acknowledgement first. Handling the acknowledgement re-reads the inbox, so the older reply
+/// is stale and must not put the acknowledged message back.
+#[test]
+fn an_inbox_reply_read_before_mark_read_landed_does_not_restore_the_message() {
+    let root = Root::new("work-message-ack-race");
+    let engine = start(&root);
+    let real = engine.backend();
+    let project = ops::project_changed(real.command(
+        "projects.create",
+        &ops::project_create(&*real, "Ack race", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let post = |body: &str| {
+        wops::message_posted(real.command(
+            "agents.post",
+            &wops::message_post(&*real, &pid, json!({"body":body,"toHuman":true})),
+        ))
+        .unwrap()
+    };
+    post("Read me");
+    // The acknowledgement waits before it runs; the inbox read runs, then holds its reply.
+    let ack = Gate::new("agents.ack").missing_hints();
+    let inbox = Gate::holding_replies("agents.receive").missing_hints();
+    let backend = ack.over(inbox.over(real.clone()));
+    let mut h = harness(
+        shell_with(Ok(backend), &root, Script::default(), None),
+        1600.0,
+        1000.0,
+    );
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Messages");
+    assert_eq!(h.state().work.messages.inbox.len(), 1);
+
+    ack.close();
+    inbox.close();
+    h.get_by_role_and_label(Role::Button, "Mark read").click();
+    let until = |h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+                 done: &dyn Fn() -> bool| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !done() {
+            assert!(std::time::Instant::now() < deadline, "gate never reached");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
+    until(&mut h, &|| ack.has_waiter());
+    // A change event makes the shell re-read the inbox while the acknowledgement is held:
+    // that read still sees "Read me" unread.
+    post("Arrived meanwhile");
+    h.state_mut().work.messages.event_poll_at =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+    until(&mut h, &|| inbox.has_waiter());
+
+    // Let the acknowledgement commit and reply, then release the older inbox reply, and
+    // only then let the shell drain both together.
+    ack.open();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while wops::message_inbox_page(
+        real.command("agents.receive", &wops::message_inbox(&*real, &pid, None)),
+    )
+    .unwrap()
+    .items
+    .0
+    .iter()
+    .any(|m| m.body.0 == "Read me")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "acknowledgement never committed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    inbox.open();
+    assert!(h.state().wait_idle(), "requests finish");
+    settle(&mut h);
+    let shown = &h.state().work.messages.inbox;
+    assert!(
+        !shown.iter().any(|m| m.body.0 == "Read me"),
+        "the acknowledged message came back: {:?}",
+        shown.iter().map(|m| &m.body.0).collect::<Vec<_>>()
+    );
+    assert!(shown.iter().any(|m| m.body.0 == "Arrived meanwhile"));
+}

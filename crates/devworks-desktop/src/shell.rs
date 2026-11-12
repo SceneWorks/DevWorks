@@ -1873,7 +1873,16 @@ impl Shell {
         let Some(client) = &mut self.client else {
             return;
         };
-        for (slot, reply) in client.poll() {
+        for (slot, ticket, reply) in client.poll() {
+            // An earlier reply of this batch may have re-requested this slot (a message
+            // acknowledgement re-reads the inbox): this reply is then stale.
+            if self
+                .client
+                .as_ref()
+                .is_some_and(|c| c.is_superseded(&slot, ticket))
+            {
+                continue;
+            }
             self.apply(ctx, slot, reply);
         }
     }
