@@ -15,7 +15,8 @@ use std::sync::OnceLock;
 
 const ANSWER: &str = "echo-server saw ticket DW-45";
 
-/// Each call returns one text block naming the `ticket` argument it received.
+/// Each call returns one text block naming the `ticket` argument it received. A call for the
+/// ticket `BROKEN` fails with a protocol error instead.
 struct EchoServer;
 impl rmcp::ServerHandler for EchoServer {
     fn get_info(&self) -> rmcp::model::ServerConfig {
@@ -38,6 +39,12 @@ impl rmcp::ServerHandler for EchoServer {
             .and_then(Value::as_str)
             .unwrap_or("none")
             .to_owned();
+        if ticket == "BROKEN" {
+            return Err(rmcp::ErrorData::internal_error(
+                "echo-server cannot read BROKEN",
+                None,
+            ));
+        }
         Ok(rmcp::model::CallToolResponse::Complete(
             rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(format!(
                 "echo-server saw ticket {ticket}"
@@ -46,10 +53,11 @@ impl rmcp::ServerHandler for EchoServer {
     }
 }
 
-/// The first request gets a call to `tool`; every later request gets a final answer. Each
-/// request body is kept for inspection.
+/// The first request gets one call to `tool` per `(call id, ticket)` in `calls`, all in the same
+/// response; every later request gets a final answer. Each request body is kept for inspection.
 struct ToolWire {
     tool: Mutex<String>,
+    calls: Vec<(&'static str, &'static str)>,
     bodies: Mutex<Vec<Value>>,
 }
 struct Body(Option<Vec<u8>>);
@@ -97,11 +105,21 @@ impl StreamingHttp for ToolWire {
         let mut bodies = self.bodies.lock().unwrap();
         bodies.push(body);
         let wire = if bodies.len() == 1 {
-            let call = json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,
-                "id":"call-mcp","type":"function","function":{"name":*self.tool.lock().unwrap(),
-                "arguments":"{\"ticket\":\"DW-45\"}"}}]},"finish_reason":null}]});
+            let tool = self.tool.lock().unwrap().clone();
+            let calls: String = self
+                .calls
+                .iter()
+                .enumerate()
+                .map(|(index, (call_id, ticket))| {
+                    let call = json!({"choices":[{"index":0,"delta":{"tool_calls":[{
+                        "index":index,"id":call_id,"type":"function","function":{"name":tool,
+                        "arguments":json!({"ticket":ticket}).to_string()}}]},
+                        "finish_reason":null}]});
+                    format!("data: {call}\n\n")
+                })
+                .collect();
             format!(
-                "data: {call}\n\ndata: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\
+                "{calls}data: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\
                  \"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n"
             )
         } else {
@@ -139,8 +157,20 @@ fn decision(
     }
 }
 
-#[test]
-fn an_agent_turn_calls_a_selected_mcp_tool_and_reads_its_result_in_the_next_request() {
+/// What one agent turn sent to the provider and recorded for its session.
+struct Turn {
+    alias: String,
+    bodies: Vec<Value>,
+    /// The session's linked operations: capability, state and payload.
+    operations: Vec<(String, OperationState, Value)>,
+    /// The bodies of the session's `ToolResponseRecorded` entries.
+    responses: Vec<Value>,
+    session_id: Value,
+}
+
+/// Runs one agent turn whose first provider response calls the selected echo tool once per
+/// `(call id, ticket)` of `calls`, and asserts the turn completed.
+fn agent_turn(calls: Vec<(&'static str, &'static str)>) -> Turn {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
     tokio::runtime::Builder::new_multi_thread()
@@ -172,6 +202,7 @@ fn an_agent_turn_calls_a_selected_mcp_tool_and_reads_its_result_in_the_next_requ
                 .with_mcp(service.clone());
             let wire = Arc::new(ToolWire {
                 tool: Mutex::default(),
+                calls,
                 bodies: Mutex::default(),
             });
             composed.config.providers =
@@ -441,47 +472,31 @@ fn an_agent_turn_calls_a_selected_mcp_tool_and_reads_its_result_in_the_next_requ
                 "{end:?}"
             );
 
-            // Two provider requests: the first offers the tool, the second carries its result.
-            let bodies = wire.bodies.lock().unwrap().clone();
-            assert_eq!(bodies.len(), 2, "{bodies:?}");
-            let offered: Vec<_> = bodies[0]["tools"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|tool| tool["function"]["name"].as_str().unwrap().to_owned())
-                .collect();
-            assert!(offered.contains(&alias), "{offered:?}");
-            let followup = bodies[1]["messages"].as_array().unwrap();
-            let result = followup
-                .iter()
-                .find(|message| message["role"] == "tool" && message["tool_call_id"] == "call-mcp")
-                .expect("tool result message");
-            assert!(result.to_string().contains(ANSWER), "{result}");
-
-            // The call was journaled as one settled `mcp.tool` operation for this session.
             let operations = read(&*fx.store, |s| {
                 s.sessions().linked_operations(&session.id, 10)
-            });
-            assert_eq!(operations.len(), 1);
-            let operation = read(&*fx.store, |s| {
-                s.operations()
-                    .operation(operations[0].operation_id.as_ref().unwrap())
             })
-            .unwrap();
-            assert_eq!(operation.capability, "mcp.tool");
-            assert_eq!(operation.state, OperationState::ObservedComplete);
-            assert_eq!(
-                operation.payload["sessionId"],
-                json!(session.id),
-                "{:?}",
-                operation.payload
-            );
-            let responses: Vec<_> = read(&*fx.store, |s| s.sessions().entries(&session.id, 0, 500))
+            .into_iter()
+            .map(|link| {
+                let operation = read(&*fx.store, |s| {
+                    s.operations()
+                        .operation(link.operation_id.as_ref().unwrap())
+                })
+                .unwrap();
+                (operation.capability, operation.state, operation.payload)
+            })
+            .collect();
+            let responses = read(&*fx.store, |s| s.sessions().entries(&session.id, 0, 500))
                 .into_iter()
                 .filter(|entry| entry.kind == "ToolResponseRecorded")
+                .map(|entry| entry.body)
                 .collect();
-            assert_eq!(responses.len(), 1);
-            assert_eq!(responses[0].body["call"]["nativeCallId"], "call-mcp");
+            let turn = Turn {
+                alias,
+                bodies: wire.bodies.lock().unwrap().clone(),
+                operations,
+                responses,
+                session_id: json!(session.id),
+            };
 
             let _ = remote.cancel().await;
             Arc::try_unwrap(app)
@@ -489,5 +504,83 @@ fn an_agent_turn_calls_a_selected_mcp_tool_and_reads_its_result_in_the_next_requ
                 .expect("runtime has one owner")
                 .shutdown()
                 .await;
-        });
+            turn
+        })
+}
+
+/// The provider message carrying the result of `call_id`.
+fn tool_result<'a>(body: &'a Value, call_id: &str) -> &'a Value {
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "tool" && message["tool_call_id"] == call_id)
+        .unwrap_or_else(|| panic!("no tool result for {call_id}: {body}"))
+}
+
+#[test]
+fn an_agent_turn_calls_a_selected_mcp_tool_and_reads_its_result_in_the_next_request() {
+    let turn = agent_turn(vec![("call-mcp", "DW-45")]);
+
+    // Two provider requests: the first offers the tool, the second carries its result.
+    assert_eq!(turn.bodies.len(), 2, "{:?}", turn.bodies);
+    let offered: Vec<_> = turn.bodies[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(offered.contains(&turn.alias), "{offered:?}");
+    let result = tool_result(&turn.bodies[1], "call-mcp");
+    assert!(result.to_string().contains(ANSWER), "{result}");
+
+    // The call was journaled as one settled `mcp.tool` operation for this session.
+    assert_eq!(turn.operations.len(), 1);
+    let (capability, state, payload) = &turn.operations[0];
+    assert_eq!(capability, "mcp.tool");
+    assert_eq!(*state, OperationState::ObservedComplete);
+    assert_eq!(payload["sessionId"], turn.session_id, "{payload:?}");
+    assert_eq!(turn.responses.len(), 1);
+    assert_eq!(turn.responses[0]["call"]["nativeCallId"], "call-mcp");
+}
+
+#[test]
+fn a_failing_mcp_tool_call_does_not_block_an_independent_call_in_the_same_turn() {
+    let turn = agent_turn(vec![("call-broken", "BROKEN"), ("call-mcp", "DW-45")]);
+
+    // Both calls were answered in the same follow-up request: the failure as a failure, the
+    // independent call with the server's result.
+    assert_eq!(turn.bodies.len(), 2, "{:?}", turn.bodies);
+    let answered = tool_result(&turn.bodies[1], "call-mcp");
+    assert!(answered.to_string().contains(ANSWER), "{answered}");
+    let broken = tool_result(&turn.bodies[1], "call-broken").to_string();
+    assert!(!broken.contains("echo-server saw"), "{broken}");
+
+    // Each call settled as its own `mcp.tool` operation; only the broken one failed.
+    let states: Vec<_> = turn
+        .operations
+        .iter()
+        .map(|(capability, state, _)| {
+            assert_eq!(capability, "mcp.tool");
+            *state
+        })
+        .collect();
+    assert_eq!(states.len(), 2, "{:?}", turn.operations);
+    assert!(
+        states.contains(&OperationState::ObservedComplete),
+        "{states:?}"
+    );
+    assert!(
+        states
+            .iter()
+            .any(|state| *state != OperationState::ObservedComplete),
+        "{states:?}"
+    );
+    let mut answered_calls: Vec<_> = turn
+        .responses
+        .iter()
+        .map(|body| body["call"]["nativeCallId"].as_str().unwrap().to_owned())
+        .collect();
+    answered_calls.sort();
+    assert_eq!(answered_calls, ["call-broken", "call-mcp"]);
 }

@@ -292,6 +292,8 @@ pub enum ConnectFault {
     TooLarge,
     StopFailed,
     InputRequired,
+    /// The server answered the request with an error: it is known not to have succeeded.
+    Rejected,
 }
 
 const CONNECT_DEADLINE: Duration = Duration::from_secs(20);
@@ -450,6 +452,7 @@ fn map_connect_fault(fault: ConnectFault) -> McpRemoteFault {
         ConnectFault::Deadline => McpRemoteFault::Deadline,
         ConnectFault::TooLarge => McpRemoteFault::TooLarge,
         ConnectFault::InputRequired => McpRemoteFault::InputRequired,
+        ConnectFault::Rejected => McpRemoteFault::Rejected,
     }
 }
 fn map_binding_fault(fault: BindingRefusal) -> McpRemoteFault {
@@ -840,7 +843,11 @@ impl McpWireSession {
                 Err(_) => return Err(ConnectFault::Deadline),
             }
         }
-        .map_err(|_| ConnectFault::Protocol)?;
+        .map_err(|error| match error {
+            // A JSON-RPC error reply is the server's answer, not a lost one.
+            rmcp::ServiceError::McpError(_) => ConnectFault::Rejected,
+            _ => ConnectFault::Protocol,
+        })?;
         let result = match response {
             CallToolResponse::Complete(result) => result,
             CallToolResponse::InputRequired(_) => return Err(ConnectFault::InputRequired),
