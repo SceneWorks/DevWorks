@@ -8245,3 +8245,6 @@ mod usage_tests;
 
 #[path = "runs/auxiliary.rs"]
 mod auxiliary_tests;
+
+#[path = "runs/mcp_agent_tool.rs"]
+mod mcp_agent_tool;

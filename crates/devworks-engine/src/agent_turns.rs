@@ -353,6 +353,7 @@ async fn run_native_loop(
             recovered = runtime.recover_native_context_head(ctx, session_id)?;
             continue;
         }
+        wait_for_running_mcp_calls(runtime, ctx, session_id, cancellation).await?;
         head = runtime.refresh_native_tool_context(ctx, session_id, &head)?;
         let selected_count = runtime
             .providers()
@@ -495,6 +496,48 @@ async fn wait_for_linked_effects(
             return Ok(());
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
+/// An external MCP tool answers within its own call deadline, so the next provider request
+/// waits for it and carries the result instead of only the accepted receipt. A call that needs
+/// input or whose outcome is unknown does not hold the agent.
+async fn wait_for_running_mcp_calls(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    cancellation: &Cancellation,
+) -> Result<(), StorageError> {
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(StorageError::Cancelled);
+        }
+        let linked =
+            crate::tool_turn::linked_operations(runtime.store().as_ref(), ctx, session_id)?;
+        let running = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+            for operation_id in linked.iter().filter_map(|call| call.operation_id.as_ref()) {
+                let operation = read
+                    .operations()
+                    .operation(operation_id)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                if operation.capability == "mcp.tool"
+                    && matches!(
+                        operation.state,
+                        OperationState::IntentRecorded
+                            | OperationState::Preflighted
+                            | OperationState::Dispatching
+                            | OperationState::RetryPending
+                    )
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })?;
+        if !running {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }
 

@@ -2105,9 +2105,33 @@ pub(crate) fn cancel_before_dispatch(
     })
 }
 
+const OPERATION_MOVED: &str = "tool operation changed during update publication";
+
 /// Append a later operation state as a separate fact. The accepted tool receipt and its first
-/// response stay immutable; repeated recovery of the same journal revision is a no-op.
+/// response stay immutable; repeated recovery of the same journal revision is a no-op. An
+/// operation that advances between the read and the write is observed again, a bounded number
+/// of times, rather than failing the caller's turn.
 pub(crate) fn record_operation_update(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    operation_id: &OperationId,
+) -> Result<Option<devworks_core::protocol::provider::ArtifactRef>, StorageError> {
+    let mut remaining = 8;
+    loop {
+        match record_observed_operation_update(store, artifacts, ctx, session_id, operation_id) {
+            Err(StorageError::StorageUnavailable { diagnostic, .. })
+                if diagnostic == OPERATION_MOVED && remaining > 1 =>
+            {
+                remaining -= 1;
+            }
+            outcome => return outcome,
+        }
+    }
+}
+
+fn record_observed_operation_update(
     store: &dyn ApplicationStore,
     artifacts: &Arc<ArtifactService>,
     ctx: &InvocationContext,
@@ -2225,7 +2249,7 @@ pub(crate) fn record_operation_update(
         if (operation.state, operation.revision) != (observed.0, observed.1) {
             return Err(StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
-                "tool operation changed during update publication",
+                OPERATION_MOVED,
             ));
         }
         let mut position = first_response;
