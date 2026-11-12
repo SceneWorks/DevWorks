@@ -1175,8 +1175,10 @@ impl Client {
             .is_some()
     }
 
-    /// Replies that arrived since the last call, for the slots still waiting for them.
-    pub fn poll(&mut self) -> Vec<(Slot, Reply)> {
+    /// Replies that arrived since the last call, for the slots still waiting for them, each
+    /// with its ticket. Handling one reply can submit a newer request for the slot of a later
+    /// reply in the same batch; check [`Self::is_superseded`] before handling each one.
+    pub fn poll(&mut self) -> Vec<(Slot, u64, Reply)> {
         let mut out = Vec::new();
         while let Ok((ticket, reply)) = self.replies.try_recv() {
             let Some(at) = self.pending.iter().position(|p| p.ticket == ticket) else {
@@ -1199,7 +1201,7 @@ impl Client {
             // Superseded by a newer request for the same slot: drop the stale reply.
             if self.latest.get(&p.slot) == Some(&ticket) {
                 self.latest.remove(&p.slot);
-                out.push((p.slot, reply));
+                out.push((p.slot, ticket, reply));
             }
         }
         out
@@ -1245,6 +1247,12 @@ impl Client {
         self.pending
             .iter()
             .any(|p| p.command.is_none() && p.query.is_none())
+    }
+
+    /// Whether a request for `slot` newer than `ticket` was submitted after `ticket`'s reply
+    /// was polled, so that reply is stale.
+    pub fn is_superseded(&self, slot: &Slot, ticket: u64) -> bool {
+        self.latest.get(slot).is_some_and(|newer| *newer > ticket)
     }
 
     /// Whether a request for `slot` is waiting for its reply.
