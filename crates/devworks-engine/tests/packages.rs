@@ -1995,8 +1995,10 @@ fn the_host_enforces_deadlines_and_caps_concurrent_invocations() {
         })
         .collect();
     let host = a.app().packages().unwrap().clone();
+    // Timed from before the spawn, like the 400 ms observation below, so a late-scheduled
+    // thread cannot shorten the measured wait.
+    let started = Instant::now();
     let fifth = std::thread::spawn(move || {
-        let started = Instant::now();
         let r = host.invoke(InvokeRequest {
             package_id: "limits-pack".into(),
             contribution_id: "limits-pack/echo".into(),

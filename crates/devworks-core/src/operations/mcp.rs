@@ -66,7 +66,13 @@ impl Revisioned for ConfigureInput {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConnectInput {
-    pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 8))]
+    pub scope: Option<DataScope>,
     pub server_id: Id,
     pub expected_revision: Revision,
 }
@@ -79,14 +85,24 @@ impl Check for ConnectInput {
     }
 }
 impl Revisioned for ConnectInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.scope = None;
+        }
+    }
 }
 
 /// `mcp.discover` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiscoverInput {
-    pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 8))]
+    pub scope: Option<DataScope>,
     pub server_id: Id,
     pub expected_catalog_revision: Revision,
 }
@@ -99,14 +115,24 @@ impl Check for DiscoverInput {
     }
 }
 impl Revisioned for DiscoverInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.scope = None;
+        }
+    }
 }
 
 /// `mcp.select_tools` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SelectToolsInput {
-    pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 8))]
+    pub scope: Option<DataScope>,
     pub server_id: Id,
     pub expected_revision: Revision,
     pub expected_catalog_revision: Revision,
@@ -123,14 +149,24 @@ impl Check for SelectToolsInput {
     }
 }
 impl Revisioned for SelectToolsInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.scope = None;
+        }
+    }
 }
 
 /// `mcp.resources` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourcesInput {
-    pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 8))]
+    pub scope: Option<DataScope>,
     pub server_id: Id,
     pub catalog_revision: Revision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,14 +184,24 @@ impl Check for ResourcesInput {
     }
 }
 impl Revisioned for ResourcesInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.scope = None;
+        }
+    }
 }
 
 /// `mcp.prompts` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PromptsInput {
-    pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 8))]
+    pub scope: Option<DataScope>,
     pub server_id: Id,
     pub catalog_revision: Revision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -176,14 +222,24 @@ impl Check for PromptsInput {
     }
 }
 impl Revisioned for PromptsInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.scope = None;
+        }
+    }
 }
 
 /// `mcp.capabilities` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CapabilitiesInput {
-    pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 8))]
+    pub scope: Option<DataScope>,
     pub server_id: Id,
     pub catalog_revision: Revision,
     pub page: PageRequest,
@@ -198,7 +254,11 @@ impl Check for CapabilitiesInput {
     }
 }
 impl Revisioned for CapabilitiesInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.scope = None;
+        }
+    }
 }
 
 /// An admitted input of the `mcp` family, built only for the selected operation and mode.

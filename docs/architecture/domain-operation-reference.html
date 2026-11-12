@@ -1984,42 +1984,42 @@
 </thead>
 <tbody><tr>
 <td><code>mcp.servers</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 8 (<a href="contracts/domain-request.r8.schema.json">revision 8 input</a>)</td>
 <td><code>Page&lt;McpServer&gt;</code></td>
 </tr>
 <tr>
 <td><code>mcp.configure</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>serverId</code>: <code>?Id</code><br><code>expectedRevision</code>: <code>?Revision</code><br><code>name</code>: <code>Label</code><br><code>transport</code>: <code>McpTransport</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>serverId</code>: <code>?Id</code><br><code>expectedRevision</code>: <code>?Revision</code><br><code>name</code>: <code>Label</code><br><code>transport</code>: <code>McpTransport</code><br><br><strong>Schema revisions</strong> 1, 8 (<a href="contracts/domain-request.r8.schema.json">revision 8 input</a>)</td>
 <td><code>McpServer</code></td>
 </tr>
 <tr>
 <td><code>mcp.connect</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>serverId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>?DataScope</code><br><code>serverId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><br><strong>Schema revisions</strong> 1, 8 (<a href="contracts/domain-request.r8.schema.json">revision 8 input</a>)</td>
 <td><code>McpServer</code></td>
 </tr>
 <tr>
 <td><code>mcp.discover</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>serverId</code>: <code>Id</code><br><code>expectedCatalogRevision</code>: <code>Revision</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>?DataScope</code><br><code>serverId</code>: <code>Id</code><br><code>expectedCatalogRevision</code>: <code>Revision</code><br><br><strong>Schema revisions</strong> 1, 8 (<a href="contracts/domain-request.r8.schema.json">revision 8 input</a>)</td>
 <td><code>Page&lt;McpCapability&gt;</code></td>
 </tr>
 <tr>
 <td><code>mcp.select_tools</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>serverId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>expectedCatalogRevision</code>: <code>Revision</code><br><code>toolIds</code>: <code>Items&lt;Id&gt;</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>?DataScope</code><br><code>serverId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>expectedCatalogRevision</code>: <code>Revision</code><br><code>toolIds</code>: <code>Items&lt;Id&gt;</code><br><br><strong>Schema revisions</strong> 1, 8 (<a href="contracts/domain-request.r8.schema.json">revision 8 input</a>)</td>
 <td><code>McpServer</code></td>
 </tr>
 <tr>
 <td><code>mcp.resources</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>serverId</code>: <code>Id</code><br><code>catalogRevision</code>: <code>Revision</code><br><code>uri</code>: <code>?Text</code><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>?DataScope</code><br><code>serverId</code>: <code>Id</code><br><code>catalogRevision</code>: <code>Revision</code><br><code>uri</code>: <code>?Text</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 8 (<a href="contracts/domain-request.r8.schema.json">revision 8 input</a>)</td>
 <td><code>Page&lt;McpResource&gt;</code></td>
 </tr>
 <tr>
 <td><code>mcp.prompts</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>serverId</code>: <code>Id</code><br><code>catalogRevision</code>: <code>Revision</code><br><code>name</code>: <code>?Label</code><br><code>arguments</code>: <code>?SchemaValue</code><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>?DataScope</code><br><code>serverId</code>: <code>Id</code><br><code>catalogRevision</code>: <code>Revision</code><br><code>name</code>: <code>?Label</code><br><code>arguments</code>: <code>?SchemaValue</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 8 (<a href="contracts/domain-request.r8.schema.json">revision 8 input</a>)</td>
 <td><code>Page&lt;McpPrompt&gt;</code></td>
 </tr>
 <tr>
 <td><code>mcp.capabilities</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>serverId</code>: <code>Id</code><br><code>catalogRevision</code>: <code>Revision</code><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>?DataScope</code><br><code>serverId</code>: <code>Id</code><br><code>catalogRevision</code>: <code>Revision</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 8 (<a href="contracts/domain-request.r8.schema.json">revision 8 input</a>)</td>
 <td><code>Page&lt;McpCapability&gt;</code></td>
 </tr>
 </tbody></table>
@@ -7152,7 +7152,11 @@
 </tr>
 <tr>
 <td><code>lastFailure</code></td>
-<td><code>?Text</code></td>
+<td><code>?Text</code> · <em>revision 8+</em></td>
+</tr>
+<tr>
+<td><code>configuration</code></td>
+<td><code>?McpTransport</code> · <em>revision 8+</em></td>
 </tr>
 </tbody></table>
 <h3 id="mcptransport">McpTransport</h3>

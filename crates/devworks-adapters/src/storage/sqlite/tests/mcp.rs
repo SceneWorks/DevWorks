@@ -156,7 +156,7 @@ fn command(
     mut body: Value,
 ) -> DomainDecision {
     body["kind"] = json!(op);
-    let frame = json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":key,"body":body});
+    let frame = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":8,"requestKey":key,"body":body});
     let authority = HostAuthority {
         store,
         clock: &*h.clock,
@@ -191,7 +191,7 @@ fn servers(
         store,
         ids: &*h.ids,
     };
-    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"mcp-list","body":{
+    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":8,"queryId":"mcp-list","body":{
         "kind":"mcp.servers","scope":{"kind":"Workspace"},"page":{"limit":10}
     }});
     match cases
@@ -228,7 +228,7 @@ fn capabilities(
         store,
         ids: &*h.ids,
     };
-    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"mcp-catalog","body":{
+    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":8,"queryId":"mcp-catalog","body":{
         "kind":"mcp.capabilities","scope":{"kind":"Workspace"},"serverId":server_id,
         "catalogRevision":catalog_revision.to_string(),"page":{"limit":10}
     }});
@@ -426,7 +426,8 @@ fn configuration_is_durable_and_selection_rejects_unknown_tools() {
         )
     })
     .unwrap();
-    assert!(published.selected_tool_ids.0.is_empty());
+    // A newly added server starts with its read-only tools selected (MCP-06).
+    assert_eq!(published.selected_tool_ids.0, vec![id("mcp-read")]);
     assert_eq!(published.catalog_revision.get(), 2);
     assert!(matches!(
         capabilities(&h, &store, &cases, &server.id, 2),
@@ -476,7 +477,7 @@ fn configuration_is_durable_and_selection_rejects_unknown_tools() {
 }
 
 #[test]
-fn discovery_keeps_untrusted_read_only_hints_unselected_beyond_selection_cap() {
+fn first_discovery_selects_read_only_hints_up_to_the_selection_bound() {
     let h = Harness::new();
     let store = h.store();
     run_write(&store, WriteOptions::default(), |tx| {
@@ -529,7 +530,9 @@ fn discovery_keeps_untrusted_read_only_hints_unselected_beyond_selection_cap() {
     });
     let published = result.unwrap();
     assert_eq!(published.catalog_revision.get(), 2);
-    assert!(published.selected_tool_ids.0.is_empty());
+    assert_eq!(published.selected_tool_ids.0.len(), 128);
+    assert_eq!(published.selected_tool_ids.0[0], id("read-0"));
+    assert!(!published.selected_tool_ids.0.contains(&id("read-128")));
 }
 
 #[test]
@@ -770,7 +773,7 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
         })
         .unwrap()
     };
-    assert!(first.selected_tool_ids.0.is_empty());
+    assert_eq!(first.selected_tool_ids.0.len(), 1);
     let first_cap = match capabilities(&h, &store, &cases, &server.id, 2) {
         DomainQueryReply::Result {
             result: OperationResult::McpCapabilities { value },
@@ -921,7 +924,7 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
 }
 
 #[test]
-fn journaled_discovery_does_not_select_untrusted_read_only_hints() {
+fn journaled_first_discovery_selects_read_only_hints() {
     let h = Harness::new();
     let store = Arc::new(h.store());
     run_write(&*store, WriteOptions::default(), |tx| {
@@ -989,7 +992,7 @@ fn journaled_discovery_does_not_select_untrusted_read_only_hints() {
     ));
     let published = servers(&h, &store, &cases).pop().unwrap();
     assert_eq!(published.catalog_revision.get(), 2);
-    assert!(published.selected_tool_ids.0.is_empty());
+    assert_eq!(published.selected_tool_ids.0.len(), 1);
     let before = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
         Ok(snapshot
             .configuration()
@@ -1029,7 +1032,13 @@ fn journaled_discovery_does_not_select_untrusted_read_only_hints() {
         service.selected_tool_materials(&context(&store), snapshot)
     })
     .unwrap();
-    assert!(selected.is_empty());
+    assert_eq!(
+        selected
+            .iter()
+            .map(|material| material.wire_name.as_str())
+            .collect::<Vec<_>>(),
+        ["lookup"]
+    );
     assert!(
         matches!(capabilities(&h, &store, &cases, &server.id, 2), DomainQueryReply::Result { result: OperationResult::McpCapabilities { value }, .. } if value.items.0.len() == 2)
     );
@@ -1107,7 +1116,7 @@ fn resource_and_prompt_queries_publish_bounded_untrusted_content() {
         ids: &*h.ids,
     };
     let query = |operation: &str, body: Value| {
-        let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"mcp-content-read",
+        let frame = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":8,"queryId":"mcp-content-read",
             "body":body});
         cases
             .query(
@@ -1264,7 +1273,7 @@ fn resource_query_stops_when_deadline_expires_during_a_remote_read() {
         store: &*store,
         ids: &*h.ids,
     };
-    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"deadline-read",
+    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":8,"queryId":"deadline-read",
         "body":{"kind":"mcp.resources","scope":{"kind":"Workspace"},
             "serverId":server.id,"catalogRevision":"2","page":{"limit":10}}});
     let reply = gateway
@@ -1403,11 +1412,12 @@ fn sampling_selection_is_advertised_survives_rediscovery_and_clears_on_transport
     let cases = UseCases::new().with_mcp(service.clone());
     let (server, _) = discovered_server(&h, &store, &cases, &service);
     let sampling = sampling_capability(&h, &store, &cases, &server);
+    // Only the read-only tool starts selected; sampling is never selected by default.
     assert!(
-        servers(&h, &store, &cases)[0]
+        !servers(&h, &store, &cases)[0]
             .selected_tool_ids
             .0
-            .is_empty()
+            .contains(&sampling)
     );
     let revision = select(
         &h,
@@ -1711,6 +1721,249 @@ fn sampling_is_authorized_only_for_the_dispatching_agent_call_with_current_selec
 }
 
 #[test]
+fn a_vanished_selected_tool_stays_unavailable_and_returns_selected() {
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")
+    })
+    .unwrap();
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    let cases = UseCases::new().with_mcp(service.clone());
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: server },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "vanish-server",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"name":"Vanishing server",
+            "transport":{"kind":"Http","endpoint":"https://mcp.example.test/mcp"}}),
+    )
+    else {
+        panic!("server configuration failed");
+    };
+    let tool = |name: &str, read_only_hint| RemoteTool {
+        name: name.into(),
+        description: format!("{name} a record"),
+        input_schema: json!({"type":"object"}),
+        output_schema: None,
+        read_only_hint,
+    };
+    let publish = |expected: i64, tools: Vec<RemoteTool>| {
+        let (service, server_id) = (service.clone(), server.id.clone());
+        run_write(&*store, WriteOptions::default(), move |tx| {
+            service.publish_remote_catalog(
+                tx,
+                &ConfigScope::Workspace,
+                &server_id,
+                &Revision::new(expected).unwrap(),
+                RemoteCatalog {
+                    tools,
+                    resources: vec![],
+                    prompts: vec![],
+                },
+            )
+        })
+        .unwrap()
+    };
+    let tool_id =
+        |catalog: i64, name: &str| match capabilities(&h, &store, &cases, &server.id, catalog) {
+            DomainQueryReply::Result {
+                result: OperationResult::McpCapabilities { value },
+                ..
+            } => value
+                .items
+                .0
+                .into_iter()
+                .find(|cap| cap.kind.0 == "tool" && cap.name.0 == name)
+                .unwrap(),
+            other => panic!("unexpected catalog: {other:?}"),
+        };
+    let offered = || {
+        read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+            service.selected_tool_materials(&context(&store), snapshot)
+        })
+        .unwrap()
+        .into_iter()
+        .map(|material| material.wire_name)
+        .collect::<Vec<_>>()
+    };
+
+    // A newly added server starts with only its read-only tool selected.
+    let added = publish(1, vec![tool("lookup", true), tool("write", false)]);
+    let (lookup, write) = (tool_id(2, "lookup").id, tool_id(2, "write").id);
+    assert_eq!(added.selected_tool_ids.0, vec![lookup.clone()]);
+
+    // The human deselects the read-only tool and selects the other one.
+    let DomainDecision::Applied { .. } = command(
+        &h,
+        &store,
+        &cases,
+        "vanish-select",
+        "mcp.select_tools",
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"2",
+            "expectedCatalogRevision":"2","toolIds":[write]}),
+    ) else {
+        panic!("selection failed");
+    };
+
+    // The selected tool vanishes: it stays listed without a schema, stays selected and is not
+    // offered. The deselected read-only tool is not selected again.
+    let vanished = publish(2, vec![tool("lookup", true)]);
+    assert_eq!(vanished.selected_tool_ids.0, vec![write.clone()]);
+    let unavailable = tool_id(3, "write");
+    assert_eq!(unavailable.id, write);
+    assert!(unavailable.input_schema.is_none());
+    assert!(offered().is_empty());
+    // The same discovery again, with the tool still absent, changes nothing.
+    let repeated = publish(3, vec![tool("lookup", true)]);
+    assert_eq!(repeated.catalog_revision.get(), 3);
+    assert_eq!(repeated.revision, vanished.revision);
+    assert_eq!(tool_id(3, "write").revision, unavailable.revision);
+
+    // It returns unchanged and is offered again under its original selection.
+    let returned = publish(3, vec![tool("lookup", true), tool("write", false)]);
+    assert_eq!(returned.selected_tool_ids.0, vec![write.clone()]);
+    assert!(tool_id(4, "write").input_schema.is_some());
+    assert_eq!(offered(), ["write"]);
+
+    // A tool that returns changed is not reselected.
+    let vanished_again = publish(4, vec![tool("lookup", true)]);
+    assert_eq!(vanished_again.selected_tool_ids.0, vec![write.clone()]);
+    let mut changed = tool("write", false);
+    changed.description = "Write a different record".into();
+    let changed = publish(5, vec![tool("lookup", true), changed]);
+    assert!(changed.selected_tool_ids.0.is_empty());
+}
+
+#[test]
+fn a_reviewer_is_offered_no_default_selected_mcp_tool() {
+    use devworks_core::authority::service::bind_principal;
+    use devworks_core::ports::storage::NewPrincipalBinding;
+    use devworks_core::settings::{catalog, catalog::AgentRole, model};
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
+        for agent in ["mcp-worker", "mcp-reviewer"] {
+            tx.actors()
+                .register(&ActorId(id(agent)), PrincipalKind::Agent, agent)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let human = context(&store);
+    for (agent, role) in [
+        ("mcp-worker", AgentRole::Worker),
+        ("mcp-reviewer", AgentRole::CodeReviewer),
+    ] {
+        let human = human.clone();
+        run_write(&*store, WriteOptions::default(), move |tx| {
+            bind_principal(
+                tx,
+                &human,
+                NewPrincipalBinding {
+                    actor: ActorId(id(agent)),
+                    kind: PrincipalKind::Agent,
+                    role: Some(role),
+                    project_id: None,
+                    tool_families: None,
+                    bound_by: ActorId(id("mcp-user")),
+                },
+                None,
+            )
+            .map_err(|error| {
+                devworks_core::ports::storage::StorageError::InvalidRecord(format!("{error:?}"))
+            })
+        })
+        .unwrap();
+    }
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    let cases = UseCases::new().with_mcp(service.clone());
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: server },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "reviewer-server",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"name":"Read server",
+            "transport":{"kind":"Http","endpoint":"https://mcp.example.test/mcp"}}),
+    )
+    else {
+        panic!("server configuration failed");
+    };
+    let (service_for_write, server_id) = (service.clone(), server.id.clone());
+    let published = run_write(&*store, WriteOptions::default(), move |tx| {
+        service_for_write.publish_remote_catalog(
+            tx,
+            &ConfigScope::Workspace,
+            &server_id,
+            &Revision::new(1).unwrap(),
+            RemoteCatalog {
+                tools: vec![RemoteTool {
+                    name: "lookup".into(),
+                    description: "Read a record".into(),
+                    input_schema: json!({"type":"object"}),
+                    output_schema: None,
+                    read_only_hint: true,
+                }],
+                resources: vec![],
+                prompts: vec![],
+            },
+        )
+    })
+    .unwrap();
+    let tool = published.selected_tool_ids.0[0].clone();
+    // Both agents' tool settings allow the tool, so only the role decides.
+    let capability = format!("mcp/{}", tool.as_str().strip_prefix("mcp-").unwrap());
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        let current = model::current_layer(tx.configuration(), &ConfigScope::Workspace)?;
+        let descriptor = catalog::descriptor(catalog::TOOL_OVERRIDES_KEY).unwrap();
+        let assignment = serde_json::from_value(json!({"key": descriptor.key,
+            "value": {"schema": descriptor.schema_ref(), "value": {(capability): true}}}))
+        .unwrap();
+        let plan = model::plan(&current, &[assignment]);
+        let body = model::body(
+            &plan,
+            &ActorId(id("mcp-user")),
+            tx.now_ms(),
+            json!({"kind":"test"}),
+        );
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            model::NAMESPACE,
+            current.revision,
+            model::BODY_SCHEMA_VERSION,
+            body,
+        )
+    })
+    .unwrap();
+    let offered = |agent: &str| {
+        let ctx = HostIngress::new(&*store).context(
+            ActorId(id(agent)),
+            PrincipalKind::Agent,
+            id("mcp-invocation"),
+            id("mcp-agent"),
+            Counter::new(store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        );
+        read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+            service.selected_tool_materials(&ctx, snapshot)
+        })
+        .unwrap()
+        .len()
+    };
+    assert_eq!(offered("mcp-worker"), 1);
+    assert_eq!(offered("mcp-reviewer"), 0);
+}
+
+#[test]
 fn two_servers_with_the_same_tool_name_get_distinct_agent_aliases() {
     let h = Harness::new();
     let store = Arc::new(h.store());
@@ -1813,4 +2066,199 @@ fn two_servers_with_the_same_tool_name_get_distinct_agent_aliases() {
             .iter()
             .all(|material| material.alias.wire_name.len() <= 64)
     );
+}
+
+#[test]
+fn saved_configuration_is_shown_to_humans_at_revision_eight_and_a_new_token_keeps_the_catalog() {
+    use devworks_core::authority::service::bind_principal;
+    use devworks_core::ports::storage::NewPrincipalBinding;
+    use devworks_core::protocol::records::{ItemState, McpTransport};
+    use devworks_core::settings::catalog::AgentRole;
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
+        tx.actors().register(
+            &ActorId(id("mcp-worker")),
+            PrincipalKind::Agent,
+            "MCP worker",
+        )
+    })
+    .unwrap();
+    let human = context(&store);
+    let binder = human.clone();
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        bind_principal(
+            tx,
+            &binder,
+            NewPrincipalBinding {
+                actor: ActorId(id("mcp-worker")),
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::Worker),
+                project_id: None,
+                tool_families: None,
+                bound_by: ActorId(id("mcp-user")),
+            },
+            None,
+        )
+        .map_err(|error| {
+            devworks_core::ports::storage::StorageError::InvalidRecord(format!("{error:?}"))
+        })
+    })
+    .unwrap();
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    let cases = UseCases::new().with_mcp(service.clone());
+    let transport = |credential: Option<&str>| {
+        let mut transport = json!({"kind":"Http","endpoint":"https://mcp.example.test/mcp"});
+        if let Some(handle) = credential {
+            transport["credentialRef"] = json!(handle);
+        }
+        transport
+    };
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: server },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "saved-config-create",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"name":"Token server",
+            "transport":transport(Some("mcp-first-token"))}),
+    )
+    else {
+        panic!("server configuration failed");
+    };
+    let (service_for_write, server_id) = (service.clone(), server.id.clone());
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        service_for_write.publish_remote_catalog(
+            tx,
+            &ConfigScope::Workspace,
+            &server_id,
+            &Revision::new(1).unwrap(),
+            RemoteCatalog {
+                tools: vec![RemoteTool {
+                    name: "lookup".into(),
+                    description: "Read a record".into(),
+                    input_schema: json!({"type":"object"}),
+                    output_schema: None,
+                    read_only_hint: true,
+                }],
+                resources: vec![],
+                prompts: vec![],
+            },
+        )
+    })
+    .unwrap();
+    let tool = match capabilities(&h, &store, &cases, &server.id, 2) {
+        DomainQueryReply::Result {
+            result: OperationResult::McpCapabilities { value },
+            ..
+        } => {
+            value
+                .items
+                .0
+                .into_iter()
+                .find(|cap| cap.kind.0 == "tool")
+                .unwrap()
+                .id
+        }
+        other => panic!("unexpected catalog: {other:?}"),
+    };
+    let DomainDecision::Applied {
+        result: OperationResult::McpSelectTools { value: published },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "saved-config-select",
+        "mcp.select_tools",
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"2",
+            "expectedCatalogRevision":"2","toolIds":[tool]}),
+    )
+    else {
+        panic!("selection failed");
+    };
+    assert_eq!(published.selected_tool_ids.0.len(), 1);
+
+    let listed = |ctx: &InvocationContext, revision: u32| {
+        let authority = HostAuthority {
+            store: &*store,
+            clock: &*h.clock,
+            protected_branches: &[],
+        };
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*store,
+            ids: &*h.ids,
+        };
+        let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"saved-config-list",
+            "schemaRevision":revision,"body":{"kind":"mcp.servers","scope":{"kind":"Workspace"},
+            "page":{"limit":10}}});
+        match cases
+            .query(&gateway, ctx, "mcp.servers", frame.to_string().as_bytes())
+            .expect("MCP query registered")
+        {
+            DomainQueryReply::Result {
+                result: OperationResult::McpServers { value },
+                ..
+            } => value.items.0.into_iter().next().unwrap(),
+            other => panic!("expected MCP server page: {other:?}"),
+        }
+    };
+    let agent = HostIngress::new(&*store).context(
+        ActorId(id("mcp-worker")),
+        PrincipalKind::Agent,
+        id("mcp-invocation"),
+        id("mcp-agent"),
+        Counter::new(store.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    // A human at revision 8 sees the saved transport with its handle; revision 1 and agents
+    // never see it.
+    assert!(matches!(listed(&human, 8).configuration,
+        Some(McpTransport::Http { credential_ref: Some(handle), .. })
+            if handle.as_str() == "mcp-first-token"));
+    assert!(listed(&human, 1).configuration.is_none());
+    assert!(listed(&agent, 8).configuration.is_none());
+
+    // Replacing the token keeps the same server's catalog and selection, and disables it until
+    // it reconnects with the new credential.
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: retokened },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "saved-config-token",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"3",
+            "name":"Token server","transport":transport(Some("mcp-second-token"))}),
+    )
+    else {
+        panic!("token replacement failed");
+    };
+    assert_eq!(retokened.catalog_revision, published.catalog_revision);
+    assert_eq!(retokened.selected_tool_ids.0, published.selected_tool_ids.0);
+    assert!(matches!(retokened.state, ItemState::Disabled));
+
+    // A new endpoint is a different server: its catalog and selection are cleared.
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: moved },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "saved-config-endpoint",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"serverId":server.id,"expectedRevision":"4",
+            "name":"Token server",
+            "transport":{"kind":"Http","endpoint":"https://other.example.test/mcp"}}),
+    )
+    else {
+        panic!("endpoint change failed");
+    };
+    assert!(moved.catalog_revision.get() > published.catalog_revision.get());
+    assert!(moved.selected_tool_ids.0.is_empty());
 }

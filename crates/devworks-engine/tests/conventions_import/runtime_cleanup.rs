@@ -78,6 +78,8 @@ fn captures(store: &dyn ApplicationStore, op: &OperationId) -> Vec<StoredConvent
 
 fn cleanup_fault(h: &Harness, enabled: bool) {
     let db = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
+    // The open store's writer or its maintenance may hold the lock; wait for it like the store does.
+    db.busy_timeout(Duration::from_secs(5)).unwrap();
     db.execute_batch(if enabled {
         "CREATE TRIGGER refuse_private_import_cleanup BEFORE DELETE ON convention_import_artifacts BEGIN SELECT RAISE(ABORT,'controlled cleanup interruption'); END;"
     } else {

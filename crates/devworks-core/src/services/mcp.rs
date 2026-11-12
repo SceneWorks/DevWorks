@@ -67,9 +67,26 @@ struct StoredServer {
     schemas: BTreeMap<String, Value>,
     #[serde(default)]
     resource_uris: BTreeMap<String, String>,
+    /// The last available version of each selected tool that a later discovery no longer
+    /// listed. It stays in the catalog without an input schema, so it is shown unavailable and
+    /// never offered; it is selected again when the server lists it again unchanged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    retired: BTreeMap<String, McpCapability>,
 }
 
 impl StoredServer {
+    /// The record a caller sees. A human or the host also gets the saved transport so Settings
+    /// can show and resend it; it holds credential handles, never secret values. Agents do not
+    /// get it.
+    fn view(&self, ctx: &InvocationContext) -> McpServer {
+        let mut public = self.public.clone();
+        public.configuration = matches!(
+            ctx.principal_kind(),
+            PrincipalKind::Human | PrincipalKind::Host
+        )
+        .then(|| self.transport.clone());
+        public
+    }
     fn samples(&self) -> bool {
         capability_id(&self.public.id, SAMPLING_KIND, SAMPLING_NAME)
             .is_ok_and(|id| self.public.selected_tool_ids.0.contains(&id))
@@ -91,6 +108,12 @@ pub struct SamplingGrant {
     pub attempt_id: Id,
     pub call: ToolCallKey,
     pub fences: Vec<AuthorityFence>,
+}
+
+/// A server-targeted input names its scope from revision 8; an earlier caller addresses the
+/// workspace, which was the only outgoing MCP scope before then.
+pub(crate) fn requested_scope(scope: &Option<DataScope>) -> DataScope {
+    scope.clone().unwrap_or(DataScope::Workspace)
 }
 
 fn scope(
@@ -1549,21 +1572,82 @@ impl McpClientService {
                 "invalid MCP catalog identity".into(),
             ));
         }
-        // A remote read-only hint is untrusted. Discovery may keep an unchanged human selection,
-        // but only mcp.select_tools can make a newly discovered tool executable.
-        let selected = server
-            .public
-            .selected_tool_ids
-            .0
-            .iter()
-            .filter(|id| {
-                let old = server.capabilities.iter().find(|cap| &cap.id == *id);
-                let new = capabilities.iter().find(|cap| &cap.id == *id);
-                matches!((old, new), (Some(old), Some(new))
-                    if serde_json::to_value(old).ok() == serde_json::to_value(new).ok())
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        // A read-only hint is untrusted: it only chooses the default selection of a newly added
+        // server (MCP-06) and never counts as a verified read. Later discoveries keep a human
+        // selection while the selected capability is unchanged and never add to it.
+        let first_discovery = server.capabilities.is_empty();
+        let previously_retired = std::mem::take(&mut server.retired);
+        let mut last_available = previously_retired.clone();
+        for old in &server.capabilities {
+            last_available
+                .entry(old.id.as_str().to_owned())
+                .or_insert_with(|| old.clone());
+        }
+        let same = |a: &McpCapability, b: &McpCapability| {
+            serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
+        };
+        // A returning tool carries a newer revision than its last available version; compare
+        // what it is, not when it was numbered.
+        let same_content = |a: &McpCapability, b: &McpCapability| {
+            let unnumbered = |cap: &McpCapability| {
+                let mut cap = cap.clone();
+                cap.revision = rev(1);
+                for schema in [&mut cap.input_schema, &mut cap.output_schema]
+                    .into_iter()
+                    .flatten()
+                {
+                    schema.revision = rev(1);
+                }
+                serde_json::to_value(cap).ok()
+            };
+            unnumbered(a) == unnumbered(b)
+        };
+        let mut capabilities = capabilities;
+        let mut retired = BTreeMap::new();
+        let mut selected = Vec::new();
+        if first_discovery {
+            selected.extend(
+                capabilities
+                    .iter()
+                    .filter(|cap| cap.kind.0 == "tool" && cap.read_only)
+                    .take(128)
+                    .map(|cap| cap.id.clone()),
+            );
+        }
+        for id in &server.public.selected_tool_ids.0 {
+            let Some(old) = last_available.get(id.as_str()) else {
+                continue;
+            };
+            match capabilities.iter().find(|cap| &cap.id == id) {
+                Some(new)
+                    if if previously_retired.contains_key(id.as_str()) {
+                        same_content(old, new)
+                    } else {
+                        same(old, new)
+                    } =>
+                {
+                    selected.push(id.clone())
+                }
+                Some(_) => {}
+                None if old.kind.0 == "tool" => {
+                    let mut unavailable = old.clone();
+                    unavailable.input_schema = None;
+                    unavailable.output_schema = None;
+                    // An identical placeholder keeps the revision already shown, so a repeated
+                    // discovery with the tool still absent changes nothing.
+                    if let Some(shown) = server.capabilities.iter().find(|cap| &cap.id == id) {
+                        unavailable.revision = shown.revision.clone();
+                        if !same(shown, &unavailable) {
+                            unavailable.revision = rev(shown.revision.get() + 1);
+                        }
+                    }
+                    retired.insert(id.as_str().to_owned(), old.clone());
+                    capabilities.push(unavailable);
+                    selected.push(id.clone());
+                }
+                None => {}
+            }
+        }
         if selected.len() > 128 {
             return Err(StorageError::InvalidRecord(
                 "MCP tool selection exceeds contract bound".into(),
@@ -1577,8 +1661,10 @@ impl McpClientService {
             && server.schemas == schemas
             && server.resource_uris == resource_uris
         {
+            server.retired = retired;
             return Ok(server.public.clone());
         }
+        server.retired = retired;
         server.capabilities = capabilities;
         server.schemas = schemas;
         server.resource_uris = resource_uris;
@@ -1649,19 +1735,28 @@ impl McpClientService {
             }
             let changed_transport = serde_json::to_value(&server.transport).ok()
                 != serde_json::to_value(&input.transport).ok();
+            // The same endpoint or process with another credential is the same server: it keeps
+            // its catalog and selection, but stops serving until it reconnects with the new one.
+            let changed_server =
+                without_credentials(&server.transport) != without_credentials(&input.transport);
             server.public.name = input.name.clone();
             server.public.transport = transport_label;
             server.public.revision = rev(server.public.revision.get() + 1);
-            if changed_transport {
+            if changed_transport && !changed_server {
+                server.public.state = ItemState::Disabled;
+                server.public.last_failure = None;
+            }
+            if changed_server {
                 server.public.state = ItemState::Disabled;
                 server.public.last_failure = None;
                 server.public.catalog_revision = rev(server.public.catalog_revision.get() + 1);
                 server.public.selected_tool_ids = BoundedList(Vec::new());
                 server.capabilities.clear();
                 server.schemas.clear();
+                server.retired.clear();
             }
             server.transport = input.transport.clone();
-            server.public.clone()
+            server.view(ctx)
         } else {
             if input.expected_revision.is_some() {
                 return Err(Refusal::new(
@@ -1680,15 +1775,19 @@ impl McpClientService {
                 selected_tool_ids: BoundedList(Vec::new()),
                 catalog_revision: rev(1),
                 last_failure: None,
+                configuration: None,
             };
-            state.servers.push(StoredServer {
-                public: public.clone(),
+            let stored = StoredServer {
+                public,
                 transport: input.transport.clone(),
                 capabilities: Vec::new(),
                 schemas: BTreeMap::new(),
                 resource_uris: BTreeMap::new(),
-            });
-            public
+                retired: BTreeMap::new(),
+            };
+            let view = stored.view(ctx);
+            state.servers.push(stored);
+            view
         };
         let body = serde_json::to_value(state)
             .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
@@ -1710,8 +1809,8 @@ impl McpClientService {
                 Refusal::new(DomainErrorCode::PermissionDenied, "mcp_selection", None).into(),
             );
         }
-        scope(ctx, &input.scope, tx.projects())?;
-        let scope = active_server_scope(ctx, &input.scope, tx.projects())?;
+        scope(ctx, &requested_scope(&input.scope), tx.projects())?;
+        let scope = active_server_scope(ctx, &requested_scope(&input.scope), tx.projects())?;
         let (version, mut state) = current(tx.configuration(), &scope)?;
         let server = state
             .servers
@@ -1755,7 +1854,7 @@ impl McpClientService {
         selected.dedup();
         server.public.selected_tool_ids = BoundedList(selected);
         server.public.revision = rev(server.public.revision.get() + 1);
-        let result = server.public.clone();
+        let result = server.view(ctx);
         let body = serde_json::to_value(state)
             .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
         tx.configuration()
@@ -1777,7 +1876,7 @@ impl McpClientService {
                 Refusal::new(DomainErrorCode::UnsupportedTarget, "mcp_runtime", None).into(),
             );
         }
-        let scope = active_server_scope(ctx, &input.scope, tx.projects())?;
+        let scope = active_server_scope(ctx, &requested_scope(&input.scope), tx.projects())?;
         let (version, mut state) = current(tx.configuration(), &scope)?;
         let server = state
             .servers
@@ -1881,7 +1980,7 @@ impl McpClientService {
                 Refusal::new(DomainErrorCode::UnsupportedTarget, "mcp_runtime", None).into(),
             );
         }
-        let scope = active_server_scope(ctx, &input.scope, tx.projects())?;
+        let scope = active_server_scope(ctx, &requested_scope(&input.scope), tx.projects())?;
         let (_, state) = current(tx.configuration(), &scope)?;
         let server = state
             .servers
@@ -2085,6 +2184,23 @@ fn schema_ref(
     })
 }
 
+/// A transport with every credential handle removed: what identifies the server itself.
+fn without_credentials(transport: &McpTransport) -> Option<Value> {
+    let mut value = serde_json::to_value(transport).ok()?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("credentialRef");
+    }
+    if let Some(entries) = value
+        .pointer_mut("/process/environment")
+        .and_then(Value::as_array_mut)
+    {
+        for entry in entries.iter_mut().filter_map(Value::as_object_mut) {
+            entry.remove("credentialRef");
+        }
+    }
+    Some(value)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn capability(
     previous: &StoredServer,
@@ -2180,12 +2296,12 @@ impl QueryHandler for McpClientService {
                 state
                     .servers
                     .sort_by(|a, b| a.public.id.as_str().cmp(b.public.id.as_str()));
-                let records: Vec<McpServer> = state.servers.into_iter().map(|s| s.public).collect();
+                let records: Vec<McpServer> = state.servers.iter().map(|s| s.view(ctx)).collect();
                 let value = page(&records, &input.page, version).map_err(|e| self.fault(e))?;
                 (version, OperationResult::McpServers { value })
             }
             OperationInput::Mcp(ops::Input::Capabilities(input)) => {
-                let scope = server_scope(ctx, &input.scope, snapshot.projects())
+                let scope = server_scope(ctx, &requested_scope(&input.scope), snapshot.projects())
                     .map_err(|e| self.fault(e))?;
                 let (version, state) =
                     current(snapshot.configuration(), &scope).map_err(|e| self.fault(e))?;

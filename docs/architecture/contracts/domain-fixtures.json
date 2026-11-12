@@ -1780,42 +1780,42 @@
   {
     "id": "input-mcp.connect-Command",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.connect\",\"scope\":{\"kind\":\"Workspace\"},\"serverId\":\"id-a\",\"expectedRevision\":\"1\"}}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.connect\",\"serverId\":\"id-a\",\"expectedRevision\":\"1\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-mcp.discover-Command",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.discover\",\"scope\":{\"kind\":\"Workspace\"},\"serverId\":\"id-a\",\"expectedCatalogRevision\":\"1\"}}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.discover\",\"serverId\":\"id-a\",\"expectedCatalogRevision\":\"1\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-mcp.select_tools-Command",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.select_tools\",\"scope\":{\"kind\":\"Workspace\"},\"serverId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedCatalogRevision\":\"1\",\"toolIds\":[]}}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.select_tools\",\"serverId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedCatalogRevision\":\"1\",\"toolIds\":[]}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-mcp.resources-Query",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.resources\",\"scope\":{\"kind\":\"Workspace\"},\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20}}}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.resources\",\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20}}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-mcp.prompts-Query",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.prompts\",\"scope\":{\"kind\":\"Workspace\"},\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20}}}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.prompts\",\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20}}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-mcp.capabilities-Query",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.capabilities\",\"scope\":{\"kind\":\"Workspace\"},\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20}}}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.capabilities\",\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -13639,6 +13639,146 @@
     "id": "dw150-reject-r2-target-input",
     "entry": "domain-request.r2",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"desktop.input\",\"desktopId\":\"id-a\",\"leaseId\":\"id-a\",\"expectedFence\":\"0\",\"consentId\":\"id-a\",\"expectedDesktopRevision\":\"1\",\"action\":{\"kind\":\"Target\",\"targetId\":\"mac:42:0\",\"snapshotRevision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"action\":{\"kind\":\"Invoke\",\"action\":\"AXPress\"}}},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r8-input-mcp.servers",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.servers\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-mcp.configure",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.configure\",\"scope\":{\"kind\":\"Workspace\"},\"name\":\"fixture\",\"transport\":{\"kind\":\"Stdio\",\"process\":{\"executableRef\":\"id-a\",\"args\":[],\"workingDirectory\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"environment\":[],\"profile\":\"VerifiedRead\",\"timeoutMs\":\"0\",\"outputLimitBytes\":\"0\"}}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-mcp.connect",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.connect\",\"serverId\":\"id-a\",\"expectedRevision\":\"1\",\"scope\":{\"kind\":\"Workspace\"}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-mcp.discover",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.discover\",\"serverId\":\"id-a\",\"expectedCatalogRevision\":\"1\",\"scope\":{\"kind\":\"Workspace\"}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-mcp.select_tools",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.select_tools\",\"serverId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedCatalogRevision\":\"1\",\"toolIds\":[],\"scope\":{\"kind\":\"Workspace\"}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-mcp.resources",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.resources\",\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20},\"scope\":{\"kind\":\"Workspace\"}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-mcp.prompts",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.prompts\",\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20},\"scope\":{\"kind\":\"Workspace\"}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-input-mcp.capabilities",
+    "entry": "domain-request.r8",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"mcp.capabilities\",\"serverId\":\"id-a\",\"catalogRevision\":\"1\",\"page\":{\"limit\":20},\"scope\":{\"kind\":\"Workspace\"}},\"schemaRevision\":8}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r1-input-mcp.connect-workspace",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.connect\",\"serverId\":\"id-a\",\"expectedRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-input-mcp.connect-scope",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"mcp.connect\",\"serverId\":\"id-a\",\"expectedRevision\":\"1\",\"scope\":{\"kind\":\"Workspace\"}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r8-result-mcp.servers",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"mcp.servers\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"state\":\"Enabled\",\"transport\":\"fixture\",\"selectedToolIds\":[],\"catalogRevision\":\"1\",\"lastFailure\":\"Connection refused\",\"configuration\":{\"kind\":\"Http\",\"endpoint\":\"https://fixture.invalid/mcp\",\"credentialRef\":\"mcp-fixture-handle\"}},{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"state\":\"Enabled\",\"transport\":\"fixture\",\"selectedToolIds\":[],\"catalogRevision\":\"1\",\"configuration\":{\"kind\":\"Stdio\",\"process\":{\"executableRef\":\"id-a\",\"args\":[],\"workingDirectory\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"environment\":[],\"profile\":\"VerifiedRead\",\"timeoutMs\":\"0\",\"outputLimitBytes\":\"0\"}}}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-result-mcp.configure",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"mcp.configure\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"state\":\"Enabled\",\"transport\":\"fixture\",\"selectedToolIds\":[],\"catalogRevision\":\"1\",\"lastFailure\":\"Connection refused\",\"configuration\":{\"kind\":\"Http\",\"endpoint\":\"https://fixture.invalid/mcp\",\"credentialRef\":\"mcp-fixture-handle\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-result-mcp.connect",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"mcp.connect\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"state\":\"Enabled\",\"transport\":\"fixture\",\"selectedToolIds\":[],\"catalogRevision\":\"1\",\"lastFailure\":\"Connection refused\",\"configuration\":{\"kind\":\"Http\",\"endpoint\":\"https://fixture.invalid/mcp\",\"credentialRef\":\"mcp-fixture-handle\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-result-mcp.select_tools-plain",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"mcp.select_tools\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"state\":\"Enabled\",\"transport\":\"fixture\",\"selectedToolIds\":[],\"catalogRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-result-mcp.discover",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"mcp.discover\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-result-mcp.capabilities",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"mcp.capabilities\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-result-mcp.resources",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"mcp.resources\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r8-result-mcp.prompts",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"mcp.prompts\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-mcp-server-configuration",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"mcp.configure\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"state\":\"Enabled\",\"transport\":\"fixture\",\"selectedToolIds\":[],\"catalogRevision\":\"1\",\"lastFailure\":\"Connection refused\",\"configuration\":{\"kind\":\"Http\",\"endpoint\":\"https://fixture.invalid/mcp\",\"credentialRef\":\"mcp-fixture-handle\"}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r8-result-mcp-server-secret-value",
+    "entry": "operation-result.r8",
+    "raw": "{\"kind\":\"mcp.connect\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"state\":\"Enabled\",\"transport\":\"fixture\",\"selectedToolIds\":[],\"catalogRevision\":\"1\",\"lastFailure\":\"Connection refused\",\"configuration\":{\"kind\":\"Http\",\"endpoint\":\"https://fixture.invalid/mcp\",\"credentialRef\":\"mcp-fixture-handle\",\"token\":\"synthetic-not-a-token\"}}}",
     "typedValid": false,
     "schemaValid": false
   }

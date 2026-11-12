@@ -64,7 +64,8 @@ impl McpClientService {
                 {
                     return Err(StorageError::ScopeDenied);
                 }
-                let scope = active_server_scope(ctx, requested_scope, snapshot.projects())
+                let requested_scope = super::requested_scope(requested_scope);
+                let scope = active_server_scope(ctx, &requested_scope, snapshot.projects())
                     .map_err(|_| StorageError::ScopeDenied)?;
                 let (version, state) = current(snapshot.configuration(), &scope)?;
                 let server = state

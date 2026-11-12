@@ -1,7 +1,7 @@
 //! Outgoing MCP configuration and effective tool selection in Settings > Agent tools.
 //! All mutations go through the same domain gateway used by agents.
 use devworks_core::ports::secrets::Secret;
-use devworks_core::protocol::records::{McpCapability, McpServer, ProjectRecord};
+use devworks_core::protocol::records::{McpCapability, McpServer, McpTransport, ProjectRecord};
 use devworks_core::protocol::{Id, OperationId, OperationState, ProjectId};
 use eframe::egui::{self, Ui};
 use serde_json::{Value, json};
@@ -16,6 +16,49 @@ pub enum McpAction {
     Discover(Id, i64),
     Select(Id, i64, i64, Vec<Id>),
     Sampling(Id, i64, i64, Vec<Id>),
+}
+
+/// The credential handles a saved server configuration references.
+pub fn credential_handles(server: &McpServer) -> Vec<Id> {
+    match &server.configuration {
+        Some(McpTransport::Http { credential_ref, .. }) => credential_ref.iter().cloned().collect(),
+        Some(McpTransport::Stdio { process }) => process
+            .environment
+            .0
+            .iter()
+            .filter_map(|entry| entry.credential_ref.clone())
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// One line describing a saved transport without any secret value.
+fn describe(configuration: &McpTransport) -> String {
+    match configuration {
+        McpTransport::Http {
+            endpoint,
+            credential_ref,
+        } => format!(
+            "Endpoint: {} · Bearer token: {}",
+            endpoint.0,
+            if credential_ref.is_some() {
+                "set"
+            } else {
+                "not set"
+            }
+        ),
+        McpTransport::Stdio { process } => format!(
+            "Executable: {} · {} argument(s) · {} environment entr{}",
+            process.executable_ref.as_str(),
+            process.args.0.len(),
+            process.environment.0.len(),
+            if process.environment.0.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            }
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -68,9 +111,42 @@ pub struct McpPanel {
     /// changed client capabilities.
     pub reconnect: Option<Id>,
     selection: Vec<Id>,
+    /// A server whose saved configuration fills the form on the next frame.
+    form_from: Option<McpServer>,
 }
 
 impl McpPanel {
+    /// After a saved change, an open update form follows the saved server, so a later update
+    /// never resends a removed or replaced credential handle.
+    pub fn saved(&mut self, server: &McpServer) {
+        if self.editing {
+            self.form_from = Some(server.clone());
+        }
+    }
+
+    /// Fill the add/update form from a saved server so an update resends what is saved.
+    pub fn fill_form(&mut self, server: &McpServer) {
+        self.name = server.name.0.clone();
+        self.credential.clear();
+        match &server.configuration {
+            Some(McpTransport::Http {
+                endpoint,
+                credential_ref,
+            }) => {
+                self.stdio = false;
+                self.endpoint = endpoint.0.clone();
+                self.credential_ref = credential_ref
+                    .as_ref()
+                    .map_or_else(String::new, |id| id.as_str().to_owned());
+            }
+            Some(McpTransport::Stdio { process }) => {
+                self.stdio = true;
+                self.process_spec = serde_json::to_string_pretty(process).unwrap_or_default();
+            }
+            None => {}
+        }
+    }
+
     pub fn observed_operation(&mut self, operation: &OperationId, state: OperationState) -> bool {
         if self.pending_operation.as_ref() != Some(operation) {
             return false;
@@ -196,6 +272,7 @@ impl McpPanel {
                         self.selected = Some(server.id.clone());
                         self.capabilities.clear();
                         self.selection = server.selected_tool_ids.0.clone();
+                        self.form_from = Some(server.clone());
                         actions.push(McpAction::Catalog(
                             server.id.clone(),
                             server.catalog_revision.get(),
@@ -219,8 +296,31 @@ impl McpPanel {
                 "Status: {:?} · Transport: {} · Catalog revision: {}",
                 server.state, server.transport.0, catalog_revision
             ));
+            if let Some(configuration) = &server.configuration {
+                ui.label(describe(configuration));
+            }
             if let Some(failure) = &server.last_failure {
                 ui.colored_label(ui.visuals().error_fg_color, &failure.0);
+            }
+            if let Some(McpTransport::Http {
+                endpoint,
+                credential_ref: Some(_),
+            }) = &server.configuration
+                && ui
+                    .add_enabled(
+                        online && !self.busy && server_idle,
+                        egui::Button::new("Remove token"),
+                    )
+                    .clicked()
+            {
+                self.busy = true;
+                self.error = None;
+                actions.push(McpAction::Configure {
+                    body: json!({"scope":self.scope(),"serverId":server.id,
+                        "expectedRevision":server.revision,"name":server.name,
+                        "transport":{"kind":"Http","endpoint":endpoint}}),
+                    secret: None,
+                });
             }
             if !server_idle {
                 ui.label("MCP connection or discovery is running…");
@@ -307,11 +407,18 @@ impl McpPanel {
                 });
                 for cap in tools {
                     let mut checked = self.selection.contains(&cap.id);
+                    // A selected tool the server stopped listing keeps its selection without a
+                    // schema; agents are not offered it until the server lists it again.
                     let label = format!(
-                        "{}{}",
+                        "{}{}{}",
                         cap.name.0,
                         if cap.read_only {
                             " · read-only hint"
+                        } else {
+                            ""
+                        },
+                        if cap.input_schema.is_none() {
+                            " · unavailable: the server no longer lists it"
                         } else {
                             ""
                         }
@@ -346,7 +453,20 @@ impl McpPanel {
             }
         }
         ui.separator();
-        ui.checkbox(&mut self.editing, "Update selected server");
+        if ui
+            .checkbox(&mut self.editing, "Update selected server")
+            .changed()
+            && self.editing
+        {
+            self.form_from = self
+                .selected
+                .as_ref()
+                .and_then(|id| self.servers.iter().find(|record| &record.id == id))
+                .cloned();
+        }
+        if let Some(server) = self.form_from.take() {
+            self.fill_form(&server);
+        }
         ui.label("Server name");
         ui.text_edit_singleline(&mut self.name).widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::TextInput, true, "MCP server name")
@@ -404,11 +524,8 @@ impl McpPanel {
                 }
                 transport
             };
-            let scope = self.project.as_ref().map_or_else(
-                || json!({"kind":"Workspace"}),
-                |id| json!({"kind":"Project","projectId":id}),
-            );
-            let mut body = json!({"scope":scope,"name":self.name.trim(),"transport":transport});
+            let mut body =
+                json!({"scope":self.scope(),"name":self.name.trim(),"transport":transport});
             if self.editing {
                 let Some(server) = self
                     .selected
@@ -427,5 +544,12 @@ impl McpPanel {
                 .then(|| Secret::new(std::mem::take(&mut self.credential)));
             actions.push(McpAction::Configure { body, secret });
         }
+    }
+
+    fn scope(&self) -> Value {
+        self.project.as_ref().map_or_else(
+            || json!({"kind":"Workspace"}),
+            |id| json!({"kind":"Project","projectId":id}),
+        )
     }
 }
