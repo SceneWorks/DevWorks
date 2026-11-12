@@ -127,7 +127,7 @@ fn decision(
     mut body: Value,
 ) -> Value {
     body["kind"] = json!(op);
-    let frame = json!({"mode":"Command","protocol":PROTOCOL,
+    let frame = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":8,
         "requestKey":format!("agent-mcp-{}", op.replace(['.', '_'], "-")),"body":body});
     match app.command(ctx, op, frame.to_string().as_bytes()) {
         Ok(CommandReply::Recorded { receipt, .. })
