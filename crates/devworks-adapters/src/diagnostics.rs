@@ -136,6 +136,7 @@ impl DiagnosticExports {
         else {
             return;
         };
+        let boot = store.info().boot_id;
         let mut after = None;
         loop {
             let Ok(rows) = read_snapshot(store.as_ref(), &ReadOptions::default(), |r| {
@@ -149,6 +150,12 @@ impl DiagnosticExports {
             }
             after = rows.last().map(|r| r.id.clone());
             for row in rows {
+                // A current-boot reservation still being written belongs to an in-flight
+                // `stage`, which reserves before it creates the file; retiring it here would
+                // make that export's registration fail.
+                if row.writing && row.boot_id == boot {
+                    continue;
+                }
                 if row.root == root
                     && matches!(std::fs::symlink_metadata(self.dir.join(&row.relative_path)),Err(e) if e.kind()==std::io::ErrorKind::NotFound)
                 {

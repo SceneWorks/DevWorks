@@ -134,12 +134,19 @@ pub fn mcp_servers(
     if let Some(cursor) = cursor {
         page["cursor"] = json!(cursor);
     }
-    query_frame(
-        backend,
-        "mcp.servers",
-        json!({"scope":mcp_scope(scope),"page":page}),
+    at_revision(
+        query_frame(
+            backend,
+            "mcp.servers",
+            json!({"scope":mcp_scope(scope),"page":page}),
+        ),
+        MCP_REVISION,
     )
 }
+
+/// Revision 8 of the outgoing MCP operations carries each server-targeted input's scope and
+/// each server's last failure and saved transport.
+pub const MCP_REVISION: u64 = 8;
 
 pub fn mcp_server_page(
     outcome: QueryOutcome,
@@ -169,10 +176,13 @@ pub fn mcp_capabilities(
     if let Some(cursor) = cursor {
         page["cursor"] = json!(cursor);
     }
-    query_frame(
-        backend,
-        "mcp.capabilities",
-        json!({"scope":mcp_scope(scope),"serverId":server,"catalogRevision":revision.to_string(),"page":page}),
+    at_revision(
+        query_frame(
+            backend,
+            "mcp.capabilities",
+            json!({"scope":mcp_scope(scope),"serverId":server,"catalogRevision":revision.to_string(),"page":page}),
+        ),
+        MCP_REVISION,
     )
 }
 
@@ -201,7 +211,7 @@ pub fn mcp_capability_page(
 }
 
 pub fn mcp_command(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    command_frame(backend, operation, body)
+    at_revision(command_frame(backend, operation, body), MCP_REVISION)
 }
 
 /// The message, any accepted operation, and the configured or reselected server.

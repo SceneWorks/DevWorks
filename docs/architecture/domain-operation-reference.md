@@ -588,14 +588,14 @@ All 369 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `mcp.servers` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest` | `Page<McpServer>` |
-| `mcp.configure` | **Command**<br>`scope`: `DataScope`<br>`serverId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`name`: `Label`<br>`transport`: `McpTransport` | `McpServer` |
-| `mcp.connect` | **Command**<br>`scope`: `DataScope`<br>`serverId`: `Id`<br>`expectedRevision`: `Revision` | `McpServer` |
-| `mcp.discover` | **Command**<br>`scope`: `DataScope`<br>`serverId`: `Id`<br>`expectedCatalogRevision`: `Revision` | `Page<McpCapability>` |
-| `mcp.select_tools` | **Command**<br>`scope`: `DataScope`<br>`serverId`: `Id`<br>`expectedRevision`: `Revision`<br>`expectedCatalogRevision`: `Revision`<br>`toolIds`: `Items<Id>` | `McpServer` |
-| `mcp.resources` | **Query**<br>`scope`: `DataScope`<br>`serverId`: `Id`<br>`catalogRevision`: `Revision`<br>`uri`: `?Text`<br>`page`: `PageRequest` | `Page<McpResource>` |
-| `mcp.prompts` | **Query**<br>`scope`: `DataScope`<br>`serverId`: `Id`<br>`catalogRevision`: `Revision`<br>`name`: `?Label`<br>`arguments`: `?SchemaValue`<br>`page`: `PageRequest` | `Page<McpPrompt>` |
-| `mcp.capabilities` | **Query**<br>`scope`: `DataScope`<br>`serverId`: `Id`<br>`catalogRevision`: `Revision`<br>`page`: `PageRequest` | `Page<McpCapability>` |
+| `mcp.servers` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<McpServer>` |
+| `mcp.configure` | **Command**<br>`scope`: `DataScope`<br>`serverId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`name`: `Label`<br>`transport`: `McpTransport`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `McpServer` |
+| `mcp.connect` | **Command**<br>`scope`: `?DataScope`<br>`serverId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `McpServer` |
+| `mcp.discover` | **Command**<br>`scope`: `?DataScope`<br>`serverId`: `Id`<br>`expectedCatalogRevision`: `Revision`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<McpCapability>` |
+| `mcp.select_tools` | **Command**<br>`scope`: `?DataScope`<br>`serverId`: `Id`<br>`expectedRevision`: `Revision`<br>`expectedCatalogRevision`: `Revision`<br>`toolIds`: `Items<Id>`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `McpServer` |
+| `mcp.resources` | **Query**<br>`scope`: `?DataScope`<br>`serverId`: `Id`<br>`catalogRevision`: `Revision`<br>`uri`: `?Text`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<McpResource>` |
+| `mcp.prompts` | **Query**<br>`scope`: `?DataScope`<br>`serverId`: `Id`<br>`catalogRevision`: `Revision`<br>`name`: `?Label`<br>`arguments`: `?SchemaValue`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<McpPrompt>` |
+| `mcp.capabilities` | **Query**<br>`scope`: `?DataScope`<br>`serverId`: `Id`<br>`catalogRevision`: `Revision`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<McpCapability>` |
 
 ### Addons
 
@@ -2414,7 +2414,8 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `transport` | `Label` |
 | `selectedToolIds` | `Items<Id>` |
 | `catalogRevision` | `Revision` |
-| `lastFailure` | `?Text` |
+| `lastFailure` | `?Text` · *revision 8+* |
+| `configuration` | `?McpTransport` · *revision 8+* |
 
 ### McpTransport
 
