@@ -10117,7 +10117,7 @@
       "result": "Page<McpCapability>",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Catalog changes invalidate old selected schema revisions before use. No discovered tool becomes enabled solely by discovery."
+      "rules": "Catalog changes invalidate old selected schema revisions before use. The first discovery of a newly added server selects its read-only-hinted tools (MCP-06); later discoveries never add to the human selection, and a hint is never a verified read."
     },
     "mcp.select_tools": {
       "operation": "mcp.select_tools",

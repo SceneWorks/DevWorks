@@ -67,6 +67,11 @@ struct StoredServer {
     schemas: BTreeMap<String, Value>,
     #[serde(default)]
     resource_uris: BTreeMap<String, String>,
+    /// The last available version of each selected tool that a later discovery no longer
+    /// listed. It stays in the catalog without an input schema, so it is shown unavailable and
+    /// never offered; it is selected again when the server lists it again unchanged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    retired: BTreeMap<String, McpCapability>,
 }
 
 impl StoredServer {
@@ -1549,21 +1554,82 @@ impl McpClientService {
                 "invalid MCP catalog identity".into(),
             ));
         }
-        // A remote read-only hint is untrusted. Discovery may keep an unchanged human selection,
-        // but only mcp.select_tools can make a newly discovered tool executable.
-        let selected = server
-            .public
-            .selected_tool_ids
-            .0
-            .iter()
-            .filter(|id| {
-                let old = server.capabilities.iter().find(|cap| &cap.id == *id);
-                let new = capabilities.iter().find(|cap| &cap.id == *id);
-                matches!((old, new), (Some(old), Some(new))
-                    if serde_json::to_value(old).ok() == serde_json::to_value(new).ok())
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        // A read-only hint is untrusted: it only chooses the default selection of a newly added
+        // server (MCP-06) and never counts as a verified read. Later discoveries keep a human
+        // selection while the selected capability is unchanged and never add to it.
+        let first_discovery = server.capabilities.is_empty();
+        let previously_retired = std::mem::take(&mut server.retired);
+        let mut last_available = previously_retired.clone();
+        for old in &server.capabilities {
+            last_available
+                .entry(old.id.as_str().to_owned())
+                .or_insert_with(|| old.clone());
+        }
+        let same = |a: &McpCapability, b: &McpCapability| {
+            serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
+        };
+        // A returning tool carries a newer revision than its last available version; compare
+        // what it is, not when it was numbered.
+        let same_content = |a: &McpCapability, b: &McpCapability| {
+            let unnumbered = |cap: &McpCapability| {
+                let mut cap = cap.clone();
+                cap.revision = rev(1);
+                for schema in [&mut cap.input_schema, &mut cap.output_schema]
+                    .into_iter()
+                    .flatten()
+                {
+                    schema.revision = rev(1);
+                }
+                serde_json::to_value(cap).ok()
+            };
+            unnumbered(a) == unnumbered(b)
+        };
+        let mut capabilities = capabilities;
+        let mut retired = BTreeMap::new();
+        let mut selected = Vec::new();
+        if first_discovery {
+            selected.extend(
+                capabilities
+                    .iter()
+                    .filter(|cap| cap.kind.0 == "tool" && cap.read_only)
+                    .take(128)
+                    .map(|cap| cap.id.clone()),
+            );
+        }
+        for id in &server.public.selected_tool_ids.0 {
+            let Some(old) = last_available.get(id.as_str()) else {
+                continue;
+            };
+            match capabilities.iter().find(|cap| &cap.id == id) {
+                Some(new)
+                    if if previously_retired.contains_key(id.as_str()) {
+                        same_content(old, new)
+                    } else {
+                        same(old, new)
+                    } =>
+                {
+                    selected.push(id.clone())
+                }
+                Some(_) => {}
+                None if old.kind.0 == "tool" => {
+                    let mut unavailable = old.clone();
+                    unavailable.input_schema = None;
+                    unavailable.output_schema = None;
+                    // An identical placeholder keeps the revision already shown, so a repeated
+                    // discovery with the tool still absent changes nothing.
+                    if let Some(shown) = server.capabilities.iter().find(|cap| &cap.id == id) {
+                        unavailable.revision = shown.revision.clone();
+                        if !same(shown, &unavailable) {
+                            unavailable.revision = rev(shown.revision.get() + 1);
+                        }
+                    }
+                    retired.insert(id.as_str().to_owned(), old.clone());
+                    capabilities.push(unavailable);
+                    selected.push(id.clone());
+                }
+                None => {}
+            }
+        }
         if selected.len() > 128 {
             return Err(StorageError::InvalidRecord(
                 "MCP tool selection exceeds contract bound".into(),
@@ -1577,8 +1643,10 @@ impl McpClientService {
             && server.schemas == schemas
             && server.resource_uris == resource_uris
         {
+            server.retired = retired;
             return Ok(server.public.clone());
         }
+        server.retired = retired;
         server.capabilities = capabilities;
         server.schemas = schemas;
         server.resource_uris = resource_uris;
@@ -1659,6 +1727,7 @@ impl McpClientService {
                 server.public.selected_tool_ids = BoundedList(Vec::new());
                 server.capabilities.clear();
                 server.schemas.clear();
+                server.retired.clear();
             }
             server.transport = input.transport.clone();
             server.public.clone()
@@ -1687,6 +1756,7 @@ impl McpClientService {
                 capabilities: Vec::new(),
                 schemas: BTreeMap::new(),
                 resource_uris: BTreeMap::new(),
+                retired: BTreeMap::new(),
             });
             public
         };
