@@ -4,7 +4,7 @@
   "project": "DW",
   "existing_feature": "DW-F1",
   "existing_feature_role": "Retain as architecture/planning baseline and publication home; native implementation moves to the related delivery features.",
-  "scope": "Preserve all 63 native item IDs and 250 dependency edges. The current approved source requirement set contains 377 individually structured requirements. UI acceptance is amended explicitly; native progress and completion require live CodeGraph evidence. Latest-model amendment adds three confirmed requirements and DW-108; all earlier identities and obligations remain.",
+  "scope": "Preserve all 63 native item IDs and 250 dependency edges. The current approved source requirement set contains 378 individually structured requirements. UI acceptance is amended explicitly; native progress and completion require live CodeGraph evidence. Latest-model amendment adds three confirmed requirements and DW-108; all earlier identities and obligations remain.",
   "apply_strategy": [
     "Create related features under DW with requirements/goals/acceptance.",
     "Move existing items with version-checked update_work, updating inherited requirement references without recreating items or changing dependencies.",
@@ -2095,6 +2095,12 @@
           "source_id": "DOC-02",
           "source_status": "Confirmed",
           "text": "DOC-02 [Confirmed]: Keep code documentation, developer guides and architecture diagrams aligned with the implementation as part of the same change. Link important source modules and interfaces to their relevant design explanations and workflows. Review documentation accuracy and test impact with code changes; architectural documentation must distinguish proposed designs from implemented behavior. Existing local searchable Help, agent access, offline documentation and mandatory self-improvement documentation requirements remain effective."
+        },
+        {
+          "id": "E40",
+          "source_id": "KNOW-09",
+          "source_status": "Confirmed",
+          "text": "KNOW-09 [Confirmed]: Knowledge search must let an agent bound one page of results by a token budget, filled with the best-ranked claims first. The budget sets the page size and must not make any claim unreachable: the remaining claims stay available on later pages. The default budget and the largest budget a caller may pass must be configurable, inherited Workspace then Project; a caller may pass its own budget on a call within the allowed range. A person searching in the app is not limited by the budget."
         }
       ],
       "acceptance_tests": [

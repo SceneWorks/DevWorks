@@ -1,10 +1,10 @@
 # Local implementation plan
 
-Status: architecture baseline 1.1. This is the complete ownership and dependency breakdown of the captured scope, not implementation authorization or a frozen public API. Requirements remain 230 Confirmed and 147 Proposed; a planned slice does not approve a Proposed requirement. CodeGraph remains the operational source of truth.
+Status: architecture baseline 1.1. This is the complete ownership and dependency breakdown of the captured scope, not implementation authorization or a frozen public API. Requirements remain 231 Confirmed and 147 Proposed; a planned slice does not approve a Proposed requirement. CodeGraph remains the operational source of truth.
 
 ## Success and remaining commitments
 
-The register assigns all 377 requirements, 369 operations across 49 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 79 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 378 requirements, 369 operations across 49 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 79 local slices and no unowned operations, requirements or retained entries.
 
 All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
@@ -598,7 +598,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Operations:** `knowledge.search`, `knowledge.read`, `knowledge.record`, `knowledge.revise`, `knowledge.relate`, `knowledge.tag`, `knowledge.verify`, `knowledge.retract`, `knowledge.scope`, `knowledge.diagnostics`, `knowledge.delete_by_source`, `knowledge.delete_selected`, `knowledge.write_status`, `knowledge.import_user_data`, `knowledge.promote`, `knowledge.challenge`, `knowledge.tagged_lessons`
 
-**Primary requirement cases:** AT-KNOW-01, AT-KNOW-02, AT-KNOW-03, AT-KNOW-04, AT-KNOW-05, AT-KNOW-06, AT-KNOW-07, AT-KNOW-08
+**Primary requirement cases:** AT-KNOW-01, AT-KNOW-02, AT-KNOW-03, AT-KNOW-04, AT-KNOW-05, AT-KNOW-06, AT-KNOW-07, AT-KNOW-08, AT-KNOW-09
 
 **Supporting requirements:** CONTEXT-01, CONTEXT-02, CONTEXT-03, CONTEXT-04, CONTEXT-05, CONTEXT-06, DREAM-01, DREAM-02, DREAM-03, DREAM-04, DREAM-05, MCP-07, MCP-08, MCP-09, MCP-10, MCP-11, CONV-01, CONV-02, RAG-01, RAG-02, RAG-03, RAG-09, RAG-10, RAG-04, RAG-05, RAG-06, RAG-07, RAG-08, RAG-11, RAG-12, RAG-13
 
@@ -616,7 +616,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** See supporting and integration obligations.
 
-**Supporting requirements:** KNOW-01, KNOW-02, KNOW-03, KNOW-04, KNOW-05, KNOW-06, KNOW-07, KNOW-08, GRAPH-01, GRAPH-02, GRAPH-03, GRAPH-04
+**Supporting requirements:** KNOW-01, KNOW-02, KNOW-03, KNOW-04, KNOW-05, KNOW-06, KNOW-07, KNOW-08, KNOW-09, GRAPH-01, GRAPH-02, GRAPH-03, GRAPH-04
 
 **Behavior/workload obligations:** CAP-KNOWLEDGE. Frozen source entries bound: 25. Pending input schemas: 0.
 
@@ -632,7 +632,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** AT-DREAM-01, AT-DREAM-02, AT-DREAM-03, AT-DREAM-04, AT-DREAM-05
 
-**Supporting requirements:** KNOW-01, KNOW-02, KNOW-03, KNOW-04, KNOW-05, KNOW-06, KNOW-07, KNOW-08
+**Supporting requirements:** KNOW-01, KNOW-02, KNOW-03, KNOW-04, KNOW-05, KNOW-06, KNOW-07, KNOW-08, KNOW-09
 
 **Behavior/workload obligations:** CAP-DREAMING. Frozen source entries bound: 22. Pending input schemas: 0.
 
