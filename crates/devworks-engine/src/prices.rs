@@ -131,8 +131,7 @@ impl PriceSupervisor {
             self.source.clone(),
         );
         let flight = Flight::new(self.active.clone(), self.finished.clone());
-        source_work(move || {
-            let _flight = flight;
+        source_work(flight, move || {
             if stopping.load(Ordering::SeqCst) {
                 return Ok(0);
             }
@@ -188,7 +187,9 @@ impl PriceSupervisor {
 }
 /// A bounded public GET may outlive application shutdown. It must not retain a Tokio blocking
 /// task (whose runtime destructor waits for it). Late completion owns no write authority.
-async fn source_work<T, F>(work: F) -> Result<T, String>
+/// `flight` ends only after `work` and everything it captured (the store among it) are dropped,
+/// so a drained supervisor no longer holds the data root.
+async fn source_work<T, F>(flight: Flight, work: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
@@ -197,7 +198,9 @@ where
     std::thread::Builder::new()
         .name("devworks-price-source".into())
         .spawn(move || {
-            let _ = finished.send(work());
+            let value = work();
+            drop(flight);
+            let _ = finished.send(value);
         })
         .map_err(|error| error.to_string())?;
     result
@@ -240,8 +243,7 @@ impl Effects {
                 );
             }
             let flight = Flight::new(worker.active.clone(), worker.finished.clone());
-            let fetching = source_work(move || {
-                let _flight = flight;
+            let fetching = source_work(flight, move || {
                 if worker.stopping.load(Ordering::SeqCst) {
                     return EffectResult::NotApplied("price maintenance is stopping".into());
                 }
@@ -275,5 +277,54 @@ impl EffectExecutor for Effects {
     }
     fn observe(&self, operation: OperationRecord) -> EffectFuture {
         self.effect(operation)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    /// Dropped slowly, like a store that joins its writer before releasing the data root.
+    struct SlowDrop(Arc<AtomicBool>);
+    impl Drop for SlowDrop {
+        fn drop(&mut self) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_source_callback_reports_idle_only_after_dropping_what_it_captured() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let active = Arc::new(AtomicUsize::new(0));
+                let finished = Arc::new(Notify::new());
+                let dropped = Arc::new(AtomicBool::new(false));
+                let held = SlowDrop(dropped.clone());
+                let flight = Flight::new(active.clone(), finished.clone());
+                let work = tokio::spawn(source_work(flight, move || {
+                    let _ = &held;
+                }));
+                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    loop {
+                        let notified = finished.notified();
+                        if active.load(Ordering::SeqCst) == 0 {
+                            return;
+                        }
+                        notified.await;
+                    }
+                })
+                .await
+                .expect("the callback ends");
+                assert!(
+                    dropped.load(Ordering::SeqCst),
+                    "idle was reported while the callback still held its captures"
+                );
+                work.await.unwrap().unwrap();
+            });
     }
 }
