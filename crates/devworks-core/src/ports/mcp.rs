@@ -110,6 +110,8 @@ pub enum McpRemoteFault {
     Deadline,
     TooLarge,
     InputRequired,
+    /// The server answered with an error, so the request did not succeed.
+    Rejected,
 }
 
 pub trait McpRemote: Send + Sync {

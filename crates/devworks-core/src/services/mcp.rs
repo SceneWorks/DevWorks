@@ -1069,6 +1069,9 @@ impl McpClientService {
             ) => McpEffectOutcome::Unknown(
                 "MCP tool may have run; reconcile its result before retry".into(),
             ),
+            Err(McpRemoteFault::Rejected) => {
+                McpEffectOutcome::Failed("MCP server answered the tool call with an error".into())
+            }
             Err(fault) => McpEffectOutcome::Failed(format!("MCP tool was not sent: {fault:?}")),
         }
     }
