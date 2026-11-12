@@ -98,6 +98,8 @@ pub struct TreeStatus {
     pub empty: bool,
     /// The root's exit code, once the tree is empty and the root was collected.
     pub exit_code: Option<i32>,
+    /// The signal that terminated the root, where the platform reports one (Unix).
+    pub signal: Option<i32>,
 }
 
 /// What the host can say about a recorded identity (recovery of an earlier boot).

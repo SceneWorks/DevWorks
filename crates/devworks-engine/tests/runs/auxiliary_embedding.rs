@@ -343,7 +343,7 @@ fn managed_conventions_only_agent_embeddings_reuse_actual_turn_and_refuse_missin
     assert!(balance.local_quiescent && !balance.unknown_tail);
     let ending_session = ctx.session_id().unwrap().clone();
     let ending_turn = turn.turn_id;
-    f.tx(move |service, tx| service.end_turn(tx, &ending_session, &ending_turn))
+    f.tx(move |service, tx| service.end_turn(tx, &ending_session, &ending_turn, true))
         .unwrap();
     let after_config = native.configured_space(&ctx).unwrap();
     let after_space = after_config.space.unwrap();

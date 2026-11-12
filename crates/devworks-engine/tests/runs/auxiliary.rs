@@ -79,7 +79,7 @@ fn auxiliary_ownership_comes_from_the_current_turn_without_beginning_another_dis
     );
     let stop_session = session.clone();
     let turn_id = turn.turn_id;
-    f.tx(move |svc, tx| svc.end_turn(tx, &stop_session, &turn_id))
+    f.tx(move |svc, tx| svc.end_turn(tx, &stop_session, &turn_id, true))
         .unwrap();
     assert!(matches!(
         capture(),

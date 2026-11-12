@@ -10,26 +10,26 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "f0f40f1cc6db56465b4e73590a16d5b0744dc9a04346f41093c08f2c87b236bb",
-    "devworks-capability-catalog.json": "8714599ea1a066c303665e012145cd7e51e92dc259ef31975bd9a73924dcf172",
+    "implementation-slices.json": "c515967038575693f979b65cccdb37e86a7f00115adec842c1184b61fbc51949",
+    "devworks-capability-catalog.json": "5fc5d7da3c910be05ea893710603b6c731b9236b33b6365864df1a57bffc4d72",
     "devworks-requirements-traceability.json": "fdf6d27d17f61c1a41ea87d686314d315b9ed0099e185b2f095f61df9e0aa660",
     "codegraph-capability-inventory.json": "54da948de48de4a7d00353ae14d7464feac80cca9bdab6d2a6bb2679caae2c09",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "8a01620b6beadb9477362a5c60633ed4b033c7a4b1a59c100b3517ce57f6e953",
+    "contracts/family-coverage.json": "ed41c56bd7f8881cebe19f8a5123c8d53d321a80376a48384c05d2fd4ec7bc8f",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "7adfb3650fbc6bde7d6a580464ba32015b47edc121a52dfab88ac052b3e46949"
   },
   "counts": {
-    "slices": 79,
-    "operationFamilies": 49,
-    "operations": 369,
+    "slices": 80,
+    "operationFamilies": 50,
+    "operations": 373,
     "requirements": 378,
     "requirementsByStatus": {
       "Confirmed": 231,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 369,
+    "inputSchemaCandidates": 373,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -107,6 +107,7 @@
     "DW-108",
     "DW-107",
     "DW-119",
+    "DW-094",
     "DW-062",
     "DW-071",
     "DW-072",
@@ -4704,7 +4705,8 @@
         "session_auto_routing",
         "model_latest",
         "work_item_metadata",
-        "embedding_spaces"
+        "embedding_spaces",
+        "watchers"
       ],
       "acceptance": "A1: Run every AT requirement and all 33 CAP groups through actual services, reconcile frozen-source drift and verify each retained operation plus import quirks. Separately dispatch authorized live inference E2E later; schema/probe counts cannot satisfy product acceptance. A2: Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests. Satisfy every primary and supporting source requirement listed on this item, preserving its Confirmed/Proposed status. A3: Integrated Auto/latest acceptance reuses the latest-model story, DW-22 and DW-107 evidence: all eight aliases and explicit/custom choices work across native/host/job entry points; hourly complete inventories promote/fall back and remove/restore availability across providers including SystemOne without deleting configuration or reacting to failed/partial lists. New/replacement tier and pinless Low-classifier allocations use latest/custom pools with independent durable cursors; eligible concrete pins, the chosen Auto tier and known receipt resolutions survive alias promotion and restart. No extra inference/benchmark campaign is implied, and normal CI executes no inference.",
       "gates": [
@@ -4778,7 +4780,8 @@
         "DW-107",
         "DW-108",
         "DW-109",
-        "DW-119"
+        "DW-119",
+        "DW-094"
       ],
       "ownedOperations": [],
       "primaryRequirements": [
@@ -5534,6 +5537,40 @@
         "WORK-11",
         "WORK-12"
       ],
+      "capabilityCases": [],
+      "sourceEntryIds": [],
+      "workloads": [],
+      "pendingInputSchemas": [],
+      "commonAcceptance": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests."
+    },
+    {
+      "key": "watchers",
+      "id": "DW-094",
+      "type": "Feature",
+      "title": "Watch an owned background process and wake its session",
+      "operations": [
+        "watch.*"
+      ],
+      "dependsOnKeys": [
+        "process_tools"
+      ],
+      "acceptance": "watch.create launches through the process.execute service and answers before exit; list/inspect/cancel answer the watcher; the observed outcome reaches the owning session's input once as a host-only message, survives a dispatcher restart and is acknowledged only when a carrying turn completes; reviewer roles cannot launch or stop processes through a watcher.",
+      "gates": [
+        "G04",
+        "G10"
+      ],
+      "status": "Planned; implementation in progress (DW-94)",
+      "dependsOn": [
+        "DW-049"
+      ],
+      "ownedOperations": [
+        "watch.create",
+        "watch.list",
+        "watch.inspect",
+        "watch.cancel"
+      ],
+      "primaryRequirements": [],
+      "supportingRequirements": [],
       "capabilityCases": [],
       "sourceEntryIds": [],
       "workloads": [],
@@ -17735,6 +17772,62 @@
       "resultValueType": "EvalReportPage",
       "requestModes": [
         "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "watch.create",
+      "family": "watch",
+      "serviceOwner": "WatchService",
+      "primarySlice": "watchers",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "WatcherRecord",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "watch.list",
+      "family": "watch",
+      "serviceOwner": "WatchService",
+      "primarySlice": "watchers",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "WatcherPage",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "watch.inspect",
+      "family": "watch",
+      "serviceOwner": "WatchService",
+      "primarySlice": "watchers",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "WatcherRecord",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "watch.cancel",
+      "family": "watch",
+      "serviceOwner": "WatchService",
+      "primarySlice": "watchers",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "WatcherRecord",
+      "requestModes": [
+        "Command"
       ],
       "acceptanceStatus": "Planned; no production operation acceptance claimed"
     }

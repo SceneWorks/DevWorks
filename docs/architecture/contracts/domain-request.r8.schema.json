@@ -7410,6 +7410,60 @@
           ],
           "type": "object",
           "x-since": 6
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "watch.create",
+              "type": "string"
+            },
+            "process": {
+              "$ref": "#/$defs/ProcessSpec"
+            },
+            "tailBytes": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ByteLimit"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "process"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "watch.cancel",
+              "type": "string"
+            },
+            "stopProcess": {
+              "type": "boolean"
+            },
+            "watcherId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "watcherId",
+            "expectedRevision",
+            "stopProcess"
+          ],
+          "type": "object",
+          "x-since": 8
         }
       ]
     },
@@ -11509,6 +11563,62 @@
           ],
           "type": "object",
           "x-since": 6
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "watch.list",
+              "type": "string"
+            },
+            "page": {
+              "$ref": "#/$defs/PageRequest"
+            },
+            "sessionId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "states": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/List_WatcherState_0_128"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "page"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "watch.inspect",
+              "type": "string"
+            },
+            "watcherId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "watcherId"
+          ],
+          "type": "object",
+          "x-since": 8
         }
       ]
     },
@@ -13183,6 +13293,14 @@
     "List_TouchRef_0_128": {
       "items": {
         "$ref": "#/$defs/TouchRef"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_WatcherState_0_128": {
+      "items": {
+        "$ref": "#/$defs/WatcherState"
       },
       "maxItems": 128,
       "minItems": 0,
@@ -15740,6 +15858,15 @@
           "type": "object"
         }
       ]
+    },
+    "WatcherState": {
+      "enum": [
+        "Active",
+        "Stopping",
+        "Settled",
+        "Cancelled"
+      ],
+      "type": "string"
     },
     "WorkComment": {
       "additionalProperties": false,

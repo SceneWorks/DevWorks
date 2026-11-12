@@ -772,6 +772,18 @@ pub enum OperationResult {
     EvalsGrade { value: EvalReport },
     #[serde(rename = "evals.results")]
     EvalsResults { value: EvalReportPage },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "watch.create")]
+    WatchCreate { value: WatcherRecord },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "watch.list")]
+    WatchList { value: WatcherPage },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "watch.inspect")]
+    WatchInspect { value: WatcherRecord },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "watch.cancel")]
+    WatchCancel { value: WatcherRecord },
 }
 impl OperationResult {
     pub fn operation(&self) -> &'static str {
@@ -1149,6 +1161,10 @@ impl OperationResult {
             Self::McpServerSetClientAccess { .. } => "mcp_server.set_client_access",
             Self::EvalsGrade { .. } => "evals.grade",
             Self::EvalsResults { .. } => "evals.results",
+            Self::WatchCreate { .. } => "watch.create",
+            Self::WatchList { .. } => "watch.list",
+            Self::WatchInspect { .. } => "watch.inspect",
+            Self::WatchCancel { .. } => "watch.cancel",
         }
     }
 }
@@ -1524,6 +1540,10 @@ impl Check for OperationResult {
             Self::McpServerSetClientAccess { value } => value.check()?,
             Self::EvalsGrade { value } => value.check()?,
             Self::EvalsResults { value } => value.check()?,
+            Self::WatchCreate { value } => value.check()?,
+            Self::WatchList { value } => value.check()?,
+            Self::WatchInspect { value } => value.check()?,
+            Self::WatchCancel { value } => value.check()?,
         }
         crate::protocol::rules::result(
             self.operation(),
@@ -1742,6 +1762,18 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::RouterEmbeddingSpaces { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::WatchCreate { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::WatchList { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::WatchInspect { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::WatchCancel { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),

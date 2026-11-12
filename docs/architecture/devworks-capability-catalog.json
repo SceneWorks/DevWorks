@@ -762,6 +762,18 @@
       ],
       "effectAndAuthority": "Scoped recorded-session grading with immutable supplied measurement and bounded report reads; no inference, measurement activation or work/repository/Knowledge mutation",
       "status": "DW-71 deterministic walking-skeleton contract; remaining EVAL surface has separate tracked acceptance"
+    },
+    {
+      "family": "watch",
+      "owner": "WatchService",
+      "operations": [
+        "create",
+        "list",
+        "inspect",
+        "cancel"
+      ],
+      "effectAndAuthority": "Scoped watchers launch through process.execute authority and wake the owning session with a host-only message; reviewer roles cannot launch or stop processes",
+      "status": "DW-94 owned-process walking skeleton; other sources, wakes and workspace UI have separate tracked acceptance"
     }
   ]
 }

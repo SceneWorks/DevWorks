@@ -19,6 +19,7 @@
     {"path":"crates/devworks-core/src/services/indexing","topics":["indexing","code-exploration","sdk-semantic"]},
     {"path":"crates/devworks-core/src/services/knowledge","topics":["knowledge","documents-retrieval"]},
     {"path":"crates/devworks-core/src/services/evals","topics":["evaluations"]},
+    {"path":"crates/devworks-core/src/services/watch","topics":["watchers","resources"]},
     {"path":"crates/devworks-core/src/services/packages","topics":["addons","sdk-start","sdk-manifest"]},
     {"path":"crates/devworks-core/src/services/browser","topics":["browser","resources"]},
     {"path":"crates/devworks-core/src/services/web","topics":["integrations","settings-Tools"]},

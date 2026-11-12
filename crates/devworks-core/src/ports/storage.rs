@@ -96,6 +96,7 @@ mod runs;
 mod schemas;
 mod sessions;
 mod usage;
+mod watchers;
 mod work;
 pub use agents::*;
 pub use artifacts::*;
@@ -123,6 +124,7 @@ pub use runs::*;
 pub use schemas::*;
 pub use sessions::*;
 pub use usage::*;
+pub use watchers::*;
 pub use work::*;
 
 // ---------------------------------------------------------------------------------------------
@@ -516,6 +518,7 @@ pub trait WriteTransaction {
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
     fn browser(&mut self) -> &mut dyn BrowserRepository;
     fn evals(&mut self) -> &mut dyn EvalRepository;
+    fn watchers(&mut self) -> &mut dyn WatcherRepository;
     fn help(&mut self) -> &mut dyn HelpRepository;
     fn instructions(&mut self) -> &mut dyn InstructionRepository;
     fn github(&mut self) -> &mut dyn GithubRepository;
@@ -573,6 +576,7 @@ pub trait ReadSnapshot {
     fn diagnostics(&self) -> &dyn DiagnosticRead;
     fn browser(&self) -> &dyn BrowserRead;
     fn evals(&self) -> &dyn EvalRead;
+    fn watchers(&self) -> &dyn WatcherRead;
     fn help(&self) -> &dyn HelpRead;
     fn instructions(&self) -> &dyn InstructionRead;
     fn github(&self) -> &dyn GithubRead;

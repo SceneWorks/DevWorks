@@ -1,0 +1,20 @@
+{
+  "schema": 50,
+  "policy": "dw94-watchers-v1",
+  "additionalTables": [
+    {
+      "table": "watchers",
+      "class": "watcher_ownership",
+      "disposition": "project_owner",
+      "purpose": "A watcher created in a project, its source binding and its observed outcome are deleted with that project; a watcher outside any project is never a candidate."
+    },
+    {
+      "table": "watcher_events",
+      "class": "watcher_ownership",
+      "disposition": "project_owner",
+      "purpose": "A watcher's delivery event (its host-only message body and acknowledgement state) follows its watcher's project."
+    }
+  ],
+  "readerFloor": 48,
+  "writerFloor": 50
+}

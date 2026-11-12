@@ -52,6 +52,7 @@ pub mod settings;
 pub mod skills;
 pub mod tasks;
 pub mod ui;
+pub mod watch;
 pub mod web;
 pub mod workflows;
 pub mod workspace;
@@ -108,6 +109,7 @@ pub enum OperationInput {
     RepositoryDocs(repository_docs::Input),
     McpServer(mcp_server::Input),
     Evals(evals::Input),
+    Watch(watch::Input),
 }
 impl OperationInput {
     pub fn operation(&self) -> &'static str {
@@ -161,6 +163,7 @@ impl OperationInput {
             Self::RepositoryDocs(i) => i.operation(),
             Self::McpServer(i) => i.operation(),
             Self::Evals(i) => i.operation(),
+            Self::Watch(i) => i.operation(),
         }
     }
     pub fn mode(&self) -> Mode {
@@ -214,6 +217,7 @@ impl OperationInput {
             Self::RepositoryDocs(i) => i.mode(),
             Self::McpServer(i) => i.mode(),
             Self::Evals(i) => i.mode(),
+            Self::Watch(i) => i.mode(),
         }
     }
 }

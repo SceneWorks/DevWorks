@@ -6,7 +6,7 @@ use crate::dispatch::{
 };
 use devworks_core::ports::storage::{OperationRecord, StorageError, WriteTransaction};
 use devworks_core::services::process::tools::{
-    CANCEL_CONSUMER, EFFECT_CONSUMER, EffectOutcome, ProcessToolService,
+    CANCEL_CONSUMER, EFFECT_CONSUMER, EffectOutcome, ProcessToolService, WATCH_CONSUMER,
 };
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ impl EffectExecutor for Effects {
     fn execute(&self, operation: OperationRecord) -> EffectFuture {
         let service = self.0.clone();
         Box::pin(async move {
-            match tokio::task::spawn_blocking(move || service.execute(&operation)).await {
+            match tokio::task::spawn_blocking(move || service.execute_detached(&operation)).await {
                 Ok(value) => outcome(value),
                 Err(_) => EffectResult::Unknown("process effect panicked".into()),
             }
@@ -72,5 +72,14 @@ pub fn consumer(service: Arc<ProcessToolService>) -> Consumer {
 pub fn cancel_consumer(service: Arc<ProcessToolService>) -> Consumer {
     let mut consumer = consumer(service);
     consumer.name = CANCEL_CONSUMER.into();
+    consumer
+}
+
+/// Watched processes run long by design (a dev server, a build). Their effect ends once the
+/// process is launched (a monitor thread records the outcome), so they hold a dispatcher worker
+/// only for the launch and never starve cancellation or other consumers.
+pub fn watch_consumer(service: Arc<ProcessToolService>) -> Consumer {
+    let mut consumer = consumer(service);
+    consumer.name = WATCH_CONSUMER.into();
     consumer
 }

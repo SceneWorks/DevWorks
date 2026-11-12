@@ -8,7 +8,7 @@
 //! to classify the selected effect (for example a force push and its target ref).
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
-use crate::operations::{OperationInput, git};
+use crate::operations::{OperationInput, git, watch};
 use crate::ports::AuthorityRequest;
 use crate::ports::storage::{
     ConfigScope, ConfigurationRead, GrantKind, PrincipalBinding, StorageError,
@@ -45,11 +45,13 @@ pub const UNVERIFIED_READ_FAMILIES: [&str; 4] = ["mcp", "addons", "database", "b
 /// Commands that run arbitrary native code with the desktop user's rights. Under Project scope
 /// they need a reviewed native grant, because no confined launcher is qualified; there is no
 /// fallback to Full.
-pub const NATIVE_EXECUTION: [&str; 17] = [
+pub const NATIVE_EXECUTION: [&str; 18] = [
     "git.worktree",
     "git.commit",
     "git.push",
     "process.execute",
+    // A process watcher launches through process.execute.
+    "watch.create",
     "process.install_project_dependencies",
     "containers.build",
     "containers.pull",
@@ -349,6 +351,17 @@ fn force_push_target(input: &OperationInput) -> Option<&str> {
     }
 }
 
+/// Whether the typed input is a watcher cancellation that also stops the watched process.
+fn stops_watched_process(input: &OperationInput) -> bool {
+    matches!(
+        input,
+        OperationInput::Watch(watch::Input::Cancel(watch::CancelInput {
+            stop_process: true,
+            ..
+        }))
+    )
+}
+
 /// Evaluates one request for a principal. `binding` is the principal's current host binding
 /// (required for every kind except Human and Host). Mandatory restrictions are evaluated first
 /// and hold under every profile.
@@ -515,13 +528,23 @@ pub fn registered_tool_visibility(
         return Verdict::Deny(DenialReason::OutOfProjectScope);
     }
     if let Some(selected) = &binding.tool_families
-        && !selected.iter().any(|f| f == fam)
+        && (!selected.iter().any(|f| f == fam)
+            // A watcher launches through the process tools: it needs that family too.
+            || (op == "watch.create" && !selected.iter().any(|f| f == "process")))
     {
         return Verdict::Deny(DenialReason::ToolNotSelected);
     }
     let default_selected = !matches!(fam, "desktop" | "browser");
     if kind == PrincipalKind::Agent
         && !policy.tool_selected(&format!("devworks/{op}"), default_selected)
+    {
+        return Verdict::Deny(DenialReason::ToolNotSelected);
+    }
+    // A watcher launches through process.execute: turning that tool off turns off launching
+    // through a watcher too.
+    if kind == PrincipalKind::Agent
+        && op == "watch.create"
+        && !policy.tool_selected("devworks/process.execute", true)
     {
         return Verdict::Deny(DenialReason::ToolNotSelected);
     }
@@ -535,7 +558,10 @@ pub fn registered_tool_visibility(
         }
     }
     if kind == PrincipalKind::Agent {
-        if fam == "process" && !policy.shell_tools {
+        // A process watcher launches and stops processes through the process tools.
+        if (fam == "process" || matches!(op, "watch.create" | "watch.cancel"))
+            && !policy.shell_tools
+        {
             return Verdict::Deny(DenialReason::ShellToolsDisabled);
         }
         // Each web tool has its own switch; no other web operation is allowed by them.
@@ -648,6 +674,17 @@ pub(crate) fn evaluate_with_owned_task(
     );
     if !matches!(visible, Verdict::Allow) {
         return visible;
+    }
+    // Stopping a watched process is a process cancellation: it needs what process.cancel needs.
+    if stops_watched_process(request.input)
+        && !matches!(kind, PrincipalKind::Human | PrincipalKind::Host)
+        && (binding
+            .and_then(|b| b.tool_families.as_ref())
+            .is_some_and(|selected| !selected.iter().any(|f| f == "process"))
+            || (kind == PrincipalKind::Agent
+                && !policy.tool_selected("devworks/process.cancel", true)))
+    {
+        return Verdict::Deny(DenialReason::ToolNotSelected);
     }
     if matches!(kind, PrincipalKind::Human | PrincipalKind::Host)
         || request.binding.mode != Mode::Command

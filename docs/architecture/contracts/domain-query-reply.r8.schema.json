@@ -11017,6 +11017,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_WatcherRecord_0_500": {
+      "items": {
+        "$ref": "#/$defs/WatcherRecord"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_WebRedirect_0_128": {
       "items": {
         "$ref": "#/$defs/WebRedirect"
@@ -17541,6 +17549,78 @@
           ],
           "type": "object",
           "x-since": 6
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "watch.create",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/WatcherRecord"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "watch.list",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/WatcherPage"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "watch.inspect",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/WatcherRecord"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "watch.cancel",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/WatcherRecord"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
         },
         {
           "additionalProperties": false,
@@ -26435,6 +26515,269 @@
           "type": "object"
         }
       ]
+    },
+    "WatchDeliveryState": {
+      "enum": [
+        "Pending",
+        "Delivered",
+        "Acknowledged"
+      ],
+      "type": "string"
+    },
+    "WatchEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "acknowledgedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "deliveredAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "state": {
+          "$ref": "#/$defs/WatchDeliveryState"
+        }
+      },
+      "required": [
+        "id",
+        "state",
+        "createdAtMs"
+      ],
+      "type": "object"
+    },
+    "WatchOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exitCode": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/WatchOutcomeKind"
+        },
+        "signal": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "WatchOutcomeKind": {
+      "enum": [
+        "Succeeded",
+        "Failed",
+        "Cancelled",
+        "TimedOut",
+        "Interrupted",
+        "Lost",
+        "Uncertain"
+      ],
+      "type": "string"
+    },
+    "WatchProcessSource": {
+      "additionalProperties": false,
+      "properties": {
+        "executableRef": {
+          "$ref": "#/$defs/Id"
+        },
+        "processId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "processId",
+        "executableRef"
+      ],
+      "type": "object"
+    },
+    "WatchSourceKind": {
+      "enum": [
+        "Process"
+      ],
+      "type": "string"
+    },
+    "WatcherPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "$ref": "#/$defs/List_WatcherRecord_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "WatcherRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "durationMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "elapsedMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WatchEvent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WatchOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputTail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputTruncated": {
+          "type": "boolean"
+        },
+        "process": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WatchProcessSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "projectId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "settledAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceKind": {
+          "$ref": "#/$defs/WatchSourceKind"
+        },
+        "state": {
+          "$ref": "#/$defs/WatcherState"
+        },
+        "stopRequested": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "state",
+        "sourceKind",
+        "sessionId",
+        "createdAtMs",
+        "elapsedMs",
+        "outputTruncated",
+        "stopRequested"
+      ],
+      "type": "object"
+    },
+    "WatcherState": {
+      "enum": [
+        "Active",
+        "Stopping",
+        "Settled",
+        "Cancelled"
+      ],
+      "type": "string"
     },
     "WebDocument": {
       "additionalProperties": false,

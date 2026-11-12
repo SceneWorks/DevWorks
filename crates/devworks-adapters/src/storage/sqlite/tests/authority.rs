@@ -2259,6 +2259,9 @@ impl WriteTransaction for Lying<'_> {
     fn evals(&mut self) -> &mut dyn EvalRepository {
         self.inner.evals()
     }
+    fn watchers(&mut self) -> &mut dyn WatcherRepository {
+        self.inner.watchers()
+    }
     fn conventions(&mut self) -> &mut dyn ConventionRepository {
         self.inner.conventions()
     }

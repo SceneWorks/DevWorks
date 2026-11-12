@@ -312,6 +312,8 @@ pub struct RuntimeConfig {
     pub providers: Option<crate::providers::driver::ProviderComposition>,
     /// Durable notification catch-up interval; focus and committed commands also wake it.
     pub notification_interval: Duration,
+    /// Time between watcher passes (settle observed outcomes, deliver pending events).
+    pub watch_interval: Duration,
     /// File-backed skills and role instructions (`skills.*`, `roles.*`). Absent: neither family
     /// is registered.
     pub instructions: Option<InstructionComposition>,
@@ -358,6 +360,7 @@ impl RuntimeConfig {
             native_notifications: None,
             providers: None,
             notification_interval: Duration::from_secs(5),
+            watch_interval: Duration::from_millis(250),
             instructions: None,
         }
     }
@@ -418,6 +421,8 @@ pub struct CollectionPass {
 struct Collector {
     trigger: Notify,
     observation_stop: Notify,
+    /// Wakes the watcher loop's wait between passes when the runtime stops.
+    watch_stop: Notify,
     stopping: AtomicBool,
     status: watch::Sender<Option<CollectionPass>>,
 }
@@ -426,6 +431,7 @@ impl Collector {
         self.stopping.store(true, Ordering::SeqCst);
         self.trigger.notify_one();
         self.observation_stop.notify_one();
+        self.watch_stop.notify_one();
     }
 }
 
@@ -480,6 +486,7 @@ pub struct Runtime {
     monitor: Arc<Monitor>,
     browser: Option<Arc<BrowserService>>,
     process_tools: Option<Arc<devworks_core::services::process::tools::ProcessToolService>>,
+    watchers: Option<Arc<crate::watch::WatchSupervisor>>,
     containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
     desktop: Option<Arc<devworks_core::services::desktop::DesktopService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
@@ -684,6 +691,24 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         use_cases = use_cases.with_process_tools(service.clone());
         consumers.push(crate::process_tools::consumer(service.clone()));
         consumers.push(crate::process_tools::cancel_consumer(service.clone()));
+    }
+    // Watchers launch through the process tools, so they are composed with them.
+    let watchers = process_tools.as_ref().map(|service| {
+        Arc::new(crate::watch::WatchSupervisor::new(
+            store.clone(),
+            ids.clone(),
+            Arc::new(devworks_core::services::watch::WatchService::new(
+                store.clone(),
+                service.clone(),
+                artifacts.clone(),
+                ids.clone(),
+                clock.clone(),
+            )),
+        ))
+    });
+    if let (Some(supervisor), Some(service)) = (&watchers, &process_tools) {
+        use_cases = use_cases.with_watchers(supervisor.service().clone());
+        consumers.push(crate::process_tools::watch_consumer(service.clone()));
     }
     if let Some(service) = &containers {
         use_cases = use_cases.with_containers(service.clone());
@@ -1196,6 +1221,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let collector = Arc::new(Collector {
         trigger: Notify::new(),
         observation_stop: Notify::new(),
+        watch_stop: Notify::new(),
         stopping: AtomicBool::new(false),
         status,
     });
@@ -1250,6 +1276,21 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 })
                 .await;
                 tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }));
+    }
+
+    if let Some(supervisor) = &watchers {
+        let (supervisor, stopping) = (supervisor.clone(), collector.clone());
+        let every = config.watch_interval;
+        tasks.push(tokio::spawn(async move {
+            while !stopping.stopping.load(Ordering::Acquire) {
+                tokio::select! {
+                    () = tokio::time::sleep(every) => {}
+                    () = stopping.watch_stop.notified() => break,
+                }
+                let pass = supervisor.clone();
+                let _ = tokio::task::spawn_blocking(move || pass.tick()).await;
             }
         }));
     }
@@ -1452,6 +1493,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         monitor,
         browser,
         process_tools,
+        watchers: watchers.clone(),
         containers,
         desktop,
         git,
@@ -1587,6 +1629,10 @@ impl Runtime {
 
     /// The process owner shared by the native UI, agent tools and its durable effect consumer.
     /// Typed completions supply the process ID after an accepted execute settles.
+    /// The watcher supervisor, composed with the process tools.
+    pub fn watchers(&self) -> Option<&Arc<crate::watch::WatchSupervisor>> {
+        self.watchers.as_ref()
+    }
     pub fn process_tools(
         &self,
     ) -> Option<&Arc<devworks_core::services::process::tools::ProcessToolService>> {

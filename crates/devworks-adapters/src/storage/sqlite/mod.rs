@@ -58,6 +58,7 @@ mod schemas;
 mod seed;
 mod sessions;
 mod usage;
+mod watchers;
 mod work;
 mod writer;
 

@@ -531,6 +531,15 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0049_instructions.sql"),
         rebuilds_tables: false,
     },
+    // Prior writers would neither carry nor acknowledge watcher events at turn boundaries; the
+    // new tables are invisible to prior readers.
+    Migration {
+        version: 50,
+        minimum_reader: 48,
+        minimum_writer: 50,
+        sql: include_str!("migrations/0050_watchers.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

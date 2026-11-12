@@ -349,6 +349,7 @@ impl ProcessTree for JobTree {
         Ok(TreeStatus {
             empty: self.empty,
             exit_code: self.exit_code,
+            signal: None,
         })
     }
     fn take_output(&mut self) -> Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)> {

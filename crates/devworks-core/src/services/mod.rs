@@ -38,6 +38,7 @@ pub mod runs;
 pub mod schemas;
 pub mod sessions;
 pub mod usage;
+pub mod watch;
 pub mod web;
 pub mod work;
 
@@ -365,6 +366,14 @@ impl UseCases {
             Some(service.clone()),
         );
         self.register("process.request_system_install", None, Some(service));
+        self
+    }
+    /// Registers the watcher operations once their process consumer and tick are composed.
+    pub fn with_watchers(mut self, service: Arc<watch::WatchService>) -> Self {
+        self.register("watch.create", None, Some(service.clone()));
+        self.register("watch.cancel", None, Some(service.clone()));
+        self.register("watch.list", Some(service.clone()), None);
+        self.register("watch.inspect", Some(service), None);
         self
     }
     /// Registers the one selected-container domain owner when its effect consumer is composed.

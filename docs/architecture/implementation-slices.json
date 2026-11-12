@@ -1731,6 +1731,24 @@
         "next_work.claim_project_queue",
         "next_work.claim_feature_task"
       ]
+    },
+    {
+      "key": "watchers",
+      "id": "DW-094",
+      "type": "Feature",
+      "title": "Watch an owned background process and wake its session",
+      "operations": [
+        "watch.*"
+      ],
+      "dependsOnKeys": [
+        "process_tools"
+      ],
+      "acceptance": "watch.create launches through the process.execute service and answers before exit; list/inspect/cancel answer the watcher; the observed outcome reaches the owning session's input once as a host-only message, survives a dispatcher restart and is acknowledged only when a carrying turn completes; reviewer roles cannot launch or stop processes through a watcher.",
+      "gates": [
+        "G04",
+        "G10"
+      ],
+      "status": "Planned; implementation in progress (DW-94)"
     }
   ],
   "retiredSlices": [
@@ -1808,7 +1826,8 @@
       "session_auto_routing",
       "model_latest",
       "work_item_metadata",
-      "embedding_spaces"
+      "embedding_spaces",
+      "watchers"
     ],
     "eval_acceptance": [
       "eval_recorded",

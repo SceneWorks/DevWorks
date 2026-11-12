@@ -229,6 +229,7 @@ mod store;
 mod tool_turn;
 pub use tool_turn::ResolvedToolCall;
 pub mod usage;
+pub mod watch;
 
 pub use dispatch::{
     AsyncDelivery, AsyncDeliveryHandler, AsyncFuture, AsyncOutcome, Consumer, Delivery,

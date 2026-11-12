@@ -149,6 +149,8 @@ pub enum StopOutcome {
     Reaped {
         graceful: bool,
         exit_code: Option<i32>,
+        /// The terminating signal where the platform reported one when this boot reaped it.
+        signal: Option<i32>,
     },
     /// It could not be verified stopped within the bound; recorded `Uncertain`.
     Uncertain(String),
@@ -594,6 +596,7 @@ impl ProcessSupervisor {
                 Ok(Some(StopOutcome::Reaped {
                     graceful: true,
                     exit_code: s.exit_code,
+                    signal: s.signal,
                 }))
             }
             Ok(_) => Ok(None),
@@ -714,6 +717,7 @@ impl ProcessSupervisor {
                 StopOutcome::Reaped {
                     graceful,
                     exit_code: s.exit_code,
+                    signal: s.signal,
                 },
                 self.settle(
                     &mut record,
@@ -965,6 +969,7 @@ impl ProcessSupervisor {
             ProcessPhase::Reaped | ProcessPhase::Failed => StopOutcome::Reaped {
                 graceful: true,
                 exit_code: record.exit_code.map(|c| c as i32),
+                signal: None,
             },
             _ => StopOutcome::Uncertain(record.detail.unwrap_or_default()),
         })

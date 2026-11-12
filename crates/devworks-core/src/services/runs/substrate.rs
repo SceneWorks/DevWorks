@@ -1293,7 +1293,12 @@ impl ControlService {
             started_at_ms: tx.now_ms(),
         };
         match tx.runs().insert_turn(&turn) {
-            Ok(()) => Ok(Ok(turn)),
+            Ok(()) => {
+                // The turn carries every watcher event already delivered to the session
+                // (including one an ended turn carried but never completed).
+                tx.watchers().carry_watch_events(session, &turn.turn_id)?;
+                Ok(Ok(turn))
+            }
             Err(StorageError::Duplicate { .. }) => Ok(Err(Fenced::LeaseLost(
                 "another turn of this session is in flight".into(),
             ))),
@@ -1301,10 +1306,22 @@ impl ControlService {
         }
     }
 
-    /// Ends the session's turn `turn` (a stale turn identity is refused).
-    pub fn end_turn(&self, tx: &mut dyn WriteTransaction, session: &Id, turn: &Id) -> Gate<()> {
+    /// Ends the session's turn `turn` (a stale turn identity is refused). A `completed` turn
+    /// acknowledges the watcher events it carried; any other end leaves them for the next turn.
+    pub fn end_turn(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        session: &Id,
+        turn: &Id,
+        completed: bool,
+    ) -> Gate<()> {
         match tx.runs().delete_turn(session, turn) {
-            Ok(()) => Ok(Ok(())),
+            Ok(()) => {
+                let now = tx.now_ms();
+                tx.watchers()
+                    .release_watch_events(session, turn, completed, now)?;
+                Ok(Ok(()))
+            }
             Err(StorageError::LeaseLost { .. }) => {
                 Ok(Err(Fenced::LeaseLost("the turn already ended".into())))
             }
