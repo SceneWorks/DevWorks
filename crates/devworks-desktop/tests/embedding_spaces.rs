@@ -92,6 +92,17 @@ fn setup_qualify_reopen(paid: bool, lose_acks: bool) {
         settle(&mut h);
     }
     let lossy = if lose_acks {
+        // Close the first shell as the app does. Its periodic memory save can hold the candidate
+        // command from while it was in flight; a bare drop leaves that stale entry, and the next
+        // shell would resubmit it (into the lost acknowledgments) instead of sending qualify.
+        h.state_mut().on_exit();
+        assert!(
+            devworks_desktop::memory::Memory::load(&root.memory())
+                .pending
+                .commands
+                .is_empty(),
+            "the closed shell leaves no command to resubmit"
+        );
         drop(h);
         let lossy = LoseAcks::over(backend.clone(), "router.configure", 4);
         h = harness(
