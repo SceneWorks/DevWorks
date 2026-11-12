@@ -35,6 +35,8 @@ struct RecordedRemote(
     Option<Arc<super::TestClock>>,
     AtomicUsize,
     Mutex<Vec<bool>>,
+    /// Disconnect calls.
+    AtomicUsize,
 );
 impl McpRemote for RecordedRemote {
     fn connect(
@@ -93,6 +95,7 @@ impl McpRemote for RecordedRemote {
     }
 
     fn disconnect(&self, _server_id: &Id) -> Result<(), McpRemoteFault> {
+        self.5.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -641,6 +644,7 @@ fn failed_connection_persists_a_safe_diagnostic_for_settings() {
                 None,
                 AtomicUsize::new(0),
                 Mutex::default(),
+                AtomicUsize::new(0),
             )),
             Arc::new(JsonSchemaValidator),
             artifacts(&h),
@@ -1216,6 +1220,7 @@ fn resource_query_stops_when_deadline_expires_during_a_remote_read() {
         Some(h.clock.clone()),
         AtomicUsize::new(0),
         Mutex::default(),
+        AtomicUsize::new(0),
     ));
     service
         .install_remote(
@@ -2261,4 +2266,208 @@ fn saved_configuration_is_shown_to_humans_at_revision_eight_and_a_new_token_keep
     };
     assert!(moved.catalog_revision.get() > published.catalog_revision.get());
     assert!(moved.selected_tool_ids.0.is_empty());
+}
+
+#[test]
+fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is_gone() {
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
+        tx.actors()
+            .register(&ActorId(id("mcp-agent")), PrincipalKind::Agent, "MCP agent")
+    })
+    .unwrap();
+    bind_agent(&store, None);
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    let remote = Arc::new(RecordedRemote::default());
+    service
+        .install_remote(
+            store.clone(),
+            remote.clone(),
+            Arc::new(JsonSchemaValidator),
+            artifacts(&h),
+        )
+        .unwrap();
+    let cases = UseCases::new().with_mcp(service.clone());
+    let (server, _) = discovered_server(&h, &store, &cases, &service);
+    let offered = || {
+        read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+            service.selected_tool_materials(&context(&store), snapshot)
+        })
+        .unwrap()
+        .into_iter()
+        .map(|material| material.wire_name)
+        .collect::<Vec<_>>()
+    };
+    // Discovery selected the read-only hinted tool, and it is offered.
+    let selection = servers(&h, &store, &cases)[0].selected_tool_ids.0.clone();
+    assert_eq!(selection.len(), 1);
+    assert_eq!(offered(), ["lookup"]);
+    let revision = |h: &Harness| servers(h, &store, &cases)[0].revision.get().to_string();
+
+    // Disabling stops offering its tools at once and closes the session through the queue.
+    let DomainDecision::Accepted { operation_id } = command(
+        &h,
+        &store,
+        &cases,
+        "lifecycle-disable",
+        "mcp.disable",
+        json!({"scope":{"kind":"Workspace"},"serverId":server,"expectedRevision":revision(&h)}),
+    ) else {
+        panic!("disable was not accepted");
+    };
+    let disabled = servers(&h, &store, &cases).remove(0);
+    assert_eq!(disabled.disabled, Some(true));
+    assert!(matches!(
+        disabled.state,
+        devworks_core::protocol::records::ItemState::Disabled
+    ));
+    assert_eq!(disabled.selected_tool_ids.0, selection);
+    assert!(offered().is_empty());
+    assert_eq!(remote.5.load(Ordering::SeqCst), 0);
+    let McpEffectOutcome::Completed(record) = service.execute(&dispatched(&store, &operation_id))
+    else {
+        panic!("disconnect did not complete");
+    };
+    assert_eq!(record["disabled"], json!(true));
+    assert_eq!(remote.5.load(Ordering::SeqCst), 1);
+
+    // An agent cannot enable a server a human disabled.
+    let agent = HostIngress::new(&*store).context(
+        ActorId(id("mcp-agent")),
+        PrincipalKind::Agent,
+        id("mcp-agent-invocation"),
+        id("mcp-agent-ingress"),
+        Counter::new(store.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    let authority = HostAuthority {
+        store: &*store,
+        clock: &*h.clock,
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*store,
+        ids: &*h.ids,
+    };
+    let frame = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":8,
+        "requestKey":"lifecycle-agent-connect","body":{"kind":"mcp.connect",
+        "scope":{"kind":"Workspace"},"serverId":server,"expectedRevision":revision(&h)}});
+    match cases
+        .command(
+            &gateway,
+            &agent,
+            "mcp.connect",
+            frame.to_string().as_bytes(),
+        )
+        .unwrap()
+    {
+        CommandReply::Recorded { receipt, .. } => assert!(
+            matches!(&receipt.decision, DomainDecision::Refused { fault }
+                if fault.code == devworks_core::protocol::DomainErrorCode::PermissionDenied),
+            "{:?}",
+            receipt.decision
+        ),
+        CommandReply::Rejected { .. } => {}
+        other => panic!("unexpected agent connect reply: {other:?}"),
+    }
+    assert_eq!(servers(&h, &store, &cases)[0].disabled, Some(true));
+
+    // A human connect enables it again and reconnects with the prior selection.
+    let DomainDecision::Accepted { operation_id } = command(
+        &h,
+        &store,
+        &cases,
+        "lifecycle-enable",
+        "mcp.connect",
+        json!({"scope":{"kind":"Workspace"},"serverId":server,"expectedRevision":revision(&h)}),
+    ) else {
+        panic!("enable was not accepted");
+    };
+    assert_eq!(servers(&h, &store, &cases)[0].disabled, None);
+    let connects = remote.0.load(Ordering::SeqCst);
+    assert!(matches!(
+        service.execute(&dispatched(&store, &operation_id)),
+        McpEffectOutcome::Completed(_)
+    ));
+    assert_eq!(remote.0.load(Ordering::SeqCst), connects + 1);
+    let enabled = servers(&h, &store, &cases).remove(0);
+    assert_eq!(enabled.selected_tool_ids.0, selection);
+    assert_eq!(offered(), ["lookup"]);
+    // A disable whose server a human enabled again before its effect ran leaves the new
+    // session open.
+    let DomainDecision::Accepted { operation_id: late } = command(
+        &h,
+        &store,
+        &cases,
+        "lifecycle-disable-late",
+        "mcp.disable",
+        json!({"scope":{"kind":"Workspace"},"serverId":server,"expectedRevision":revision(&h)}),
+    ) else {
+        panic!("second disable was not accepted");
+    };
+    let DomainDecision::Accepted {
+        operation_id: reenable,
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "lifecycle-enable-again",
+        "mcp.connect",
+        json!({"scope":{"kind":"Workspace"},"serverId":server,"expectedRevision":revision(&h)}),
+    )
+    else {
+        panic!("second enable was not accepted");
+    };
+    let disconnects = remote.5.load(Ordering::SeqCst);
+    assert!(matches!(
+        service.execute(&dispatched(&store, &late)),
+        McpEffectOutcome::Completed(_)
+    ));
+    assert_eq!(remote.5.load(Ordering::SeqCst), disconnects);
+    assert!(matches!(
+        service.execute(&dispatched(&store, &reenable)),
+        McpEffectOutcome::Completed(_)
+    ));
+    assert_eq!(offered(), ["lookup"]);
+
+    // Removing deletes the server, stops offering its tools and closes the session.
+    let DomainDecision::Accepted { operation_id } = command(
+        &h,
+        &store,
+        &cases,
+        "lifecycle-remove",
+        "mcp.remove",
+        json!({"scope":{"kind":"Workspace"},"serverId":server,"expectedRevision":revision(&h)}),
+    ) else {
+        panic!("remove was not accepted");
+    };
+    assert!(servers(&h, &store, &cases).is_empty());
+    assert!(offered().is_empty());
+    let disconnects = remote.5.load(Ordering::SeqCst);
+    let McpEffectOutcome::Completed(record) = service.execute(&dispatched(&store, &operation_id))
+    else {
+        panic!("removal disconnect did not complete");
+    };
+    assert_eq!(record["id"], json!(server));
+    assert_eq!(remote.5.load(Ordering::SeqCst), disconnects + 1);
+    // A removed server's saved credential is no longer referenced.
+    let references = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+        devworks_core::services::mcp::credential_references(snapshot)
+    })
+    .unwrap();
+    assert!(references.is_empty());
+    // A second removal finds nothing.
+    let gone = command(
+        &h,
+        &store,
+        &cases,
+        "lifecycle-remove-again",
+        "mcp.remove",
+        json!({"scope":{"kind":"Workspace"},"serverId":server,"expectedRevision":"1"}),
+    );
+    assert!(matches!(gone, DomainDecision::Refused { .. }), "{gone:?}");
 }

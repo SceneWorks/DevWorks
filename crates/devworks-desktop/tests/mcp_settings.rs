@@ -335,3 +335,67 @@ fn settings_shows_a_saved_server_renames_it_in_place_and_removes_its_token() {
     .expect("saved MCP credential references");
     assert!(references.is_empty());
 }
+
+#[test]
+fn settings_disables_enables_and_removes_a_server_and_deletes_its_token() {
+    let _case = native_runtime_case();
+    let root = Root::new("mcp-settings-lifecycle");
+    let mut configuration = config(&root.0);
+    let secrets = Arc::new(SessionSecrets::new());
+    configuration.secrets = Some(secrets.clone());
+    let engine = Engine::start(configuration).expect("desktop runtime boots");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1800.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, Category::Tools.label());
+    settle(&mut h);
+    type_into(&mut h, "MCP server name", "Lifecycle server");
+    // A closed loopback port: connecting fails locally without leaving this machine.
+    type_into(&mut h, "MCP HTTPS endpoint", "https://127.0.0.1:9/mcp");
+    h.get_by_role_and_label(Role::PasswordInput, "New MCP bearer token")
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::PasswordInput, "New MCP bearer token")
+        .type_text("mcp-test-token");
+    h.step();
+    click(&mut h, Role::Button, "Add server");
+    settle(&mut h);
+    assert_eq!(secrets.len(), 1);
+    let idle = |shell: &devworks_desktop::shell::Shell| {
+        !shell.settings.mcp.busy && shell.settings.mcp.pending_operation.is_none()
+    };
+
+    // Disable: the server shows it was disabled by the human and offers Enable.
+    click(&mut h, Role::Button, "Disable");
+    step_until(&mut h, "the disconnect settles", idle);
+    assert_eq!(h.state().settings.mcp.servers[0].disabled, Some(true));
+    assert!(has_text(
+        &h,
+        "Status: Disabled by you · Transport: http · Catalog revision: 1"
+    ));
+    assert!(h.query_by_role_and_label(Role::Button, "Disable").is_none());
+
+    // Enable connects it again; the unreachable endpoint fails, but it is no longer disabled.
+    click(&mut h, Role::Button, "Enable");
+    step_until(&mut h, "the reconnect settles", idle);
+    assert_eq!(h.state().settings.mcp.servers[0].disabled, None);
+    assert!(h.query_by_role_and_label(Role::Button, "Disable").is_some());
+
+    // Remove asks once more, then deletes the server and its stored token.
+    click(&mut h, Role::Button, "Remove server");
+    assert_eq!(h.state().settings.mcp.servers.len(), 1);
+    click(&mut h, Role::Button, "Confirm remove");
+    step_until(&mut h, "the removal settles", |shell| {
+        idle(shell) && shell.settings.mcp.servers.is_empty()
+    });
+    assert!(h.state().settings.mcp.servers.is_empty());
+    assert!(h.state().settings.mcp.selected.is_none());
+    assert_eq!(secrets.len(), 0);
+    let references = read_snapshot(
+        &**engine.host().runtime().store(),
+        &ReadOptions::default(),
+        credential_references,
+    )
+    .expect("saved MCP credential references");
+    assert!(references.is_empty());
+}

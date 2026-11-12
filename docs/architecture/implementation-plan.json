@@ -11,25 +11,25 @@
   ],
   "sourceSha256": {
     "implementation-slices.json": "c515967038575693f979b65cccdb37e86a7f00115adec842c1184b61fbc51949",
-    "devworks-capability-catalog.json": "5fc5d7da3c910be05ea893710603b6c731b9236b33b6365864df1a57bffc4d72",
+    "devworks-capability-catalog.json": "181208735ecadfa5e918392bc54a230e9482cfdf199e7950b8016ced4ab58444",
     "devworks-requirements-traceability.json": "fdf6d27d17f61c1a41ea87d686314d315b9ed0099e185b2f095f61df9e0aa660",
     "codegraph-capability-inventory.json": "54da948de48de4a7d00353ae14d7464feac80cca9bdab6d2a6bb2679caae2c09",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "ed41c56bd7f8881cebe19f8a5123c8d53d321a80376a48384c05d2fd4ec7bc8f",
+    "contracts/family-coverage.json": "3872b35cb48355e3541da031d6c42f05c6ec50762ebe5a378c347a5f163b8ccc",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "7adfb3650fbc6bde7d6a580464ba32015b47edc121a52dfab88ac052b3e46949"
   },
   "counts": {
     "slices": 80,
     "operationFamilies": 50,
-    "operations": 373,
+    "operations": 375,
     "requirements": 378,
     "requirementsByStatus": {
       "Confirmed": 231,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 373,
+    "inputSchemaCandidates": 375,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -3753,6 +3753,8 @@
         "mcp.servers",
         "mcp.configure",
         "mcp.connect",
+        "mcp.disable",
+        "mcp.remove",
         "mcp.discover",
         "mcp.select_tools",
         "mcp.resources",
@@ -16979,6 +16981,34 @@
     },
     {
       "operation": "mcp.connect",
+      "family": "mcp",
+      "serviceOwner": "McpClient",
+      "primarySlice": "mcp",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "McpServer",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "mcp.disable",
+      "family": "mcp",
+      "serviceOwner": "McpClient",
+      "primarySlice": "mcp",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "McpServer",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "mcp.remove",
       "family": "mcp",
       "serviceOwner": "McpClient",
       "primarySlice": "mcp",

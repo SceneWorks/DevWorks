@@ -2537,6 +2537,17 @@ impl Shell {
                         self.settings.mcp.message = Some(message);
                         self.settings.mcp.error = None;
                         let reconnect = self.settings.mcp.reconnect.take();
+                        // A removed server's tokens are no longer referenced once the removal
+                        // is saved, whether or not its session has closed yet.
+                        if let Some(handles) = self.settings.mcp.removing.take() {
+                            if self.settings.mcp.pending_server.as_ref()
+                                == self.settings.mcp.selected.as_ref()
+                            {
+                                self.settings.mcp.selected = None;
+                                self.settings.mcp.capabilities.clear();
+                            }
+                            self.release_mcp_credentials(handles);
+                        }
                         if let Some(server) = &configured {
                             self.release_dropped_mcp_credentials(server);
                             self.settings.mcp.saved(server);
@@ -2557,6 +2568,7 @@ impl Shell {
                     }
                     Err(error) => {
                         self.settings.mcp.reconnect = None;
+                        self.settings.mcp.removing = None;
                         self.settings.mcp.pending_server = None;
                         self.settings.mcp.pending_operation = None;
                         self.settings.mcp.error = Some(error.describe());
@@ -3417,6 +3429,11 @@ impl Shell {
             .into_iter()
             .filter(|handle| !kept.contains(handle))
             .collect();
+        self.release_mcp_credentials(dropped);
+    }
+
+    /// Delete the stored secrets behind MCP handles no saved server references any more.
+    fn release_mcp_credentials(&mut self, dropped: Vec<Id>) {
         if dropped.is_empty() {
             return;
         }
@@ -3449,6 +3466,21 @@ impl Shell {
                         None,
                         Some(id),
                     ),
+                    McpAction::Disable(id, revision) => (
+                        "mcp.disable",
+                        serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string()}),
+                        None,
+                        Some(id),
+                    ),
+                    McpAction::Remove(id, revision, handles) => {
+                        self.settings.mcp.removing = Some(handles);
+                        (
+                            "mcp.remove",
+                            serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string()}),
+                            None,
+                            Some(id),
+                        )
+                    }
                     McpAction::Discover(id, revision) => (
                         "mcp.discover",
                         serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedCatalogRevision":revision.to_string()}),
@@ -3491,6 +3523,7 @@ impl Shell {
                 if !submitted {
                     self.settings.mcp.busy = false;
                     self.settings.mcp.reconnect = None;
+                    self.settings.mcp.removing = None;
                     self.settings.mcp.error = Some("MCP command could not be submitted.".into());
                 } else {
                     self.settings.mcp.pending_server = pending_server;

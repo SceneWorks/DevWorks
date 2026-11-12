@@ -660,6 +660,12 @@ pub enum OperationResult {
     McpConfigure { value: McpServer },
     #[serde(rename = "mcp.connect")]
     McpConnect { value: McpServer },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "mcp.disable")]
+    McpDisable { value: McpServer },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "mcp.remove")]
+    McpRemove { value: McpServer },
     #[serde(rename = "mcp.discover")]
     McpDiscover { value: Page<McpCapability> },
     #[serde(rename = "mcp.select_tools")]
@@ -1105,6 +1111,8 @@ impl OperationResult {
             Self::McpServers { .. } => "mcp.servers",
             Self::McpConfigure { .. } => "mcp.configure",
             Self::McpConnect { .. } => "mcp.connect",
+            Self::McpDisable { .. } => "mcp.disable",
+            Self::McpRemove { .. } => "mcp.remove",
             Self::McpDiscover { .. } => "mcp.discover",
             Self::McpSelectTools { .. } => "mcp.select_tools",
             Self::McpResources { .. } => "mcp.resources",
@@ -1484,6 +1492,8 @@ impl Check for OperationResult {
             Self::McpServers { value } => value.check()?,
             Self::McpConfigure { value } => value.check()?,
             Self::McpConnect { value } => value.check()?,
+            Self::McpDisable { value } => value.check()?,
+            Self::McpRemove { value } => value.check()?,
             Self::McpDiscover { value } => value.check()?,
             Self::McpSelectTools { value } => value.check()?,
             Self::McpResources { value } => value.check()?,
@@ -1703,6 +1713,8 @@ impl Revisioned for OperationResult {
             Self::McpServers { value } => value.retain_revision(revision),
             Self::McpConfigure { value } => value.retain_revision(revision),
             Self::McpConnect { value } => value.retain_revision(revision),
+            Self::McpDisable { value } => value.retain_revision(revision),
+            Self::McpRemove { value } => value.retain_revision(revision),
             Self::McpSelectTools { value } => value.retain_revision(revision),
             Self::AddonsCatalog { value } => value.retain_revision(revision),
             Self::AddonsInstall { value } => value.retain_revision(revision),
@@ -1762,6 +1774,12 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::RouterEmbeddingSpaces { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::McpDisable { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::McpRemove { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::WatchCreate { .. } if revision < 8 => {

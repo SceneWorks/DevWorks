@@ -226,9 +226,10 @@ pub fn mcp_command_status(
     Failure,
 > {
     let server = |result| match result {
-        OperationResult::McpConfigure { value } | OperationResult::McpSelectTools { value } => {
-            Some(value)
-        }
+        OperationResult::McpConfigure { value }
+        | OperationResult::McpSelectTools { value }
+        | OperationResult::McpDisable { value } => Some(value),
+        // A removed server no longer exists; there is nothing to select or refill.
         _ => None,
     };
     match outcome.map_err(gateway)? {
