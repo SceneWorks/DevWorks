@@ -5910,6 +5910,38 @@
       ],
       "type": "string"
     },
+    "EnvironmentEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "credentialRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "EvalCoverage": {
       "additionalProperties": false,
       "properties": {
@@ -10105,6 +10137,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_EnvironmentEntry_0_128": {
+      "items": {
+        "$ref": "#/$defs/EnvironmentEntry"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_EvalDeterministicCheck_1_128": {
       "items": {
         "$ref": "#/$defs/EvalDeterministicCheck"
@@ -11417,18 +11457,16 @@
         "catalogRevision": {
           "$ref": "#/$defs/Revision"
         },
+        "configuration": {
+          "$ref": "#/$defs/McpTransport",
+          "x-since": 8
+        },
         "id": {
           "$ref": "#/$defs/Id"
         },
         "lastFailure": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To4096"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 8
         },
         "name": {
           "$ref": "#/$defs/Text1To256"
@@ -11463,6 +11501,54 @@
         "LoopbackHttp"
       ],
       "type": "string"
+    },
+    "McpTransport": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Stdio",
+              "type": "string"
+            },
+            "process": {
+              "$ref": "#/$defs/ProcessSpec"
+            }
+          },
+          "required": [
+            "kind",
+            "process"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "credentialRef": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "endpoint": {
+              "$ref": "#/$defs/Url"
+            },
+            "kind": {
+              "const": "Http",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "endpoint"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "MergeObservation": {
       "enum": [
@@ -14483,6 +14569,42 @@
         "state",
         "ownerId",
         "truncated"
+      ],
+      "type": "object"
+    },
+    "ProcessSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "$ref": "#/$defs/List_Text1To4096_0_128"
+        },
+        "environment": {
+          "$ref": "#/$defs/List_EnvironmentEntry_0_128"
+        },
+        "executableRef": {
+          "$ref": "#/$defs/Id"
+        },
+        "outputLimitBytes": {
+          "$ref": "#/$defs/Counter"
+        },
+        "profile": {
+          "$ref": "#/$defs/ToolProfile"
+        },
+        "timeoutMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "workingDirectory": {
+          "$ref": "#/$defs/RegisteredPath"
+        }
+      },
+      "required": [
+        "executableRef",
+        "args",
+        "workingDirectory",
+        "environment",
+        "profile",
+        "timeoutMs",
+        "outputLimitBytes"
       ],
       "type": "object"
     },
@@ -18390,6 +18512,15 @@
           "type": "object"
         }
       ]
+    },
+    "ToolProfile": {
+      "enum": [
+        "VerifiedRead",
+        "Full",
+        "Project",
+        "Confined"
+      ],
+      "type": "string"
     },
     "TouchRef": {
       "additionalProperties": false,

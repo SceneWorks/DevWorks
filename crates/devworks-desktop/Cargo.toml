@@ -37,6 +37,8 @@ tokio = { version = "=1.54.1", default-features = false, features = ["net", "rt"
 libc = "=0.2.191"
 
 [dev-dependencies]
+# Seeds empty test data roots from one migrated store per test binary (test builds only).
+devworks-adapters = { path = "../devworks-adapters", features = ["test-support"] }
 egui_kittest = "=0.37.0"
 # Seeds a work root the desktop does not create yet (the close-lifecycle test).
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache"] }

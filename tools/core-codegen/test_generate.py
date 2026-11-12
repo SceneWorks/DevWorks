@@ -14,6 +14,10 @@ generate = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(generate)
 
 
+
+MCP = ('mcp.servers', 'mcp.configure', 'mcp.connect', 'mcp.discover', 'mcp.select_tools',
+       'mcp.resources', 'mcp.prompts', 'mcp.capabilities')
+
 class SchemaRevisionRules(unittest.TestCase):
     def setUp(self):
         self.types = copy.deepcopy(generate.TYPES)
@@ -83,8 +87,10 @@ class SchemaRevisionRules(unittest.TestCase):
             'schemas.configure', 'database.configure_sensitive_columns',
             'projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
             'projects.purge_status', 'history.command_receipt', 'agents.post', 'agents.receive', 'agents.ack',
-            'agents.history', 'agents.events', 'skills.resources',
+            'agents.history', 'agents.events', 'skills.resources', *MCP,
             'watch.create', 'watch.list', 'watch.inspect', 'watch.cancel'})
+        for name in MCP:
+            self.assertEqual(carried[name], {8})
         for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):
             self.assertEqual(carried[name], {7})
         for name in ('watch.create', 'watch.list', 'watch.inspect', 'watch.cancel'):

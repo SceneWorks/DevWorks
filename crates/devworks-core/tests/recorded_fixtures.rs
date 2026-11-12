@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1957), 1957);
+    assert_eq!(run("domain-fixtures.json", 1977), 1977);
 }
 
 #[test]
@@ -446,8 +446,9 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // DW83 adds four revision-6 project purge bindings and history.command_receipt
     // at revision 6: five additional recorded native admissions.
     // Native accessibility targeting adds five selected revision-3 admissions.
-    // skills.resources revision 3 (resource paths) adds one.
-    assert_eq!(admitted.len(), 617);
+    // skills.resources revision 3 (resource paths) adds one; outgoing MCP adds revision 8
+    // of its eight operations; the four watch operations arrive at revision 8.
+    assert_eq!(admitted.len(), 625);
 }
 
 #[test]

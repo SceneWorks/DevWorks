@@ -12,6 +12,11 @@ on:
 permissions:
   contents: read
 
+# Matches ci.yml: rust-cache hashes every CARGO* variable into the cache key.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   linux:
     if: inputs.target != 'windows'
@@ -29,6 +34,7 @@ jobs:
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
         with:
           shared-key: test-desktop
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Exercise AT-SPI target on X11
         run: |
           dbus-run-session -- xvfb-run -a env NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge \
@@ -60,6 +66,7 @@ jobs:
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
         with:
           shared-key: test-desktop
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Exercise UIA target on a disposable WinForms window
         shell: pwsh
         run: cargo test -p devworks-adapters --test desktop_accessibility_qualification --locked -- --ignored --nocapture

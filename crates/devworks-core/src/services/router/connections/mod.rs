@@ -849,6 +849,22 @@ impl ConnectionService {
         )
     }
 
+    /// Delete the stored secrets behind MCP bearer handles that a saved server referenced and no
+    /// saved server references any more, such as a token a human removed or replaced. Intake
+    /// leaves an MCP handle staged after it is saved, so the release clears that mark first;
+    /// other handles are left alone.
+    pub fn release_mcp_credentials(&self, handles: &[Id]) {
+        let handles: Vec<Id> = handles
+            .iter()
+            .filter(|handle| handle.as_str().starts_with("mcp-"))
+            .cloned()
+            .collect();
+        for handle in &handles {
+            self.unstage(handle);
+        }
+        self.delete_unreferenced(&handles);
+    }
+
     /// Writes `credential` under a new handle, registered as staged first so a concurrent
     /// reconcile never deletes it before it is published.
     fn write_handle(

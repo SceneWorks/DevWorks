@@ -17,7 +17,8 @@ tokio = { version = "=1.54.1", default-features = false, features = ["sync", "ti
 
 # Integration tests compose the real SQLite adapter (STORE-11).
 [dev-dependencies]
-devworks-adapters = { path = "../devworks-adapters" }
+# test-support: seed each test's data root with a store migrated once per test binary.
+devworks-adapters = { path = "../devworks-adapters", features = ["test-support"] }
 # Signs the fixture package bundles the package tests install.
 ed25519-dalek = "=2.2.0"
 # Seeds rows the engine has no port for yet (projects and work items owning root-scoped work).

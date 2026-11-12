@@ -7066,7 +7066,7 @@ pub(super) static CATALOG: [OperationDescriptor; 373] = [
         result_type: "Page<McpServer>",
         result_schema: schema_of::<Page<McpServer>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(8)],
     },
     OperationDescriptor {
         name: "mcp.configure",
@@ -7088,7 +7088,7 @@ pub(super) static CATALOG: [OperationDescriptor; 373] = [
         result_type: "McpServer",
         result_schema: schema_of::<McpServer>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(8)],
     },
     OperationDescriptor {
         name: "mcp.connect",
@@ -7110,7 +7110,7 @@ pub(super) static CATALOG: [OperationDescriptor; 373] = [
         result_type: "McpServer",
         result_schema: schema_of::<McpServer>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(8)],
     },
     OperationDescriptor {
         name: "mcp.discover",
@@ -7132,7 +7132,7 @@ pub(super) static CATALOG: [OperationDescriptor; 373] = [
         result_type: "Page<McpCapability>",
         result_schema: schema_of::<Page<McpCapability>>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(8)],
     },
     OperationDescriptor {
         name: "mcp.select_tools",
@@ -7154,7 +7154,7 @@ pub(super) static CATALOG: [OperationDescriptor; 373] = [
         result_type: "McpServer",
         result_schema: schema_of::<McpServer>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(8)],
     },
     OperationDescriptor {
         name: "mcp.resources",
@@ -7176,7 +7176,7 @@ pub(super) static CATALOG: [OperationDescriptor; 373] = [
         result_type: "Page<McpResource>",
         result_schema: schema_of::<Page<McpResource>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(8)],
     },
     OperationDescriptor {
         name: "mcp.prompts",
@@ -7198,7 +7198,7 @@ pub(super) static CATALOG: [OperationDescriptor; 373] = [
         result_type: "Page<McpPrompt>",
         result_schema: schema_of::<Page<McpPrompt>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(8)],
     },
     OperationDescriptor {
         name: "mcp.capabilities",
@@ -7220,7 +7220,7 @@ pub(super) static CATALOG: [OperationDescriptor; 373] = [
         result_type: "Page<McpCapability>",
         result_schema: schema_of::<Page<McpCapability>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(8)],
     },
     OperationDescriptor {
         name: "addons.catalog",

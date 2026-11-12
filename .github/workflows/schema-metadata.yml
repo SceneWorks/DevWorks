@@ -15,6 +15,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# Matches ci.yml: rust-cache hashes every CARGO* variable into the cache key.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 concurrency:
   group: schema-metadata-${{ github.ref }}
   cancel-in-progress: true
@@ -23,9 +27,6 @@ jobs:
     name: SQLServer16 native x86 metadata and TLS
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      CARGO_INCREMENTAL: '0'
-      CARGO_BUILD_JOBS: '2'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install pinned Rust toolchain
@@ -33,6 +34,10 @@ jobs:
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
         with:
-          shared-key: schema-metadata
+          # PR-only workflow: restores the main branch's foundation cache, which builds the same adapters tests.
+          shared-key: test-foundation
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Qualify actual isolated SQLServer without learned inference
+        env:
+          CARGO_BUILD_JOBS: '2'
         run: python3 tools/ci/schema_sqlserver_fixture.py

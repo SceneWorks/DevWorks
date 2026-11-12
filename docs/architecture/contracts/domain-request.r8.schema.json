@@ -6365,7 +6365,8 @@
               "type": "string"
             },
             "scope": {
-              "$ref": "#/$defs/DataScope"
+              "$ref": "#/$defs/DataScope",
+              "x-since": 8
             },
             "serverId": {
               "$ref": "#/$defs/Id"
@@ -6373,7 +6374,6 @@
           },
           "required": [
             "kind",
-            "scope",
             "serverId",
             "expectedRevision"
           ],
@@ -6390,7 +6390,8 @@
               "type": "string"
             },
             "scope": {
-              "$ref": "#/$defs/DataScope"
+              "$ref": "#/$defs/DataScope",
+              "x-since": 8
             },
             "serverId": {
               "$ref": "#/$defs/Id"
@@ -6398,7 +6399,6 @@
           },
           "required": [
             "kind",
-            "scope",
             "serverId",
             "expectedCatalogRevision"
           ],
@@ -6418,7 +6418,8 @@
               "type": "string"
             },
             "scope": {
-              "$ref": "#/$defs/DataScope"
+              "$ref": "#/$defs/DataScope",
+              "x-since": 8
             },
             "serverId": {
               "$ref": "#/$defs/Id"
@@ -6429,7 +6430,6 @@
           },
           "required": [
             "kind",
-            "scope",
             "serverId",
             "expectedRevision",
             "expectedCatalogRevision",
@@ -10715,7 +10715,8 @@
               "$ref": "#/$defs/PageRequest"
             },
             "scope": {
-              "$ref": "#/$defs/DataScope"
+              "$ref": "#/$defs/DataScope",
+              "x-since": 8
             },
             "serverId": {
               "$ref": "#/$defs/Id"
@@ -10733,7 +10734,6 @@
           },
           "required": [
             "kind",
-            "scope",
             "serverId",
             "catalogRevision",
             "page"
@@ -10774,7 +10774,8 @@
               "$ref": "#/$defs/PageRequest"
             },
             "scope": {
-              "$ref": "#/$defs/DataScope"
+              "$ref": "#/$defs/DataScope",
+              "x-since": 8
             },
             "serverId": {
               "$ref": "#/$defs/Id"
@@ -10782,7 +10783,6 @@
           },
           "required": [
             "kind",
-            "scope",
             "serverId",
             "catalogRevision",
             "page"
@@ -10803,7 +10803,8 @@
               "$ref": "#/$defs/PageRequest"
             },
             "scope": {
-              "$ref": "#/$defs/DataScope"
+              "$ref": "#/$defs/DataScope",
+              "x-since": 8
             },
             "serverId": {
               "$ref": "#/$defs/Id"
@@ -10811,7 +10812,6 @@
           },
           "required": [
             "kind",
-            "scope",
             "serverId",
             "catalogRevision",
             "page"

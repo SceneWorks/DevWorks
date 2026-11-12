@@ -1115,3 +1115,57 @@ fn export_staging_attribution_survives_restart_and_normal_owner_reconciles_compl
     drop(parts);
     drop(composition);
 }
+
+#[test]
+fn a_sweep_never_retires_an_export_this_boot_is_still_writing() {
+    use devworks_core::ports::diagnostics::ExportStaging;
+    let h = Harness::new();
+    drop(h.open());
+    seed_root(&h, "root-a");
+    let (composition, parts) = compose(&h, Vec::new());
+    let project = ProjectId(id("project-a"));
+    let user = principal(parts.sqlite.as_ref(), "user-a", PrincipalKind::Human).with_lineage(
+        Some(project.clone()),
+        None,
+        None,
+    );
+    parts
+        .exports
+        .stage(&user, "first-export.jsonl", b"first")
+        .unwrap();
+    let root = read_snapshot(parts.sqlite.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().project_managed_files(&project, None, 10)
+    })
+    .unwrap()[0]
+        .witness
+        .root;
+    // `stage` reserves its row before it creates the file. A sweep landing in between sees a
+    // current-boot reservation whose file does not exist yet.
+    let info = parts.sqlite.info();
+    let in_flight = ProjectManagedFileReservation {
+        id: id("in-flight-diagnostic-write"),
+        project_id: project.clone(),
+        kind: "DiagnosticExport".into(),
+        relative_path: "in-flight-write.jsonl".into(),
+        root,
+        created_identity: None,
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        boot_id: info.boot_id,
+        created_at_ms: 1,
+    };
+    run_write(parts.sqlite.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&in_flight)
+    })
+    .unwrap();
+    parts.exports.sweep();
+    assert!(
+        read_snapshot(parts.sqlite.as_ref(), &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project))
+        .unwrap(),
+        "the sweep retired a reservation this boot is still writing"
+    );
+    drop(parts);
+    drop(composition);
+}
