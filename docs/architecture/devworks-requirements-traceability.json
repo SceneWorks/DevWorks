@@ -2,8 +2,8 @@
   "title": "DevWorks architecture requirement traceability",
   "status": "Proposed design coverage, not implemented or tested capability",
   "date": "2026-11-02",
-  "requirementsInputSha256": "6de34b24444a5f0601d8219173e01a8c9d7c15054fde4626788783dfbcc1a8dc",
-  "requirementsCount": 377,
+  "requirementsInputSha256": "9eaa5c6161939fc93f5c6a801d821323d2c70647c1d46d0e9b67f94629bae348",
+  "requirementsCount": 378,
   "architectureVersion": "1.1",
   "requirements": [
     {
@@ -2140,6 +2140,18 @@
       "validationFamily": "Tagged identity, source revision and scope tests",
       "validationGate": "G06",
       "plannedCase": "AT-KNOW-08",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result"
+    },
+    {
+      "requirement": "KNOW-09",
+      "requirementStatus": "Confirmed",
+      "statement": "Knowledge search must let an agent bound one page of results by a token budget, filled with the best-ranked claims first. The budget sets the page size and must not make any claim unreachable: the remaining claims stay available on later pages. The default budget and the largest budget a caller may pass must be configurable, inherited Workspace then Project; a caller may pass its own budget on a call within the allowed range. A person searching in the app is not limited by the budget.",
+      "sourceSection": "15 Context memory knowledge lessons and rules",
+      "architectureSection": "knowledge-documents-and-dreaming",
+      "owner": "KnowledgeService",
+      "validationFamily": "Tagged identity, source revision and scope tests",
+      "validationGate": "G06",
+      "plannedCase": "AT-KNOW-09",
       "designStatus": "Proposed architecture mapping; not an implementation/test result"
     },
     {

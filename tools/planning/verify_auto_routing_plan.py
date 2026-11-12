@@ -23,8 +23,9 @@ reqs = {b[1]:b for s in requirements for b in s['blocks'] if b[0]=='req'}
 prior = json.loads(subprocess.check_output(['git','show',latest['source_commit']+':'+requirements_path],cwd=ROOT))
 prior_reqs = {b[1]:b for s in prior for b in s['blocks'] if b[0]=='req'}
 added = {d['source_requirement'] for d in latest['requirements_delta']}
-assert set(reqs)-set(prior_reqs) == added == {'ROUTE-25','ROUTE-26','ROUTE-27'}
-assert len(reqs) == len(prior_reqs) + len(added)
+later = {'KNOW-09'}  # approved after the latest-model amendment
+assert set(reqs)-set(prior_reqs)-later == added == {'ROUTE-25','ROUTE-26','ROUTE-27'}
+assert len(reqs) == len(prior_reqs) + len(added) + len(later)
 assert all(reqs[k] == v for k,v in prior_reqs.items())
 paragraphs = {' '.join(p.text.split()) for p in Document(ROOT/'docs/planning/devworks-requirements.docx').paragraphs}
 for _, rid, status, text in reqs.values():

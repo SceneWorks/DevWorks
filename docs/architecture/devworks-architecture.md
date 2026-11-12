@@ -1436,7 +1436,7 @@ Suite lifecycle and separation controls (DW-72), judges (DW-73), trials (DW-74),
 
 ![Native backend ownership and qualification](architecture-diagrams/40-native-backend-boundaries.svg)
 
-The [local implementation plan](implementation-plan.html) assigns 78 planned slices (66 native delivery slices including approved DW-107/DW-108, and 12 approved EVAL items) with concrete outcomes and dependency order. Its [machine-readable coverage](implementation-plan.json) binds all 377 requirements, 357 operations, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded entries retain their reasons. Each operation has exactly one primary slice; source entries may overlap. Proposed requirements remain Proposed. Coverage is complete ownership accounting, not completed contracts or authorization to implement.
+The [local implementation plan](implementation-plan.html) assigns 78 planned slices (66 native delivery slices including approved DW-107/DW-108, and 12 approved EVAL items) with concrete outcomes and dependency order. Its [machine-readable coverage](implementation-plan.json) binds all 378 requirements, 357 operations, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded entries retain their reasons. Each operation has exactly one primary slice; source entries may overlap. Proposed requirements remain Proposed. Coverage is complete ownership accounting, not completed contracts or authorization to implement.
 
 ![Implementation coverage and acceptance gates](architecture-diagrams/41-implementation-coverage.svg)
 
@@ -1589,7 +1589,7 @@ This is the architecture-to-implementation handoff order, not an estimate or an 
 
 ## Evidence and dependency status
 
-The requirements input is `docs/planning/requirements-content.json`, 377 unique requirements, including the approved 5 November Auto-routing and latest-model amendments and prior interview/UI/EVAL revisions. The traceability register records an input digest so future edits can detect drift. Confirmed versus Proposed remains preserved from that source.
+The requirements input is `docs/planning/requirements-content.json`, 378 unique requirements, including the approved 5 November Auto-routing and latest-model amendments, the 11 November Knowledge search token budget (KNOW-09) and prior interview/UI/EVAL revisions. The traceability register records an input digest so future edits can detect drift. Confirmed versus Proposed remains preserved from that source.
 
 Earlier CodeGraph discovery reported DevWorks indexed at local HEAD `20715bbefe7ae356d81696a39ea36223e736e538`, with no native application graph. simple-router source/index agree at `a556b3531b577173195bbc3876b556196447721d`; `Routing/ModelSelector.cs` was inspected for pin/eligibility behavior. CodeGraph index `afe73560215bbe7593fc59451de5cc3237e3eeca` differs from its local checkout HEAD `bec77ed044d3ace42366c8143444fa82dafde7aa`; targeted `WorkTools.cs` and `Overlays/OverlayGraphView.cs` were read from the indexed Git objects. The most recent service-summary query returned no analysis for DevWorks; the local planning sources are authoritative for these edits. The source graph is not treated as proof of current uncommitted behavior.
 

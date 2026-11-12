@@ -12,7 +12,7 @@
   },
   "sourcePlan": "implementation-plan.json",
   "fullSourceRequirements": {
-    "count": 377,
+    "count": 378,
     "documentId": "3ab2d98c-4bcf-4c3d-b415-df422cbf33e0",
     "statusesPreserved": true,
     "individuallyStructuredAcrossDeliveryFeatures": true,
@@ -23,7 +23,7 @@
   "publicationItem": "DW-64",
   "dependencyEdges": 311,
   "nativeInitialStatus": "backlog",
-  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, original acceptance scope and250 dependencies are preserved; approved UI criteria are amended explicitly. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All377 source requirements are individually structured across related delivery features. This file records planning amendments; the native status fields are the original planning snapshot; consult live CodeGraph for execution state. The EVAL item mappings were synchronized on 4 November 2026. Approved latest-model amendment adds DW-108 and three requirements, preserves Auto/SystemOne ownership and extends existing final acceptance; see latestModelAmendment.",
+  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, original acceptance scope and250 dependencies are preserved; approved UI criteria are amended explicitly. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All378 source requirements are individually structured across related delivery features. This file records planning amendments; the native status fields are the original planning snapshot; consult live CodeGraph for execution state. The EVAL item mappings were synchronized on 4 November 2026. Approved latest-model amendment adds DW-108 and three requirements, preserves Auto/SystemOne ownership and extends existing final acceptance; see latestModelAmendment.",
   "items": [
     {
       "ref": "slice-contracts",
@@ -1282,7 +1282,7 @@
       "featureKey": "DW-F5"
     }
   ],
-  "structuredSourceRequirements": 377,
+  "structuredSourceRequirements": 378,
   "deliveryFeatures": [
     {
       "id": "11568b6e-16b6-48b5-b0c1-3f0c3b0cdf10",
@@ -2640,6 +2640,11 @@
         {
           "id": "DOC-02",
           "codegraphRequirement": "E39",
+          "status": "Confirmed"
+        },
+        {
+          "id": "KNOW-09",
+          "codegraphRequirement": "E40",
           "status": "Confirmed"
         }
       ]

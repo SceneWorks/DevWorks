@@ -1160,6 +1160,21 @@
         "DW-107"
       ],
       "evidence_boundary": "Approved product/plan decision; native behavior and provider cache savings are not established by the planning or classifier pilot."
+    },
+    {
+      "id": "knowledge_search_token_budget_20261111",
+      "date": "2026-11-11",
+      "source": "User reviewed how the Hindsight memory system bounds recall by tokens and asked for a Knowledge search budget that is reasonable and flexible (\"I don't want to limit it too much\"), then required that it be configurable (\"let's make it configureable\"), on 11 November 2026.",
+      "status": "Requirement decision recorded in KNOW-09; native behavior unimplemented",
+      "decision": "Knowledge search lets an agent bound one page of results by a token budget, filled with the best-ranked claims first. The budget is a page size, not a cutoff: remaining claims stay available on later pages. The default budget and the largest budget a caller may pass are settings inherited Workspace then Project, and a caller may pass its own budget within the allowed range. A person searching in the app is not limited. Knowledge search does not get a time-window filter.",
+      "requirements": [
+        "KNOW-09"
+      ],
+      "codegraph_feature": "DW-F8",
+      "items": [
+        "DW-250"
+      ],
+      "evidence_boundary": "Approved product decision. The planned default of 8,000 tokens and maximum of 32,000 in DW-250 assume 50 to 200 tokens per claim and are not measured."
     }
   ],
   "open_next": "Execute native work from CodeGraph items after revalidation; all native items remain backlog. DW-64 tracks the current commit/push closeout.",
