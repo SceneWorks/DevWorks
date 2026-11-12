@@ -922,6 +922,33 @@ fn qualify(h: &mut Ui, backend: &dyn Backend, http: &embedding::RecordedEmbeddin
     assert_eq!(h.state().route_memory(Route::Knowledge).tab, 2);
 }
 
+/// Refreshes until the selected convention is neither queued for nor in the middle of indexing.
+fn background_index_settled(h: &mut Ui) {
+    use devworks_core::protocol::records::ConventionIndexPhase::{Indexing, Queued};
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    loop {
+        click(h, Role::Button, "Refresh conventions");
+        let status = h
+            .state()
+            .conventions
+            .state()
+            .unwrap()
+            .record()
+            .unwrap()
+            .index
+            .status
+            .clone();
+        if !matches!(status, Queued | Indexing) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "background index never settled: {status:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 fn indexed(h: &mut Ui) {
     let old = h.state().conventions.state().unwrap().operation_ids.len();
     click(h, Role::Button, "Index convention");
@@ -1550,6 +1577,10 @@ fn native_owned_index_operation_can_be_inspected_cancelled_and_replaced_by_scope
     );
     import(&mut h, &files, source);
     let record = select(&mut h, "Index cancellation guide");
+    // Qualifying the space starts a background index of every convention, this import included.
+    // While it runs, the gate would catch its request instead of this test's index, which then
+    // stays Queued and is cancelled before dispatch.
+    background_index_settled(&mut h);
     let _release = GateRelease(gate.clone());
     gate.block.store(true, SeqCst);
     click(&mut h, Role::Button, "Index convention");
@@ -1566,13 +1597,16 @@ fn native_owned_index_operation_can_be_inspected_cancelled_and_replaced_by_scope
         gate.entered.load(SeqCst)
     });
     click(&mut h, Role::Button, "Operations");
+    // Cancel from the dispatched status: an older Queued status carries a stale revision.
     step_until(&mut h, "actual index cancellation is available", |s| {
         s.conventions
             .state()
             .unwrap()
             .operation_statuses
             .get(&id)
-            .is_some_and(|op| op.can_cancel)
+            .is_some_and(|op| {
+                op.can_cancel && matches!(op.phase, ConventionOperationPhase::Publishing)
+            })
     });
     h.query_all_by_role_and_label(Role::Button, "Cancel convention operation")
         .find(|node| !node.accesskit_node().is_disabled())
