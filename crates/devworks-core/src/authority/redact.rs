@@ -31,8 +31,8 @@
 //! * **Per line**: the value after a credential header (`Authorization:`,
 //!   `Proxy-Authorization:`, `Cookie:`, `X-Api-Key:`); `name=value`, `name:value`,
 //!   `name: value`, `"name":"value"`, `"name": value`, `--name value` and `--name=value` for a
-//!   sensitive name (a `"name": value` whose value opens an object or array, or is `true`,
-//!   `false` or `null`, is left to the JSON pass); URL userinfo passwords (`scheme://user:[REDACTED]@host`); `-pVALUE` with
+//!   sensitive name (a value inside JSON the embedded-JSON pass parsed is left to that pass,
+//!   which keeps objects, booleans and nulls); URL userinfo passwords (`scheme://user:[REDACTED]@host`); `-pVALUE` with
 //!   a mixed letter-and-digit value of at least 6 bytes.
 //! * **Credential-shaped words**: the settings [`looks_like_credential`] prefixes (`ghp_`,
 //!   `github_pat_`, `sk-`, `xoxb-`, `AKIA`, `glpat-`, ...), JSON Web Tokens (two or three
@@ -193,10 +193,12 @@ impl Redactor {
                 }
             }
         }
-        let out = self.redact_embedded_json(&out);
+        let (out, parsed) = self.redact_embedded_json(&out);
         let mut result = String::with_capacity(out.len());
+        let mut offset = 0;
         for line in out.split_inclusive('\n') {
-            result.push_str(&redact_line(line));
+            result.push_str(&redact_line(line, offset, &parsed));
+            offset += line.len();
         }
         result
     }
@@ -225,10 +227,13 @@ impl Redactor {
 
     /// JSON objects and arrays embedded in `text`, redacted as [`Self::redact_json`] does and
     /// written back compactly; text that does not parse, or needs no redaction, is kept as is.
-    fn redact_embedded_json(&self, text: &str) -> String {
+    /// Also returns the byte spans of the output that parsed as JSON and were handled
+    /// structurally, which the line pass's name-then-value rule leaves alone.
+    fn redact_embedded_json(&self, text: &str) -> (String, Vec<(usize, usize)>) {
+        let mut parsed = Vec::new();
         // A `\u` escape can spell a sensitive key the raw text does not show.
         if !text.contains("\\u") && !mentions_sensitive_name(text) {
-            return text.to_owned();
+            return (text.to_owned(), parsed);
         }
         let mut out = String::with_capacity(text.len());
         let mut rest = text;
@@ -238,11 +243,13 @@ impl Redactor {
                 Some(Ok(v)) if v.is_object() || v.is_array() => {
                     let end = i + values.byte_offset();
                     out.push_str(&rest[..i]);
+                    let start = out.len();
                     let redacted = self.redact_json(&v);
                     match serde_json::to_string(&redacted) {
                         Ok(s) if redacted != v => out.push_str(&s),
                         _ => out.push_str(&rest[i..end]),
                     }
+                    parsed.push((start, out.len()));
                     rest = &rest[end..];
                 }
                 _ => {
@@ -252,7 +259,7 @@ impl Redactor {
             }
         }
         out.push_str(rest);
-        out
+        (out, parsed)
     }
 }
 
@@ -335,7 +342,10 @@ fn redact_pem(text: &str) -> String {
 }
 
 /// Credential headers, `key=value` assignments of sensitive names and token-shaped words.
-fn redact_line(line: &str) -> String {
+/// `offset` is the line's byte position in the text and `parsed` the spans of that text the
+/// embedded-JSON pass handled structurally: a value word starting inside one is kept.
+fn redact_line(line: &str, offset: usize, parsed: &[(usize, usize)]) -> String {
+    let structured = |at: usize| parsed.iter().any(|&(s, e)| (s..e).contains(&(offset + at)));
     // ASCII lowercasing keeps byte offsets aligned with `line`.
     let lower = line.to_ascii_lowercase();
     for header in [
@@ -361,20 +371,16 @@ fn redact_line(line: &str) -> String {
     let mut pending = false;
     // The previous word was a bare sensitive name (`"password"` before `:` in JSON).
     let mut after_name = false;
-    let mut flush = |word: &mut String, out: &mut String| {
+    let mut flush = |word: &mut String, start: usize, out: &mut String| {
         if word.is_empty() {
             return;
         }
         // JSON escapes inside a logged string (`{\"password\":\"x\"}`) leave a `\` on words.
         let bare = word.trim_matches('\\');
         if pending {
-            // A secret reference, an opening object or array, or a JSON literal is not a
-            // secret: structured values are the embedded-JSON pass's to redact.
-            let literal = bare.trim_end_matches([',', '}', ']']);
-            if is_secret_ref(bare)
-                || bare.starts_with(['{', '['])
-                || matches!(literal, "true" | "false" | "null")
-            {
+            // A secret reference is not a secret, and a value inside JSON the embedded-JSON
+            // pass parsed was already redacted structurally (objects, booleans and nulls kept).
+            if is_secret_ref(bare) || structured(start) {
                 out.push_str(word);
             } else {
                 out.push_str(REDACTED);
@@ -399,15 +405,19 @@ fn redact_line(line: &str) -> String {
         }
         word.clear();
     };
-    for c in line.chars() {
+    let mut start = 0;
+    for (at, c) in line.char_indices() {
         if c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == '&' {
-            flush(&mut word, &mut out);
+            flush(&mut word, start, &mut out);
             out.push(c);
         } else {
+            if word.is_empty() {
+                start = at;
+            }
             word.push(c);
         }
     }
-    flush(&mut word, &mut out);
+    flush(&mut word, start, &mut out);
     out
 }
 
@@ -581,6 +591,20 @@ mod tests {
         for line in [kept.to_string(), pretty, r#"{"token": null}"#.to_owned()] {
             assert_eq!(r.redact_text(&line), line);
         }
+        // A nested object under a sensitive key stays valid JSON, its value redacted.
+        let nested = r.redact_text("{\n  \"credentials\": {\n    \"value\": \"x7-cred\"\n  }\n}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&nested).unwrap(),
+            json!({"credentials": {"value": REDACTED}})
+        );
+        // A value that only looks structured, outside parsed JSON, is still redacted.
+        for line in ["cmd --password {orchard7}", "cmd --password [orchard7]"] {
+            assert_eq!(r.redact_text(line), format!("cmd --password {REDACTED}"));
+        }
+        assert_eq!(
+            r.redact_text("cmd --password true"),
+            format!("cmd --password {REDACTED}")
+        );
         // A sensitive key spelled with a JSON escape is still a sensitive key.
         let escaped_key = r#"{"password":"hunter2"}"#;
         let out = r.redact_text(escaped_key);
