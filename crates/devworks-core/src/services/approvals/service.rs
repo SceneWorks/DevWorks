@@ -481,7 +481,7 @@ impl CommandHandler for ApprovalService {
     }
 }
 
-fn builtin(op: &str) -> bool {
+pub(crate) fn builtin(op: &str) -> bool {
     matches!(
         op,
         "projects.archive" | "projects.delete" | "repositories.remove_index"
