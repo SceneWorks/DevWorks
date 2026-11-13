@@ -14383,6 +14383,26 @@
       "typedValid": true
     },
     {
+      "entry": "domain-request.r8",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "input-mcp.classify_tool-Command",
+      "normalized": {
+        "body": {
+          "expectedRevision": "1",
+          "kind": "mcp.classify_tool",
+          "serverId": "id-a",
+          "toolId": "id-a"
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 8
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
       "entry": "domain-request",
       "error": null,
       "expectedSchemaValid": true,
@@ -20899,6 +20919,26 @@
       "typedValid": true
     },
     {
+      "entry": "operation-result.r8",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "result-mcp.classify_tool",
+      "normalized": {
+        "kind": "mcp.classify_tool",
+        "value": {
+          "catalogRevision": "1",
+          "id": "id-a",
+          "name": "fixture",
+          "revision": "1",
+          "selectedToolIds": [],
+          "state": "Enabled",
+          "transport": "fixture"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
       "entry": "operation-result",
       "error": null,
       "expectedSchemaValid": true,
@@ -26002,7 +26042,7 @@
     },
     {
       "entry": "domain-request",
-      "error": "unknown variant `agents.pause`, expected one of `projects.create`, `projects.edit`, `projects.membership`, `projects.archive`, `projects.restore`, `projects.delete`, `features.create`, `features.edit`, `issues.create`, `issues.edit`, `tasks.create`, `tasks.edit`, `features.prioritize`, `issues.prioritize`, `features.edit_plan`, `features.dependencies`, `features.request_plan_approval`, `issues.publish`, `issues.link`, `tasks.move`, `tasks.assign`, `tasks.dependency_links`, `tasks.acceptance_evidence`, `tasks.sync_plan`, `workflows.create_status`, `workflows.rename_status`, `workflows.order`, `workflows.reassign_and_remove`, `next_work.claim_project_queue`, `next_work.claim_feature_task`, `next_work.release_claim`, `runs.redirect`, `runs.stop`, `agents.delegate`, `agents.messages`, `agents.post`, `agents.receive`, `agents.ack`, `agents.acknowledge`, `agents.checkpoint`, `sessions.start`, `sessions.end`, `indexing.index`, `indexing.reindex`, `indexing.retire_view`, `indexing.configure_sources`, `analysis.community_analysis`, `analysis.link_and_detect`, `analysis.process_batch`, `analysis.reanalyze`, `analysis.synthesize`, `schemas.index`, `schemas.refresh`, `schemas.remove_index`, `schemas.configure`, `database.execute_write`, `database.direct_schema_change`, `database.apply_migration`, `database.configure_sensitive_columns`, `knowledge.record`, `knowledge.revise`, `knowledge.relate`, `knowledge.tag`, `knowledge.verify`, `knowledge.retract`, `knowledge.challenge`, `knowledge.scope`, `knowledge.delete_by_source`, `knowledge.delete_selected`, `knowledge.import_user_data`, `knowledge.promote`, `dreaming.run`, `dreaming.settings`, `dreaming.instructions`, `dreaming.propose`, `dreaming.revert`, `dreaming.review`, `documents.import`, `documents.index`, `documents.retry`, `conventions.edit`, `conventions.applicability`, `conventions.retire`, `conventions.index`, `conventions.delete`, `conventions.delete_resource`, `conventions.import`, `conventions.move`, `skills.draft`, `skills.propose`, `skills.rollback`, `roles.draft`, `roles.propose`, `roles.rollback`, `approvals.propose`, `approvals.record_human_decision`, `notifications.acknowledge`, `notifications.settings`, `git.worktree`, `reviews.request`, `reviews.respond`, `reviews.adjudicate`, `github.account`, `github.issue_sync`, `resources.acquire`, `resources.renew`, `resources.release`, `browser.sessions`, `browser.navigate`, `browser.input`, `browser.upload`, `desktop.request_control`, `desktop.input`, `desktop.release_control`, `process.execute`, `process.cancel`, `process.install_project_dependencies`, `process.request_system_install`, `containers.build`, `containers.pull`, `containers.create`, `containers.start`, `containers.stop`, `containers.exec`, `jobs.create`, `jobs.edit`, `jobs.enable`, `jobs.disable`, `jobs.delete`, `jobs.run_now`, `jobs.cancel`, `settings.save_revision`, `router.route`, `router.pin`, `router.price_refresh`, `router.price_override`, `router.configure`, `router.decide`, `mcp.configure`, `mcp.connect`, `mcp.disable`, `mcp.remove`, `mcp.discover`, `mcp.select_tools`, `addons.configure`, `addons.propose`, `help.generate_capability_docs`, `workspace.record_diagnostic`, `workspace.backup`, `workspace.restore`, `workspace.migrate`, `workspace.approve_install`, `repositories.remove_index`, `queue.resolve`, `queue.retry`, `queue.reconcile`, `imports.configure`, `imports.apply`, `maintenance.prune_diagnostics`, `maintenance.prune_index_runs`, `maintenance.prune_messages`, `maintenance.prune_sessions`, `repository_docs.generate`, `mcp_server.configure`, `mcp_server.set_client_access`, `tasks.prioritize`, `tasks.set_feature`, `artifacts.tag`, `evals.grade`, `notifications.mark_read`, `projects.prepare_purge`, `projects.purge`, `watch.create`, `watch.cancel`",
+      "error": "unknown variant `agents.pause`, expected one of `projects.create`, `projects.edit`, `projects.membership`, `projects.archive`, `projects.restore`, `projects.delete`, `features.create`, `features.edit`, `issues.create`, `issues.edit`, `tasks.create`, `tasks.edit`, `features.prioritize`, `issues.prioritize`, `features.edit_plan`, `features.dependencies`, `features.request_plan_approval`, `issues.publish`, `issues.link`, `tasks.move`, `tasks.assign`, `tasks.dependency_links`, `tasks.acceptance_evidence`, `tasks.sync_plan`, `workflows.create_status`, `workflows.rename_status`, `workflows.order`, `workflows.reassign_and_remove`, `next_work.claim_project_queue`, `next_work.claim_feature_task`, `next_work.release_claim`, `runs.redirect`, `runs.stop`, `agents.delegate`, `agents.messages`, `agents.post`, `agents.receive`, `agents.ack`, `agents.acknowledge`, `agents.checkpoint`, `sessions.start`, `sessions.end`, `indexing.index`, `indexing.reindex`, `indexing.retire_view`, `indexing.configure_sources`, `analysis.community_analysis`, `analysis.link_and_detect`, `analysis.process_batch`, `analysis.reanalyze`, `analysis.synthesize`, `schemas.index`, `schemas.refresh`, `schemas.remove_index`, `schemas.configure`, `database.execute_write`, `database.direct_schema_change`, `database.apply_migration`, `database.configure_sensitive_columns`, `knowledge.record`, `knowledge.revise`, `knowledge.relate`, `knowledge.tag`, `knowledge.verify`, `knowledge.retract`, `knowledge.challenge`, `knowledge.scope`, `knowledge.delete_by_source`, `knowledge.delete_selected`, `knowledge.import_user_data`, `knowledge.promote`, `dreaming.run`, `dreaming.settings`, `dreaming.instructions`, `dreaming.propose`, `dreaming.revert`, `dreaming.review`, `documents.import`, `documents.index`, `documents.retry`, `conventions.edit`, `conventions.applicability`, `conventions.retire`, `conventions.index`, `conventions.delete`, `conventions.delete_resource`, `conventions.import`, `conventions.move`, `skills.draft`, `skills.propose`, `skills.rollback`, `roles.draft`, `roles.propose`, `roles.rollback`, `approvals.propose`, `approvals.record_human_decision`, `notifications.acknowledge`, `notifications.settings`, `git.worktree`, `reviews.request`, `reviews.respond`, `reviews.adjudicate`, `github.account`, `github.issue_sync`, `resources.acquire`, `resources.renew`, `resources.release`, `browser.sessions`, `browser.navigate`, `browser.input`, `browser.upload`, `desktop.request_control`, `desktop.input`, `desktop.release_control`, `process.execute`, `process.cancel`, `process.install_project_dependencies`, `process.request_system_install`, `containers.build`, `containers.pull`, `containers.create`, `containers.start`, `containers.stop`, `containers.exec`, `jobs.create`, `jobs.edit`, `jobs.enable`, `jobs.disable`, `jobs.delete`, `jobs.run_now`, `jobs.cancel`, `settings.save_revision`, `router.route`, `router.pin`, `router.price_refresh`, `router.price_override`, `router.configure`, `router.decide`, `mcp.configure`, `mcp.connect`, `mcp.disable`, `mcp.remove`, `mcp.discover`, `mcp.classify_tool`, `mcp.select_tools`, `addons.configure`, `addons.propose`, `help.generate_capability_docs`, `workspace.record_diagnostic`, `workspace.backup`, `workspace.restore`, `workspace.migrate`, `workspace.approve_install`, `repositories.remove_index`, `queue.resolve`, `queue.retry`, `queue.reconcile`, `imports.configure`, `imports.apply`, `maintenance.prune_diagnostics`, `maintenance.prune_index_runs`, `maintenance.prune_messages`, `maintenance.prune_sessions`, `repository_docs.generate`, `mcp_server.configure`, `mcp_server.set_client_access`, `tasks.prioritize`, `tasks.set_feature`, `artifacts.tag`, `evals.grade`, `notifications.mark_read`, `projects.prepare_purge`, `projects.purge`, `watch.create`, `watch.cancel`",
       "expectedSchemaValid": false,
       "id": "reject-child-pause",
       "normalized": null,
@@ -40045,7 +40085,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-preview-source-13-1327",
+      "id": "r3-preview-source-13-1329",
       "normalized": {
         "body": {
           "kind": "knowledge.diagnostics",
@@ -40066,7 +40106,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-delete-source-13-1327",
+      "id": "r3-delete-source-13-1329",
       "normalized": {
         "body": {
           "expectedScopeRevision": "1",
@@ -40089,7 +40129,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-preview-source-15-1329",
+      "id": "r3-preview-source-15-1331",
       "normalized": {
         "body": {
           "kind": "knowledge.diagnostics",
@@ -40110,7 +40150,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-delete-source-15-1329",
+      "id": "r3-delete-source-15-1331",
       "normalized": {
         "body": {
           "expectedScopeRevision": "1",
@@ -40133,7 +40173,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-preview-source-256-1331",
+      "id": "r3-preview-source-256-1333",
       "normalized": {
         "body": {
           "kind": "knowledge.diagnostics",
@@ -40154,7 +40194,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-delete-source-256-1331",
+      "id": "r3-delete-source-256-1333",
       "normalized": {
         "body": {
           "expectedScopeRevision": "1",

@@ -294,6 +294,7 @@ pub fn mcp_command_status(
     let server = |result| match result {
         OperationResult::McpConfigure { value }
         | OperationResult::McpSelectTools { value }
+        | OperationResult::McpClassifyTool { value }
         | OperationResult::McpDisable { value } => Some(value),
         // A removed server no longer exists; there is nothing to select or refill.
         _ => None,

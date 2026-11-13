@@ -1332,6 +1332,7 @@
         "remove",
         "discover",
         "select_tools",
+        "classify_tool",
         "resources",
         "prompts",
         "capabilities"

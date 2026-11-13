@@ -634,8 +634,13 @@ impl McpRemote for NativeMcpClients {
                         .map(|s| serde_json::Value::Object((*s).clone())),
                     read_only_hint: tool
                         .annotations
+                        .as_ref()
                         .and_then(|a| a.read_only_hint)
                         .unwrap_or(false),
+                    destructive_hint: tool.annotations.as_ref().and_then(|a| a.destructive_hint),
+                    title: tool
+                        .title
+                        .or_else(|| tool.annotations.and_then(|a| a.title)),
                 })
                 .collect(),
             resources: catalog

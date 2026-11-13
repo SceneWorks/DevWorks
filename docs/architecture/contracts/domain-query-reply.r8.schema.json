@@ -11231,6 +11231,10 @@
         "description": {
           "$ref": "#/$defs/Text0To65536"
         },
+        "destructive": {
+          "type": "boolean",
+          "x-since": 8
+        },
         "id": {
           "$ref": "#/$defs/Id"
         },
@@ -11263,11 +11267,19 @@
         "readOnly": {
           "type": "boolean"
         },
+        "readOnlyOverride": {
+          "type": "boolean",
+          "x-since": 8
+        },
         "revision": {
           "$ref": "#/$defs/Revision"
         },
         "serverId": {
           "$ref": "#/$defs/Id"
+        },
+        "title": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 8
         },
         "uri": {
           "$ref": "#/$defs/Text1To4096",
@@ -16569,6 +16581,24 @@
             "value"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "mcp.classify_tool",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/McpServer"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 8
         },
         {
           "additionalProperties": false,

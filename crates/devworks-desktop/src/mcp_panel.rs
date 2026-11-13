@@ -26,6 +26,9 @@ pub enum McpAction {
     Sampling(Id, i64, i64, Vec<Id>),
     /// Read one resource or prompt of a server at a catalog revision.
     Open(Id, i64, McpContentRequest),
+    /// Classify a tool as read-only or not in place of the server's hint (`None` returns it to
+    /// the hint): server, server revision, tool.
+    Classify(Id, i64, Id, Option<bool>),
 }
 
 /// A read in flight: the server it was sent to and what it reads.
@@ -58,6 +61,31 @@ pub fn credential_handles(server: &McpServer) -> Vec<Id> {
             .collect(),
         None => Vec::new(),
     }
+}
+
+/// The tool's title when the server gives one, with its wire name beside it.
+fn tool_title(cap: &McpCapability) -> String {
+    match &cap.title {
+        Some(title) if title.0 != cap.name.0 => format!("{} ({})", title.0, cap.name.0),
+        _ => cap.name.0.clone(),
+    }
+}
+
+/// How the tool is classified and what the server says about it. A person's classification
+/// replaces the server's untrusted read-only hint.
+fn tool_tags(cap: &McpCapability) -> String {
+    let read_only = match cap.read_only_override {
+        Some(true) => " · read-only (set by you)",
+        Some(false) => " · not read-only (set by you)",
+        None if cap.read_only => " · read-only hint",
+        None => "",
+    };
+    let destructive = if cap.destructive == Some(true) {
+        " · destructive hint"
+    } else {
+        ""
+    };
+    format!("{read_only}{destructive}")
 }
 
 /// The runtime a well-known launcher belongs to, so a person knows what to install.
@@ -123,6 +151,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_classification_reload_keeps_unsaved_tool_selection() {
+        let server = Id::new("server-a").unwrap();
+        let mut record: McpServer = serde_json::from_value(json!({
+            "id":"server-a","name":"Server","revision":"3","state":"Healthy","transport":"http",
+            "selectedToolIds":["saved-tool"],"catalogRevision":"2"
+        }))
+        .unwrap();
+        record.selected_tool_ids.0 = vec![Id::new("saved-tool").unwrap()];
+        let mut panel = McpPanel {
+            servers: vec![record],
+            selected: Some(server.clone()),
+            ..McpPanel::default()
+        };
+        // An unsaved checkbox edit, then a saved classification.
+        panel.selection = vec![Id::new("unsaved-tool").unwrap()];
+        panel.keep_selection = true;
+        panel.loaded_catalog(&server, vec![], false);
+        assert_eq!(panel.selection, vec![Id::new("unsaved-tool").unwrap()]);
+        assert!(!panel.keep_selection);
+        // Any other reload shows the saved selection.
+        panel.loaded_catalog(&server, vec![], false);
+        assert_eq!(panel.selection, vec![Id::new("saved-tool").unwrap()]);
+    }
+
+    #[test]
     fn a_missing_runtime_notice_names_the_launchers_runtime() {
         assert!(missing_runtime_notice("npx").contains("`npx` (Node.js)"));
         assert!(missing_runtime_notice("uvx").contains("Install Python"));
@@ -182,6 +235,9 @@ pub struct McpPanel {
     confirm_remove: Option<Id>,
     /// Credential handles of the server being removed, released once the removal is saved.
     pub removing: Option<Vec<Id>>,
+    /// A classification was saved while the person may have unsaved checkbox edits; the
+    /// catalog reload it causes keeps them instead of resetting to the saved selection.
+    pub keep_selection: bool,
     /// The JSON arguments typed for each prompt, by capability ID.
     pub prompt_arguments: std::collections::BTreeMap<String, String>,
     /// The resource or prompt being read: its title until the reply arrives.
@@ -272,6 +328,9 @@ impl McpPanel {
             self.capabilities = capabilities;
         }
         if !append {
+            if std::mem::take(&mut self.keep_selection) {
+                return;
+            }
             self.selection = self
                 .servers
                 .iter()
@@ -351,6 +410,7 @@ impl McpPanel {
                         self.content = None;
                         self.capabilities.clear();
                         self.selection = server.selected_tool_ids.0.clone();
+                        self.keep_selection = false;
                         self.form_from = Some(server.clone());
                         actions.push(McpAction::Catalog(
                             server.id.clone(),
@@ -555,29 +615,57 @@ impl McpPanel {
                     // schema; agents are not offered it until the server lists it again.
                     let label = format!(
                         "{}{}{}",
-                        cap.name.0,
-                        if cap.read_only {
-                            " · read-only hint"
-                        } else {
-                            ""
-                        },
+                        tool_title(cap),
+                        tool_tags(cap),
                         if cap.input_schema.is_none() {
                             " · unavailable: the server no longer lists it"
                         } else {
                             ""
                         }
                     );
-                    if ui
-                        .checkbox(&mut checked, label)
-                        .on_hover_text(&cap.description.0)
-                        .changed()
-                    {
-                        if checked {
-                            self.selection.push(cap.id.clone());
-                        } else {
-                            self.selection.retain(|id| id != &cap.id);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .checkbox(&mut checked, label)
+                            .on_hover_text(&cap.description.0)
+                            .changed()
+                        {
+                            if checked {
+                                self.selection.push(cap.id.clone());
+                            } else {
+                                self.selection.retain(|id| id != &cap.id);
+                            }
                         }
-                    }
+                        let current = cap.read_only_override;
+                        let mut chosen = current;
+                        let shown = match current {
+                            Some(true) => "Read-only",
+                            Some(false) => "Not read-only",
+                            None => "Server hint",
+                        };
+                        let name = format!("Read-only classification for {}", cap.name.0);
+                        egui::ComboBox::from_id_salt(("mcp-classify", cap.id.as_str()))
+                            .selected_text(shown)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut chosen, None, "Server hint");
+                                ui.selectable_value(&mut chosen, Some(true), "Read-only");
+                                ui.selectable_value(&mut chosen, Some(false), "Not read-only");
+                            })
+                            .response
+                            .widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::Role::ComboBox, true, &name)
+                            });
+                        if chosen != current && online && !self.busy && server_idle {
+                            self.busy = true;
+                            self.error = None;
+                            self.keep_selection = true;
+                            actions.push(McpAction::Classify(
+                                server_id.clone(),
+                                revision,
+                                cap.id.clone(),
+                                chosen,
+                            ));
+                        }
+                    });
                 }
                 if ui
                     .add_enabled(

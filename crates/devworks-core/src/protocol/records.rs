@@ -6199,6 +6199,27 @@ pub struct McpCapability {
     )]
     #[schemars(with = "Text", extend("x-since" = 8))]
     pub uri: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 8))]
+    pub title: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 8))]
+    pub destructive: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 8))]
+    pub read_only_override: Option<bool>,
 }
 impl Check for McpCapability {
     fn check(&self) -> Result<(), String> {
@@ -6212,6 +6233,9 @@ impl Check for McpCapability {
         self.read_only.check()?;
         self.revision.check()?;
         self.uri.check()?;
+        self.title.check()?;
+        self.destructive.check()?;
+        self.read_only_override.check()?;
         crate::protocol::rules::record(
             "McpCapability",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -6224,6 +6248,15 @@ impl Revisioned for McpCapability {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 8 {
             self.uri = None;
+        }
+        if revision < 8 {
+            self.title = None;
+        }
+        if revision < 8 {
+            self.destructive = None;
+        }
+        if revision < 8 {
+            self.read_only_override = None;
         }
     }
 }

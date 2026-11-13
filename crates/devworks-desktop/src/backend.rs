@@ -681,6 +681,7 @@ pub const COMMANDS: &[&str] = &[
     "mcp.remove",
     "mcp.discover",
     "mcp.select_tools",
+    "mcp.classify_tool",
     "projects.create",
     "projects.edit",
     "projects.membership",
