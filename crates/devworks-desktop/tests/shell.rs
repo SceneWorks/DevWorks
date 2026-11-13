@@ -1762,3 +1762,194 @@ fn index_sources_keep_paths_with_spaces() {
         json!([{"location": location, "publicKey": publisher}])
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Frame work only when something changed
+
+/// A real backend whose runtime hints the test sends itself, counting what the frame loop asks
+/// of it: purge snapshot publications and the time of each query of one operation.
+struct Counted {
+    inner: Arc<dyn Backend>,
+    hints: tokio::sync::watch::Receiver<u64>,
+    operation: &'static str,
+    queries: std::sync::Mutex<Vec<Instant>>,
+    publications: std::sync::atomic::AtomicUsize,
+}
+impl Counted {
+    fn queries(&self) -> Vec<Instant> {
+        self.queries.lock().unwrap().clone()
+    }
+    fn publications(&self) -> usize {
+        self.publications.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+impl Backend for Counted {
+    fn query(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
+        if operation == self.operation {
+            self.queries.lock().unwrap().push(Instant::now());
+        }
+        self.inner.query(operation, frame)
+    }
+    fn command(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
+        self.inner.command(operation, frame)
+    }
+    fn purge_client_publish(
+        &self,
+        memory: devworks_desktop::memory::Memory,
+        live: devworks_desktop::project_purge::Live,
+        save: bool,
+    ) -> Result<Option<Vec<devworks_core::ports::storage::ProjectPurgeClientScope>>, String> {
+        self.publications
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.purge_client_publish(memory, live, save)
+    }
+    fn purge_client_acknowledge(
+        &self,
+        scope: &devworks_core::ports::storage::ProjectPurgeClientScope,
+    ) {
+        self.inner.purge_client_acknowledge(scope)
+    }
+    fn purge_client_freeze(&self, project: &str, frozen: bool) -> Result<(), String> {
+        self.inner.purge_client_freeze(project, frozen)
+    }
+    fn mint_workspace_upload(
+        &self,
+        file: &std::path::Path,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.mint_workspace_upload(file)
+    }
+    fn mint_project_upload(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        file: &std::path::Path,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.mint_project_upload(project, file)
+    }
+    fn keep_awake_health(&self) -> devworks_core::settings::view::Health {
+        self.inner.keep_awake_health()
+    }
+    fn hints(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        Some(self.hints.clone())
+    }
+    fn set_waker(&self, waker: devworks_desktop::backend::Waker) {
+        self.inner.set_waker(waker)
+    }
+    fn token(&self, prefix: &str) -> String {
+        self.inner.token(prefix)
+    }
+    fn scratch_dir(&self) -> std::path::PathBuf {
+        self.inner.scratch_dir()
+    }
+    fn read_stream(
+        &self,
+        stream: &devworks_core::protocol::Id,
+        max: u64,
+    ) -> Result<Vec<u8>, String> {
+        self.inner.read_stream(stream, max)
+    }
+}
+
+fn counted(
+    engine: &Engine,
+    operation: &'static str,
+) -> (Arc<Counted>, tokio::sync::watch::Sender<u64>) {
+    let (send, hints) = tokio::sync::watch::channel(0);
+    let backend = Arc::new(Counted {
+        inner: engine.backend(),
+        hints,
+        operation,
+        queries: Default::default(),
+        publications: Default::default(),
+    });
+    (backend, send)
+}
+
+#[test]
+fn a_hint_burst_reloads_the_visible_list_at_most_once_a_second_and_once_after_it() {
+    let root = Root::new("hint-burst");
+    let engine = start(&root);
+    let (backend, hints) = counted(&engine, "artifacts.list");
+    let mut h = harness(
+        shell_with(Ok(backend.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Artifacts);
+    settle(&mut h);
+
+    // Two and a half seconds of hints, one every frame.
+    let before = backend.queries().len();
+    let start = Instant::now();
+    let mut last_hint = start;
+    while start.elapsed() < Duration::from_millis(2500) {
+        hints.send_modify(|n| *n += 1);
+        last_hint = Instant::now();
+        h.step();
+        assert!(h.state().wait_idle());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let during = backend.queries()[before..].to_vec();
+    assert!(
+        during.len() <= 3,
+        "{} reloads in 2.5 s of hints",
+        during.len()
+    );
+    for pair in during.windows(2) {
+        assert!(
+            pair[1] - pair[0] >= Duration::from_millis(900),
+            "{:?} between reloads",
+            pair[1] - pair[0]
+        );
+    }
+    // The last hint of the burst is still shown: one reload follows it.
+    settle(&mut h);
+    let after: Vec<_> = backend.queries()[before..]
+        .iter()
+        .copied()
+        .filter(|at| *at > last_hint)
+        .collect();
+    assert_eq!(after.len(), 1, "{after:?}");
+    h.state_mut().on_exit();
+}
+
+#[test]
+fn an_idle_shell_publishes_no_purge_snapshot_until_an_editor_changes_or_a_review_opens() {
+    let root = Root::new("idle-snapshot");
+    let engine = start(&root);
+    let (backend, _hints) = counted(&engine, "artifacts.list");
+    let mut h = harness(
+        shell_with(Ok(backend.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+
+    // Idle frames read no editor and publish nothing.
+    let idle = backend.publications();
+    for _ in 0..30 {
+        h.step();
+    }
+    assert_eq!(backend.publications(), idle);
+
+    // Typing changes the composer's draft: the snapshot follows it.
+    type_into(&mut h, COMPOSER_LABEL, "a draft the purge review must see");
+    assert!(backend.publications() > idle);
+    for _ in 0..3 {
+        h.step();
+    }
+    let typed = backend.publications();
+    for _ in 0..30 {
+        h.step();
+    }
+    assert_eq!(backend.publications(), typed);
+
+    // While a purge review is open, every frame publishes the current editors.
+    h.state_mut().purge.frozen = true;
+    for _ in 0..5 {
+        h.step();
+    }
+    assert!(backend.publications() >= typed + 5);
+    h.state_mut().purge.frozen = false;
+    h.state_mut().on_exit();
+}

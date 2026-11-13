@@ -144,6 +144,8 @@ pub enum Lifecycle {
 pub const QUIESCE_BOUND: Duration = Duration::from_secs(10);
 /// How often Settings → Provider connections reloads while a sign-in is open.
 pub const CONNECTION_POLL: Duration = Duration::from_secs(3);
+/// Shortest time between two hint-driven re-reads of the visible lists.
+pub const HINT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 /// Height of the global toolbar; the completion overlay anchors just below it.
 pub const TOOLBAR: f32 = 46.0;
 
@@ -216,6 +218,11 @@ pub struct Shell {
     lifecycle: Lifecycle,
     status: Option<String>,
     hints: Option<watch::Receiver<u64>>,
+    /// A hint arrived within [`HINT_REFRESH_INTERVAL`] of the last refresh: one refresh is due
+    /// when that interval ends, so the last hint of a burst is still shown.
+    hint_refresh_due: bool,
+    /// Input or a reply may have changed an editor since the purge snapshot was published.
+    editors_changed: bool,
     started: bool,
     saved: Option<Memory>,
     purge_reviews: BTreeMap<String, serde_json::Value>,
@@ -370,6 +377,8 @@ impl Shell {
             lifecycle: Lifecycle::Open,
             status: None,
             hints,
+            hint_refresh_due: false,
+            editors_changed: true,
             started: false,
             saved: Some(memory.clone()),
             purge_reviews: memory.purge_reviews.clone(),
@@ -605,7 +614,7 @@ impl Shell {
             Route::AddOns => {
                 self.load_addons();
                 if let Some(c) = &mut self.client {
-                    c.task(
+                    c.network_task(
                         Slot::AddonsDiscovery,
                         "Checking runtimes and package indexes",
                         |b| b.refresh_packages().map(|()| TaskOutput::Refreshed),
@@ -947,7 +956,7 @@ impl Shell {
                 }
                 AddonsAction::Discover => {
                     if let Some(c) = &mut self.client {
-                        c.task(
+                        c.network_task(
                             Slot::AddonsDiscovery,
                             "Checking runtimes and package indexes",
                             |b| b.refresh_packages().map(|()| TaskOutput::Refreshed),
@@ -961,7 +970,7 @@ impl Shell {
                     update,
                 } => {
                     if let Some(c) = &mut self.client {
-                        self.addons.busy = c.task(
+                        self.addons.busy = c.network_task(
                             Slot::AddonsSave {
                                 update: update.then_some(package.clone()),
                                 registry,
@@ -1881,7 +1890,11 @@ impl Shell {
         let Some(client) = &mut self.client else {
             return;
         };
-        for (slot, ticket, reply) in client.poll() {
+        let replies = client.poll();
+        if !replies.is_empty() {
+            self.editors_changed = true;
+        }
+        for (slot, ticket, reply) in replies {
             // An earlier reply of this batch may have re-requested this slot (a message
             // acknowledgement re-reads the inbox): this reply is then stale.
             if self
@@ -3140,7 +3153,7 @@ impl Shell {
         );
     }
 
-    fn poll_hints(&mut self) {
+    fn poll_hints(&mut self, ctx: &egui::Context) {
         let changed = self
             .hints
             .as_mut()
@@ -3149,11 +3162,29 @@ impl Shell {
             if let Some(rx) = &mut self.hints {
                 rx.borrow_and_update();
             }
-            self.refresh_visible();
+            self.hint_refresh_due = true;
+        }
+        if self.hint_refresh_due {
+            // A burst of hints re-reads the visible lists at most once per interval; the
+            // refresh after the burst reads the state its last hint announced.
+            let since = self.last_poll.elapsed();
+            if since >= HINT_REFRESH_INTERVAL {
+                self.hint_refresh_due = false;
+                self.refresh_visible();
+            } else {
+                ctx.request_repaint_after(HINT_REFRESH_INTERVAL - since);
+            }
         } else if self.last_poll.elapsed() > Duration::from_secs(10) {
             // A missed hint is repaired by a bounded periodic re-query of what is visible.
             self.refresh_visible();
         }
+    }
+
+    /// When a hint-driven refresh is waiting for its interval to end (tests step frames until
+    /// then).
+    pub fn hint_refresh_due_at(&self) -> Option<Instant> {
+        self.hint_refresh_due
+            .then(|| self.last_poll + HINT_REFRESH_INTERVAL)
     }
 
     fn refresh_visible(&mut self) {
@@ -3487,7 +3518,7 @@ impl Shell {
                 let slot = Slot::McpContent(self.mcp_scope_key(), id.as_str().to_owned());
                 let submitted = self.online().is_ok()
                     && self.client.as_mut().is_some_and(|client| {
-                        client.task(slot, "Reading MCP content", move |backend| {
+                        client.network_task(slot, "Reading MCP content", move |backend| {
                             ops::mcp_content(
                                 backend,
                                 scope.as_ref(),
@@ -4155,7 +4186,12 @@ impl Shell {
     /// Writes view state when it changed (or always, when `force`).
     fn persist(&mut self, force: bool) {
         let memory = self.memory();
-        match self.publish_purge_client(force || self.saved.as_ref() != Some(&memory)) {
+        if !force && self.saved.as_ref() == Some(&memory) {
+            // Nothing to save; the frame loop publishes editor changes as they happen.
+            self.last_save = Instant::now();
+            return;
+        }
+        match self.publish_purge_client(true) {
             Ok(true) => {
                 self.saved = Some(memory);
                 self.last_save = Instant::now();
@@ -4169,7 +4205,6 @@ impl Shell {
             Ok(false) => {}
         }
         if let Some(path) = &self.memory_path
-            && (force || self.saved.as_ref() != Some(&memory))
             && memory.save(path).is_ok()
         {
             self.saved = Some(memory);
@@ -4232,12 +4267,19 @@ impl Shell {
         }
         self.apply_text_scale(&ctx);
         self.advance_lifecycle(&ctx);
+        let input = ctx.input(|i| !i.events.is_empty() || !i.raw.dropped_files.is_empty());
         self.drain(&ctx);
-        if let Err(e) = self.publish_purge_client(false) {
+        // Building the snapshot reads every draft and editor, so it is published only when
+        // input or a reply may have changed one, or while a purge review inspects it.
+        if (self.editors_changed || input || self.purge.frozen || self.purge.project.is_some())
+            && let Err(e) = self.publish_purge_client(false)
+        {
             self.status = Some(e);
         }
+        // This frame's widgets apply its input after the publish above: publish again next frame.
+        self.editors_changed |= input;
         if self.lifecycle == Lifecycle::Open && !self.purge.frozen {
-            self.poll_hints();
+            self.poll_hints(&ctx);
             self.input(&ctx);
             self.poll_live_text(&ctx);
         }

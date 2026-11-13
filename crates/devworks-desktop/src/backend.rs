@@ -748,6 +748,8 @@ pub struct Client {
     purge_reviewing: bool,
     backend: Arc<dyn Backend>,
     jobs: Sender<(u64, Job)>,
+    /// Network-bound tasks, served by their own workers (see [`Client::network_task`]).
+    network_jobs: Sender<(u64, Job)>,
     replies: Receiver<(u64, Reply)>,
     reply_tx: Sender<(u64, Reply)>,
     pending: Vec<Pending>,
@@ -761,15 +763,20 @@ pub struct Client {
     join_bound: Duration,
 }
 
-/// Worker threads; requests rarely contend, but an attachment upload must not hold up a
-/// settings read.
+/// Worker threads for store queries, commands and local tasks; requests rarely contend, but an
+/// attachment upload must not hold up a settings read.
 const WORKERS: usize = 3;
+/// Worker threads for tasks that wait on the network (package indexes, add-on downloads, MCP
+/// servers). They have their own queue, so slow remote calls never hold a store worker.
+const NETWORK_WORKERS: usize = 2;
 
 impl Client {
     pub fn new(backend: Arc<dyn Backend>) -> Self {
         let (jobs, job_rx) = channel::<(u64, Job)>();
+        let (network_jobs, network_rx) = channel::<(u64, Job)>();
         let (reply_tx, replies) = channel::<(u64, Reply)>();
         let job_rx = Arc::new(Mutex::new(job_rx));
+        let network_rx = Arc::new(Mutex::new(network_rx));
         let shared = Arc::new(Shared {
             in_flight: Mutex::new(0),
             idle: Condvar::new(),
@@ -777,10 +784,14 @@ impl Client {
             exited: Condvar::new(),
         });
         let waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
-        let mut workers = Vec::with_capacity(WORKERS);
-        for n in 0..WORKERS {
+        let mut workers = Vec::with_capacity(WORKERS + NETWORK_WORKERS);
+        let pools = std::iter::repeat_n(("request", &job_rx), WORKERS).chain(std::iter::repeat_n(
+            ("network", &network_rx),
+            NETWORK_WORKERS,
+        ));
+        for (n, (pool, queue)) in pools.enumerate() {
             let (rx, tx, be, sh, wk) = (
-                job_rx.clone(),
+                queue.clone(),
                 reply_tx.clone(),
                 backend.clone(),
                 shared.clone(),
@@ -789,7 +800,7 @@ impl Client {
             *shared.alive.lock().unwrap_or_else(|p| p.into_inner()) += 1;
             let guard = Alive(shared.clone());
             let spawned = std::thread::Builder::new()
-                .name(format!("devworks-ui-request-{n}"))
+                .name(format!("devworks-ui-{pool}-{n}"))
                 .spawn(move || {
                     let _alive = guard;
                     loop {
@@ -820,6 +831,7 @@ impl Client {
             purge_reviewing: false,
             backend,
             jobs,
+            network_jobs,
             replies,
             reply_tx,
             pending: Vec::new(),
@@ -868,6 +880,17 @@ impl Client {
         job: Job,
         command: Option<(&'static str, Vec<u8>, CommandDispatch)>,
     ) -> Option<u64> {
+        self.submit_to(false, slot, label, job, command)
+    }
+
+    fn submit_to(
+        &mut self,
+        network: bool,
+        slot: Slot,
+        label: &str,
+        job: Job,
+        command: Option<(&'static str, Vec<u8>, CommandDispatch)>,
+    ) -> Option<u64> {
         if !self.open {
             return None;
         }
@@ -887,7 +910,12 @@ impl Client {
             .in_flight
             .lock()
             .unwrap_or_else(|p| p.into_inner()) += 1;
-        if self.jobs.send((ticket, job)).is_err() {
+        let queue = if network {
+            &self.network_jobs
+        } else {
+            &self.jobs
+        };
+        if queue.send((ticket, job)).is_err() {
             // No worker could start: report the request as failed rather than leave it pending.
             let mut n = self
                 .shared
@@ -1102,6 +1130,27 @@ impl Client {
             .is_some()
     }
 
+    /// A [`Self::task`] that waits on the network. It runs on the network workers, so however
+    /// long it takes, store queries and commands keep their own workers.
+    pub fn network_task(
+        &mut self,
+        slot: Slot,
+        label: &str,
+        task: impl FnOnce(&dyn Backend) -> Result<TaskOutput, String> + Send + 'static,
+    ) -> bool {
+        if self.purge_reviewing {
+            return false;
+        }
+        self.submit_to(
+            true,
+            slot,
+            label,
+            Box::new(move |b| Reply::Task(task(b))),
+            None,
+        )
+        .is_some()
+    }
+
     /// Replies that arrived since the last call, for the slots still waiting for them, each
     /// with its ticket. Handling one reply can submit a newer request for the slot of a later
     /// reply in the same batch; check [`Self::is_superseded`] before handling each one.
@@ -1230,6 +1279,8 @@ impl Drop for Client {
     fn drop(&mut self) {
         let (closed, _) = channel();
         drop(std::mem::replace(&mut self.jobs, closed));
+        let (closed, _) = channel();
+        drop(std::mem::replace(&mut self.network_jobs, closed));
         // Wait (bounded) for every worker to end; join only then, so no join can block.
         let deadline = Instant::now() + self.join_bound;
         let mut alive = self.shared.alive.lock().unwrap_or_else(|p| p.into_inner());
@@ -1372,6 +1423,44 @@ mod human_dispatch_tests {
         fn read_stream(&self, _: &Id, _: u64) -> Result<Vec<u8>, String> {
             Err("unavailable".into())
         }
+    }
+    #[test]
+    fn slow_network_tasks_never_hold_the_worker_a_transcript_read_needs() {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let started = Arc::new(AtomicUsize::new(0));
+        let mut client = Client::new(Arc::new(NoHuman::default()));
+        for slot in [Slot::AddonsDiscovery, Slot::McpRelease, Slot::McpCommand] {
+            let (gate, started) = (gate.clone(), started.clone());
+            assert!(client.network_task(slot, "Slow network call", move |_| {
+                started.fetch_add(1, Ordering::SeqCst);
+                let mut open = gate.0.lock().unwrap();
+                while !*open {
+                    open = gate.1.wait(open).unwrap();
+                }
+                Ok(TaskOutput::Refreshed)
+            }));
+        }
+        assert!(client.query(
+            Slot::Transcript("session-a".into()),
+            "Reading the transcript",
+            "sessions.transcript",
+            b"frame".to_vec(),
+        ));
+        // The read is answered while every slow task is still waiting on its network call.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut answered = false;
+        while !answered && Instant::now() < deadline {
+            answered = client.poll().into_iter().any(|(slot, _, reply)| {
+                slot == Slot::Transcript("session-a".into()) && matches!(reply, Reply::Query(_))
+            });
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(answered, "the transcript read waited behind network tasks");
+        assert!(started.load(Ordering::SeqCst) >= 1);
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        assert!(client.wait_idle(Duration::from_secs(10)));
+        assert_eq!(started.load(Ordering::SeqCst), 3);
     }
     #[test]
     fn unsupported_human_ingress_never_falls_back_to_generic_commands() {
