@@ -785,3 +785,50 @@ fn latest_catalog_preserves_all_preexisting_revision_one_and_two_schema_bytes() 
         );
     }
 }
+
+fn create_with_port(revision: Option<u64>, expose: Option<bool>) -> String {
+    let mut port = json!({"containerPort": 80, "hostPort": 8080, "protocol": "Tcp"});
+    if let Some(expose) = expose {
+        port["exposeBeyondLoopback"] = json!(expose);
+    }
+    let mut frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": "key-1",
+        "body": {"kind": "containers.create", "spec": {"engineId": "engine-a",
+            "projectId": "project-a", "image": "alpine", "command": [], "mounts": [],
+            "ports": [port], "environment": [], "resourceIds": []}}});
+    if let Some(revision) = revision {
+        frame["schemaRevision"] = json!(revision);
+    }
+    frame.to_string()
+}
+
+#[test]
+fn a_wider_port_bind_is_an_explicit_revision_8_member_bound_into_the_request_digest() {
+    let op = "containers.create";
+    // Requests that predate the member decode without it, so the engine binds loopback.
+    let plain = decode(op, Mode::Command, &create_with_port(None, None)).expect("revision 1");
+    assert!(
+        !plain
+            .normalized
+            .to_string()
+            .contains("exposeBeyondLoopback")
+    );
+    // An earlier revision refuses the member rather than ignoring it.
+    assert!(matches!(
+        decode(op, Mode::Command, &create_with_port(Some(1), Some(true))),
+        Err(AdmissionError::Decode(_))
+    ));
+    let loopback = decode(op, Mode::Command, &create_with_port(Some(8), None)).expect("r8");
+    let explicit_false =
+        decode(op, Mode::Command, &create_with_port(Some(8), Some(false))).expect("r8 false");
+    let wider = decode(op, Mode::Command, &create_with_port(Some(8), Some(true))).expect("r8 true");
+    assert_eq!(
+        wider.normalized["spec"]["ports"][0]["exposeBeyondLoopback"],
+        json!(true)
+    );
+    // A grant or approval bound to the loopback request cannot cover the wider one.
+    assert_ne!(loopback.fingerprint.as_str(), wider.fingerprint.as_str());
+    assert_ne!(
+        explicit_false.fingerprint.as_str(),
+        wider.fingerprint.as_str()
+    );
+}
