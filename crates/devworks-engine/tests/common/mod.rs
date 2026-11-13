@@ -176,14 +176,17 @@ impl CountingStore {
     }
 }
 
-/// Asserts that the store work of one request did not grow when unrelated history grew:
-/// neither more read snapshots nor more SQLite steps on either connection.
+/// Asserts that the store work of one request did not grow when unrelated history grew: no
+/// more read snapshots, and at most 2% more SQLite steps on either connection. The allowance
+/// covers B-tree bookkeeping a larger table can add to the same insert or seek; work that
+/// visits history grows with it, far past 2%.
 pub fn assert_no_growth(path: &str, small: StoreWork, large: StoreWork) {
     eprintln!("{path}: before {small:?}, after tenfold history {large:?}");
+    let within = |small: u64, large: u64| large <= small + small / 50;
     assert!(
         large.snapshots <= small.snapshots
-            && large.read_steps <= small.read_steps
-            && large.write_steps <= small.write_steps,
+            && within(small.read_steps, large.read_steps)
+            && within(small.write_steps, large.write_steps),
         "{path}: store work grew with unrelated history: {small:?} -> {large:?}"
     );
 }

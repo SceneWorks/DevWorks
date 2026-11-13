@@ -2114,6 +2114,18 @@ impl WorkRead for Unsupported {
     ) -> Result<Vec<StoredAllocationClaim>, StorageError> {
         nope()
     }
+    fn live_allocation_claims(
+        &self,
+        _: &ProjectId,
+    ) -> Result<Vec<StoredAllocationClaim>, StorageError> {
+        nope()
+    }
+    fn latest_allocation_claim(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredAllocationClaim>, StorageError> {
+        nope()
+    }
     fn allocation_by_invocation(
         &self,
         _: &Id,

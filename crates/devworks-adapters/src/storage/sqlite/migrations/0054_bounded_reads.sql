@@ -76,3 +76,10 @@ CREATE INDEX router_requests_created ON router_requests(created_at,request_id);
 CREATE INDEX usage_origins_recorded ON usage_origins(recorded_at,source_kind,source_id);
 CREATE INDEX usage_origins_project_recorded
  ON usage_origins(project_id,recorded_at,source_kind,source_id);
+
+-- A next_work claim reads the project's live claims and the work items in an actionable status,
+-- not released claims or completed work.
+CREATE INDEX allocation_claims_live_project ON allocation_claims(project_id,id)
+ WHERE state IN ('Active','Transferred','Yielding');
+CREATE INDEX work_items_by_status
+ ON work_items(project_id,status_id,priority DESC,manual_order,created_at,id);
