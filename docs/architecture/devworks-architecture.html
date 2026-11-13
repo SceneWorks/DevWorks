@@ -1463,6 +1463,61 @@
 <h2 id="integrations-automation-and-resource-ownership">Integrations automation and resource ownership</h2>
 <p>Outgoing MCP uses app-launched stdio servers and remote Streamable HTTP connections. Their standard framing and lifecycle are distinct from the private package protocol. Incoming DevWorks MCP support is a separate adapter to the same application gateway. <a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/transports">MCP transport specification</a></p>
 <p>Namespace server tools and retain schemas, capability versions, discovery state and authentication handles. Enable established read-only tools by default; mutating tools require selection. Treat external annotations as hints during classification. Missing optional Node/Python runtimes or server failures are server-specific limitations, not app startup failures. Accepted sampling requests enter the router with attribution, permission and budget checks; incoming clients use the independently granted server boundary below.</p>
+<p><strong>Outgoing transport and capability matrix (MCP-02).</strong> The outgoing client supports exactly these transports and capabilities. Anything not listed is not supported.</p>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>App-launched stdio</th>
+<th>Remote Streamable HTTP</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Configuration</td>
+<td>A registered executable, a registered working root, arguments, environment entries (secrets only as OS secret store handles), tool profile, timeout and output limit.</td>
+<td>An <code>https</code> endpoint and an optional bearer token kept in the OS secret store. Plain <code>http</code> with a token is accepted only for a literal loopback address; URL user info and fragments are refused.</td>
+</tr>
+<tr>
+<td>Lifecycle</td>
+<td>Configure, connect or reconnect, disable, enable (a person&#39;s connect), remove. Disable and remove close the session and stop the launched process tree through <code>ProcessSupervisor</code>.</td>
+<td>Configure, connect or reconnect, disable, enable, remove. Disable and remove close the session.</td>
+</tr>
+<tr>
+<td>Runtime availability</td>
+<td>Before connecting, Settings names an executable this computer cannot resolve and the runtime it belongs to; a failed launch records a diagnostic naming it. Other servers keep serving.</td>
+<td>Not applicable.</td>
+</tr>
+<tr>
+<td>Bounds</td>
+<td>Connect within 20 s; each call within 15 s; frames up to 8 MiB; a catalog of at most 500 tools, resources and prompts in total, within 1 MiB.</td>
+<td>Same.</td>
+</tr>
+<tr>
+<td>Discovery</td>
+<td>A person&#39;s discovery reads tools, resources and prompts. Catalog changes are picked up only by rediscovery; <code>list_changed</code> notifications are not handled.</td>
+<td>Same.</td>
+</tr>
+<tr>
+<td>Tools</td>
+<td>Selected tools are offered to agents under server-qualified aliases. On a server&#39;s first discovery, tools that are read-only by the server&#39;s hint, or by a person&#39;s classification in its place, start selected. Titles and destructive hints are shown; all annotations stay hints and never count as a verified read.</td>
+<td>Same.</td>
+</tr>
+<tr>
+<td>Resources and prompts</td>
+<td>Read through <code>mcp.resources</code> and <code>mcp.prompts</code>, published as untrusted content artifacts within an 8 MiB budget per query, and viewable in Settings.</td>
+<td>Same.</td>
+</tr>
+<tr>
+<td>Sampling</td>
+<td>Advertised only when a person selected the server&#39;s sampling capability, and accepted only during a selected tool call; requests go through the router.</td>
+<td>Same.</td>
+</tr>
+<tr>
+<td>Client capabilities not offered</td>
+<td>Roots, elicitation, input-required continuations (they fail the call) and tasks (a task result is a protocol fault, so the call&#39;s outcome is unknown and held for a person).</td>
+<td>Same.</td>
+</tr>
+</tbody></table>
 <h3 id="devworks-mcp-server-for-other-harnesses">DevWorks MCP server for other harnesses</h3>
 <p><strong>AD76–78 · baseline 1.1 · 2 November 2026.</strong> The user reversed the client-only decision: indexed code, planned work and Knowledge must be available to other MCP clients and harnesses. Keep outgoing server connections. Incoming tools and scoped resources call existing application services through <code>McpServerAdapter</code>; there is no second store writer, separate business-policy implementation or mandatory daemon. The complete <a href="mcp-server-contracts.html">MCP server contracts</a> define the capability manifest, typed administration, transport matrix and acceptance.</p>
 <p><img src="architecture-diagrams/44-mcp-server-boundary.svg" alt="Other harnesses use the same application gateway"></p>
