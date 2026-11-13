@@ -1817,6 +1817,29 @@ fn a_constantly_matching_file_watcher_still_expires() {
         }
         let record = inspect(&app, &ctx, id_text);
         assert_eq!(record["outcome"]["kind"], json!("TimedOut"), "{record}");
+        // The outcome comes after every report, never in the same pass as one.
+        let session = ctx.session_id().unwrap().clone();
+        let events = read(&**app.store(), |s| {
+            s.watchers().watch_events(
+                &session,
+                &[WatchEventState::Pending, WatchEventState::Delivered],
+                500,
+            )
+        });
+        let ours: Vec<_> = events
+            .iter()
+            .filter(|e| e.watcher_id.as_str() == id_text)
+            .collect();
+        let outcome = ours
+            .iter()
+            .find(|e| e.match_count.is_none())
+            .expect("an outcome");
+        assert!(
+            ours.iter()
+                .filter(|e| e.match_count.is_some())
+                .all(|e| e.created_at_ms < outcome.created_at_ms),
+            "{ours:?}"
+        );
         app.shutdown().await;
     });
 }

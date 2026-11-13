@@ -1513,10 +1513,25 @@ fn step_in(
     let now = tx.now_ms();
     // Matches first: a first-match watcher completes on its first, an each-match watcher records
     // them and reports them no more often than its minimum interval.
-    // An intermediate report does not end the pass: the same pass still settles an expired
-    // or ended source.
+    // A pass that settles the watcher reports no intermediate event first: its pending matches
+    // ride on the outcome, so the outcome is never delivered ahead of a report saying the
+    // source is still watched. An intermediate report does not end the pass otherwise.
+    let ending = match watcher.source_kind.as_str() {
+        "File" => watcher.expires_at_ms.is_some_and(|end| now >= end),
+        "Process" => match watcher.process_operation_id.clone() {
+            Some(run) => match tx.operations().operation(&run)? {
+                Some(operation) => {
+                    let process = tx.resources().process(&run.0)?;
+                    observe(&watcher, &operation, process.as_ref(), monitoring).is_some()
+                }
+                None => false,
+            },
+            None => false,
+        },
+        _ => false,
+    };
     if watcher.matching.is_some()
-        && let Some(Step::Settled) = matches_in(tx, &mut watcher, update, now)?
+        && let Some(Step::Settled) = matches_in(tx, &mut watcher, update, now, !ending)?
     {
         return Ok(Step::Settled);
     }
@@ -1565,16 +1580,18 @@ fn step_in(
                     to: rule.scanned,
                     total,
                 };
-                if let Some(step) = matches_in(tx, &mut watcher, Some(update), now)? {
+                if let Some(step) = matches_in(tx, &mut watcher, Some(update), now, false)? {
                     return Ok(step);
                 }
             }
             let mut ended = observed.outcome;
             if watcher.matching.as_ref().is_some_and(|m| !m.each) {
-                ended.detail = Some(match ended.detail.take() {
+                let detail = match ended.detail.take() {
                     Some(detail) => format!("{detail}; the output never matched the pattern"),
                     None => "the output never matched the pattern".into(),
-                });
+                };
+                // The stored detail is bounded (1,024 characters); the explanation must fit.
+                ended.detail = Some(detail.chars().take(1024).collect());
             }
             finish_in(
                 tx,
@@ -1712,6 +1729,7 @@ fn matches_in(
     watcher: &mut StoredWatcher,
     update: Option<MatchUpdate>,
     now: i64,
+    report: bool,
 ) -> Result<Option<Step>, StorageError> {
     let Some(mut rule) = watcher.matching.clone() else {
         return Ok(None);
@@ -1746,7 +1764,10 @@ fn matches_in(
         return Ok(Some(Step::Settled));
     }
     let interval = rule.min_interval_ms.unwrap_or(DEFAULT_MATCH_INTERVAL_MS);
-    if rule.each && rule.pending > 0 && rule.last_event_at_ms.is_none_or(|at| now - at >= interval)
+    if report
+        && rule.each
+        && rule.pending > 0
+        && rule.last_event_at_ms.is_none_or(|at| now - at >= interval)
     {
         let count = rule.pending;
         rule.pending = 0;
