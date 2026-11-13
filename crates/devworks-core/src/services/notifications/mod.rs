@@ -18,7 +18,7 @@ use crate::protocol::support::{BoundedList, BoundedText, Check, Page};
 use crate::protocol::{
     ActorId, DomainErrorCode, DomainFault, EventId, Id, ProjectId, RevisionDimension, RootId,
 };
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::{
     Failure, Refusal, content, counter, decided, label, not_found, project_visible, query_fault,
     rev,
@@ -394,64 +394,34 @@ impl NotificationService {
             &[
                 &serde_json::to_string(&i.scope).expect("scope"),
                 &filter.categories.join(","),
+                // The cursor is a keyset position, so it stays valid across unrelated commits.
                 &format!(
-                    "{:?}:{}:{}:{}",
-                    filter.read,
-                    filter.unacknowledged_only,
-                    filter.completion_only,
-                    snapshot.stamp().committed_sequence,
+                    "{:?}:{}:{}",
+                    filter.read, filter.unacknowledged_only, filter.completion_only,
                 ),
             ],
             revision,
         );
-        let after = i
-            .page
-            .cursor
-            .as_ref()
-            .map(|c| {
-                let p = binding.decode(&c.0)?;
-                let (time, id) = p.split_once(':').ok_or(StorageError::CursorExpired)?;
-                Ok::<_, StorageError>(NotificationPosition {
-                    created_at_ms: time.parse().map_err(|_| StorageError::CursorExpired)?,
-                    id: Id::new(id).map_err(|_| StorageError::CursorExpired)?,
-                })
-            })
-            .transpose()?;
-        let limit = i.page.limit.get() as u16;
-        let mut rows = snapshot
-            .decisions()
-            .notifications(&filter, after.as_ref(), limit)?;
-        let next = if rows.len() == usize::from(limit) {
-            let p = rows.last().map(|r| NotificationPosition {
-                created_at_ms: r.created_at_ms,
-                id: r.id.clone(),
-            });
-            if snapshot
-                .decisions()
-                .notifications(&filter, p.as_ref(), 1)?
-                .is_empty()
-            {
-                None
-            } else {
-                p.map(|p| {
-                    BoundedText(binding.encode(&format!("{}:{}", p.created_at_ms, p.id.as_str())))
-                })
-            }
-        } else {
-            None
-        };
-        let values = rows
-            .drain(..)
-            .map(|r| record(&r))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok((
-            Page {
-                items: BoundedList(values),
-                has_more: next.is_some(),
-                next_cursor: next,
+        let rows = cursor::page(
+            &binding,
+            &i.page,
+            |after, n| {
+                let after = after
+                    .map(|p| {
+                        let (time, id) = p.split_once(':').ok_or(StorageError::CursorExpired)?;
+                        Ok::<_, StorageError>(NotificationPosition {
+                            created_at_ms: time.parse().map_err(|_| StorageError::CursorExpired)?,
+                            id: Id::new(id).map_err(|_| StorageError::CursorExpired)?,
+                        })
+                    })
+                    .transpose()?;
+                snapshot
+                    .decisions()
+                    .notifications(&filter, after.as_ref(), n)
             },
-            revision,
-        ))
+            |r| format!("{}:{}", r.created_at_ms, r.id.as_str()),
+        )?;
+        Ok((rows.try_into_page(|r| record(&r))?, revision))
     }
     fn mutate(
         &self,

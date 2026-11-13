@@ -11,11 +11,10 @@ use crate::ports::{
 use crate::protocol::data::DataScope;
 use crate::protocol::records::{ApprovalContent, ApprovalViewRecord};
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id};
 use crate::services::{
     UseCases,
-    cursor::CursorBinding,
+    cursor::{self, CursorBinding},
     sessions::{Failure, Refusal, not_found, project_visible, query_fault, rev},
 };
 use crate::settings::service::PrincipalRoles;
@@ -250,41 +249,25 @@ impl ApprovalService {
             ],
             1,
         );
-        let after = i
-            .page
-            .cursor
-            .as_ref()
-            .map(|c| bind.decode(&c.0))
-            .transpose()?
-            .map(|p| parse_position(&p))
-            .transpose()?;
-        let limit = i.page.limit.get() as u16;
-        let refs = s
-            .decisions()
-            .list_approval_sources(&filter, after.as_ref(), limit)?;
-        let more = refs.len() == usize::from(limit);
-        let next = if more {
-            refs.last().map(|p| {
-                BoundedText(bind.encode(&format!(
+        let refs = cursor::page(
+            &bind,
+            &i.page,
+            |after, n| {
+                let after = after.map(parse_position).transpose()?;
+                s.decisions()
+                    .list_approval_sources(&filter, after.as_ref(), n)
+            },
+            |p| {
+                format!(
                     "{}|{}|{}",
                     p.created_at_ms,
                     p.id.as_str(),
                     p.source.as_str()
-                )))
-            })
-        } else {
-            None
-        };
-        let mut rows = Vec::with_capacity(refs.len());
-        for r in refs {
-            rows.push(self.inspect(s, ctx, &r.id, false)?)
-        }
-        Ok(OperationResult::ApprovalsList {
-            value: Page {
-                items: BoundedList(rows),
-                next_cursor: next,
-                has_more: more,
+                )
             },
+        )?;
+        Ok(OperationResult::ApprovalsList {
+            value: refs.try_into_page(|r| self.inspect(s, ctx, &r.id, false))?,
         })
     }
 }

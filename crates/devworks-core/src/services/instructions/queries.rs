@@ -14,33 +14,10 @@ use crate::protocol::records::{
     InstructionRecord, PageRequest, SkillResource, SkillResourcePage, SkillResourcePageResult,
 };
 use crate::protocol::results::OperationResult;
-use crate::protocol::support::{BoundedList, BoundedText, Page};
+use crate::protocol::support::Page;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::Failure;
 use std::collections::BTreeMap;
-
-fn offset(page: &PageRequest, binding: &str) -> Result<usize, Failure> {
-    match &page.cursor {
-        None => Ok(0),
-        Some(c) => {
-            c.0.strip_suffix(&format!(":{binding}"))
-                .and_then(|n| n.parse::<usize>().ok())
-                .ok_or(Failure::Storage(StorageError::CursorExpired))
-        }
-    }
-}
-fn paged<T>(all: Vec<T>, page: &PageRequest, binding: &str) -> Result<Page<T>, Failure> {
-    let start = offset(page, binding)?;
-    if start > all.len() {
-        return Err(Failure::Storage(StorageError::CursorExpired));
-    }
-    let end = (start + page.limit.get() as usize).min(all.len());
-    let has_more = end < all.len();
-    Ok(Page {
-        items: BoundedList(all.into_iter().skip(start).take(end - start).collect()),
-        next_cursor: has_more.then(|| BoundedText(format!("{end}:{binding}"))),
-        has_more,
-    })
-}
 
 /// How a skill item stands among the items sharing its (case-insensitive) name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,7 +140,7 @@ impl InstructionService {
                     let revision = visible_current(instructions, ctx, &item)?;
                     records.push(record(&item, &revision, Some(standing))?);
                 }
-                let binding = crate::fingerprint::sha256_hex(
+                let listed = crate::fingerprint::sha256_hex(
                     serde_json::to_string(
                         &records
                             .iter()
@@ -175,7 +152,11 @@ impl InstructionService {
                 );
                 Ok((
                     OperationResult::SkillsDiscover {
-                        value: paged(records, &i.page, &binding[..16])?,
+                        value: cursor::slice(
+                            &CursorBinding::new(ctx, "skills.discover", &[&listed], 1),
+                            records,
+                            &i.page,
+                        )?,
                     },
                     fence.max(1),
                 ))
@@ -210,8 +191,13 @@ impl InstructionService {
                     })
                     .collect::<Result<_, _>>()
                     .map_err(|e| StorageError::InvalidRecord(format!("skill resource: {e}")))?;
-                let binding = format!("{}-{}", item.id.as_str(), revision.revision);
-                let page = paged(resources, &i.page, &binding)?;
+                let binding = CursorBinding::new(
+                    ctx,
+                    "skills.resources",
+                    &[item.id.as_str(), &revision.revision.to_string()],
+                    1,
+                );
+                let page = cursor::slice(&binding, resources, &i.page)?;
                 Ok((
                     OperationResult::SkillsResources {
                         value: SkillResourcePageResult::Current(SkillResourcePage {
@@ -302,46 +288,27 @@ impl InstructionService {
         page: &PageRequest,
     ) -> Result<(Page<InstructionRecord>, i64), Failure> {
         let item = visible_item(read, ctx, id, kind)?;
-        let before = match &page.cursor {
-            None => None,
-            Some(c) => Some(
-                c.0.strip_suffix(&format!(":{}", item.id.as_str()))
-                    .and_then(|n| n.parse::<i64>().ok())
-                    .ok_or(Failure::Storage(StorageError::CursorExpired))?,
-            ),
-        };
-        let limit = (page.limit.get() as u16).min(crate::ports::storage::MAX_PAGE - 1);
+        let binding = CursorBinding::new(ctx, "instructions.history", &[item.id.as_str()], 1);
         // Another project's confined drafts are skipped; read on until the page fills.
-        let mut rows = Vec::new();
-        let mut scan = before;
-        loop {
-            let batch =
-                read.instruction_revisions(&item.id, scan, crate::ports::storage::MAX_PAGE)?;
-            let end = batch.len() < crate::ports::storage::MAX_PAGE as usize;
-            scan = batch.last().map(|r| r.revision);
-            rows.extend(batch.into_iter().filter(|r| revision_visible(ctx, r)));
-            if end || rows.len() > limit as usize {
-                break;
-            }
-        }
-        let has_more = rows.len() > limit as usize;
-        let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
-        let next = has_more
-            .then(|| {
-                rows.last()
-                    .map(|r| BoundedText(format!("{}:{}", r.revision, item.id.as_str())))
-            })
-            .flatten();
-        let items = rows
-            .iter()
-            .map(|r| record(&item, r, None))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok((
-            Page {
-                items: BoundedList(items),
-                next_cursor: next,
-                has_more,
+        let rows = cursor::page(
+            &binding,
+            page,
+            |before, n| {
+                let before = before
+                    .map(|b| b.parse::<i64>().map_err(|_| StorageError::CursorExpired))
+                    .transpose()?;
+                cursor::scan(
+                    before,
+                    n,
+                    |before, batch| read.instruction_revisions(&item.id, *before, batch),
+                    |r| Some(r.revision),
+                    |r| Ok(revision_visible(ctx, r)),
+                )
             },
+            |r| r.revision.to_string(),
+        )?;
+        Ok((
+            rows.try_into_page(|r| record(&item, &r, None))?,
             item.version,
         ))
     }

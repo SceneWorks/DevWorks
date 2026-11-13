@@ -237,7 +237,17 @@ fn inspection_and_status_are_shared_by_ui_and_agent_tools() {
         r#""page":{"limit":1,"cursor":"nonsense"}"#,
     );
     assert!(
-        matches!(garbage, DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::InvalidArgument)
+        matches!(garbage, DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::CursorExpired)
+    );
+    // A cursor in the format before the shared one expires: the client restarts the listing.
+    let pre_upgrade = f.query(
+        &f.operator,
+        "queue.inspect",
+        "q-p5",
+        r#""page":{"limit":1,"cursor":"q1.2.0.0.delivery-1.0123456789abcdef"}"#,
+    );
+    assert!(
+        matches!(pre_upgrade, DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::CursorExpired)
     );
 
     // Retained running/queued/failed counters.

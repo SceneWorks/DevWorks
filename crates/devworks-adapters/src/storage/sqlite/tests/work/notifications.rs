@@ -31,10 +31,13 @@ fn rows(fx: &Fx) -> Vec<StoredNotification> {
     })
 }
 fn source(fx: &Fx, p: &ProjectId) -> Id {
+    source_named(fx, p, "notification-proposal")
+}
+fn source_named(fx: &Fx, p: &ProjectId, name: &'static str) -> Id {
     let p = p.clone();
     fx.write(move |tx| {
         let a = StoredApproval {
-            id: id("notification-proposal"),
+            id: id(name),
             scope: ConfigScope::Project(p.clone()),
             revision: 1,
             state: "Pending".into(),
@@ -177,6 +180,34 @@ fn read_read_state_and_acknowledgment_are_separate_per_user_and_persist() {
     .unwrap()
     .unwrap();
     assert_eq!(actual, keep);
+}
+
+#[test]
+fn a_list_cursor_survives_an_unrelated_commit() {
+    let fx = fixture();
+    let p = fx.project("Paging", &[]);
+    source_named(&fx, &p, "first-proposal");
+    source_named(&fx, &p, "second-proposal");
+    let body = |cursor: Option<&Value>| {
+        let mut b =
+            json!({"scope":{"kind":"Workspace"},"page":{"limit":1},"unacknowledgedOnly":false});
+        if let Some(c) = cursor {
+            b["page"]["cursor"] = c.clone();
+        }
+        b
+    };
+    let first = list(&fx, body(None));
+    assert_eq!(first["items"].as_array().unwrap().len(), 1);
+    assert_eq!(first["hasMore"], true);
+    let before = fx.read(|s| Ok(s.stamp().committed_sequence));
+    fx.project("Unrelated", &[]);
+    assert!(fx.read(|s| Ok(s.stamp().committed_sequence)) > before);
+    let second = list(&fx, body(Some(&first["nextCursor"])));
+    let items = second["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_ne!(items[0]["id"], first["items"][0]["id"]);
+    assert_eq!(second["hasMore"], false);
+    assert!(second.get("nextCursor").is_none());
 }
 
 #[test]
