@@ -26,11 +26,13 @@
 //!   number becomes `[REDACTED]`, and every string and number inside an object or array does
 //!   too. Secret references, `null`, booleans and empty strings are kept.
 //! * **JSON embedded in text.** An object or array that parses as JSON anywhere in the text is
-//!   redacted as above (and written back compactly) when the text mentions a sensitive name.
+//!   redacted as above (and written back compactly) when the text mentions a sensitive name or
+//!   holds a `\u` escape (which can spell one).
 //! * **Per line**: the value after a credential header (`Authorization:`,
 //!   `Proxy-Authorization:`, `Cookie:`, `X-Api-Key:`); `name=value`, `name:value`,
 //!   `name: value`, `"name":"value"`, `"name": value`, `--name value` and `--name=value` for a
-//!   sensitive name; URL userinfo passwords (`scheme://user:[REDACTED]@host`); `-pVALUE` with
+//!   sensitive name (a `"name": value` whose value opens an object or array, or is `true`,
+//!   `false` or `null`, is left to the JSON pass); URL userinfo passwords (`scheme://user:[REDACTED]@host`); `-pVALUE` with
 //!   a mixed letter-and-digit value of at least 6 bytes.
 //! * **Credential-shaped words**: the settings [`looks_like_credential`] prefixes (`ghp_`,
 //!   `github_pat_`, `sk-`, `xoxb-`, `AKIA`, `glpat-`, ...), JSON Web Tokens (two or three
@@ -224,7 +226,8 @@ impl Redactor {
     /// JSON objects and arrays embedded in `text`, redacted as [`Self::redact_json`] does and
     /// written back compactly; text that does not parse, or needs no redaction, is kept as is.
     fn redact_embedded_json(&self, text: &str) -> String {
-        if !mentions_sensitive_name(text) {
+        // A `\u` escape can spell a sensitive key the raw text does not show.
+        if !text.contains("\\u") && !mentions_sensitive_name(text) {
             return text.to_owned();
         }
         let mut out = String::with_capacity(text.len());
@@ -365,7 +368,13 @@ fn redact_line(line: &str) -> String {
         // JSON escapes inside a logged string (`{\"password\":\"x\"}`) leave a `\` on words.
         let bare = word.trim_matches('\\');
         if pending {
-            if is_secret_ref(bare) {
+            // A secret reference, an opening object or array, or a JSON literal is not a
+            // secret: structured values are the embedded-JSON pass's to redact.
+            let literal = bare.trim_end_matches([',', '}', ']']);
+            if is_secret_ref(bare)
+                || bare.starts_with(['{', '['])
+                || matches!(literal, "true" | "false" | "null")
+            {
                 out.push_str(word);
             } else {
                 out.push_str(REDACTED);
@@ -566,8 +575,18 @@ mod tests {
             "user": "me",
         });
         assert_eq!(r.redact_json(&kept), kept);
-        let line = kept.to_string();
-        assert_eq!(r.redact_text(&line), line);
+        // Compact and pretty: the line pass keeps the objects, booleans and nulls the
+        // structural pass kept.
+        let pretty = serde_json::to_string_pretty(&kept).unwrap();
+        for line in [kept.to_string(), pretty, r#"{"token": null}"#.to_owned()] {
+            assert_eq!(r.redact_text(&line), line);
+        }
+        // A sensitive key spelled with a JSON escape is still a sensitive key.
+        let escaped_key = r#"{"password":"hunter2"}"#;
+        let out = r.redact_text(escaped_key);
+        assert!(!out.contains("hunter2"), "{out}");
+        let value: Value = serde_json::from_str(escaped_key).unwrap();
+        assert_eq!(r.redact_json(&value), json!({"password": REDACTED}));
     }
 
     #[test]
