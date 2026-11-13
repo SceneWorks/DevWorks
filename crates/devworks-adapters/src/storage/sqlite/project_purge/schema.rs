@@ -17,9 +17,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// ownership edge, and its rows keep their session owner. Migration 50 adds watchers and
 /// watcher_events, both owned by their project (schema50 extension); a watcher outside any
 /// project is never a candidate. Migration 51 rebuilds watchers to add probe and timer sources;
-/// it adds no table or ownership edge.
+/// it adds no table or ownership edge. Migration 52 rebuilds watchers (match and file columns)
+/// and watcher_events (several events per watcher, match_count); both keep their project owner
+/// and add no table or ownership edge, and a project's purge still removes all of its rows.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "93f9fa4ee3871dd8676afa86f76fcbc28caff1833bf2e8b84b0d34deb1fa22f9";
+    "ebfb760971e01d5fbc9fc613c71779b980d2750fe6c928932c6a258425ff3a45";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

@@ -603,6 +603,16 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "6f21259b2a9b29021600e2515886b0d0626ceabfdf095cf1c157f2b45610f3ec",
         rebuilds_tables: true,
     },
+    // Prior writers cannot keep a watcher's match state or record more than one event per
+    // watcher, and the source CHECK widens, so both watcher tables are rebuilt.
+    Migration {
+        version: 52,
+        minimum_reader: 52,
+        minimum_writer: 52,
+        sql: include_str!("migrations/0052_watcher_matches.sql"),
+        expected_sha256: "98b89612ce3caecfafb3533de350b23c0cf6f883e6834944ec8a71a7901a9677",
+        rebuilds_tables: true,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

@@ -6450,7 +6450,8 @@
       "values": [
         "Process",
         "Probe",
-        "Timer"
+        "Timer",
+        "File"
       ]
     },
     "WatchOutcomeKind": {
@@ -6507,6 +6508,20 @@
         "after_ms"
       ]
     },
+    "WatchFile": {
+      "kind": "record",
+      "fields": {
+        "path": "RegisteredPath"
+      }
+    },
+    "WatchMatch": {
+      "kind": "record",
+      "fields": {
+        "pattern": "Text",
+        "each": "bool",
+        "min_interval_ms": "?Counter"
+      }
+    },
     "WatchProbeStatus": {
       "kind": "record",
       "fields": {
@@ -6551,6 +6566,7 @@
         "probe": "?WatchProbeStatus",
         "due_at_ms": "?Counter",
         "expires_at_ms": "?Counter",
+        "matches": "?Counter",
         "session_id": "Id",
         "project_id": "?ProjectId",
         "created_at_ms": "Counter",
@@ -11250,13 +11266,15 @@
         "process": "?ProcessSpec",
         "probe": "?WatchProbe",
         "timer": "?WatchTimer",
+        "file": "?WatchFile",
+        "matching": "?WatchMatch",
         "tail_bytes": "?ByteLimit",
         "max_lifetime_ms": "?Counter"
       },
       "result": "WatcherRecord",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers (timers) and cannot launch a process through a watcher.",
+      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers (timers) and cannot launch a process through a watcher.",
       "introducedRevision": 8
     },
     "watch.list": {

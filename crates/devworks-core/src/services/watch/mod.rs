@@ -11,9 +11,10 @@ use crate::operations::{OperationInput, watch as ops};
 use crate::ports::process::{Probe, ProcessSpec as NativeProcessSpec};
 use crate::ports::storage::{
     ApplicationStore, ArtifactScope, ConfigScope, ConfigurationRead, MAX_WATCH_TAIL_BYTES,
-    NewEvent, OperationRecord, ProcessPhase, ReadOptions, ReadSnapshot, StorageError, StoredProbe,
-    StoredProcess, StoredWatchEvent, StoredWatchOutcome, StoredWatcher, WatchEventState,
-    WatcherFilter, WatcherPhase, WriteOptions, WriteTransaction, read_snapshot, run_write,
+    NewEvent, OperationRecord, ProcessPhase, ReadOptions, ReadSnapshot, StorageError, StoredMatch,
+    StoredProbe, StoredProcess, StoredWatchEvent, StoredWatchOutcome, StoredWatcher,
+    WatchEventState, WatcherFilter, WatcherPhase, WriteOptions, WriteTransaction, read_snapshot,
+    run_write,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -35,7 +36,7 @@ use crate::services::artifacts::{ArtifactService, version_ref};
 use crate::services::diagnostics::{DiagnosticService, LogEntry};
 use crate::services::process::STOPPED_ON_REQUEST;
 use crate::services::process::tools::{
-    BindingRefusal, ExecuteOrigin, ProcessToolService, binding_refusal,
+    BindingRefusal, ExecuteOrigin, MatchCounter, ProcessToolService, binding_refusal,
 };
 use crate::services::runs::ControlService;
 use crate::services::sessions::transcript::{BatchOutcome, SessionBatch, SessionWriter};
@@ -58,8 +59,15 @@ const MAX_PATTERN_BYTES: usize = 4_096;
 /// A probe waits at most this many intervals between runs, however many have not met it.
 const MAX_BACKOFF_INTERVALS: i64 = 8;
 
-/// What preparation found for the command a watcher launches (`None`: a timer).
-type PreparedLaunch = Result<Option<(NativeProcessSpec, CommandVerdict)>, BindingRefusal>;
+/// What preparation found for the command a watcher launches (`None`: a timer), or the file it
+/// reads.
+type PreparedLaunch = Result<Prepped, BindingRefusal>;
+enum Prepped {
+    Launch(Option<(NativeProcessSpec, CommandVerdict)>),
+    File(std::path::PathBuf),
+}
+/// Least time between two match events when the watcher sets none.
+const DEFAULT_MATCH_INTERVAL_MS: i64 = 30_000;
 
 /// The default maximum lifetime of a polling watcher in `project` (`watch.maxLifetimeMs`).
 fn max_lifetime_default(
@@ -460,6 +468,32 @@ impl WatchService {
         committed
     }
 
+    /// The matches found since the watcher last recorded them: the running process's count so
+    /// far, or the complete lines appended to the file since its scanned offset.
+    fn match_update(&self, watcher: &StoredWatcher) -> Option<MatchUpdate> {
+        let rule = watcher.matching.as_ref()?;
+        match watcher.source_kind.as_str() {
+            "File" => {
+                let path = watcher.file_path.as_deref()?;
+                let (to, found) = scan_file(path, rule.scanned, &rule.pattern)?;
+                (to != rule.scanned).then_some(MatchUpdate {
+                    from: rule.scanned,
+                    to,
+                    total: rule.total + found,
+                })
+            }
+            _ => {
+                let run = watcher.process_operation_id.as_ref()?;
+                let total = self.processes.live_match_count(&run.0)?;
+                (total > rule.total).then_some(MatchUpdate {
+                    from: rule.scanned,
+                    to: rule.scanned,
+                    total,
+                })
+            }
+        }
+    }
+
     /// The last pass of an orderly shutdown, after owned process trees were stopped (WATCH-08):
     /// a process watcher whose process the shutdown stopped ends `Interrupted`, and a probe whose
     /// run it stopped forgets that run and runs again as soon as DevWorks reopens. Timers and
@@ -538,19 +572,31 @@ impl WatchService {
             let monitoring = self.processes.is_monitoring(operation_id);
             Ok(observe(watcher, &operation, process.as_ref(), monitoring).is_some())
         })?;
-        let due = match watcher.source_kind.as_str() {
-            "Timer" => watcher.due_at_ms.is_some_and(|due| now >= due),
-            "Probe" => {
-                watcher.expires_at_ms.is_some_and(|end| now >= end)
-                    || (watcher.process_operation_id.is_none()
-                        && watcher
-                            .probe
-                            .as_ref()
-                            .and_then(|p| p.next_run_at_ms)
-                            .is_some_and(|next| now >= next))
-            }
-            _ => false,
-        };
+        // New matches: counted over the live output by the run, or read from the file.
+        let update = self.match_update(watcher);
+        let flush = watcher.matching.as_ref().is_some_and(|m| {
+            m.each
+                && m.pending > 0
+                && m.last_event_at_ms.is_none_or(|at| {
+                    now - at >= m.min_interval_ms.unwrap_or(DEFAULT_MATCH_INTERVAL_MS)
+                })
+        });
+        let due = update.is_some()
+            || flush
+            || match watcher.source_kind.as_str() {
+                "Timer" => watcher.due_at_ms.is_some_and(|due| now >= due),
+                "File" => watcher.expires_at_ms.is_some_and(|end| now >= end),
+                "Probe" => {
+                    watcher.expires_at_ms.is_some_and(|end| now >= end)
+                        || (watcher.process_operation_id.is_none()
+                            && watcher
+                                .probe
+                                .as_ref()
+                                .and_then(|p| p.next_run_at_ms)
+                                .is_some_and(|next| now >= next))
+                }
+                _ => false,
+            };
         if !observed && !due {
             return Ok(false);
         }
@@ -562,7 +608,7 @@ impl WatchService {
             .is_some_and(|op| self.processes.is_monitoring(op));
         let processes = self.processes.clone();
         let step = run_write(&*self.store, WriteOptions::default(), move |tx| {
-            step_in(tx, &id, monitoring, &processes)
+            step_in(tx, &id, monitoring, &processes, update)
         })?;
         if let Step::Expired(Some(run)) = &step {
             // The lifetime ended with a run in flight: the watcher already settled TimedOut, and
@@ -760,8 +806,10 @@ impl WatchService {
         let Some(session_id) = ctx.session_id().cloned() else {
             return refuse(tx, DomainErrorCode::InvalidArgument, "watcher_session");
         };
+        let mut file_path = None;
         match command.prepared::<PreparedLaunch>() {
-            Some(Ok(Some((bound, verdict)))) => {
+            Some(Ok(Prepped::File(path))) => file_path = Some(path.to_string_lossy().into_owned()),
+            Some(Ok(Prepped::Launch(Some((bound, verdict))))) => {
                 // Probe and launch commands pass the shell preflight at creation (WATCH-10),
                 // not only when each run launches.
                 if matches!(verdict, CommandVerdict::Blocked { .. }) {
@@ -769,7 +817,7 @@ impl WatchService {
                     return refuse(tx, DomainErrorCode::PermissionDenied, "process_preflight");
                 }
             }
-            Some(Ok(None)) => {}
+            Some(Ok(Prepped::Launch(None))) => {}
             Some(Err(reason)) => return decided(tx, Err(binding_refusal(*reason).into())),
             None => return refuse(tx, DomainErrorCode::Conflict, "watch_preparation"),
         }
@@ -778,6 +826,29 @@ impl WatchService {
         let tail_bytes = requested
             .unwrap_or(DEFAULT_TAIL_BYTES)
             .min(MAX_WATCH_TAIL_BYTES as u32);
+        let matching = match &input.matching {
+            Some(rule) => {
+                let pattern = rule.pattern.0.clone();
+                if regex::Regex::new(&pattern).is_err() {
+                    return refuse(tx, DomainErrorCode::InvalidArgument, "matching_pattern");
+                }
+                Some(StoredMatch {
+                    pattern,
+                    each: rule.each,
+                    min_interval_ms: Some(
+                        rule.min_interval_ms
+                            .as_ref()
+                            .map_or(DEFAULT_MATCH_INTERVAL_MS, |ms| ms.get()),
+                    ),
+                    scanned: 0,
+                    pending: 0,
+                    total: 0,
+                    last_event_at_ms: None,
+                })
+            }
+            None => None,
+        };
+        let output_pattern = matching.as_ref().map(|m| m.pattern.clone());
         let launch = |spec, tx: &mut dyn WriteTransaction| {
             self.processes.record_execute(
                 ctx,
@@ -786,6 +857,7 @@ impl WatchService {
                 ExecuteOrigin::Watch {
                     tail_bytes,
                     requested,
+                    pattern: output_pattern.clone(),
                 },
                 tx,
             )
@@ -812,8 +884,22 @@ impl WatchService {
             probe: None,
             due_at_ms: None,
             expires_at_ms: None,
+            matching,
+            file_path: None,
         };
-        if let Some(process) = &input.process {
+        if input.file.is_some() {
+            let Some(path) = file_path.take() else {
+                return refuse(tx, DomainErrorCode::Conflict, "watch_preparation");
+            };
+            let lifetime = match &input.max_lifetime_ms {
+                Some(ms) => ms.get(),
+                None => max_lifetime_default(tx.configuration(), ctx.project_id())?,
+            };
+            watcher.source_kind = "File".into();
+            watcher.tail_bytes = 0;
+            watcher.file_path = Some(path);
+            watcher.expires_at_ms = Some(now.saturating_add(lifetime));
+        } else if let Some(process) = &input.process {
             watcher.source_kind = "Process".into();
             watcher.executable_ref = Some(process.executable_ref.as_str().to_owned());
             watcher.process_operation_id = Some(launch(process, tx)?);
@@ -1003,14 +1089,21 @@ impl CommandHandler for WatchService {
                     .process
                     .as_ref()
                     .or(input.probe.as_ref().map(|p| &p.process));
-                let prepared: PreparedLaunch = spec
-                    .map(|spec| {
-                        self.processes.bind_spec(spec, ctx).map(|bound| {
-                            let verdict = self.processes.preflight(&bound);
-                            (bound, verdict)
+                let prepared: PreparedLaunch = match &input.file {
+                    Some(file) => self
+                        .processes
+                        .resolve_watched_file(&file.path, ctx.project_id())
+                        .map(Prepped::File),
+                    None => spec
+                        .map(|spec| {
+                            self.processes.bind_spec(spec, ctx).map(|bound| {
+                                let verdict = self.processes.preflight(&bound);
+                                (bound, verdict)
+                            })
                         })
-                    })
-                    .transpose();
+                        .transpose()
+                        .map(Prepped::Launch),
+                };
                 Some(Prepared::new(prepared))
             }
             _ => None,
@@ -1409,14 +1502,22 @@ fn step_in(
     id: &Id,
     monitoring: bool,
     processes: &ProcessToolService,
+    update: Option<MatchUpdate>,
 ) -> Result<Step, StorageError> {
-    let Some(watcher) = tx.watchers().watcher(id)? else {
+    let Some(mut watcher) = tx.watchers().watcher(id)? else {
         return Ok(Step::Nothing);
     };
     if !watcher.phase.is_open() {
         return Ok(Step::Nothing);
     }
     let now = tx.now_ms();
+    // Matches first: a first-match watcher completes on its first, an each-match watcher records
+    // them and reports them no more often than its minimum interval.
+    if watcher.matching.is_some()
+        && let Some(step) = matches_in(tx, &mut watcher, update, now)?
+    {
+        return Ok(step);
+    }
     match watcher.source_kind.as_str() {
         "Timer" => {
             if watcher.due_at_ms.is_none_or(|due| now < due) {
@@ -1428,6 +1529,20 @@ fn step_in(
             Ok(Step::Settled)
         }
         "Probe" => probe_step_in(tx, watcher, monitoring, processes, now),
+        "File" => {
+            if watcher.expires_at_ms.is_none_or(|end| now < end) {
+                return Ok(Step::Advanced);
+            }
+            let duration = Some((now - watcher.created_at_ms).max(0));
+            let detail = if watcher.matching.as_ref().is_some_and(|m| m.each) {
+                "the file watcher reached its maximum lifetime"
+            } else {
+                "the pattern did not match the file within the watcher's maximum lifetime"
+            };
+            let ended = outcome("TimedOut", None, None, Some(detail));
+            finish_in(tx, watcher, ended, duration, None, false, None)?;
+            Ok(Step::Settled)
+        }
         _ => {
             let Some(operation_id) = watcher.process_operation_id.clone() else {
                 return Ok(Step::Nothing);
@@ -1439,10 +1554,30 @@ fn step_in(
             let Some(observed) = observe(&watcher, &operation, process.as_ref(), monitoring) else {
                 return Ok(Step::Nothing);
             };
+            // The final count covers the output after the last pass read the live count.
+            if let (Some(rule), Some(total)) = (&watcher.matching, final_matches(&operation))
+                && total > rule.total
+            {
+                let update = MatchUpdate {
+                    from: rule.scanned,
+                    to: rule.scanned,
+                    total,
+                };
+                if let Some(step) = matches_in(tx, &mut watcher, Some(update), now)? {
+                    return Ok(step);
+                }
+            }
+            let mut ended = observed.outcome;
+            if watcher.matching.as_ref().is_some_and(|m| !m.each) {
+                ended.detail = Some(match ended.detail.take() {
+                    Some(detail) => format!("{detail}; the output never matched the pattern"),
+                    None => "the output never matched the pattern".into(),
+                });
+            }
             finish_in(
                 tx,
                 watcher,
-                observed.outcome,
+                ended,
                 observed.duration_ms,
                 observed.tail,
                 observed.truncated,
@@ -1558,6 +1693,135 @@ fn probe_step_in(
     Ok(Step::Advanced)
 }
 
+/// Matches found since a watcher last recorded them: its new total, and for a file the bytes
+/// scanned (complete lines) from `from` to `to`.
+#[derive(Clone, Copy, Debug)]
+struct MatchUpdate {
+    from: i64,
+    to: i64,
+    total: i64,
+}
+
+/// Applies `update` to `watcher`'s match rule and records what it calls for: `Some(step)` when
+/// the watcher settled (its first match) or reported matches, `None` to continue its source's
+/// own step. The watcher row is written whenever its match state changed.
+fn matches_in(
+    tx: &mut dyn WriteTransaction,
+    watcher: &mut StoredWatcher,
+    update: Option<MatchUpdate>,
+    now: i64,
+) -> Result<Option<Step>, StorageError> {
+    let Some(mut rule) = watcher.matching.clone() else {
+        return Ok(None);
+    };
+    let mut changed = false;
+    // Read outside this write: applied only if nothing recorded them meanwhile.
+    if let Some(update) = update
+        && update.from == rule.scanned
+        && update.total >= rule.total
+        && (update.total > rule.total || update.to != rule.scanned)
+    {
+        rule.pending += update.total - rule.total;
+        rule.total = update.total;
+        rule.scanned = update.to;
+        changed = true;
+    }
+    if !rule.each && rule.total > 0 {
+        rule.pending = 0;
+        watcher.matching = Some(rule);
+        let duration = Some((now - watcher.created_at_ms).max(0));
+        let run = watcher.process_operation_id.clone();
+        let matched = outcome("Succeeded", None, None, Some("the pattern matched"));
+        finish_in(
+            tx,
+            watcher.clone(),
+            matched,
+            duration,
+            None,
+            false,
+            run.as_ref(),
+        )?;
+        return Ok(Some(Step::Settled));
+    }
+    let interval = rule.min_interval_ms.unwrap_or(DEFAULT_MATCH_INTERVAL_MS);
+    if rule.each && rule.pending > 0 && rule.last_event_at_ms.is_none_or(|at| now - at >= interval)
+    {
+        let count = rule.pending;
+        rule.pending = 0;
+        rule.last_event_at_ms = Some(now);
+        watcher.matching = Some(rule);
+        update_in(tx, watcher, now)?;
+        let mut payload = bounded_payload(watcher, now)?;
+        payload["matchCount"] = json!(count);
+        let event = StoredWatchEvent {
+            id: tx.new_id(IdKind::Event),
+            watcher_id: watcher.id.clone(),
+            session_id: watcher.session_id.clone(),
+            project_id: watcher.project_id.clone(),
+            state: WatchEventState::Pending,
+            payload,
+            transcript_sequence: None,
+            carried_turn_id: None,
+            created_at_ms: now,
+            delivered_at_ms: None,
+            acknowledged_at_ms: None,
+            match_count: Some(count),
+        };
+        tx.watchers().insert_watch_event(&event)?;
+        let run = watcher.process_operation_id.clone();
+        history(
+            tx,
+            watcher,
+            run.as_ref(),
+            "WatcherMatched",
+            json!({"eventId": event.id.as_str(), "matches": count}),
+        )?;
+        return Ok(Some(Step::Advanced));
+    }
+    if changed {
+        watcher.matching = Some(rule);
+        update_in(tx, watcher, now)?;
+    }
+    Ok(None)
+}
+
+/// The final match count a watched run's monitor recorded with its outcome.
+fn final_matches(operation: &OperationRecord) -> Option<i64> {
+    operation.attempts.iter().rev().find_map(|attempt| {
+        attempt
+            .observations
+            .iter()
+            .rev()
+            .find_map(|o| o.pointer("/watchOutcome/matches").and_then(Value::as_i64))
+    })
+}
+
+/// The matches of `pattern` in the complete lines appended to the file at `path` since byte
+/// `from` (from the start again if the file shrank): the offset scanned to, and the count.
+/// `None` while the file cannot be read (it may not exist yet).
+fn scan_file(path: &str, from: i64, pattern: &str) -> Option<(i64, i64)> {
+    use std::io::{Read, Seek, SeekFrom};
+    const MAX_READ: u64 = 16 * 1024 * 1024;
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = i64::try_from(file.metadata().ok()?.len()).ok()?;
+    let from = if len < from { 0 } else { from };
+    if len == from {
+        return Some((from, 0));
+    }
+    file.seek(SeekFrom::Start(from as u64)).ok()?;
+    let mut bytes = Vec::new();
+    file.take(((len - from) as u64).min(MAX_READ))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let Some(end) = bytes.iter().rposition(|b| *b == b'\n').map(|i| i + 1) else {
+        return Some((from, 0));
+    };
+    let mut counter = MatchCounter::new(pattern)?;
+    counter.feed(&bytes[..end]);
+    counter.finish();
+    Some((from + end as i64, counter.count()))
+}
+
 /// Whether a completed probe run meets its condition: the required exit code (0 when neither a
 /// code nor an output pattern is set), and a match of the pattern anywhere in its output.
 fn condition_holds(probe: &StoredProbe, exit: Option<i64>, output: Option<&[u8]>) -> bool {
@@ -1631,21 +1895,31 @@ fn finish_in(
     if let Some(probe) = watcher.probe.as_mut() {
         probe.next_run_at_ms = None;
     }
+    // Matches not yet reported ride on the outcome, so none is silently lost.
+    let unreported = watcher
+        .matching
+        .as_mut()
+        .map_or(0, |m| std::mem::take(&mut m.pending));
     watcher.updated_at_ms = now;
     watcher.settled_at_ms = Some(now);
     tx.watchers().update_watcher(&watcher)?;
+    let mut payload = bounded_payload(&watcher, now)?;
+    if unreported > 0 {
+        payload["matchCount"] = json!(unreported);
+    }
     let event = StoredWatchEvent {
         id: tx.new_id(IdKind::Event),
         watcher_id: watcher.id.clone(),
         session_id: watcher.session_id.clone(),
         project_id: watcher.project_id.clone(),
         state: WatchEventState::Pending,
-        payload: bounded_payload(&watcher, now)?,
+        payload,
         transcript_sequence: None,
         carried_turn_id: None,
         created_at_ms: now,
         delivered_at_ms: None,
         acknowledged_at_ms: None,
+        match_count: None,
     };
     tx.watchers().insert_watch_event(&event)?;
     let kind = watcher.outcome.as_ref().map(|o| o.kind.clone());
@@ -1953,6 +2227,7 @@ fn record_of(
         source_kind: match watcher.source_kind.as_str() {
             "Probe" => WatchSourceKind::Probe,
             "Timer" => WatchSourceKind::Timer,
+            "File" => WatchSourceKind::File,
             _ => WatchSourceKind::Process,
         },
         process: watcher.process_operation_id.as_ref().and_then(|op| {
@@ -1968,6 +2243,7 @@ fn record_of(
         }),
         due_at_ms: watcher.due_at_ms.map(counter),
         expires_at_ms: watcher.expires_at_ms.map(counter),
+        matches: watcher.matching.as_ref().map(|m| counter(m.total)),
         session_id: watcher.session_id.clone(),
         project_id: watcher.project_id.clone(),
         created_at_ms: counter(watcher.created_at_ms),
@@ -2024,6 +2300,10 @@ fn notice_text(event: &StoredWatchEvent) -> String {
             "its timer fire".to_owned(),
             format!("timer due at {} ms", n("/dueAtMs").unwrap_or_default()),
         ),
+        "File" => (
+            "its file watch end".to_owned(),
+            "a file under the project's registered root".to_owned(),
+        ),
         "Probe" => (
             "its probe end".to_owned(),
             format!(
@@ -2042,12 +2322,34 @@ fn notice_text(event: &StoredWatchEvent) -> String {
             ),
         ),
     };
-    let mut text = format!(
-        "Watcher event {event}: watcher {watcher} observed {observed}: {outcome}.\n\
-         Source: {source}.",
-        event = event.id.as_str(),
-        watcher = event.watcher_id.as_str(),
-    );
+    let reported = n("/matchCount");
+    let mut text = if event.match_count.is_some() {
+        // An intermediate match event: the source is still being watched.
+        format!(
+            "Watcher event {event}: watcher {watcher} observed {count} new matches of its \
+             pattern ({total} so far); it is still watching.\nSource: {source}.",
+            event = event.id.as_str(),
+            watcher = event.watcher_id.as_str(),
+            count = reported.unwrap_or_default(),
+            total = n("/matches").unwrap_or_default(),
+        )
+    } else {
+        format!(
+            "Watcher event {event}: watcher {watcher} observed {observed}: {outcome}.\n\
+             Source: {source}.",
+            event = event.id.as_str(),
+            watcher = event.watcher_id.as_str(),
+        )
+    };
+    if event.match_count.is_none()
+        && let Some(total) = n("/matches")
+    {
+        text.push_str(&format!(" Matches: {total} in all"));
+        if let Some(count) = reported {
+            text.push_str(&format!(", {count} not reported before"));
+        }
+        text.push('.');
+    }
     if let Some(duration) = n("/durationMs") {
         text.push_str(&format!(" Duration: {duration} ms."));
     }
@@ -2148,6 +2450,8 @@ mod tests {
             probe: None,
             due_at_ms: None,
             expires_at_ms: None,
+            matching: None,
+            file_path: None,
         }
     }
 
@@ -2184,6 +2488,7 @@ mod tests {
                 created_at_ms: 1,
                 delivered_at_ms: None,
                 acknowledged_at_ms: None,
+                match_count: None,
             })
         };
         let fired = text(&timer);
@@ -2354,6 +2659,7 @@ mod tests {
             created_at_ms: 1,
             delivered_at_ms: None,
             acknowledged_at_ms: None,
+            match_count: None,
         };
         let text = notice_text(&event);
         assert!(text.len() <= MAX_NOTICE_BYTES);

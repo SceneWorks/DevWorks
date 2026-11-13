@@ -26736,7 +26736,8 @@
       "enum": [
         "Process",
         "Probe",
-        "Timer"
+        "Timer",
+        "File"
       ],
       "type": "string"
     },
@@ -26813,6 +26814,16 @@
         },
         "id": {
           "$ref": "#/$defs/Id"
+        },
+        "matches": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "outcome": {
           "anyOf": [
