@@ -11,151 +11,106 @@ use rusqlite::Connection;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-const POLICIES: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/table-selectors.json"
-));
-const EXTENSION: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/schema36-extension.json"
-));
-const STAGING_EXTENSION: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/schema37-extension.json"
-));
-const RECOVERY_EXTENSION: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/schema38-extension.json"
-));
-const CONTAINER_EXTENSION: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/schema39-extension.json"
-));
-const ASSIGNMENT_EXTENSION: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/schema40-extension.json"
-));
-const MESSAGE_EXTENSION: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/schema41-extension.json"
-));
-const ASSIGNMENT_CONTEXT_EXTENSION: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/schema42-extension.json"
-));
-const PROVIDER_CONTEXT_EXTENSION: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/schema46-extension.json"
-));
-const MESSAGE_HEAD_EXTENSION: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/schema47-extension.json"
-));
-const INSTRUCTION_EXTENSION: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/schema49-extension.json"
-));
-const WATCHER_EXTENSION: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/schema50-extension.json"
-));
+/// How `policies()` reads one ownership policy document.
+#[derive(Clone, Copy, Debug)]
+enum Shape {
+    /// `policies` rows, each naming its table, class and disposition.
+    Baseline,
+    /// `additionalTables` rows naming purge control tables.
+    PurgeControl,
+    /// `additionalTables` rows, each naming its table, class and disposition.
+    Tables,
+    /// `tables` changed by added columns or indexes; the document adds no table.
+    Columns,
+}
+struct PolicyDocument {
+    /// The document's key in the assessment digest.
+    key: &'static str,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "a test matches the list to the directory")
+    )]
+    file: &'static str,
+    shape: Shape,
+    text: &'static str,
+}
+macro_rules! policy_document {
+    ($key:literal, $shape:ident, $file:literal) => {
+        PolicyDocument {
+            key: $key,
+            file: $file,
+            shape: Shape::$shape,
+            text: include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../docs/architecture/validation/project-purge/",
+                $file
+            )),
+        }
+    };
+}
+/// Every reviewed ownership policy document. `policies()` loads exactly this list and the
+/// assessment digest hashes exactly this list, so a policy change invalidates prepared purges.
+const POLICY_DOCUMENTS: &[PolicyDocument] = &[
+    policy_document!("policy", Baseline, "table-selectors.json"),
+    policy_document!("extension", PurgeControl, "schema36-extension.json"),
+    policy_document!("stagingExtension", Tables, "schema37-extension.json"),
+    policy_document!("recoveryExtension", Columns, "schema38-extension.json"),
+    policy_document!("containerExtension", Tables, "schema39-extension.json"),
+    policy_document!("assignmentExtension", Columns, "schema40-extension.json"),
+    policy_document!("messageExtension", Tables, "schema41-extension.json"),
+    policy_document!(
+        "assignmentContextExtension",
+        Tables,
+        "schema42-extension.json"
+    ),
+    policy_document!(
+        "providerContextExtension",
+        Tables,
+        "schema46-extension.json"
+    ),
+    policy_document!("messageHeadExtension", Tables, "schema47-extension.json"),
+    policy_document!("instructionExtension", Tables, "schema49-extension.json"),
+    policy_document!("watcherExtension", Tables, "schema50-extension.json"),
+];
+/// The SHA-256 of each policy document, by its digest key.
+fn document_digests() -> BTreeMap<&'static str, String> {
+    POLICY_DOCUMENTS
+        .iter()
+        .map(|document| {
+            (
+                document.key,
+                devworks_core::fingerprint::sha256_hex(document.text.as_bytes()),
+            )
+        })
+        .collect()
+}
 pub(super) type Key = (String, String);
 fn invalid() -> StorageError {
     StorageError::IncompatibleSchema("unmapped project purge ownership policy".into())
 }
 fn policies(conn: &Connection) -> Result<BTreeMap<String, (String, String)>, StorageError> {
-    let policy: Value = serde_json::from_str(POLICIES).map_err(|_| invalid())?;
-    let extension: Value = serde_json::from_str(EXTENSION).map_err(|_| invalid())?;
     let mut known = BTreeMap::new();
-    for row in policy["policies"].as_array().ok_or_else(invalid)? {
-        let (table, class, disposition) = (
-            row["table"].as_str().ok_or_else(invalid)?,
-            row["class"].as_str().ok_or_else(invalid)?,
-            row["disposition"].as_str().ok_or_else(invalid)?,
-        );
-        if known
-            .insert(table.into(), (class.into(), disposition.into()))
-            .is_some()
-        {
-            return Err(invalid());
-        }
-    }
-    for row in extension["additionalTables"]
-        .as_array()
-        .ok_or_else(invalid)?
-    {
-        let table = row["table"].as_str().ok_or_else(invalid)?;
-        if known
-            .insert(
-                table.into(),
-                ("purge_control".into(), "purge_control".into()),
-            )
-            .is_some()
-        {
-            return Err(invalid());
-        }
-    }
-    let container_extension: Value =
-        serde_json::from_str(CONTAINER_EXTENSION).map_err(|_| invalid())?;
-    let instruction_extension: Value =
-        serde_json::from_str(INSTRUCTION_EXTENSION).map_err(|_| invalid())?;
-    for row in container_extension["additionalTables"]
-        .as_array()
-        .ok_or_else(invalid)?
-        .iter()
-        .chain(
-            instruction_extension["additionalTables"]
-                .as_array()
-                .ok_or_else(invalid)?,
-        )
-    {
-        let table = row["table"].as_str().ok_or_else(invalid)?;
-        let class = row["class"].as_str().ok_or_else(invalid)?;
-        let disposition = row["disposition"].as_str().ok_or_else(invalid)?;
-        if known
-            .insert(table.into(), (class.into(), disposition.into()))
-            .is_some()
-        {
-            return Err(invalid());
-        }
-    }
-    let message_extension: Value =
-        serde_json::from_str(MESSAGE_EXTENSION).map_err(|_| invalid())?;
-    for row in message_extension["additionalTables"]
-        .as_array()
-        .ok_or_else(invalid)?
-    {
-        let table = row["table"].as_str().ok_or_else(invalid)?;
-        let class = row["class"].as_str().ok_or_else(invalid)?;
-        let disposition = row["disposition"].as_str().ok_or_else(invalid)?;
-        if known
-            .insert(table.into(), (class.into(), disposition.into()))
-            .is_some()
-        {
-            return Err(invalid());
-        }
-    }
-    let assignment_context_extension: Value =
-        serde_json::from_str(ASSIGNMENT_CONTEXT_EXTENSION).map_err(|_| invalid())?;
-    let provider_context_extension: Value =
-        serde_json::from_str(PROVIDER_CONTEXT_EXTENSION).map_err(|_| invalid())?;
-    let message_head_extension: Value =
-        serde_json::from_str(MESSAGE_HEAD_EXTENSION).map_err(|_| invalid())?;
-    let watcher_extension: Value =
-        serde_json::from_str(WATCHER_EXTENSION).map_err(|_| invalid())?;
-    for extension in [
-        &assignment_context_extension,
-        &provider_context_extension,
-        &message_head_extension,
-        &watcher_extension,
-    ] {
-        for row in extension["additionalTables"]
-            .as_array()
-            .ok_or_else(invalid)?
-        {
+    for document in POLICY_DOCUMENTS {
+        let value: Value = serde_json::from_str(document.text).map_err(|_| invalid())?;
+        let rows = match document.shape {
+            Shape::Baseline => value["policies"].as_array().ok_or_else(invalid)?,
+            Shape::PurgeControl | Shape::Tables => {
+                value["additionalTables"].as_array().ok_or_else(invalid)?
+            }
+            Shape::Columns => {
+                value["tables"].as_object().ok_or_else(invalid)?;
+                continue;
+            }
+        };
+        for row in rows {
             let table = row["table"].as_str().ok_or_else(invalid)?;
-            let class = row["class"].as_str().ok_or_else(invalid)?;
-            let disposition = row["disposition"].as_str().ok_or_else(invalid)?;
+            let (class, disposition) = match document.shape {
+                Shape::PurgeControl => ("purge_control", "purge_control"),
+                _ => (
+                    row["class"].as_str().ok_or_else(invalid)?,
+                    row["disposition"].as_str().ok_or_else(invalid)?,
+                ),
+            };
             if known
                 .insert(table.into(), (class.into(), disposition.into()))
                 .is_some()
@@ -741,16 +696,8 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
         })
         .collect::<Vec<_>>();
     let digest=devworks_core::fingerprint::sha256_hex(serde_json::to_string(&serde_json::json!({
-        "format":"dw83-ownership-assessment-v1","project":project,
-        "policy":devworks_core::fingerprint::sha256_hex(POLICIES.as_bytes()),
-        "extension":devworks_core::fingerprint::sha256_hex(EXTENSION.as_bytes()),
-        "stagingExtension":devworks_core::fingerprint::sha256_hex(STAGING_EXTENSION.as_bytes()),
-        "recoveryExtension":devworks_core::fingerprint::sha256_hex(RECOVERY_EXTENSION.as_bytes()),
-        "assignmentExtension":devworks_core::fingerprint::sha256_hex(ASSIGNMENT_EXTENSION.as_bytes()),
-        "containerExtension":devworks_core::fingerprint::sha256_hex(CONTAINER_EXTENSION.as_bytes()),
-        "messageExtension":devworks_core::fingerprint::sha256_hex(MESSAGE_EXTENSION.as_bytes()),
-        "instructionExtension":devworks_core::fingerprint::sha256_hex(INSTRUCTION_EXTENSION.as_bytes()),
-        "watcherExtension":devworks_core::fingerprint::sha256_hex(WATCHER_EXTENSION.as_bytes()),
+        "format":"dw83-ownership-assessment-v2","project":project,
+        "policyDocuments":document_digests(),
         "scrubPolicy":scrub_policy,"clientKeepers":super::client_keepers::digest(keepers),"selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
     })).map_err(|_|invalid())?.as_bytes());
     Ok(Some(ProjectPurgePlanning {
@@ -759,4 +706,37 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
         rows,
         unresolved,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assessment_digest_covers_every_policy_document_in_the_directory() {
+        let directory = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/architecture/validation/project-purge"
+        );
+        let mut on_disk = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.starts_with("schema") && name.ends_with("-extension.json"))
+            .collect::<BTreeSet<_>>();
+        on_disk.insert("table-selectors.json".into());
+        let listed = POLICY_DOCUMENTS
+            .iter()
+            .map(|document| document.file.to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            listed, on_disk,
+            "every purge policy document must be listed in POLICY_DOCUMENTS \
+             (project_purge/classification.rs), which both policies() and the assessment digest read"
+        );
+        assert_eq!(
+            document_digests().len(),
+            POLICY_DOCUMENTS.len(),
+            "each policy document needs its own digest key"
+        );
+    }
 }

@@ -378,6 +378,24 @@ fn schema(conn: &Connection) -> Vec<(String, String, String, Option<String>)> {
 }
 
 #[test]
+fn every_shipped_migration_matches_its_recorded_checksum() {
+    for (index, m) in MIGRATIONS.iter().enumerate() {
+        assert_eq!(m.version, index as i64 + 1, "MIGRATIONS must be contiguous");
+        assert_eq!(
+            m.checksum(),
+            m.expected_sha256,
+            "migration {} text differs from its recorded checksum. A shipped migration is \
+             immutable: every store that applied it would refuse to open, so revert the edit and \
+             add a new migration instead. Only a migration that has never been released may change; \
+             then set `expected_sha256` of version {} in MIGRATIONS \
+             (crates/devworks-adapters/src/storage/sqlite/migrations.rs) to the new value.",
+            m.version,
+            m.version,
+        );
+    }
+}
+
+#[test]
 fn migration_one_is_exactly_the_adopted_schema_fixture() {
     let fixture = Connection::open_in_memory().unwrap();
     fixture
@@ -679,11 +697,13 @@ fn shipped_migrations_increase_and_settings_apply_on_top() {
     assert_eq!(version_and_ledger(&h, "configuration_proposals").0, 1);
 }
 
+// Fixture migrations never ship in MIGRATIONS, so they record no checksum.
 const EXTRA: Migration = Migration {
     version: 3,
     minimum_reader: 1,
     minimum_writer: 3,
     sql: "CREATE TABLE fixture_extra(id TEXT PRIMARY KEY) STRICT;",
+    expected_sha256: "",
     rebuilds_tables: false,
 };
 const BROKEN: Migration = Migration {
@@ -691,6 +711,7 @@ const BROKEN: Migration = Migration {
     minimum_reader: 1,
     minimum_writer: 4,
     sql: "CREATE TABLE fixture_partial(id TEXT PRIMARY KEY) STRICT; INSERT INTO no_such_table VALUES(1);",
+    expected_sha256: "",
     rebuilds_tables: false,
 };
 /// Leaves a (deferred) foreign-key violation behind: the in-transaction check must refuse it.
@@ -699,6 +720,7 @@ const DANGLING: Migration = Migration {
     minimum_reader: 1,
     minimum_writer: 4,
     sql: "CREATE TABLE fixture_dangling(id TEXT PRIMARY KEY) STRICT; PRAGMA defer_foreign_keys=ON; INSERT INTO command_receipts VALUES('nobody','s','k','x','d',NULL,'{}',1);",
+    expected_sha256: "",
     rebuilds_tables: false,
 };
 

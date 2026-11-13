@@ -19,6 +19,9 @@ pub struct Migration {
     /// Oldest build version that can still write a store at this version.
     pub minimum_writer: i64,
     pub sql: &'static str,
+    /// Recorded SHA-256 of `sql`. Shipped migrations are immutable: a test fails when the text
+    /// no longer matches, because every store that applied the old text would refuse to open.
+    pub expected_sha256: &'static str,
     /// The migration rebuilds a table other tables reference (SQLite's documented table-rebuild
     /// procedure: create, copy, drop, rename). Foreign-key enforcement is switched off for its
     /// one transaction, because dropping a referenced table would otherwise fail, and the full
@@ -39,6 +42,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 1,
         minimum_writer: 1,
         sql: include_str!("migrations/0001_initial.sql"),
+        expected_sha256: MIGRATION_0001_SHA256,
         rebuilds_tables: false,
     },
     // Writers older than 2 would not bind claims to their boot epoch, so they may not write.
@@ -47,6 +51,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 1,
         minimum_writer: 2,
         sql: include_str!("migrations/0002_claim_boot.sql"),
+        expected_sha256: MIGRATION_0002_SHA256,
         rebuilds_tables: false,
     },
     // A version-2 build can still read deliveries, but writing them without partition/sequence
@@ -56,6 +61,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 1,
         minimum_writer: 3,
         sql: include_str!("migrations/0003_durable_delivery.sql"),
+        expected_sha256: MIGRATION_0003_SHA256,
         rebuilds_tables: false,
     },
     // Additive (a new table only). Applying a migration overwrites the store's writer floor, so
@@ -66,6 +72,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 1,
         minimum_writer: 3,
         sql: include_str!("migrations/0004_settings.sql"),
+        expected_sha256: MIGRATION_0004_SHA256,
         rebuilds_tables: false,
     },
     // Additive tables. Writers older than 5 would ignore principal revocation and authority
@@ -77,6 +84,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 5,
         minimum_writer: 5,
         sql: include_str!("migrations/0005_authority.sql"),
+        expected_sha256: MIGRATION_0005_SHA256,
         rebuilds_tables: false,
     },
     // Additive columns, tables and indexes. Applying a migration overwrites both store floors,
@@ -90,6 +98,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 5,
         minimum_writer: 5,
         sql: include_str!("migrations/0006_artifacts.sql"),
+        expected_sha256: MIGRATION_0006_SHA256,
         rebuilds_tables: false,
     },
     // Additive columns (all defaulted or nullable), tables and indexes. It keeps the highest
@@ -103,6 +112,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 5,
         minimum_writer: 5,
         sql: include_str!("migrations/0007_sessions.sql"),
+        expected_sha256: MIGRATION_0007_SHA256,
         rebuilds_tables: false,
     },
     // Rebuilds `artifacts` (nullable project columns for the workspace scope) and adds the
@@ -115,6 +125,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 8,
         sql: include_str!("migrations/0008_receipt_replies.sql"),
+        expected_sha256: MIGRATION_0008_SHA256,
         rebuilds_tables: true,
     },
     // Additive indexes and the tool_invocations table (backfilled from the recorded responses).
@@ -127,6 +138,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 9,
         sql: include_str!("migrations/0009_history_feeds.sql"),
+        expected_sha256: MIGRATION_0009_SHA256,
         rebuilds_tables: false,
     },
     // Additive columns (all defaulted or nullable), tables and indexes. The reader floor stays
@@ -139,6 +151,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 9,
         sql: include_str!("migrations/0010_resources_processes.sql"),
+        expected_sha256: MIGRATION_0010_SHA256,
         rebuilds_tables: false,
     },
     // Additive columns (all defaulted or nullable), tables and indexes for run root controls.
@@ -154,6 +167,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 11,
         sql: include_str!("migrations/0011_run_controls.sql"),
+        expected_sha256: MIGRATION_0011_SHA256,
         rebuilds_tables: false,
     },
     // Additive: the retained diagnostic log, its retention boundary and export intents (three
@@ -169,6 +183,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 11,
         sql: include_str!("migrations/0012_diagnostics.sql"),
+        expected_sha256: MIGRATION_0012_SHA256,
         rebuilds_tables: false,
     },
     // Additive: the router catalog (seeded once), tier cursors, session pins, cooldowns and
@@ -185,6 +200,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 11,
         sql: include_str!("migrations/0013_router.sql"),
+        expected_sha256: MIGRATION_0013_SHA256,
         rebuilds_tables: false,
     },
     // Additive: project and repository side tables, the index view registry and repository
@@ -200,6 +216,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 14,
         sql: include_str!("migrations/0014_projects.sql"),
+        expected_sha256: MIGRATION_0014_SHA256,
         rebuilds_tables: false,
     },
     // Additive: provider connections and SystemOne decision models (two tables and their
@@ -218,6 +235,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 14,
         sql: include_str!("migrations/0015_router_connections.sql"),
+        expected_sha256: MIGRATION_0015_SHA256,
         rebuilds_tables: false,
     },
     // Additive: the work detail, queue revision, plan-approval request, readiness and stop
@@ -234,6 +252,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 16,
         sql: include_str!("migrations/0016_work.sql"),
+        expected_sha256: MIGRATION_0016_SHA256,
         rebuilds_tables: false,
     },
     // Additive: columns (all defaulted or nullable) on `schedules` and `job_runs`, which no
@@ -254,6 +273,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 16,
         sql: include_str!("migrations/0017_jobs.sql"),
+        expected_sha256: MIGRATION_0017_SHA256,
         rebuilds_tables: false,
     },
     // Additive: the unified Knowledge tables, their indexes and two FTS5 projections, referencing
@@ -269,6 +289,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 16,
         sql: include_str!("migrations/0018_knowledge.sql"),
+        expected_sha256: MIGRATION_0018_SHA256,
         rebuilds_tables: false,
     },
     // Additive (DW-023): index source configuration, observed source identity, worktrees, index
@@ -285,6 +306,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 19,
         sql: include_str!("migrations/0019_indexing.sql"),
+        expected_sha256: MIGRATION_0019_SHA256,
         rebuilds_tables: false,
     },
     // Additive: the package registry head, package records, verified versions, approval
@@ -300,6 +322,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 19,
         sql: include_str!("migrations/0020_packages.sql"),
+        expected_sha256: MIGRATION_0020_SHA256,
         rebuilds_tables: false,
     },
     // Additive: owned browser sessions and their observation index (two tables and their
@@ -314,6 +337,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 19,
         sql: include_str!("migrations/0021_browser_sessions.sql"),
+        expected_sha256: MIGRATION_0021_SHA256,
         rebuilds_tables: false,
     },
     // Additive owned Git identities; preserves all earlier reader/writer floors.
@@ -322,6 +346,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 19,
         sql: include_str!("migrations/0022_git_worktrees.sql"),
+        expected_sha256: MIGRATION_0022_SHA256,
         rebuilds_tables: false,
     },
     // Old writers cannot preserve invocation-bound provenance on new browser evidence.
@@ -330,6 +355,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 23,
         sql: include_str!("migrations/0023_browser_source.sql"),
+        expected_sha256: MIGRATION_0023_SHA256,
         rebuilds_tables: false,
     },
     // Additive immutable eval reports; previous readers and writers preserve these rows.
@@ -338,6 +364,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 23,
         sql: include_str!("migrations/0024_eval_runs.sql"),
+        expected_sha256: MIGRATION_0024_SHA256,
         rebuilds_tables: false,
     },
     // Additive concrete pin snapshots. Old writers would silently follow catalog identity
@@ -347,6 +374,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 25,
         sql: include_str!("migrations/0025_router_pin_identity.sql"),
+        expected_sha256: MIGRATION_0025_SHA256,
         rebuilds_tables: false,
     },
     // Earlier writers do not know allocation ownership or its membership fences.
@@ -355,6 +383,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 26,
         sql: include_str!("migrations/0026_allocations.sql"),
+        expected_sha256: MIGRATION_0026_SHA256,
         rebuilds_tables: false,
     },
     // Earlier writers cannot capture reviewed plan content or preserve decision wakeup bindings.
@@ -363,6 +392,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 27,
         sql: include_str!("migrations/0027_decisions.sql"),
+        expected_sha256: MIGRATION_0027_SHA256,
         rebuilds_tables: false,
     },
     // New writers preserve canonical attempt ownership, reservations and historical tariff identity.
@@ -371,6 +401,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 28,
         sql: include_str!("migrations/0028_usage.sql"),
+        expected_sha256: MIGRATION_0028_SHA256,
         rebuilds_tables: true,
     },
     // Earlier writers cannot preserve native account identity when credentials change.
@@ -379,6 +410,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 29,
         sql: include_str!("migrations/0029_connection_account_identity.sql"),
+        expected_sha256: MIGRATION_0029_SHA256,
         rebuilds_tables: false,
     },
     // Earlier writers cannot preserve Help generation and artifact reference invariants.
@@ -387,6 +419,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 30,
         sql: include_str!("migrations/0030_help.sql"),
+        expected_sha256: MIGRATION_0030_SHA256,
         rebuilds_tables: false,
     },
     Migration {
@@ -394,6 +427,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 31,
         sql: include_str!("migrations/0031_graph.sql"),
+        expected_sha256: MIGRATION_0031_SHA256,
         rebuilds_tables: false,
     },
     // Earlier writers cannot preserve convention revision/resource/index identity.
@@ -402,6 +436,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 32,
         sql: include_str!("migrations/0032_conventions.sql"),
+        expected_sha256: MIGRATION_0032_SHA256,
         rebuilds_tables: false,
     },
     // Embedding candidates and their host qualification are additive. Writers must preserve
@@ -411,6 +446,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 33,
         sql: include_str!("migrations/0033_embedding_spaces.sql"),
+        expected_sha256: MIGRATION_0033_SHA256,
         rebuilds_tables: false,
     },
     Migration {
@@ -418,6 +454,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 34,
         sql: include_str!("migrations/0034_schemas.sql"),
+        expected_sha256: MIGRATION_0034_SHA256,
         rebuilds_tables: false,
     },
     // Prior writers do not enforce settings credential retirement fences.
@@ -426,6 +463,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 35,
         sql: include_str!("migrations/0035_settings_secrets.sql"),
+        expected_sha256: MIGRATION_0035_SHA256,
         rebuilds_tables: false,
     },
     // Compact purge identities and receipt outcomes require both new readers and writers.
@@ -434,6 +472,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 36,
         minimum_writer: 36,
         sql: include_str!("migrations/0036_project_purge.sql"),
+        expected_sha256: "fb74cdc793221065ca0afdc99361bc2f7ddb1987fbc02b68bf718147e8970fcc",
         rebuilds_tables: false,
     },
     // Preserve existing managed-file custody while recognizing all owned UI staging.
@@ -442,6 +481,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 37,
         minimum_writer: 37,
         sql: include_str!("migrations/0037_client_staging_custody.sql"),
+        expected_sha256: "b925f2ce095801f5509565911ab540f3a700fce65602142d2cc137f865a881a7",
         rebuilds_tables: true,
     },
     Migration {
@@ -449,6 +489,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 38,
         minimum_writer: 38,
         sql: include_str!("migrations/0038_purge_effect_leases.sql"),
+        expected_sha256: "a3c200a2009cb12e4c929a2e8f4168cbef203def4c625ac92f40e9dfb7ee87de",
         rebuilds_tables: false,
     },
     // A prior writer cannot preserve the new ownership record during project deletion.
@@ -457,6 +498,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 38,
         minimum_writer: 39,
         sql: include_str!("migrations/0039_owned_containers.sql"),
+        expected_sha256: "30dbdac29f79956c98216d29b7bfe62fb9bb609844e3eaf8f926e4cabdf08eb9",
         rebuilds_tables: false,
     },
     Migration {
@@ -464,6 +506,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 40,
         minimum_writer: 40,
         sql: include_str!("migrations/0040_assignment_purpose.sql"),
+        expected_sha256: "9224b731e04bf7436ed9ac85bea92aa682c60dea8366cbbe86a60e81bfa4afc4",
         rebuilds_tables: false,
     },
     Migration {
@@ -471,6 +514,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 41,
         minimum_writer: 41,
         sql: include_str!("migrations/0041_agent_messages.sql"),
+        expected_sha256: "1b149a91b78726f84ac1d9688a93a99b5f6ff08f85e64e975550e4c8ee385b71",
         rebuilds_tables: false,
     },
     Migration {
@@ -478,6 +522,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 42,
         minimum_writer: 42,
         sql: include_str!("migrations/0042_agent_assignment_context.sql"),
+        expected_sha256: "e68758ec4bceb6d9a82af3962fc785f547c265fc88008d40cb8f65e5263339f8",
         rebuilds_tables: false,
     },
     Migration {
@@ -485,6 +530,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 43,
         minimum_writer: 43,
         sql: include_str!("migrations/0043_direct_message_handover.sql"),
+        expected_sha256: "d751ab36d72095b103122be4844443ceb6a4660a9a27cfbef331cbb9f8312193",
         rebuilds_tables: false,
     },
     Migration {
@@ -492,6 +538,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 44,
         minimum_writer: 44,
         sql: include_str!("migrations/0044_session_repository_scope.sql"),
+        expected_sha256: "186dc02b965f875bfdb5ae310656fffee7ac7153ecf4c4005df37944160738ec",
         rebuilds_tables: false,
     },
     Migration {
@@ -499,6 +546,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 45,
         minimum_writer: 45,
         sql: include_str!("migrations/0045_session_activity.sql"),
+        expected_sha256: "c117bab6b4e30d44470069bbdc062a349a088c0950ac54e7bd78c71cab6c5295",
         rebuilds_tables: false,
     },
     Migration {
@@ -506,6 +554,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 46,
         minimum_writer: 46,
         sql: include_str!("migrations/0046_provider_context_head.sql"),
+        expected_sha256: "c287952aeacac7156e94be67cdfa6fd791a25e4bd161dcb7d606edc2f77c9a34",
         rebuilds_tables: false,
     },
     // Agent message cursors must never retreat when a project's rows are purged.
@@ -514,6 +563,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 46,
         minimum_writer: 47,
         sql: include_str!("migrations/0047_agent_message_heads.sql"),
+        expected_sha256: "2e60f717ffeb968368dc1afcac4c4ea7c4f7fe5c5da3db161885c6c990bd6551",
         rebuilds_tables: false,
     },
     Migration {
@@ -521,6 +571,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 48,
         minimum_writer: 48,
         sql: include_str!("migrations/0048_membership_context_epoch.sql"),
+        expected_sha256: "5626f94f862a82cc0a15a1b2caefc05d837fbc0df66f1ff48d909ba8ac993d3a",
         rebuilds_tables: true,
     },
     // Prior writers cannot preserve instruction revision approval and activation invariants.
@@ -529,6 +580,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 48,
         minimum_writer: 49,
         sql: include_str!("migrations/0049_instructions.sql"),
+        expected_sha256: "88286f435638ddda4798562d9437a1c3f042d33706327f9a21c3dd611cfac380",
         rebuilds_tables: false,
     },
     // Prior writers would neither carry nor acknowledge watcher events at turn boundaries; the
@@ -538,6 +590,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 48,
         minimum_writer: 50,
         sql: include_str!("migrations/0050_watchers.sql"),
+        expected_sha256: "e69c28572b504955df3fd47dacea1fd3c9edee5cd72f9e8a22d392528caeb43a",
         rebuilds_tables: false,
     },
     // Prior writers cannot keep a probe's schedule or a timer's due time, and the source CHECK
@@ -547,6 +600,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 51,
         minimum_writer: 51,
         sql: include_str!("migrations/0051_watcher_sources.sql"),
+        expected_sha256: "6f21259b2a9b29021600e2515886b0d0626ceabfdf095cf1c157f2b45610f3ec",
         rebuilds_tables: true,
     },
 ];
