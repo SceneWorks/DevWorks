@@ -1188,6 +1188,24 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         }
         None => None,
     };
+    // The last recovery steps that can stop boot run before any task starts, so a failure here
+    // leaves nothing delivering or holding the store.
+    if let Some(worker) = &purge_worker {
+        // Client effects run before UI restoration; held effects retain their original authority.
+        let recovered = worker.clone();
+        tokio::task::spawn_blocking(move || recovered.step(&mut || false))
+            .await
+            .unwrap_or_else(|_| Err(panicked("purge recovery")))
+            .map_err(BootError::Composition)
+            .map_err(failed)?;
+    }
+    // Earlier submissions remain uncertain even if this boot has no native adapter.
+    crate::store::write(&store, |tx| {
+        tx.decisions().recover_os_notification_deliveries()
+    })
+    .await
+    .map_err(BootError::Composition)
+    .map_err(failed)?;
     // Applying may start an OS helper (and wait briefly to see it hold), so off the async thread.
     let keep_awake = Arc::new(KeepAwake::new(power));
     let (ka, st) = (keep_awake.clone(), store.clone());
@@ -1265,12 +1283,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         }));
     }
     if let Some(worker) = purge_worker {
-        // Client effects run before UI restoration; held effects retain their original authority.
-        let recovered = worker.clone();
-        tokio::task::spawn_blocking(move || recovered.step(&mut || false))
-            .await
-            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.to_string())))?
-            .map_err(BootError::Composition)?;
         let stopping = collector.clone();
         tasks.push(tokio::spawn(async move {
             while !stopping.stopping.load(Ordering::Acquire) {
@@ -1339,12 +1351,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let indexing_task = index_supervisor
         .clone()
         .map(|ix| tokio::spawn(async move { ix.run().await }));
-    // Earlier submissions remain uncertain even if this boot has no native adapter.
-    crate::store::write(&store, |tx| {
-        tx.decisions().recover_os_notification_deliveries()
-    })
-    .await
-    .map_err(BootError::Composition)?;
     let notifications = config
         .native_notifications
         .map(|port| OsNotificationSupervisor::new(store.clone(), ids.clone(), clock.clone(), port));
