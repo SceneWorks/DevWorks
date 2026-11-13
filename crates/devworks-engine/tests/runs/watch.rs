@@ -995,6 +995,39 @@ fn stopping_a_probe_after_its_run_exited_starts_no_further_run() {
     });
 }
 
+/// Cancelling only a process watcher's observation leaves its process to run, even when the
+/// cancellation arrives before the process launched.
+#[test]
+fn an_observation_only_cancel_keeps_the_watched_process() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-observe-cancel-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watcher = create(&app, &ctx, "echo ran > ran", 10_000, "w-observe");
+        let cancelled = command(
+            &app,
+            &ctx,
+            "watch.cancel",
+            json!({"watcherId": watcher["id"], "expectedRevision": watcher["revision"], "stopProcess": false}),
+            "observe-cancel",
+        );
+        assert_eq!(cancelled["state"], json!("Cancelled"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !work.join("work").join("ran").exists() {
+            assert!(std::time::Instant::now() < deadline, "the process never ran");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        app.shutdown().await;
+    });
+}
+
 /// A probe whose condition never holds ends TimedOut at its maximum lifetime.
 #[test]
 fn a_polling_watcher_past_its_maximum_lifetime_ends_timed_out() {

@@ -1600,14 +1600,18 @@ impl ProcessToolService {
         let Ok(job) = serde_json::from_value::<ExecuteJob>(operation.payload.clone()) else {
             return EffectOutcome::Failed("invalid process intent".into());
         };
-        // A watched run starts only while its watcher still observes: one queued before the
-        // watcher ended (a probe that timed out, or one stopped between runs) never launches.
+        // A probe's run starts only while its probe still observes: one queued before the probe
+        // ended (it timed out, or was stopped between runs) never launches. A one-shot process
+        // watcher's process is the owner's request and launches even when only its observation
+        // was cancelled (an explicit stop cancels the undispatched intent itself).
         if job.watch.is_some() {
             let watcher = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
                 snapshot.watchers().watcher_for_process(&operation.id)
             });
             match watcher {
-                Ok(Some(w)) if !w.phase.is_open() || w.stop_requested => {
+                Ok(Some(w))
+                    if w.source_kind == "Probe" && (!w.phase.is_open() || w.stop_requested) =>
+                {
                     return EffectOutcome::Failed(
                         "the watcher ended before this run started".into(),
                     );
