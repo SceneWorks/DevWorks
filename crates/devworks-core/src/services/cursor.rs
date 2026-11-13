@@ -53,7 +53,7 @@ impl CursorBinding {
         else {
             return Err(StorageError::CursorExpired);
         };
-        if hex.len() % 2 != 0 {
+        if !hex.is_ascii() || hex.len() % 2 != 0 {
             return Err(StorageError::CursorExpired);
         }
         let bytes = (0..hex.len())
@@ -66,5 +66,21 @@ impl CursorBinding {
             return Err(StorageError::CursorExpired);
         }
         Ok(position)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_ascii_hex_is_expired_not_a_panic() {
+        let binding = CursorBinding(String::new());
+        for cursor in ["v1.aéa.x", "v1.éa.x", "v1.é.x", "v1.aaé.x"] {
+            assert!(matches!(
+                binding.decode(cursor),
+                Err(StorageError::CursorExpired)
+            ));
+        }
     }
 }
