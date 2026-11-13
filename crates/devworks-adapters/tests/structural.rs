@@ -1034,11 +1034,14 @@ fn csharp_javascript_and_typescript_native_specs_keep_their_own_reading() {
     // definitions are definitions.
     let k = extract(
         "web/k.ts",
-        "class A { #f() {} f() {} m() { this.#f(); } }\nfunction outer(cb = () => { function inner() {} inner(); }) {}\n",
+        "class A { #f() {} f() {} m() { this.#f(); } }\nfunction á() {}\nfunction b() { á(); }\nfunction outer(cb = () => { function inner() {} inner(); }) {}\n",
     );
     let (hf, ..) = def(&k, "Method", "#type:A#method:#f()");
     let (m, ..) = def(&k, "Method", "#type:A#method:m()");
     assert!(local(&k, "CALLS", m, hf));
+    let (accent, ..) = def(&k, "Function", "#function:á()");
+    let (b, ..) = def(&k, "Function", "#function:b()");
+    assert!(local(&k, "CALLS", b, accent));
     let (inner, ..) = def(
         &k,
         "Function",

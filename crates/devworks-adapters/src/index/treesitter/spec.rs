@@ -459,35 +459,6 @@ fn is_receiver_path(s: &str) -> bool {
             !b.is_empty() && ident_start(b[0]) && b[1..].iter().all(|c| ident_part(*c))
         })
 }
-/// The callee of a native spec: the trailing name after dropping balanced trailing `<...>`
-/// type arguments. Its spelling is kept whole: `$`, a private `#f` and a verbatim `@Foo` are
-/// part of a name, as is any Unicode letter or digit.
-fn native_callee(t: &str) -> Option<String> {
-    let mut t = t.trim();
-    if t.ends_with('>') {
-        let mut depth = 0usize;
-        for (i, c) in t.char_indices().rev() {
-            match c {
-                '>' => depth += 1,
-                '<' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        t = &t[..i];
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    let start = t
-        .char_indices()
-        .rev()
-        .take_while(|(_, c)| c.is_alphanumeric() || matches!(c, '_' | '$' | '#' | '@'))
-        .last()
-        .map(|(i, _)| i)?;
-    Some(t[start..].to_owned())
-}
 /// The retained `LastIdentifier`: the last identifier after dropping a trailing `<...>`.
 fn last_identifier(t: &str) -> Option<String> {
     let mut t = t.trim();
@@ -1557,11 +1528,20 @@ impl<'s, 't> W<'s, 't> {
         let name_node = child_by_field(target, "name")
             .or_else(|| child_by_field(target, "field"))
             .or_else(|| child_by_field(target, "method"));
-        let callee_text = self.text(name_node.unwrap_or(target));
         let callee = if spec.native {
-            native_callee(&callee_text)?
+            // The name node's own text, whole: `$`, `#f`, `@Foo` and combining marks are part
+            // of a name; a generic name is its identifier.
+            let node = name_node
+                .or_else(|| child_by_field(target, "property"))
+                .unwrap_or(target);
+            let node = if node.kind() == "generic_name" {
+                node.named_child(0).unwrap_or(node)
+            } else {
+                node
+            };
+            Some(self.text(node).trim().to_owned()).filter(|t| !t.is_empty())?
         } else {
-            last_identifier(&callee_text)?
+            last_identifier(&self.text(name_node.unwrap_or(target)))?
         };
         if receiver.is_none() {
             receiver = spec
