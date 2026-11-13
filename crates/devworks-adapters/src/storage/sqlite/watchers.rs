@@ -285,13 +285,15 @@ macro_rules! watcher_reads {
             }
             fn pending_watch_events(
                 &self,
-                after: Option<&Id>,
+                after: Option<(i64, &Id)>,
                 limit: u16,
             ) -> Result<Vec<StoredWatchEvent>, StorageError> {
+                let (at, id) = after.map_or((i64::MIN, ""), |(at, id)| (at, id.as_str()));
                 events_where(
                     self.conn,
-                    "state='Pending' AND id>?1 ORDER BY id LIMIT ?2",
-                    params![after.map_or("", Id::as_str), page_limit(limit)?],
+                    "state='Pending' AND (created_at>?1 OR (created_at=?1 AND id>?2)) \
+                     ORDER BY created_at,id LIMIT ?3",
+                    params![at, id, page_limit(limit)?],
                 )
             }
             fn watch_event(&self, id: &Id) -> Result<Option<StoredWatchEvent>, StorageError> {

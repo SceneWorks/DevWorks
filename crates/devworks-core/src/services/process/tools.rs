@@ -1609,8 +1609,11 @@ impl ProcessToolService {
                 snapshot.watchers().watcher_for_process(&operation.id)
             });
             match watcher {
+                // ... and nothing a watcher launched starts once the watcher was ended with a stop
+                // (its owner ended, or a stop was requested before the launch).
                 Ok(Some(w))
-                    if w.source_kind == "Probe" && (!w.phase.is_open() || w.stop_requested) =>
+                    if (w.source_kind == "Probe" && (!w.phase.is_open() || w.stop_requested))
+                        || (!w.phase.is_open() && w.stop_requested) =>
                 {
                     return EffectOutcome::Failed(
                         "the watcher ended before this run started".into(),

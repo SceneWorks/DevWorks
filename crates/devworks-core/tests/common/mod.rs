@@ -3305,7 +3305,7 @@ impl WatcherRead for Unsupported {
     }
     fn pending_watch_events(
         &self,
-        _: Option<&Id>,
+        _: Option<(i64, &Id)>,
         _: u16,
     ) -> Result<Vec<StoredWatchEvent>, StorageError> {
         nope()

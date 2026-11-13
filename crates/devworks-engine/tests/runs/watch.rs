@@ -1028,6 +1028,242 @@ fn an_observation_only_cancel_keeps_the_watched_process() {
     });
 }
 
+fn end_session(fx: &Fx, session: &Id) {
+    let session = session.clone();
+    let user = fx.user.principal().clone();
+    fx.tx(move |_, tx| {
+        let mut stored = tx.sessions().session(&session)?.expect("session");
+        stored.closed_at_ms = Some(tx.now_ms());
+        stored.closed_by = Some(user);
+        stored.revision += 1;
+        tx.sessions().update_session(&stored)
+    });
+}
+
+async fn until_running(app: &Runtime, process: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while read(&**app.store(), |s| s.resources().process(&id(process)))
+        .is_none_or(|p| p.phase != ProcessPhase::Running)
+    {
+        assert!(std::time::Instant::now() < deadline, "process never ran");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Ending the owning session cancels its watchers and stops the processes they launched; a probe
+/// starts no further run.
+#[test]
+fn ending_the_owning_session_cancels_its_watchers_and_stops_their_processes() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-session-end-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let session = ctx.session_id().unwrap().clone();
+        let long = create(&app, &ctx, "sleep 30", 60_000, "w-long");
+        let process = long["process"]["processId"].as_str().unwrap().to_owned();
+        let probe = command(
+            &app,
+            &ctx,
+            "watch.create",
+            probe("echo run >> runs; exit 1", 1000, json!({})),
+            "w-probe-end",
+        );
+        until_running(&app, &process).await;
+        let watchers = app.watchers().expect("watchers composed");
+        let probe_id = probe["id"].as_str().unwrap();
+        // The probe's first run ends unmet and waits for its next run.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while counter_at(&inspect(&app, &ctx, probe_id), "/probe/nextRunAtMs").is_none() {
+            assert!(std::time::Instant::now() < deadline, "probe never ran");
+            watchers.settle().unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        end_session(&fx, &session);
+        watchers.settle().unwrap();
+        for watcher in [long["id"].as_str().unwrap(), probe_id] {
+            let record = read(&**app.store(), |s| s.watchers().watcher(&id(watcher))).unwrap();
+            assert_eq!(record.phase, WatcherPhase::Cancelled, "{watcher}");
+            assert!(record.stop_requested, "{watcher}");
+        }
+        let tree = read(&**app.store(), |s| s.resources().process(&id(&process))).unwrap();
+        assert_eq!(
+            tree.phase,
+            ProcessPhase::Reaped,
+            "the launched process was stopped"
+        );
+        for _ in 0..3 {
+            fx.h.advance(10_000);
+            watchers.settle().unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            std::fs::read_to_string(work.join("work").join("runs")).unwrap(),
+            "run\n",
+            "no probe run after the session ended"
+        );
+        app.shutdown().await;
+    });
+}
+
+/// While the owner is paused its events wait and no notice reaches the session; on Continue they
+/// are delivered, in the order they were recorded.
+#[test]
+fn a_paused_owner_receives_its_events_in_order_on_continue() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-pause-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let session = ctx.session_id().unwrap().clone();
+        let watchers = app.watchers().expect("watchers composed");
+        let first = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"timer": {"afterMs": "1000"}}),
+            "w-first",
+        );
+        let second = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"timer": {"afterMs": "2000"}}),
+            "w-second",
+        );
+        applied(&fx.pause(&fx.user, "root-i"));
+        fx.h.advance(1000);
+        watchers.tick().unwrap();
+        fx.h.advance(1000);
+        let paused = watchers.tick().unwrap();
+        assert_eq!(
+            (paused.settled, paused.delivered),
+            (1, 0),
+            "observed, not delivered"
+        );
+        assert!(
+            notices(&fx, &session).is_empty(),
+            "nothing reaches a paused owner"
+        );
+        applied(&fx.resume(&fx.user, "root-i"));
+        assert_eq!(watchers.deliver().unwrap(), 2);
+        let delivered = notices(&fx, &session);
+        let sources: Vec<Value> = delivered.iter().map(|n| n["source"].clone()).collect();
+        let first_event = inspect(&app, &ctx, first["id"].as_str().unwrap())["event"]["id"].clone();
+        let second_event =
+            inspect(&app, &ctx, second["id"].as_str().unwrap())["event"]["id"].clone();
+        assert_eq!(
+            sources,
+            vec![first_event, second_event],
+            "in the order recorded"
+        );
+        app.shutdown().await;
+    });
+}
+
+/// Shutdown interrupts a watched process; on reopen a probe whose run the shutdown stopped runs
+/// again, and a timer that came due while DevWorks was closed fires once.
+#[test]
+fn watchers_are_interrupted_at_shutdown_and_resume_on_reopen() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-reopen-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let long = create(&app, &ctx, "sleep 30", 60_000, "w-interrupted");
+        let probe = command(
+            &app,
+            &ctx,
+            "watch.create",
+            probe(
+                "echo run >> runs; [ -f ready ] || sleep 30",
+                1000,
+                json!({}),
+            ),
+            "w-resumed-probe",
+        );
+        let timer = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"timer": {"afterMs": "5000"}}),
+            "w-closed-timer",
+        );
+        until_running(&app, long["process"]["processId"].as_str().unwrap()).await;
+        until_running(&app, probe["process"]["processId"].as_str().unwrap()).await;
+        app.shutdown().await;
+        drop(app);
+        let interrupted = read(&*fx.store, |s| {
+            s.watchers().watcher(&id(long["id"].as_str().unwrap()))
+        })
+        .unwrap();
+        assert_eq!(
+            interrupted.outcome.as_ref().map(|o| o.kind.as_str()),
+            Some("Interrupted")
+        );
+        let waiting = read(&*fx.store, |s| {
+            s.watchers().watcher(&id(probe["id"].as_str().unwrap()))
+        })
+        .unwrap();
+        assert!(
+            waiting.phase.is_open() && waiting.process_operation_id.is_none(),
+            "{waiting:?}"
+        );
+
+        // Closed past the timer's due time; the next run of the probe now meets its condition.
+        fx.h.advance(10_000);
+        std::fs::write(work.join("work").join("ready"), b"").unwrap();
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let watchers = app.watchers().expect("watchers composed");
+        // The overdue timer fires on the first pass, once, while the restart still holds the
+        // root's work for a person to continue.
+        watchers.settle().unwrap();
+        watchers.settle().unwrap();
+        let timer_id = id(timer["id"].as_str().unwrap());
+        let fired = read(&**app.store(), |s| s.watchers().watcher(&timer_id)).unwrap();
+        assert_eq!(
+            fired.outcome.as_ref().map(|o| o.kind.as_str()),
+            Some("Succeeded"),
+            "{fired:?}"
+        );
+        let events = read(&**app.store(), |s| {
+            s.watchers().watch_event_for_watcher(&timer_id)
+        });
+        assert!(events.is_some(), "the timer recorded its one event");
+        // The probe's next run executes under its root, so it waits for Continue like the rest
+        // of the root's work.
+        applied(&fx.resume(&fx.user, "root-i"));
+        let (ctx, _) = bind(&fx, "coordinator-watch-after-restart");
+        let (record, _) = step_probe(&fx, &app, &ctx, probe["id"].as_str().unwrap()).await;
+        assert_eq!(record["outcome"]["kind"], json!("Succeeded"), "{record}");
+        assert_eq!(
+            std::fs::read_to_string(work.join("work").join("runs")).unwrap(),
+            "run\nrun\n",
+            "the stopped run did not count and the probe ran again after reopening"
+        );
+        app.shutdown().await;
+    });
+}
+
 /// A probe whose condition never holds ends TimedOut at its maximum lifetime.
 #[test]
 fn a_polling_watcher_past_its_maximum_lifetime_ends_timed_out() {
