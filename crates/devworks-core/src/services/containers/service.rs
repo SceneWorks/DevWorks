@@ -56,6 +56,30 @@ pub struct ContainerService {
     pub(super) image_gate: Mutex<()>,
 }
 
+/// An agent may mount an ordinary direct child of a primary checkout. A name starting with `.`
+/// (`.git`, whose hooks and config run host code on the next Git command, and any other
+/// dot-directory) is refused whether the mount is read-only or writable.
+fn agent_mount_name_allowed(name: &str) -> bool {
+    !name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\\'])
+}
+
+/// The canonical direct child `name` of the canonical `root`, or `None` when the name is not
+/// allowed or the child is not already its own canonical path. The canonical form is checked
+/// again, so a symlink or a case or short-name variant that resolves to a dot-directory is
+/// refused even though the requested name looks ordinary.
+fn agent_mount_source(root: &std::path::Path, name: &str) -> Option<PathBuf> {
+    if !agent_mount_name_allowed(name) {
+        return None;
+    }
+    let source = root.join(name);
+    let canonical = source.canonicalize().ok()?;
+    if canonical != source || canonical.parent() != Some(root) {
+        return None;
+    }
+    let leaf = canonical.file_name()?.to_str()?;
+    agent_mount_name_allowed(leaf).then_some(canonical)
+}
+
 impl ContainerService {
     pub(super) fn lifecycle_gate(&self, id: &Id) -> Arc<Mutex<()>> {
         let mut gates = self
@@ -116,7 +140,7 @@ impl ContainerService {
         path: &RegisteredPath,
         project: &ProjectId,
     ) -> Option<PathBuf> {
-        if path.relative.0.is_empty() || path.relative.0.contains(['/', '\\']) {
+        if !agent_mount_name_allowed(&path.relative.0) {
             return None;
         }
         read_snapshot(
@@ -142,10 +166,9 @@ impl ContainerService {
                 {
                     return Ok(None);
                 }
-                let source = root.join(&path.relative.0);
-                if source.canonicalize().ok().as_ref() != Some(&source) {
+                let Some(source) = agent_mount_source(&root, &path.relative.0) else {
                     return Ok(None);
-                }
+                };
                 // A second registered root above this one could itself be mounted writable by an
                 // agent. Refuse nested roots so that route cannot replace this source pathname.
                 let mut after = None;
@@ -574,5 +597,41 @@ impl QueryHandler for ContainerService {
                 .read_stamp(ctx.policy_revision().clone(), rev(1)),
             result,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn checkout(tag: &str) -> PathBuf {
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("dw-mount-source-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(directory.join(".git/hooks")).unwrap();
+        std::fs::create_dir_all(directory.join(".cache")).unwrap();
+        std::fs::create_dir_all(directory.join("src")).unwrap();
+        directory
+    }
+
+    #[test]
+    fn dot_directories_are_refused_and_ordinary_children_resolve() {
+        let root = checkout("names");
+        for name in [".git", ".GIT", ".cache", ".", "..", ".git/hooks", "", "a/b"] {
+            assert_eq!(agent_mount_source(&root, name), None, "{name:?}");
+        }
+        assert_eq!(agent_mount_source(&root, "src"), Some(root.join("src")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_into_a_dot_directory_is_refused() {
+        let root = checkout("link");
+        std::os::unix::fs::symlink(root.join(".git"), root.join("innocent")).unwrap();
+        assert_eq!(agent_mount_source(&root, "innocent"), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
