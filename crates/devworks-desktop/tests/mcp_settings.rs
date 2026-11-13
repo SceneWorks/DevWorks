@@ -612,6 +612,18 @@ fn settings_opens_a_servers_resources_and_prompts_as_untrusted_content() {
         "{}",
         view.text
     );
+
+    // Adding another server selects it; the first server's content is not shown as its own.
+    type_into(&mut h, "MCP server name", " two");
+    click(&mut h, Role::Button, "Add server");
+    settle(&mut h);
+    assert_ne!(h.state().settings.mcp.selected.as_ref(), Some(&server));
+    assert!(
+        h.query_all_by_label_contains("Untrusted content from")
+            .next()
+            .is_none(),
+        "another server's content is not shown beside the new one"
+    );
     wire.block_on(async {
         let _ = remote.cancel().await;
     });

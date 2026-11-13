@@ -2495,12 +2495,19 @@ impl Shell {
                     self.settings.mcp.error = Some(error.describe());
                 }
             },
-            (Slot::McpContent(scope), Reply::Task(_)) if scope != self.mcp_scope_key() => {}
-            (Slot::McpContent(_), Reply::Task(t)) => self.settings.mcp.opened(match t {
-                Ok(TaskOutput::McpContent(text)) => Ok(text),
-                Ok(_) => Err("unexpected reply".into()),
-                Err(error) => Err(error),
-            }),
+            (Slot::McpContent(scope, _), Reply::Task(_)) if scope != self.mcp_scope_key() => {}
+            (Slot::McpContent(_, server), Reply::Task(t)) => {
+                if let Ok(server) = Id::new(server) {
+                    self.settings.mcp.opened(
+                        &server,
+                        match t {
+                            Ok(TaskOutput::McpContent(text)) => Ok(text),
+                            Ok(_) => Err("unexpected reply".into()),
+                            Err(error) => Err(error),
+                        },
+                    );
+                }
+            }
             (Slot::McpCapabilities(scope, _, _), Reply::Query(_))
                 if scope != self.mcp_scope_key() => {}
             (Slot::McpCapabilities(_, server, cursor), Reply::Query(q)) => {
@@ -3466,8 +3473,9 @@ impl Shell {
             McpAction::Reload => self.load_mcp_servers(None),
             McpAction::Catalog(id, _revision) => self.load_mcp_capabilities(id, None),
             McpAction::Open(id, catalog_revision, request) => {
+                let server = id.clone();
                 let scope = self.settings.mcp.project.clone();
-                let slot = Slot::McpContent(self.mcp_scope_key());
+                let slot = Slot::McpContent(self.mcp_scope_key(), id.as_str().to_owned());
                 let submitted = self.online().is_ok()
                     && self.client.as_mut().is_some_and(|client| {
                         client.task(slot, "Reading MCP content", move |backend| {
@@ -3484,7 +3492,7 @@ impl Shell {
                 if !submitted {
                     self.settings
                         .mcp
-                        .opened(Err("the app is offline or closing".into()));
+                        .opened(&server, Err("the app is offline or closing".into()));
                 }
             }
             other => {

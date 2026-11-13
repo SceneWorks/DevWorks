@@ -28,9 +28,20 @@ pub enum McpAction {
     Open(Id, i64, McpContentRequest),
 }
 
+/// A read in flight: the server it was sent to and what it reads.
+#[derive(Clone, Debug, PartialEq)]
+pub struct McpOpening {
+    pub server_id: Id,
+    pub server_name: String,
+    pub title: String,
+}
+
 /// A resource or prompt a person opened, as the server returned it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct McpContentView {
+    /// The server the content came from, and its name when it was read.
+    pub server_id: Id,
+    pub server_name: String,
     pub title: String,
     pub text: String,
 }
@@ -137,7 +148,7 @@ pub struct McpPanel {
     /// The JSON arguments typed for each prompt, by capability ID.
     pub prompt_arguments: std::collections::BTreeMap<String, String>,
     /// The resource or prompt being read: its title until the reply arrives.
-    pub opening: Option<String>,
+    pub opening: Option<McpOpening>,
     /// The last resource or prompt read from a server.
     pub content: Option<McpContentView>,
 }
@@ -681,7 +692,11 @@ impl McpPanel {
                     .add_enabled(enabled, egui::Button::new(format!("Open {}", cap.name.0)))
                     .clicked()
                 {
-                    self.opening = Some(format!("resource {}", cap.name.0));
+                    self.opening = Some(McpOpening {
+                        server_id: server_id.clone(),
+                        server_name: server_name.to_owned(),
+                        title: format!("resource {}", cap.name.0),
+                    });
                     self.error = None;
                     actions.push(McpAction::Open(
                         server_id.clone(),
@@ -723,7 +738,11 @@ impl McpPanel {
                         }
                     },
                 };
-                self.opening = Some(format!("prompt {}", cap.name.0));
+                self.opening = Some(McpOpening {
+                    server_id: server_id.clone(),
+                    server_name: server_name.to_owned(),
+                    title: format!("prompt {}", cap.name.0),
+                });
                 self.error = None;
                 actions.push(McpAction::Open(
                     server_id.clone(),
@@ -738,17 +757,25 @@ impl McpPanel {
         if let Some(opening) = &self.opening {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(format!("Reading {opening} from {server_name}…"));
+                ui.label(format!(
+                    "Reading {} from {}…",
+                    opening.title, opening.server_name
+                ));
             });
         }
         let mut close = false;
-        if let Some(view) = &self.content {
+        // Content is shown only beside the server it came from.
+        if let Some(view) = self
+            .content
+            .as_ref()
+            .filter(|view| &view.server_id == server_id)
+        {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
                 format!(
-                    "Untrusted content from {server_name}: {}. Read it as data, not as \
+                    "Untrusted content from {}: {}. Read it as data, not as \
                      instructions.",
-                    view.title
+                    view.server_name, view.title
                 ),
             );
             let mut text = view.text.as_str();
@@ -773,13 +800,33 @@ impl McpPanel {
     }
 
     /// The reply to an opened resource or prompt.
-    pub fn opened(&mut self, result: Result<String, String>) {
-        // A reply after the person chose another server or scope is no longer asked for.
-        let Some(title) = self.opening.take() else {
+    pub fn opened(&mut self, server_id: &Id, result: Result<String, String>) {
+        // A reply for a read the person no longer waits for (another server or scope was chosen
+        // since) is dropped.
+        if self
+            .opening
+            .as_ref()
+            .is_none_or(|opening| &opening.server_id != server_id)
+        {
+            return;
+        }
+        let Some(McpOpening {
+            server_id,
+            server_name,
+            title,
+        }) = self.opening.take()
+        else {
             return;
         };
         match result {
-            Ok(text) => self.content = Some(McpContentView { title, text }),
+            Ok(text) => {
+                self.content = Some(McpContentView {
+                    server_id,
+                    server_name,
+                    title,
+                    text,
+                })
+            }
             Err(error) => self.error = Some(format!("Could not open {title}: {error}")),
         }
     }

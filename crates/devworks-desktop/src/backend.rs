@@ -347,8 +347,8 @@ pub enum Slot {
     McpServers(String, Option<String>),
     McpOperation(String),
     McpCapabilities(String, String, Option<String>),
-    /// A resource or prompt read from Settings (scope key).
-    McpContent(String),
+    /// A resource or prompt read from Settings (scope key, server ID).
+    McpContent(String, String),
     McpCommand,
     /// Deletes MCP secrets a configuration change left unreferenced.
     McpRelease,
