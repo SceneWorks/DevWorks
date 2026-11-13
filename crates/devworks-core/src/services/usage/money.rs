@@ -9,6 +9,9 @@ const MICROS_PER_USD: i128 = 1_000_000;
 pub enum MoneyError {
     InvalidDecimal,
     Overflow,
+    /// A positive amount that rounds to zero micro-USD. Recording it as zero would hide spend
+    /// from a budget, so the caller must keep it as an untracked component instead.
+    SubMicro,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rounding {
@@ -19,7 +22,17 @@ pub enum Rounding {
 }
 /// Nonnegative decimal, preserving the supported twelve fractional places without floats.
 fn decimal(value: &str) -> Result<BigRational, MoneyError> {
-    if value.is_empty() || value.len() > 64 {
+    parse_decimal(value, 64, 12)
+}
+/// Longest provider-reported amount `reported_usd_micros` accepts. The decoder expands an
+/// exponent to at most 4,096 places beside at most 1,024 mantissa digits.
+pub const REPORTED_AMOUNT_MAX_LEN: usize = 8192;
+fn parse_decimal(
+    value: &str,
+    max_len: usize,
+    max_fraction: usize,
+) -> Result<BigRational, MoneyError> {
+    if value.is_empty() || value.len() > max_len {
         return Err(MoneyError::InvalidDecimal);
     }
     let mut parts = value.split('.');
@@ -28,8 +41,9 @@ fn decimal(value: &str) -> Result<BigRational, MoneyError> {
     if whole.is_empty()
         || !whole.bytes().all(|b| b.is_ascii_digit())
         || parts.next().is_some()
-        || fraction
-            .is_some_and(|f| f.is_empty() || f.len() > 12 || !f.bytes().all(|b| b.is_ascii_digit()))
+        || fraction.is_some_and(|f| {
+            f.is_empty() || f.len() > max_fraction || !f.bytes().all(|b| b.is_ascii_digit())
+        })
     {
         return Err(MoneyError::InvalidDecimal);
     }
@@ -38,10 +52,27 @@ fn decimal(value: &str) -> Result<BigRational, MoneyError> {
     if let Some(fraction) = fraction {
         amount += BigRational::new(
             fraction.parse().map_err(|_| MoneyError::InvalidDecimal)?,
-            10_u64.pow(fraction.len() as u32).into(),
+            format!("1{}", "0".repeat(fraction.len()))
+                .parse()
+                .map_err(|_| MoneyError::InvalidDecimal)?,
         );
     }
     Ok(amount)
+}
+/// Round a provider-reported USD amount of any fractional length to whole micro-USD, half
+/// up (an exact half micro rounds to the next micro), the unit the ledger stores. A
+/// positive amount that rounds to zero is `SubMicro`, never a silent zero.
+pub fn reported_usd_micros(amount: &str) -> Result<i64, MoneyError> {
+    let micros = parse_decimal(amount, REPORTED_AMOUNT_MAX_LEN, REPORTED_AMOUNT_MAX_LEN)?
+        * BigRational::from_integer(MICROS_PER_USD.into());
+    let exact = CostAccumulator {
+        micros: micros.clone(),
+    };
+    let rounded = exact.micro_usd(Rounding::Nearest)?;
+    if rounded == 0 && micros != BigRational::from_integer(0.into()) {
+        return Err(MoneyError::SubMicro);
+    }
+    Ok(rounded)
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CostAccumulator {
@@ -150,6 +181,26 @@ mod tests {
         assert_eq!(cost.micro_usd(Rounding::Up), Ok(0));
         cost.amount_usd("0.000000000001").unwrap();
         assert_eq!(cost.micro_usd(Rounding::Up), Ok(1));
+    }
+
+    #[test]
+    fn reported_amounts_round_half_up_and_never_become_a_silent_zero() {
+        assert_eq!(reported_usd_micros("0.000035549999999999995"), Ok(36));
+        assert_eq!(reported_usd_micros("0.0000005"), Ok(1));
+        assert_eq!(
+            reported_usd_micros("0.0000004999999999999999999"),
+            Err(MoneyError::SubMicro)
+        );
+        assert_eq!(reported_usd_micros("0"), Ok(0));
+        assert_eq!(
+            reported_usd_micros(&format!("0.{}1", "0".repeat(199))),
+            Err(MoneyError::SubMicro)
+        );
+        assert_eq!(reported_usd_micros("1e3"), Err(MoneyError::InvalidDecimal));
+        assert_eq!(
+            reported_usd_micros(&format!("1{}", "0".repeat(400))),
+            Err(MoneyError::Overflow)
+        );
     }
 
     #[test]
