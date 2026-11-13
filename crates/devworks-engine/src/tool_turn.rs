@@ -2178,13 +2178,19 @@ fn record_observed_operation_update(
             .flatten();
         Ok((operation.state, operation.revision, remote_content))
     })?;
-    let bytes = serde_json::to_vec(&json!({
+    let mut update = json!({
         "operationId": operation_id,
         "revision": observed.1,
         "state": observed.0,
         "untrustedRemoteContent": observed.2,
-    }))
-    .map_err(invalid)?;
+    });
+    if observed.0 == OperationState::OutcomeUnknown {
+        update["note"] = json!(
+            "The outcome is unknown: the call may or may not have taken effect. It is held for \
+             a person to reconcile and will not be retried automatically."
+        );
+    }
+    let bytes = serde_json::to_vec(&update).map_err(invalid)?;
     let staged = artifacts
         .stage_host_bytes(
             store,

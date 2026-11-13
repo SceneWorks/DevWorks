@@ -16,7 +16,8 @@ use std::sync::OnceLock;
 const ANSWER: &str = "echo-server saw ticket DW-45";
 
 /// Each call returns one text block naming the `ticket` argument it received. A call for the
-/// ticket `BROKEN` fails with a protocol error instead.
+/// ticket `BROKEN` fails with a protocol error instead, and one for `SLOW` answers only after
+/// the client's 15 s call deadline, which leaves its outcome unknown.
 struct EchoServer;
 impl rmcp::ServerHandler for EchoServer {
     fn get_info(&self) -> rmcp::model::ServerConfig {
@@ -44,6 +45,9 @@ impl rmcp::ServerHandler for EchoServer {
                 "echo-server cannot read BROKEN",
                 None,
             ));
+        }
+        if ticket == "SLOW" {
+            tokio::time::sleep(std::time::Duration::from_secs(17)).await;
         }
         Ok(rmcp::model::CallToolResponse::Complete(
             rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(format!(
@@ -163,6 +167,8 @@ struct Turn {
     bodies: Vec<Value>,
     /// The session's linked operations: capability, state and payload.
     operations: Vec<(String, OperationState, Value)>,
+    /// How many dispatch attempts each linked operation has, in the same order.
+    attempts: Vec<usize>,
     /// The bodies of the session's `ToolResponseRecorded` entries.
     responses: Vec<Value>,
     session_id: Value,
@@ -472,19 +478,23 @@ fn agent_turn(calls: Vec<(&'static str, &'static str)>) -> Turn {
                 "{end:?}"
             );
 
-            let operations = read(&*fx.store, |s| {
+            let linked: Vec<_> = read(&*fx.store, |s| {
                 s.sessions().linked_operations(&session.id, 10)
             })
             .into_iter()
             .map(|link| {
-                let operation = read(&*fx.store, |s| {
+                read(&*fx.store, |s| {
                     s.operations()
                         .operation(link.operation_id.as_ref().unwrap())
                 })
-                .unwrap();
-                (operation.capability, operation.state, operation.payload)
+                .unwrap()
             })
             .collect();
+            let attempts = linked.iter().map(|op| op.attempts.len()).collect();
+            let operations = linked
+                .into_iter()
+                .map(|op| (op.capability, op.state, op.payload))
+                .collect();
             let responses = read(&*fx.store, |s| s.sessions().entries(&session.id, 0, 500))
                 .into_iter()
                 .filter(|entry| entry.kind == "ToolResponseRecorded")
@@ -494,6 +504,7 @@ fn agent_turn(calls: Vec<(&'static str, &'static str)>) -> Turn {
                 alias,
                 bodies: wire.bodies.lock().unwrap().clone(),
                 operations,
+                attempts,
                 responses,
                 session_id: json!(session.id),
             };
@@ -583,4 +594,28 @@ fn a_failing_mcp_tool_call_does_not_block_an_independent_call_in_the_same_turn()
         .collect();
     answered_calls.sort();
     assert_eq!(answered_calls, ["call-broken", "call-mcp"]);
+}
+
+#[test]
+fn an_mcp_tool_call_with_an_unknown_outcome_does_not_hold_its_turn() {
+    let turn = agent_turn(vec![("call-slow", "SLOW"), ("call-mcp", "DW-45")]);
+
+    // The follow-up request carries the answered call's result and says plainly that the other
+    // call's outcome is unknown.
+    assert_eq!(turn.bodies.len(), 2, "{:?}", turn.bodies);
+    let answered = tool_result(&turn.bodies[1], "call-mcp");
+    assert!(answered.to_string().contains(ANSWER), "{answered}");
+    let unknown = tool_result(&turn.bodies[1], "call-slow").to_string();
+    assert!(unknown.contains("outcome is unknown"), "{unknown}");
+
+    // The unknown call stays held for recovery: it was dispatched once and never again.
+    let held: Vec<_> = turn
+        .operations
+        .iter()
+        .zip(&turn.attempts)
+        .filter(|((_, state, _), _)| *state != OperationState::ObservedComplete)
+        .collect();
+    assert_eq!(held.len(), 1, "{:?}", turn.operations);
+    assert_eq!(held[0].0.1, OperationState::OutcomeUnknown, "{held:?}");
+    assert_eq!(*held[0].1, 1, "{held:?}");
 }

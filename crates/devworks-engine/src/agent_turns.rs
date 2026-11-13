@@ -484,10 +484,13 @@ async fn wait_for_linked_effects(
                     .operations()
                     .operation(operation_id)?
                     .ok_or(StorageError::ScopeDenied)?;
+                // An unknown outcome changes only through an explicit reconcile, so the turn ends
+                // with it held; the agent was told the outcome is unknown.
                 match operation.state {
                     OperationState::ObservedComplete
                     | OperationState::Failed
-                    | OperationState::CancelledBeforeDispatch => {}
+                    | OperationState::CancelledBeforeDispatch
+                    | OperationState::OutcomeUnknown => {}
                     _ => pending = true,
                 }
             }
