@@ -32,7 +32,12 @@ pub(super) struct Credentials {
 }
 impl Credentials {
     pub(super) fn password(&self, handle: &Id) -> Result<Option<Secret>, SecretError> {
-        self.secrets.get(&self.key(handle))
+        let password = self.secrets.get(&self.key(handle))?;
+        if let Some(p) = &password {
+            // A database driver error that echoes the password is then redacted.
+            crate::authority::redact::register_resolved_secret(p.expose());
+        }
+        Ok(password)
     }
     fn key(&self, handle: &Id) -> SecretKey {
         SecretKey::new(

@@ -295,8 +295,15 @@ impl SecretStore for SwitchableSecrets {
     fn put(&self, key: &SecretKey, secret: &Secret) -> Result<(), SecretError> {
         self.active().put(key, secret)
     }
+    /// Every value the host reads is registered with the process-wide redactor
+    /// ([`crate::authority::redact::register_resolved_secret`]), so later process output, error
+    /// bodies and diagnostics that echo it are redacted.
     fn get(&self, key: &SecretKey) -> Result<Option<Secret>, SecretError> {
-        self.active().get(key)
+        let secret = self.active().get(key)?;
+        if let Some(s) = &secret {
+            crate::authority::redact::register_resolved_secret(s.expose());
+        }
+        Ok(secret)
     }
     fn delete(&self, key: &SecretKey) -> Result<bool, SecretError> {
         self.active().delete(key)
