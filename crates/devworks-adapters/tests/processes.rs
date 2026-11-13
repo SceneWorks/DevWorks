@@ -49,7 +49,7 @@ use devworks_core::services::process::tools::RegisteredCredential;
 use devworks_core::services::process::tools::{RegisteredExecutable, ToolBindings};
 use devworks_core::services::process::{
     ConfirmRefusal, LaunchPolicy, LaunchRefusal, LaunchRequest, LeaseClaim, OwnedProcess,
-    ProcessSupervisor, StopFailure, StopOutcome, StopScope, all_recorded,
+    ProcessSupervisor, STOPPED_ON_REQUEST, StopFailure, StopOutcome, StopScope, all_recorded,
 };
 use devworks_core::services::resources::{
     DispatchFailure, DispatchRefusal, MachineResource, ReconcileCause, ResourceService,
@@ -2487,6 +2487,77 @@ fn launch_preflight_blocks_destructive_commands_before_anything_runs() {
     let failed = fx.events("ProcessLaunchFailed");
     assert_eq!(failed.len(), 1);
     assert_eq!(failed[0].root_id, Some(root("root-a")));
+}
+
+/// The record says when a requested stop ended a running tree, whatever its exit code; a tree
+/// that exited on its own before the stop keeps its own outcome.
+#[cfg(unix)]
+#[test]
+fn a_stop_that_ends_a_running_tree_is_recorded_on_the_process() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let sup = fx.supervisor();
+    let (fs, roots) = policy_parts();
+    let policy = LaunchPolicy {
+        fs: &fs,
+        roots: &roots,
+        protected_branches: &[],
+    };
+    let a = fx.agent("agent-a", "project-a", "s-a");
+    let launch = |script: &str| {
+        sup.launch(
+            &a,
+            LaunchRequest {
+                spec: shell(script),
+                operation_id: None,
+                lease: None,
+                approved_hold: false,
+            },
+            &policy,
+        )
+        .unwrap()
+    };
+    // Traps the cooperative stop and exits 0: the stop still ended it.
+    let trapping = launch("trap 'exit 0' TERM; while :; do sleep 0.05; done");
+    std::thread::sleep(Duration::from_millis(300));
+    let outcome = sup
+        .cancel(&trapping, Duration::from_secs(2), Duration::from_secs(10))
+        .unwrap();
+    assert!(
+        matches!(
+            outcome,
+            StopOutcome::Reaped {
+                graceful: true,
+                exit_code: Some(0),
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    let stored = fx.read(|r| r.resources().process(&trapping.id)).unwrap();
+    assert_eq!(stored.detail.as_deref(), Some(STOPPED_ON_REQUEST));
+    // Exits before the stop and is not polled first: the stop finds it already gone.
+    let exited = launch("exit 3");
+    std::thread::sleep(Duration::from_millis(300));
+    let outcome = sup
+        .cancel(&exited, Duration::from_secs(2), Duration::from_secs(10))
+        .unwrap();
+    assert!(
+        matches!(
+            outcome,
+            StopOutcome::Reaped {
+                exit_code: Some(3),
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    let stored = fx.read(|r| r.resources().process(&exited.id)).unwrap();
+    assert_eq!((stored.exit_code, stored.detail), (Some(3), None));
+    assert!(
+        fx.events("ProcessStopRequested").len() == 1,
+        "only the running tree was stopped"
+    );
 }
 
 #[test]

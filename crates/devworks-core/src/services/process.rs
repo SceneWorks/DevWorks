@@ -117,6 +117,10 @@ impl From<StorageError> for LaunchRefusal {
 /// Bound on verifying the kill of a tree that registered after its project closed.
 const LATE_LAUNCH_STOP_BOUND: Duration = Duration::from_secs(5);
 
+/// The detail of a process record that a requested stop reaped: the tree was still running when
+/// [`ProcessSupervisor::cancel`] began, so the stop, not the program, ended it.
+pub const STOPPED_ON_REQUEST: &str = "stopped on request";
+
 /// A project's launch fence: closed (archived, deleted or unknown), or open at an archival epoch.
 enum Fence {
     Closed,
@@ -667,7 +671,13 @@ impl ProcessSupervisor {
         let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
         let mut record = live.record.clone();
         let mut unrecorded = None;
-        if record.phase == ProcessPhase::Running {
+        // A tree that already exited keeps its own outcome: the stop did not end it.
+        let mut status = match live.tree.poll() {
+            Ok(s) if s.empty => Some(s),
+            _ => None,
+        };
+        let stopped = status.is_none();
+        if stopped && record.phase == ProcessPhase::Running {
             match self.write_phase(
                 &mut record,
                 ProcessPhase::Stopping,
@@ -680,15 +690,18 @@ impl ProcessSupervisor {
         }
         let mut observed = String::new();
         let mut graceful = true;
-        let mut status = None;
-        let cooperative = live.tree.request_stop();
+        let cooperative = if stopped {
+            live.tree.request_stop()
+        } else {
+            Ok(true)
+        };
         if let Err(e) = &cooperative {
             observed = e.to_string();
         }
         let grace_until = start + grace.min(bound);
         let bound_until = start + bound;
         let mut killed = false;
-        loop {
+        while status.is_none() {
             match live.tree.poll() {
                 Ok(s) if s.empty => {
                     status = Some(s);
@@ -723,7 +736,7 @@ impl ProcessSupervisor {
                     &mut record,
                     ProcessPhase::Reaped,
                     s.exit_code,
-                    None,
+                    stopped.then(|| STOPPED_ON_REQUEST.to_owned()),
                     "ProcessReaped",
                 ),
             ),
