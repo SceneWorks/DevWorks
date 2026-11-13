@@ -434,6 +434,8 @@ struct App {
     artifact_files: Option<Arc<dyn devworks_core::ports::files::ArtifactFiles>>,
     /// The host's restart budget per instance key (`config()` otherwise).
     restart_limit: Option<u32>,
+    /// The host's handshake bound (`config()` otherwise).
+    handshake: Option<Duration>,
     healthy_after: Option<Duration>,
     host_tick: Option<Duration>,
     probe_timeout: Option<Duration>,
@@ -533,6 +535,7 @@ impl App {
             files,
             artifact_files: None,
             restart_limit: None,
+            handshake: None,
             healthy_after: None,
             host_tick: None,
             probe_timeout: None,
@@ -642,6 +645,7 @@ impl App {
                 config: HostConfig {
                     runtime_timeout: self.probe_timeout.unwrap_or(config().runtime_timeout),
                     restart_limit: self.restart_limit.unwrap_or(config().restart_limit),
+                    handshake: self.handshake.unwrap_or(config().handshake),
                     healthy_after: self.healthy_after.unwrap_or(config().healthy_after),
                     tick: self.host_tick.unwrap_or(config().tick),
                     restart_backoff: self.retry_backoff.unwrap_or(config().restart_backoff),
@@ -831,6 +835,7 @@ impl App {
             std::thread::sleep(Duration::from_millis(25));
         }
     }
+    #[track_caller]
     fn ready(&self, package: &str) {
         let until = Instant::now() + PATIENCE;
         loop {
@@ -842,7 +847,9 @@ impl App {
             }
             assert!(
                 Instant::now() < until,
-                "{package} never became ready: {s:?}"
+                "{package} never became ready: {s:?}\nlogs: {:?}\nfailure: {:?}",
+                self.logs(package),
+                read(&*self.store, |s| s.packages().package(package)).and_then(|p| p.failure)
             );
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -3908,7 +3915,13 @@ fn the_registry_is_read_whole_and_a_new_identity_beyond_capacity_is_refused() {
 fn an_explicit_retry_restarts_a_helper_even_before_reconciliation_saw_its_failure() {
     let _s = serial();
     let fail = Marker::absent("retry-pack", "fail-on-activate");
-    let mut a = App::new();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    // Every start except the deliberate failure must succeed, but a loaded machine can take
+    // longer than the shared 1.5 s handshake bound to launch a helper (z-busy alone answers
+    // after 1.2 s): with a budget of one, a single timeout records the failure and the package
+    // never becomes ready. The deliberate failure exits at once and needs no bound.
+    a.handshake = Some(PATIENCE / 2);
+    a.boot();
     // One start per budget: the first failure spends it.
     a.restart_limit = Some(1);
     package(a.install(&a.user, &Spec::new("retry-pack", "1.0.0")));
