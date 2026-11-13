@@ -1147,6 +1147,20 @@ Outgoing MCP uses app-launched stdio servers and remote Streamable HTTP connecti
 
 Namespace server tools and retain schemas, capability versions, discovery state and authentication handles. Enable established read-only tools by default; mutating tools require selection. Treat external annotations as hints during classification. Missing optional Node/Python runtimes or server failures are server-specific limitations, not app startup failures. Accepted sampling requests enter the router with attribution, permission and budget checks; incoming clients use the independently granted server boundary below.
 
+**Outgoing transport and capability matrix (MCP-02).** The outgoing client supports exactly these transports and capabilities. Anything not listed is not supported.
+
+| Area | App-launched stdio | Remote Streamable HTTP |
+| --- | --- | --- |
+| Configuration | A registered executable, a registered working root, arguments, environment entries (secrets only as OS secret store handles), tool profile, timeout and output limit. | An `https` endpoint and an optional bearer token kept in the OS secret store. Plain `http` with a token is accepted only for a literal loopback address; URL user info and fragments are refused. |
+| Lifecycle | Configure, connect or reconnect, disable, enable (a person's connect), remove. Disable and remove close the session and stop the launched process tree through `ProcessSupervisor`. | Configure, connect or reconnect, disable, enable, remove. Disable and remove close the session. |
+| Runtime availability | Before connecting, Settings names an executable this computer cannot resolve and the runtime it belongs to; a failed launch records a diagnostic naming it. Other servers keep serving. | Not applicable. |
+| Bounds | Connect within 20 s; each call within 15 s; frames up to 8 MiB; a catalog up to 500 entries per family and 1 MiB. | Same. |
+| Discovery | A person's discovery reads tools, resources and prompts. Catalog changes are picked up only by rediscovery; `list_changed` notifications are not handled. | Same. |
+| Tools | Selected tools are offered to agents under server-qualified aliases. On a server's first discovery, tools that are read-only by the server's hint, or by a person's classification in its place, start selected. Titles and destructive hints are shown; all annotations stay hints and never count as a verified read. | Same. |
+| Resources and prompts | Read through `mcp.resources` and `mcp.prompts`, published as untrusted content artifacts within an 8 MiB budget per query, and viewable in Settings. | Same. |
+| Sampling | Advertised only when a person selected the server's sampling capability, and accepted only during a selected tool call; requests go through the router. | Same. |
+| Client capabilities not offered | Roots, elicitation, input-required continuations (they fail the call) and tasks (a task result is a protocol fault, so the call's outcome is unknown and held for a person). | Same. |
+
 ### DevWorks MCP server for other harnesses
 
 **AD76–78 · baseline 1.1 · 2 November 2026.** The user reversed the client-only decision: indexed code, planned work and Knowledge must be available to other MCP clients and harnesses. Keep outgoing server connections. Incoming tools and scoped resources call existing application services through `McpServerAdapter`; there is no second store writer, separate business-policy implementation or mandatory daemon. The complete [MCP server contracts](mcp-server-contracts.html) define the capability manifest, typed administration, transport matrix and acceptance.
