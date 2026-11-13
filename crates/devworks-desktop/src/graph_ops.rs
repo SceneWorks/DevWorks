@@ -1,6 +1,6 @@
 //! Native graph frames use the same scoped, pinned operations as agent tools.
 use crate::{
-    backend::Backend,
+    backend::{Backend, screen_slot},
     ops::{self, Failure},
 };
 use devworks_core::{
@@ -8,6 +8,16 @@ use devworks_core::{
     protocol::{data::GraphPage, records::CodeNode, results::OperationResult},
 };
 use serde_json::{Value, json};
+
+/// The graph requests the screen waits for. The names are persisted (see [`crate::backend::Slot`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum GraphSlot {
+    /// A graph read (read sequence).
+    GraphRead(u64),
+    /// A trust change of one node (node ID).
+    GraphTrust(String),
+}
+screen_slot!(GraphSlot, Graph);
 
 pub const PAGE_SIZE: u16 = 50;
 
