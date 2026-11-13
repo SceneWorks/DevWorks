@@ -6181,6 +6181,13 @@ pub struct McpCapability {
     pub output_schema: Option<SchemaRef>,
     pub read_only: bool,
     pub revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 8))]
+    pub uri: Option<Text>,
 }
 impl Check for McpCapability {
     fn check(&self) -> Result<(), String> {
@@ -6193,11 +6200,20 @@ impl Check for McpCapability {
         self.output_schema.check()?;
         self.read_only.check()?;
         self.revision.check()?;
+        self.uri.check()?;
         crate::protocol::rules::record(
             "McpCapability",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for McpCapability {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.uri = None;
+        }
     }
 }
 

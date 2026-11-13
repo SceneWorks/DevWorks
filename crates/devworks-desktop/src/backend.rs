@@ -347,6 +347,8 @@ pub enum Slot {
     McpServers(String, Option<String>),
     McpOperation(String),
     McpCapabilities(String, String, Option<String>),
+    /// A resource or prompt read from Settings (scope key, server ID).
+    McpContent(String, String),
     McpCommand,
     /// Deletes MCP secrets a configuration change left unreferenced.
     McpRelease,
@@ -541,6 +543,8 @@ pub enum TaskOutput {
     Instruction(crate::instructions_ops::TaskResult),
     /// Package runtimes and indexes were refreshed.
     Refreshed,
+    /// The text of an MCP resource or prompt a person opened in Settings.
+    McpContent(String),
 }
 
 type Job = Box<dyn FnOnce(&dyn Backend) -> Reply + Send>;

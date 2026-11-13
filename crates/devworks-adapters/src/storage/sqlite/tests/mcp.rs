@@ -403,6 +403,7 @@ fn configuration_is_durable_and_selection_rejects_unknown_tools() {
         output_schema: None,
         read_only: true,
         revision: Revision::new(1).unwrap(),
+        uri: None,
     };
     let write = McpCapability {
         id: id("mcp-write"),
@@ -518,6 +519,7 @@ fn first_discovery_selects_read_only_hints_up_to_the_selection_bound() {
             output_schema: None,
             read_only: true,
             revision: Revision::new(1).unwrap(),
+            uri: None,
         })
         .collect();
     let service_for_write = service.clone();
@@ -2509,4 +2511,95 @@ fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is
         json!({"scope":{"kind":"Workspace"},"serverId":server,"expectedRevision":"1"}),
     );
     assert!(matches!(gone, DomainDecision::Refused { .. }), "{gone:?}");
+}
+
+#[test]
+fn a_resource_saved_before_capabilities_carried_uris_still_names_its_uri() {
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
+        Ok(())
+    })
+    .unwrap();
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    service
+        .install_remote(
+            store.clone(),
+            Arc::new(RecordedRemote::default()),
+            Arc::new(JsonSchemaValidator),
+            artifacts(&h),
+        )
+        .unwrap();
+    let cases = UseCases::new().with_mcp(service.clone());
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: server },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "legacy-resource-server",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"name":"Legacy server",
+            "transport":{"kind":"Http","endpoint":"https://mcp.example.test/mcp"}}),
+    )
+    else {
+        panic!("MCP server configuration failed");
+    };
+    let server_id = server.id.clone();
+    let service_for_write = service.clone();
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        service_for_write.publish_remote_catalog(
+            tx,
+            &ConfigScope::Workspace,
+            &server_id,
+            &Revision::new(1).unwrap(),
+            RemoteCatalog {
+                tools: vec![],
+                resources: vec![RemoteResource {
+                    uri: "mcp://example/readme".into(),
+                    name: "Readme".into(),
+                    description: "A test resource".into(),
+                }],
+                prompts: vec![],
+            },
+        )?;
+        // Store the catalog as an earlier version did: the capability without its URI.
+        let saved = tx
+            .configuration()
+            .current(&ConfigScope::Workspace, "outgoing_mcp")?
+            .unwrap();
+        let mut body = saved.body.clone();
+        for cap in body["servers"][0]["capabilities"].as_array_mut().unwrap() {
+            cap.as_object_mut().unwrap().remove("uri");
+        }
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            "outgoing_mcp",
+            saved.revision,
+            saved.schema_version,
+            body,
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let reply = capabilities(&h, &store, &cases, &server.id, 2);
+    let DomainQueryReply::Result {
+        result: OperationResult::McpCapabilities { value },
+        ..
+    } = reply
+    else {
+        panic!("capabilities query failed: {reply:?}");
+    };
+    let resource = value
+        .items
+        .0
+        .iter()
+        .find(|cap| cap.kind.0 == "resource")
+        .expect("resource capability");
+    assert_eq!(
+        resource.uri.as_ref().map(|uri| uri.0.as_str()),
+        Some("mcp://example/readme")
+    );
 }

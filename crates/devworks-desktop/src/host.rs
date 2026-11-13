@@ -298,10 +298,16 @@ pub struct Host {
     switchable: Option<Arc<SwitchableSecrets>>,
     /// The web tools, stopped first at shutdown so no fetch holds a request thread.
     web: Arc<WebService>,
+    /// The native outgoing MCP client the runtime installed at boot.
+    mcp_clients: Arc<std::sync::OnceLock<Arc<NativeMcpClients>>>,
 }
 impl Host {
     pub fn runtime(&self) -> &Arc<Runtime> {
         &self.runtime
+    }
+    /// The native outgoing MCP client, once the runtime installed it.
+    pub fn mcp_clients(&self) -> Option<Arc<NativeMcpClients>> {
+        self.mcp_clients.get().cloned()
     }
     pub fn report(&self) -> &BootReport {
         self.runtime.report()
@@ -550,10 +556,12 @@ async fn compose(
     let mcp_secrets = secrets.clone();
     let mcp_namespace = store.info().store_id.0.as_str().to_owned();
     let mcp_data_root = config.data_root.display().to_string();
+    let mcp_clients: Arc<std::sync::OnceLock<Arc<NativeMcpClients>>> = Arc::default();
+    let installed_mcp = mcp_clients.clone();
     runtime_config.mcp = Some(devworks_engine::runtime::McpComposition {
         validator: Arc::new(JsonSchemaValidator),
         factory: Arc::new(move |supervisor, handle| {
-            Arc::new(NativeMcpClients::new(
+            let native = Arc::new(NativeMcpClients::new(
                 supervisor,
                 mcp_bindings.clone(),
                 mcp_secrets.clone(),
@@ -562,7 +570,9 @@ async fn compose(
                 ProtectedRoots::new(Vec::new(), Vec::new(), Some(mcp_data_root.clone())),
                 Vec::new(),
                 handle,
-            ))
+            ));
+            let _ = installed_mcp.set(native.clone());
+            native
         }),
     });
     runtime_config.providers = Some(match config.providers.clone() {
@@ -741,6 +751,7 @@ async fn compose(
         connections,
         switchable,
         web,
+        mcp_clients,
     })
 }
 

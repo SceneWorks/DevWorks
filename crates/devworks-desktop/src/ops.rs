@@ -210,6 +210,72 @@ pub fn mcp_capability_page(
     }
 }
 
+/// The largest MCP resource or prompt result Settings shows inline.
+pub const MCP_CONTENT_VIEW_BYTES: u64 = 1024 * 1024;
+
+/// One resource or prompt a person asked to open from Settings.
+#[derive(Clone, Debug, PartialEq)]
+pub enum McpContentRequest {
+    Resource {
+        uri: String,
+    },
+    /// `arguments` is the prompt's `{schema, value}` pair when the person filled any in.
+    Prompt {
+        name: String,
+        arguments: Option<Value>,
+    },
+}
+
+/// Reads one MCP resource or prompt through `mcp.resources` or `mcp.prompts` and returns its
+/// published content as text. Content larger than the viewer bound is named, not loaded.
+pub fn mcp_content(
+    backend: &dyn Backend,
+    scope: Option<&devworks_core::protocol::ProjectId>,
+    server: &devworks_core::protocol::Id,
+    catalog_revision: i64,
+    request: &McpContentRequest,
+) -> Result<String, String> {
+    let mut body = json!({"scope":mcp_scope(scope),"serverId":server,
+        "catalogRevision":catalog_revision.to_string(),"page":{"limit":1}});
+    let operation = match request {
+        McpContentRequest::Resource { uri } => {
+            body["uri"] = json!(uri);
+            "mcp.resources"
+        }
+        McpContentRequest::Prompt { name, arguments } => {
+            body["name"] = json!(name);
+            if let Some(arguments) = arguments {
+                body["arguments"] = arguments.clone();
+            }
+            "mcp.prompts"
+        }
+    };
+    let frame = at_revision(query_frame(backend, operation, body), MCP_REVISION);
+    let artifact =
+        match query_result(backend.query(operation, &frame)).map_err(|e| e.describe())? {
+            (OperationResult::McpResources { value }, _) => {
+                value.items.0.into_iter().next().map(|item| item.content)
+            }
+            (OperationResult::McpPrompts { value }, _) => {
+                value.items.0.into_iter().next().map(|item| item.messages)
+            }
+            (other, _) => return Err(unexpected(operation, &other).describe()),
+        }
+        .ok_or("The server returned nothing for this request.")?;
+    if artifact.byte_length.get() as u64 > MCP_CONTENT_VIEW_BYTES {
+        return Ok(format!(
+            "The content is {} bytes, more than this viewer shows. It is saved as artifact {}.",
+            artifact.byte_length.get(),
+            artifact.artifact_id.as_str()
+        ));
+    }
+    let bytes = read_artifact_bytes(backend, &artifact)?;
+    Ok(match serde_json::from_slice::<Value>(&bytes) {
+        Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_default(),
+        Err(_) => String::from_utf8_lossy(&bytes).into_owned(),
+    })
+}
+
 pub fn mcp_command(backend: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
     at_revision(command_frame(backend, operation, body), MCP_REVISION)
 }
@@ -481,6 +547,55 @@ pub fn artifact_read(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
             "versionId": artifact.version_id}, "limit": 1})
     .to_string()
     .into_bytes()
+}
+/// The complete bytes of `artifact` through `artifacts.read` (paged by byte cursor, or a
+/// verified stream for non-text bytes), checked against the reference's length and digest.
+pub fn read_artifact_bytes(b: &dyn Backend, artifact: &ArtifactRef) -> Result<Vec<u8>, String> {
+    use sha2::{Digest, Sha256};
+    let expected = artifact.byte_length.get() as u64;
+    let mut bytes: Vec<u8> = Vec::with_capacity(expected as usize);
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut frame: Value =
+            serde_json::from_slice(&artifact_read(b, artifact)).map_err(|e| e.to_string())?;
+        if let Some(c) = &cursor {
+            frame["cursor"] = json!(c);
+        }
+        let frame = frame.to_string().into_bytes();
+        match read_content(b.query("artifacts.read", &frame)).map_err(|e| e.describe())? {
+            devworks_core::protocol::records::ArtifactReadContent::Text {
+                content,
+                truncated,
+                next_byte,
+                ..
+            } => {
+                bytes.extend_from_slice(content.0.as_bytes());
+                if bytes.len() as u64 > expected {
+                    return Err("The text exceeded its recorded length.".into());
+                }
+                if !truncated {
+                    break;
+                }
+                let next = next_byte.get().to_string();
+                if cursor.as_deref() == Some(next.as_str()) {
+                    return Err("The text read did not advance.".into());
+                }
+                cursor = Some(next);
+            }
+            devworks_core::protocol::records::ArtifactReadContent::Binary { stream_id, .. } => {
+                bytes = b.read_stream(&stream_id, expected)?;
+                break;
+            }
+        }
+    }
+    let digest: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if bytes.len() as u64 != expected || digest != artifact.sha256.as_str() {
+        return Err("The text did not match its recorded length and digest.".into());
+    }
+    Ok(bytes)
 }
 pub fn read_content(
     outcome: QueryOutcome,

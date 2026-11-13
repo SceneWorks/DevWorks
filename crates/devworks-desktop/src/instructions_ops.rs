@@ -11,7 +11,7 @@ use devworks_core::{
     protocol::{
         DomainErrorCode,
         provider::ArtifactRef,
-        records::{ArtifactReadContent, InstructionRecord, SkillResource, SkillResourcePageResult},
+        records::{InstructionRecord, SkillResource, SkillResourcePageResult},
         results::OperationResult,
     },
     services::instructions::{HARNESS_ROOT_ID, MAX_TEXT_BYTES, SHARED_ROOT_ID, role_item_id},
@@ -356,53 +356,10 @@ pub enum TaskResult {
 /// Reads the complete text of `artifact` through `artifacts.read` (paged by byte cursor, or a
 /// verified stream for non-text bytes) and checks it against the reference's length and digest.
 pub fn load_text(b: &dyn Backend, artifact: &ArtifactRef) -> Result<TaskOutput, String> {
-    use sha2::{Digest, Sha256};
-    let expected = artifact.byte_length.get() as u64;
-    if expected > MAX_TEXT_BYTES {
+    if artifact.byte_length.get() as u64 > MAX_TEXT_BYTES {
         return Err("The instruction text is larger than the editable limit.".into());
     }
-    let mut bytes: Vec<u8> = Vec::with_capacity(expected as usize);
-    let mut cursor: Option<String> = None;
-    loop {
-        let mut frame: Value =
-            serde_json::from_slice(&ops::artifact_read(b, artifact)).map_err(|e| e.to_string())?;
-        if let Some(c) = &cursor {
-            frame["cursor"] = json!(c);
-        }
-        let frame = frame.to_string().into_bytes();
-        match ops::read_content(b.query("artifacts.read", &frame)).map_err(|e| e.describe())? {
-            ArtifactReadContent::Text {
-                content,
-                truncated,
-                next_byte,
-                ..
-            } => {
-                bytes.extend_from_slice(content.0.as_bytes());
-                if bytes.len() as u64 > expected {
-                    return Err("The text exceeded its recorded length.".into());
-                }
-                if !truncated {
-                    break;
-                }
-                let next = next_byte.get().to_string();
-                if cursor.as_deref() == Some(next.as_str()) {
-                    return Err("The text read did not advance.".into());
-                }
-                cursor = Some(next);
-            }
-            ArtifactReadContent::Binary { stream_id, .. } => {
-                bytes = b.read_stream(&stream_id, expected)?;
-                break;
-            }
-        }
-    }
-    let digest: String = Sha256::digest(&bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    if bytes.len() as u64 != expected || digest != artifact.sha256.as_str() {
-        return Err("The text did not match its recorded length and digest.".into());
-    }
+    let bytes = ops::read_artifact_bytes(b, artifact)?;
     let text = String::from_utf8(bytes).map_err(|_| "The instruction text is not UTF-8.")?;
     Ok(TaskOutput::Instruction(TaskResult::Text(text)))
 }

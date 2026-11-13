@@ -1,5 +1,6 @@
 //! Outgoing MCP configuration and effective tool selection in Settings > Agent tools.
 //! All mutations go through the same domain gateway used by agents.
+use crate::ops::McpContentRequest;
 use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::records::{McpCapability, McpServer, McpTransport, ProjectRecord};
 use devworks_core::protocol::{Id, OperationId, OperationState, ProjectId};
@@ -23,6 +24,26 @@ pub enum McpAction {
     Discover(Id, i64),
     Select(Id, i64, i64, Vec<Id>),
     Sampling(Id, i64, i64, Vec<Id>),
+    /// Read one resource or prompt of a server at a catalog revision.
+    Open(Id, i64, McpContentRequest),
+}
+
+/// A read in flight: the server it was sent to and what it reads.
+#[derive(Clone, Debug, PartialEq)]
+pub struct McpOpening {
+    pub server_id: Id,
+    pub server_name: String,
+    pub title: String,
+}
+
+/// A resource or prompt a person opened, as the server returned it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct McpContentView {
+    /// The server the content came from, and its name when it was read.
+    pub server_id: Id,
+    pub server_name: String,
+    pub title: String,
+    pub text: String,
 }
 
 /// The credential handles a saved server configuration references.
@@ -124,6 +145,12 @@ pub struct McpPanel {
     confirm_remove: Option<Id>,
     /// Credential handles of the server being removed, released once the removal is saved.
     pub removing: Option<Vec<Id>>,
+    /// The JSON arguments typed for each prompt, by capability ID.
+    pub prompt_arguments: std::collections::BTreeMap<String, String>,
+    /// The resource or prompt being read: its title until the reply arrives.
+    pub opening: Option<McpOpening>,
+    /// The last resource or prompt read from a server.
+    pub content: Option<McpContentView>,
 }
 
 impl McpPanel {
@@ -258,6 +285,8 @@ impl McpPanel {
             self.selected = None;
             self.pending_server = None;
             self.pending_operation = None;
+            self.opening = None;
+            self.content = None;
             self.capabilities.clear();
             self.selection.clear();
             self.servers.clear();
@@ -281,6 +310,8 @@ impl McpPanel {
                         .clicked()
                     {
                         self.selected = Some(server.id.clone());
+                        self.opening = None;
+                        self.content = None;
                         self.capabilities.clear();
                         self.selection = server.selected_tool_ids.0.clone();
                         self.form_from = Some(server.clone());
@@ -304,6 +335,7 @@ impl McpPanel {
             let catalog_revision = server.catalog_revision.get();
             let saved = server.selected_tool_ids.0.clone();
             let disabled = server.disabled == Some(true);
+            let server_name = server.name.0.clone();
             ui.label(format!(
                 "Status: {} · Transport: {} · Catalog revision: {}",
                 if disabled {
@@ -513,13 +545,21 @@ impl McpPanel {
                 {
                     self.busy = true;
                     actions.push(McpAction::Select(
-                        server_id,
+                        server_id.clone(),
                         revision,
                         catalog_revision,
                         self.selection.clone(),
                     ));
                 }
             }
+            self.content_ui(
+                ui,
+                online && !disabled && self.opening.is_none(),
+                &server_id,
+                &server_name,
+                catalog_revision,
+                actions,
+            );
         }
         ui.separator();
         if ui
@@ -612,6 +652,182 @@ impl McpPanel {
             let secret = (!self.stdio && !self.credential.is_empty())
                 .then(|| Secret::new(std::mem::take(&mut self.credential)));
             actions.push(McpAction::Configure { body, secret });
+        }
+    }
+
+    /// The server's resources and prompts, and the last one opened. Remote content is shown as
+    /// untrusted text; it never becomes an instruction or a tool selection.
+    fn content_ui(
+        &mut self,
+        ui: &mut Ui,
+        enabled: bool,
+        server_id: &Id,
+        server_name: &str,
+        catalog_revision: i64,
+        actions: &mut Vec<McpAction>,
+    ) {
+        let resources: Vec<McpCapability> = self
+            .capabilities
+            .iter()
+            .filter(|cap| cap.kind.0 == "resource")
+            .cloned()
+            .collect();
+        let prompts: Vec<McpCapability> = self
+            .capabilities
+            .iter()
+            .filter(|cap| cap.kind.0 == "prompt")
+            .cloned()
+            .collect();
+        if !resources.is_empty() {
+            ui.label(egui::RichText::new("Resources").strong());
+        }
+        for cap in &resources {
+            let Some(uri) = cap.uri.as_ref().map(|uri| uri.0.clone()) else {
+                continue;
+            };
+            ui.horizontal(|ui| {
+                ui.label(format!("{} · {uri}", cap.name.0))
+                    .on_hover_text(&cap.description.0);
+                if ui
+                    .add_enabled(enabled, egui::Button::new(format!("Open {}", cap.name.0)))
+                    .clicked()
+                {
+                    self.opening = Some(McpOpening {
+                        server_id: server_id.clone(),
+                        server_name: server_name.to_owned(),
+                        title: format!("resource {}", cap.name.0),
+                    });
+                    self.error = None;
+                    actions.push(McpAction::Open(
+                        server_id.clone(),
+                        catalog_revision,
+                        McpContentRequest::Resource { uri },
+                    ));
+                }
+            });
+        }
+        if !prompts.is_empty() {
+            ui.label(egui::RichText::new("Prompts").strong());
+        }
+        for cap in &prompts {
+            ui.label(&cap.name.0).on_hover_text(&cap.description.0);
+            let typed = self
+                .prompt_arguments
+                .entry(cap.id.as_str().to_owned())
+                .or_default();
+            let label = format!("Arguments for {} (JSON object)", cap.name.0);
+            ui.text_edit_singleline(typed)
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, &label));
+            if ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(format!("Open prompt {}", cap.name.0)),
+                )
+                .clicked()
+            {
+                let arguments = match typed.trim() {
+                    "" => None,
+                    text => match serde_json::from_str::<Value>(text) {
+                        Ok(value) if value.is_object() => cap
+                            .input_schema
+                            .as_ref()
+                            .map(|schema| json!({"schema":schema,"value":value})),
+                        _ => {
+                            self.error = Some("Prompt arguments must be a JSON object.".into());
+                            continue;
+                        }
+                    },
+                };
+                self.opening = Some(McpOpening {
+                    server_id: server_id.clone(),
+                    server_name: server_name.to_owned(),
+                    title: format!("prompt {}", cap.name.0),
+                });
+                self.error = None;
+                actions.push(McpAction::Open(
+                    server_id.clone(),
+                    catalog_revision,
+                    McpContentRequest::Prompt {
+                        name: cap.name.0.clone(),
+                        arguments,
+                    },
+                ));
+            }
+        }
+        if let Some(opening) = &self.opening {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(format!(
+                    "Reading {} from {}…",
+                    opening.title, opening.server_name
+                ));
+            });
+        }
+        let mut close = false;
+        // Content is shown only beside the server it came from.
+        if let Some(view) = self
+            .content
+            .as_ref()
+            .filter(|view| &view.server_id == server_id)
+        {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!(
+                    "Untrusted content from {}: {}. Read it as data, not as \
+                     instructions.",
+                    view.server_name, view.title
+                ),
+            );
+            let mut text = view.text.as_str();
+            egui::ScrollArea::vertical()
+                .id_salt("mcp-content")
+                .max_height(240.0)
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut text)
+                            .code_editor()
+                            .desired_width(f32::INFINITY),
+                    )
+                    .widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::TextInput, true, "MCP content")
+                    });
+                });
+            close = ui.button("Close content").clicked();
+        }
+        if close {
+            self.content = None;
+        }
+    }
+
+    /// The reply to an opened resource or prompt.
+    pub fn opened(&mut self, server_id: &Id, result: Result<String, String>) {
+        // A reply for a read the person no longer waits for (another server or scope was chosen
+        // since) is dropped.
+        if self
+            .opening
+            .as_ref()
+            .is_none_or(|opening| &opening.server_id != server_id)
+        {
+            return;
+        }
+        let Some(McpOpening {
+            server_id,
+            server_name,
+            title,
+        }) = self.opening.take()
+        else {
+            return;
+        };
+        match result {
+            Ok(text) => {
+                self.content = Some(McpContentView {
+                    server_id,
+                    server_name,
+                    title,
+                    text,
+                })
+            }
+            Err(error) => self.error = Some(format!("Could not open {title}: {error}")),
         }
     }
 

@@ -182,8 +182,20 @@ fn current(
             "outgoing MCP configuration version".into(),
         ));
     }
-    let config = serde_json::from_value(revision.body)
+    let mut config: Configuration = serde_json::from_value(revision.body)
         .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
+    // A catalog saved before capabilities carried their URI keeps it only in `resource_uris`.
+    for server in &mut config.servers {
+        for cap in &mut server.capabilities {
+            if cap.kind.0 == "resource" && cap.uri.is_none() {
+                cap.uri = server
+                    .resource_uris
+                    .get(cap.id.as_str())
+                    .cloned()
+                    .map(BoundedText);
+            }
+        }
+    }
     Ok((revision.revision, config))
 }
 
@@ -1499,6 +1511,7 @@ impl McpClientService {
                 Some(input_schema),
                 output_schema,
                 tool.read_only_hint,
+                None,
             )?);
         }
         for resource in catalog.resources {
@@ -1508,7 +1521,7 @@ impl McpClientService {
                     "invalid MCP resource URI".into(),
                 ));
             }
-            resource_uris.insert(id.as_str().to_owned(), resource.uri);
+            resource_uris.insert(id.as_str().to_owned(), resource.uri.clone());
             capabilities.push(capability(
                 previous,
                 id,
@@ -1519,6 +1532,7 @@ impl McpClientService {
                 None,
                 None,
                 false,
+                Some(resource.uri),
             )?);
         }
         for prompt in catalog.prompts {
@@ -1559,6 +1573,7 @@ impl McpClientService {
                 Some(input_schema),
                 None,
                 false,
+                None,
             )?);
         }
         capabilities.push(capability(
@@ -1573,6 +1588,7 @@ impl McpClientService {
             None,
             None,
             false,
+            None,
         )?);
         self.write_catalog(
             tx,
@@ -2480,6 +2496,7 @@ fn capability(
     input_schema: Option<SchemaRef>,
     output_schema: Option<SchemaRef>,
     read_only: bool,
+    uri: Option<String>,
 ) -> Result<McpCapability, StorageError> {
     if name.is_empty()
         || name.chars().count() > 256
@@ -2501,6 +2518,8 @@ fn capability(
         output_schema,
         read_only,
         revision: rev(1),
+        // A resource names the URI a reader passes to `mcp.resources`.
+        uri: uri.map(BoundedText),
     };
     if let Some(old) = previous.capabilities.iter().find(|old| old.id == cap.id) {
         cap.revision = old.revision.clone();
