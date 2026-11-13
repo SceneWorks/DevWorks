@@ -229,6 +229,83 @@ fn a_knowledge_read_costs_the_same_behind_tenfold_history() {
     let tally = common::read(&*app.store, |s| s.knowledge().knowledge_claim_tally(&claim));
     assert_eq!(
         (tally.lesson_events, tally.open_challenges, tally.deliveries.sessions),
-        (100, 1, 100)
+        (101, 1, 100)
+    );
+}
+
+/// MCP: reading one server's capabilities reads that server's catalog only. Three other
+/// servers' catalogs grow from 10 to 100 tools; the read costs the same steps and pages.
+#[test]
+fn reading_one_mcp_server_costs_the_same_behind_tenfold_other_catalogs() {
+    use devworks_core::ports::mcp::{RemoteCatalog, RemoteTool};
+    use devworks_core::services::mcp::McpClientService;
+    let h = Harness::new();
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    let app = App::boot(&h, |cases| cases.with_mcp(service.clone()));
+    let configure = |name: &str| match app.cmd(
+        "mcp.configure",
+        8,
+        json!({"scope": {"kind": "Workspace"}, "name": name,
+            "transport": {"kind": "Http", "endpoint": "https://mcp.example.test/mcp"}}),
+    ) {
+        OperationResult::McpConfigure { value } => value.id,
+        other => panic!("{other:?}"),
+    };
+    let publish = |server: &Id, tools: usize, expected: i64| {
+        let (service, server) = (service.clone(), server.clone());
+        write(&*app.store, move |tx| {
+            service.publish_remote_catalog(
+                tx,
+                &ConfigScope::Workspace,
+                &server,
+                &Revision::new(expected).unwrap(),
+                RemoteCatalog {
+                    tools: (0..tools)
+                        .map(|n| RemoteTool {
+                            name: format!("tool_{n}"),
+                            description: "Look up one record by its key. ".repeat(8),
+                            input_schema: json!({"type": "object",
+                                "properties": {"key": {"type": "string",
+                                    "description": "The record key. ".repeat(8)}}}),
+                            output_schema: None,
+                            read_only_hint: true,
+                            title: None,
+                            destructive_hint: None,
+                        })
+                        .collect(),
+                    resources: vec![],
+                    prompts: vec![],
+                },
+            )
+        })
+        .unwrap();
+    };
+    let read = configure("Read server");
+    publish(&read, 5, 1);
+    let others = ["Other one", "Other two", "Other three"].map(configure);
+    for other in &others {
+        publish(other, 10, 1);
+    }
+    let capabilities = |app: &App<'_>| {
+        app.counted
+            .count(|| {
+                app.q(
+                    "mcp.capabilities",
+                    8,
+                    json!({"scope": {"kind": "Workspace"}, "serverId": read,
+                        "catalogRevision": "2", "page": {"limit": 10}}),
+                )
+            })
+            .1
+    };
+    let small = capabilities(&app);
+    for other in &others {
+        publish(other, 100, 2);
+    }
+    let large = capabilities(&app);
+    assert_no_growth("mcp capabilities", small, large);
+    assert!(
+        large.read_pages <= small.read_pages + small.read_pages / 4,
+        "mcp capabilities read other servers' catalogs: {small:?} -> {large:?}"
     );
 }

@@ -83,3 +83,30 @@ CREATE INDEX allocation_claims_live_project ON allocation_claims(project_id,id)
  WHERE state IN ('Active','Transferred','Yielding');
 CREATE INDEX work_items_by_status
  ON work_items(project_id,status_id,priority DESC,manual_order,created_at,id);
+
+-- Outgoing MCP: each server's catalog moves out of its scope's configuration into its own
+-- namespace, outgoing_mcp/<server id>, so reading one server reads only its own catalog. Every
+-- current configuration gets a new revision without the catalogs; history keeps its revisions.
+INSERT INTO configuration_revisions(scope_key,namespace,revision,schema_version,body_json)
+ SELECT r.scope_key,'outgoing_mcp/'||json_extract(s.value,'$.public.id'),2,r.schema_version,
+  json_object(
+   'capabilities',json(coalesce(json_extract(s.value,'$.capabilities'),'[]')),
+   'schemas',json(coalesce(json_extract(s.value,'$.schemas'),'{}')),
+   'resource_uris',json(coalesce(json_extract(s.value,'$.resource_uris'),'{}')),
+   'retired',json(coalesce(json_extract(s.value,'$.retired'),'{}')))
+ FROM effective_configuration e
+ JOIN configuration_revisions r USING(scope_key,namespace,revision),
+ json_each(r.body_json,'$.servers') s
+ WHERE e.namespace='outgoing_mcp';
+INSERT INTO effective_configuration(scope_key,namespace,revision)
+ SELECT scope_key,namespace,revision FROM configuration_revisions
+ WHERE substr(namespace,1,13)='outgoing_mcp/';
+INSERT INTO configuration_revisions(scope_key,namespace,revision,schema_version,body_json)
+ SELECT r.scope_key,'outgoing_mcp',r.revision+1,r.schema_version,
+  json_set(r.body_json,'$.servers',json((SELECT json_group_array(
+   json(json_remove(s.value,'$.capabilities','$.schemas','$.resource_uris','$.retired'))
+   ORDER BY CAST(s.key AS INTEGER)) FROM json_each(r.body_json,'$.servers') s)))
+ FROM effective_configuration e
+ JOIN configuration_revisions r USING(scope_key,namespace,revision)
+ WHERE e.namespace='outgoing_mcp';
+UPDATE effective_configuration SET revision=revision+1 WHERE namespace='outgoing_mcp';

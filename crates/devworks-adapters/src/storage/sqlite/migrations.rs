@@ -624,14 +624,15 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "98b89612ce3caecfafb3533de350b23c0cf6f883e6834944ec8a71a7901a9677",
         rebuilds_tables: true,
     },
-    // Indexes and maintained summaries for bounded reads. Prior readers ignore them; a prior
-    // writer would leave the summaries stale, so it may not open the store.
+    // Indexes, maintained Knowledge tallies and per-server MCP catalogs for bounded reads. A
+    // prior build would read a server's catalog from its scope's configuration, where it no
+    // longer is, so neither a prior reader nor a prior writer may open the store.
     Migration {
         version: 54,
-        minimum_reader: 53,
+        minimum_reader: 54,
         minimum_writer: 54,
         sql: include_str!("migrations/0054_bounded_reads.sql"),
-        expected_sha256: "6fe828b29be92586dff23583e5d511f5457563c15873a968a6939d2feefa3cf3",
+        expected_sha256: "ad1a1a6be077446bd6f7a3f1bc9ed1ffec0ce745a82fbfc4d46153ce314101cc",
         rebuilds_tables: false,
     },
 ];
