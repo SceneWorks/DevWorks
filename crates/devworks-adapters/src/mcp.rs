@@ -771,6 +771,17 @@ impl McpRemote for NativeMcpClients {
         })
     }
 
+    fn missing_runtime(&self, transport: &McpTransport) -> Option<String> {
+        let McpTransport::Stdio { process } = transport else {
+            return None;
+        };
+        let executable = process.executable_ref.as_str();
+        self.bindings
+            .resolve_named_executable(executable)
+            .is_err()
+            .then(|| executable.to_owned())
+    }
+
     fn disconnect(&self, server_id: &Id) -> Result<(), McpRemoteFault> {
         let slot = self
             .sessions

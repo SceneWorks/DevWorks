@@ -6101,6 +6101,13 @@ pub struct McpServer {
     )]
     #[schemars(with = "bool", extend("x-since" = 8))]
     pub disabled: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 8))]
+    pub missing_runtime: Option<Text>,
 }
 impl Check for McpServer {
     fn check(&self) -> Result<(), String> {
@@ -6114,6 +6121,7 @@ impl Check for McpServer {
         self.last_failure.check()?;
         self.configuration.check()?;
         self.disabled.check()?;
+        self.missing_runtime.check()?;
         super::domain_rules::record(
             "McpServer",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -6132,6 +6140,9 @@ impl Revisioned for McpServer {
         }
         if revision < 8 {
             self.disabled = None;
+        }
+        if revision < 8 {
+            self.missing_runtime = None;
         }
     }
 }

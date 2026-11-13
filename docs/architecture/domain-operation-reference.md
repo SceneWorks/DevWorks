@@ -2431,6 +2431,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `lastFailure` | `?Text` · *revision 8+* |
 | `configuration` | `?McpTransport` · *revision 8+* |
 | `disabled` | `?bool` · *revision 8+* |
+| `missingRuntime` | `?Text` · *revision 8+* |
 
 ### McpTransport
 

@@ -709,3 +709,54 @@ fn settings_shows_tool_annotations_and_saves_a_read_only_classification() {
         "the person's classification replaces the hint"
     );
 }
+
+#[test]
+fn settings_names_a_stdio_servers_missing_runtime_before_connecting() {
+    let _case = native_runtime_case();
+    let root = Root::new("mcp-settings-runtime");
+    let engine = Engine::start(config(&root.0)).expect("desktop runtime boots");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1800.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, Category::Tools.label());
+    settle(&mut h);
+    type_into(&mut h, "MCP server name", "Local server");
+    click(
+        &mut h,
+        Role::CheckBox,
+        "Launch a registered local process (stdio)",
+    );
+    settle(&mut h);
+    // No executable by this name is on this computer's PATH.
+    h.get_by_role_and_label(Role::TextInput, "MCP process spec JSON")
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "MCP process spec JSON")
+        .type_text(
+            r#"{"executableRef":"devworks-no-such-runtime","args":[],"workingDirectory":{"rootId":"mcp-root","relative":"work"},"environment":[],"profile":"Full","timeoutMs":"5000","outputLimitBytes":"1024"}"#,
+        );
+    h.step();
+    click(&mut h, Role::Button, "Add server");
+    settle(&mut h);
+    click(&mut h, Role::Button, "Refresh MCP servers");
+    settle(&mut h);
+    let server = h
+        .state()
+        .settings
+        .mcp
+        .servers
+        .iter()
+        .find(|server| server.name.0 == "Local server")
+        .expect("saved stdio server")
+        .clone();
+    assert_eq!(
+        server.missing_runtime.as_ref().map(|text| text.0.as_str()),
+        Some("devworks-no-such-runtime")
+    );
+    assert!(
+        h.query_all_by_label_contains("Runtime not found: `devworks-no-such-runtime`")
+            .next()
+            .is_some(),
+        "Settings names the missing runtime before connecting"
+    );
+}

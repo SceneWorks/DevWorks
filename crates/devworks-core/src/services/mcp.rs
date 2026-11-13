@@ -787,7 +787,7 @@ impl McpClientService {
         let failure = outcome
             .as_ref()
             .err()
-            .map(|fault| BoundedText(format!("Connection failed: {fault:?}")));
+            .map(|fault| BoundedText(connection_failure(&native.remote, &server.transport, fault)));
         let new_state = if successful {
             ItemState::Healthy
         } else {
@@ -1906,6 +1906,7 @@ impl McpClientService {
                 last_failure: None,
                 configuration: None,
                 disabled: None,
+                missing_runtime: None,
             };
             let stored = StoredServer {
                 public,
@@ -2539,6 +2540,22 @@ fn sampling_decision(
     }))
 }
 
+/// The diagnostic a failed connection leaves on its server. A launch whose executable this
+/// host cannot resolve names that executable, so a person knows which runtime to install.
+fn connection_failure(
+    remote: &Arc<dyn McpRemote>,
+    transport: &McpTransport,
+    fault: &McpRemoteFault,
+) -> String {
+    match (fault, remote.missing_runtime(transport)) {
+        (McpRemoteFault::UnavailableRuntime, Some(executable)) => format!(
+            "Connection failed: the executable `{executable}` is not available on this \
+             computer. Install its runtime, make it available on PATH, then reconnect."
+        ),
+        _ => format!("Connection failed: {fault:?}"),
+    }
+}
+
 fn capability_id(server: &Id, kind: &str, wire_name: &str) -> Result<Id, StorageError> {
     Id::new(format!(
         "mcp-{}",
@@ -2703,7 +2720,24 @@ impl QueryHandler for McpClientService {
                 state
                     .servers
                     .sort_by(|a, b| a.public.id.as_str().cmp(b.public.id.as_str()));
-                let records: Vec<McpServer> = state.servers.iter().map(|s| s.view(ctx)).collect();
+                // Runtime availability is a fact about this host now, so it is read, not stored.
+                let records: Vec<McpServer> = state
+                    .servers
+                    .iter()
+                    .map(|s| {
+                        let mut view = s.view(ctx);
+                        // It names the saved executable, so it goes only where the saved
+                        // configuration does.
+                        if view.configuration.is_some() {
+                            view.missing_runtime = self
+                                .native
+                                .get()
+                                .and_then(|native| native.remote.missing_runtime(&s.transport))
+                                .map(BoundedText);
+                        }
+                        view
+                    })
+                    .collect();
                 let value = page(&records, &input.page, version).map_err(|e| self.fault(e))?;
                 (version, OperationResult::McpServers { value })
             }
