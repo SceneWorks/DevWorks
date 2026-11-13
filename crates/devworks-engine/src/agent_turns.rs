@@ -143,16 +143,24 @@ async fn drive_agent_turn(
     };
     let cancellation = Cancellation::new();
     let signal = cancellation.clone();
+    // Set after the cancellation, so a held call's wait ends as soon as the turn is stopped.
+    let (stopped_tx, stopped) = watch::channel(false);
     let bridge = tokio::spawn(async move {
         while !*stop.borrow() && stop.changed().await.is_ok() {}
         signal.cancel();
+        stopped_tx.send_replace(true);
+        // Keep the sender until the loop ends: a closed channel would end every wait at once.
+        std::future::pending::<()>().await;
     });
     let mut retry_at_ms = None;
     let result = run_native_loop(
         &runtime,
         &ctx,
         &coordinator,
-        &cancellation,
+        Stop {
+            cancellation: &cancellation,
+            stopped,
+        },
         &mut retry_at_ms,
     )
     .await;
@@ -226,13 +234,50 @@ async fn acknowledge_native_instructions(
     }
 }
 
+/// Longest wait before a held tool call is dispatched again when no admitted command changed
+/// state. It covers changes that are not commands, such as an edited guidance file.
+const HELD_CALL_RECHECK: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How a turn learns it was stopped: the flag its blocking work checks, and a signal its waits
+/// select on.
+struct Stop<'a> {
+    cancellation: &'a Cancellation,
+    stopped: watch::Receiver<bool>,
+}
+
+/// Shortest time between two dispatches of a held call. A failing store answers each
+/// submission "status unknown", which counts as a change; this keeps that from spinning.
+const HELD_CALL_SPACING: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Waits until an admitted command may have changed state (an approval decision, its
+/// readmission, a reconcile), the turn is stopped, or [`HELD_CALL_RECHECK`] elapses, and at
+/// least [`HELD_CALL_SPACING`] after the dispatch that left the call held.
+async fn wait_for_state_change(
+    changes: &mut watch::Receiver<u64>,
+    stop: &mut Stop<'_>,
+    dispatched: tokio::time::Instant,
+) {
+    tokio::select! {
+        _ = changes.changed() => {}
+        _ = stop.stopped.wait_for(|stopped| *stopped) => {}
+        _ = tokio::time::sleep(HELD_CALL_RECHECK) => {}
+    }
+    if !*stop.stopped.borrow() {
+        tokio::time::sleep_until(dispatched + HELD_CALL_SPACING).await;
+    }
+}
+
 async fn run_native_loop(
     runtime: &Arc<Runtime>,
     ctx: &InvocationContext,
     agent: &AgentRecord,
-    cancellation: &Cancellation,
+    mut stop: Stop<'_>,
     retry_at_ms: &mut Option<i64>,
 ) -> Result<(), StorageError> {
+    let cancellation = stop.cancellation;
+    // Marked seen before each dispatch, so a change committed while a call is dispatched still
+    // wakes the wait that follows it.
+    let mut changes = runtime.state_changes();
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     ensure_membership_context(runtime, ctx, agent)?;
     let mut recovered = runtime.recover_native_context_head(ctx, session_id)?;
@@ -320,11 +365,15 @@ async fn run_native_loop(
                 }
             };
             if has_tools {
+                changes.borrow_and_update();
+                let dispatched = tokio::time::Instant::now();
                 dispatch_pending_off_thread(runtime, ctx, session_id, cancellation).await?;
                 if !crate::tool_turn::pending_calls(runtime.store().as_ref(), ctx, session_id)?
                     .is_empty()
                 {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    // A call awaiting approval is held: dispatch it again only once something
+                    // changed, never on a timer that re-admits it every few hundred ms.
+                    wait_for_state_change(&mut changes, &mut stop, dispatched).await;
                     recovered = Some((head, binding, observed_sequence));
                     continue;
                 }
@@ -400,6 +449,8 @@ async fn run_native_loop(
             .1;
         acknowledge_native_instructions(runtime, ctx, agent).await?;
         let invocation = plan_generation_window(runtime, ctx, &route, &binding, &head, window)?;
+        changes.borrow_and_update();
+        let dispatched = tokio::time::Instant::now();
         let worker = Arc::clone(runtime);
         let stopped = cancellation.clone();
         let handle = tokio::runtime::Handle::current();
@@ -445,7 +496,7 @@ async fn run_native_loop(
                 // An approval or a still-running operation can delay the initial result. The
                 // native request is durable: replaying its key resumes the pending dispatches
                 // without sending a second provider request.
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                wait_for_state_change(&mut changes, &mut stop, dispatched).await;
                 recovered = runtime
                     .recover_native_context_head(ctx, session_id)?
                     .or(Some((head, binding, observed_sequence)));

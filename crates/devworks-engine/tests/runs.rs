@@ -8253,3 +8253,6 @@ mod watch_tests;
 
 #[path = "runs/mcp_agent_tool.rs"]
 mod mcp_agent_tool;
+
+#[path = "runs/approval_wait.rs"]
+mod approval_wait;

@@ -197,6 +197,15 @@ pub fn settle(h: &mut Harness<'_, Shell>) {
         }
         match h.try_run() {
             Ok(_) => {
+                // A runtime hint inside the shell's refresh interval re-reads the screen when
+                // that interval ends: wait for it, so the screen reflects the hint.
+                if let Some(due) = h.state().hint_refresh_due_at()
+                    && std::time::Instant::now() < deadline
+                {
+                    std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
+                    h.step();
+                    continue;
+                }
                 // A final frame may submit a query after its spinner/status bar rendered.
                 // Its worker has not necessarily sent the repaint wake yet: a quiet egui
                 // frame alone does not mean its backend replies were applied.

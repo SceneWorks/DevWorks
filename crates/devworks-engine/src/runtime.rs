@@ -1387,6 +1387,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         prices: prices.clone(),
         notifications: notifications.clone(),
         indexing: index_supervisor.clone(),
+        changes: watch::channel(0).0,
         handle: tokio::runtime::Handle::current(),
     });
     if let Some(service) = &help {
@@ -2641,6 +2642,12 @@ impl Runtime {
     pub fn approval_resumes(&self) -> &Arc<ResumeDispatcher> {
         &self.resumes
     }
+    /// Changes each time an admitted command may have changed domain state: a new receipt
+    /// that is not a refusal, or an unknown outcome. Approval decisions and their readmissions
+    /// are admitted commands, so a caller waiting on one wakes here instead of polling.
+    pub fn state_changes(&self) -> watch::Receiver<u64> {
+        self.admitter.changes.subscribe()
+    }
 
     /// Admits a command. A command that may have committed (`Recorded`, or a lost
     /// acknowledgment) wakes delivery for the reply intent its receipt committed, an applied
@@ -3054,6 +3061,8 @@ struct Admitter {
     prices: Option<Arc<crate::prices::PriceSupervisor>>,
     notifications: Option<Arc<OsNotificationSupervisor>>,
     indexing: Option<Arc<IndexSupervisor>>,
+    /// Counts admissions that may have changed domain state (see [`Runtime::state_changes`]).
+    changes: watch::Sender<u64>,
     /// The Tokio runtime [`boot`] ran on (a project archival's immediate stop is spawned there).
     handle: tokio::runtime::Handle,
 }
@@ -3169,6 +3178,18 @@ impl Admitter {
             Ok(CommandReply::CommandStatusUnknown { .. }) => (true, true),
             _ => (false, false),
         };
+        // A replayed receipt or a refusal records nothing new in domain state, so it cannot
+        // unblock a waiter; counting it would wake the caller that submitted it.
+        let changed = match &outcome {
+            Ok(CommandReply::Recorded {
+                receipt, replayed, ..
+            }) => !replayed && !matches!(receipt.decision, DomainDecision::Refused { .. }),
+            Ok(CommandReply::CommandStatusUnknown { .. }) => true,
+            _ => false,
+        };
+        if changed {
+            self.changes.send_modify(|n| *n = n.wrapping_add(1));
+        }
         if committed {
             self.dispatcher.wakeup().wake();
             self.usage.notify();

@@ -176,6 +176,7 @@ impl Shell {
         let Some(cleaned) = b.purge_client_publish(self.memory(), self.purge_live(), save)? else {
             return Ok(false);
         };
+        self.editors_changed = false;
         for scope in cleaned {
             self.remove_purged_client(&scope);
             b.purge_client_acknowledge(&scope);
