@@ -705,7 +705,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                     ids.clone(),
                     clock.clone(),
                 )
-                .with_root_control(runs.service.clone()),
+                .with_root_control(runs.service.clone())
+                .with_diagnostics(diagnostics.clone()),
             ),
         ))
     });

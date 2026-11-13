@@ -61,6 +61,12 @@ impl WatchSupervisor {
     ) -> Result<usize, StorageError> {
         self.service.close_at_shutdown(stopped, deadline)
     }
+    /// The watcher backup check when it is due (its setting, interval and unfinished watchers).
+    pub fn backup_if_due(
+        &self,
+    ) -> Result<Option<devworks_core::services::watch::BackupPass>, StorageError> {
+        self.service.backup_if_due(&self.host())
+    }
     /// The delivering half of a pass alone.
     pub fn deliver(&self) -> Result<usize, StorageError> {
         self.service.deliver_pending(&self.host())

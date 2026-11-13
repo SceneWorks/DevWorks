@@ -1314,6 +1314,264 @@ fn a_run_that_timed_out_before_shutdown_keeps_its_outcome() {
     });
 }
 
+fn watcher_history(app: &Runtime, watcher: &str) -> Vec<String> {
+    read(&**app.store(), |s| {
+        s.history().page(
+            &devworks_core::ports::storage::EventFilter::Aggregate {
+                kind: "watcher".into(),
+                id: watcher.into(),
+            },
+            0,
+            500,
+        )
+    })
+    .events
+    .into_iter()
+    .map(|e| e.kind)
+    .collect()
+}
+
+/// Writes one workspace setting directly, as a saved settings revision would.
+fn save_workspace_setting(app: &Runtime, key: &'static str, value: Value) {
+    use devworks_core::ports::storage::ConfigScope;
+    use devworks_core::settings::catalog::descriptor;
+    use devworks_core::settings::model;
+    write(&**app.store(), move |tx| {
+        let current = model::current_layer(tx.configuration(), &ConfigScope::Workspace)?;
+        let schema = serde_json::to_value(descriptor(key).unwrap().schema_ref()).unwrap();
+        let entry = serde_json::from_value(
+            json!({"key": key, "value": {"schema": schema, "value": value}}),
+        )
+        .unwrap();
+        let plan = model::plan(&current, &[entry]);
+        let body = model::body(
+            &plan,
+            &ActorId(id("host")),
+            tx.now_ms(),
+            json!({"kind": "test"}),
+        );
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            model::NAMESPACE,
+            current.revision,
+            model::BODY_SCHEMA_VERSION,
+            body,
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// The backup check runs only on its interval, only while some owner has an unfinished watcher,
+/// and not at all when it is off; a changed interval applies to the next check.
+#[test]
+fn the_backup_check_runs_on_its_interval_only_while_watchers_are_unfinished() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-backup-gate-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watchers = app.watchers().expect("watchers composed");
+        assert_eq!(
+            watchers.backup_if_due().unwrap(),
+            None,
+            "the first tick starts the interval"
+        );
+        fx.h.advance(900_000);
+        assert_eq!(
+            watchers.backup_if_due().unwrap(),
+            None,
+            "no unfinished watcher, no check"
+        );
+        command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"timer": {"afterMs": "86400000"}}),
+            "w-gate",
+        );
+        fx.h.advance(899_999);
+        assert_eq!(
+            watchers.backup_if_due().unwrap(),
+            None,
+            "not before its interval"
+        );
+        fx.h.advance(1);
+        assert!(
+            watchers.backup_if_due().unwrap().is_some(),
+            "due, with a running watcher"
+        );
+        save_workspace_setting(&app, "watch.backupIntervalMs", json!(60_000));
+        fx.h.advance(60_000);
+        assert!(
+            watchers.backup_if_due().unwrap().is_some(),
+            "the new interval applies next"
+        );
+        save_workspace_setting(&app, "watch.backupEnabled", json!(false));
+        fx.h.advance(3_600_000);
+        assert_eq!(
+            watchers.backup_if_due().unwrap(),
+            None,
+            "off: no check at all"
+        );
+        app.shutdown().await;
+    });
+}
+
+/// An outcome whose primary delivery never happened is delivered by the next backup check, once,
+/// with its own event ID, marked as a backup delivery and recorded as a missed primary delivery.
+#[test]
+fn the_backup_check_delivers_a_missed_outcome_once_with_its_event_id() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-backup-catch-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let session = ctx.session_id().unwrap().clone();
+        let watchers = app.watchers().expect("watchers composed");
+        assert_eq!(watchers.backup_if_due().unwrap(), None);
+        let watcher = create(&app, &ctx, "exit 3", 10_000, "w-missed");
+        let id_text = watcher["id"].as_str().unwrap().to_owned();
+        let run = OperationId(id(watcher["process"]["processId"].as_str().unwrap()));
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !read(&**app.store(), |s| s.operations().operation(&run)).is_some_and(|op| {
+            op.attempts.iter().any(|a| {
+                a.observations
+                    .iter()
+                    .any(|o| o.get("watchOutcome").is_some())
+            })
+        }) {
+            assert!(std::time::Instant::now() < deadline, "the run never ended");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // The primary pass never runs: its settlement and delivery are dropped.
+        fx.h.advance(900_000);
+        let pass = watchers
+            .backup_if_due()
+            .unwrap()
+            .expect("a backup check ran");
+        assert_eq!((pass.caught, pass.reminded), (1, 0));
+        let record = inspect(&app, &ctx, &id_text);
+        assert_eq!(record["outcome"]["kind"], json!("Failed"), "{record}");
+        assert_eq!(record["outcome"]["exitCode"], json!(3), "{record}");
+        let delivered = notices(&fx, &session);
+        assert_eq!(delivered.len(), 1, "{delivered:?}");
+        assert_eq!(
+            delivered[0]["source"], record["event"]["id"],
+            "its own event ID"
+        );
+        let kinds = watcher_history(&app, &id_text);
+        assert_eq!(
+            kinds.iter().filter(|k| *k == "WatcherBackupCatch").count(),
+            1,
+            "{kinds:?}"
+        );
+        let diagnostics = read(&**app.store(), |s| {
+            s.diagnostics().diagnostics(
+                &devworks_core::ports::storage::DiagnosticFilter {
+                    component: Some("watch.backup".into()),
+                    target_id: Some(id(&id_text)),
+                    ..Default::default()
+                },
+                10,
+            )
+        });
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        // Once: a later check finds nothing left to catch, and the primary pass sends nothing.
+        fx.h.advance(900_000);
+        assert_eq!(watchers.backup_if_due().unwrap(), None);
+        assert_eq!(watchers.tick().unwrap().delivered, 0);
+        assert_eq!(notices(&fx, &session).len(), 1);
+        app.shutdown().await;
+    });
+}
+
+/// A source that is still running wakes no one; a probe that has not run for more than twice
+/// its interval wakes its owner with a reminder to check it.
+#[test]
+fn the_backup_check_reminds_only_about_stalled_or_unknown_watchers() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-backup-remind-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let session = ctx.session_id().unwrap().clone();
+        let watchers = app.watchers().expect("watchers composed");
+        assert_eq!(watchers.backup_if_due().unwrap(), None);
+        let running = create(&app, &ctx, "sleep 30", 60_000, "w-running");
+        until_running(&app, running["process"]["processId"].as_str().unwrap()).await;
+        fx.h.advance(900_000);
+        let pass = watchers
+            .backup_if_due()
+            .unwrap()
+            .expect("a backup check ran");
+        assert_eq!(
+            (pass.caught, pass.reminded),
+            (0, 0),
+            "a running source wakes no one"
+        );
+        assert!(notices(&fx, &session).is_empty());
+        // A probe whose next run is long overdue: its primary scheduling stalled.
+        let probe_watcher = command(
+            &app,
+            &ctx,
+            "watch.create",
+            probe("exit 1", 60_000, json!({})),
+            "w-stalled",
+        );
+        let probe_id = probe_watcher["id"].as_str().unwrap().to_owned();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while counter_at(&inspect(&app, &ctx, &probe_id), "/probe/nextRunAtMs").is_none() {
+            assert!(std::time::Instant::now() < deadline, "probe never ran");
+            watchers.settle().unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        fx.h.advance(900_000);
+        let pass = watchers
+            .backup_if_due()
+            .unwrap()
+            .expect("a backup check ran");
+        assert_eq!(pass.reminded, 1, "{pass:?}");
+        let kinds = watcher_history(&app, &probe_id);
+        assert!(kinds.iter().any(|k| k == "WatcherReminder"), "{kinds:?}");
+        let delivered = notices(&fx, &session);
+        assert_eq!(delivered.len(), 1, "{delivered:?}");
+        assert_eq!(
+            delivered[0]["source"],
+            json!(probe_id),
+            "the reminder names its watcher"
+        );
+        // Past its lifetime the stalled probe ends TimedOut instead of being reminded again.
+        fx.h.advance(86_400_000);
+        let pass = watchers
+            .backup_if_due()
+            .unwrap()
+            .expect("a backup check ran");
+        assert_eq!(pass.reminded, 0, "{pass:?}");
+        let record = inspect(&app, &ctx, &probe_id);
+        assert_eq!(record["outcome"]["kind"], json!("TimedOut"), "{record}");
+        app.shutdown().await;
+    });
+}
+
 /// A probe whose condition never holds ends TimedOut at its maximum lifetime.
 #[test]
 fn a_polling_watcher_past_its_maximum_lifetime_ends_timed_out() {

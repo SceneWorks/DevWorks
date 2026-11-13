@@ -8,7 +8,7 @@ use crate::authority::shell::{CommandVerdict, record_verdict};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, watch as ops};
-use crate::ports::process::ProcessSpec as NativeProcessSpec;
+use crate::ports::process::{Probe, ProcessSpec as NativeProcessSpec};
 use crate::ports::storage::{
     ApplicationStore, ArtifactScope, ConfigScope, ConfigurationRead, MAX_WATCH_TAIL_BYTES,
     NewEvent, OperationRecord, ProcessPhase, ReadOptions, ReadSnapshot, StorageError, StoredProbe,
@@ -32,6 +32,7 @@ use crate::protocol::{
 };
 use crate::services::artifacts::host::HostArtifactPublication;
 use crate::services::artifacts::{ArtifactService, version_ref};
+use crate::services::diagnostics::{DiagnosticService, LogEntry};
 use crate::services::process::STOPPED_ON_REQUEST;
 use crate::services::process::tools::{
     BindingRefusal, ExecuteOrigin, ProcessToolService, binding_refusal,
@@ -39,6 +40,7 @@ use crate::services::process::tools::{
 use crate::services::runs::ControlService;
 use crate::services::sessions::transcript::{BatchOutcome, SessionBatch, SessionWriter};
 use crate::services::sessions::{Refusal, counter, decided, query_fault, rev, turn};
+use crate::settings::catalog::{WATCH_BACKUP_ENABLED_KEY, WATCH_BACKUP_INTERVAL_KEY};
 use crate::settings::catalog::{WATCH_MAX_LIFETIME_KEY, descriptor};
 use crate::settings::model::{chain, current_chain};
 use base64::Engine;
@@ -91,6 +93,8 @@ const PAGE: u16 = 100;
 pub struct WatchTick {
     pub settled: usize,
     pub delivered: usize,
+    /// The backup check, when one ran on this tick.
+    pub backup: Option<BackupPass>,
 }
 
 pub struct WatchService {
@@ -101,6 +105,19 @@ pub struct WatchService {
     clock: Arc<dyn Clock>,
     /// Root controls: a paused or held owner's events wait (WATCH-07).
     control: Option<Arc<ControlService>>,
+    /// Where backup catches are recorded as missed primary deliveries (WATCH-12).
+    diagnostics: Option<Arc<DiagnosticService>>,
+    /// When the backup check last came due (store clock), or `None` before the first tick.
+    last_backup_ms: std::sync::Mutex<Option<i64>>,
+}
+
+/// What one watcher backup check did (WATCH-12).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BackupPass {
+    /// Outcomes delivered by the backup check because their first delivery was missed.
+    pub caught: usize,
+    /// Owners reminded to check a watcher that stalled or whose source cannot be established.
+    pub reminded: usize,
 }
 
 impl WatchService {
@@ -118,7 +135,15 @@ impl WatchService {
             ids,
             clock,
             control: None,
+            diagnostics: None,
+            last_backup_ms: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Records each backup catch as a missed primary delivery in diagnostics as well as history.
+    pub fn with_diagnostics(mut self, diagnostics: Arc<DiagnosticService>) -> Self {
+        self.diagnostics = Some(diagnostics);
+        self
     }
 
     /// Holds delivery to an owner whose root is paused or held until it may run again (Continue),
@@ -135,9 +160,13 @@ impl WatchService {
     /// Settles every open watcher whose process outcome is now observed, then delivers every
     /// pending event to its session. `host` must be a host context.
     pub fn tick(&self, host: &InvocationContext) -> Result<WatchTick, StorageError> {
+        let settled = self.settle_observed()?;
+        let delivered = self.deliver_pending(host)?;
+        let backup = self.backup_if_due(host)?;
         Ok(WatchTick {
-            settled: self.settle_observed()?,
-            delivered: self.deliver_pending(host)?,
+            settled,
+            delivered,
+            backup,
         })
     }
 
@@ -163,6 +192,272 @@ impl WatchService {
                 return Ok(settled);
             }
         }
+    }
+
+    /// Runs the watcher backup check when it is due (WATCH-12): when it is on, its interval has
+    /// passed since it last came due (read on every tick, so a changed interval applies to the next
+    /// check), and some owner still has an unfinished watcher or an undelivered event. `None` when
+    /// no check ran.
+    pub fn backup_if_due(
+        &self,
+        host: &InvocationContext,
+    ) -> Result<Option<BackupPass>, StorageError> {
+        let now = self.clock.now_ms().get();
+        let (enabled, interval) = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            backup_settings(read.configuration())
+        })?;
+        {
+            let mut last = self
+                .last_backup_ms
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let Some(since) = *last else {
+                *last = Some(now);
+                return Ok(None);
+            };
+            if !enabled || now - since < interval {
+                return Ok(None);
+            }
+            *last = Some(now);
+        }
+        let unfinished = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            Ok(!read.watchers().open_watchers(None, 1)?.is_empty()
+                || !read.watchers().pending_watch_events(None, 1)?.is_empty())
+        })?;
+        if !unfinished {
+            return Ok(None);
+        }
+        self.backup_pass(host).map(Some)
+    }
+
+    /// The watcher backup check itself. Each open watcher of an owner that may run is checked by
+    /// a path independent of the primary pass: an outcome the primary pass never settled is
+    /// settled now, a recorded tree the OS reports gone is settled Lost, and an owner whose
+    /// watcher stalled (a probe more than two intervals past its due run) or whose source cannot
+    /// be established is reminded to check it; a source that is still running wakes no one.
+    /// Every event still undelivered is then delivered as a backup delivery, with its own event
+    /// ID, and recorded as a missed primary delivery.
+    pub fn backup_pass(&self, host: &InvocationContext) -> Result<BackupPass, StorageError> {
+        if host.principal_kind() != PrincipalKind::Host {
+            return Err(StorageError::ScopeDenied);
+        }
+        let mut pass = BackupPass::default();
+        let mut after: Option<Id> = None;
+        loop {
+            let page = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+                read.watchers().open_watchers(after.as_ref(), PAGE)
+            })?;
+            let Some(last) = page.last() else {
+                break;
+            };
+            after = Some(last.id.clone());
+            for watcher in &page {
+                if !self.owner_may_run(watcher)? {
+                    continue;
+                }
+                if let Some(reason) = self.backup_check(watcher)? {
+                    pass.reminded += usize::from(self.remind(host, watcher, reason)?);
+                }
+            }
+            if page.len() < usize::from(PAGE) {
+                break;
+            }
+        }
+        let mut after: Option<(i64, Id)> = None;
+        loop {
+            let page = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+                read.watchers()
+                    .pending_watch_events(after.as_ref().map(|(at, id)| (*at, id)), PAGE)
+            })?;
+            let Some(last) = page.last() else {
+                break;
+            };
+            after = Some((last.created_at_ms, last.id.clone()));
+            for event in &page {
+                pass.caught += usize::from(self.deliver(host, event, true)?);
+            }
+            if page.len() < usize::from(PAGE) {
+                break;
+            }
+        }
+        Ok(pass)
+    }
+
+    /// Whether `watcher`'s owner is open and may run (not paused or held): a held owner is
+    /// skipped by the backup check as by delivery.
+    fn owner_may_run(&self, watcher: &StoredWatcher) -> Result<bool, StorageError> {
+        let session = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            read.sessions().session(&watcher.session_id)
+        })?;
+        let Some(session) = session.filter(|s| !s.closed()) else {
+            return Ok(false);
+        };
+        match (self.control.clone(), session.root_id) {
+            (Some(control), Some(root)) => run_write(&*self.store, WriteOptions::default(), {
+                move |tx| control.root_permits_dispatch(tx, &root)
+            }),
+            _ => Ok(true),
+        }
+    }
+
+    /// Checks one open watcher's source by the backup path; returns why its owner must be
+    /// reminded, if it must. An outcome found here is settled (and later delivered as a backup).
+    fn backup_check(&self, watcher: &StoredWatcher) -> Result<Option<&'static str>, StorageError> {
+        let now = self.clock.now_ms().get();
+        // A probe past its lifetime ends TimedOut, stalled or not: no reminder for it.
+        if watcher.expires_at_ms.is_some_and(|end| now >= end) {
+            self.advance(watcher)?;
+            return Ok(None);
+        }
+        if watcher.source_kind == "Probe"
+            && let Some(probe) = &watcher.probe
+            && probe
+                .next_run_at_ms
+                .is_some_and(|next| now - next > probe.interval_ms.saturating_mul(2))
+        {
+            return Ok(Some(
+                "the probe has not run for more than twice its interval",
+            ));
+        }
+        // Settles whatever the primary pass would have: an observed end, a due timer.
+        if self.advance(watcher)? {
+            return Ok(None);
+        }
+        let Some(run) = &watcher.process_operation_id else {
+            return Ok(None);
+        };
+        // A registered monitor is not proof the source is healthy (it may be stuck): the OS is
+        // asked either way.
+        let monitoring = self.processes.is_monitoring(run);
+        let record = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            read.resources().process(&run.0)
+        })?;
+        let Some(record) = record else {
+            // Not launched yet: still pending, nothing to establish.
+            return Ok(None);
+        };
+        match record.phase {
+            ProcessPhase::Running | ProcessPhase::Stopping => {
+                match self.processes.probe_watched_run(&record) {
+                    Some(Probe::Alive) => Ok(None),
+                    // Its monitor may be about to record the real outcome, or may be stuck: the
+                    // host cannot tell, so the owner is asked to check rather than told Lost.
+                    Some(Probe::Gone) if monitoring => Ok(Some(
+                        "its process has ended but its outcome was not recorded",
+                    )),
+                    Some(Probe::Gone) => {
+                        let id = watcher.id.clone();
+                        let run = run.clone();
+                        run_write(&*self.store, WriteOptions::default(), move |tx| {
+                            lost_in(tx, &id, &run)
+                        })?;
+                        Ok(None)
+                    }
+                    Some(Probe::Unknown(_)) | None => {
+                        Ok(Some("its process's status cannot be established"))
+                    }
+                }
+            }
+            ProcessPhase::Uncertain | ProcessPhase::Lost => {
+                Ok(Some("its process's status cannot be established"))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Wakes `watcher`'s owner with a reminder to check it: a host notice whose source is the
+    /// watcher, recorded in history. It is not a watcher event and changes no state.
+    fn remind(
+        &self,
+        host: &InvocationContext,
+        watcher: &StoredWatcher,
+        reason: &'static str,
+    ) -> Result<bool, StorageError> {
+        let text = format!(
+            "Watcher reminder: watcher {id} ({kind}) needs checking: {reason}. Inspect it with \
+             watch.inspect and decide whether to keep or cancel it.",
+            id = watcher.id.as_str(),
+            kind = watcher.source_kind,
+        );
+        let staged = self
+            .artifacts
+            .stage_host_bytes(
+                &*self.store,
+                text.as_bytes(),
+                json!({"kind":"WatcherReminder","watcherId":watcher.id.as_str(),"sessionId":watcher.session_id.as_str()}),
+            )?
+            .map_err(|_| StorageError::InvalidRecord("watcher reminder staging failed".into()))?;
+        let pending = staged.clone();
+        let service = self.artifacts.clone();
+        let id = watcher.id.clone();
+        let host = host.clone().with_session(watcher.session_id.clone());
+        let control = self.control.clone();
+        let committed = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let Some(watcher) = tx.watchers().watcher(&id)? else {
+                return Ok(false);
+            };
+            let Some(session) = tx.sessions().session(&watcher.session_id)? else {
+                return Ok(false);
+            };
+            if !watcher.phase.is_open() || session.closed() {
+                return Ok(false);
+            }
+            // As for delivery: an owner paused or held meanwhile receives nothing.
+            if let (Some(control), Some(root)) = (&control, &session.root_id)
+                && !control.root_permits_dispatch(tx, root)?
+            {
+                return Ok(false);
+            }
+            let scope = session
+                .project_id
+                .clone()
+                .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+            let version = service.commit_host_bytes_in_scope(
+                tx,
+                &pending,
+                HostArtifactPublication {
+                    title: "Watcher reminder",
+                    media_type: "text/plain; charset=utf-8",
+                    provenance: json!({"kind":"WatcherReminder","watcherId":watcher.id.as_str()}),
+                    scope,
+                    owner: session.agent_id.clone(),
+                },
+            )?;
+            let batch = turn::batch_of(
+                &watcher.session_id,
+                tx.new_id(IdKind::TranscriptBatch),
+                session.context_epoch,
+                session.next_sequence,
+                vec![TranscriptBody::HostNotice {
+                    source: watcher.id.clone(),
+                    artifact: version_ref(&version),
+                }],
+                || tx.new_id(IdKind::TranscriptEntry),
+            );
+            match SessionWriter::append_in(tx, &host, &SessionBatch::entries(batch))? {
+                BatchOutcome::Accepted(_) | BatchOutcome::Replayed(_) => {}
+                BatchOutcome::Refused(refusal) => {
+                    return Err(StorageError::InvalidRecord(format!(
+                        "watcher reminder refused: {refusal:?}"
+                    )));
+                }
+            }
+            let operation = watcher.process_operation_id.clone();
+            history(
+                tx,
+                &watcher,
+                operation.as_ref(),
+                "WatcherReminder",
+                json!({"reason": reason}),
+            )?;
+            Ok(true)
+        });
+        self.artifacts.settle_host_bytes(
+            &*self.store,
+            &staged,
+            committed.as_ref().is_ok_and(|d| *d),
+        );
+        committed
     }
 
     /// The last pass of an orderly shutdown, after owned process trees were stopped (WATCH-08):
@@ -296,7 +591,7 @@ impl WatchService {
             };
             after = Some((last.created_at_ms, last.id.clone()));
             for event in &page {
-                delivered += usize::from(self.deliver(host, event)?);
+                delivered += usize::from(self.deliver(host, event, false)?);
             }
             if page.len() < usize::from(PAGE) {
                 return Ok(delivered);
@@ -310,6 +605,7 @@ impl WatchService {
         &self,
         host: &InvocationContext,
         event: &StoredWatchEvent,
+        backup: bool,
     ) -> Result<bool, StorageError> {
         // An ended session's events are never delivered (its watchers are cancelled), so they
         // are not staged on every pass.
@@ -329,13 +625,19 @@ impl WatchService {
                 return Ok(false);
             }
         }
-        let text = notice_text(event);
+        let mut text = notice_text(event);
+        if backup {
+            text = format!(
+                "Backup delivery: this watcher event's first delivery was missed; the watcher \
+                 backup check found it. Act on it as on any watcher event.\n{text}"
+            );
+        }
         let staged = self
             .artifacts
             .stage_host_bytes(
                 &*self.store,
                 text.as_bytes(),
-                json!({"kind":"WatcherEvent","eventId":event.id.as_str(),"sessionId":event.session_id.as_str()}),
+                json!({"kind":"WatcherEvent","eventId":event.id.as_str(),"sessionId":event.session_id.as_str(),"backup":backup}),
             )?
             .map_err(|_| StorageError::InvalidRecord("watcher notice staging failed".into()))?;
         let pending = staged.clone();
@@ -343,6 +645,7 @@ impl WatchService {
         let event_id = event.id.clone();
         let host = host.clone().with_session(event.session_id.clone());
         let control = self.control.clone();
+        let diagnostics = self.diagnostics.clone();
         let committed = run_write(&*self.store, WriteOptions::default(), move |tx| {
             let Some(event) = tx.watchers().watch_event(&event_id)? else {
                 return Ok(false);
@@ -376,7 +679,7 @@ impl WatchService {
                 HostArtifactPublication {
                     title: "Watcher event",
                     media_type: "text/plain; charset=utf-8",
-                    provenance: json!({"kind":"WatcherEvent","eventId":event.id.as_str(),"watcherId":event.watcher_id.as_str()}),
+                    provenance: json!({"kind":"WatcherEvent","eventId":event.id.as_str(),"watcherId":event.watcher_id.as_str(),"backup":backup}),
                     scope,
                     owner: session.agent_id.clone(),
                 },
@@ -402,7 +705,13 @@ impl WatchService {
                 }
             }
             let now = tx.now_ms();
-            tx.watchers().deliver_watch_event(&event.id, sequence, now)
+            let delivered = tx
+                .watchers()
+                .deliver_watch_event(&event.id, sequence, now)?;
+            if backup && delivered {
+                record_backup_catch(tx, diagnostics.as_deref(), &event)?;
+            }
+            Ok(delivered)
         });
         self.artifacts.settle_host_bytes(
             &*self.store,
@@ -873,6 +1182,98 @@ enum Step {
     Advanced,
     /// A polling watcher reached its maximum lifetime, with the run then in flight (if any).
     Expired(Option<OperationId>),
+}
+
+/// Whether the backup check is on, and its interval.
+fn backup_settings(read: &dyn ConfigurationRead) -> Result<(bool, i64), StorageError> {
+    let layers = current_chain(read, &ConfigScope::Workspace)?;
+    let value = |key: &str| {
+        let d = descriptor(key).expect("catalog key");
+        chain(d, &layers)
+            .ok()
+            .and_then(|e| e.into_iter().next())
+            .map(|e| e.value.value.0)
+            .unwrap_or_else(|| d.default_value())
+    };
+    Ok((
+        value(WATCH_BACKUP_ENABLED_KEY).as_bool().unwrap_or(true),
+        value(WATCH_BACKUP_INTERVAL_KEY)
+            .as_i64()
+            .unwrap_or(900_000)
+            .max(60_000),
+    ))
+}
+
+/// Records a backup delivery of `event` as a missed primary delivery: in the watcher's history
+/// and, when composed, in diagnostics.
+fn record_backup_catch(
+    tx: &mut dyn WriteTransaction,
+    diagnostics: Option<&DiagnosticService>,
+    event: &StoredWatchEvent,
+) -> Result<(), StorageError> {
+    let Some(watcher) = tx.watchers().watcher(&event.watcher_id)? else {
+        return Ok(());
+    };
+    let operation = watcher.process_operation_id.clone();
+    history(
+        tx,
+        &watcher,
+        operation.as_ref(),
+        "WatcherBackupCatch",
+        json!({"eventId": event.id.as_str(), "missed": "primary delivery"}),
+    )?;
+    if let Some(diagnostics) = diagnostics {
+        let mut entry = LogEntry::new(
+            "watch.backup",
+            "missed_primary_delivery",
+            crate::protocol::records::Severity::Warning,
+            format!(
+                "The watcher backup check delivered event {} of watcher {}: its primary delivery was missed.",
+                event.id.as_str(),
+                watcher.id.as_str()
+            ),
+        );
+        entry.project_id = watcher.project_id.clone();
+        entry.target_kind = Some("watcher".into());
+        entry.target_id = Some(watcher.id.clone());
+        entry.operation_id = operation;
+        diagnostics
+            .log_in(tx, &entry)
+            .map_err(|refusal| match refusal {
+                crate::services::diagnostics::LogRefusal::Storage(error) => error,
+                crate::services::diagnostics::LogRefusal::Invalid(why) => {
+                    StorageError::InvalidRecord(why.into())
+                }
+            })?;
+    }
+    Ok(())
+}
+
+/// Settles an open watcher whose recorded tree the OS reports gone without an observed outcome:
+/// Lost, found by the backup check.
+fn lost_in(
+    tx: &mut dyn WriteTransaction,
+    id: &Id,
+    run: &OperationId,
+) -> Result<bool, StorageError> {
+    let Some(watcher) = tx.watchers().watcher(id)? else {
+        return Ok(false);
+    };
+    if !watcher.phase.is_open() || watcher.process_operation_id.as_ref() != Some(run) {
+        return Ok(false);
+    }
+    let now = tx.now_ms();
+    let duration = Some((now - watcher.created_at_ms).max(0));
+    let lost = outcome(
+        "Lost",
+        None,
+        None,
+        Some(
+            "the process ended without its outcome being observed; found by the watcher backup check",
+        ),
+    );
+    finish_in(tx, watcher, lost, duration, None, false, Some(run))?;
+    Ok(true)
 }
 
 /// Why `watcher`'s owner no longer exists for it: its session ended, or its project was archived
