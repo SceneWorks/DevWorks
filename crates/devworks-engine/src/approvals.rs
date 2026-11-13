@@ -6,9 +6,10 @@ use crate::store;
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::CommandOutcome;
 use devworks_core::ports::storage::{ApplicationStore, Cancellation, StorageError, WriteOptions};
+use devworks_core::protocol::Id;
 use devworks_core::services::approvals::{ApprovalService, ResumePreparation};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 use tokio::sync::{Notify, watch};
 
@@ -45,7 +46,10 @@ pub struct ResumeDispatcher {
     wake: Notify,
     ticking: tokio::sync::Mutex<()>,
     status: watch::Sender<Option<Result<ResumePass, StorageError>>>,
+    settled: OnceLock<Settled>,
 }
+/// Called with an approval's ID after its readmission outcome is settled.
+type Settled = Arc<dyn Fn(&Id) + Send + Sync>;
 impl ResumeDispatcher {
     pub fn new(
         store: Arc<dyn ApplicationStore>,
@@ -63,7 +67,12 @@ impl ResumeDispatcher {
             wake: Notify::new(),
             ticking: tokio::sync::Mutex::new(()),
             status,
+            settled: OnceLock::new(),
         })
+    }
+    /// Sets what runs after each settled readmission (at most once).
+    pub fn on_settled(&self, settled: Settled) {
+        let _ = self.settled.set(settled);
     }
     pub fn notify(&self) {
         self.wake.notify_one();
@@ -161,13 +170,14 @@ impl ResumeDispatcher {
                 if self.stopping.load(Ordering::SeqCst) {
                     break;
                 }
-                let (store, service, admission, stopping, cancellation, fence) = (
+                let (store, service, admission, stopping, cancellation, fence, settled) = (
                     self.store.clone(),
                     self.service.clone(),
                     self.admission.clone(),
                     self.stopping.clone(),
                     self.cancellation.clone(),
                     self.fence.clone(),
+                    self.settled.get().cloned(),
                 );
                 let result = tokio::task::spawn_blocking(move || {
                     let closed = fence.read().unwrap_or_else(|p| p.into_inner());
@@ -193,6 +203,9 @@ impl ResumeDispatcher {
                             // Even an unknown outcome is settled under the original binding.
                             // Shutdown waits for this CAS; the next boot retries the same key.
                             service.settle_resume(&*store, &command, &outcome)?;
+                            if let Some(settled) = settled {
+                                settled(&command.approval_id);
+                            }
                             Ok(Step::Submitted)
                         }
                     }

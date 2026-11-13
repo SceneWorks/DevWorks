@@ -496,6 +496,12 @@ impl ApprovalService {
                 _ if r.state == "Unknown" && state == "Refused" => ("Unknown".into(), value),
                 _ => (state, value),
             };
+            super::held::settle(
+                tx,
+                &id,
+                &state,
+                json!({"approvalId": id, "decision": "Approved", "result": value}),
+            )?;
             r.revision += 1;
             r.state = state;
             r.updated_at_ms = tx.now_ms();
