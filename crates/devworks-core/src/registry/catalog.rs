@@ -7449,7 +7449,7 @@ pub(super) static CATALOG: [OperationDescriptor; 376] = [
         result_type: "ContainerRecord",
         result_schema: schema_of::<ContainerRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(8)],
         native_execution: true,
         approval_required: false,
         human_only: false,
