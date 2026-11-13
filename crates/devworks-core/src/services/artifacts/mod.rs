@@ -880,7 +880,7 @@ fn event(
     if let Some(map) = payload.as_object_mut() {
         map.insert(
             "principalKind".into(),
-            json!(format!("{:?}", ctx.principal_kind())),
+            json!(ctx.principal_kind().as_str().to_string()),
         );
         map.insert("invocationId".into(), json!(ctx.invocation_id().as_str()));
         if let Some(s) = ctx.session_id() {
@@ -1470,7 +1470,7 @@ fn new_version(
             "source": staged.source,
             "operationId": staged.operation_id.0.as_str(),
             "producedBy": ctx.principal().0.as_str(),
-            "principalKind": format!("{:?}", ctx.principal_kind()),
+            "principalKind": ctx.principal_kind().as_str().to_string(),
             "sessionId": ctx.session_id().map(Id::as_str),
             "repositoryId": staged.origin.repository_id.as_ref().map(Id::as_str),
             "repositoryRevision": staged.origin.repository_revision,
@@ -1573,7 +1573,7 @@ impl ArtifactService {
             created_at_ms: now,
             provenance: json!({
                 "producedBy": ctx.principal().0.as_str(),
-                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "principalKind": ctx.principal_kind().as_str().to_string(),
                 "sessionId": ctx.session_id().map(Id::as_str),
                 "assignmentId": ctx.assignment_id().map(|a| a.0.as_str()),
                 "invocationId": ctx.invocation_id().as_str(),

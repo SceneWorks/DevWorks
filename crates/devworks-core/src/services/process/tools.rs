@@ -613,7 +613,7 @@ impl InstallJob {
     ) -> Self {
         Self {
             actor: ctx.principal().clone(),
-            kind: format!("{:?}", ctx.principal_kind()),
+            kind: ctx.principal_kind().as_str().to_string(),
             session: ctx.session_id().cloned(),
             project: ctx.project_id().cloned(),
             root: ctx.root_id().cloned(),
@@ -628,7 +628,11 @@ impl InstallJob {
             profile: input.profile.clone(),
         }
     }
-    fn context(&self, store: &dyn ApplicationStore, operation: &OperationId) -> InvocationContext {
+    fn context(
+        &self,
+        store: &dyn ApplicationStore,
+        operation: &OperationId,
+    ) -> Option<InvocationContext> {
         process_context(
             store,
             operation,
@@ -661,7 +665,7 @@ impl ExecuteJob {
     fn from_context(ctx: &InvocationContext, fingerprint: &Fingerprint, spec: ProcessSpec) -> Self {
         Self {
             actor: ctx.principal().clone(),
-            kind: format!("{:?}", ctx.principal_kind()),
+            kind: ctx.principal_kind().as_str().to_string(),
             session: ctx.session_id().cloned(),
             project: ctx.project_id().cloned(),
             root: ctx.root_id().cloned(),
@@ -676,7 +680,11 @@ impl ExecuteJob {
         }
     }
 
-    fn context(&self, store: &dyn ApplicationStore, operation: &OperationId) -> InvocationContext {
+    fn context(
+        &self,
+        store: &dyn ApplicationStore,
+        operation: &OperationId,
+    ) -> Option<InvocationContext> {
         process_context(
             store,
             operation,
@@ -706,15 +714,8 @@ fn process_context(
     restore_epoch: i64,
     policy_revision: i64,
     authority_sources: &[Id],
-) -> InvocationContext {
-    let kind = match kind {
-        "Human" => PrincipalKind::Human,
-        "Agent" => PrincipalKind::Agent,
-        "Package" => PrincipalKind::Package,
-        "McpClient" => PrincipalKind::McpClient,
-        "Schedule" => PrincipalKind::Schedule,
-        _ => PrincipalKind::Host,
-    };
+) -> Option<InvocationContext> {
+    let kind = PrincipalKind::parse(kind)?;
     let mut context = InvocationContext::new(
         actor.clone(),
         kind,
@@ -731,7 +732,7 @@ fn process_context(
     for source in authority_sources {
         context = context.with_authority_source(source.clone());
     }
-    context
+    Some(context)
 }
 
 pub struct ProcessToolService {
@@ -1640,7 +1641,9 @@ impl ProcessToolService {
                 _ => {}
             }
         }
-        let ctx = job.context(&*self.store, &operation.id);
+        let Some(ctx) = job.context(&*self.store, &operation.id) else {
+            return EffectOutcome::Failed("invalid process principal kind".into());
+        };
         let admitted_by = if job.watch.is_some() {
             "watch.create"
         } else {
@@ -1729,7 +1732,9 @@ impl ProcessToolService {
         let Ok(job) = serde_json::from_value::<InstallJob>(operation.payload.clone()) else {
             return EffectOutcome::Failed("invalid project install intent".into());
         };
-        let ctx = job.context(&*self.store, &operation.id);
+        let Some(ctx) = job.context(&*self.store, &operation.id) else {
+            return EffectOutcome::Failed("invalid process principal kind".into());
+        };
         let Some(descriptor) = crate::registry::find("process.install_project_dependencies") else {
             return EffectOutcome::Failed("project install descriptor unavailable".into());
         };

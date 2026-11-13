@@ -21,7 +21,7 @@ pub enum ResumePreparation {
     Ready(ApprovedCommand),
 }
 pub(crate) fn save_context(c: &InvocationContext) -> Value {
-    json!({"principal":c.principal(),"kind":format!("{:?}",c.principal_kind()),"invocation":c.invocation_id(),"session":c.session_id(),"jobRun":c.job_run_id(),"namespace":c.ingress_namespace(),"project":c.project_id(),"root":c.root_id(),"assignment":c.assignment_id(),"capability":c.capability_registration(),"policyRevision":c.policy_revision(),"worktree":c.worktree().map(|w|json!({"id":w.id(),"repository":w.repository_id(),"work":w.work_id(),"revision":w.ownership_revision()}))})
+    json!({"principal":c.principal(),"kind":c.principal_kind().as_str().to_string(),"invocation":c.invocation_id(),"session":c.session_id(),"jobRun":c.job_run_id(),"namespace":c.ingress_namespace(),"project":c.project_id(),"root":c.root_id(),"assignment":c.assignment_id(),"capability":c.capability_registration(),"policyRevision":c.policy_revision(),"worktree":c.worktree().map(|w|json!({"id":w.id(),"repository":w.repository_id(),"work":w.work_id(),"revision":w.ownership_revision()}))})
 }
 fn parse<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, StorageError> {
     serde_json::from_value(v).map_err(|e| StorageError::InvalidRecord(e.to_string()))
@@ -60,10 +60,7 @@ fn invocation_context(
     kind: PrincipalKind,
     v: &Value,
 ) -> Result<InvocationContext, StorageError> {
-    if !v.is_object()
-        || v["principal"] != json!(principal)
-        || v["kind"] != json!(format!("{kind:?}"))
-    {
+    if !v.is_object() || v["principal"] != json!(principal) || v["kind"] != json!(kind.as_str()) {
         return Err(StorageError::InvalidRecord(
             "source context principal binding".into(),
         ));

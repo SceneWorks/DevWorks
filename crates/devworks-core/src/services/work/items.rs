@@ -685,7 +685,7 @@ impl WorkService {
             payload: json!({
                 "workId": w.id.as_str(),
                 "title": w.title,
-                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "principalKind": ctx.principal_kind().as_str().to_string(),
                 "notifyCoordinator": true,
             }),
         })?;
@@ -1539,7 +1539,7 @@ impl WorkService {
                             "anchorId": m.anchor_id.as_str(), "side": format!("{:?}", m.side)}),
                         Order::Ids(_) => serde_json::Value::Null,
                     },
-                    "principalKind": format!("{:?}", ctx.principal_kind()),
+                    "principalKind": ctx.principal_kind().as_str().to_string(),
                 }),
             })?;
             revision

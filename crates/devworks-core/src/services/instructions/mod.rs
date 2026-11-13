@@ -424,7 +424,7 @@ pub(crate) fn visible_current(
 pub(crate) fn provenance(ctx: &InvocationContext) -> Value {
     serde_json::json!({
         "principal": ctx.principal().0.as_str(),
-        "principalKind": format!("{:?}", ctx.principal_kind()),
+        "principalKind": ctx.principal_kind().as_str().to_string(),
         "invocationId": ctx.invocation_id().as_str(),
         "sessionId": ctx.session_id().map(Id::as_str),
         "projectId": ctx.project_id().map(|p| p.0.as_str()),

@@ -392,27 +392,6 @@ pub struct BrowserService {
     launch_failures: Mutex<HashMap<String, String>>,
 }
 
-fn owner_kind(k: PrincipalKind) -> &'static str {
-    match k {
-        PrincipalKind::Human => "Human",
-        PrincipalKind::Agent => "Agent",
-        PrincipalKind::Package => "Package",
-        PrincipalKind::McpClient => "McpClient",
-        PrincipalKind::Schedule => "Schedule",
-        PrincipalKind::Host => "Host",
-    }
-}
-fn kind_of(s: &str) -> PrincipalKind {
-    match s {
-        "Human" => PrincipalKind::Human,
-        "Package" => PrincipalKind::Package,
-        "McpClient" => PrincipalKind::McpClient,
-        "Schedule" => PrincipalKind::Schedule,
-        "Host" => PrincipalKind::Host,
-        _ => PrincipalKind::Agent,
-    }
-}
-
 /// The wire state of a durable phase: `Partial` while starting, `Healthy` when ready,
 /// `Disabled` once closed, `Failed` after a failure or crash, and `Unavailable` until a
 /// requested stop is verified (including a cancelled cleanup that needs another Close).
@@ -719,11 +698,16 @@ impl BrowserService {
     }
 
     /// The host context a journaled effect runs under: the session's principal and lineage.
-    fn host_context(&self, s: &StoredBrowserSession, op: &OperationId) -> InvocationContext {
+    /// `None` when the stored owner kind is not recognised.
+    fn host_context(
+        &self,
+        s: &StoredBrowserSession,
+        op: &OperationId,
+    ) -> Option<InvocationContext> {
         let info = self.store.info();
         let mut ctx = InvocationContext::new(
             s.owner.clone(),
-            kind_of(&s.owner_kind),
+            PrincipalKind::parse(&s.owner_kind)?,
             op.0.clone(),
             Id::new("browser-effects").expect("namespace"),
             info.store_id,
@@ -738,7 +722,7 @@ impl BrowserService {
         if let Some(a) = &s.agent_session_id {
             ctx = ctx.with_session(a.clone());
         }
-        ctx
+        Some(ctx)
     }
 
     fn read_session(&self, id: &Id) -> Result<Option<StoredBrowserSession>, StorageError> {
@@ -944,7 +928,14 @@ impl BrowserService {
         let spec = self
             .platform
             .command(&asset, &profile, &launch_args(&profile));
-        let ctx = self.host_context(&s, &op.id);
+        let Some(ctx) = self.host_context(&s, &op.id) else {
+            let why = "the browser session owner kind is not recognised";
+            let _ = self.platform.remove_profile(id);
+            self.fail_session(id, why, BrowserPhase::Failed);
+            drop(guard);
+            self.forget(id);
+            return EffectOutcome::NotApplied(why.into());
+        };
         let roots = match ProtectedRoots::read(&*self.store, vec![], self.app_data_root.clone()) {
             Ok(r) => r,
             Err(e) => {
@@ -1198,11 +1189,12 @@ impl BrowserService {
     /// principal only while its host binding is active (a revoked agent's queued actions are
     /// never performed).
     fn owner_active(&self, s: &StoredBrowserSession) -> bool {
-        if matches!(
-            kind_of(&s.owner_kind),
-            PrincipalKind::Human | PrincipalKind::Host
-        ) {
+        let kind = PrincipalKind::parse(&s.owner_kind);
+        if matches!(kind, Some(PrincipalKind::Human | PrincipalKind::Host)) {
             return true;
+        }
+        if kind.is_none() {
+            return false;
         }
         let owner = s.owner.clone();
         matches!(
@@ -2466,7 +2458,7 @@ impl BrowserService {
             phase: BrowserPhase::Starting,
             boot_id: boot,
             owner: ctx.principal().clone(),
-            owner_kind: owner_kind(ctx.principal_kind()).into(),
+            owner_kind: ctx.principal_kind().as_str().into(),
             agent_session_id: ctx.session_id().cloned(),
             project_id: project,
             root_id: ctx.root_id().cloned(),

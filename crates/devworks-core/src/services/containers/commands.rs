@@ -263,6 +263,9 @@ impl CommandHandler for ContainerService {
                     phase: ContainerPhase::Creating,
                     image: spec.image.0.clone(),
                     actor: ctx.principal().clone(),
+                    // Not a principal-kind serialization: `owner_kind` is a three-class owner
+                    // (Human, Host, Agent). The storage layer indexes and validates exactly these
+                    // classes (`AgentWorkMayRun`), so Package, McpClient and Schedule are agent work.
                     owner_kind: match ctx.principal_kind() {
                         PrincipalKind::Human => "Human",
                         PrincipalKind::Host => "Host",
