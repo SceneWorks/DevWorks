@@ -31,6 +31,7 @@ use crate::protocol::{
 };
 use crate::services::artifacts::host::HostArtifactPublication;
 use crate::services::artifacts::{ArtifactService, version_ref};
+use crate::services::process::STOPPED_ON_REQUEST;
 use crate::services::process::tools::{
     BindingRefusal, ExecuteOrigin, ProcessToolService, binding_refusal,
 };
@@ -750,6 +751,9 @@ fn observe(
                 .cloned()
         })
     });
+    let stopped_on_request = process.is_some_and(|p| {
+        p.phase == ProcessPhase::Reaped && p.detail.as_deref() == Some(STOPPED_ON_REQUEST)
+    });
     let plain = |outcome| Observed {
         outcome,
         duration_ms,
@@ -775,6 +779,9 @@ fn observe(
                 (None, true) if monitoring => return None,
                 // No monitor recorded it: the process record says what became of it.
                 (None, true) => {
+                    if watcher.stop_requested && stopped_on_request {
+                        return Some(plain(outcome("Cancelled", None, None, None)));
+                    }
                     let (kind, detail) = match process.map(|p| (p.phase, p.detail.as_deref())) {
                         Some((ProcessPhase::Reaped, Some("killed by boot recovery"))) => {
                             ("Interrupted", "DevWorks restarted and stopped the process")
@@ -834,8 +841,9 @@ fn observe(
                 .get("durationMs")
                 .and_then(Value::as_i64)
                 .or(duration_ms);
-            // A requested stop is the cause only when the process did not exit on its own first.
-            let kind = if watcher.stop_requested && exit_code.is_none() {
+            // A requested stop is the cause only when the supervisor recorded that the stop
+            // reaped a still-running tree; a process that exited on its own first keeps its exit.
+            let kind = if watcher.stop_requested && stopped_on_request {
                 outcome("Cancelled", None, signal, None)
             } else if evidence.get("timedOut").and_then(Value::as_bool) == Some(true) {
                 outcome(

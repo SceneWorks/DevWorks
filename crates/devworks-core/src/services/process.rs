@@ -117,6 +117,10 @@ impl From<StorageError> for LaunchRefusal {
 /// Bound on verifying the kill of a tree that registered after its project closed.
 const LATE_LAUNCH_STOP_BOUND: Duration = Duration::from_secs(5);
 
+/// The detail of a process record that a requested stop reaped: the tree was still running when
+/// [`ProcessSupervisor::cancel`] began, so the stop, not the program, ended it.
+pub const STOPPED_ON_REQUEST: &str = "stopped on request";
+
 /// A project's launch fence: closed (archived, deleted or unknown), or open at an archival epoch.
 enum Fence {
     Closed,
@@ -247,6 +251,9 @@ struct Live {
     record: StoredProcess,
     /// The archival epoch of its project the launch was recorded under (`None`: no project).
     epoch: Option<i64>,
+    /// A stop found the tree running: kept until its settlement is recorded, so a retried poll
+    /// or cancel still records that the stop ended it.
+    stopped: bool,
 }
 
 pub struct ProcessSupervisor {
@@ -503,6 +510,7 @@ impl ProcessSupervisor {
                             tree,
                             epoch,
                             record: running.clone(),
+                            stopped: false,
                         })),
                     );
                     self.pending_cancel
@@ -588,7 +596,7 @@ impl ProcessSupervisor {
                     &mut record,
                     ProcessPhase::Reaped,
                     s.exit_code,
-                    None,
+                    live.stopped.then(|| STOPPED_ON_REQUEST.to_owned()),
                     "ProcessReaped",
                 )?;
                 drop(live);
@@ -667,7 +675,14 @@ impl ProcessSupervisor {
         let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
         let mut record = live.record.clone();
         let mut unrecorded = None;
-        if record.phase == ProcessPhase::Running {
+        // A tree that already exited keeps its own outcome: the stop did not end it.
+        let mut status = match live.tree.poll() {
+            Ok(s) if s.empty => Some(s),
+            _ => None,
+        };
+        live.stopped |= status.is_none();
+        let stopped = live.stopped;
+        if status.is_none() && record.phase == ProcessPhase::Running {
             match self.write_phase(
                 &mut record,
                 ProcessPhase::Stopping,
@@ -680,15 +695,18 @@ impl ProcessSupervisor {
         }
         let mut observed = String::new();
         let mut graceful = true;
-        let mut status = None;
-        let cooperative = live.tree.request_stop();
+        let cooperative = if status.is_none() {
+            live.tree.request_stop()
+        } else {
+            Ok(true)
+        };
         if let Err(e) = &cooperative {
             observed = e.to_string();
         }
         let grace_until = start + grace.min(bound);
         let bound_until = start + bound;
         let mut killed = false;
-        loop {
+        while status.is_none() {
             match live.tree.poll() {
                 Ok(s) if s.empty => {
                     status = Some(s);
@@ -723,7 +741,7 @@ impl ProcessSupervisor {
                     &mut record,
                     ProcessPhase::Reaped,
                     s.exit_code,
-                    None,
+                    stopped.then(|| STOPPED_ON_REQUEST.to_owned()),
                     "ProcessReaped",
                 ),
             ),

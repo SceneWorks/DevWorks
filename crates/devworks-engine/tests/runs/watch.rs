@@ -695,6 +695,55 @@ fn long_running_watchers_never_block_their_own_stops() {
     });
 }
 
+/// A stop is the cause whenever it ended the running process, even one that handles the stop and
+/// exits 0. (A process that exits on its own before the stop keeps its exit: the supervisor
+/// records only a stop that found the tree running.)
+#[test]
+fn a_stopped_watcher_is_cancelled_even_when_its_process_exits_cleanly() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-trap-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let trapping = create(
+            &app,
+            &ctx,
+            "trap 'exit 0' TERM; while :; do sleep 0.05; done",
+            60_000,
+            "w-trap",
+        );
+        let process = trapping["process"]["processId"].as_str().unwrap().to_owned();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while read(&**app.store(), |s| s.resources().process(&id(&process)))
+            .is_none_or(|p| p.phase != ProcessPhase::Running)
+        {
+            assert!(std::time::Instant::now() < deadline, "watched process never ran");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // The shell installs its trap before it loops.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let stop = command(
+            &app,
+            &ctx,
+            "watch.cancel",
+            json!({"watcherId": trapping["id"], "expectedRevision": trapping["revision"], "stopProcess": true}),
+            "stop-trap",
+        );
+        assert_eq!(stop["state"], json!("Stopping"));
+        let trapping_id = trapping["id"].as_str().unwrap();
+        settle_all(&app, &ctx, &[trapping_id]).await;
+        let outcome = inspect(&app, &ctx, trapping_id)["outcome"].clone();
+        assert_eq!(outcome["kind"], json!("Cancelled"), "{outcome}");
+        app.shutdown().await;
+    });
+}
+
 /// A process that exits before its launch report is consumed still settles with its real exit,
 /// never Lost: the outcome is recorded once the launch was reported, whatever the timing.
 #[test]
