@@ -37,12 +37,23 @@ pub fn operation_for(approval: &Id) -> OperationId {
     )
 }
 
+/// The `n`th approval of one request from one place. The saved approval captures the caller's
+/// context and its readmission restores it, so the identity includes the session and lineage
+/// that context carries: a request from another session or work scope gets its own approval.
 fn approval_for(ctx: &InvocationContext, operation: &str, digest: &str, n: u32) -> Id {
+    let place = super::save_context(ctx);
     Id::new(format!(
         "held-{}",
         &model::hash(&json!([
             ctx.principal(),
             ctx.restore_epoch(),
+            place["session"],
+            place["jobRun"],
+            place["project"],
+            place["root"],
+            place["assignment"],
+            place["capability"],
+            place["worktree"],
             operation,
             digest,
             n

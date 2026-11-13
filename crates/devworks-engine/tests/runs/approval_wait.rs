@@ -803,3 +803,71 @@ fn an_approval_whose_grant_expired_before_readmission_reaches_the_agent_as_faile
         shut_down(t.app).await;
     });
 }
+
+#[test]
+fn the_same_request_from_another_session_gets_its_own_approval_and_decision() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    in_runtime(async || {
+        let t = takeover(&fx, 1).await;
+        // A second session of the same agent, in the same work scope.
+        let first = t.context.session_id().unwrap().clone();
+        let mut other = read(&*fx.store, |s| s.sessions().session(&first)).unwrap();
+        other.id = id("approval-wait-other-session");
+        other.conversation_id = id("approval-wait-other-conversation");
+        let inserted = other.clone();
+        fx.tx(move |_, tx| tx.sessions().insert_session(&inserted));
+        let elsewhere = t.context.clone().with_session(other.id.clone());
+
+        let digest =
+            devworks_core::services::approvals::requests::decode(TAKEOVER, 3, &t.arguments, true)
+                .unwrap()
+                .fingerprint;
+        let stage = |ctx: &InvocationContext| {
+            t.app
+                .approvals()
+                .stage_held(
+                    &**t.app.store(),
+                    ctx,
+                    TAKEOVER,
+                    3,
+                    &t.arguments,
+                    digest.as_str(),
+                )
+                .unwrap()
+        };
+        let a = stage(&t.context);
+        let b = stage(&elsewhere);
+        // A re-send from the same session still asks once; another session asks separately.
+        assert_eq!(stage(&t.context), a);
+        assert_eq!(stage(&elsewhere), b);
+        assert_ne!(a.approval_id, b.approval_id);
+        assert_ne!(a.operation_id, b.operation_id);
+
+        // Each decision settles that session's own operation and is addressed to that session.
+        decide(&fx, &t.app, &b.approval_id, false);
+        decide(&fx, &t.app, &a.approval_id, true);
+        t.app.approval_resumes().tick().await.unwrap();
+        for (held, session, state) in [
+            (&a, &first, OperationState::ObservedComplete),
+            (&b, &other.id, OperationState::CancelledBeforeDispatch),
+        ] {
+            let (ctx, to, operation, observed) =
+                devworks_core::services::approvals::held::held_target(
+                    &**t.app.store(),
+                    &held.approval_id,
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(&to, session);
+            assert_eq!(ctx.session_id(), Some(session));
+            assert_eq!(operation, held.operation_id);
+            assert_eq!(observed, state);
+        }
+        assert_eq!(
+            desktop_record(&t.app, &fx.user)["consentId"],
+            json!(a.approval_id)
+        );
+        shut_down(t.app).await;
+    });
+}
