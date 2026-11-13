@@ -985,7 +985,7 @@ fn a_next_work_claim_costs_the_same_behind_tenfold_completed_history() {
         }
         done = to;
     };
-    let mut measure = || {
+    let measure = || {
         let (reply, work) = counted.count(|| f.claim());
         let claimed = claim(reply);
         assert_eq!(claimed["workId"], json!(target));
