@@ -4714,6 +4714,12 @@ impl Check for ContainerSpec {
     }
 }
 
+impl Revisioned for ContainerSpec {
+    fn retain_revision(&mut self, revision: u32) {
+        self.ports.retain_revision(revision);
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContainerMount {
@@ -4740,17 +4746,33 @@ pub struct PortMapping {
     pub container_port: Port,
     pub host_port: Port,
     pub protocol: PortProtocol,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 8))]
+    pub expose_beyond_loopback: Option<bool>,
 }
 impl Check for PortMapping {
     fn check(&self) -> Result<(), String> {
         self.container_port.check()?;
         self.host_port.check()?;
         self.protocol.check()?;
+        self.expose_beyond_loopback.check()?;
         super::domain_rules::record(
             "PortMapping",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for PortMapping {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.expose_beyond_loopback = None;
+        }
     }
 }
 
@@ -25551,6 +25573,9 @@ impl Revisioned for DomainCommand {
             }
             Self::DesktopInput { action, .. } => {
                 action.retain_revision(revision);
+            }
+            Self::ContainersCreate { spec, .. } => {
+                spec.retain_revision(revision);
             }
             Self::RouterPriceOverride { change, .. } => {
                 if revision < 3 {

@@ -89,7 +89,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
             'projects.purge_status', 'history.command_receipt', 'agents.post', 'agents.receive', 'agents.ack',
             'agents.history', 'agents.events', 'skills.resources', *MCP,
-            'watch.create', 'watch.list', 'watch.inspect', 'watch.cancel'})
+            'watch.create', 'watch.list', 'watch.inspect', 'watch.cancel', 'containers.create'})
         for name in MCP:
             self.assertEqual(carried[name], {8})
         for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):

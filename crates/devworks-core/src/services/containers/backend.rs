@@ -188,7 +188,14 @@ impl Backend {
             args.extend([
                 "--publish".into(),
                 format!(
-                    "{}:{}/{}",
+                    "{}{}:{}/{}",
+                    // The engine binds a bare `host:container` publish on every interface, so the
+                    // default names the loopback address; only an explicit request omits it.
+                    if port.expose_beyond_loopback {
+                        ""
+                    } else {
+                        "127.0.0.1:"
+                    },
                     port.host,
                     port.container,
                     match port.protocol {
@@ -292,6 +299,8 @@ pub struct Port<'a> {
     pub host: u16,
     pub container: u16,
     pub protocol: &'a PortProtocol,
+    /// Publish on every host interface instead of 127.0.0.1 only.
+    pub expose_beyond_loopback: bool,
 }
 
 pub struct CreatePlan<'a> {
@@ -420,6 +429,7 @@ mod tests {
             host: 1080,
             container: 80,
             protocol: &PortProtocol::Tcp,
+            expose_beyond_loopback: false,
         }];
         let environment = [("A".into(), "value with spaces".into())];
         let plan = CreatePlan {
@@ -444,7 +454,7 @@ mod tests {
             ]));
         assert!(
             args.windows(2)
-                .any(|pair| pair == ["--publish", "1080:80/tcp"])
+                .any(|pair| pair == ["--publish", "127.0.0.1:1080:80/tcp"])
         );
         assert!(
             args.windows(2)
@@ -452,5 +462,55 @@ mod tests {
         );
         assert!(!args.iter().any(|arg| arg.contains("value with spaces")));
         assert_eq!(args.last().unwrap(), "alpine:latest");
+    }
+
+    #[test]
+    fn published_ports_bind_loopback_unless_the_request_widens_them() {
+        let ports = [
+            Port {
+                host: 1080,
+                container: 80,
+                protocol: &PortProtocol::Tcp,
+                expose_beyond_loopback: false,
+            },
+            Port {
+                host: 5353,
+                container: 53,
+                protocol: &PortProtocol::Udp,
+                expose_beyond_loopback: false,
+            },
+            Port {
+                host: 8443,
+                container: 443,
+                protocol: &PortProtocol::Tcp,
+                expose_beyond_loopback: true,
+            },
+        ];
+        let plan = CreatePlan {
+            name: "dw-123",
+            image: "alpine:latest",
+            labels: &[],
+            mounts: &[],
+            ports: &ports,
+            environment: &[],
+            env_file: None,
+            command: &[],
+        };
+        for backend in [Backend::Docker, Backend::Podman, Backend::Apple] {
+            let args = backend.create(&plan).unwrap();
+            let published: Vec<&str> = args
+                .windows(2)
+                .filter(|pair| pair[0] == "--publish")
+                .map(|pair| pair[1].as_str())
+                .collect();
+            assert_eq!(
+                published,
+                [
+                    "127.0.0.1:1080:80/tcp",
+                    "127.0.0.1:5353:53/udp",
+                    "8443:443/tcp"
+                ]
+            );
+        }
     }
 }

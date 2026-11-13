@@ -102,6 +102,14 @@ case('reject-watch.create-no-source','domain-request.r8',_watch_body(),False,Tru
 case('reject-watch.create-process-lifetime','domain-request.r8',_watch_body(process=_proc,maxLifetimeMs='60000'),False,True)
 case('reject-watch.create-timer-tail','domain-request.r8',_watch_body(timer={'afterMs':'5000'},tailBytes=64),False,True)
 case('reject-watch.create-probe-too-often','domain-request.r8',_watch_body(probe={**_probe,'intervalMs':'999'}),False,True)
+# Published ports (DW-189): bind loopback unless a port sets exposeBeyondLoopback (revision 8).
+_create=request('containers.create','Command')
+_port={'containerPort':80,'hostPort':8080,'protocol':'Tcp'}
+def _create_body(**port):
+ frame=copy.deepcopy(_create); frame['schemaRevision']=8; frame['body']['spec']['ports']=[{**_port,**port}]; return frame
+case('input-containers.create-wider-bind','domain-request.r8',_create_body(exposeBeyondLoopback=True))
+case('input-containers.create-loopback-bind','domain-request.r8',_create_body())
+case('reject-containers.create-wider-bind-not-bool','domain-request.r8',_create_body(exposeBeyondLoopback='yes'),False,False)
 case('reject-watch.create-timer-both-times','domain-request.r8',_watch_body(timer={'afterMs':'5000','atMs':'1'}),False,False)
 # Stable handwritten assertions cover wrong mode, authority/provenance injection,
 # dangerous ambiguity, partial/unknown effects and cross-operation substitution.

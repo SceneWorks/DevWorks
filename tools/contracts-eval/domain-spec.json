@@ -1802,7 +1802,11 @@
       "fields": {
         "container_port": "Port",
         "host_port": "Port",
-        "protocol": "PortProtocol"
+        "protocol": "PortProtocol",
+        "expose_beyond_loopback": "?bool"
+      },
+      "since": {
+        "expose_beyond_loopback": 8
       }
     },
     "PortProtocol": {
@@ -9783,7 +9787,7 @@
       "result": "ContainerRecord",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Host validates mounts/ports/environment and records ownership; cannot claim arbitrary preexisting engine resources."
+      "rules": "Host validates mounts/ports/environment and records ownership; cannot claim arbitrary preexisting engine resources. Schema revision 8: a port mapping may set exposeBeyondLoopback to publish on every host interface; absent or false binds 127.0.0.1 only. The field is part of the request digest a reviewer approves."
     },
     "containers.start": {
       "operation": "containers.start",
@@ -11527,6 +11531,10 @@
       8
     ],
     "mcp.discover": [
+      1,
+      8
+    ],
+    "containers.create": [
       1,
       8
     ],

@@ -14152,6 +14152,10 @@
         "containerPort": {
           "$ref": "#/$defs/Port"
         },
+        "exposeBeyondLoopback": {
+          "type": "boolean",
+          "x-since": 8
+        },
         "hostPort": {
           "$ref": "#/$defs/Port"
         },
