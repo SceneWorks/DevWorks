@@ -269,10 +269,6 @@ pub enum Slot {
     PriceOverride,
     PriceRefresh,
     PriceOperation,
-    HelpTopics(u64, bool),
-    HelpProbe(u64),
-    HelpRead(u64),
-    HelpGenerate,
     ApprovalsList,
     ApprovalInspect(String),
     ApprovalRefresh(String),
@@ -501,6 +497,19 @@ pub enum Slot {
     InstructionArtifact(u64),
     /// The `*.draft` / `*.rollback` command (change token).
     InstructionCommand(u64),
+    // Migrated screens' slots, after every tagged variant: each serializes as its inner value
+    // alone, so persisted commands keep the JSON they had in the single enum.
+    #[serde(untagged)]
+    Help(crate::help_ops::HelpSlot),
+}
+impl Slot {
+    /// The screen whose replies this slot waits for.
+    pub fn screen(&self) -> crate::screen::ScreenId {
+        match self {
+            Self::Help(_) => crate::screen::ScreenId::Help,
+            _ => crate::screen::ScreenId::Legacy,
+        }
+    }
 }
 
 /// A finished request.
