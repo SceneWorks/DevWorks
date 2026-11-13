@@ -1092,7 +1092,7 @@ impl CommandHandler for WatchService {
                 let prepared: PreparedLaunch = match &input.file {
                     Some(file) => self
                         .processes
-                        .resolve_watched_file(&file.path, ctx.project_id())
+                        .resolve_watched_file(&file.path, ctx)
                         .map(Prepped::File),
                     None => spec
                         .map(|spec| {
