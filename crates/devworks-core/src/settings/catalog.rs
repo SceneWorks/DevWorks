@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 7;
+pub const CATALOG_REVISION: i64 = 8;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -642,6 +642,19 @@ fn build() -> Vec<SettingDescriptor> {
             NextAdmission
         ),
         setting!(
+            WATCH_MAX_LIFETIME_KEY,
+            "Polling watcher lifetime (ms)",
+            "Longest a polling watcher (a probe command) keeps checking before it ends TimedOut, unless the watcher sets its own. A day covers slow deploys and queues without leaving forgotten probes running. Engineering default.",
+            Agents,
+            INHERITED,
+            ValueKind::Integer {
+                min: 60_000,
+                max: 2_592_000_000
+            },
+            86_400_000,
+            NextAdmission
+        ),
+        setting!(
             "reviews.automationWaitSeconds",
             "Automated review wait (seconds)",
             "Finite wait for a registered review source before the review gate escalates. Engineering default.",
@@ -874,6 +887,8 @@ pub const WEB_SEARCH_CREDENTIAL_KEY: &str = "web.searchCredential";
 pub const WEB_FETCH_MAX_REDIRECTS_KEY: &str = "web.fetchMaxRedirects";
 /// Longest end-to-end web request (a fetch with its redirects, or a search), in milliseconds.
 pub const WEB_TIMEOUT_KEY: &str = "web.timeoutMs";
+/// Default maximum lifetime of a polling watcher, in milliseconds.
+pub const WATCH_MAX_LIFETIME_KEY: &str = "watch.maxLifetimeMs";
 /// Whether fetches may reach loopback and private network addresses.
 pub const WEB_FETCH_PRIVATE_KEY: &str = "web.fetchAllowPrivateNetwork";
 

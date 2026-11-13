@@ -4,15 +4,16 @@
 //! event in the same transaction as the watcher's state change, then delivers the event into the
 //! owning session's input as a host-only transcript notice. The next turn that starts carries
 //! it, and only that turn's completion acknowledges it (`runs` substrate `begin_turn`/`end_turn`).
+use crate::authority::shell::{CommandVerdict, record_verdict};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, watch as ops};
 use crate::ports::process::ProcessSpec as NativeProcessSpec;
 use crate::ports::storage::{
-    ApplicationStore, ArtifactScope, MAX_WATCH_TAIL_BYTES, NewEvent, OperationRecord, ProcessPhase,
-    ReadOptions, ReadSnapshot, StorageError, StoredProcess, StoredWatchEvent, StoredWatchOutcome,
-    StoredWatcher, WatchEventState, WatcherFilter, WatcherPhase, WriteOptions, WriteTransaction,
-    read_snapshot, run_write,
+    ApplicationStore, ArtifactScope, ConfigScope, ConfigurationRead, MAX_WATCH_TAIL_BYTES,
+    NewEvent, OperationRecord, ProcessPhase, ReadOptions, ReadSnapshot, StorageError, StoredProbe,
+    StoredProcess, StoredWatchEvent, StoredWatchOutcome, StoredWatcher, WatchEventState,
+    WatcherFilter, WatcherPhase, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -20,14 +21,14 @@ use crate::ports::{
 };
 use crate::protocol::provider::TranscriptBody;
 use crate::protocol::records::{
-    WatchDeliveryState, WatchEvent, WatchOutcome, WatchOutcomeKind, WatchProcessSource,
-    WatchSourceKind, WatcherPage, WatcherRecord, WatcherState,
+    WatchDeliveryState, WatchEvent, WatchOutcome, WatchOutcomeKind, WatchProbeStatus,
+    WatchProcessSource, WatchSourceKind, WatcherPage, WatcherRecord, WatcherState,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{
     CorrelationId, DomainErrorCode, DomainFault, EventId, Id, OperationId, OperationState,
-    RevisionDimension,
+    ProjectId, RevisionDimension,
 };
 use crate::services::artifacts::host::HostArtifactPublication;
 use crate::services::artifacts::{ArtifactService, version_ref};
@@ -37,6 +38,8 @@ use crate::services::process::tools::{
 };
 use crate::services::sessions::transcript::{BatchOutcome, SessionBatch, SessionWriter};
 use crate::services::sessions::{Refusal, counter, decided, query_fault, rev, turn};
+use crate::settings::catalog::{WATCH_MAX_LIFETIME_KEY, descriptor};
+use crate::settings::model::{chain, current_chain};
 use base64::Engine;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -47,6 +50,39 @@ const MAX_EVENT_PAYLOAD_BYTES: usize = 200_000;
 const MAX_NOTICE_BYTES: usize = 8_000;
 /// Default output tail a watcher keeps when `tail_bytes` is omitted.
 pub const DEFAULT_TAIL_BYTES: u32 = 4_096;
+/// Store bound on a probe's output pattern (`watchers.probe_output_pattern`).
+const MAX_PATTERN_BYTES: usize = 4_096;
+/// A probe waits at most this many intervals between runs, however many have not met it.
+const MAX_BACKOFF_INTERVALS: i64 = 8;
+
+/// What preparation found for the command a watcher launches (`None`: a timer).
+type PreparedLaunch = Result<Option<(NativeProcessSpec, CommandVerdict)>, BindingRefusal>;
+
+/// The default maximum lifetime of a polling watcher in `project` (`watch.maxLifetimeMs`).
+fn max_lifetime_default(
+    read: &dyn ConfigurationRead,
+    project: Option<&ProjectId>,
+) -> Result<i64, StorageError> {
+    let scope = project.map_or(ConfigScope::Workspace, |p| ConfigScope::Project(p.clone()));
+    let layers = current_chain(read, &scope)?;
+    let d = descriptor(WATCH_MAX_LIFETIME_KEY).expect("catalog key");
+    let entries = chain(d, &layers).map_err(|e| {
+        StorageError::IncompatibleSchema(format!("{WATCH_MAX_LIFETIME_KEY}: {e:?}"))
+    })?;
+    Ok(entries
+        .into_iter()
+        .next()
+        .and_then(|e| e.value.value.0.as_i64())
+        .or_else(|| d.default_value().as_i64())
+        .unwrap_or(86_400_000))
+}
+
+/// How long a probe waits after its `runs`-th run did not meet its condition: one interval,
+/// doubling after each further run, at most [`MAX_BACKOFF_INTERVALS`].
+fn probe_backoff(interval_ms: i64, runs: i64) -> i64 {
+    let factor = 1_i64 << runs.clamp(1, 4).saturating_sub(1);
+    interval_ms.saturating_mul(factor.min(MAX_BACKOFF_INTERVALS))
+}
 const PAGE: u16 = 100;
 
 /// What one [`WatchService::tick`] pass did.
@@ -94,7 +130,10 @@ impl WatchService {
         })
     }
 
-    /// Settles every open watcher whose outcome is observed; returns how many it settled.
+    /// Advances every open watcher: settles those whose outcome is observed (a process's end, a
+    /// probe's condition holding, a timer's due time, a polling watcher's lifetime), starts each
+    /// probe run that is due and schedules the next after a run that did not meet its condition.
+    /// Returns how many watchers it settled.
     pub fn settle_observed(&self) -> Result<usize, StorageError> {
         let mut settled = 0;
         let mut after: Option<Id> = None;
@@ -107,37 +146,62 @@ impl WatchService {
             };
             after = Some(last.id.clone());
             for watcher in &page {
-                // Most open watchers have nothing new: decide that from a snapshot and write only
-                // when an outcome is observed (the write re-checks it).
-                let observable = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-                    let Some(operation_id) = &watcher.process_operation_id else {
-                        return Ok(false);
-                    };
-                    let Some(operation) = read.operations().operation(operation_id)? else {
-                        return Ok(false);
-                    };
-                    let process = read.resources().process(&operation_id.0)?;
-                    let monitoring = self.processes.is_monitoring(operation_id);
-                    Ok(observe(watcher, &operation, process.as_ref(), monitoring).is_some())
-                })?;
-                if !observable {
-                    continue;
-                }
-                let id = watcher.id.clone();
-                // Checked before the write: a monitor records its outcome before it lets go.
-                let monitoring = watcher
-                    .process_operation_id
-                    .as_ref()
-                    .is_some_and(|op| self.processes.is_monitoring(op));
-                let done = run_write(&*self.store, WriteOptions::default(), move |tx| {
-                    settle_in(tx, &id, monitoring)
-                })?;
-                settled += usize::from(done);
+                settled += usize::from(self.advance(watcher)?);
             }
             if page.len() < usize::from(PAGE) {
                 return Ok(settled);
             }
         }
+    }
+
+    /// One open watcher's step; `true` when it settled.
+    fn advance(&self, watcher: &StoredWatcher) -> Result<bool, StorageError> {
+        // Most open watchers have nothing new: decide that from a snapshot and write only when
+        // something is due or observed (the write re-checks it).
+        let now = self.clock.now_ms().get();
+        let observed = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            let Some(operation_id) = &watcher.process_operation_id else {
+                return Ok(false);
+            };
+            let Some(operation) = read.operations().operation(operation_id)? else {
+                return Ok(false);
+            };
+            let process = read.resources().process(&operation_id.0)?;
+            let monitoring = self.processes.is_monitoring(operation_id);
+            Ok(observe(watcher, &operation, process.as_ref(), monitoring).is_some())
+        })?;
+        let due = match watcher.source_kind.as_str() {
+            "Timer" => watcher.due_at_ms.is_some_and(|due| now >= due),
+            "Probe" => {
+                watcher.expires_at_ms.is_some_and(|end| now >= end)
+                    || (watcher.process_operation_id.is_none()
+                        && watcher
+                            .probe
+                            .as_ref()
+                            .and_then(|p| p.next_run_at_ms)
+                            .is_some_and(|next| now >= next))
+            }
+            _ => false,
+        };
+        if !observed && !due {
+            return Ok(false);
+        }
+        let id = watcher.id.clone();
+        // Checked before the write: a monitor records its outcome before it lets go.
+        let monitoring = watcher
+            .process_operation_id
+            .as_ref()
+            .is_some_and(|op| self.processes.is_monitoring(op));
+        let processes = self.processes.clone();
+        let step = run_write(&*self.store, WriteOptions::default(), move |tx| {
+            step_in(tx, &id, monitoring, &processes)
+        })?;
+        if let Step::Expired(Some(run)) = &step {
+            // The lifetime ended with a run in flight: the watcher already settled TimedOut, and
+            // the run's tree is stopped now (a failed stop leaves it to its own time limit).
+            self.processes.stop_watched_run(&run.0);
+        }
+        Ok(matches!(step, Step::Settled | Step::Expired(_)))
     }
 
     /// Delivers every pending event to its session; returns how many it delivered.
@@ -290,47 +354,52 @@ impl WatchService {
         input: &ops::CreateInput,
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
-        let Some(session_id) = ctx.session_id().cloned() else {
-            return decided(
-                tx,
-                Err(Refusal::new(DomainErrorCode::InvalidArgument, "watcher_session", None).into()),
-            );
+        let refuse = |tx: &mut dyn WriteTransaction, code, target: &'static str| {
+            decided(tx, Err(Refusal::new(code, target, None).into()))
         };
-        match command.prepared::<Result<NativeProcessSpec, BindingRefusal>>() {
-            Some(Ok(_)) => {}
-            Some(Err(reason)) => return decided(tx, Err(binding_refusal(*reason).into())),
-            None => {
-                return decided(
-                    tx,
-                    Err(Refusal::new(DomainErrorCode::Conflict, "watch_preparation", None).into()),
-                );
+        let Some(session_id) = ctx.session_id().cloned() else {
+            return refuse(tx, DomainErrorCode::InvalidArgument, "watcher_session");
+        };
+        match command.prepared::<PreparedLaunch>() {
+            Some(Ok(Some((bound, verdict)))) => {
+                // Probe and launch commands pass the shell preflight at creation (WATCH-10),
+                // not only when each run launches.
+                if matches!(verdict, CommandVerdict::Blocked { .. }) {
+                    record_verdict(tx, ctx, "watch.create", &bound.argv(), verdict)?;
+                    return refuse(tx, DomainErrorCode::PermissionDenied, "process_preflight");
+                }
             }
+            Some(Ok(None)) => {}
+            Some(Err(reason)) => return decided(tx, Err(binding_refusal(*reason).into())),
+            None => return refuse(tx, DomainErrorCode::Conflict, "watch_preparation"),
         }
+        let now = tx.now_ms();
         let requested = input.tail_bytes.as_ref().map(|t| t.get());
         let tail_bytes = requested
             .unwrap_or(DEFAULT_TAIL_BYTES)
             .min(MAX_WATCH_TAIL_BYTES as u32);
-        let operation = self.processes.record_execute(
-            ctx,
-            command.fingerprint(),
-            &input.process,
-            ExecuteOrigin::Watch {
-                tail_bytes,
-                requested,
-            },
-            tx,
-        )?;
-        let now = tx.now_ms();
-        let watcher = StoredWatcher {
+        let launch = |spec, tx: &mut dyn WriteTransaction| {
+            self.processes.record_execute(
+                ctx,
+                command.fingerprint(),
+                spec,
+                ExecuteOrigin::Watch {
+                    tail_bytes,
+                    requested,
+                },
+                tx,
+            )
+        };
+        let mut watcher = StoredWatcher {
             id: tx.new_id(IdKind::Watcher),
             revision: 1,
             phase: WatcherPhase::Active,
-            source_kind: "Process".into(),
+            source_kind: String::new(),
             project_id: ctx.project_id().cloned(),
             session_id,
             actor: ctx.principal().clone(),
-            process_operation_id: Some(operation.clone()),
-            executable_ref: input.process.executable_ref.as_str().to_owned(),
+            process_operation_id: None,
+            executable_ref: None,
             tail_bytes: i64::from(tail_bytes),
             outcome: None,
             duration_ms: None,
@@ -340,14 +409,64 @@ impl WatchService {
             created_at_ms: now,
             updated_at_ms: now,
             settled_at_ms: None,
+            probe: None,
+            due_at_ms: None,
+            expires_at_ms: None,
         };
+        if let Some(process) = &input.process {
+            watcher.source_kind = "Process".into();
+            watcher.executable_ref = Some(process.executable_ref.as_str().to_owned());
+            watcher.process_operation_id = Some(launch(process, tx)?);
+        } else if let Some(probe) = &input.probe {
+            let pattern = probe.condition.output_pattern.as_ref().map(|p| p.0.clone());
+            if pattern
+                .as_deref()
+                .is_some_and(|p| p.len() > MAX_PATTERN_BYTES || regex::Regex::new(p).is_err())
+            {
+                return refuse(tx, DomainErrorCode::InvalidArgument, "probe_output_pattern");
+            }
+            let lifetime = match &input.max_lifetime_ms {
+                Some(ms) => ms.get(),
+                None => max_lifetime_default(tx.configuration(), ctx.project_id())?,
+            };
+            let first = launch(&probe.process, tx)?;
+            watcher.source_kind = "Probe".into();
+            watcher.executable_ref = Some(probe.process.executable_ref.as_str().to_owned());
+            watcher.process_operation_id = Some(first.clone());
+            watcher.expires_at_ms = Some(now.saturating_add(lifetime));
+            watcher.probe = Some(StoredProbe {
+                job_operation_id: first,
+                interval_ms: probe.interval_ms.get(),
+                exit_code: probe.condition.exit_code.map(i64::from),
+                output_pattern: pattern,
+                runs: 0,
+                next_run_at_ms: None,
+            });
+        } else if let Some(timer) = &input.timer {
+            let due = match (&timer.at_ms, &timer.after_ms) {
+                (Some(at), _) => at.get(),
+                (None, Some(after)) => now.saturating_add(after.get()),
+                (None, None) => return refuse(tx, DomainErrorCode::InvalidArgument, "timer"),
+            };
+            watcher.source_kind = "Timer".into();
+            watcher.tail_bytes = 0;
+            watcher.due_at_ms = Some(due);
+        } else {
+            return refuse(tx, DomainErrorCode::InvalidArgument, "watcher_source");
+        }
         tx.watchers().insert_watcher(&watcher)?;
+        let operation = watcher.process_operation_id.clone();
         history(
             tx,
             &watcher,
-            Some(&operation),
+            operation.as_ref(),
             "WatcherCreated",
-            json!({"processId": operation.0.as_str()}),
+            json!({
+                "sourceKind": watcher.source_kind,
+                "processId": operation.as_ref().map(|o| o.0.as_str()),
+                "dueAtMs": watcher.due_at_ms,
+                "expiresAtMs": watcher.expires_at_ms,
+            }),
         )?;
         decided(
             tx,
@@ -400,7 +519,21 @@ impl WatchService {
             );
         }
         let now = tx.now_ms();
-        let kind = if input.stop_process {
+        // A probe between runs has nothing running to stop: stopping it just ends it.
+        let probe = watcher.source_kind == "Probe";
+        // A probe whose run has already ended (or that waits between runs) has nothing running
+        // to stop: stopping it just ends it, so no further run starts.
+        let run_ended = match &watcher.process_operation_id {
+            Some(process) => {
+                let monitoring = self.processes.is_monitoring(process);
+                let record = tx.resources().process(&process.0)?;
+                tx.operations()
+                    .operation(process)?
+                    .is_some_and(|op| observe(&watcher, &op, record.as_ref(), monitoring).is_some())
+            }
+            None => probe,
+        };
+        let kind = if input.stop_process && !(probe && run_ended) {
             let Some(process) = watcher.process_operation_id.clone() else {
                 return decided(
                     tx,
@@ -414,13 +547,7 @@ impl WatchService {
             };
             // A process that already ended keeps its observed outcome: there is nothing to stop,
             // and the next pass settles the watcher with what actually happened.
-            let monitoring = self.processes.is_monitoring(&process);
-            let record = tx.resources().process(&process.0)?;
-            let ended = tx
-                .operations()
-                .operation(&process)?
-                .is_some_and(|op| observe(&watcher, &op, record.as_ref(), monitoring).is_some());
-            if ended {
+            if run_ended {
                 return decided(
                     tx,
                     Ok(DomainDecision::NoChange {
@@ -470,7 +597,21 @@ impl CommandHandler for WatchService {
     ) -> Result<Option<Prepared>, StorageError> {
         Ok(match command.input() {
             OperationInput::Watch(ops::Input::Create(input)) => {
-                Some(Prepared::new(self.processes.bind_spec(&input.process, ctx)))
+                // The command a process or probe watcher launches, bound and preflighted outside
+                // the write (the preflight resolves paths on disk). A timer launches nothing.
+                let spec = input
+                    .process
+                    .as_ref()
+                    .or(input.probe.as_ref().map(|p| &p.process));
+                let prepared: PreparedLaunch = spec
+                    .map(|spec| {
+                        self.processes.bind_spec(spec, ctx).map(|bound| {
+                            let verdict = self.processes.preflight(&bound);
+                            (bound, verdict)
+                        })
+                    })
+                    .transpose();
+                Some(Prepared::new(prepared))
             }
             _ => None,
         })
@@ -632,36 +773,246 @@ pub fn turn_input(
         .collect())
 }
 
-/// Settles one open watcher whose process outcome is observed: the watcher's state change, its
-/// event and its history commit together. `false` when nothing is observed yet.
-fn settle_in(
+/// What one write step did to an open watcher.
+#[derive(Debug)]
+enum Step {
+    Nothing,
+    Settled,
+    /// A probe run started or the next one was scheduled.
+    Advanced,
+    /// A polling watcher reached its maximum lifetime, with the run then in flight (if any).
+    Expired(Option<OperationId>),
+}
+
+/// Advances one open watcher in `tx`: the watcher's state change, its event and its history
+/// commit together.
+fn step_in(
     tx: &mut dyn WriteTransaction,
     id: &Id,
     monitoring: bool,
-) -> Result<bool, StorageError> {
-    let Some(mut watcher) = tx.watchers().watcher(id)? else {
-        return Ok(false);
+    processes: &ProcessToolService,
+) -> Result<Step, StorageError> {
+    let Some(watcher) = tx.watchers().watcher(id)? else {
+        return Ok(Step::Nothing);
     };
     if !watcher.phase.is_open() {
-        return Ok(false);
+        return Ok(Step::Nothing);
     }
-    let Some(operation_id) = watcher.process_operation_id.clone() else {
-        return Ok(false);
+    let now = tx.now_ms();
+    match watcher.source_kind.as_str() {
+        "Timer" => {
+            if watcher.due_at_ms.is_none_or(|due| now < due) {
+                return Ok(Step::Nothing);
+            }
+            let duration = Some((now - watcher.created_at_ms).max(0));
+            let fired = outcome("Succeeded", None, None, Some("the timer fired"));
+            finish_in(tx, watcher, fired, duration, None, false, None)?;
+            Ok(Step::Settled)
+        }
+        "Probe" => probe_step_in(tx, watcher, monitoring, processes, now),
+        _ => {
+            let Some(operation_id) = watcher.process_operation_id.clone() else {
+                return Ok(Step::Nothing);
+            };
+            let Some(operation) = tx.operations().operation(&operation_id)? else {
+                return Ok(Step::Nothing);
+            };
+            let process = tx.resources().process(&operation_id.0)?;
+            let Some(observed) = observe(&watcher, &operation, process.as_ref(), monitoring) else {
+                return Ok(Step::Nothing);
+            };
+            finish_in(
+                tx,
+                watcher,
+                observed.outcome,
+                observed.duration_ms,
+                observed.tail,
+                observed.truncated,
+                Some(&operation_id),
+            )?;
+            Ok(Step::Settled)
+        }
+    }
+}
+
+/// A probe's step: its lifetime first, then its run in flight (settle when the condition holds,
+/// else schedule the next run after its backoff), then a due run.
+fn probe_step_in(
+    tx: &mut dyn WriteTransaction,
+    mut watcher: StoredWatcher,
+    monitoring: bool,
+    processes: &ProcessToolService,
+    now: i64,
+) -> Result<Step, StorageError> {
+    let Some(mut probe) = watcher.probe.clone() else {
+        return Ok(Step::Nothing);
     };
-    let Some(operation) = tx.operations().operation(&operation_id)? else {
-        return Ok(false);
+    let duration = Some((now - watcher.created_at_ms).max(0));
+    if watcher.expires_at_ms.is_some_and(|end| now >= end) {
+        let run = watcher.process_operation_id.clone();
+        let detail = format!(
+            "the probe's condition did not hold within its maximum lifetime ({} runs)",
+            probe.runs
+        );
+        let expired = outcome("TimedOut", None, None, Some(&detail));
+        finish_in(tx, watcher, expired, duration, None, false, run.as_ref())?;
+        // A run whose outcome is already recorded needs no stop.
+        let in_flight = match &run {
+            Some(op) => tx
+                .operations()
+                .operation(op)?
+                .is_some_and(|op| !watch_outcome_recorded(&op)),
+            None => false,
+        };
+        return Ok(Step::Expired(run.filter(|_| in_flight)));
+    }
+    if let Some(run) = watcher.process_operation_id.clone() {
+        let Some(operation) = tx.operations().operation(&run)? else {
+            return Ok(Step::Nothing);
+        };
+        let process = tx.resources().process(&run.0)?;
+        let Some(observed) = observe(&watcher, &operation, process.as_ref(), monitoring) else {
+            return Ok(Step::Nothing);
+        };
+        let exit = observed.outcome.exit_code;
+        let completed = exit.is_some() || observed.outcome.kind == "TimedOut";
+        // A stop was requested (watch.cancel with stopProcess): the run's end is the outcome.
+        if !completed || watcher.phase == WatcherPhase::Stopping {
+            // The probe could not run (refused, lost or uncertain): that is its outcome.
+            finish_in(
+                tx,
+                watcher,
+                observed.outcome,
+                duration,
+                observed.tail,
+                observed.truncated,
+                Some(&run),
+            )?;
+            return Ok(Step::Settled);
+        }
+        probe.runs += 1;
+        if exit.is_some() && condition_holds(&probe, exit, run_output(&operation).as_deref()) {
+            let detail = format!("the probe's condition held on run {}", probe.runs);
+            let held = outcome("Succeeded", exit, None, Some(&detail));
+            watcher.probe = Some(probe);
+            finish_in(
+                tx,
+                watcher,
+                held,
+                duration,
+                observed.tail,
+                observed.truncated,
+                Some(&run),
+            )?;
+            return Ok(Step::Settled);
+        }
+        probe.next_run_at_ms =
+            Some(now.saturating_add(probe_backoff(probe.interval_ms, probe.runs)));
+        watcher.output_tail = observed.tail;
+        watcher.output_truncated = observed.truncated;
+        watcher.process_operation_id = None;
+        let payload = json!({
+            "runs": probe.runs,
+            "processId": run.0.as_str(),
+            "exitCode": exit,
+            "nextRunAtMs": probe.next_run_at_ms,
+        });
+        watcher.probe = Some(probe);
+        update_in(tx, &mut watcher, now)?;
+        history(tx, &watcher, Some(&run), "WatcherProbeRan", payload)?;
+        return Ok(Step::Advanced);
+    }
+    if probe.next_run_at_ms.is_none_or(|next| now < next) {
+        return Ok(Step::Nothing);
+    }
+    let run = processes.record_watch_rerun(&probe.job_operation_id, tx)?;
+    probe.next_run_at_ms = None;
+    watcher.probe = Some(probe);
+    watcher.process_operation_id = Some(run.clone());
+    update_in(tx, &mut watcher, now)?;
+    history(
+        tx,
+        &watcher,
+        Some(&run),
+        "WatcherProbeStarted",
+        json!({"processId": run.0.as_str()}),
+    )?;
+    Ok(Step::Advanced)
+}
+
+/// Whether a completed probe run meets its condition: the required exit code (0 when neither a
+/// code nor an output pattern is set), and a match of the pattern anywhere in its output.
+fn condition_holds(probe: &StoredProbe, exit: Option<i64>, output: Option<&[u8]>) -> bool {
+    let code = match (probe.exit_code, &probe.output_pattern) {
+        (Some(code), _) => exit == Some(code),
+        (None, None) => exit == Some(0),
+        (None, Some(_)) => true,
     };
-    let process = tx.resources().process(&operation_id.0)?;
-    let Some(observed) = observe(&watcher, &operation, process.as_ref(), monitoring) else {
-        return Ok(false);
+    let output = match &probe.output_pattern {
+        None => true,
+        Some(pattern) => regex::Regex::new(pattern).is_ok_and(|re| {
+            output.is_some_and(|bytes| re.is_match(&String::from_utf8_lossy(bytes)))
+        }),
     };
+    code && output
+}
+
+/// The redacted output a watched run's monitor captured, if recorded.
+fn run_output(operation: &OperationRecord) -> Option<Vec<u8>> {
+    operation.attempts.iter().rev().find_map(|attempt| {
+        attempt.observations.iter().rev().find_map(|o| {
+            o.pointer("/watchOutcome/outputBase64")
+                .and_then(Value::as_str)
+                .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
+        })
+    })
+}
+
+/// Whether a probe run has ended: refused or cancelled before it launched, or its monitor
+/// recorded its outcome. A run still queued, dispatching or running has not.
+fn watch_outcome_recorded(operation: &OperationRecord) -> bool {
+    matches!(
+        operation.state,
+        OperationState::Failed | OperationState::CancelledBeforeDispatch
+    ) || operation.attempts.iter().any(|a| {
+        a.observations
+            .iter()
+            .any(|o| o.get("watchOutcome").is_some())
+    })
+}
+
+fn update_in(
+    tx: &mut dyn WriteTransaction,
+    watcher: &mut StoredWatcher,
+    now: i64,
+) -> Result<(), StorageError> {
+    watcher.revision += 1;
+    watcher.updated_at_ms = now;
+    tx.watchers().update_watcher(watcher)
+}
+
+/// Settles `watcher` with `outcome`: its state change, its one event and its history.
+fn finish_in(
+    tx: &mut dyn WriteTransaction,
+    mut watcher: StoredWatcher,
+    outcome: StoredWatchOutcome,
+    duration_ms: Option<i64>,
+    tail: Option<Vec<u8>>,
+    truncated: bool,
+    operation: Option<&OperationId>,
+) -> Result<(), StorageError> {
     let now = tx.now_ms();
     watcher.phase = WatcherPhase::Settled;
     watcher.revision += 1;
-    watcher.outcome = Some(observed.outcome);
-    watcher.duration_ms = observed.duration_ms;
-    watcher.output_tail = observed.tail;
-    watcher.output_truncated = observed.truncated;
+    watcher.outcome = Some(outcome);
+    watcher.duration_ms = duration_ms;
+    if tail.is_some() {
+        watcher.output_tail = tail;
+        watcher.output_truncated = truncated;
+    }
+    if let Some(probe) = watcher.probe.as_mut() {
+        probe.next_run_at_ms = None;
+    }
     watcher.updated_at_ms = now;
     watcher.settled_at_ms = Some(now);
     tx.watchers().update_watcher(&watcher)?;
@@ -679,15 +1030,15 @@ fn settle_in(
         acknowledged_at_ms: None,
     };
     tx.watchers().insert_watch_event(&event)?;
-    let outcome = watcher.outcome.as_ref().map(|o| o.kind.clone());
+    let kind = watcher.outcome.as_ref().map(|o| o.kind.clone());
     history(
         tx,
         &watcher,
-        Some(&operation_id),
+        operation,
         "WatcherSettled",
-        json!({"eventId": event.id.as_str(), "outcome": outcome}),
+        json!({"eventId": event.id.as_str(), "outcome": kind}),
     )?;
-    Ok(true)
+    Ok(())
 }
 
 /// The event body, its encoded size within the store's bound: JSON escaping can grow a tail
@@ -981,13 +1332,24 @@ fn record_of(
         id: watcher.id.clone(),
         revision: rev(watcher.revision),
         state: state_of(watcher.phase),
-        source_kind: WatchSourceKind::Process,
+        source_kind: match watcher.source_kind.as_str() {
+            "Probe" => WatchSourceKind::Probe,
+            "Timer" => WatchSourceKind::Timer,
+            _ => WatchSourceKind::Process,
+        },
         process: watcher.process_operation_id.as_ref().and_then(|op| {
             Some(WatchProcessSource {
                 process_id: op.0.clone(),
-                executable_ref: Id::new(watcher.executable_ref.clone()).ok()?,
+                executable_ref: Id::new(watcher.executable_ref.clone()?).ok()?,
             })
         }),
+        probe: watcher.probe.as_ref().map(|p| WatchProbeStatus {
+            interval_ms: counter(p.interval_ms),
+            runs: counter(p.runs),
+            next_run_at_ms: p.next_run_at_ms.map(counter),
+        }),
+        due_at_ms: watcher.due_at_ms.map(counter),
+        expires_at_ms: watcher.expires_at_ms.map(counter),
         session_id: watcher.session_id.clone(),
         project_id: watcher.project_id.clone(),
         created_at_ms: counter(watcher.created_at_ms),
@@ -1039,13 +1401,34 @@ fn notice_text(event: &StoredWatchEvent) -> String {
     if let Some(signal) = n("/outcome/signal") {
         outcome.push_str(&format!(" (signal {signal})"));
     }
+    let (observed, source) = match s("/sourceKind") {
+        "Timer" => (
+            "its timer fire".to_owned(),
+            format!("timer due at {} ms", n("/dueAtMs").unwrap_or_default()),
+        ),
+        "Probe" => (
+            "its probe end".to_owned(),
+            format!(
+                "probe command {} after {} runs (last process {})",
+                s("/process/executableRef"),
+                n("/probe/runs").unwrap_or_default(),
+                s("/process/processId"),
+            ),
+        ),
+        _ => (
+            "its process end".to_owned(),
+            format!(
+                "process {} ({})",
+                s("/process/processId"),
+                s("/process/executableRef")
+            ),
+        ),
+    };
     let mut text = format!(
-        "Watcher event {event}: watcher {watcher} observed its process end: {outcome}.\n\
-         Source: process {process} ({executable}).",
+        "Watcher event {event}: watcher {watcher} observed {observed}: {outcome}.\n\
+         Source: {source}.",
         event = event.id.as_str(),
         watcher = event.watcher_id.as_str(),
-        process = s("/process/processId"),
-        executable = s("/process/executableRef"),
     );
     if let Some(duration) = n("/durationMs") {
         text.push_str(&format!(" Duration: {duration} ms."));
@@ -1120,8 +1503,11 @@ mod tests {
     use super::*;
     use crate::protocol::ActorId;
 
+    fn id(s: &str) -> Id {
+        Id::new(s).unwrap()
+    }
+
     fn watcher(tail: Vec<u8>) -> StoredWatcher {
-        let id = |s: &str| Id::new(s).unwrap();
         StoredWatcher {
             id: id("w"),
             revision: 2,
@@ -1131,7 +1517,7 @@ mod tests {
             session_id: id("s"),
             actor: ActorId(id("a")),
             process_operation_id: Some(OperationId(id("op"))),
-            executable_ref: "sh".into(),
+            executable_ref: Some("sh".into()),
             tail_bytes: 65_536,
             outcome: Some(outcome("Failed", Some(1), None, None)),
             duration_ms: Some(5),
@@ -1141,7 +1527,127 @@ mod tests {
             created_at_ms: 0,
             updated_at_ms: 1,
             settled_at_ms: Some(1),
+            probe: None,
+            due_at_ms: None,
+            expires_at_ms: None,
         }
+    }
+
+    #[test]
+    fn a_notice_names_what_its_watcher_observed() {
+        let mut timer = watcher(Vec::new());
+        timer.source_kind = "Timer".into();
+        timer.executable_ref = None;
+        timer.process_operation_id = None;
+        timer.output_tail = None;
+        timer.due_at_ms = Some(5_000);
+        timer.outcome = Some(outcome("Succeeded", None, None, Some("the timer fired")));
+        let mut probe = watcher(b"ready".to_vec());
+        probe.source_kind = "Probe".into();
+        probe.outcome = Some(outcome("Succeeded", Some(0), None, None));
+        probe.probe = Some(StoredProbe {
+            job_operation_id: OperationId(id("op")),
+            interval_ms: 1_000,
+            exit_code: None,
+            output_pattern: None,
+            runs: 3,
+            next_run_at_ms: None,
+        });
+        let text = |w: &StoredWatcher| {
+            notice_text(&StoredWatchEvent {
+                id: id("e"),
+                watcher_id: w.id.clone(),
+                session_id: w.session_id.clone(),
+                project_id: None,
+                state: WatchEventState::Pending,
+                payload: bounded_payload(w, 1).unwrap(),
+                transcript_sequence: None,
+                carried_turn_id: None,
+                created_at_ms: 1,
+                delivered_at_ms: None,
+                acknowledged_at_ms: None,
+            })
+        };
+        let fired = text(&timer);
+        assert!(
+            fired.contains("observed its timer fire: Succeeded"),
+            "{fired}"
+        );
+        assert!(fired.contains("timer due at 5000 ms"), "{fired}");
+        let held = text(&probe);
+        assert!(
+            held.contains("observed its probe end: Succeeded (exit code 0)"),
+            "{held}"
+        );
+        assert!(held.contains("probe command sh after 3 runs"), "{held}");
+    }
+
+    #[test]
+    fn a_queued_or_running_probe_run_is_in_flight_until_it_ends() {
+        let run = |state| OperationRecord {
+            id: OperationId(id("op")),
+            root_id: None,
+            assignment_id: None,
+            capability: "process.execute".into(),
+            schema_version: 1,
+            args_digest: String::new(),
+            payload: json!({}),
+            state,
+            revision: 1,
+            created_at_ms: 0,
+            attempts: Vec::new(),
+        };
+        // Still to be stopped when a probe's lifetime ends: queued, dispatching or launched.
+        for state in [
+            OperationState::IntentRecorded,
+            OperationState::Preflighted,
+            OperationState::Dispatching,
+            OperationState::ObservedComplete,
+        ] {
+            assert!(!watch_outcome_recorded(&run(state)), "{state:?}");
+        }
+        for state in [
+            OperationState::Failed,
+            OperationState::CancelledBeforeDispatch,
+        ] {
+            assert!(watch_outcome_recorded(&run(state)), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn a_probe_condition_needs_its_exit_code_and_its_pattern() {
+        let probe = |exit_code, output_pattern: Option<&str>| StoredProbe {
+            job_operation_id: OperationId(id("op")),
+            interval_ms: 1_000,
+            exit_code,
+            output_pattern: output_pattern.map(str::to_owned),
+            runs: 0,
+            next_run_at_ms: None,
+        };
+        assert!(condition_holds(&probe(None, None), Some(0), None));
+        assert!(!condition_holds(&probe(None, None), Some(1), None));
+        assert!(condition_holds(&probe(Some(3), None), Some(3), None));
+        assert!(condition_holds(
+            &probe(None, Some("ready")),
+            Some(1),
+            Some(b"ready\n")
+        ));
+        assert!(!condition_holds(
+            &probe(None, Some("^ready$")),
+            Some(0),
+            Some(b"not ready")
+        ));
+        assert!(!condition_holds(
+            &probe(Some(0), Some("up")),
+            Some(1),
+            Some(b"up")
+        ));
+        assert_eq!(
+            (1..=6)
+                .map(|runs| probe_backoff(1_000, runs))
+                .collect::<Vec<_>>(),
+            vec![1_000, 2_000, 4_000, 8_000, 8_000, 8_000]
+        );
     }
 
     #[test]

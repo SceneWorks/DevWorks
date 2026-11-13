@@ -821,6 +821,342 @@ fn process_output_reads_a_watched_process_while_it_runs_and_after_it_ends() {
     });
 }
 
+fn decision(app: &Runtime, ctx: &InvocationContext, body: Value, key: &str) -> DomainDecision {
+    match app
+        .command(
+            ctx,
+            "watch.create",
+            &frame("Command", "watch.create", body, key),
+        )
+        .unwrap()
+    {
+        CommandReply::Recorded { receipt, .. } => receipt.decision,
+        other => panic!("watch.create: {other:?}"),
+    }
+}
+
+fn probe(script: &str, interval_ms: i64, extra: Value) -> Value {
+    let mut body = json!({"probe": {
+        "process": {
+            "executableRef":"sh", "args":["-c", script],
+            "workingDirectory":{"rootId":"watch-root","relative":"work"},
+            "environment":[], "profile":"Full",
+            "timeoutMs":"10000", "outputLimitBytes":"4096"
+        },
+        "intervalMs": interval_ms.to_string(),
+        "condition": {}
+    }});
+    if let Value::Object(extra) = extra {
+        for (key, value) in extra {
+            body[key] = value;
+        }
+    }
+    body
+}
+
+fn counter_at(record: &Value, pointer: &str) -> Option<i64> {
+    record
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse().ok())
+}
+
+/// Steps a probe watcher on the test clock until it settles: each pass settles what is observed
+/// and, while the probe waits for its next run, moves the clock to that run. Returns the record
+/// and every wait the probe scheduled.
+async fn step_probe(
+    fx: &Fx,
+    app: &Runtime,
+    ctx: &InvocationContext,
+    watcher: &str,
+) -> (Value, Vec<i64>) {
+    let watchers = app.watchers().expect("watchers composed");
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let mut waits = Vec::new();
+    loop {
+        watchers.settle().unwrap();
+        let record = inspect(app, ctx, watcher);
+        if record["state"] == json!("Settled") {
+            return (record, waits);
+        }
+        if let Some(next) = counter_at(&record, "/probe/nextRunAtMs") {
+            let wait = next - fx.h.now();
+            if wait > 0 {
+                waits.push(wait);
+                fx.h.advance(wait);
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "probe never settled: {record}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// A probe reruns its command, backing off, until the condition holds: here on the third run.
+#[test]
+fn a_probe_succeeds_on_the_run_that_meets_its_condition_with_backoff_between_runs() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-probe-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let script = "n=$(cat count 2>/dev/null || echo 0); n=$((n+1)); echo $n > count; \
+                      echo run $n; [ $n -ge 3 ]";
+        let watcher = command(
+            &app,
+            &ctx,
+            "watch.create",
+            probe(script, 1000, json!({})),
+            "w-probe",
+        );
+        assert_eq!(watcher["sourceKind"], json!("Probe"));
+        let id = watcher["id"].as_str().unwrap();
+        let (record, waits) = step_probe(&fx, &app, &ctx, id).await;
+        assert_eq!(record["outcome"]["kind"], json!("Succeeded"), "{record}");
+        assert_eq!(record["outcome"]["exitCode"], json!(0), "{record}");
+        assert_eq!(counter_at(&record, "/probe/runs"), Some(3), "{record}");
+        assert_eq!(waits, vec![1000, 2000], "one interval, then doubled");
+        assert_eq!(
+            std::fs::read_to_string(work.join("work").join("count"))
+                .unwrap()
+                .trim(),
+            "3",
+            "exactly three runs"
+        );
+        assert!(
+            record["outputTail"].as_str().unwrap().contains("run 3"),
+            "{record}"
+        );
+        app.shutdown().await;
+    });
+}
+
+/// Stopping a probe whose run already exited ends the probe: no later run starts.
+#[test]
+fn stopping_a_probe_after_its_run_exited_starts_no_further_run() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-probe-stop-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watcher = command(
+            &app,
+            &ctx,
+            "watch.create",
+            probe("echo run >> runs; exit 1", 1000, json!({})),
+            "w-probe-stop",
+        );
+        let run = OperationId(id(watcher["process"]["processId"].as_str().unwrap()));
+        // The run exits; its outcome is recorded but no pass has observed it yet.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !read(&**app.store(), |s| s.operations().operation(&run)).is_some_and(|op| {
+            op.attempts
+                .iter()
+                .any(|a| a.observations.iter().any(|o| o.get("watchOutcome").is_some()))
+        }) {
+            assert!(std::time::Instant::now() < deadline, "the run never ended");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let stopped = command(
+            &app,
+            &ctx,
+            "watch.cancel",
+            json!({"watcherId": watcher["id"], "expectedRevision": watcher["revision"], "stopProcess": true}),
+            "stop-probe",
+        );
+        assert_eq!(stopped["state"], json!("Cancelled"), "{stopped}");
+        let watchers = app.watchers().expect("watchers composed");
+        for _ in 0..5 {
+            watchers.settle().unwrap();
+            fx.h.advance(10_000);
+        }
+        let id = watcher["id"].as_str().unwrap();
+        assert_eq!(inspect(&app, &ctx, id)["state"], json!("Cancelled"));
+        assert_eq!(
+            std::fs::read_to_string(work.join("work").join("runs")).unwrap(),
+            "run\n",
+            "only the first run started"
+        );
+        app.shutdown().await;
+    });
+}
+
+/// Cancelling only a process watcher's observation leaves its process to run, even when the
+/// cancellation arrives before the process launched.
+#[test]
+fn an_observation_only_cancel_keeps_the_watched_process() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-observe-cancel-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watcher = create(&app, &ctx, "echo ran > ran", 10_000, "w-observe");
+        let cancelled = command(
+            &app,
+            &ctx,
+            "watch.cancel",
+            json!({"watcherId": watcher["id"], "expectedRevision": watcher["revision"], "stopProcess": false}),
+            "observe-cancel",
+        );
+        assert_eq!(cancelled["state"], json!("Cancelled"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !work.join("work").join("ran").exists() {
+            assert!(std::time::Instant::now() < deadline, "the process never ran");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        app.shutdown().await;
+    });
+}
+
+/// A probe whose condition never holds ends TimedOut at its maximum lifetime.
+#[test]
+fn a_polling_watcher_past_its_maximum_lifetime_ends_timed_out() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-lifetime-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watcher = command(
+            &app,
+            &ctx,
+            "watch.create",
+            probe("exit 1", 1000, json!({"maxLifetimeMs": "2500"})),
+            "w-lifetime",
+        );
+        let created = counter_at(&watcher, "/createdAtMs").unwrap();
+        assert_eq!(counter_at(&watcher, "/expiresAtMs"), Some(created + 2500));
+        let (record, _) = step_probe(&fx, &app, &ctx, watcher["id"].as_str().unwrap()).await;
+        assert_eq!(record["outcome"]["kind"], json!("TimedOut"), "{record}");
+        assert_eq!(counter_at(&record, "/probe/runs"), Some(2), "{record}");
+        // Without its own lifetime a probe takes the 24-hour default.
+        let defaulted = command(
+            &app,
+            &ctx,
+            "watch.create",
+            probe("exit 1", 1000, json!({})),
+            "w-default",
+        );
+        assert_eq!(
+            counter_at(&defaulted, "/expiresAtMs"),
+            Some(counter_at(&defaulted, "/createdAtMs").unwrap() + 86_400_000)
+        );
+        app.shutdown().await;
+    });
+}
+
+/// A timer fires at its due time, not before, and wakes its session like any watcher.
+#[test]
+fn a_timer_fires_at_its_due_time() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-timer-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let session = ctx.session_id().unwrap().clone();
+        let watchers = app.watchers().expect("watchers composed");
+        let timer = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"timer": {"afterMs": "5000"}}),
+            "w-timer",
+        );
+        assert_eq!(timer["sourceKind"], json!("Timer"));
+        let id = timer["id"].as_str().unwrap();
+        assert_eq!(counter_at(&timer, "/dueAtMs"), Some(fx.h.now() + 5000));
+        watchers.settle().unwrap();
+        fx.h.advance(4999);
+        watchers.settle().unwrap();
+        assert_eq!(
+            inspect(&app, &ctx, id)["state"],
+            json!("Active"),
+            "not before its due time"
+        );
+        fx.h.advance(1);
+        assert_eq!(watchers.tick().unwrap().settled, 1);
+        let record = inspect(&app, &ctx, id);
+        assert_eq!(record["outcome"]["kind"], json!("Succeeded"), "{record}");
+        assert_eq!(
+            record["outcome"]["detail"],
+            json!("the timer fired"),
+            "{record}"
+        );
+        let delivered = notices(&fx, &session);
+        assert_eq!(delivered.len(), 1, "{delivered:?}");
+        assert_eq!(
+            delivered[0]["source"], record["event"]["id"],
+            "{delivered:?}"
+        );
+        app.shutdown().await;
+    });
+}
+
+/// A probe command the shell preflight blocks is refused when the watcher is created.
+#[test]
+fn a_probe_command_the_shell_preflight_blocks_is_refused_at_creation() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-preflight-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let refused = decision(
+            &app,
+            &ctx,
+            probe("git push --force origin main", 1000, json!({})),
+            "w-blocked",
+        );
+        let DomainDecision::Refused { fault } = refused else {
+            panic!("a blocked probe was admitted: {refused:?}");
+        };
+        assert_eq!(fault.code, DomainErrorCode::PermissionDenied, "{fault:?}");
+        let session = ctx.session_id().unwrap().clone();
+        let watchers = read(&**app.store(), |s| {
+            s.watchers()
+                .watchers(&WatcherFilter::Session(session.clone()), &[], None, 10)
+        });
+        assert!(watchers.is_empty(), "nothing was recorded: {watchers:?}");
+        app.shutdown().await;
+    });
+}
+
 /// A process that exits before its launch report is consumed still settles with its real exit,
 /// never Lost: the outcome is recorded once the launch was reported, whatever the timing.
 #[test]

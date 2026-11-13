@@ -814,6 +814,50 @@ fn watchers_launch_and_stop_with_process_authority() {
             "{op}"
         );
     }
+    // A probe launches its command like a process watcher: a reviewer cannot create one.
+    let probe = OperationInput::Watch(watch::Input::Create(
+        serde_json::from_value(json!({"probe": {"process": spec, "intervalMs": "1000",
+            "condition": {}}}))
+        .unwrap(),
+    ));
+    assert_eq!(
+        verdict("watch.create", &probe, AgentRole::CodeReviewer, &full),
+        Verdict::Deny(DenialReason::ReadOnlyRole)
+    );
+    assert_eq!(
+        verdict("watch.create", &probe, AgentRole::Worker, &full),
+        Verdict::Allow
+    );
+    // A timer only observes: a reviewer may create one, without shell tools or a native grant,
+    // and may end a watcher without stopping a process.
+    let timer = OperationInput::Watch(watch::Input::Create(
+        serde_json::from_value(json!({"timer": {"afterMs": "1000"}})).unwrap(),
+    ));
+    let observe_cancel = OperationInput::Watch(watch::Input::Cancel(
+        serde_json::from_value(json!({"watcherId":"w","expectedRevision":"1","stopProcess":false}))
+            .unwrap(),
+    ));
+    for (policy, label) in [
+        (&full, "full"),
+        (&policy(AccessProfile::Full, false), "no shell tools"),
+        (&policy(AccessProfile::ProjectScope, false), "project scope"),
+    ] {
+        assert_eq!(
+            verdict("watch.create", &timer, AgentRole::CodeReviewer, policy),
+            Verdict::Allow,
+            "timer, {label}"
+        );
+        assert_eq!(
+            verdict(
+                "watch.cancel",
+                &observe_cancel,
+                AgentRole::CodeReviewer,
+                policy
+            ),
+            Verdict::Allow,
+            "observing cancel, {label}"
+        );
+    }
     // Turning process.execute off for agents turns off launching through a watcher.
     let mut no_execute = policy(AccessProfile::Full, true);
     no_execute

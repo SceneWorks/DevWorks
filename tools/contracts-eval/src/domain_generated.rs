@@ -17821,6 +17821,8 @@ impl Check for WatcherState {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum WatchSourceKind {
     Process,
+    Probe,
+    Timer,
 }
 impl Check for WatchSourceKind {
     fn check(&self) -> Result<(), String> {
@@ -17881,6 +17883,98 @@ impl Check for WatchProcessSource {
         self.executable_ref.check()?;
         super::domain_rules::record(
             "WatchProcessSource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchProbeCondition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_pattern: Option<Text>,
+}
+impl Check for WatchProbeCondition {
+    fn check(&self) -> Result<(), String> {
+        self.exit_code.check()?;
+        self.output_pattern.check()?;
+        super::domain_rules::record(
+            "WatchProbeCondition",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchProbe {
+    pub process: ProcessSpec,
+    pub interval_ms: Counter,
+    pub condition: WatchProbeCondition,
+}
+impl Check for WatchProbe {
+    fn check(&self) -> Result<(), String> {
+        self.process.check()?;
+        self.interval_ms.check()?;
+        self.condition.check()?;
+        super::domain_rules::record(
+            "WatchProbe",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["atMs"]}, {"required": ["afterMs"]}]))]
+pub struct WatchTimer {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter")]
+    pub at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter")]
+    pub after_ms: Option<Counter>,
+}
+impl Check for WatchTimer {
+    fn check(&self) -> Result<(), String> {
+        self.at_ms.check()?;
+        self.after_ms.check()?;
+        super::domain_rules::record(
+            "WatchTimer",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchProbeStatus {
+    pub interval_ms: Counter,
+    pub runs: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_run_at_ms: Option<Counter>,
+}
+impl Check for WatchProbeStatus {
+    fn check(&self) -> Result<(), String> {
+        self.interval_ms.check()?;
+        self.runs.check()?;
+        self.next_run_at_ms.check()?;
+        super::domain_rules::record(
+            "WatchProbeStatus",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
@@ -17953,6 +18047,12 @@ pub struct WatcherRecord {
     pub source_kind: WatchSourceKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<WatchProcessSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<WatchProbeStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<Counter>,
     pub session_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
@@ -17978,6 +18078,9 @@ impl Check for WatcherRecord {
         self.state.check()?;
         self.source_kind.check()?;
         self.process.check()?;
+        self.probe.check()?;
+        self.due_at_ms.check()?;
+        self.expires_at_ms.check()?;
         self.session_id.check()?;
         self.project_id.check()?;
         self.created_at_ms.check()?;
@@ -22975,9 +23078,16 @@ pub enum DomainCommand {
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "watch.create")]
     WatchCreate {
-        process: ProcessSpec,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        process: Option<ProcessSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        probe: Option<WatchProbe>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timer: Option<WatchTimer>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tail_bytes: Option<ByteLimit>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_lifetime_ms: Option<Counter>,
     },
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "watch.cancel")]
@@ -25107,10 +25217,16 @@ impl Check for DomainCommand {
             }
             Self::WatchCreate {
                 process,
+                probe,
+                timer,
                 tail_bytes,
+                max_lifetime_ms,
             } => {
                 process.check()?;
+                probe.check()?;
+                timer.check()?;
                 tail_bytes.check()?;
+                max_lifetime_ms.check()?;
             }
             Self::WatchCancel {
                 watcher_id,

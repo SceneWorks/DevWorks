@@ -12,6 +12,7 @@ use super::{
 };
 use crate::authority::destructive::{FilesystemResolver, ProtectedRoots};
 use crate::authority::redact::Redactor;
+use crate::authority::shell::CommandVerdict;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::Fingerprint;
 use crate::fingerprint::sha256_hex;
@@ -1011,6 +1012,90 @@ impl ProcessToolService {
         Ok(operation)
     }
 
+    /// The shell preflight verdict on launching `spec`, as a launch would judge it now.
+    pub(crate) fn preflight(&self, spec: &NativeProcessSpec) -> CommandVerdict {
+        let branches = ["main".to_owned(), "master".to_owned()];
+        let policy = LaunchPolicy {
+            fs: &*self.fs,
+            roots: &self.protected_roots,
+            protected_branches: &branches,
+        };
+        self.processes.preflight(spec, &policy)
+    }
+
+    /// Stops a watched run's tree now (bounded), as `process.cancel` would; a failed stop leaves
+    /// the tree to its own time limit.
+    pub(crate) fn stop_watched_run(&self, process_id: &Id) {
+        let owned = OwnedProcess {
+            id: process_id.clone(),
+            identity: NativeIdentity {
+                pid: 0,
+                birth: String::new(),
+                group: None,
+            },
+            lease: None,
+        };
+        let _ = self
+            .processes
+            .cancel(&owned, Duration::from_secs(1), Duration::from_secs(5));
+    }
+
+    /// Records one more run of the watched `process.execute` job `source` (a probe's next run)
+    /// and enqueues it on the watcher consumer, in the caller's transaction. The run repeats the
+    /// job exactly, so it is re-authorized at dispatch as the request that admitted it.
+    pub(crate) fn record_watch_rerun(
+        &self,
+        source: &OperationId,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<OperationId, StorageError> {
+        let job = tx
+            .operations()
+            .operation(source)?
+            .ok_or_else(|| StorageError::NotFound {
+                kind: "operation",
+                id: source.0.as_str().to_owned(),
+            })?;
+        let parsed = serde_json::from_value::<ExecuteJob>(job.payload.clone())
+            .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+        let operation = OperationId(tx.new_id(IdKind::Operation));
+        tx.operations().record_intent(NewOperation {
+            id: operation.clone(),
+            root_id: job.root_id.clone(),
+            assignment_id: job.assignment_id.clone(),
+            capability: "process.execute".into(),
+            schema_version: 1,
+            args_digest: job.args_digest.clone(),
+            payload: job.payload.clone(),
+        })?;
+        let event = EventId(tx.new_id(IdKind::Event));
+        tx.history().append(NewEvent {
+            id: event.clone(),
+            actor: parsed.actor.clone(),
+            project_id: parsed.project.clone(),
+            root_id: job.root_id.clone(),
+            operation_id: Some(operation.clone()),
+            aggregate_kind: "process_tool".into(),
+            aggregate_id: operation.0.as_str().into(),
+            aggregate_revision: 1,
+            kind: "ProcessRequested".into(),
+            payload: json!({"operationId": operation.0.as_str(), "executableRef": parsed.spec.executable_ref.as_str(), "repeats": source.0.as_str()}),
+        })?;
+        let entry = tx.new_id(IdKind::QueueEntry);
+        let now = tx.now_ms();
+        tx.queue().enqueue(NewQueueEntry {
+            id: entry,
+            consumer: WATCH_CONSUMER.into(),
+            event_id: event,
+            root_id: job.root_id.clone(),
+            operation_id: Some(operation.clone()),
+            partition: None,
+            priority: 0,
+            ready_at_ms: now,
+            payload: json!({"operationId":operation.0.as_str()}),
+        })?;
+        Ok(operation)
+    }
+
     /// Requests a stop of the process `process_id` launched, at its current revision, through
     /// the `process.cancel` path (before launch it cancels the undispatched intent).
     pub(crate) fn request_cancel(
@@ -1515,6 +1600,28 @@ impl ProcessToolService {
         let Ok(job) = serde_json::from_value::<ExecuteJob>(operation.payload.clone()) else {
             return EffectOutcome::Failed("invalid process intent".into());
         };
+        // A probe's run starts only while its probe still observes: one queued before the probe
+        // ended (it timed out, or was stopped between runs) never launches. A one-shot process
+        // watcher's process is the owner's request and launches even when only its observation
+        // was cancelled (an explicit stop cancels the undispatched intent itself).
+        if job.watch.is_some() {
+            let watcher = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+                snapshot.watchers().watcher_for_process(&operation.id)
+            });
+            match watcher {
+                Ok(Some(w))
+                    if w.source_kind == "Probe" && (!w.phase.is_open() || w.stop_requested) =>
+                {
+                    return EffectOutcome::Failed(
+                        "the watcher ended before this run started".into(),
+                    );
+                }
+                Err(error) => {
+                    return EffectOutcome::Unknown(format!("watcher state unavailable: {error}"));
+                }
+                _ => {}
+            }
+        }
         let ctx = job.context(&*self.store, &operation.id);
         let admitted_by = if job.watch.is_some() {
             "watch.create"
@@ -1533,7 +1640,10 @@ impl ProcessToolService {
         let input = match &job.watch {
             Some(origin) => OperationInput::Watch(crate::operations::watch::Input::Create(
                 crate::operations::watch::CreateInput {
-                    process: job.spec.clone(),
+                    process: Some(job.spec.clone()),
+                    probe: None,
+                    timer: None,
+                    max_lifetime_ms: None,
                     tail_bytes: origin
                         .requested_tail_bytes
                         .and_then(crate::protocol::support::ByteLimit::new),
