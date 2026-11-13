@@ -1029,6 +1029,35 @@ fn csharp_javascript_and_typescript_native_specs_keep_their_own_reading() {
         Some((Resolution::Unresolved, 0.45))
     );
     assert!(js.edges.iter().all(|e| !is_ext(e)), "no baseline markers");
+
+    // Names keep their spelling (`#f`, `@Foo`, nested generics); a default parameter's
+    // definitions are definitions.
+    let k = extract(
+        "web/k.ts",
+        "class A { #f() {} f() {} m() { this.#f(); } }\nfunction outer(cb = () => { function inner() {} inner(); }) {}\n",
+    );
+    let (hf, ..) = def(&k, "Method", "#type:A#method:#f()");
+    let (m, ..) = def(&k, "Method", "#type:A#method:m()");
+    assert!(local(&k, "CALLS", m, hf));
+    let (inner, ..) = def(
+        &k,
+        "Function",
+        "#function:outer(cb=()=>{function inner(){}inner();})#function:inner()",
+    );
+    assert!(
+        k.edges
+            .iter()
+            .any(|e| e.kind == "CALLS" && e.target == EdgeTarget::Local(inner)),
+        "the call binds to the nested definition"
+    );
+    let cs = extract(
+        "src/C.cs",
+        "class C { void Run<T>() {} void @Foo() {} void M() { Run<List<int>>(); @Foo(); } }\n",
+    );
+    let (m, ..) = def(&cs, "Method", "#type:C#method:M()");
+    let (run, ..) = def(&cs, "Method", "#type:C#method:Run()");
+    let (foo, ..) = def(&cs, "Method", "#type:C#method:@Foo()");
+    assert!(local(&cs, "CALLS", m, run) && local(&cs, "CALLS", m, foo));
 }
 
 #[test]

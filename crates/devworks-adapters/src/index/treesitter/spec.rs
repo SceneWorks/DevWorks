@@ -459,20 +459,31 @@ fn is_receiver_path(s: &str) -> bool {
             !b.is_empty() && ident_start(b[0]) && b[1..].iter().all(|c| ident_part(*c))
         })
 }
-/// The callee of a native spec: the trailing name after dropping a trailing `<...>`; `$` is a
-/// name character (`$(".x")`), as is any Unicode letter or digit.
+/// The callee of a native spec: the trailing name after dropping balanced trailing `<...>`
+/// type arguments. Its spelling is kept whole: `$`, a private `#f` and a verbatim `@Foo` are
+/// part of a name, as is any Unicode letter or digit.
 fn native_callee(t: &str) -> Option<String> {
     let mut t = t.trim();
-    if t.ends_with('>')
-        && let Some(open) = t.rfind('<')
-        && !t[open + 1..t.len() - 1].contains('>')
-    {
-        t = &t[..open];
+    if t.ends_with('>') {
+        let mut depth = 0usize;
+        for (i, c) in t.char_indices().rev() {
+            match c {
+                '>' => depth += 1,
+                '<' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        t = &t[..i];
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
     let start = t
         .char_indices()
         .rev()
-        .take_while(|(_, c)| c.is_alphanumeric() || matches!(c, '_' | '$'))
+        .take_while(|(_, c)| c.is_alphanumeric() || matches!(c, '_' | '$' | '#' | '@'))
         .last()
         .map(|(i, _)| i)?;
     Some(t[start..].to_owned())
@@ -1140,7 +1151,8 @@ impl<'s, 't> W<'s, 't> {
     fn visit(&mut self, n: Node<'t>, ctx: &Ctx) -> (Node<'t>, Ctx) {
         let spec = self.spec;
         let kind = n.kind();
-        if ctx.extra {
+        // A native spec has no retained walk to differ from: it reads all of a definition.
+        if ctx.extra && !spec.native {
             if spec.call_types.contains(&kind) {
                 let caller = ctx
                     .callable
