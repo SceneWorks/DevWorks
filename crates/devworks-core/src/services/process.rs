@@ -780,6 +780,12 @@ impl ProcessSupervisor {
         }
     }
 
+    /// Asks the OS whether a recorded tree still exists, by its native identity (pid and birth
+    /// token), independently of any owner in this boot. `None` when the record has no identity.
+    pub fn probe_recorded(&self, record: &StoredProcess) -> Option<Probe> {
+        identity_of(record).map(|identity| self.host.probe(&identity))
+    }
+
     /// Asks for the stop of a tree that may not be recorded yet (a launch in progress): the stop is
     /// held and applied as soon as a launch with this ID registers its tree.
     pub fn hold_cancel(&self, id: &Id) {

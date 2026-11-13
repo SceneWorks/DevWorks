@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 8;
+pub const CATALOG_REVISION: i64 = 9;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -642,6 +642,29 @@ fn build() -> Vec<SettingDescriptor> {
             NextAdmission
         ),
         setting!(
+            WATCH_BACKUP_ENABLED_KEY,
+            "Watcher backup check",
+            "Periodically re-check every unfinished or unacknowledged watcher by a separate path, so an outcome whose first delivery was missed still reaches its agent, and an agent whose watcher stalled is reminded to check it. Engineering default.",
+            Agents,
+            WORKSPACE,
+            ValueKind::Bool,
+            true,
+            NextAdmission
+        ),
+        setting!(
+            WATCH_BACKUP_INTERVAL_KEY,
+            "Watcher backup check interval (ms)",
+            "How often the watcher backup check runs while some agent has an unfinished or unacknowledged watcher. Engineering default.",
+            Agents,
+            WORKSPACE,
+            ValueKind::Integer {
+                min: 60_000,
+                max: 86_400_000
+            },
+            900_000,
+            NextAdmission
+        ),
+        setting!(
             WATCH_MAX_LIFETIME_KEY,
             "Polling watcher lifetime (ms)",
             "Longest a polling watcher (a probe command) keeps checking before it ends TimedOut, unless the watcher sets its own. A day covers slow deploys and queues without leaving forgotten probes running. Engineering default.",
@@ -887,6 +910,10 @@ pub const WEB_SEARCH_CREDENTIAL_KEY: &str = "web.searchCredential";
 pub const WEB_FETCH_MAX_REDIRECTS_KEY: &str = "web.fetchMaxRedirects";
 /// Longest end-to-end web request (a fetch with its redirects, or a search), in milliseconds.
 pub const WEB_TIMEOUT_KEY: &str = "web.timeoutMs";
+/// Whether the watcher backup check runs.
+pub const WATCH_BACKUP_ENABLED_KEY: &str = "watch.backupEnabled";
+/// How often the watcher backup check runs, in milliseconds.
+pub const WATCH_BACKUP_INTERVAL_KEY: &str = "watch.backupIntervalMs";
 /// Default maximum lifetime of a polling watcher, in milliseconds.
 pub const WATCH_MAX_LIFETIME_KEY: &str = "watch.maxLifetimeMs";
 /// Whether fetches may reach loopback and private network addresses.

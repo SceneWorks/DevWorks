@@ -18,12 +18,12 @@ use crate::fingerprint::Fingerprint;
 use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, process as ops};
-use crate::ports::process::{NativeIdentity, ProcessSpec as NativeProcessSpec};
+use crate::ports::process::{NativeIdentity, Probe, ProcessSpec as NativeProcessSpec};
 use crate::ports::secrets::{SecretKey, SecretStore};
 use crate::ports::storage::{
     ApplicationStore, ArtifactState, ConfigScope, DeliveryFilter, NewEvent, NewOperation,
     NewQueueEntry, OperationRecord, ProcessPhase, ReadOptions, ReadSnapshot, StorageError,
-    StoredApproval, WriteTransaction, read_snapshot,
+    StoredApproval, StoredProcess, WriteTransaction, read_snapshot,
 };
 use crate::ports::{
     AuthorityPort, AuthorityRequest, CommandHandler, Decided, HandlerFailure, IdKind, IdSource,
@@ -1021,6 +1021,12 @@ impl ProcessToolService {
             protected_branches: &branches,
         };
         self.processes.preflight(spec, &policy)
+    }
+
+    /// Whether a watched run's recorded tree is still alive, asked of the OS by its pid and birth
+    /// token rather than through the run's monitor (the watcher backup check's own path).
+    pub(crate) fn probe_watched_run(&self, record: &StoredProcess) -> Option<Probe> {
+        self.processes.probe_recorded(record)
     }
 
     /// Stops a watched run's tree now (bounded), as `process.cancel` would; a failed stop leaves
