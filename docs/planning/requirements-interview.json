@@ -1179,9 +1179,9 @@
     {
       "id": "watcher_requirements_20261104",
       "date": "2026-11-04",
-      "source": "Watcher requirements WATCH-01 to WATCH-12 were agreed on 4 November 2026 and tracked under DW-F14. The agreed wording was held only in the tracker, so the text in the requirements restates them from the implemented watch service and its recorded behavior. Check it against the tracker wording.",
-      "status": "Requirement text recorded in WATCH-01 to WATCH-12; the watch service implements them and its acceptance is tracked in the tracker",
-      "decision": "A watcher starts background work or a wait for a session and wakes that session once, with only what was observed. It covers process, probe, timer and file watchers, bounded lifetime, owner lifecycle, restart behavior, process-tool authority and a backup delivery check.",
+      "source": "Feature DW-F14 \"Watcher tasks\", agreed with the user on 4 November 2026. The requirement text is the tracker wording.",
+      "status": "Requirement decision recorded in WATCH-01 to WATCH-12. As of 13 November 2026 the tracker shows WATCH-01 to WATCH-08, WATCH-10 and WATCH-12 delivered at least in part; WATCH-09 and WATCH-11 are not built yet.",
+      "decision": "Watchers observe processes, output and file matches, GitHub runs and checks, probes, timers, delegated assignments and attached external processes, and wake the owning session with observed outcomes only.",
       "requirements": [
         "WATCH-01",
         "WATCH-02",

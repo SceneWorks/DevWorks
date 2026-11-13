@@ -1405,7 +1405,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 ### DW-094
 
-**Watch an owned background process and wake its session** · Feature · Implemented in native services (`watch.create`, `watch.list`, `watch.inspect` and `watch.cancel` have registered handlers); acceptance recorded in the tracker item DW-94.
+**Watch an owned background process and wake its session** · Feature · Implemented in native services (`watch.create`, `watch.list`, `watch.inspect` and `watch.cancel` have registered handlers); acceptance recorded in the tracker item DW-94. WATCH-09 (visibility in workspaces) and WATCH-11 (external processes) are not built yet; GitHub and delegated-agent sources are not built in the code on main.
 
 watch.create launches through the process.execute service and answers before exit; list/inspect/cancel answer the watcher; the observed outcome reaches the owning session's input once as a host-only message, survives a dispatcher restart and is acknowledged only when a carrying turn completes; reviewer roles cannot launch or stop processes through a watcher.
 

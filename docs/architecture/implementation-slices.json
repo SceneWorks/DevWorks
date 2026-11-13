@@ -1748,7 +1748,7 @@
         "G04",
         "G10"
       ],
-      "status": "Implemented in native services (`watch.create`, `watch.list`, `watch.inspect` and `watch.cancel` have registered handlers); acceptance recorded in the tracker item DW-94"
+      "status": "Implemented in native services (`watch.create`, `watch.list`, `watch.inspect` and `watch.cancel` have registered handlers); acceptance recorded in the tracker item DW-94. WATCH-09 (visibility in workspaces) and WATCH-11 (external processes) are not built yet; GitHub and delegated-agent sources are not built in the code on main"
     }
   ],
   "retiredSlices": [

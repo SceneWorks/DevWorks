@@ -2919,79 +2919,79 @@
       ],
       [
         "p",
-        "A watcher lets a session start background work or a wait and be woken when it ends, without holding a turn open. These requirements restate the agreed watcher behavior of 4 November 2026 from the implemented watch service."
+        "Watcher tasks (agreed with the user on 4 November 2026, tracked as DW-F14). Status as of 13 November 2026: WATCH-01 to WATCH-08, WATCH-10 and WATCH-12 are delivered at least in part. WATCH-09 (visibility in workspaces) and WATCH-11 (external processes) are not built yet."
       ],
       [
         "req",
         "WATCH-01",
         "Confirmed",
-        "An agent must be able to start a long-running process, such as a build, a test run or a dev server, as a watcher and keep working. Creating a watcher launches the process through the same process-execution service as a plain run, with the same registered executables, working roots, shell safety checks, and time and output limits, and returns the watcher before the process exits."
+        "Sources: a watcher can observe (a) a background process DevWorks launches through the ProcessSupervisor (exit code, signal, output tail); (b) a regex condition on an owned process's output stream or on a file, first match or each match; (c) a GitHub Actions workflow run or a pull request's checks; (d) a probe command run on an interval until its exit status or output meets the condition (covers deploys, HTTP health, remote queues); (e) a timer at an absolute time or after a delay; (f) a delegated agent assignment finishing; (g) a process DevWorks did not launch, attached by pid plus birth token (see WATCH-11)."
       ],
       [
         "req",
         "WATCH-02",
         "Confirmed",
-        "Watchers must be listed, inspected and cancelled through the same operations for the UI and for agents. Inspection shows the watcher state, elapsed time, match count and the current redacted output tail. Cancel can stop the process the watcher launched, or only stop observing it. Stopping observation leaves the process running under its owner and reports nothing."
+        "Tools: agents have watch.create (returns the watcher id immediately; can launch the watched process in the same call), watch.list, watch.inspect (state, source, elapsed, last poll, redacted output tail) and watch.cancel (optionally stopping the owned process it launched). These are registered operations through the shared admission gateway. No agent polling is required to learn an outcome."
       ],
       [
         "req",
         "WATCH-03",
         "Confirmed",
-        "When a watcher settles, DevWorks must deliver what it observed once, to the session that created the watcher, as a host-authored message. Delivery must survive a restart. The message counts as handled only when a turn that carried it completes. Agents and add-ons cannot write watcher messages."
+        "Wake delivery: a watcher event is recorded as a durable event in the same transaction as the watcher's state change and delivered to the owning session's input. An idle owner gets a new turn carrying watcher id, source, outcome, exit code or conclusion, duration, a redacted output tail and links. An owner mid-turn receives it at the next tool-result boundary, not only at turn end; several events arriving together are all delivered, in order. An event is acknowledged only when a turn that carried it completes; the host records the acknowledgement, the agent does not call a tool for it. Until acknowledged an event may be redelivered, always with the same event id, so a turn sees an event at most once after it is acknowledged and an event is never lost. Watcher messages are a host-only message class: no agent or package can create or forge one."
       ],
       [
         "req",
         "WATCH-04",
         "Confirmed",
-        "A watcher outcome reports only what was observed: Succeeded, Failed, TimedOut, Cancelled, Interrupted, Lost or Uncertain, with the exit code or signal, the duration and the redacted output tail. Starting a process, or polling one, is never reported as success."
+        "Observed outcomes only: outcomes are Succeeded, Failed (with exit code, signal or conclusion), Cancelled, TimedOut, Interrupted (app shutdown), Lost and Uncertain, matching the ProcessSupervisor's settlement. A watcher never reports an outcome it did not observe; completing a launch or a poll is not success."
       ],
       [
         "req",
         "WATCH-05",
         "Confirmed",
-        "A watcher may poll instead of waiting on one process. A probe runs a command at an interval, waiting twice as long after each run that fails the condition, up to eight intervals, until a run meets it: an exit code (0 by default) and optionally an output pattern. The watcher then settles Succeeded with the run count. A run that cannot launch, or is lost or uncertain, ends the watcher with that outcome."
+        "Noise control: by default only the terminal outcome wakes the owner. Intermediate events (each output match, each probe change) are opt-in per watcher, coalesced, and limited by a minimum interval between wakes; coalesced events carry their count so none is silently lost."
       ],
       [
         "req",
         "WATCH-06",
         "Confirmed",
-        "A watcher may be a timer that fires at a stated time or after a stated delay, settles Succeeded and wakes the session. A timer launches nothing, so every role may create and cancel one, including a read-only reviewer."
+        "Bounds: every watcher has a maximum lifetime (default 24 hours for polling sources, configurable per watcher and in Settings) and ends TimedOut when it expires. Probe and GitHub polling back off, GitHub uses conditional requests within a shared rate-limit budget, and watchers on the same GitHub run share one poller. There is no global watcher-count cap, consistent with UIQA-04."
       ],
       [
         "req",
         "WATCH-07",
         "Confirmed",
-        "A watcher lives as long as its owner. When the owning session ends, or its project is archived or deleted, the watcher is cancelled and the process it launched is stopped, and nothing is delivered. While the owner is paused or held, events wait and are delivered in order after Continue."
+        "Owner lifecycle: ending or archiving the owning session cancels its watchers (and stops processes they launched under the existing process rules). While the owner is paused, watchers keep observing and their deliveries queue; nothing starts a turn until Continue, when queued events are delivered in order."
       ],
       [
         "req",
         "WATCH-08",
         "Confirmed",
-        "Watchers must be honest across shutdown and restart. At an orderly shutdown, a watched process that DevWorks stopped settles Interrupted, and a probe forgets the stopped run and runs again after reopen once the owner continues. A timer that came due while the app was closed fires once. After a crash, a process killed by boot recovery is reported Interrupted."
+        "App close and restart: there is no background mode. At shutdown, watchers on owned processes end Interrupted after the bounded shutdown protocol. On reopen, GitHub, timer, probe, delegated-agent and attached-process watchers resume automatically and deliver if the target finished while the app was closed; a timer that came due while closed fires once. Agents paused by app closure still require manual Continue (JOB-04); their deliveries queue under WATCH-07."
       ],
       [
         "req",
         "WATCH-09",
         "Confirmed",
-        "A watcher may count regular-expression matches in a process output as it streams, or in the lines of a file it watches. By default it completes on the first match. In each-match mode it reports matches in coalesced wakes, at most one per minimum interval (30 seconds by default), each carrying its count, so a burst of matches cannot flood the session and the final count still includes every match."
+        "Visibility and control: watchers are listed in the session and feature workspaces and in a global list, attributed to project, feature, assignment and agent, with source, state, elapsed time, last poll and output tail. The user can cancel any watcher. Watcher events appear in the owning transcript."
       ],
       [
         "req",
         "WATCH-10",
         "Confirmed",
-        "Launching or stopping a process through a watcher needs everything the process tools require: the process tool family, a role that is not read-only, the shell-tools setting, the shell safety checks (at creation as well as at launch) and, under Project scope, a native-execution exception. A watcher that only observes, such as a timer, needs none of these."
+        "Permissions: probe and launch commands pass the existing SEC-04/05 shell preflight and effective tool permissions. Read-only reviewer roles may create only observing watchers (GitHub, timer, delegated agent, output of existing processes, attached processes) and cannot launch or stop processes through a watcher."
       ],
       [
         "req",
         "WATCH-11",
         "Confirmed",
-        "Every polling or file watcher must end. It has a maximum lifetime, set on the watcher or taken from the watch.maxLifetimeMs setting (24 hours by default, inherited from workspace to project), and it settles TimedOut when the lifetime passes, stopping a run in flight."
+        "External processes: a watcher can attach to a process DevWorks did not launch by pid plus birth token, using the native exit notification on each platform (kqueue on macOS, pidfd on Linux, process handle on Windows). When the exit status cannot be obtained for a non-child process, the outcome is Exited with status unknown, shown as a limitation, never as success. A reused pid with a different birth token is never mistaken for the watched process."
       ],
       [
         "req",
         "WATCH-12",
         "Confirmed",
-        "A backup check must catch what primary delivery missed. When watch.backupEnabled is on (the default) and at least every watch.backupIntervalMs (15 minutes by default, at least 1 minute), it settles an outcome the primary pass never settled, marks Lost a recorded process the operating system reports gone, reminds the owner of a probe that has not run for more than twice its interval or whose source status cannot be established, and delivers pending events with their own IDs. Each such delivery is recorded as a missed primary delivery in history and diagnostics."
+        "Backup reconciliation: a backup pass runs on an interval (default 15 minutes, set in Settings, minimum 1 minute, can be turned off) only while some owner has an unacknowledged watcher (still running, or finished but not acknowledged under WATCH-03), and stops for an owner once all its watchers are finished and acknowledged. Paused owners are skipped (WATCH-07). Each pass re-checks every such watcher's source by a path independent of the watcher itself (pid plus birth-token probe, a direct GitHub API read, a probe run). A finished source whose outcome was never acknowledged is delivered as the normal watcher message with the same event id, marked as a backup delivery, and the agent acts on it as on any watcher event. The agent is woken with a reminder to check the task itself only when the host cannot establish the source's status or the watcher looks stalled (no poll within twice its expected interval); a source that is merely still running wakes no one. Every backup catch is recorded in history and diagnostics as a missed primary delivery."
       ],
       [
         "req",
