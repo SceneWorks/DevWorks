@@ -182,8 +182,20 @@ fn current(
             "outgoing MCP configuration version".into(),
         ));
     }
-    let config = serde_json::from_value(revision.body)
+    let mut config: Configuration = serde_json::from_value(revision.body)
         .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
+    // A catalog saved before capabilities carried their URI keeps it only in `resource_uris`.
+    for server in &mut config.servers {
+        for cap in &mut server.capabilities {
+            if cap.kind.0 == "resource" && cap.uri.is_none() {
+                cap.uri = server
+                    .resource_uris
+                    .get(cap.id.as_str())
+                    .cloned()
+                    .map(BoundedText);
+            }
+        }
+    }
     Ok((revision.revision, config))
 }
 
