@@ -649,6 +649,7 @@ async fn compose(
             fs: Arc::new(NativeFilesystem::new()),
             app_data_root: Some(config.data_root.to_string_lossy().into_owned()),
             config: devworks_core::services::browser::BrowserConfig::default(),
+            resolver: Arc::new(devworks_adapters::web::resolve::SystemResolver),
         }),
         packages: Some(PackageComposition {
             service: packages,

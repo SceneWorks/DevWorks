@@ -4,6 +4,7 @@ use crate::gateway::AdmittedCommand;
 use crate::operations::approvals as ops;
 use crate::ports::IdKind;
 use crate::ports::storage::*;
+use crate::protocol::Id;
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{ApprovalContent, ProposalDecision};
 use crate::protocol::results::OperationResult;
@@ -136,6 +137,7 @@ impl ApprovalService {
                     &proposal,
                     scope,
                     json!({"content":payload,"reviewed":binding,"binding":binding,"invocation":super::save_context(ctx)}),
+                    None,
                 )?;
                 model::generic(&p, true, None)?
             }
@@ -341,6 +343,15 @@ impl ApprovalService {
                 };
                 self.owners
                     .decide_source(tx, ctx, &request, &stored, approve)?;
+                if !approve {
+                    super::held::settle(
+                        tx,
+                        id,
+                        "Rejected",
+                        json!({"approvalId": id, "decision": "Rejected",
+                            "rationale": i.rationale.0}),
+                    )?;
+                }
             }
             let mut changed = p.clone();
             changed.revision += 1;
@@ -409,6 +420,17 @@ pub fn stage_saved(
     request: &crate::admission::DecodedRequest,
     preview: &OwnerPreview,
 ) -> Result<StoredApproval, Failure> {
+    stage_saved_as(tx, ctx, i, request, preview, None)
+}
+/// [`stage_saved`] under a chosen approval ID (`None`: a new one).
+pub(crate) fn stage_saved_as(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    i: &ops::ProposeInput,
+    request: &crate::admission::DecodedRequest,
+    preview: &OwnerPreview,
+    id: Option<Id>,
+) -> Result<StoredApproval, Failure> {
     if request.fingerprint.as_str() != i.content_digest.0
         || preview.target_id != i.target.id
         || preview.target_revision != i.target.revision.get()
@@ -436,6 +458,7 @@ pub fn stage_saved(
         &input,
         preview.scope.clone(),
         json!({"content":i.payload,"reviewed":preview.reviewed,"binding":preview.binding,"authority":authority,"invocation":super::save_context(ctx),"operationPreview":{"effect":format!("{:?}",request.effect),"targetIds":request.targets,"projectIds":request.project_targets,"requestDigest":request.fingerprint.as_str()}}),
+        id,
     )
 }
 fn stage_generic(
@@ -444,10 +467,11 @@ fn stage_generic(
     i: &ops::ProposeInput,
     scope: ConfigScope,
     mut payload: Value,
+    id: Option<Id>,
 ) -> Result<StoredApproval, Failure> {
     payload["sourceContext"] = super::save_source_context(ctx);
     let p = StoredApproval {
-        id: tx.new_id(IdKind::Event),
+        id: id.unwrap_or_else(|| tx.new_id(IdKind::Event)),
         scope,
         revision: 1,
         state: "Pending".into(),

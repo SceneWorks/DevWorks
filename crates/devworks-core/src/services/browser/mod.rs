@@ -60,6 +60,7 @@
 //! service; sessions retain their start source and each observation retains its own source.
 //! Unbound invocations record no repository revision.
 pub mod cdp;
+pub mod egress;
 pub mod live;
 
 use crate::authority::destructive::{FilesystemResolver, ProtectedRoots};
@@ -390,6 +391,8 @@ pub struct BrowserService {
     verified: Mutex<HashMap<String, (String, String)>>,
     /// The latest launch failure per asset in this boot.
     launch_failures: Mutex<HashMap<String, String>>,
+    /// Which requests the browser may send (every intercepted request passes it).
+    egress: Arc<egress::BrowserEgress>,
 }
 
 fn owner_kind(k: PrincipalKind) -> &'static str {
@@ -587,6 +590,7 @@ impl BrowserService {
     ) -> Self {
         let assets = platform.assets();
         Self {
+            egress: Arc::new(egress::BrowserEgress::new(store.clone(), None)),
             store,
             platform,
             artifacts,
@@ -603,6 +607,16 @@ impl BrowserService {
             verified: Mutex::new(HashMap::new()),
             launch_failures: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Resolves the names pages request through `resolver`; without one only literal
+    /// addresses and `localhost` names are reachable.
+    pub fn with_resolver(mut self, resolver: Arc<dyn crate::ports::web::Resolver>) -> Self {
+        self.egress = Arc::new(egress::BrowserEgress::new(
+            self.store.clone(),
+            Some(resolver),
+        ));
+        self
     }
 
     pub fn with_git_source(
@@ -1032,7 +1046,7 @@ impl BrowserService {
             id.clone(),
             profile.clone(),
             process.clone(),
-            cdp::Cdp::new(transport),
+            cdp::Cdp::new(transport).with_gate(self.egress.clone()),
         );
         if let Err(e) = live.setup(&self.config.bounds(), self.config.launch_timeout) {
             let why = format!("the browser session could not be configured: {e}");
@@ -1487,6 +1501,9 @@ impl BrowserService {
             Err(ActionError::Refused { kind, detail: d }) => {
                 failed(DomainErrorCode::InvalidArgument, kind, &d)
             }
+            Err(ActionError::Denied { kind, detail: d }) => {
+                failed(DomainErrorCode::PermissionDenied, kind, &d)
+            }
             Err(ActionError::Before(e)) => {
                 failed(DomainErrorCode::ExternalFailure, "browser", &e.to_string())
             }
@@ -1675,7 +1692,15 @@ impl BrowserService {
                 detail: e.to_string(),
             })?;
         let url = match &input.location {
-            BrowserLocation::Remote { url } => url.0.clone(),
+            // The page itself is checked before anything is sent; its redirects and requests are
+            // checked as the browser makes them.
+            BrowserLocation::Remote { url } => {
+                self.egress.check(&url.0).map_err(|r| ActionError::Denied {
+                    kind: "browser_destination",
+                    detail: format!("navigation refused: {}", r.detail),
+                })?;
+                url.0.clone()
+            }
             BrowserLocation::Blank {} => "about:blank".into(),
             // An artifact page is served from the session's artifact origin (never a `file:`
             // URL, which could reach every other local file), from its staged copy.
@@ -3219,6 +3244,12 @@ fn action_failure(e: ActionError, target: &BrowserTarget) -> Failure {
         }
         ActionError::Refused { kind, .. } => Refusal::new(
             DomainErrorCode::UnsupportedTarget,
+            kind,
+            Some(target.target_id.clone()),
+        )
+        .into(),
+        ActionError::Denied { kind, .. } => Refusal::new(
+            DomainErrorCode::PermissionDenied,
             kind,
             Some(target.target_id.clone()),
         )

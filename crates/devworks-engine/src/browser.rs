@@ -19,6 +19,7 @@ use crate::dispatch::{
 use devworks_core::authority::destructive::FilesystemResolver;
 use devworks_core::ports::browser::BrowserPlatform;
 use devworks_core::ports::storage::{OperationRecord, StorageError, WriteTransaction};
+use devworks_core::ports::web::Resolver;
 use devworks_core::services::browser::{
     BrowserConfig, BrowserService, EFFECT_CONSUMER, EffectOutcome,
 };
@@ -28,14 +29,16 @@ use std::time::Duration;
 use tokio::sync::Notify;
 
 /// What the runtime composes the browser service from: the native platform (discovery,
-/// profiles, transport), the filesystem resolver of the launch preflight and the data root the
-/// preflight protects.
+/// profiles, transport), the filesystem resolver of the launch preflight, the data root the
+/// preflight protects and the name resolver of the egress policy.
 #[derive(Clone)]
 pub struct BrowserComposition {
     pub platform: Arc<dyn BrowserPlatform>,
     pub fs: Arc<dyn FilesystemResolver>,
     pub app_data_root: Option<String>,
     pub config: BrowserConfig,
+    /// Resolves the names pages request so every address can be checked before it is sent.
+    pub resolver: Arc<dyn Resolver>,
 }
 
 struct Effects(Arc<BrowserService>);
