@@ -939,6 +939,62 @@ fn a_probe_succeeds_on_the_run_that_meets_its_condition_with_backoff_between_run
     });
 }
 
+/// Stopping a probe whose run already exited ends the probe: no later run starts.
+#[test]
+fn stopping_a_probe_after_its_run_exited_starts_no_further_run() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-probe-stop-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watcher = command(
+            &app,
+            &ctx,
+            "watch.create",
+            probe("echo run >> runs; exit 1", 1000, json!({})),
+            "w-probe-stop",
+        );
+        let run = OperationId(id(watcher["process"]["processId"].as_str().unwrap()));
+        // The run exits; its outcome is recorded but no pass has observed it yet.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !read(&**app.store(), |s| s.operations().operation(&run)).is_some_and(|op| {
+            op.attempts
+                .iter()
+                .any(|a| a.observations.iter().any(|o| o.get("watchOutcome").is_some()))
+        }) {
+            assert!(std::time::Instant::now() < deadline, "the run never ended");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let stopped = command(
+            &app,
+            &ctx,
+            "watch.cancel",
+            json!({"watcherId": watcher["id"], "expectedRevision": watcher["revision"], "stopProcess": true}),
+            "stop-probe",
+        );
+        assert_eq!(stopped["state"], json!("Cancelled"), "{stopped}");
+        let watchers = app.watchers().expect("watchers composed");
+        for _ in 0..5 {
+            watchers.settle().unwrap();
+            fx.h.advance(10_000);
+        }
+        let id = watcher["id"].as_str().unwrap();
+        assert_eq!(inspect(&app, &ctx, id)["state"], json!("Cancelled"));
+        assert_eq!(
+            std::fs::read_to_string(work.join("work").join("runs")).unwrap(),
+            "run\n",
+            "only the first run started"
+        );
+        app.shutdown().await;
+    });
+}
+
 /// A probe whose condition never holds ends TimedOut at its maximum lifetime.
 #[test]
 fn a_polling_watcher_past_its_maximum_lifetime_ends_timed_out() {

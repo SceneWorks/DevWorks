@@ -1600,6 +1600,24 @@ impl ProcessToolService {
         let Ok(job) = serde_json::from_value::<ExecuteJob>(operation.payload.clone()) else {
             return EffectOutcome::Failed("invalid process intent".into());
         };
+        // A watched run starts only while its watcher still observes: one queued before the
+        // watcher ended (a probe that timed out, or one stopped between runs) never launches.
+        if job.watch.is_some() {
+            let watcher = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+                snapshot.watchers().watcher_for_process(&operation.id)
+            });
+            match watcher {
+                Ok(Some(w)) if !w.phase.is_open() || w.stop_requested => {
+                    return EffectOutcome::Failed(
+                        "the watcher ended before this run started".into(),
+                    );
+                }
+                Err(error) => {
+                    return EffectOutcome::Unknown(format!("watcher state unavailable: {error}"));
+                }
+                _ => {}
+            }
+        }
         let ctx = job.context(&*self.store, &operation.id);
         let admitted_by = if job.watch.is_some() {
             "watch.create"

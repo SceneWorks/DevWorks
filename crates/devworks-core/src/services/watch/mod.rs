@@ -520,8 +520,20 @@ impl WatchService {
         }
         let now = tx.now_ms();
         // A probe between runs has nothing running to stop: stopping it just ends it.
-        let between_runs = watcher.source_kind == "Probe" && watcher.process_operation_id.is_none();
-        let kind = if input.stop_process && !between_runs {
+        let probe = watcher.source_kind == "Probe";
+        // A probe whose run has already ended (or that waits between runs) has nothing running
+        // to stop: stopping it just ends it, so no further run starts.
+        let run_ended = match &watcher.process_operation_id {
+            Some(process) => {
+                let monitoring = self.processes.is_monitoring(process);
+                let record = tx.resources().process(&process.0)?;
+                tx.operations()
+                    .operation(process)?
+                    .is_some_and(|op| observe(&watcher, &op, record.as_ref(), monitoring).is_some())
+            }
+            None => probe,
+        };
+        let kind = if input.stop_process && !(probe && run_ended) {
             let Some(process) = watcher.process_operation_id.clone() else {
                 return decided(
                     tx,
@@ -535,13 +547,7 @@ impl WatchService {
             };
             // A process that already ended keeps its observed outcome: there is nothing to stop,
             // and the next pass settles the watcher with what actually happened.
-            let monitoring = self.processes.is_monitoring(&process);
-            let record = tx.resources().process(&process.0)?;
-            let ended = tx
-                .operations()
-                .operation(&process)?
-                .is_some_and(|op| observe(&watcher, &op, record.as_ref(), monitoring).is_some());
-            if ended {
+            if run_ended {
                 return decided(
                     tx,
                     Ok(DomainDecision::NoChange {
@@ -962,13 +968,17 @@ fn run_output(operation: &OperationRecord) -> Option<Vec<u8>> {
     })
 }
 
+/// Whether a probe run has ended: refused or cancelled before it launched, or its monitor
+/// recorded its outcome. A run still queued, dispatching or running has not.
 fn watch_outcome_recorded(operation: &OperationRecord) -> bool {
-    operation.state != OperationState::ObservedComplete
-        || operation.attempts.iter().any(|a| {
-            a.observations
-                .iter()
-                .any(|o| o.get("watchOutcome").is_some())
-        })
+    matches!(
+        operation.state,
+        OperationState::Failed | OperationState::CancelledBeforeDispatch
+    ) || operation.attempts.iter().any(|a| {
+        a.observations
+            .iter()
+            .any(|o| o.get("watchOutcome").is_some())
+    })
 }
 
 fn update_in(
@@ -1570,6 +1580,38 @@ mod tests {
             "{held}"
         );
         assert!(held.contains("probe command sh after 3 runs"), "{held}");
+    }
+
+    #[test]
+    fn a_queued_or_running_probe_run_is_in_flight_until_it_ends() {
+        let run = |state| OperationRecord {
+            id: OperationId(id("op")),
+            root_id: None,
+            assignment_id: None,
+            capability: "process.execute".into(),
+            schema_version: 1,
+            args_digest: String::new(),
+            payload: json!({}),
+            state,
+            revision: 1,
+            created_at_ms: 0,
+            attempts: Vec::new(),
+        };
+        // Still to be stopped when a probe's lifetime ends: queued, dispatching or launched.
+        for state in [
+            OperationState::IntentRecorded,
+            OperationState::Preflighted,
+            OperationState::Dispatching,
+            OperationState::ObservedComplete,
+        ] {
+            assert!(!watch_outcome_recorded(&run(state)), "{state:?}");
+        }
+        for state in [
+            OperationState::Failed,
+            OperationState::CancelledBeforeDispatch,
+        ] {
+            assert!(watch_outcome_recorded(&run(state)), "{state:?}");
+        }
     }
 
     #[test]
