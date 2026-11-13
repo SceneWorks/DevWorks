@@ -418,7 +418,10 @@ impl McpClientService {
                     && candidate.public.revision == server.public.revision
                     && candidate.public.catalog_revision == server.public.catalog_revision
             })
-            || !server.capabilities.iter().any(|current| current.id == cap.id)
+            || !server
+                .capabilities
+                .iter()
+                .any(|current| current.id == cap.id)
         {
             return Err(StorageError::ScopeDenied);
         }

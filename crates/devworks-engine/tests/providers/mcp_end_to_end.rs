@@ -154,10 +154,7 @@ fn a_selected_server_samples_through_the_boot_installed_sampler_during_an_agent_
                     )?
                     .unwrap()
                     .body;
-                let caps = catalog["capabilities"]
-                    .as_array()
-                    .unwrap()
-                    .clone();
+                let caps = catalog["capabilities"].as_array().unwrap().clone();
                 let find = |kind: &str| {
                     caps.iter()
                         .find(|cap| cap["kind"] == kind)

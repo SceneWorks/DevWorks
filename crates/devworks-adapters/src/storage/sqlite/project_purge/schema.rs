@@ -24,9 +24,16 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// `PRAGMA optimize` that clean shutdown runs) hold no project rows and are not part of the digest.
 /// Migration 53 rebuilds watchers (match and file columns) and watcher_events (several events per
 /// watcher, match_count); both keep their project owner and add no table or ownership edge, and a
-/// project's purge still removes all of their rows.
+/// project's purge still removes all of their rows. Migration 54 adds read indexes (usage
+/// attempts, origins and router requests by time, open attempt balances, live allocation
+/// claims, work items by status); four tally columns on knowledge_claims with the triggers that
+/// keep them current from knowledge_deliveries, knowledge_lesson_events and
+/// knowledge_challenges, which only update the claim those rows already belong to; and moves
+/// each outgoing MCP server's catalog into its own configuration_revisions namespace in the same
+/// scope. It adds no table or ownership edge: the tallies are columns of their claim, and the
+/// catalogs are configuration rows of the scope that already owns the server.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "812180517e5371e73f697e8453fcf7611ba29ce30a6506cf7001128d1f8b6844";
+    "b479120eced9f3a0aaec2cf14b65b6bcb6863b3fc3317ed966029dfc0cf482a5";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

@@ -164,8 +164,12 @@ impl CountingStore {
     /// The store work `request` performs; nothing else may use the store meanwhile.
     pub fn count<T>(&self, request: impl FnOnce() -> T) -> (T, StoreWork) {
         let p = &self.probe;
-        let (snapshots, read, write, pages) =
-            (p.snapshots(), p.read_steps(), p.write_steps(), p.read_pages());
+        let (snapshots, read, write, pages) = (
+            p.snapshots(),
+            p.read_steps(),
+            p.write_steps(),
+            p.read_pages(),
+        );
         let value = request();
         (
             value,

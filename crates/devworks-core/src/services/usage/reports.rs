@@ -843,8 +843,7 @@ fn collect(read: &dyn ReadSnapshot, q: &Query, gaps: &mut Gaps) -> SResult<Vec<F
         Ok(())
     })?;
     origins(read, q, |o| {
-        if o.attempt_id.is_some() && matches!(o.source_kind.as_str(), "SessionUsage" | "JobUsage")
-        {
+        if o.attempt_id.is_some() && matches!(o.source_kind.as_str(), "SessionUsage" | "JobUsage") {
             return Ok(());
         }
         if q.root_is_feature

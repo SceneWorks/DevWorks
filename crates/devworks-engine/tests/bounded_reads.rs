@@ -228,7 +228,11 @@ fn a_knowledge_read_costs_the_same_behind_tenfold_history() {
     // The maintained tallies match the history they summarize.
     let tally = common::read(&*app.store, |s| s.knowledge().knowledge_claim_tally(&claim));
     assert_eq!(
-        (tally.lesson_events, tally.open_challenges, tally.deliveries.sessions),
+        (
+            tally.lesson_events,
+            tally.open_challenges,
+            tally.deliveries.sessions
+        ),
         (101, 1, 100)
     );
 }

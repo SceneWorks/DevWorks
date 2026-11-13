@@ -915,10 +915,12 @@ fn gaps(
          WHERE {filter_sql} AND ({reason}) IS NOT NULL ORDER BY {order} LIMIT ?4"
     );
     let mut stmt = db(conn.prepare_cached(&sql))?;
-    db(db(stmt.query_map(params![scope, filter, space, limit], |r| {
-        Ok((identifier(r, 0)?, r.get::<_, String>(1)?))
-    }))?
-    .collect())
+    db(
+        db(stmt.query_map(params![scope, filter, space, limit], |r| {
+            Ok((identifier(r, 0)?, r.get::<_, String>(1)?))
+        }))?
+        .collect(),
+    )
 }
 fn index_revision(conn: &Connection, allowed: &[KnowledgeScope]) -> Result<i64, StorageError> {
     let scopes = scopes(allowed)?;
