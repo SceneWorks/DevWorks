@@ -697,13 +697,16 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         Arc::new(crate::watch::WatchSupervisor::new(
             store.clone(),
             ids.clone(),
-            Arc::new(devworks_core::services::watch::WatchService::new(
-                store.clone(),
-                service.clone(),
-                artifacts.clone(),
-                ids.clone(),
-                clock.clone(),
-            )),
+            Arc::new(
+                devworks_core::services::watch::WatchService::new(
+                    store.clone(),
+                    service.clone(),
+                    artifacts.clone(),
+                    ids.clone(),
+                    clock.clone(),
+                )
+                .with_root_control(runs.service.clone()),
+            ),
         ))
     });
     if let (Some(supervisor), Some(service)) = (&watchers, &process_tools) {
@@ -2814,6 +2817,19 @@ impl Runtime {
             .shutdown(self.shutdown_grace.min(bound), bound)
             .await;
         stopped.containers = container_shutdown;
+        // Watchers whose processes the stop above ended are interrupted, and a probe's stopped
+        // run is forgotten so it runs again on reopen (WATCH-08). A failure leaves them to the
+        // next boot, which observes the stopped trees instead.
+        if let Some(watchers) = &self.watchers {
+            let watchers = watchers.clone();
+            let stopped: std::collections::HashSet<_> =
+                stopped.stopped.iter().map(|(id, _)| id.clone()).collect();
+            let budget = left();
+            let deadline = std::time::Instant::now() + budget;
+            let pass =
+                tokio::task::spawn_blocking(move || watchers.close_at_shutdown(&stopped, deadline));
+            let _ = tokio::time::timeout(budget, pass).await;
+        }
         match refresh_shutdown {
             Err(error) if stopped.reconciliation.is_ok() => stopped.reconciliation = Err(error),
             Ok(Some(report)) if !report.unknown_operations.is_empty() => {

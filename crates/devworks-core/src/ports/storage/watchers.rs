@@ -170,10 +170,11 @@ pub trait WatcherRead {
         before: Option<(i64, &Id)>,
         limit: u16,
     ) -> Result<Vec<StoredWatcher>, StorageError>;
-    /// Pending (undelivered) events of every session, after `after` in ID order.
+    /// Pending (undelivered) events of every session in the order they were recorded (creation
+    /// time, then ID), strictly after the exclusive position `after` `(created_at_ms, id)`.
     fn pending_watch_events(
         &self,
-        after: Option<&Id>,
+        after: Option<(i64, &Id)>,
         limit: u16,
     ) -> Result<Vec<StoredWatchEvent>, StorageError>;
     /// Open (Active or Stopping) watchers, oldest first, after `after`.

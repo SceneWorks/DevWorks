@@ -53,6 +53,14 @@ impl WatchSupervisor {
     pub fn settle(&self) -> Result<usize, StorageError> {
         self.service.settle_observed()
     }
+    /// The last pass of an orderly shutdown, after owned trees were stopped.
+    pub fn close_at_shutdown(
+        &self,
+        stopped: &std::collections::HashSet<Id>,
+        deadline: std::time::Instant,
+    ) -> Result<usize, StorageError> {
+        self.service.close_at_shutdown(stopped, deadline)
+    }
     /// The delivering half of a pass alone.
     pub fn deliver(&self) -> Result<usize, StorageError> {
         self.service.deliver_pending(&self.host())

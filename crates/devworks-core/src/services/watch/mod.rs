@@ -36,6 +36,7 @@ use crate::services::process::STOPPED_ON_REQUEST;
 use crate::services::process::tools::{
     BindingRefusal, ExecuteOrigin, ProcessToolService, binding_refusal,
 };
+use crate::services::runs::ControlService;
 use crate::services::sessions::transcript::{BatchOutcome, SessionBatch, SessionWriter};
 use crate::services::sessions::{Refusal, counter, decided, query_fault, rev, turn};
 use crate::settings::catalog::{WATCH_MAX_LIFETIME_KEY, descriptor};
@@ -98,6 +99,8 @@ pub struct WatchService {
     artifacts: Arc<ArtifactService>,
     ids: Arc<dyn IdSource>,
     clock: Arc<dyn Clock>,
+    /// Root controls: a paused or held owner's events wait (WATCH-07).
+    control: Option<Arc<ControlService>>,
 }
 
 impl WatchService {
@@ -114,7 +117,15 @@ impl WatchService {
             artifacts,
             ids,
             clock,
+            control: None,
         }
+    }
+
+    /// Holds delivery to an owner whose root is paused or held until it may run again (Continue),
+    /// when the waiting events are delivered in the order they were recorded.
+    pub fn with_root_control(mut self, control: Arc<ControlService>) -> Self {
+        self.control = Some(control);
+        self
     }
 
     fn correlation(&self) -> CorrelationId {
@@ -154,11 +165,73 @@ impl WatchService {
         }
     }
 
+    /// The last pass of an orderly shutdown, after owned process trees were stopped (WATCH-08):
+    /// a process watcher whose process the shutdown stopped ends `Interrupted`, and a probe whose
+    /// run it stopped forgets that run and runs again as soon as DevWorks reopens. Timers and
+    /// waiting probes need nothing: they resume on reopen. Returns how many watchers it changed.
+    pub fn close_at_shutdown(
+        &self,
+        stopped: &std::collections::HashSet<Id>,
+        deadline: std::time::Instant,
+    ) -> Result<usize, StorageError> {
+        let mut changed = 0;
+        let mut after: Option<Id> = None;
+        loop {
+            // Bounded by the shutdown: what is left is observed by the next boot instead.
+            if std::time::Instant::now() >= deadline {
+                return Ok(changed);
+            }
+            let page = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+                read.watchers().open_watchers(after.as_ref(), PAGE)
+            })?;
+            let Some(last) = page.last() else {
+                return Ok(changed);
+            };
+            after = Some(last.id.clone());
+            for watcher in &page {
+                // Only a run whose tree this shutdown stopped: one stopped earlier (its own time
+                // limit, a requested stop) keeps the outcome it recorded.
+                if !watcher
+                    .process_operation_id
+                    .as_ref()
+                    .is_some_and(|run| stopped.contains(&run.0))
+                    || std::time::Instant::now() >= deadline
+                {
+                    continue;
+                }
+                let id = watcher.id.clone();
+                changed += usize::from(run_write(
+                    &*self.store,
+                    WriteOptions::default(),
+                    move |tx| interrupt_in(tx, &id),
+                )?);
+            }
+            if page.len() < usize::from(PAGE) {
+                return Ok(changed);
+            }
+        }
+    }
+
     /// One open watcher's step; `true` when it settled.
     fn advance(&self, watcher: &StoredWatcher) -> Result<bool, StorageError> {
         // Most open watchers have nothing new: decide that from a snapshot and write only when
         // something is due or observed (the write re-checks it).
         let now = self.clock.now_ms().get();
+        // A watcher lives as long as its owner (WATCH-07): an ended session or an archived
+        // project cancels it and stops what it launched.
+        let owner_ended = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            owner_ended(read.sessions(), read.projects(), watcher)
+        })?;
+        if owner_ended.is_some() {
+            let id = watcher.id.clone();
+            let step = run_write(&*self.store, WriteOptions::default(), move |tx| {
+                end_with_owner_in(tx, &id)
+            })?;
+            if let Step::Expired(Some(run)) = &step {
+                self.processes.stop_watched_run(&run.0);
+            }
+            return Ok(false);
+        }
         let observed = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
             let Some(operation_id) = &watcher.process_operation_id else {
                 return Ok(false);
@@ -210,15 +283,18 @@ impl WatchService {
             return Err(StorageError::ScopeDenied);
         }
         let mut delivered = 0;
-        let mut after: Option<Id> = None;
+        // In the order the events were recorded, so a held owner's events arrive in order once
+        // it may run again.
+        let mut after: Option<(i64, Id)> = None;
         loop {
             let page = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-                read.watchers().pending_watch_events(after.as_ref(), PAGE)
+                read.watchers()
+                    .pending_watch_events(after.as_ref().map(|(at, id)| (*at, id)), PAGE)
             })?;
             let Some(last) = page.last() else {
                 return Ok(delivered);
             };
-            after = Some(last.id.clone());
+            after = Some((last.created_at_ms, last.id.clone()));
             for event in &page {
                 delivered += usize::from(self.deliver(host, event)?);
             }
@@ -235,16 +311,23 @@ impl WatchService {
         host: &InvocationContext,
         event: &StoredWatchEvent,
     ) -> Result<bool, StorageError> {
-        // Delivery to an ended session is decided with session lifecycle (DW-99); it is not
-        // staged again on every pass meanwhile.
-        let open = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-            Ok(read
-                .sessions()
-                .session(&event.session_id)?
-                .is_some_and(|session| !session.closed()))
+        // An ended session's events are never delivered (its watchers are cancelled), so they
+        // are not staged on every pass.
+        let session = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            read.sessions().session(&event.session_id)
         })?;
-        if !open {
+        let Some(session) = session.filter(|session| !session.closed()) else {
             return Ok(false);
+        };
+        // A held owner's events wait without staging a notice on every pass; the write below
+        // checks again, against a pause that lands meanwhile.
+        if let (Some(control), Some(root)) = (self.control.clone(), session.root_id.clone()) {
+            let permitted = run_write(&*self.store, WriteOptions::default(), move |tx| {
+                control.root_permits_dispatch(tx, &root)
+            })?;
+            if !permitted {
+                return Ok(false);
+            }
         }
         let text = notice_text(event);
         let staged = self
@@ -259,6 +342,7 @@ impl WatchService {
         let service = self.artifacts.clone();
         let event_id = event.id.clone();
         let host = host.clone().with_session(event.session_id.clone());
+        let control = self.control.clone();
         let committed = run_write(&*self.store, WriteOptions::default(), move |tx| {
             let Some(event) = tx.watchers().watch_event(&event_id)? else {
                 return Ok(false);
@@ -270,7 +354,14 @@ impl WatchService {
                 return Ok(false);
             };
             if session.closed() {
-                // Delivery to an ended session is decided with session lifecycle (DW-99).
+                // An ended session's watchers are cancelled; its events are never delivered.
+                return Ok(false);
+            }
+            // A paused (or otherwise held) owner receives nothing until it may run again: the
+            // event waits, and no notice arrives to start a turn.
+            if let (Some(control), Some(root)) = (&control, &session.root_id)
+                && !control.root_permits_dispatch(tx, root)?
+            {
                 return Ok(false);
             }
             // The notice belongs to the session's agent, whose turns read it; the watcher keeps
@@ -782,6 +873,132 @@ enum Step {
     Advanced,
     /// A polling watcher reached its maximum lifetime, with the run then in flight (if any).
     Expired(Option<OperationId>),
+}
+
+/// Why `watcher`'s owner no longer exists for it: its session ended, or its project was archived
+/// (or deleted). `None` while both are open.
+fn owner_ended(
+    sessions: &dyn crate::ports::storage::SessionRead,
+    projects: &dyn crate::ports::storage::ProjectRead,
+    watcher: &StoredWatcher,
+) -> Result<Option<&'static str>, StorageError> {
+    let session_ended = sessions
+        .session(&watcher.session_id)?
+        .is_none_or(|session| session.closed());
+    let project_closed = match &watcher.project_id {
+        Some(project) => projects
+            .project(project)?
+            .is_none_or(|p| crate::services::runs::closed_to_work(&p.lifecycle)),
+        None => false,
+    };
+    Ok(ended_because(session_ended, project_closed))
+}
+
+fn ended_because(session_ended: bool, project_closed: bool) -> Option<&'static str> {
+    if session_ended {
+        Some("the owning session ended")
+    } else if project_closed {
+        Some("the owning project was archived")
+    } else {
+        None
+    }
+}
+
+/// Cancels an open watcher whose owner ended (WATCH-07), with a stop of what it launched: no
+/// further probe run starts, a queued process is not launched, and the run in flight (if any) is
+/// returned for the caller to stop. Nothing is delivered: the owner is gone.
+fn end_with_owner_in(tx: &mut dyn WriteTransaction, id: &Id) -> Result<Step, StorageError> {
+    let Some(mut watcher) = tx.watchers().watcher(id)? else {
+        return Ok(Step::Nothing);
+    };
+    if !watcher.phase.is_open() {
+        return Ok(Step::Nothing);
+    }
+    let session_ended = tx
+        .sessions()
+        .session(&watcher.session_id)?
+        .is_none_or(|session| session.closed());
+    let project_closed = match &watcher.project_id {
+        Some(project) => tx
+            .projects()
+            .project(project)?
+            .is_none_or(|p| crate::services::runs::closed_to_work(&p.lifecycle)),
+        None => false,
+    };
+    let Some(reason) = ended_because(session_ended, project_closed) else {
+        return Ok(Step::Nothing);
+    };
+    let run = watcher.process_operation_id.clone();
+    let in_flight = match &run {
+        Some(op) => tx
+            .operations()
+            .operation(op)?
+            .is_some_and(|op| !watch_outcome_recorded(&op)),
+        None => false,
+    };
+    let now = tx.now_ms();
+    watcher.phase = WatcherPhase::Cancelled;
+    watcher.stop_requested = true;
+    watcher.settled_at_ms = Some(now);
+    if let Some(probe) = watcher.probe.as_mut() {
+        probe.next_run_at_ms = None;
+    }
+    update_in(tx, &mut watcher, now)?;
+    history(
+        tx,
+        &watcher,
+        run.as_ref(),
+        "WatcherCancelled",
+        json!({"reason": reason, "stopProcess": true}),
+    )?;
+    Ok(Step::Expired(run.filter(|_| in_flight)))
+}
+
+/// Applies the shutdown's stop of `id`'s current run, which the shutdown reported stopping: it
+/// ended it if the record says the stop found it running (or could not verify it stopped). A run
+/// that had already exited keeps its own outcome for the next pass.
+fn interrupt_in(tx: &mut dyn WriteTransaction, id: &Id) -> Result<bool, StorageError> {
+    let Some(mut watcher) = tx.watchers().watcher(id)? else {
+        return Ok(false);
+    };
+    let Some(run) = watcher.process_operation_id.clone() else {
+        return Ok(false);
+    };
+    if !watcher.phase.is_open() || watcher.stop_requested {
+        return Ok(false);
+    }
+    let stopped_by_shutdown = tx.resources().process(&run.0)?.is_some_and(|p| {
+        matches!(p.phase, ProcessPhase::Uncertain)
+            || (p.phase == ProcessPhase::Reaped && p.detail.as_deref() == Some(STOPPED_ON_REQUEST))
+    });
+    if !stopped_by_shutdown {
+        return Ok(false);
+    }
+    let now = tx.now_ms();
+    if watcher.source_kind == "Probe" {
+        if let Some(probe) = watcher.probe.as_mut() {
+            probe.next_run_at_ms = Some(now);
+        }
+        watcher.process_operation_id = None;
+        update_in(tx, &mut watcher, now)?;
+        history(
+            tx,
+            &watcher,
+            Some(&run),
+            "WatcherProbeInterrupted",
+            json!({"processId": run.0.as_str()}),
+        )?;
+        return Ok(true);
+    }
+    let duration = Some((now - watcher.created_at_ms).max(0));
+    let interrupted = outcome(
+        "Interrupted",
+        None,
+        None,
+        Some("DevWorks shut down and stopped the process"),
+    );
+    finish_in(tx, watcher, interrupted, duration, None, false, Some(&run))?;
+    Ok(true)
 }
 
 /// Advances one open watcher in `tx`: the watcher's state change, its event and its history
@@ -1580,6 +1797,66 @@ mod tests {
             "{held}"
         );
         assert!(held.contains("probe command sh after 3 runs"), "{held}");
+    }
+
+    /// After a crash nothing stopped the tree in an orderly way: boot recovery kills it, and the
+    /// watcher reports Interrupted (WATCH-08), not the kill's missing exit code.
+    #[test]
+    fn a_process_killed_by_boot_recovery_is_interrupted() {
+        use crate::ports::storage::{AttemptBinding, AttemptRecord};
+        let mut watcher = watcher(Vec::new());
+        watcher.phase = WatcherPhase::Active;
+        watcher.outcome = None;
+        let launched = OperationRecord {
+            id: OperationId(id("op")),
+            root_id: None,
+            assignment_id: None,
+            capability: "process.execute".into(),
+            schema_version: 1,
+            args_digest: String::new(),
+            payload: json!({}),
+            state: OperationState::ObservedComplete,
+            revision: 2,
+            created_at_ms: 0,
+            attempts: vec![AttemptRecord {
+                id: crate::protocol::AttemptId(id("attempt")),
+                attempt_no: 1,
+                boot_id: id("earlier-boot"),
+                binding: AttemptBinding {
+                    execution_id: None,
+                    owner_generation: None,
+                    control_revision: None,
+                    policy_revision: None,
+                },
+                state: OperationState::ObservedComplete,
+                observations: vec![json!({"effect": {"evidence": {"launched": true}}})],
+            }],
+        };
+        let killed = StoredProcess {
+            id: id("op"),
+            boot_id: id("earlier-boot"),
+            phase: ProcessPhase::Reaped,
+            pid: Some(1),
+            birth: Some("b".into()),
+            group: None,
+            platform: "unix".into(),
+            program: "sh".into(),
+            argv_sha256: String::new(),
+            operation_id: Some(OperationId(id("op"))),
+            lease_id: None,
+            actor: ActorId(id("a")),
+            session_id: None,
+            project_id: None,
+            root_id: None,
+            assignment_id: None,
+            exit_code: None,
+            detail: Some("killed by boot recovery".into()),
+            created_at_ms: 0,
+            updated_at_ms: 1,
+            revision: 3,
+        };
+        let observed = observe(&watcher, &launched, Some(&killed), false).expect("observed");
+        assert_eq!(observed.outcome.kind, "Interrupted");
     }
 
     #[test]
