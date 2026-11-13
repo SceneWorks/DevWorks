@@ -363,8 +363,7 @@ fn decision_digest(
     decision: &crate::operations::approvals::RecordHumanDecisionInput,
 ) -> Option<String> {
     let value = serde_json::to_value(decision).ok()?;
-    let canonical = crate::jcs::canonicalize(&value).ok()?;
-    Some(crate::fingerprint::sha256_hex(canonical.as_bytes()))
+    crate::fingerprint::canonical_digest(&value).ok()
 }
 
 fn project_purge_digest(
@@ -391,8 +390,7 @@ fn project_purge_digest(
         "session":context.session_id,"jobRun":context.job_run_id,"registration":context.capability_registration,
         "authoritySources":context.authority_sources,"worktree":worktree,"reviewed":reviewed
     });
-    let canonical = crate::jcs::canonicalize(&value).ok()?;
-    Some(crate::fingerprint::sha256_hex(canonical.as_bytes()))
+    crate::fingerprint::canonical_digest(&value).ok()
 }
 
 /// Host encoding of store identity, restore epoch and ingress namespace. Opaque IDs cannot

@@ -144,7 +144,7 @@ impl ConventionService {
             ctx,
             &row,
             kind,
-            json!({"version":1,"previousRevision":old.revision,"previousScope":model::scope(&old.scope),"previousParentId":old.parent_id}),
+            json!({"version":1,"previousRevision":old.revision,"previousScope":crate::protocol::data::DataScope::from(&old.scope),"previousParentId":old.parent_id}),
         )?;
         Ok(row)
     }

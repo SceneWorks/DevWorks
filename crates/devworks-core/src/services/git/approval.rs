@@ -313,9 +313,12 @@ impl GitService {
                     }
                     if matches!(mode, PushMode::ForceWithLease)
                         && (expected_remote.is_none()
-                            || matches!(
-                                target_ref.to_ascii_lowercase().as_str(),
-                                "refs/heads/main" | "refs/heads/master"
+                            || crate::authority::policy::protected_ref(
+                                target_ref,
+                                &crate::authority::policy::repository_protected_branches(
+                                    tx.indexing(),
+                                    &tree.repository_id,
+                                )?,
                             ))
                     {
                         return Err(refuse(

@@ -624,6 +624,15 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "98b89612ce3caecfafb3533de350b23c0cf6f883e6834944ec8a71a7901a9677",
         rebuilds_tables: true,
     },
+    // A prior writer would refresh a repository source without its default branch.
+    Migration {
+        version: 54,
+        minimum_reader: 54,
+        minimum_writer: 54,
+        sql: include_str!("migrations/0054_repository_default_branch.sql"),
+        expected_sha256: "432211adc752b138515ce31f0fec31e1d36e0ff55fc4f7b586a6d15e33276aca",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

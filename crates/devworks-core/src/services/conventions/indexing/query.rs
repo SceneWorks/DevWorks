@@ -105,7 +105,7 @@ impl IndexService {
                     .map(|r| json!({"scope":s.key(),"revision":r}))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let fingerprint=sha256_hex(crate::jcs::canonicalize(&json!({"scope":input.scope,"text":input.text,"applicability":input.applicability,"topK":top_k,"pageLimit":input.page.limit,"schema":query.schema_revision().0})).map_err(|_|invalid("search identity"))?.as_bytes());
+        let fingerprint=crate::fingerprint::canonical_digest(&json!({"scope":input.scope,"text":input.text,"applicability":input.applicability,"topK":top_k,"pageLimit":input.page.limit,"schema":query.schema_revision().0})).map_err(|_|invalid("search identity"))?;
         let principal = read.authority().principal(ctx.principal())?;
         let policy =
             crate::authority::policy::resolve_policy(read.configuration(), ctx.project_id())?

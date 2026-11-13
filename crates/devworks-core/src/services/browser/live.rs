@@ -17,7 +17,7 @@ use super::cdp::{
     ARTIFACT_ORIGIN, Cdp, CdpError, CdpEvent, INTERCEPTED, ServedPage, decode_base64,
     dialog_accepted,
 };
-use crate::authority::redact::Redactor;
+use crate::authority::redact::{Redactor, percent_decode, redact_url};
 use crate::ports::browser::{MAX_TARGETS, Profile};
 use crate::protocol::records::{
     BrowserInput, BrowserNode, BrowserTarget, KeyModifier, MouseButton,
@@ -354,118 +354,9 @@ fn text(s: &str) -> String {
     redactor.redact_text(&cut)
 }
 
-/// Percent-decodes `s` (invalid escapes stay literal; `plus` also reads `+` as a space, as in a
-/// query), lossily as UTF-8.
-fn percent_decode(s: &str, plus: bool) -> String {
-    let b = s.as_bytes();
-    let hex = |c: u8| (c as char).to_digit(16);
-    let mut out = Vec::with_capacity(b.len());
-    let mut k = 0;
-    while k < b.len() {
-        if b[k] == b'%'
-            && k + 2 < b.len()
-            && let (Some(h), Some(l)) = (hex(b[k + 1]), hex(b[k + 2]))
-        {
-            out.push((h * 16 + l) as u8);
-            k += 3;
-            continue;
-        }
-        out.push(if plus && b[k] == b'+' { b' ' } else { b[k] });
-        k += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Whether a URL component holds a secret once decoded (the generic redactor reads only text).
-fn secret_when_decoded(component: &str) -> bool {
-    let decoded = percent_decode(component, true);
-    Redactor::new().redact_text(&decoded) != decoded
-}
-
-/// The URL as evidence: user info and fragment are dropped; a credential-shaped query
-/// parameter (by its decoded, case-folded name) or a component that holds a secret once
-/// decoded is replaced; everything else keeps its original encoding, bounded and redacted.
+/// The URL as evidence ([`redact_url`]), bounded.
 pub fn safe_url(url: &str) -> String {
-    // The fragment never leaves the page; it is dropped before anything else is read.
-    let url = url.split('#').next().unwrap_or(url);
-    let (base, query) = match url.split_once('?') {
-        Some((b, q)) => (b, Some(q)),
-        None => (url, None),
-    };
-    let base = match base.split_once("://") {
-        Some((scheme, rest)) => {
-            let (authority, path) = match rest.find('/') {
-                Some(i) => (&rest[..i], &rest[i..]),
-                None => (rest, ""),
-            };
-            let host = authority.rsplit('@').next().unwrap_or(authority);
-            let path: Vec<String> = path
-                .split('/')
-                .map(|seg| {
-                    if secret_when_decoded(seg) {
-                        "[REDACTED]".to_owned()
-                    } else {
-                        seg.to_owned()
-                    }
-                })
-                .collect();
-            format!("{scheme}://{host}{}", path.join("/"))
-        }
-        None => base.to_owned(),
-    };
-    let mut out = base;
-    if let Some(q) = query {
-        let parts: Vec<String> = q
-            .split('&')
-            .filter(|p| !p.is_empty())
-            .map(|p| match p.split_once('=') {
-                Some((k, v)) if sensitive_param(k) || secret_when_decoded(v) => {
-                    format!("{k}=[REDACTED]")
-                }
-                None if secret_when_decoded(p) => "[REDACTED]".to_owned(),
-                _ => p.to_owned(),
-            })
-            .collect();
-        if !parts.is_empty() {
-            out.push('?');
-            out.push_str(&parts.join("&"));
-        }
-    }
-    text(&out)
-}
-/// Whether a query parameter name is credential-shaped: judged on its percent-decoded name,
-/// with full-width forms folded to ASCII and Unicode case folded.
-fn sensitive_param(name: &str) -> bool {
-    let n: String = percent_decode(name, true)
-        .chars()
-        .map(|c| match c {
-            // Full-width ASCII forms (U+FF01..U+FF5E) read as their ASCII letters.
-            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
-            c => c,
-        })
-        .flat_map(char::to_lowercase)
-        .filter(|c| c.is_alphanumeric())
-        .collect();
-    [
-        "token",
-        "key",
-        "secret",
-        "password",
-        "passwd",
-        "auth",
-        "code",
-        "sig",
-        "session",
-        "credential",
-        "jwt",
-        "access",
-        "refresh",
-        "otp",
-        "nonce",
-        "ticket",
-    ]
-    .iter()
-    .any(|s| n.contains(s))
+    text(&redact_url(url, &Redactor::new()))
 }
 
 impl Live {

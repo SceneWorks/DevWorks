@@ -1077,15 +1077,36 @@ impl ProcessToolService {
         Ok(operation)
     }
 
-    /// The shell preflight verdict on launching `spec`, as a launch would judge it now.
-    pub(crate) fn preflight(&self, spec: &NativeProcessSpec) -> CommandVerdict {
-        let branches = ["main".to_owned(), "master".to_owned()];
+    /// The shell preflight verdict on launching `spec` in the working root `root`, as a launch
+    /// would judge it now.
+    pub(crate) fn preflight(
+        &self,
+        spec: &NativeProcessSpec,
+        root: &Id,
+    ) -> Result<CommandVerdict, StorageError> {
+        let branches = self.protected_branches(root)?;
         let policy = LaunchPolicy {
             fs: &*self.fs,
             roots: &self.protected_roots,
             protected_branches: &branches,
         };
-        self.processes.preflight(spec, &policy)
+        Ok(self.processes.preflight(spec, &policy))
+    }
+
+    /// The branches the shell guard protects for a command run in the working root `root`
+    /// besides `main` and `master`: the default branch of the repository the root belongs to
+    /// (a worktree's repository, or the registered repository itself).
+    fn protected_branches(&self, root: &Id) -> Result<Vec<String>, StorageError> {
+        read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+            let repository = match snapshot.git().git_worktree(root)? {
+                Some(tree) => tree.repository_id,
+                None => root.clone(),
+            };
+            crate::authority::policy::repository_protected_branches(
+                snapshot.indexing(),
+                &repository,
+            )
+        })
     }
 
     /// Resolves a file a watcher reads: its directory must be a real directory under the
@@ -1822,6 +1843,7 @@ impl ProcessToolService {
             operation,
             &ctx,
             spec,
+            &job.spec.working_directory.root_id,
             job.spec.timeout_ms.get(),
             job.spec.output_limit_bytes.get() as usize,
             job.tail_bytes as usize,
@@ -1879,6 +1901,7 @@ impl ProcessToolService {
             operation,
             &ctx,
             plan.spec,
+            &input.repository_id,
             3_600_000,
             1_048_576,
             0,
@@ -1895,6 +1918,7 @@ impl ProcessToolService {
         operation: &OperationRecord,
         ctx: &InvocationContext,
         spec: NativeProcessSpec,
+        root: &Id,
         timeout_ms: i64,
         output_limit: usize,
         tail_limit: usize,
@@ -1918,10 +1942,13 @@ impl ProcessToolService {
                 }
             }
         }
+        let Ok(branches) = self.protected_branches(root) else {
+            return EffectOutcome::Failed("protected branches unavailable".into());
+        };
         let policy = LaunchPolicy {
             fs: &*self.fs,
             roots: &self.protected_roots,
-            protected_branches: &["main".into(), "master".into()],
+            protected_branches: &branches,
         };
         let process = match self.processes.launch_reserved(
             ctx,

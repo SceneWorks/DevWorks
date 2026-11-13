@@ -13,11 +13,7 @@ pub struct Digest(pub(crate) String);
 impl TryFrom<String> for Digest {
     type Error = &'static str;
     fn try_from(s: String) -> Result<Self, Self::Error> {
-        if s.len() != 64
-            || !s
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
+        if !crate::fingerprint::is_sha256_hex(&s) {
             return Err("invalid SHA256 digest");
         }
         Ok(Self(s))

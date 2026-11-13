@@ -2037,6 +2037,88 @@ fn a_probe_command_the_shell_preflight_blocks_is_refused_at_creation() {
     });
 }
 
+/// The shell guard protects the working root's repository default branch, not only main and
+/// master: a forced push and a branch delete of `develop` are blocked when the repository's
+/// default branch is `develop`.
+#[test]
+fn the_shell_guard_blocks_rewriting_the_repository_default_branch() {
+    use devworks_core::ports::storage::{StoredRepository, StoredRepositorySource};
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-default-branch-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let location = work.to_string_lossy().into_owned();
+    write(&*fx.store, move |tx| {
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("watch-root"),
+            location: location.clone(),
+            name: "watched".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: "Active".into(),
+            languages: vec![],
+            revision: 1,
+            registered_at_ms: 1,
+        })?;
+        tx.indexing()
+            .put_repository_source(&StoredRepositorySource {
+                repository_id: id("watch-root"),
+                section: "workspace".into(),
+                section_root: None,
+                location,
+                state: "Present".into(),
+                head_oid: None,
+                head_ref: Some("refs/heads/develop".into()),
+                object_format: "Sha1".into(),
+                remote_url: None,
+                default_ref: Some("refs/heads/develop".into()),
+                revision: 1,
+                observed_at_ms: 1,
+            })
+    })
+    .unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        for (n, script) in [
+            "git push --force origin develop",
+            "git push origin --delete develop",
+            "git push origin :refs/heads/develop",
+            "git branch -D develop",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let refused = decision(
+                &app,
+                &ctx,
+                probe(script, 1000, json!({})),
+                &format!("w-default-{n}"),
+            );
+            let DomainDecision::Refused { fault } = refused else {
+                panic!("{script}: a rewrite of the default branch was admitted: {refused:?}");
+            };
+            assert_eq!(fault.code, DomainErrorCode::PermissionDenied, "{fault:?}");
+        }
+        // Another branch is not protected: the guard only holds its push for the Git owner.
+        let admitted = decision(
+            &app,
+            &ctx,
+            probe("git push --force origin feature", 1000, json!({})),
+            "w-default-other",
+        );
+        assert!(
+            !matches!(admitted, DomainDecision::Refused { .. }),
+            "{admitted:?}"
+        );
+        app.shutdown().await;
+    });
+}
+
 /// A process that exits before its launch report is consumed still settles with its real exit,
 /// never Lost: the outcome is recorded once the launch was reported, whatever the timing.
 #[test]

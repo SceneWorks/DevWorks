@@ -289,10 +289,7 @@ impl ApprovalService {
     }
 }
 pub(crate) fn scope(ctx: &InvocationContext, s: &DataScope) -> Result<ConfigScope, Failure> {
-    let s = match s {
-        DataScope::Workspace => ConfigScope::Workspace,
-        DataScope::Project { project_id } => ConfigScope::Project(project_id.clone()),
-    };
+    let s = ConfigScope::from(s);
     if !project_visible(ctx, s.project_id()) {
         return Err(denied("approval_scope"));
     }

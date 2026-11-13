@@ -515,8 +515,8 @@ pub(crate) fn publish_review_evidence(
             {
                 return Err(crate::ports::storage::StorageError::ScopeDenied);
             }
-            crate::services::artifacts::authorized_scope(tx.authority(), &context)
-                .map_err(|_| crate::ports::storage::StorageError::ScopeDenied)?;
+            crate::authority::reach::reach(tx.authority(), &context)?
+                .ok_or(crate::ports::storage::StorageError::ScopeDenied)?;
             Ok(())
         })
         .map(|(reference, ())| reference)

@@ -62,6 +62,7 @@ pub mod destructive;
 pub mod disclosure;
 mod git;
 pub mod policy;
+pub mod reach;
 pub mod reads;
 pub mod redact;
 pub mod service;

@@ -1218,10 +1218,9 @@ impl HistoryService {
                 ))
             }
             (None, None, Some(true)) => {
-                let authorized =
-                    crate::services::artifacts::authorized_scope(snapshot.authority(), ctx)?;
+                let authorized = crate::services::knowledge::reach(snapshot.authority(), ctx)?;
                 if ctx.project_id().is_some()
-                    || authorized != crate::services::artifacts::AuthorizedScope::Workspace
+                    || authorized != crate::authority::reach::Reach::Workspace
                 {
                     return Err(Refusal::new(
                         DomainErrorCode::PermissionDenied,

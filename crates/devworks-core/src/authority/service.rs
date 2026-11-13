@@ -189,8 +189,8 @@ pub struct EffectivePermissions {
 pub struct HostAuthority<'a> {
     pub store: &'a dyn ApplicationStore,
     pub clock: &'a dyn Clock,
-    /// Branch names protected in addition to `main`/`master`, for example remote default
-    /// branches the Git adapter knows.
+    /// Branch names protected in addition to `main`/`master` and the default branch of the
+    /// repository a typed push targets (which the authority reads from the store itself).
     pub protected_branches: &'a [String],
 }
 
@@ -743,6 +743,27 @@ fn agent_assignment_scope(
     }
 }
 
+/// `configured`, plus the protected branches of the repository a typed Git push targets.
+fn request_protected_branches(
+    s: &dyn ReadSnapshot,
+    input: &crate::operations::OperationInput,
+    configured: &[String],
+) -> Result<Vec<String>, StorageError> {
+    use crate::operations::{OperationInput, git};
+    use crate::protocol::data::GitCommand;
+    let mut protected = configured.to_vec();
+    if let OperationInput::Git(git::Input::Push(push)) = input
+        && let GitCommand::Push { worktree_id, .. } = &push.command
+        && let Some(tree) = s.git().git_worktree(worktree_id)?
+    {
+        protected.extend(policy::repository_protected_branches(
+            s.indexing(),
+            &tree.repository_id,
+        )?);
+    }
+    Ok(protected)
+}
+
 pub(crate) fn decide_in(
     s: &dyn ReadSnapshot,
     ctx: &InvocationContext,
@@ -764,6 +785,9 @@ pub(crate) fn decide_in(
     }
     let binding = bound(s, ctx).map_err(unavailable)?;
     let policy = resolve_policy(s.configuration(), ctx.project_id()).map_err(unavailable)?;
+    // A pushed ref is also protected when it is its repository's default branch.
+    let protected_branches =
+        &request_protected_branches(s, request.input, protected_branches).map_err(unavailable)?;
     let mut verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, protected_branches);
     if matches!(verdict, Verdict::Allow | Verdict::NeedsGrant { .. }) {
         agent_assignment_scope(s, ctx, request).map_err(deny)?;

@@ -22,6 +22,26 @@ pub enum ConfigScope {
     Workspace,
     Project(ProjectId),
 }
+impl From<&crate::protocol::data::DataScope> for ConfigScope {
+    fn from(scope: &crate::protocol::data::DataScope) -> Self {
+        match scope {
+            crate::protocol::data::DataScope::Workspace => Self::Workspace,
+            crate::protocol::data::DataScope::Project { project_id } => {
+                Self::Project(project_id.clone())
+            }
+        }
+    }
+}
+impl From<&ConfigScope> for crate::protocol::data::DataScope {
+    fn from(scope: &ConfigScope) -> Self {
+        match scope {
+            ConfigScope::Workspace => Self::Workspace,
+            ConfigScope::Project(project_id) => Self::Project {
+                project_id: project_id.clone(),
+            },
+        }
+    }
+}
 impl ConfigScope {
     /// Stable storage key: `workspace` or `project:<id>`. Opaque IDs cannot contain `:`.
     pub fn key(&self) -> String {

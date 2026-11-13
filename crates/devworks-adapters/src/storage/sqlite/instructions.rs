@@ -26,10 +26,7 @@ fn page(limit: u16) -> Result<(), StorageError> {
     }
 }
 fn digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    devworks_core::fingerprint::is_sha256_hex(value)
 }
 
 const ITEM_COLUMNS: &str = "id,kind,name,scope_key,origin,root_path,source_path,latest_revision,active_revision,enabled,materialized_digest,observed_digest,present,version,created_at,updated_at,confined_project_id";

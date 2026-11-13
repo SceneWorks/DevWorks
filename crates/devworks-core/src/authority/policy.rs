@@ -11,13 +11,13 @@ use crate::fingerprint::sha256_hex;
 use crate::operations::{OperationInput, git, watch};
 use crate::ports::AuthorityRequest;
 use crate::ports::storage::{
-    ConfigScope, ConfigurationRead, GrantKind, PrincipalBinding, StorageError,
+    ConfigScope, ConfigurationRead, GrantKind, IndexRead, PrincipalBinding, StorageError,
 };
-use crate::protocol::ProjectId;
 use crate::protocol::data::{GitCommand, PushMode};
+use crate::protocol::{Id, ProjectId};
 use crate::registry::{AuthorityClass, EffectClass, Mode};
 use crate::settings::catalog::{AgentRole, TOOL_OVERRIDES_KEY, descriptor};
-use crate::settings::model::{chain, current_chain, scope_of};
+use crate::settings::model::{chain, current_chain};
 use std::collections::BTreeMap;
 
 /// Setting that selects the access profile (Full is the initial default for new projects).
@@ -182,7 +182,7 @@ pub fn resolve_policy(
         Some(e) => (
             e.value.value.0.as_str().and_then(AccessProfile::parse),
             Some(Provenance {
-                scope: scope_of(&e.source_scope),
+                scope: crate::ports::storage::ConfigScope::from(&e.source_scope),
                 revision: e.revision.get(),
             }),
         ),
@@ -428,6 +428,19 @@ pub fn protected_ref(target: &str, extra: &[String]) -> bool {
         .map(|r| short(r))
         .chain(extra.iter().map(|r| short(r)))
         .any(|p| p == name)
+}
+
+/// The branches protected in `repository` besides `main` and `master`: its default branch, as
+/// discovery last recorded it from the clone (`refs/remotes/origin/HEAD`).
+pub fn repository_protected_branches(
+    index: &dyn IndexRead,
+    repository: &Id,
+) -> Result<Vec<String>, StorageError> {
+    Ok(index
+        .repository_source(repository)?
+        .and_then(|source| source.default_ref)
+        .into_iter()
+        .collect())
 }
 
 pub fn evaluate(

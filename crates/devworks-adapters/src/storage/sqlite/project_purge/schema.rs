@@ -26,7 +26,7 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// watcher, match_count); both keep their project owner and add no table or ownership edge, and a
 /// project's purge still removes all of their rows.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "812180517e5371e73f697e8453fcf7611ba29ce30a6506cf7001128d1f8b6844";
+    "9c94e6aca6bafdf7799a93e5000e662a803d76258483557ad5f699dcb3c8d18c";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

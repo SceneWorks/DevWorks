@@ -639,9 +639,9 @@ impl SchemaDocuments for RegisteredSchemas {
                     .descriptor
                     .as_ref()
                     .ok_or(ProviderError::MaterialUnavailable)?;
-                let canonical = devworks_core::jcs::canonicalize(descriptor)
+                let digest = devworks_core::fingerprint::canonical_digest(descriptor)
                     .map_err(|_| ProviderError::MaterialUnavailable)?;
-                if sha256_hex(canonical.as_bytes()) != contribution.contract_digest
+                if digest != contribution.contract_digest
                     || descriptor["meta"]["inputSchema"] != json!(alias.input_schema)
                 {
                     return Err(ProviderError::MaterialUnavailable);

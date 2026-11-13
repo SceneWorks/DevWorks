@@ -302,11 +302,7 @@ fn conflict(
 // Scope
 
 /// Which projects' references the invoking principal may act on.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AuthorizedScope {
-    Workspace,
-    Project(ProjectId),
-}
+pub use crate::authority::reach::Reach as AuthorizedScope;
 impl AuthorizedScope {
     fn covers(&self, project: &ProjectId) -> bool {
         match self {
@@ -323,24 +319,14 @@ impl AuthorizedScope {
     }
 }
 
-/// The principal's reference scope from its current host binding: the user and the host act
-/// workspace-wide; a principal confined to a project (the authority port already refused any
-/// invocation outside it) acts only on that project's references.
-pub fn authorized_scope(
-    authority: &dyn crate::ports::storage::AuthorityRead,
+/// The principal's reference scope ([`crate::authority::reach::reach`]), refusing a principal
+/// that has none.
+fn authorized_scope(
+    authority: &dyn AuthorityRead,
     ctx: &InvocationContext,
-) -> Result<AuthorizedScope, StorageError> {
-    if matches!(
-        ctx.principal_kind(),
-        PrincipalKind::Human | PrincipalKind::Host
-    ) {
-        return Ok(AuthorizedScope::Workspace);
-    }
-    let bound = authority.principal(ctx.principal())?;
-    Ok(match bound.and_then(|b| b.project_id) {
-        Some(p) => AuthorizedScope::Project(p),
-        None => AuthorizedScope::Workspace,
-    })
+) -> Result<AuthorizedScope, Failure> {
+    crate::authority::reach::reach(authority, ctx)?
+        .ok_or_else(|| Refusal::new(DomainErrorCode::PermissionDenied, "principal", None).into())
 }
 
 /// Who is looking at artifacts: the invocation, the principal's current authorized scope from
@@ -358,39 +344,16 @@ impl<'a> Viewer<'a> {
         authority: &dyn AuthorityRead,
         ctx: &'a InvocationContext,
     ) -> Result<Self, StorageError> {
-        if matches!(
-            ctx.principal_kind(),
-            PrincipalKind::Human | PrincipalKind::Host
-        ) {
-            return Ok(Self {
-                ctx,
-                coordinator: false,
-                authorized: Some(AuthorizedScope::Workspace),
+        let authorized = crate::authority::reach::reach(authority, ctx)?;
+        let coordinator = authorized == Some(AuthorizedScope::Workspace)
+            && ctx.principal_kind() == PrincipalKind::Agent
+            && authority.principal(ctx.principal())?.is_some_and(|b| {
+                b.kind == PrincipalKind::Agent && b.role == Some(AgentRole::WorkspaceCoordinator)
             });
-        }
-        Ok(match authority.principal(ctx.principal())? {
-            Some(b) if !b.active => Self {
-                ctx,
-                coordinator: false,
-                authorized: None,
-            },
-            Some(b) => Self {
-                ctx,
-                coordinator: ctx.principal_kind() == PrincipalKind::Agent
-                    && b.kind == PrincipalKind::Agent
-                    && b.role == Some(AgentRole::WorkspaceCoordinator)
-                    && b.project_id.is_none(),
-                authorized: Some(
-                    b.project_id
-                        .map_or(AuthorizedScope::Workspace, AuthorizedScope::Project),
-                ),
-            },
-            // A non-human principal with no host binding has no authorized scope: fail closed.
-            None => Self {
-                ctx,
-                coordinator: false,
-                authorized: None,
-            },
+        Ok(Self {
+            ctx,
+            coordinator,
+            authorized,
         })
     }
     /// The workspace-level audience of what `owner` owns: the owner itself, the user, the host
@@ -617,7 +580,7 @@ pub(crate) fn retained_convention(
     let digest = |key: &str| {
         derived[key]
             .as_str()
-            .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            .is_some_and(crate::fingerprint::is_sha256_hex)
     };
     match derived["kind"].as_str() {
         Some("ConventionContent") => id("conventionId") && digest("sourceDigest"),

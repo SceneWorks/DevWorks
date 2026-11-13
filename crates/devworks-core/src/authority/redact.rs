@@ -571,6 +571,131 @@ pub fn redact_decision(
         .map_err(|_| "the decision carries a secret in a field that cannot hold a redaction".into())
 }
 
+/// Folded query parameter names that are credentials exactly (too short to match inside other
+/// names).
+const SECRET_PARAMS: [&str; 3] = ["sid", "pass", "pwd"];
+/// A query parameter whose folded name contains one of these is a credential: API keys,
+/// signatures of signed URLs (`X-Amz-Signature`, `X-Goog-Credential`), OAuth codes and tokens,
+/// sessions and one-time values.
+const SECRET_PARAM_PARTS: [&str; 16] = [
+    "token",
+    "key",
+    "secret",
+    "password",
+    "passwd",
+    "auth",
+    "code",
+    "sig",
+    "session",
+    "credential",
+    "jwt",
+    "access",
+    "refresh",
+    "otp",
+    "nonce",
+    "ticket",
+];
+
+/// Percent-decodes `s` (invalid escapes stay literal; `plus` also reads `+` as a space, as in a
+/// query), lossily as UTF-8.
+pub(crate) fn percent_decode(s: &str, plus: bool) -> String {
+    let b = s.as_bytes();
+    let hex = |c: u8| (c as char).to_digit(16);
+    let mut out = Vec::with_capacity(b.len());
+    let mut k = 0;
+    while k < b.len() {
+        if b[k] == b'%'
+            && k + 2 < b.len()
+            && let (Some(h), Some(l)) = (hex(b[k + 1]), hex(b[k + 2]))
+        {
+            out.push((h * 16 + l) as u8);
+            k += 3;
+            continue;
+        }
+        out.push(if plus && b[k] == b'+' { b' ' } else { b[k] });
+        k += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Whether a query parameter name is credential-shaped: a sensitive name, or (percent-decoded,
+/// full-width forms folded to ASCII, Unicode case folded, letters and digits only) one of
+/// [`SECRET_PARAMS`] or containing one of [`SECRET_PARAM_PARTS`].
+fn secret_param(name: &str) -> bool {
+    let decoded = percent_decode(name, true);
+    let folded: String = decoded
+        .chars()
+        .map(|c| match c {
+            // Full-width ASCII forms (U+FF01..U+FF5E) read as their ASCII letters.
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            c => c,
+        })
+        .flat_map(char::to_lowercase)
+        .filter(|c| c.is_alphanumeric())
+        .collect();
+    sensitive_name(&decoded)
+        || SECRET_PARAMS.contains(&folded.as_str())
+        || SECRET_PARAM_PARTS.iter().any(|part| folded.contains(part))
+}
+
+/// Whether a URL component holds a secret once decoded (the redactor reads only text).
+fn secret_when_decoded(component: &str, redactor: &Redactor) -> bool {
+    let decoded = percent_decode(component, true);
+    looks_like_credential(&decoded) || redactor.redact_text(&decoded) != decoded
+}
+
+/// The URL as it may appear in records, logs, results and evidence: user info and fragment are
+/// dropped; a credential-shaped query parameter or a path segment, query name or value that
+/// holds a secret once decoded is replaced; everything else keeps its original encoding, and
+/// the whole is redacted. Callers apply their own length bound.
+pub fn redact_url(url: &str, redactor: &Redactor) -> String {
+    // The fragment never leaves the page; it is dropped before anything else is read.
+    let url = url.split('#').next().unwrap_or(url);
+    let (base, query) = match url.split_once('?') {
+        Some((b, q)) => (b, Some(q)),
+        None => (url, None),
+    };
+    let mut out = match base.split_once("://") {
+        Some((scheme, rest)) => {
+            let (authority, path) = match rest.find('/') {
+                Some(i) => (&rest[..i], &rest[i..]),
+                None => (rest, ""),
+            };
+            let host = authority.rsplit('@').next().unwrap_or(authority);
+            let path: Vec<&str> = path
+                .split('/')
+                .map(|seg| {
+                    if secret_when_decoded(seg, redactor) {
+                        REDACTED
+                    } else {
+                        seg
+                    }
+                })
+                .collect();
+            format!("{scheme}://{host}{}", path.join("/"))
+        }
+        None => base.to_owned(),
+    };
+    if let Some(q) = query {
+        let parts: Vec<String> = q
+            .split('&')
+            .filter(|p| !p.is_empty())
+            .map(|p| match p.split_once('=') {
+                Some((k, v)) if secret_param(k) || secret_when_decoded(v, redactor) => {
+                    format!("{k}={REDACTED}")
+                }
+                None if secret_when_decoded(p, redactor) => REDACTED.to_owned(),
+                _ => p.to_owned(),
+            })
+            .collect();
+        if !parts.is_empty() {
+            out.push('?');
+            out.push_str(&parts.join("&"));
+        }
+    }
+    redactor.redact_text(&out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

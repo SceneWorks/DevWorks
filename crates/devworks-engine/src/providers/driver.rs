@@ -552,11 +552,10 @@ impl NativeProviders {
             return Err(StorageError::ScopeDenied);
         }
 
-        let canonical = devworks_core::jcs::canonicalize(
+        logical.args_digest = devworks_core::fingerprint::canonical_digest(
             &serde_json::to_value(&request).map_err(|_| invalid("provider request JSON"))?,
         )
         .map_err(|_| invalid("provider request canonical JSON"))?;
-        logical.args_digest = sha256_hex(canonical.as_bytes());
         if request.request_id != logical.request_id || request.request_id != attempt.request_id {
             return Err(StorageError::ScopeDenied);
         }

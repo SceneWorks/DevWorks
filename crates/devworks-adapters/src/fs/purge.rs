@@ -437,11 +437,7 @@ fn valid_id(id: &str) -> Result<(), PurgeFileFault> {
 }
 fn valid_blob(digest: &str, generation: &str) -> Result<(), PurgeFileFault> {
     valid_id(generation)?;
-    if digest.len() == 64
-        && digest
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
+    if devworks_core::fingerprint::is_sha256_hex(digest) {
         Ok(())
     } else {
         Err(PurgeFileFault::Unattributed)

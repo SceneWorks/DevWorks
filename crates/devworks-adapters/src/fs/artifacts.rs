@@ -214,10 +214,7 @@ fn fault(e: io::Error) -> FileFault {
     }
 }
 fn valid_digest(d: &str) -> Result<(), FileFault> {
-    if d.len() == 64
-        && d.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
+    if devworks_core::fingerprint::is_sha256_hex(d) {
         Ok(())
     } else {
         Err(FileFault::Unsupported("not a SHA-256 digest".into()))
@@ -847,12 +844,7 @@ impl ArtifactFiles for NativeArtifactFiles {
         bytes: &[u8],
     ) -> Result<(), FileFault> {
         valid_name(key)?;
-        if !key.starts_with("pv-")
-            || key.len() != 43
-            || !key[3..]
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-        {
+        if !key.starts_with("pv-") || !devworks_core::fingerprint::is_lower_hex(&key[3..], 40) {
             return Err(FileFault::Unsupported(
                 "invalid project preview identity".into(),
             ));

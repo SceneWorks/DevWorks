@@ -45,9 +45,7 @@ fn space(
     db(conn.query_row("SELECT id,provider,model,configuration_digest,dimensions,metric,element_type FROM convention_embedding_spaces WHERE id=?1",[id],|r|Ok(StoredConventionEmbeddingSpace {id:r.get(0)?,provider:r.get(1)?,model:r.get(2)?,configuration_digest:r.get(3)?,dimensions:r.get(4)?,metric:r.get(5)?,element_type:r.get(6)?})).optional())
 }
 fn digest(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    devworks_core::fingerprint::is_sha256_hex(s)
 }
 fn operation(conn: &Connection, id: &OperationId) -> Result<String, StorageError> {
     let row: Option<(String, String)> = db(conn
@@ -436,9 +434,9 @@ impl ConventionIndexRepository for Unit<'_> {
             descriptors
                 .push(json!({"sha256":reference.sha256,"byteCount":reference.byte_length.get()}));
         }
-        let canonical = devworks_core::jcs::canonicalize(&json!(descriptors))
+        let digest = devworks_core::fingerprint::canonical_digest(&json!(descriptors))
             .map_err(|_| invalid("invalid input descriptors"))?;
-        if devworks_core::fingerprint::sha256_hex(canonical.as_bytes()) != r.input_digest {
+        if digest != r.input_digest {
             return Err(invalid(
                 "convention input digest differs from exact ordered artifact bytes",
             ));
@@ -778,9 +776,9 @@ fn stage_terms(
     {
         return Err(invalid("invalid bounded sorted term batch"));
     }
-    let canonical = devworks_core::jcs::canonicalize(&json!(terms))
+    let digest = devworks_core::fingerprint::canonical_digest(&json!(terms))
         .map_err(|_| invalid("term batch encoding"))?;
-    if devworks_core::fingerprint::sha256_hex(canonical.as_bytes()) != claimed {
+    if digest != claimed {
         return Err(invalid("term batch digest mismatch"));
     }
     let old:Option<String>=db(conn.query_row("SELECT digest FROM convention_term_batches WHERE generation_id=?1 AND kind=?2 AND owner_id=?3 AND batch_index=?4",params![g.as_str(),kind,id.as_str(),batch],|r|r.get(0)).optional())?;

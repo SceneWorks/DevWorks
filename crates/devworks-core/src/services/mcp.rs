@@ -410,10 +410,10 @@ impl McpClientService {
                         .ok_or_else(|| {
                             StorageError::InvalidRecord("selected MCP schema missing".into())
                         })?;
-                    let canonical = crate::jcs::canonicalize(schema).map_err(|_| {
+                    let actual = crate::fingerprint::canonical_digest(schema).map_err(|_| {
                         StorageError::InvalidRecord("selected MCP schema invalid".into())
                     })?;
-                    if sha256_hex(canonical.as_bytes()) != reference.sha256.as_str() {
+                    if actual != reference.sha256.as_str() {
                         return Err(StorageError::InvalidRecord(
                             "selected MCP schema changed".into(),
                         ));

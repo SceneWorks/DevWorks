@@ -1251,9 +1251,7 @@ fn replay_identity(
     let scope = json!({"actor":ctx.principal(),"session":ctx.session_id(),"ingress":ctx.ingress_namespace(),"project":project,"key":key});
     let intent = json!({"project":project,"feature":feature.map(|f|&f.id),"leaseMs":lease,"repository":filters.repository_id,"taskType":filters.task_type,"label":filters.label.as_ref().map(|l|l.to_lowercase()),"another":filters.another});
     let digest = |value: &serde_json::Value| {
-        crate::jcs::canonicalize(value)
-            .map(|s| crate::fingerprint::sha256_hex(s.as_bytes()))
-            .map_err(|_| invalid("allocation_intent", None))
+        crate::fingerprint::canonical_digest(value).map_err(|_| invalid("allocation_intent", None))
     };
     Ok(Some(ReplayIdentity {
         key: digest(&scope)?,

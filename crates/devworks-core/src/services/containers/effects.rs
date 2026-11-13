@@ -62,8 +62,7 @@ fn scoped_image_prefix(project: Option<&ProjectId>) -> String {
 fn parse_image_id(bytes: &[u8]) -> Option<String> {
     let id = std::str::from_utf8(bytes).ok()?.trim();
     let digest = id.strip_prefix("sha256:").unwrap_or(id);
-    (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .then(|| format!("sha256:{digest}"))
+    crate::fingerprint::is_sha256_hex(digest).then(|| format!("sha256:{digest}"))
 }
 
 impl ContainerService {

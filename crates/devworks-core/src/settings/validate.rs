@@ -152,10 +152,7 @@ pub fn check_value(d: &SettingDescriptor, v: &Value) -> Vec<Issue> {
                         && location.len() <= 2048
                         && (location.starts_with("https://")
                             || std::path::Path::new(location).is_absolute());
-                    let key_ok = public.len() == 64
-                        && public
-                            .bytes()
-                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+                    let key_ok = crate::fingerprint::is_lower_hex(public, 64);
                     if !location_ok || !key_ok {
                         out.push(Issue::blocking(
                             key,

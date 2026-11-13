@@ -147,12 +147,12 @@ pub fn argument_schema(operation: &str, revision: SchemaRevision) -> Option<Sche
     let descriptor = registry::find(operation)?;
     let binding = descriptor.binding(Mode::Command)?;
     let schema = serde_json::to_value(binding.input_schema(revision)).ok()?;
-    let canonical = crate::jcs::canonicalize(&schema).ok()?;
+    let digest = crate::fingerprint::canonical_digest(&schema).ok()?;
     Some(SchemaRef {
         schema_id: QualifiedId::try_from(format!("{ARGUMENT_SCHEMA_NAMESPACE}/{operation}"))
             .ok()?,
         revision: Revision::new(i64::from(revision.0)).ok()?,
-        sha256: Digest(sha256_hex(canonical.as_bytes())),
+        sha256: Digest(digest),
     })
 }
 
@@ -1662,10 +1662,7 @@ fn job_approval_candidate(
     use crate::ports::storage::ConfigScope;
     let (before, title, schedule, definition, enabled, scope) = match input {
         OperationInput::Jobs(ops::Input::Create(i)) => {
-            let scope = match &i.scope {
-                DataScope::Workspace => ConfigScope::Workspace,
-                DataScope::Project { project_id } => ConfigScope::Project(project_id.clone()),
-            };
+            let scope = ConfigScope::from(&i.scope);
             (
                 None,
                 i.title.0.clone(),
@@ -1911,12 +1908,7 @@ impl JobService {
         preview: &crate::services::approvals::OwnerPreview,
     ) -> Result<(), Failure> {
         let candidate = job_approval_candidate(tx.jobs(), ctx, &request.input)?;
-        let scope = match &candidate.scope {
-            crate::ports::storage::ConfigScope::Workspace => DataScope::Workspace,
-            crate::ports::storage::ConfigScope::Project(project_id) => DataScope::Project {
-                project_id: project_id.clone(),
-            },
-        };
+        let scope = DataScope::from(&candidate.scope);
         let project = self.scope_of(tx, ctx, &scope)?;
         self.check_definition(tx, ctx, project.as_ref(), &candidate.definition)?;
         let (plan, _) = plan_of(&candidate.schedule)?;

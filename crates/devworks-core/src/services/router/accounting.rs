@@ -215,8 +215,7 @@ impl InferenceRouter {
                             )
                 }) && query.endpoint_profile == "Embedding"
                     && query.provider_model_id.as_ref() == Some(upstream_model_id)
-                    && registration_digest.len() == 64
-                    && registration_digest.bytes().all(|b| b.is_ascii_hexdigit());
+                    && crate::fingerprint::is_sha256_hex(registration_digest);
                 if !eligible
                     || tx
                         .router()

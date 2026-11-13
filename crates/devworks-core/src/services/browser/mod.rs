@@ -2409,10 +2409,8 @@ impl BrowserService {
             }
             DataScope::Workspace => {
                 let workspace = ctx.project_id().is_none() && ctx.root_id().is_none();
-                let authorized = crate::services::artifacts::authorized_scope(tx.authority(), ctx)?;
-                if !workspace
-                    || authorized != crate::services::artifacts::AuthorizedScope::Workspace
-                {
+                let authorized = crate::services::knowledge::reach(tx.authority(), ctx)?;
+                if !workspace || authorized != crate::authority::reach::Reach::Workspace {
                     return Err(Refusal::new(
                         DomainErrorCode::PermissionDenied,
                         "workspace_scope",

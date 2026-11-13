@@ -49,7 +49,7 @@ pub fn parse(backend: Backend, bytes: &[u8]) -> Result<Inspected, InspectionErro
         Backend::Docker | Backend::Podman => row.get("Id").and_then(serde_json::Value::as_str),
         Backend::Apple => None,
     }
-    .filter(|id| id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    .filter(|id| crate::fingerprint::is_lower_hex(id, 64))
     .map(str::to_owned);
     let phase = match backend {
         Backend::Docker | Backend::Podman => match row

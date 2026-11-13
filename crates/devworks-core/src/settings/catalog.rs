@@ -9,8 +9,6 @@
 //!
 //! Defaults marked "engineering default" in descriptions are technical starting values, not
 //! user-confirmed product decisions.
-use crate::fingerprint::sha256_hex;
-use crate::jcs;
 use crate::protocol::Revision;
 use crate::protocol::provider::{Digest, QualifiedId, SchemaRef};
 use serde_json::{Value, json};
@@ -295,11 +293,12 @@ impl SettingDescriptor {
         json!({"$id": self.schema_id(), "revision": SCHEMA_REVISION, "value": body})
     }
     pub fn schema_ref(&self) -> SchemaRef {
-        let canonical = jcs::canonicalize(&self.schema_document()).expect("static schema");
+        let digest =
+            crate::fingerprint::canonical_digest(&self.schema_document()).expect("static schema");
         SchemaRef {
             schema_id: QualifiedId(self.schema_id()),
             revision: Revision::new(SCHEMA_REVISION).expect("positive"),
-            sha256: Digest(sha256_hex(canonical.as_bytes())),
+            sha256: Digest(digest),
         }
     }
 }

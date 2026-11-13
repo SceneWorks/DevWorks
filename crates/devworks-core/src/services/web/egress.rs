@@ -17,9 +17,8 @@
 //! * **Records** never hold credentials: user info and fragments are dropped, the values of
 //!   secret-named query parameters and credential-shaped path segments are replaced, and the
 //!   result is redacted again for known secret shapes.
-use crate::authority::redact::{REDACTED, Redactor, sensitive_name};
+use crate::authority::redact::{Redactor, redact_url};
 use crate::ports::web::{Scheme, ServerName};
-use crate::settings::validate::looks_like_credential;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use url::{Host, Url};
 
@@ -326,77 +325,10 @@ pub fn name_class(domain: &str) -> Option<AddressClass> {
 // ---------------------------------------------------------------------------------------------
 // Records
 
-/// Query parameter names whose values are credentials in common APIs and signed URLs, besides
-/// the general secret-name rule.
-const SECRET_PARAMS: [&str; 18] = [
-    "sig",
-    "signature",
-    "x-amz-signature",
-    "x-amz-credential",
-    "x-amz-security-token",
-    "x-goog-signature",
-    "x-goog-credential",
-    "code",
-    "key",
-    "auth",
-    "jwt",
-    "session",
-    "sessionid",
-    "sid",
-    "pass",
-    "pwd",
-    "client_secret",
-    "access_token",
-];
-
-fn secret_param(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    sensitive_name(name) || SECRET_PARAMS.contains(&lower.as_str())
-}
-
-/// The URL as it may appear in records, logs and results: no user info or fragment, secret
-/// query values and credential-shaped path segments replaced, known secret shapes redacted,
-/// whitespace-free and at most [`URL_LIMIT`] bytes.
+/// The URL as it may appear in records, logs and results ([`redact_url`]), whitespace-free and
+/// at most [`URL_LIMIT`] bytes.
 pub fn redacted(url: &Url, redactor: &Redactor) -> String {
-    let mut u = url.clone();
-    let _ = u.set_username("");
-    let _ = u.set_password(None);
-    u.set_fragment(None);
-    let segments: Option<Vec<String>> = u.path_segments().map(|s| {
-        s.map(|seg| {
-            if looks_like_credential(seg) {
-                REDACTED.to_owned()
-            } else {
-                seg.to_owned()
-            }
-        })
-        .collect()
-    });
-    if let Some(segments) = segments
-        && segments.iter().any(|s| s == REDACTED)
-    {
-        u.set_path(&format!("/{}", segments.join("/")));
-    }
-    if let Some(query) = u.query().map(str::to_owned) {
-        let kept: Vec<String> = query
-            .split('&')
-            .map(|pair| {
-                let (raw_key, value) = pair.split_once('=').unwrap_or((pair, ""));
-                let key = url::form_urlencoded::parse(raw_key.as_bytes())
-                    .next()
-                    .map(|(k, _)| k.into_owned())
-                    .unwrap_or_default();
-                if secret_param(&key) && !value.is_empty() {
-                    format!("{raw_key}={REDACTED}")
-                } else {
-                    pair.to_owned()
-                }
-            })
-            .collect();
-        u.set_query(Some(&kept.join("&")));
-    }
-    let mut out: String = redactor
-        .redact_text(u.as_str())
+    let mut out: String = redact_url(url.as_str(), redactor)
         .chars()
         .map(|c| if c.is_whitespace() { '+' } else { c })
         .collect();
@@ -586,6 +518,17 @@ mod tests {
         assert_eq!(
             out,
             "https://example.com/a?api_key=[REDACTED]&page=2&X-Amz-Signature=[REDACTED]&token=[REDACTED]&q=rust"
+        );
+        // web.fetch and the browser share one parameter list: a nonce is hidden here too, and
+        // the browser hides the short exact names.
+        let u = parse("https://example.com/cb?nonce=n1&pwd=p1&sid=s1&state=ok").unwrap();
+        assert_eq!(
+            redacted(&u, &r),
+            "https://example.com/cb?nonce=[REDACTED]&pwd=[REDACTED]&sid=[REDACTED]&state=ok"
+        );
+        assert_eq!(
+            crate::services::browser::live::safe_url("https://example.com/cb?pwd=p1&state=ok"),
+            "https://example.com/cb?pwd=[REDACTED]&state=ok"
         );
         let token = format!("ghp_{}", "A1b2C3d4E5f6G7h8I9j0K1l2");
         let u = parse(&format!("https://example.com/hooks/{token}/x")).unwrap();

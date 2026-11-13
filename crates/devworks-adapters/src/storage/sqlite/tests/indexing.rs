@@ -343,6 +343,7 @@ fn source_configuration_and_identity_records_keep_their_invariants() {
         head_ref: Some("refs/heads/main".into()),
         object_format: "Sha1".into(),
         remote_url: Some("https://user:token@github.com/acme/a.git".into()),
+        default_ref: Some("refs/heads/develop".into()),
         revision: 1,
         observed_at_ms: T0,
     };

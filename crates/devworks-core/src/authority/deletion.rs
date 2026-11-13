@@ -26,8 +26,6 @@ use super::destructive::{
 };
 use super::service::{self, AdminError, GrantBounds};
 use crate::context::{InvocationContext, PrincipalKind};
-use crate::fingerprint::sha256_hex;
-use crate::jcs;
 use crate::ports::GrantUse;
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, EventFilter, GrantKind, StorageError, WriteOptions,
@@ -192,11 +190,7 @@ pub fn prepare(
         "activeWork": dependencies.active_work.iter().map(Id::as_str).collect::<Vec<_>>(),
         "worktrees": worktrees.iter().map(|w| json!([w.id.as_str(), w.location, w.stopped, w.active_users])).collect::<Vec<_>>(),
     });
-    let digest = sha256_hex(
-        jcs::canonicalize(&basis)
-            .expect("bounded preview")
-            .as_bytes(),
-    );
+    let digest = crate::fingerprint::canonical_digest(&basis).expect("bounded preview");
     Ok(DeletionPreview {
         repository_id: repository_id.clone(),
         location: repo.location.clone(),
