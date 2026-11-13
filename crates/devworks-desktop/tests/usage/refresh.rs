@@ -41,6 +41,9 @@ fn native_refresh_gesture_survives_same_frame_catalog_revalidation_hint() {
     }
     let _release = Release(gate.clone());
     gate.close();
+    // A hint within the shell's refresh interval of its last refresh waits for that interval;
+    // let it pass so the hint below is handled in the click frame.
+    std::thread::sleep(devworks_desktop::shell::HINT_REFRESH_INTERVAL);
     let mut hints = b.hints().unwrap();
     hints.borrow_and_update();
     project(&*b, "A real unrelated write wakes catalog revalidation");
@@ -135,6 +138,9 @@ fn native_apply_price_filters_survives_same_frame_catalog_revalidation_hint() {
     }
     let _release = Release(gate.clone());
     gate.close();
+    // A hint within the shell's refresh interval of its last refresh waits for that interval;
+    // let it pass so the hint below is handled in the click frame.
+    std::thread::sleep(devworks_desktop::shell::HINT_REFRESH_INTERVAL);
     let mut hints = b.hints().unwrap();
     hints.borrow_and_update();
     project(&*b, "Actual write during the enabled filter gesture");
