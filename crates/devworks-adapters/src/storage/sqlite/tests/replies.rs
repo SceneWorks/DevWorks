@@ -1510,7 +1510,6 @@ fn the_reply_migration_rebuilds_artifacts_and_backfills_earlier_receipts() {
     for orphan in [
         "INSERT INTO artifact_versions VALUES('version-x','no-artifact',1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','text/plain',1,NULL,'{}')",
         "INSERT INTO artifact_shares VALUES('no-artifact','project-a')",
-        "INSERT INTO documents VALUES('no-artifact','version-old',1,0)",
         "INSERT INTO artifact_tags VALUES('no-artifact','t')",
     ] {
         let refused =

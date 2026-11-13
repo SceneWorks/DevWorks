@@ -40,8 +40,9 @@ Frozen ownership principles (the companion documents settle the detailed decisio
    preview/confirmation rather than silently escaping the manifest.
 
 Step0 is frozen as version1 with high confidence in the explicit ownership rules.
-The machine-readable inventory has exactly240 table policies, with no unnamed
-current class. Companion documents define mixed selectors, shared/minimal history,
+The machine-readable inventory has exactly205 table policies, with no unnamed
+current class (240 at step0; migration 52 dropped 35 tables, counting FTS shadow tables, that no
+build wrote). Companion documents define mixed selectors, shared/minimal history,
 receipt compatibility, immutable guards and every managed-file/client class. This is
 an implementation policy, not a runtime confirmation to purge any project. New
 schema/format discoveries require an explicit policy amendment before execution.

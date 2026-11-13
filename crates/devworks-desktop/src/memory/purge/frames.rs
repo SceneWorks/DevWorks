@@ -70,7 +70,6 @@ pub fn affinity(
         let fields: &[(&str, &str)] = match family {
             "approvals" => &[
                 ("approvalId", "decision_approvals"),
-                ("approvalId", "approvals"),
                 ("proposalId", "decision_approvals"),
             ],
             "notifications" => &[
@@ -84,7 +83,6 @@ pub fn affinity(
             ],
             "browser" => &[("sessionId", "browser_sessions")],
             "knowledge" => &[
-                ("entryId", "knowledge_entries"),
                 ("claimId", "knowledge_claims"),
                 ("entityId", "knowledge_entities"),
                 ("challengeId", "knowledge_challenges"),
@@ -95,11 +93,7 @@ pub fn affinity(
                 ("conventionId", "convention_heads"),
                 ("resourceId", "convention_resource_heads"),
             ],
-            "resources" => &[
-                ("resourceId", "resources"),
-                ("leaseId", "resource_leases"),
-                ("grantId", "resource_grants"),
-            ],
+            "resources" => &[("resourceId", "resources"), ("leaseId", "resource_leases")],
             "artifacts" | "documents" => &[
                 ("artifactId", "artifacts"),
                 ("versionId", "artifact_versions"),

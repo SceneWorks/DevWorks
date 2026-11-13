@@ -822,9 +822,6 @@ fn two_checkout_bindings_preserve_one_canonical_intake_across_detach_rebind_and_
             |r| r.get(0),
         )
         .unwrap();
-    let legacy: i64 = raw
-        .query_row("SELECT count(*) FROM github_issue_intake", [], |r| r.get(0))
-        .unwrap();
     let fake: i64 = raw
         .query_row(
             "SELECT count(*) FROM repositories WHERE id LIKE 'github-%'",
@@ -832,7 +829,7 @@ fn two_checkout_bindings_preserve_one_canonical_intake_across_detach_rebind_and_
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!((canonical, legacy, fake), (2, 0, 0));
+    assert_eq!((canonical, fake), (2, 0));
     drop(raw);
     drop(store);
     let store = h.store();
