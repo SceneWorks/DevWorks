@@ -315,8 +315,8 @@ impl GitService {
                         && (expected_remote.is_none()
                             || crate::authority::policy::protected_ref(
                                 target_ref,
-                                &crate::authority::policy::repository_protected_branches(
-                                    tx.indexing(),
+                                &crate::authority::policy::repository_protected_branches_in(
+                                    tx,
                                     &tree.repository_id,
                                 )?,
                             ))

@@ -757,7 +757,7 @@ fn request_protected_branches(
         && let Some(tree) = s.git().git_worktree(worktree_id)?
     {
         protected.extend(policy::repository_protected_branches(
-            s.indexing(),
+            s,
             &tree.repository_id,
         )?);
     }

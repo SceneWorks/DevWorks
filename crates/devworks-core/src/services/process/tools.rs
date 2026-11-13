@@ -1102,10 +1102,7 @@ impl ProcessToolService {
                 Some(tree) => tree.repository_id,
                 None => root.clone(),
             };
-            crate::authority::policy::repository_protected_branches(
-                snapshot.indexing(),
-                &repository,
-            )
+            crate::authority::policy::repository_protected_branches(snapshot, &repository)
         })
     }
 

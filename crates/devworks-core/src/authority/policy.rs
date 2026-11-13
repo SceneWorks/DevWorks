@@ -11,7 +11,8 @@ use crate::fingerprint::sha256_hex;
 use crate::operations::{OperationInput, git, watch};
 use crate::ports::AuthorityRequest;
 use crate::ports::storage::{
-    ConfigScope, ConfigurationRead, GrantKind, IndexRead, PrincipalBinding, StorageError,
+    ConfigScope, ConfigurationRead, GithubRead, GrantKind, PrincipalBinding, ReadSnapshot,
+    StorageError, WriteTransaction,
 };
 use crate::protocol::data::{GitCommand, PushMode};
 use crate::protocol::{Id, ProjectId};
@@ -431,14 +432,45 @@ pub fn protected_ref(target: &str, extra: &[String]) -> bool {
 }
 
 /// The branches protected in `repository` besides `main` and `master`: its default branch, as
-/// discovery last recorded it from the clone (`refs/remotes/origin/HEAD`).
+/// discovery last recorded it from the clone (`refs/remotes/origin/HEAD`), or else as GitHub
+/// reported it for the repository's active binding.
 pub fn repository_protected_branches(
-    index: &dyn IndexRead,
+    s: &dyn ReadSnapshot,
     repository: &Id,
 ) -> Result<Vec<String>, StorageError> {
-    Ok(index
+    let local = s
+        .indexing()
         .repository_source(repository)?
-        .and_then(|source| source.default_ref)
+        .and_then(|source| source.default_ref);
+    default_branch(local, s.github(), repository)
+}
+
+/// [`repository_protected_branches`] inside a unit of work.
+pub fn repository_protected_branches_in(
+    tx: &mut dyn WriteTransaction,
+    repository: &Id,
+) -> Result<Vec<String>, StorageError> {
+    let local = tx
+        .indexing()
+        .repository_source(repository)?
+        .and_then(|source| source.default_ref);
+    default_branch(local, tx.github(), repository)
+}
+
+/// The recorded local default branch, else the bound GitHub repository's default branch.
+fn default_branch(
+    local: Option<String>,
+    github: &dyn GithubRead,
+    repository: &Id,
+) -> Result<Vec<String>, StorageError> {
+    if local.is_some() {
+        return Ok(local.into_iter().collect());
+    }
+    Ok(github
+        .github_repository(repository)?
+        .and_then(|bound| bound.default_branch)
+        .filter(|branch| !branch.is_empty())
+        .map(|branch| format!("refs/heads/{branch}"))
         .into_iter()
         .collect())
 }
