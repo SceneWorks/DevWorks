@@ -1856,12 +1856,11 @@ pub(crate) fn dispatch_one(
                         return Err(StorageError::Cancelled);
                     }
                     if fault.code == DomainErrorCode::ApprovalRequired {
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool query approval lacks a durable approval and operation identity",
-                        ));
-                    }
-                    if let Some(blocked) = blocked_outcome(&fault)? {
+                        // A saved-operation approval carries and replays commands only, so no
+                        // approval can be staged for a query. Answer the call at once: the query
+                        // did not run and only a person can run it.
+                        failed(QUERY_APPROVAL_REQUIRED)
+                    } else if let Some(blocked) = blocked_outcome(&fault)? {
                         (blocked, None)
                     } else if needs_recovery(fault.retry) {
                         return Err(StorageError::unavailable(
@@ -2514,6 +2513,10 @@ fn needs_recovery(retry: RetryAdvice) -> bool {
             | RetryAdvice::AfterBlockerClears
     )
 }
+
+/// The failure code an agent's query refused `ApprovalRequired` is answered with: the query was
+/// not run, and a person must run it.
+const QUERY_APPROVAL_REQUIRED: &str = "domain_ApprovalRequired-query_not_run-a_person_must_run_it";
 
 fn failed(code: &str) -> (ToolOutcome, Option<Vec<u8>>) {
     (
