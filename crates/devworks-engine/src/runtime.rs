@@ -679,6 +679,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 clock.clone(),
                 b.config,
             )
+            .with_resolver(b.resolver)
             .with_git_source(git.clone()),
         )
     });
