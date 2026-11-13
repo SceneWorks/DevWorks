@@ -16,6 +16,10 @@ use devworks_adapters::process::NativeProcessHost;
 use devworks_adapters::storage::sqlite::SqliteStore;
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::ports::diagnostics::StorageHealthProbe;
+use devworks_core::ports::project_purge::{
+    ProjectPurgeClient, ProjectPurgeFiles, PurgeClientSnapshot, PurgeFileFault, PurgeFileSelection,
+    PurgeFileSnapshot, PurgeFileWitness,
+};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::records::{DiagnosticEntry, Severity};
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
@@ -27,6 +31,7 @@ use devworks_core::services::diagnostics::{DiagnosticService, ExportFailure, Log
 use devworks_core::services::resources::ResourceService;
 use devworks_core::settings::catalog::{LOG_MAX_RECORDS_KEY, LOG_RETENTION_DAYS_KEY, descriptor};
 use devworks_core::settings::model;
+use devworks_engine::runtime::PurgeComposition;
 use devworks_engine::{BootError, Composition, Consumer, Outcome, Runtime, RuntimeConfig, boot};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -1168,4 +1173,90 @@ fn a_sweep_never_retires_an_export_this_boot_is_still_writing() {
     );
     drop(parts);
     drop(composition);
+}
+
+/// Purge owners that never remove anything; the late purge step fails on storage first.
+struct NoPurgeOwners;
+impl ProjectPurgeFiles for NoPurgeOwners {
+    fn inventory(
+        &self,
+        _: &PurgeFileSelection,
+        _: &mut dyn FnMut() -> bool,
+    ) -> Result<PurgeFileSnapshot, PurgeFileFault> {
+        Err(PurgeFileFault::Unsupported)
+    }
+    fn remove_reviewed(
+        &self,
+        _: &PurgeFileWitness,
+        _: &mut dyn FnMut() -> bool,
+    ) -> Result<(), PurgeFileFault> {
+        Err(PurgeFileFault::Unsupported)
+    }
+}
+impl ProjectPurgeClient for NoPurgeOwners {
+    fn inspect(&self, _: &ProjectPurgeClientScope) -> Result<PurgeClientSnapshot, PurgeFileFault> {
+        Err(PurgeFileFault::Unsupported)
+    }
+}
+
+/// Breaks one late boot step by dropping the table it touches, then boots. The failed boot must
+/// leave nothing behind: no task delivers a waiting delivery, nothing still holds the store (so
+/// its workspace lock is released and it reopens), and the failure is recorded.
+fn a_failed_late_step_leaves_nothing_running(table: &str, purge: bool) {
+    let h = Harness::new();
+    let rt = runtime();
+    let store = h.open();
+    enqueue(&*store, "indexer", None, json!({"repository": "r"}));
+    drop(store);
+    let db = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
+    db.execute_batch(&format!("DROP TABLE {table};")).unwrap();
+    drop(db);
+    let recorder = Recorder::ok();
+    let (mut composition, parts) = compose(&h, vec![consumer("indexer", recorder.clone())]);
+    if purge {
+        let owners = Arc::new(NoPurgeOwners);
+        composition.config.purge = Some(PurgeComposition {
+            files: owners.clone(),
+            client: owners,
+        });
+    }
+    let held = Arc::downgrade(&parts.sqlite);
+    match rt.block_on(boot(composition)) {
+        Err(BootError::Composition(e)) => assert!(e.to_string().contains(table), "{e}"),
+        Err(other) => panic!("{other:?}"),
+        Ok(_) => panic!("boot succeeded without {table}"),
+    }
+    // A task the failed boot left running would deliver, or keep the store open, meanwhile.
+    rt.block_on(async { tokio::time::sleep(Duration::from_millis(300)).await });
+    assert_eq!(
+        recorder.calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a task of the failed boot delivered"
+    );
+    drop(parts);
+    rt.block_on(async { tokio::time::sleep(Duration::from_millis(50)).await });
+    assert!(
+        held.upgrade().is_none(),
+        "a task of the failed boot still holds the store"
+    );
+    drop(h.open());
+    let db = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
+    let output: String = db
+        .query_row(
+            "SELECT output FROM diagnostic_records WHERE component='boot' AND code='failed'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("the failed boot is recorded");
+    assert!(output.contains(table), "{output}");
+}
+
+#[test]
+fn a_failed_purge_recovery_stops_boot_with_nothing_running() {
+    a_failed_late_step_leaves_nothing_running("project_purge_effects", true);
+}
+
+#[test]
+fn a_failed_os_notification_recovery_stops_boot_with_nothing_running() {
+    a_failed_late_step_leaves_nothing_running("os_notification_deliveries", false);
 }
