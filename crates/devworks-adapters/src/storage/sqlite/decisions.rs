@@ -329,14 +329,14 @@ fn notification_list(
         sql.push_str(" AND category='Completion'");
     }
     if !f.categories.is_empty() {
-        sql.push_str(&format!(
-            " AND category IN ({})",
-            vec!["?"; f.categories.len()].join(",")
-        ));
+        // One bound JSON array keeps the cached statement text the same for any list length.
+        sql.push_str(" AND category IN (SELECT value FROM json_each(?))");
         for category in &f.categories {
             bounded(category, 256, false)?;
-            p.push(Sql::Text(category.clone()));
         }
+        p.push(Sql::Text(
+            serde_json::to_string(&f.categories).map_err(|_| invalid("notification categories"))?,
+        ));
     }
     if let Some(after) = after {
         sql.push_str(" AND (created_at,id)<(?,?)");

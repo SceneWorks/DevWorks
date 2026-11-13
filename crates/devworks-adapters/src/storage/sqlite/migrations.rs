@@ -603,6 +603,17 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "6f21259b2a9b29021600e2515886b0d0626ceabfdf095cf1c157f2b45610f3ec",
         rebuilds_tables: true,
     },
+    // Prior builds name the dropped tables and the two dropped columns, so neither a prior
+    // reader nor a prior writer may open the store. feature_plans and transcript_chunks are
+    // rebuilt without the columns that referenced dropped tables.
+    Migration {
+        version: 52,
+        minimum_reader: 52,
+        minimum_writer: 52,
+        sql: include_str!("migrations/0052_drop_unused_tables.sql"),
+        expected_sha256: "ff5d30440733379049f8a3f9cd64a9ff535bcc819a8337edb77fcd5fea989ed0",
+        rebuilds_tables: true,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

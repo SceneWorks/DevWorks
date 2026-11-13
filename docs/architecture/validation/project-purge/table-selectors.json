@@ -3,7 +3,7 @@
   "schemaVersion": 35,
   "schemaDigest": "2ffa753cd5eb787d9d3d2c9dc2c5b0f32da8094876acc298388c9b1452cfa53b",
   "verifiedSourceCommit": "5071ef86827b182e4180f124901c8e9c521264de",
-  "coverage": 240,
+  "coverage": 205,
   "policies": [
     {
       "table": "actors",
@@ -33,12 +33,6 @@
       "table": "approval_resumes",
       "class": "operation_lineage",
       "selector": "approval_id in ownedDecisionApprovals",
-      "disposition": "owned_lineage"
-    },
-    {
-      "table": "approvals",
-      "class": "operation_lineage",
-      "selector": "operation_id in ownedOperations",
       "disposition": "owned_lineage"
     },
     {
@@ -84,12 +78,6 @@
       "disposition": "owned_lineage"
     },
     {
-      "table": "attempt_costs",
-      "class": "session_lineage",
-      "selector": "attempt_id in ownedProviderAttempts",
-      "disposition": "owned_lineage"
-    },
-    {
       "table": "authority_grants",
       "class": "mixed_owner_review",
       "selector": "exact rule in mixed-ownership-policy.md table authority_grants",
@@ -118,18 +106,6 @@
       "class": "project_owned_rows",
       "selector": "project_id=P; current scoped/shared keepers override removal",
       "disposition": "project_owner"
-    },
-    {
-      "table": "budget_reservations",
-      "class": "work_lineage",
-      "selector": "root_id in ownedWork",
-      "disposition": "owned_lineage"
-    },
-    {
-      "table": "chunk_vectors",
-      "class": "artifact_and_derived_lineage",
-      "selector": "chunk_id in removedSearchChunks",
-      "disposition": "owned_lineage"
     },
     {
       "table": "command_receipts",
@@ -306,12 +282,6 @@
       "disposition": "preserve_independent"
     },
     {
-      "table": "documents",
-      "class": "artifact_and_derived_lineage",
-      "selector": "artifact_id in removedArtifacts",
-      "disposition": "owned_lineage"
-    },
-    {
       "table": "effective_configuration",
       "class": "scope_key_owned_rows",
       "selector": "scope_key=canonical Project(P) configuration key",
@@ -348,12 +318,6 @@
       "disposition": "mixed_explicit"
     },
     {
-      "table": "extractions",
-      "class": "artifact_and_derived_lineage",
-      "selector": "artifact_version_id in removedArtifactVersions",
-      "disposition": "owned_lineage"
-    },
-    {
       "table": "feature_plans",
       "class": "work_lineage",
       "selector": "feature_id in ownedWork",
@@ -375,12 +339,6 @@
       "table": "github_intake_clock",
       "class": "mixed_owner_review",
       "selector": "exact rule in mixed-ownership-policy.md table github_intake_clock",
-      "disposition": "mixed_explicit"
-    },
-    {
-      "table": "github_issue_intake",
-      "class": "mixed_owner_review",
-      "selector": "exact rule in mixed-ownership-policy.md table github_issue_intake",
       "disposition": "mixed_explicit"
     },
     {
@@ -474,12 +432,6 @@
       "disposition": "project_owner"
     },
     {
-      "table": "import_mappings",
-      "class": "mixed_owner_review",
-      "selector": "exact rule in mixed-ownership-policy.md table import_mappings",
-      "disposition": "mixed_explicit"
-    },
-    {
       "table": "index_batches",
       "class": "global_repository_index",
       "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
@@ -520,12 +472,6 @@
       "class": "global_repository_index",
       "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
       "disposition": "preserve_independent"
-    },
-    {
-      "table": "inference_requests",
-      "class": "project_owned_rows",
-      "selector": "project_id=P; current scoped/shared keepers override removal",
-      "disposition": "project_owner"
     },
     {
       "table": "integration_links",
@@ -690,12 +636,6 @@
       "disposition": "virtual_owner_only"
     },
     {
-      "table": "knowledge_entries",
-      "class": "project_owned_rows",
-      "selector": "project_id=P; current scoped/shared keepers override removal",
-      "disposition": "project_owner"
-    },
-    {
       "table": "knowledge_evidence",
       "class": "project_owned_rows",
       "selector": "project_id=P; current scoped/shared keepers override removal",
@@ -720,33 +660,15 @@
       "disposition": "owned_lineage"
     },
     {
-      "table": "knowledge_links",
-      "class": "knowledge_lineage",
-      "selector": "from_id or to_id in removedLegacyKnowledgeEntries",
-      "disposition": "owned_lineage"
-    },
-    {
       "table": "knowledge_relations",
       "class": "project_owned_rows",
       "selector": "project_id=P; current scoped/shared keepers override removal",
       "disposition": "project_owner"
     },
     {
-      "table": "knowledge_revisions",
-      "class": "knowledge_lineage",
-      "selector": "entry_id in removedLegacyKnowledgeEntries",
-      "disposition": "owned_lineage"
-    },
-    {
       "table": "knowledge_scopes",
       "class": "scope_key_owned_rows",
       "selector": "scope_key=canonical Project(P) knowledge key",
-      "disposition": "owned_lineage"
-    },
-    {
-      "table": "knowledge_shares",
-      "class": "project_membership_edges",
-      "selector": "project_id=P or entry_id in removedLegacyKnowledgeEntries; retain surviving project shares",
       "disposition": "owned_lineage"
     },
     {
@@ -762,12 +684,6 @@
       "disposition": "mixed_explicit"
     },
     {
-      "table": "knowledge_tags",
-      "class": "knowledge_lineage",
-      "selector": "entry_id in removedLegacyKnowledgeEntries",
-      "disposition": "owned_lineage"
-    },
-    {
       "table": "knowledge_write_targets",
       "class": "knowledge_lineage",
       "selector": "write_id in ownedKnowledgeWrites",
@@ -778,12 +694,6 @@
       "class": "scope_key_owned_rows",
       "selector": "scope_key=canonical Project(P) knowledge key",
       "disposition": "owned_lineage"
-    },
-    {
-      "table": "maintenance_operations",
-      "class": "global_infrastructure",
-      "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
-      "disposition": "preserve_independent"
     },
     {
       "table": "notification_audience",
@@ -882,18 +792,6 @@
       "disposition": "owned_lineage"
     },
     {
-      "table": "price_overrides",
-      "class": "global_provider_router",
-      "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
-      "disposition": "preserve_independent"
-    },
-    {
-      "table": "price_snapshots",
-      "class": "global_provider_router",
-      "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
-      "disposition": "preserve_independent"
-    },
-    {
       "table": "principal_authority",
       "class": "project_membership_edges",
       "selector": "project_id=P; revoke and advance revision, retain authority fence",
@@ -918,31 +816,7 @@
       "disposition": "owned_lineage"
     },
     {
-      "table": "provider_attempts",
-      "class": "session_lineage",
-      "selector": "session_id in ownedSessions",
-      "disposition": "owned_lineage"
-    },
-    {
       "table": "provider_connection_identities",
-      "class": "global_provider_router",
-      "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
-      "disposition": "preserve_independent"
-    },
-    {
-      "table": "provider_connections",
-      "class": "global_provider_router",
-      "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
-      "disposition": "preserve_independent"
-    },
-    {
-      "table": "provider_models",
-      "class": "global_provider_router",
-      "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
-      "disposition": "preserve_independent"
-    },
-    {
-      "table": "published_prices",
       "class": "global_provider_router",
       "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
       "disposition": "preserve_independent"
@@ -1002,12 +876,6 @@
       "disposition": "preserve_independent"
     },
     {
-      "table": "resource_grants",
-      "class": "operation_lineage",
-      "selector": "operation_id in ownedOperations or resource_id in ownedProjectResources",
-      "disposition": "owned_lineage"
-    },
-    {
       "table": "resource_leases",
       "class": "project_owned_rows",
       "selector": "project_id=P; current scoped/shared keepers override removal",
@@ -1026,22 +894,10 @@
       "disposition": "owned_lineage"
     },
     {
-      "table": "review_source_evidence",
-      "class": "global_repository_index",
-      "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
-      "disposition": "preserve_independent"
-    },
-    {
       "table": "root_controls",
       "class": "work_lineage",
       "selector": "root_id in ownedWork",
       "disposition": "owned_lineage"
-    },
-    {
-      "table": "router_availability",
-      "class": "global_provider_router",
-      "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
-      "disposition": "preserve_independent"
     },
     {
       "table": "router_connections",
@@ -1116,12 +972,6 @@
       "disposition": "preserve_independent"
     },
     {
-      "table": "routing_cursors",
-      "class": "global_provider_router",
-      "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
-      "disposition": "preserve_independent"
-    },
-    {
       "table": "run_instructions",
       "class": "work_lineage",
       "selector": "root_id in ownedWork",
@@ -1188,48 +1038,6 @@
       "disposition": "preserve_independent"
     },
     {
-      "table": "search_chunks",
-      "class": "artifact_and_derived_lineage",
-      "selector": "source_version_id in removedArtifactVersions",
-      "disposition": "owned_lineage"
-    },
-    {
-      "table": "search_fts",
-      "class": "derived_fts_virtual",
-      "selector": "chunk_id in removedSearchChunks; virtual owner maintenance only",
-      "disposition": "owned_lineage"
-    },
-    {
-      "table": "search_fts_config",
-      "class": "derived_fts_shadow",
-      "selector": "no direct row selector; virtual FTS owner maintains shadow tables",
-      "disposition": "virtual_owner_only"
-    },
-    {
-      "table": "search_fts_content",
-      "class": "derived_fts_shadow",
-      "selector": "no direct row selector; virtual FTS owner maintains shadow tables",
-      "disposition": "virtual_owner_only"
-    },
-    {
-      "table": "search_fts_data",
-      "class": "derived_fts_shadow",
-      "selector": "no direct row selector; virtual FTS owner maintains shadow tables",
-      "disposition": "virtual_owner_only"
-    },
-    {
-      "table": "search_fts_docsize",
-      "class": "derived_fts_shadow",
-      "selector": "no direct row selector; virtual FTS owner maintains shadow tables",
-      "disposition": "virtual_owner_only"
-    },
-    {
-      "table": "search_fts_idx",
-      "class": "derived_fts_shadow",
-      "selector": "no direct row selector; virtual FTS owner maintains shadow tables",
-      "disposition": "virtual_owner_only"
-    },
-    {
       "table": "session_checkpoints",
       "class": "session_lineage",
       "selector": "session_id in ownedSessions",
@@ -1245,12 +1053,6 @@
       "table": "session_context_sources",
       "class": "session_lineage",
       "selector": "session_id in ownedSessions",
-      "disposition": "owned_lineage"
-    },
-    {
-      "table": "session_events",
-      "class": "session_lineage",
-      "selector": "session_id in ownedSessions or event_id in ownedEvents",
       "disposition": "owned_lineage"
     },
     {
@@ -1314,12 +1116,6 @@
       "disposition": "preserve_independent"
     },
     {
-      "table": "tool_calls",
-      "class": "session_lineage",
-      "selector": "provider_attempt_id in ownedProviderAttempts",
-      "disposition": "owned_lineage"
-    },
-    {
       "table": "tool_invocations",
       "class": "project_owned_rows",
       "selector": "project_id=P; current scoped/shared keepers override removal",
@@ -1359,12 +1155,6 @@
       "table": "usage_changes",
       "class": "usage_lineage",
       "selector": "attempt_id in ownedUsageAttempts or feature_id in ownedWork",
-      "disposition": "owned_lineage"
-    },
-    {
-      "table": "usage_entries",
-      "class": "usage_lineage",
-      "selector": "attempt_id in ownedProviderAttempts",
       "disposition": "owned_lineage"
     },
     {

@@ -1455,7 +1455,7 @@ impl SessionRepository for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO transcript_chunks(session_id,seq,provider_attempt_id,kind,payload_json,entry_id,batch_id,context_epoch,actor_id,created_at) VALUES(?1,?2,NULL,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO transcript_chunks(session_id,seq,kind,payload_json,entry_id,batch_id,context_epoch,actor_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         ))?
         .execute(params![
             e.session_id.as_str(),

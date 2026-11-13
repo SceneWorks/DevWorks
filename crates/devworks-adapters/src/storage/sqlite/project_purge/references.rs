@@ -164,35 +164,20 @@ fn typed_references(
         join: "json_type(src.source_json,'$.operationId')='text' AND json_extract(src.source_json,'$.operationId')=dst.id AND dst.capability='artifacts.stage_file'".into(),
         from_columns: vec!["source_json".into()], to_columns: vec!["id".into()],
     }, result)?;
-    for (kind, from, target, column) in [
-        (
-            ProjectPurgeReferenceKind::IndexOverlayRun,
-            "index_overlays",
-            "index_runs",
-            "run_id",
-        ),
-        (
-            ProjectPurgeReferenceKind::SearchChunk,
-            "search_fts",
-            "search_chunks",
-            "chunk_id",
-        ),
-    ] {
-        collect(
-            conn,
-            selection,
-            ReferenceSpec {
-                kind,
-                from_table: from.into(),
-                target: target.into(),
-                source: format!("{} AS src", quote(from)),
-                join: format!("src.{}=dst.id", quote(column)),
-                from_columns: vec![column.into()],
-                to_columns: vec!["id".into()],
-            },
-            result,
-        )?;
-    }
+    collect(
+        conn,
+        selection,
+        ReferenceSpec {
+            kind: ProjectPurgeReferenceKind::IndexOverlayRun,
+            from_table: "index_overlays".into(),
+            target: "index_runs".into(),
+            source: "index_overlays AS src".into(),
+            join: "src.run_id=dst.id".into(),
+            from_columns: vec!["run_id".into()],
+            to_columns: vec!["id".into()],
+        },
+        result,
+    )?;
     collect(
         conn,
         selection,

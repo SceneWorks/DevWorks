@@ -119,7 +119,10 @@ fn policies(conn: &Connection) -> Result<BTreeMap<String, (String, String)>, Sto
             }
         }
     }
-    let mut statement = db(conn.prepare("SELECT name FROM main.sqlite_schema WHERE type='table'"))?;
+    // Planner statistics (`PRAGMA optimize` creates sqlite_stat1) hold no project rows.
+    let mut statement = db(conn.prepare(
+        "SELECT name FROM main.sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_stat%'",
+    ))?;
     let actual = db(statement.query_map([], |row| row.get::<_, String>(0)))?
         .map(db)
         .collect::<Result<BTreeSet<_>, _>>()?;
@@ -149,12 +152,7 @@ fn initial(
             return Err(Unresolved::TypedLease);
         }
         "project_managed_files" => return Err(Unresolved::ManagedBytes),
-        "knowledge_entries"
-        | "knowledge_revisions"
-        | "knowledge_tags"
-        | "knowledge_shares"
-        | "knowledge_links" => return Err(Unresolved::LegacySharing),
-        "work_dependencies" | "search_fts" => return Err(Unresolved::MixedOwnership),
+        "work_dependencies" => return Err(Unresolved::MixedOwnership),
         "operations" => return Ok((Action::Delete, Reason::OwnedLineage)),
         "browser_observations" | "os_notification_deliveries" => {
             return Ok((Action::Delete, Reason::OwnedLineage));
@@ -224,10 +222,6 @@ fn scrub_columns(table: &str) -> Option<ScrubColumns> {
         "project_managed_files" => (&["project_id"], &[]),
         "schema_sources" => (&["owner_id"], &[]),
         "authority_grants" => (&["actor_id", "issued_by", "revoked_by"], &[]),
-        "github_issue_intake" => (
-            &["repository_id", "project_id"],
-            &["work_id", "operation_id"],
-        ),
         "principal_authority" => (&["actor_id", "project_id", "bound_by"], &[]),
         _ => return None,
     })
@@ -324,18 +318,12 @@ pub(super) fn assign(
     true
 }
 fn content_lineage(edge: &ProjectPurgeReference) -> bool {
-    if edge.kind == ProjectPurgeReferenceKind::SearchChunk {
-        return edge.from_table == "search_fts" && edge.to_table == "search_chunks";
-    }
     if edge.kind != ProjectPurgeReferenceKind::ForeignKey {
         return false;
     }
     let column = match (edge.from_table.as_str(), edge.to_table.as_str()) {
-        ("artifact_versions" | "artifact_tags" | "documents", "artifacts") => "artifact_id",
-        ("artifact_links" | "extractions", "artifact_versions") => "artifact_version_id",
-        ("search_chunks", "artifact_versions") => "source_version_id",
-        ("chunk_vectors", "search_chunks") => "chunk_id",
-        ("knowledge_revisions" | "knowledge_tags", "knowledge_entries") => "entry_id",
+        ("artifact_versions" | "artifact_tags", "artifacts") => "artifact_id",
+        ("artifact_links", "artifact_versions") => "artifact_version_id",
         _ => return false,
     };
     edge.from_columns.len() == 1 && edge.from_columns[0] == column
@@ -367,24 +355,6 @@ fn content_partitions(
             Reason::IndependentPublication,
         ),
         (
-            "knowledge_entries",
-            "scope_kind='Project' AND project_id=?1 AND NOT EXISTS(SELECT 1 FROM knowledge_shares s WHERE s.entry_id=knowledge_entries.id AND s.project_id<>?1)",
-            Action::Delete,
-            Reason::OwnedProjectRecords,
-        ),
-        (
-            "knowledge_entries",
-            "scope_kind='Project' AND project_id=?1 AND EXISTS(SELECT 1 FROM knowledge_shares s WHERE s.entry_id=knowledge_entries.id AND s.project_id<>?1)",
-            Action::Keep,
-            Reason::SharedContent,
-        ),
-        (
-            "knowledge_entries",
-            "scope_kind='Workspace' OR project_id<>?1",
-            Action::Keep,
-            Reason::IndependentPublication,
-        ),
-        (
             "artifact_shares",
             "project_id=?1",
             Action::Delete,
@@ -392,18 +362,6 @@ fn content_partitions(
         ),
         (
             "artifact_shares",
-            "project_id<>?1",
-            Action::Keep,
-            Reason::SharedContent,
-        ),
-        (
-            "knowledge_shares",
-            "project_id=?1",
-            Action::Delete,
-            Reason::ProjectMembership,
-        ),
-        (
-            "knowledge_shares",
             "project_id<>?1",
             Action::Keep,
             Reason::SharedContent,
@@ -422,20 +380,6 @@ fn content_partitions(
         ),
     ] {
         for row in selection.rows_where(conn, table, condition)? {
-            assign(&row, action.clone(), reason.clone(), rows, unresolved);
-        }
-    }
-    let removed_knowledge = "SELECT k.id FROM knowledge_entries k WHERE k.scope_kind='Project' AND k.project_id=?1 AND NOT EXISTS(SELECT 1 FROM knowledge_shares s WHERE s.entry_id=k.id AND s.project_id<>?1)";
-    let removed_link = format!("from_id IN({removed_knowledge}) OR to_id IN({removed_knowledge})");
-    for (condition, action, reason) in [
-        (removed_link.clone(), Action::Delete, Reason::OwnedLineage),
-        (
-            format!("NOT({removed_link})"),
-            Action::Keep,
-            Reason::SharedContent,
-        ),
-    ] {
-        for row in selection.rows_where(conn, "knowledge_links", &condition)? {
             assign(&row, action.clone(), reason.clone(), rows, unresolved);
         }
     }
@@ -545,23 +489,13 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
         Unresolved::AutomaticSnapshot,
         &mut unresolved,
     )?;
-    // There is no native mapping writer with a closed typed ownership format.
-    // Unmapped legacy records stay visible as a hold, never as string-matched owners.
-    unresolved_keys(
-        conn,
-        project,
-        "SELECT import_id,source_kind,source_id FROM import_mappings WHERE ?1 IS NOT NULL",
-        "import_mappings",
-        Unresolved::LegacyMapping,
-        &mut unresolved,
-    )?;
     for key in unresolved.keys() {
         rows.remove(key);
     }
     super::receipts::partition(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     super::leases::partition(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     super::mixed::grants(conn, project, &snapshot, &mut rows, &mut unresolved)?;
-    super::mixed::intake(conn, project, &snapshot, &mut rows, &mut unresolved)?;
+    super::mixed::intake(conn, project, &mut rows, &mut unresolved)?;
     super::mixed::managed_files(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     super::mixed::source_access(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     let mut container_states =

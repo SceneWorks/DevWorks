@@ -206,6 +206,11 @@ fn events_where<P: rusqlite::Params>(
         )
         .collect()
 }
+/// One JSON array bound in place of a variable-length `IN` list, so the cached statement text
+/// is the same for any list length.
+fn json_list<'a>(values: impl Iterator<Item = &'a str>) -> String {
+    serde_json::Value::from(values.collect::<Vec<_>>()).to_string()
+}
 fn placeholders(from: usize, count: usize) -> String {
     (from..from + count)
         .map(|n| format!("?{n}"))
@@ -263,11 +268,8 @@ macro_rules! watcher_reads {
                     "{owner} AND (?2 IS NULL OR created_at<?2 OR (created_at=?2 AND id<?3))"
                 );
                 if !phases.is_empty() {
-                    tail.push_str(&format!(
-                        " AND phase IN ({})",
-                        placeholders(5, phases.len())
-                    ));
-                    values.extend(phases.iter().map(|p| p.as_str().to_owned().into()));
+                    tail.push_str(" AND phase IN (SELECT value FROM json_each(?5))");
+                    values.push(json_list(phases.iter().map(|p| p.as_str())).into());
                 }
                 tail.push_str(" ORDER BY created_at DESC,id DESC LIMIT ?4");
                 watchers_where(self.conn, &tail, params_from_iter(values))
@@ -320,18 +322,15 @@ macro_rules! watcher_reads {
                 if states.is_empty() {
                     return Ok(Vec::new());
                 }
-                let mut values: Vec<rusqlite::types::Value> = vec![
-                    session.as_str().to_owned().into(),
-                    page_limit(limit)?.into(),
-                ];
-                values.extend(states.iter().map(|s| s.as_str().to_owned().into()));
                 events_where(
                     self.conn,
-                    &format!(
-                        "session_id=?1 AND state IN ({}) ORDER BY created_at,id LIMIT ?2",
-                        placeholders(3, states.len())
-                    ),
-                    params_from_iter(values),
+                    "session_id=?1 AND state IN (SELECT value FROM json_each(?3)) \
+                     ORDER BY created_at,id LIMIT ?2",
+                    params![
+                        session.as_str(),
+                        page_limit(limit)?,
+                        json_list(states.iter().map(|s| s.as_str()))
+                    ],
                 )
             }
         }

@@ -302,13 +302,12 @@ fn claim(conn: &Connection, id: &Id) -> Result<Option<StoredClaim>, StorageError
     Ok(claims_where(conn, "WHERE c.id=?1", vec![Sql::Text(id.as_str().into())])?.pop())
 }
 
-fn placeholders(n: usize, p: &mut Vec<Sql>, values: impl IntoIterator<Item = String>) -> String {
-    let mut out = Vec::with_capacity(n);
-    for v in values {
-        p.push(Sql::Text(v));
-        out.push(format!("?{}", p.len()));
-    }
-    out.join(",")
+/// A subquery listing `values` for `IN (...)`: one bound JSON array, so the cached statement text
+/// is the same for any list length.
+fn placeholders(p: &mut Vec<Sql>, values: impl IntoIterator<Item = String>) -> String {
+    let list = serde_json::Value::from(values.into_iter().collect::<Vec<_>>());
+    p.push(Sql::Text(list.to_string()));
+    format!("SELECT value FROM json_each(?{})", p.len())
 }
 
 /// A condition true for a claim row `c` outside `deleted` (its values appended to `p`).
@@ -320,7 +319,7 @@ fn outside_as(deleted: &DeletedClaims<'_>, p: &mut Vec<Sql>, c: &str) -> String 
     match deleted {
         DeletedClaims::Ids([]) => "1".into(),
         DeletedClaims::Ids(ids) => {
-            let list = placeholders(ids.len(), p, ids.iter().map(|i| i.as_str().to_owned()));
+            let list = placeholders(p, ids.iter().map(|i| i.as_str().to_owned()));
             format!("{c}.id NOT IN ({list})")
         }
         DeletedClaims::Source { scope, source } => {
@@ -341,7 +340,7 @@ fn entity_inside(deleted: &DeletedClaims<'_>, p: &mut Vec<Sql>, e: &str) -> Stri
     match deleted {
         DeletedClaims::Ids([]) => "0".into(),
         DeletedClaims::Ids(ids) => {
-            let list = placeholders(ids.len(), p, ids.iter().map(|i| i.as_str().to_owned()));
+            let list = placeholders(p, ids.iter().map(|i| i.as_str().to_owned()));
             format!("{e}.id IN ({list})")
         }
         DeletedClaims::Source { scope, source } => {
@@ -391,19 +390,21 @@ fn kept(deleted: &DeletedClaims<'_>, p: &mut Vec<Sql>, id_sql: &str) -> String {
 
 /// The rule state of a lesson row as read: an inferred lesson whose distinct events reach its
 /// scope's threshold is `Effective` (the same rule as the service's `effective_rule_state`).
+/// The thresholds bind as one JSON array of `[scope, threshold]` pairs; the first pair naming the
+/// row's scope applies.
 fn effective_state_sql(thresholds: &[(String, i64)], p: &mut Vec<Sql>) -> String {
-    let mut cases = String::new();
-    for (scope, t) in thresholds {
-        p.push(Sql::Text(scope.clone()));
-        let a = p.len();
-        p.push(Sql::Integer(*t));
-        cases.push_str(&format!(" WHEN ?{a} THEN ?{}", p.len()));
-    }
+    let pairs = thresholds
+        .iter()
+        .map(|(scope, t)| serde_json::json!([scope, t]))
+        .collect::<Vec<_>>();
+    p.push(Sql::Text(serde_json::Value::from(pairs).to_string()));
     format!(
         "(CASE WHEN c.rule_state IN ('Candidate','Proposed') AND \
          (SELECT count(*) FROM knowledge_lesson_events le WHERE le.claim_id=c.id) >= \
-         (CASE c.scope_key{cases} ELSE 9223372036854775807 END) \
-         THEN 'Effective' ELSE c.rule_state END)"
+         coalesce((SELECT t.value->>1 FROM json_each(?{}) t WHERE t.value->>0=c.scope_key \
+         ORDER BY t.key LIMIT 1), 9223372036854775807) \
+         THEN 'Effective' ELSE c.rule_state END)",
+        p.len()
     )
 }
 
@@ -419,7 +420,7 @@ fn claims_page(
     }
     let mut p: Vec<Sql> = Vec::new();
     let mut w: Vec<String> = Vec::new();
-    let scopes = placeholders(q.scopes.len(), &mut p, q.scopes.iter().cloned());
+    let scopes = placeholders(&mut p, q.scopes.iter().cloned());
     w.push(format!("c.scope_key IN ({scopes})"));
     for (col, values) in [
         ("c.lifecycle", &q.lifecycles),
@@ -427,7 +428,7 @@ fn claims_page(
         ("c.entry_kind", &q.entry_kinds),
     ] {
         if !values.is_empty() {
-            let list = placeholders(values.len(), &mut p, values.iter().cloned());
+            let list = placeholders(&mut p, values.iter().cloned());
             w.push(format!("{col} IN ({list})"));
         }
     }
@@ -440,7 +441,7 @@ fn claims_page(
         w.push(format!("c.subject_id=?{}", p.len()));
     }
     if !q.tags.is_empty() {
-        let list = placeholders(q.tags.len(), &mut p, q.tags.iter().cloned());
+        let list = placeholders(&mut p, q.tags.iter().cloned());
         p.push(Sql::Integer(q.tags.len() as i64));
         w.push(format!(
             "(SELECT count(*) FROM knowledge_claim_tags t WHERE t.claim_id=c.id AND t.tag IN \
@@ -453,7 +454,7 @@ fn claims_page(
         // scope filter, never before it.
         p.push(Sql::Text(fts_any(&q.words)));
         let any_match = p.len();
-        let entity_scopes = placeholders(q.scopes.len(), &mut p, q.scopes.iter().cloned());
+        let entity_scopes = placeholders(&mut p, q.scopes.iter().cloned());
         p.push(Sql::Integer(i64::from(
             q.entity_limit.unwrap_or(KNOWLEDGE_PAGE_MAX),
         )));
@@ -488,7 +489,7 @@ fn claims_page(
         w.push("c.kind='Lesson'".into());
         let state = effective_state_sql(&l.thresholds, &mut p);
         if !l.rule_states.is_empty() {
-            let list = placeholders(l.rule_states.len(), &mut p, l.rule_states.iter().cloned());
+            let list = placeholders(&mut p, l.rule_states.iter().cloned());
             w.push(format!("{state} IN ({list})"));
         }
         if let Some(a) = &l.activity {
@@ -882,13 +883,13 @@ macro_rules! knowledge_reads {
         impl KnowledgeRead for $t {
             fn knowledge_review_candidates(&self,scopes:&[String],kind:KnowledgeReviewKind,limit:u16)->Result<Vec<StoredClaim>,StorageError>{
                 let limit=check_limit(limit)?;if scopes.is_empty(){return Ok(Vec::new());}for scope in scopes{KnowledgeScope::parse(scope)?;}
-                let mut p=Vec::new();let scopes=placeholders(scopes.len(),&mut p,scopes.iter().cloned());
+                let mut p=Vec::new();let scopes=placeholders(&mut p,scopes.iter().cloned());
                 let condition=match kind{KnowledgeReviewKind::Challenge=>"EXISTS(SELECT 1 FROM knowledge_challenges h WHERE h.claim_id=c.id AND h.state='Open')",KnowledgeReviewKind::ProposedRule=>"c.kind='Lesson' AND c.rule_state='Proposed'"};
                 p.push(Sql::Integer(limit));let tail=format!("WHERE c.scope_key IN ({scopes}) AND c.lifecycle='Active' AND {condition} ORDER BY c.id LIMIT ?{}",p.len());claims_where(self.conn,&tail,p)
             }
             fn knowledge_review_contradictions(&self,scopes:&[String],limit:u16)->Result<Vec<StoredRelation>,StorageError>{
                 let limit=check_limit(limit)?;if scopes.is_empty(){return Ok(Vec::new());}for scope in scopes{KnowledgeScope::parse(scope)?;}
-                let mut p=Vec::new();let scopes=placeholders(scopes.len(),&mut p,scopes.iter().cloned());p.push(Sql::Integer(limit));
+                let mut p=Vec::new();let scopes=placeholders(&mut p,scopes.iter().cloned());p.push(Sql::Integer(limit));
                 rows(self.conn,&format!("SELECT {RELATION_COLUMNS} FROM (SELECT r.*,ROW_NUMBER() OVER (PARTITION BY r.scope_key,min(r.subject_id,r.object_id),max(r.subject_id,r.object_id) ORDER BY r.created_at,r.id) AS pair_rank FROM knowledge_relations r JOIN knowledge_claims a ON a.id=r.subject_id JOIN knowledge_claims b ON b.id=r.object_id WHERE r.scope_key IN ({scopes}) AND r.predicate='contradicts' AND r.removed_at IS NULL AND r.subject_id<>r.object_id AND a.lifecycle='Active' AND b.lifecycle='Active' AND a.scope_key=b.scope_key AND r.scope_key=a.scope_key) WHERE pair_rank=1 ORDER BY created_at,id LIMIT ?{}",p.len()),p,relation_row)?.into_iter().map(relation_of).collect()
             }
             fn knowledge_scope_revision(
@@ -938,7 +939,7 @@ macro_rules! knowledge_reads {
                     Sql::Text(subject.as_str().into()),
                     Sql::Text(predicate.into()),
                 ];
-                let list = placeholders(scopes.len(), &mut p, scopes.iter().cloned());
+                let list = placeholders(&mut p, scopes.iter().cloned());
                 p.push(Sql::Integer(limit));
                 claims_where(
                     self.conn,
@@ -1068,7 +1069,7 @@ macro_rules! knowledge_reads {
                 }
                 // Scope applies before LIMIT: another project's relations never use the budget.
                 let mut p = vec![Sql::Text(id.as_str().into())];
-                let list = placeholders(scopes.len(), &mut p, scopes.iter().cloned());
+                let list = placeholders(&mut p, scopes.iter().cloned());
                 p.push(Sql::Integer(limit));
                 rows(
                     self.conn,
@@ -1178,9 +1179,7 @@ macro_rules! knowledge_reads {
                     return Ok(Vec::new());
                 }
                 let mut p = Vec::new();
-                let list = placeholders(
-                    endpoints.len(),
-                    &mut p,
+                let list = placeholders(&mut p,
                     endpoints.iter().map(|i| i.as_str().to_owned()),
                 );
                 rows(
@@ -1508,7 +1507,7 @@ macro_rules! knowledge_reads {
                     return Ok(out);
                 }
                 let mut p = Vec::new();
-                let list = placeholders(scopes.len(), &mut p, scopes.iter().cloned());
+                let list = placeholders(&mut p, scopes.iter().cloned());
                 out.claims = rows(
                     self.conn,
                     &format!(

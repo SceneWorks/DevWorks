@@ -12,11 +12,7 @@
     "artifact_and_derived_lineage": [
       "artifact_links",
       "artifact_tags",
-      "artifact_versions",
-      "chunk_vectors",
-      "documents",
-      "extractions",
-      "search_chunks"
+      "artifact_versions"
     ],
     "convention_lineage": [
       "convention_chunk_terms",
@@ -42,17 +38,11 @@
       "knowledge_entity_fts_content",
       "knowledge_entity_fts_data",
       "knowledge_entity_fts_docsize",
-      "knowledge_entity_fts_idx",
-      "search_fts_config",
-      "search_fts_content",
-      "search_fts_data",
-      "search_fts_docsize",
-      "search_fts_idx"
+      "knowledge_entity_fts_idx"
     ],
     "derived_fts_virtual": [
       "knowledge_claim_fts",
-      "knowledge_entity_fts",
-      "search_fts"
+      "knowledge_entity_fts"
     ],
     "global_help": [
       "help_contents",
@@ -65,7 +55,6 @@
       "app_boots",
       "consumer_progress",
       "diagnostic_retention",
-      "maintenance_operations",
       "schema_migrations",
       "sqlite_schema",
       "sqlite_sequence",
@@ -84,13 +73,7 @@
     "global_provider_router": [
       "convention_embedding_spaces",
       "embedding_spaces",
-      "price_overrides",
-      "price_snapshots",
       "provider_connection_identities",
-      "provider_connections",
-      "provider_models",
-      "published_prices",
-      "router_availability",
       "router_connections",
       "router_cooldowns",
       "router_decision_models",
@@ -101,7 +84,6 @@
       "router_embedding_selection",
       "router_models",
       "router_tier_cursors",
-      "routing_cursors",
       "settings_secret_handles",
       "usage_bootstrap",
       "usage_price_overrides",
@@ -128,7 +110,6 @@
       "repository_sources",
       "repository_texts",
       "repository_worktrees",
-      "review_source_evidence",
       "source_units"
     ],
     "global_schema_sources": [
@@ -150,9 +131,6 @@
       "knowledge_history",
       "knowledge_import_map",
       "knowledge_lesson_events",
-      "knowledge_links",
-      "knowledge_revisions",
-      "knowledge_tags",
       "knowledge_write_targets"
     ],
     "mixed_owner_review": [
@@ -165,10 +143,8 @@
       "command_receipts",
       "external_cursors",
       "github_intake_clock",
-      "github_issue_intake",
       "graph_read_pin_views",
       "graph_read_pins",
-      "import_mappings",
       "integration_links",
       "knowledge_source_heads",
       "notification_audience",
@@ -181,12 +157,10 @@
     ],
     "operation_lineage": [
       "approval_resumes",
-      "approvals",
       "blockers",
       "convention_import_artifacts",
       "operation_attempts",
-      "queue_entries",
-      "resource_grants"
+      "queue_entries"
     ],
     "project_identity": [
       "project_details",
@@ -194,7 +168,6 @@
     ],
     "project_membership_edges": [
       "artifact_shares",
-      "knowledge_shares",
       "principal_authority",
       "project_repositories"
     ],
@@ -217,12 +190,10 @@
       "human_decisions",
       "index_runs",
       "index_source_configs",
-      "inference_requests",
       "integration_records",
       "job_runs",
       "knowledge_claims",
       "knowledge_entities",
-      "knowledge_entries",
       "knowledge_evidence",
       "knowledge_relations",
       "knowledge_source_deletions",
@@ -255,28 +226,22 @@
       "knowledge_writes"
     ],
     "session_lineage": [
-      "attempt_costs",
-      "provider_attempts",
       "router_pins",
       "session_checkpoints",
       "session_context_epochs",
       "session_context_sources",
-      "session_events",
       "session_tool_calls",
       "session_turns",
-      "tool_calls",
       "transcript_batches",
       "transcript_chunks"
     ],
     "usage_lineage": [
       "usage_attempt_balances",
       "usage_changes",
-      "usage_entries",
       "usage_observations"
     ],
     "work_lineage": [
       "assignments",
-      "budget_reservations",
       "conversations",
       "executions",
       "feature_plans",

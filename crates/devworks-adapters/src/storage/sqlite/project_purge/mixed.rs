@@ -327,60 +327,10 @@ pub(super) fn managed_files(
 pub(super) fn intake(
     conn: &Connection,
     project: &ProjectId,
-    snapshot: &ProjectPurgeCandidates,
     rows: &mut BTreeMap<Key, ProjectPurgeRowWitness>,
     unresolved: &mut BTreeMap<Key, ProjectPurgeUnresolved>,
 ) -> Result<(), StorageError> {
-    use devworks_core::protocol::records::GithubIssueIntakeState;
     let selection = super::candidates::selection(project)?;
-    let sql = selection.sql(
-        "github_issue_intake",
-        "repository_id,issue_number,state,project_id,work_id",
-        "1=1",
-    )?;
-    let mut statement = db(conn.prepare(&sql))?;
-    let mut records = db(statement.query(selection.parameters()))?;
-    while let Some(record) = db(records.next())? {
-        let (repo, number, state, owner, work) = (
-            db(record.get::<_, String>(0))?,
-            db(record.get::<_, i64>(1))?,
-            db(record.get::<_, String>(2))?,
-            db(record.get::<_, Option<String>>(3))?,
-            db(record.get::<_, Option<String>>(4))?,
-        );
-        if serde_json::from_value::<GithubIssueIntakeState>(serde_json::Value::String(state))
-            .is_err()
-            || owner.as_deref().is_some_and(|p| p != project.0.as_str())
-        {
-            continue;
-        }
-        if let Some(work) = work {
-            let owned: bool = db(conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM work_items WHERE id=?1 AND project_id=?2)",
-                [work.as_str(), project.0.as_str()],
-                |r| r.get(0),
-            ))?;
-            if !owned {
-                continue;
-            }
-        }
-        let key = super::guard::key_digest(
-            &serde_json::to_string(&serde_json::json!([repo, number])).expect("intake key"),
-        )?;
-        if let Some(candidate) = snapshot
-            .rows
-            .iter()
-            .find(|r| r.table == "github_issue_intake" && r.key_digest == key)
-        {
-            assign(
-                candidate,
-                Action::Scrub,
-                Reason::MinimalDeletedIdentity,
-                rows,
-                unresolved,
-            );
-        }
-    }
     // These are association edges with no independent body. The frozen policy
     // removes an edge when its explicitly owned work or integration record goes.
     for candidate in selection.rows_where(conn, "integration_links", "1=1")? {

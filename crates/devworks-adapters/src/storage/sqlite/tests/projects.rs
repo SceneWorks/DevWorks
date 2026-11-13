@@ -2654,6 +2654,32 @@ fn purge_candidate_reader_hashes_full_scoped_rows_without_copying_keys_or_other_
 }
 
 #[test]
+fn clean_shutdown_records_planner_statistics_that_purge_planning_accepts() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    let stats = || -> bool {
+        h.raw()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='sqlite_stat1')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert!(!stats());
+    // Clean shutdown runs PRAGMA optimize, which writes sqlite_stat1.
+    drop(store);
+    assert!(stats());
+    let store = h.store();
+    let plan = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&project("purge-a"))
+    })
+    .unwrap();
+    assert!(plan.is_some());
+}
+
+#[test]
 fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it_for_deletion() {
     let h = Harness::new();
     let store = h.store();
@@ -2667,15 +2693,7 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
              ('moved-workspace','independent workspace sentinel',1,1,'purge-a',NULL,'Workspace','purge-human'),
              ('shared-in','other project sentinel',1,1,'purge-b','purge-b','Project',NULL),
              ('unrelated','unrelated sentinel',1,1,'purge-b','purge-b','Project',NULL);
-             INSERT INTO artifact_shares VALUES('shared-out','purge-b'),('shared-in','purge-a');
-             INSERT INTO knowledge_entries VALUES
-             ('knowledge-owned','purge-a','fact','Project',1,'Active','{\"private\":\"sentinel\"}',1),
-             ('knowledge-shared','purge-a','fact','Project',1,'Active','{\"shared\":\"sentinel\"}',1),
-             ('knowledge-other','purge-b','fact','Project',1,'Active','{}',1);
-             INSERT INTO knowledge_shares VALUES('knowledge-shared','purge-b');
-             INSERT INTO knowledge_revisions VALUES('knowledge-owned',1,'purge-human','{}'),('knowledge-shared',1,'purge-human','{}');
-             INSERT INTO knowledge_tags VALUES('knowledge-owned','owned-private-tag'),('knowledge-shared','shared-tag');
-             INSERT INTO knowledge_links VALUES('knowledge-owned','knowledge-shared','supports','{}'),('knowledge-shared','knowledge-other','supports','{}');"
+             INSERT INTO artifact_shares VALUES('shared-out','purge-b'),('shared-in','purge-a');"
         ))
     }).unwrap();
     let snapshot = || {
@@ -2709,8 +2727,6 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
         );
     }
 
-    assert_eq!(count("knowledge_entries"), 2);
-    assert_eq!(count("knowledge_shares"), 1);
     assert!(
         !serde_json::to_string(&before.rows)
             .unwrap()
@@ -2761,46 +2777,6 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
             json!(["shared-out", "purge-b"]),
             ProjectPurgeRowAction::Keep,
         ),
-        (
-            "knowledge_entries",
-            json!(["knowledge-owned"]),
-            ProjectPurgeRowAction::Delete,
-        ),
-        (
-            "knowledge_entries",
-            json!(["knowledge-shared"]),
-            ProjectPurgeRowAction::Keep,
-        ),
-        (
-            "knowledge_revisions",
-            json!(["knowledge-owned", 1]),
-            ProjectPurgeRowAction::Delete,
-        ),
-        (
-            "knowledge_revisions",
-            json!(["knowledge-shared", 1]),
-            ProjectPurgeRowAction::Keep,
-        ),
-        (
-            "knowledge_tags",
-            json!(["knowledge-owned", "owned-private-tag"]),
-            ProjectPurgeRowAction::Delete,
-        ),
-        (
-            "knowledge_tags",
-            json!(["knowledge-shared", "shared-tag"]),
-            ProjectPurgeRowAction::Keep,
-        ),
-        (
-            "knowledge_links",
-            json!(["knowledge-owned", "knowledge-shared", "supports"]),
-            ProjectPurgeRowAction::Delete,
-        ),
-        (
-            "knowledge_links",
-            json!(["knowledge-shared", "knowledge-other", "supports"]),
-            ProjectPurgeRowAction::Keep,
-        ),
     ] {
         let digest = devworks_core::fingerprint::sha256_hex(key.to_string().as_bytes());
         assert!(
@@ -2810,11 +2786,6 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
             "{table} {key}: {action:?}"
         );
     }
-    assert!(
-        !serde_json::to_string(&plan.rows)
-            .unwrap()
-            .contains("owned-private-tag")
-    );
     h.raw()
         .execute(
             "UPDATE artifacts SET title='unrelated changed' WHERE id='unrelated'",
@@ -3092,7 +3063,7 @@ fn purge_planning_classifies_records_read_only_and_never_enables_ordinary_delete
 }
 
 #[test]
-fn purge_planning_compacts_typed_creation_snapshots_and_holds_unmapped_legacy_mappings() {
+fn purge_planning_compacts_typed_creation_snapshots() {
     let fx = Fx::new();
     let p = fx.create("Private copied project name", &[]);
     let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
@@ -3136,22 +3107,6 @@ fn purge_planning_compacts_typed_creation_snapshots_and_holds_unmapped_legacy_ma
         !serde_json::to_string(&refused.unresolved)
             .unwrap()
             .contains("unrecognized receipt body")
-    );
-    fx.h.raw().execute("UPDATE command_receipts SET result_json=?1 WHERE command_kind='projects.create' AND json_extract(result_json,'$.receipt.decision.result.value.id')=?2",rusqlite::params![original,p.id.0.as_str()]).unwrap();
-    fx.h.raw().execute("INSERT INTO import_mappings VALUES('legacy-import','unknown-kind','private-source-key','opaque-local-id','digest')",[]).unwrap();
-    let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
-        r.projects().purge_planning(&p.id)
-    })
-    .unwrap()
-    .unwrap();
-    assert!(
-        plan.unresolved.iter().any(|r| r.table == "import_mappings"
-            && r.reason == ProjectPurgeUnresolvedReason::LegacyMapping)
-    );
-    assert!(
-        !serde_json::to_string(&plan.unresolved)
-            .unwrap()
-            .contains("private-source-key")
     );
 }
 
@@ -4382,28 +4337,12 @@ fn purge_planning_grants_require_typed_scope_and_preserve_monotonic_revocation_i
 }
 
 #[test]
-fn purge_planning_intake_keeps_remote_deduplication_identity_and_removes_only_owned_edges() {
+fn purge_planning_removes_only_integration_links_the_project_owns() {
     let fx = Fx::new();
     let p = fx.create("private intake project", &[]);
     let other = fx.create("independent intake project", &[]);
     fx.seed_roots(&p.id, &["purge-local-work"]);
     fx.seed_roots(&other.id, &["independent-local-work"]);
-    for (n, owner, work) in [
-        (1, &p.id, "purge-local-work"),
-        (2, &other.id, "independent-local-work"),
-    ] {
-        fx.h.raw()
-            .execute(
-                "INSERT INTO github_issue_intake VALUES('repo-1',?1,1,'Working',?2,?3,?4,NULL)",
-                rusqlite::params![
-                    n,
-                    owner.0.as_str(),
-                    work,
-                    json!({"title":"copied private remote snapshot"}).to_string()
-                ],
-            )
-            .unwrap();
-    }
     for (record, owner, work) in [
         ("owned-integration", &p.id, "purge-local-work"),
         (
@@ -4420,7 +4359,6 @@ fn purge_planning_intake_keeps_remote_deduplication_identity_and_removes_only_ow
     })
     .unwrap()
     .unwrap();
-    assert_eq!(plan.rows.iter().filter(|r|r.table=="github_issue_intake" && r.action==ProjectPurgeRowAction::Scrub).count(),1);
     assert_eq!(
         plan.rows
             .iter()
@@ -4429,36 +4367,12 @@ fn purge_planning_intake_keeps_remote_deduplication_identity_and_removes_only_ow
         2
     );
     assert!(
-        !plan.unresolved.iter().any(|r| matches!(
-            r.table.as_str(),
-            "github_issue_intake" | "integration_links"
-        )),
+        !plan
+            .unresolved
+            .iter()
+            .any(|r| r.table == "integration_links"),
         "{:?}",
         plan.unresolved
-    );
-    assert!(!format!("{:?}", plan.rows).contains("copied private remote snapshot"));
-    fx.h.raw()
-        .execute(
-            "UPDATE github_issue_intake SET state='UnknownLegacyState' WHERE issue_number=1",
-            [],
-        )
-        .unwrap();
-    let held = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
-        r.projects().purge_planning(&p.id)
-    })
-    .unwrap()
-    .unwrap();
-    assert!(
-        held.unresolved
-            .iter()
-            .any(|r| r.table == "github_issue_intake")
-    );
-    assert_eq!(
-        fx.h.raw()
-            .query_row("SELECT count(*) FROM github_issue_intake", [], |r| r
-                .get::<_, i64>(0))
-            .unwrap(),
-        2
     );
     assert_eq!(
         fx.h.raw()

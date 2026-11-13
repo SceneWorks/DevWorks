@@ -1334,24 +1334,12 @@ impl IndexRepository for Unit<'_> {
         for table in [
             "graph_edges",
             "graph_nodes",
-            "search_chunks",
             "index_batches",
             "source_units",
         ] {
             let left = n - removed as i64;
             if left <= 0 {
                 break;
-            }
-            if table == "search_chunks" {
-                // Vectors and lexical rows of a chunk go with it.
-                db(self.conn.execute(
-                    "DELETE FROM chunk_vectors WHERE chunk_id IN (SELECT id FROM search_chunks WHERE generation_id=?1 LIMIT ?2)",
-                    params![g, left],
-                ))?;
-                db(self.conn.execute(
-                    "DELETE FROM search_fts WHERE chunk_id IN (SELECT id FROM search_chunks WHERE generation_id=?1 LIMIT ?2)",
-                    params![g, left],
-                ))?;
             }
             let k = db(self.conn.execute(
                 &format!(

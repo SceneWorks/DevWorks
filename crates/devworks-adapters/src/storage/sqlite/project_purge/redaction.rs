@@ -44,7 +44,6 @@ pub(super) fn scrub(
         "index_runs" => format!("stage='purged',owner=NULL,lease_until=NULL,config_digest='{zero_digest}',source_oid=NULL,generation_id=NULL,output_view_id=NULL,error_code=NULL,error_message=NULL,warnings_json='[]',revision=revision+1"),
         "authority_grants" => format!("binding_json='{{\"operation\":\"projects.purge\"}}',state='Revoked',revision=revision+1,uses_remaining=0,expires_at={now},revoked_by={human}"),
         "principal_authority" => format!("role=NULL,tool_families_json=NULL,state='Revoked',revision=revision+1,updated_at={now}"),
-        "github_issue_intake" => "work_id=NULL,operation_id=NULL,remote_json='{}',revision=revision+1".into(),
         "project_managed_files" => "state='Removed',relative_path='',identity_json='{}',byte_count=0".into(),
         "schema_sources" => {
             let raw: String = db(conn.query_row(&format!("SELECT body_json FROM schema_sources WHERE {predicate}"),params_from_iter(keys.iter()), |r|r.get(0)))?;

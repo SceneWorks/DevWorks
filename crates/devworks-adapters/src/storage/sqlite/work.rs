@@ -864,11 +864,11 @@ impl WorkRepository for Unit<'_> {
             return Err(invalid("a plan change advances its revision by one"));
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO feature_plans(feature_id,revision,approved_plan_json,approved_by,approved_at,pending_plan_json,pending_revision,pending_proposal_id)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,NULL)
+            "INSERT INTO feature_plans(feature_id,revision,approved_plan_json,approved_by,approved_at,pending_plan_json,pending_revision)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)
              ON CONFLICT(feature_id) DO UPDATE SET revision=excluded.revision,approved_plan_json=excluded.approved_plan_json,
              approved_by=excluded.approved_by,approved_at=excluded.approved_at,pending_plan_json=excluded.pending_plan_json,
-             pending_revision=excluded.pending_revision,pending_proposal_id=NULL",
+             pending_revision=excluded.pending_revision",
         ))?
         .execute(params![
             p.feature_id.as_str(),

@@ -17,13 +17,18 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// ownership edge, and its rows keep their session owner. Migration 50 adds watchers and
 /// watcher_events, both owned by their project (schema50 extension); a watcher outside any
 /// project is never a candidate. Migration 51 rebuilds watchers to add probe and timer sources;
-/// it adds no table or ownership edge.
+/// it adds no table or ownership edge. Migration 52 drops thirty tables no build wrote, with
+/// their policy rows and purge branches; rebuilds feature_plans and transcript_chunks without the
+/// two always-NULL columns that referenced dropped tables, adding no ownership edge; and adds the
+/// operations_capability_state index. Planner statistics tables (`sqlite_stat*`, created by the
+/// `PRAGMA optimize` that clean shutdown runs) hold no project rows and are not part of the digest.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "93f9fa4ee3871dd8676afa86f76fcbc28caff1833bf2e8b84b0d34deb1fa22f9";
+    "db064058f36bea2bb08d90c2cbf4b14e8eada50140f27e4a9dbf4bc15a311e2d";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(
-        "SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type,name,tbl_name",
+        "SELECT type,name,tbl_name,sql FROM main.sqlite_schema WHERE name NOT LIKE 'sqlite_stat%' \
+         ORDER BY type,name,tbl_name",
     ))?;
     db(statement.query_map([], |row| {
         Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
