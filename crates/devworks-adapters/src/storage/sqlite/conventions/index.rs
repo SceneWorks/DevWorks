@@ -183,9 +183,11 @@ const HEADER_JOINS: &str = "convention_indexes g JOIN convention_heads h ON h.id
 const VALID_HEADER: &str = "c.lifecycle='Active' AND c.scope_key=captured.scope_key AND c.title=captured.title AND json(c.content_ref_json)=json(g.source_ref_json) AND json(captured.content_ref_json)=json(g.source_ref_json) AND av.deleted_at IS NULL AND a.state='Live' AND a.current_project_id IS c.project_id AND b.state='Present' AND av.artifact_id=json_extract(g.source_ref_json,'$.artifactId') AND av.blob_digest=g.source_digest AND av.blob_digest=json_extract(g.source_ref_json,'$.sha256') AND av.media_type=json_extract(g.source_ref_json,'$.mediaType') AND b.byte_count=CAST(json_extract(g.source_ref_json,'$.byteLength') AS INTEGER)";
 // Body chunks and ancestor postings remain proportional to actual source; only numeric IDs
 // and vectors enter candidate materialization. Scoped/current binding precedes every statistic.
+// The corpus is read from the published index heads outward (CROSS JOIN keeps that order), so
+// a convention without an index costs a search nothing.
 fn eligible() -> String {
     format!(
-        "WITH RECURSIVE headers AS MATERIALIZED(SELECT g.generation_id,g.convention_id,g.convention_revision,g.status,g.embedding_space,g.source_digest,c.title FROM {HEADER_JOINS} JOIN convention_index_heads ih ON ih.generation_id=g.generation_id WHERE g.state='Published' AND g.status IN('Ready','LexicalOnly') AND {VALID_HEADER} AND c.scope_key IN(SELECT value FROM json_each(?1,'$.scopes')) AND NOT EXISTS(SELECT 1 FROM json_each(?1,'$.applicability') f WHERE f.value NOT IN(SELECT value FROM json_each(c.applicability_json))) AND (NOT json_extract(?1,'$.filterParent') OR c.parent_id IS json_extract(?1,'$.parent')) AND (json_extract(?1,'$.slug') IS NULL OR c.slug=json_extract(?1,'$.slug')) AND (json_extract(?1,'$.title') IS NULL OR instr(c.title_folded,json_extract(?1,'$.title'))>0) AND (json_extract(?1,'$.name') IS NULL OR convention_like(json_extract(?1,'$.name'),c.slug_folded) OR convention_like(json_extract(?1,'$.name'),c.title_folded))), ancestors(generation_id,section_id,ancestor_id,parent_id,token_count,depth) AS(SELECT s.generation_id,s.id,s.id,s.parent_id,s.token_count,1 FROM convention_sections s JOIN headers h ON h.generation_id=s.generation_id UNION ALL SELECT a.generation_id,a.section_id,s.id,s.parent_id,s.token_count,a.depth+1 FROM ancestors a JOIN convention_sections s ON s.generation_id=a.generation_id AND s.id=a.parent_id WHERE a.depth<4), eligible AS MATERIALIZED(SELECT h.*,k.id,k.chunk_index,k.section_id,k.token_count+coalesce((SELECT sum(a.token_count) FROM ancestors a WHERE a.generation_id=k.generation_id AND a.section_id=k.section_id),0) token_count,k.vector FROM headers h JOIN convention_chunks k ON k.generation_id=h.generation_id), requested_terms AS MATERIALIZED(SELECT d.generation_id,d.id,d.term FROM convention_terms d JOIN headers h ON h.generation_id=d.generation_id WHERE d.term IN(SELECT CASE type WHEN 'object' THEN json_extract(value,'$.term') ELSE value END FROM json_each(?2))), effective_terms AS(SELECT generation_id,chunk_id,term_id,sum(frequency) frequency FROM(SELECT t.generation_id,t.chunk_id,t.term_id,t.frequency FROM convention_chunk_terms t JOIN requested_terms d ON d.generation_id=t.generation_id AND d.id=t.term_id UNION ALL SELECT k.generation_id,k.id,t.term_id,t.frequency FROM convention_section_terms t JOIN requested_terms d ON d.generation_id=t.generation_id AND d.id=t.term_id JOIN ancestors a ON a.generation_id=t.generation_id AND a.ancestor_id=t.section_id JOIN eligible k ON k.generation_id=a.generation_id AND k.section_id=a.section_id) GROUP BY generation_id,chunk_id,term_id)"
+        "WITH RECURSIVE headers AS MATERIALIZED(SELECT g.generation_id,g.convention_id,g.convention_revision,g.status,g.embedding_space,g.source_digest,c.title FROM convention_index_heads ih CROSS JOIN {HEADER_JOINS} WHERE ih.generation_id=g.generation_id AND g.state='Published' AND g.status IN('Ready','LexicalOnly') AND {VALID_HEADER} AND c.scope_key IN(SELECT value FROM json_each(?1,'$.scopes')) AND NOT EXISTS(SELECT 1 FROM json_each(?1,'$.applicability') f WHERE f.value NOT IN(SELECT value FROM json_each(c.applicability_json))) AND (NOT json_extract(?1,'$.filterParent') OR c.parent_id IS json_extract(?1,'$.parent')) AND (json_extract(?1,'$.slug') IS NULL OR c.slug=json_extract(?1,'$.slug')) AND (json_extract(?1,'$.title') IS NULL OR instr(c.title_folded,json_extract(?1,'$.title'))>0) AND (json_extract(?1,'$.name') IS NULL OR convention_like(json_extract(?1,'$.name'),c.slug_folded) OR convention_like(json_extract(?1,'$.name'),c.title_folded))), ancestors(generation_id,section_id,ancestor_id,parent_id,token_count,depth) AS(SELECT s.generation_id,s.id,s.id,s.parent_id,s.token_count,1 FROM convention_sections s JOIN headers h ON h.generation_id=s.generation_id UNION ALL SELECT a.generation_id,a.section_id,s.id,s.parent_id,s.token_count,a.depth+1 FROM ancestors a JOIN convention_sections s ON s.generation_id=a.generation_id AND s.id=a.parent_id WHERE a.depth<4), eligible AS MATERIALIZED(SELECT h.*,k.id,k.chunk_index,k.section_id,k.token_count+coalesce((SELECT sum(a.token_count) FROM ancestors a WHERE a.generation_id=k.generation_id AND a.section_id=k.section_id),0) token_count,k.vector FROM headers h JOIN convention_chunks k ON k.generation_id=h.generation_id), requested_terms AS MATERIALIZED(SELECT d.generation_id,d.id,d.term FROM convention_terms d JOIN headers h ON h.generation_id=d.generation_id WHERE d.term IN(SELECT CASE type WHEN 'object' THEN json_extract(value,'$.term') ELSE value END FROM json_each(?2))), effective_terms AS(SELECT generation_id,chunk_id,term_id,sum(frequency) frequency FROM(SELECT t.generation_id,t.chunk_id,t.term_id,t.frequency FROM convention_chunk_terms t JOIN requested_terms d ON d.generation_id=t.generation_id AND d.id=t.term_id UNION ALL SELECT k.generation_id,k.id,t.term_id,t.frequency FROM convention_section_terms t JOIN requested_terms d ON d.generation_id=t.generation_id AND d.id=t.term_id JOIN ancestors a ON a.generation_id=t.generation_id AND a.ancestor_id=t.section_id JOIN eligible k ON k.generation_id=a.generation_id AND k.section_id=a.section_id) GROUP BY generation_id,chunk_id,term_id)"
     )
 }
 fn query(q: &ConventionQuery) -> Result<String, StorageError> {
@@ -360,6 +362,7 @@ macro_rules! reads {($ty:ty)=>{impl ConventionIndexRead for $ty {
     fn convention_embedding_inputs(&self,id:&Id)->Result<Option<StoredConventionEmbeddingInputs>,StorageError>{embedding_inputs(self.conn,id)}
     fn convention_embedding_space(&self,id:&str)->Result<Option<StoredConventionEmbeddingSpace>,StorageError>{space(self.conn,id)}
     fn convention_index_head(&self,id:&Id)->Result<Option<StoredConventionIndex>,StorageError>{published_head(self.conn,id)}
+    fn convention_index_gaps(&self,q:&ConventionQuery,space:Option<&str>,limit:u16)->Result<Vec<(Id,String)>,StorageError>{gaps(self.conn,q,space,limit)}
     fn convention_index_generation(&self,id:&Id)->Result<Option<StoredConventionIndex>,StorageError>{generation(self.conn,id)}
     fn convention_index_generations(&self,owner:Option<&Id>,operation:Option<&OperationId>,after:Option<&Id>,limit:u16)->Result<Vec<StoredConventionIndex>,StorageError>{let limit=page(limit)?;let mut s=db(self.conn.prepare_cached(&format!("SELECT {INDEX_COLUMNS} FROM convention_indexes WHERE (?1 IS NULL OR convention_id=?1) AND (?2 IS NULL OR operation_id=?2) AND (?3 IS NULL OR generation_id>?3) ORDER BY generation_id LIMIT ?4")))?;db(db(s.query_map(params![owner.map(Id::as_str),operation.map(|o|o.0.as_str()),after.map(Id::as_str),limit],index_record))?.collect())}
     fn convention_chunks(&self,id:&Id,after:Option<i64>,limit:u16)->Result<Vec<StoredConventionChunk>,StorageError>{let limit=page(limit)?;if after.is_some_and(|v|v<0){return Err(invalid("negative chunk cursor"));}let Some(index)=generation(self.conn,id)?else{return Ok(Vec::new());};let mut s=db(self.conn.prepare_cached("SELECT id FROM convention_chunks WHERE generation_id=?1 AND chunk_index>coalesce(?2,-1) ORDER BY chunk_index LIMIT ?3"))?;let ids=db(db(s.query_map(params![id.as_str(),after,limit],|r|identifier(r,0)))?.collect::<rusqlite::Result<Vec<_>>>())?;ids.into_iter().map(|id|chunk(self.conn,&index,&id)?.ok_or_else(||invalid("chunk disappeared"))).collect()}
@@ -884,6 +887,38 @@ fn published_head(
         r.status = "Stale".into();
     }
     Ok(Some(r))
+}
+/// One statement over the matching conventions, stopping at `limit` gaps, instead of a head
+/// and header read per convention.
+fn gaps(
+    conn: &Connection,
+    q: &ConventionQuery,
+    space: Option<&str>,
+    limit: u16,
+) -> Result<Vec<(Id, String)>, StorageError> {
+    let limit = page(limit)?;
+    let (scope, filter) = super::filter(q)?;
+    let (_, order) = super::order(&q.order);
+    let filter_sql = super::FILTER;
+    let reason = format!(
+        "CASE WHEN ih.generation_id IS NULL THEN 'Unindexed' \
+         WHEN ig.state<>'Published' OR ig.status NOT IN('Ready','LexicalOnly') \
+          OR NOT EXISTS(SELECT 1 FROM {HEADER_JOINS} WHERE g.generation_id=ih.generation_id AND {VALID_HEADER}) \
+          THEN 'IndexNotCurrent' \
+         WHEN ?3 IS NOT NULL AND (ig.embedding_space IS NOT ?3 OR ig.status<>'Ready') \
+          THEN 'MissingCompatibleVectors' END"
+    );
+    let sql = format!(
+        "SELECT h.id,{reason} FROM convention_heads h CROSS JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision \
+         LEFT JOIN convention_index_heads ih ON ih.convention_id=h.id \
+         LEFT JOIN convention_indexes ig ON ig.generation_id=ih.generation_id \
+         WHERE {filter_sql} AND ({reason}) IS NOT NULL ORDER BY {order} LIMIT ?4"
+    );
+    let mut stmt = db(conn.prepare_cached(&sql))?;
+    db(db(stmt.query_map(params![scope, filter, space, limit], |r| {
+        Ok((identifier(r, 0)?, r.get::<_, String>(1)?))
+    }))?
+    .collect())
 }
 fn index_revision(conn: &Connection, allowed: &[KnowledgeScope]) -> Result<i64, StorageError> {
     let scopes = scopes(allowed)?;

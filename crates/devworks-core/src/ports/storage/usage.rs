@@ -208,6 +208,13 @@ pub trait UsageRead {
         after: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<StoredInferenceAttempt>, StorageError>;
+    /// Attempts whose balance is not yet locally quiescent, in exclusive ID order. Settled
+    /// attempts are never visited, so the cost follows open custody rather than history.
+    fn unquiesced_attempts(
+        &self,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredInferenceAttempt>, StorageError>;
     fn usage_observation(
         &self,
         attempt: &Id,

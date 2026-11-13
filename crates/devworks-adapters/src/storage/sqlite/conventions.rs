@@ -83,17 +83,19 @@ fn convention(
     let allowed = scopes(allowed)?;
     db(conn.query_row(&format!("SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions v ON v.convention_id=h.id AND v.revision=coalesce(?2,h.revision) WHERE h.id=?1 AND c.scope_key IN(SELECT value FROM json_each(?3)) AND v.scope_key IN(SELECT value FROM json_each(?3))"),params![id.as_str(),revision,allowed],record).optional())
 }
-fn conventions(
-    conn: &Connection,
-    q: &ConventionQuery,
-    after: Option<&ConventionPosition>,
-    limit: u16,
-) -> Result<Vec<StoredConvention>, StorageError> {
-    let limit = page(limit)?;
+/// The filter of a [`ConventionQuery`] over `h` (convention_heads) and `v` (its current
+/// version), with ?1 the allowed scopes and ?2 the filter document from [`filter`].
+const FILTER: &str = "v.scope_key IN(SELECT value FROM json_each(?1)) AND (json_array_length(?2,'$.lifecycles')=0 OR v.lifecycle IN(SELECT value FROM json_each(?2,'$.lifecycles'))) AND NOT EXISTS(SELECT 1 FROM json_each(?2,'$.applicability') a WHERE a.value NOT IN(SELECT value FROM json_each(v.applicability_json))) AND (NOT json_extract(?2,'$.filterParent') OR v.parent_id IS json_extract(?2,'$.parent')) AND (json_extract(?2,'$.slug') IS NULL OR v.slug=json_extract(?2,'$.slug')) AND (json_extract(?2,'$.title') IS NULL OR instr(v.title_folded,json_extract(?2,'$.title'))>0) AND (json_extract(?2,'$.name') IS NULL OR convention_like(json_extract(?2,'$.name'),v.slug_folded) OR convention_like(json_extract(?2,'$.name'),v.title_folded))";
+/// The allowed scopes (?1) and filter document (?2) of `q`.
+fn filter(q: &ConventionQuery) -> Result<(String, String), StorageError> {
     states(&q.lifecycles)?;
     let scope = scopes(&q.scopes)?;
     let filter=json!({"lifecycles":q.lifecycles,"applicability":q.applicability,"filterParent":q.parent_id.is_some(),"parent":q.parent_id.as_ref().and_then(|p|p.as_ref()).map(Id::as_str),"slug":q.slug,"title":q.title.as_ref().map(|s|s.to_lowercase()),"name":q.name_pattern.as_ref().map(|s|s.to_lowercase())}).to_string();
-    let (position, order) = match q.order {
+    Ok((scope, filter))
+}
+/// The SQL order of `order`, and the keyset condition over ?3 (id), ?5 (sort order), ?6 (title).
+fn order(order: &ConventionOrder) -> (&'static str, &'static str) {
+    match order {
         ConventionOrder::Id => ("h.id>?3", "h.id"),
         ConventionOrder::Title => (
             "(v.title COLLATE BINARY,h.id)>(?6,?3)",
@@ -103,9 +105,19 @@ fn conventions(
             "(v.sort_order,v.title COLLATE BINARY,h.id)>(?5,?6,?3)",
             "v.sort_order,v.title COLLATE BINARY,h.id",
         ),
-    };
+    }
+}
+fn conventions(
+    conn: &Connection,
+    q: &ConventionQuery,
+    after: Option<&ConventionPosition>,
+    limit: u16,
+) -> Result<Vec<StoredConvention>, StorageError> {
+    let limit = page(limit)?;
+    let (scope, filter) = filter(q)?;
+    let (position, order) = order(&q.order);
     let sql = format!(
-        "SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision WHERE v.scope_key IN(SELECT value FROM json_each(?1)) AND (json_array_length(?2,'$.lifecycles')=0 OR v.lifecycle IN(SELECT value FROM json_each(?2,'$.lifecycles'))) AND NOT EXISTS(SELECT 1 FROM json_each(?2,'$.applicability') a WHERE a.value NOT IN(SELECT value FROM json_each(v.applicability_json))) AND (NOT json_extract(?2,'$.filterParent') OR v.parent_id IS json_extract(?2,'$.parent')) AND (json_extract(?2,'$.slug') IS NULL OR v.slug=json_extract(?2,'$.slug')) AND (json_extract(?2,'$.title') IS NULL OR instr(v.title_folded,json_extract(?2,'$.title'))>0) AND (json_extract(?2,'$.name') IS NULL OR convention_like(json_extract(?2,'$.name'),v.slug_folded) OR convention_like(json_extract(?2,'$.name'),v.title_folded)) AND (?3 IS NULL OR {position}) AND (?5 IS ?5) AND (?6 IS ?6) ORDER BY {order} LIMIT ?4"
+        "SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision WHERE {FILTER} AND (?3 IS NULL OR {position}) AND (?5 IS ?5) AND (?6 IS ?6) ORDER BY {order} LIMIT ?4"
     );
     let mut stmt = db(conn.prepare_cached(&sql))?;
     db(db(stmt.query_map(

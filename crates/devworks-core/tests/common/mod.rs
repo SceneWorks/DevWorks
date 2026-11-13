@@ -3020,6 +3020,9 @@ impl KnowledgeRead for Unsupported {
     fn knowledge_claim_stale(&self, _: &Id) -> Result<bool, StorageError> {
         nope()
     }
+    fn knowledge_claim_tally(&self, _: &Id) -> Result<ClaimTally, StorageError> {
+        nope()
+    }
     fn knowledge_source_head(&self, _: &str) -> Result<Option<String>, StorageError> {
         nope()
     }
@@ -3472,6 +3475,13 @@ impl UsageRead for Unsupported {
     fn inference_attempts(
         &self,
         _filter: &UsageAttemptFilter,
+        _after: Option<&Id>,
+        _limit: u16,
+    ) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
+        nope()
+    }
+    fn unquiesced_attempts(
+        &self,
         _after: Option<&Id>,
         _limit: u16,
     ) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
@@ -4294,6 +4304,14 @@ impl ConventionIndexRead for Unsupported {
         nope()
     }
     fn convention_index_head(&self, _: &Id) -> Result<Option<StoredConventionIndex>, StorageError> {
+        nope()
+    }
+    fn convention_index_gaps(
+        &self,
+        _: &ConventionQuery,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<Vec<(Id, String)>, StorageError> {
         nope()
     }
     fn convention_index_generation(
