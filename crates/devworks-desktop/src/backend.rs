@@ -647,97 +647,17 @@ struct Pending {
     query: Option<PendingQuery>,
 }
 
-/// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
-pub const COMMANDS: &[&str] = &[
-    "projects.purge",
-    "projects.prepare_purge",
-    "code.set_trust",
-    "help.generate_capability_docs",
-    "router.price_refresh",
-    "router.price_override",
-    "approvals.record_human_decision",
-    "approvals.propose",
-    "notifications.mark_read",
-    "notifications.acknowledge",
-    "notifications.settings",
-    "sessions.start",
-    "sessions.append_message",
-    "settings.save_revision",
-    "artifacts.delete",
-    "artifacts.save",
-    "addons.install",
-    "addons.update",
-    "addons.enable",
-    "addons.disable",
-    "addons.rollback",
-    "addons.uninstall",
-    "addons.configure",
-    "router.configure",
-    "router.pin",
-    "router.route",
-    "mcp.configure",
-    "mcp.connect",
-    "mcp.disable",
-    "mcp.remove",
-    "mcp.discover",
-    "mcp.select_tools",
-    "mcp.classify_tool",
-    "projects.create",
-    "projects.edit",
-    "projects.membership",
-    "projects.archive",
-    "projects.restore",
-    "projects.delete",
-    "repositories.remove_index",
-    "indexing.index",
-    "indexing.reindex",
-    "indexing.cancel",
-    "indexing.refresh_overlay",
-    "indexing.retire_view",
-    "indexing.configure_sources",
-    "knowledge.record",
-    "knowledge.revise",
-    "knowledge.tag",
-    "knowledge.verify",
-    "knowledge.retract",
-    "knowledge.challenge",
-    "knowledge.promote",
-    "knowledge.scope",
-    "knowledge.delete_selected",
-    "knowledge.relate",
-    "knowledge.delete_by_source",
-    "knowledge.import_user_data",
-    "jobs.create",
-    "jobs.edit",
-    "jobs.enable",
-    "jobs.disable",
-    "jobs.delete",
-    "jobs.run_now",
-    "jobs.cancel",
-    "features.create",
-    "features.edit",
-    "features.edit_plan",
-    "features.prioritize",
-    "features.request_plan_approval",
-    "issues.create",
-    "issues.prioritize",
-    "tasks.create",
-    "tasks.edit",
-    "tasks.move",
-    "tasks.prioritize",
-    "tasks.dependency_links",
-    "tasks.set_feature",
-    "workflows.create_status",
-    "workflows.rename_status",
-    "workflows.order",
-    "workflows.reassign_and_remove",
-    "next_work.claim_project_queue",
-    "next_work.claim_feature_task",
-    "next_work.release_claim",
-    "runs.start",
-    "runs.pause",
-    "runs.continue",
-];
+/// Whether the core registry binds `operation` in command mode: every such operation is
+/// restorable, so a command the shell adds later is never dropped at relaunch.
+fn registered_command(operation: &str) -> Option<&'static str> {
+    devworks_core::registry::find(operation)
+        .filter(|d| {
+            d.modes
+                .iter()
+                .any(|m| m.mode == devworks_core::registry::Mode::Command)
+        })
+        .map(|d| d.name)
+}
 
 /// A command whose outcome is still not known after its resubmissions.
 #[derive(Clone, Debug)]
@@ -766,7 +686,7 @@ impl Unresolved {
         frame: Vec<u8>,
         dispatch: CommandDispatch,
     ) -> Option<Self> {
-        let operation = COMMANDS.iter().copied().find(|c| *c == operation)?;
+        let operation = registered_command(operation)?;
         if dispatch == CommandDispatch::HumanDecision
             && operation != "approvals.record_human_decision"
         {
@@ -1342,63 +1262,52 @@ impl Drop for Client {
 mod tests {
     use super::*;
 
-    /// Every command operation the shell builds a frame for survives a relaunch: an operation
-    /// left out of [`COMMANDS`] would be dropped from the unresolved list it was kept in.
+    /// Every operation the core registry binds in command mode survives a relaunch, and a
+    /// query-only or unknown operation does not. The shell cannot send a command that is
+    /// missing from the registry, so no source scan is needed.
     #[test]
-    fn every_command_the_shell_sends_is_restorable() {
-        let sources = [
-            include_str!("shell.rs"),
-            include_str!("shell/projects.rs"),
-            include_str!("shell/indexing.rs"),
-            include_str!("ops.rs"),
-        ];
-        let mut found = std::collections::BTreeSet::new();
-        for text in sources {
-            for (i, _) in text.match_indices('"') {
-                let rest = &text[i + 1..];
-                let Some(end) = rest.find('"') else { continue };
-                let name = &rest[..end];
-                let shaped = name.split_once('.').is_some_and(|(f, o)| {
-                    !f.is_empty()
-                        && !o.is_empty()
-                        && name
-                            .bytes()
-                            .all(|b| b.is_ascii_lowercase() || b == b'.' || b == b'_')
-                });
-                if !shaped {
-                    continue;
-                }
-                if let Some(d) = devworks_core::registry::find(name)
-                    && d.modes
-                        .iter()
-                        .all(|m| m.mode == devworks_core::registry::Mode::Command)
-                {
-                    found.insert(name.to_owned());
-                }
-            }
+    fn every_registered_command_is_restorable() {
+        let mut commands = 0;
+        for d in devworks_core::registry::all() {
+            let is_command = d
+                .modes
+                .iter()
+                .any(|m| m.mode == devworks_core::registry::Mode::Command);
+            let restored = Unresolved::restored(Slot::SettingsSave, "l".into(), d.name, Vec::new());
+            assert_eq!(
+                restored.is_some(),
+                is_command,
+                "{} restorable must match its command mode",
+                d.name
+            );
+            commands += usize::from(is_command);
         }
-        for indexing in [
-            "indexing.index",
-            "indexing.reindex",
-            "indexing.cancel",
-            "indexing.refresh_overlay",
-            "indexing.retire_view",
-            "indexing.configure_sources",
+        assert!(commands > 0);
+        for op in [
+            "roles.draft",
+            "skills.draft",
+            "roles.rollback",
+            "skills.rollback",
+            "agents.post",
+            "agents.ack",
+            "schemas.configure",
+            "schemas.refresh",
+            "schemas.remove_index",
         ] {
-            assert!(found.contains(indexing), "{indexing} is sent by the shell");
-        }
-        // Kept across a relaunch by its own record (an attachment's exact frame in the pending
-        // memory, see `memory.rs`), not by the unresolved-command list.
-        let own_restore = ["artifacts.save"];
-        for op in found
-            .iter()
-            .filter(|op| !own_restore.contains(&op.as_str()))
-        {
             assert!(
                 Unresolved::restored(Slot::SettingsSave, "l".into(), op, Vec::new()).is_some(),
-                "{op} is sent by the shell but would be dropped at relaunch"
+                "{op}"
             );
         }
+        assert!(
+            Unresolved::restored(
+                Slot::SettingsSave,
+                "l".into(),
+                "no.such_operation",
+                Vec::new()
+            )
+            .is_none()
+        );
     }
 }
 
