@@ -624,6 +624,15 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "98b89612ce3caecfafb3533de350b23c0cf6f883e6834944ec8a71a7901a9677",
         rebuilds_tables: true,
     },
+    // Two partial indexes only: prior builds read and write the store unchanged.
+    Migration {
+        version: 54,
+        minimum_reader: 53,
+        minimum_writer: 53,
+        sql: include_str!("migrations/0054_root_activity_indexes.sql"),
+        expected_sha256: "5aac48f5b8bb5d074caf82c25eb26595cc6cfce2f04831854edff3eb1e3c5e0e",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

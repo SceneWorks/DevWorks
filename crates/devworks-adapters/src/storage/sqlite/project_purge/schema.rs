@@ -24,9 +24,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// `PRAGMA optimize` that clean shutdown runs) hold no project rows and are not part of the digest.
 /// Migration 53 rebuilds watchers (match and file columns) and watcher_events (several events per
 /// watcher, match_count); both keep their project owner and add no table or ownership edge, and a
-/// project's purge still removes all of their rows.
+/// project's purge still removes all of their rows. Migration 54 adds two partial indexes,
+/// owned_process_root_unsettled and owned_containers_root_agent_work; it adds no table, column
+/// or ownership edge, and both tables keep their purge policy.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "812180517e5371e73f697e8453fcf7611ba29ce30a6506cf7001128d1f8b6844";
+    "e7f43e4976932978e6c15c00f0a981c0c5ec5afdf4d88b8f8d5d8b4c0e03cd61";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

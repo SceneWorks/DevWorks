@@ -12,9 +12,12 @@ use crate::protocol::records::{
     CriterionState, LeaseState, WorkItemType, WorkKind,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::{ActorId, DomainErrorCode, Id, ProjectId, RevisionDimension, RootId};
+use crate::protocol::{
+    ActorId, AssignmentId, DomainErrorCode, Id, ProjectId, RevisionDimension, RootId,
+};
+use crate::services::runs::activity::RootActivity;
 use crate::services::runs::scope::{PlanState, Readiness};
-use crate::services::runs::{ControlService, Target, control_of, root_assignments};
+use crate::services::runs::{ControlService, Gate, Target, control_of, root_assignments};
 use crate::services::sessions::{Refusal, counter};
 use serde_json::json;
 
@@ -283,145 +286,169 @@ fn has_execution(tx: &mut dyn WriteTransaction, w: &StoredWork) -> Result<bool, 
     }
     Ok(false)
 }
-/// Eligibility shared by both queue scopes. Ownership is filtered separately, after these gates.
+/// Why a queued item was not allocated. The run gates come from [`ControlService::evaluate`]'s
+/// conditions; the others are the allocator's own (workflow status, caller filters, ownership).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Reason {
+    Pause,
+    Prerequisite,
+    Plan,
+    Readiness,
+    Question,
+    Hold,
+    Archived,
+    Assignment,
+    Filter,
+    Claimed,
+    Running,
+    Handoff,
+    /// Not in a Ready or In Progress status.
+    Status,
+}
+impl Reason {
+    fn of(gate: Gate) -> Self {
+        match gate {
+            Gate::Archived => Self::Archived,
+            Gate::Pause => Self::Pause,
+            Gate::Hold => Self::Hold,
+            Gate::Prerequisite => Self::Prerequisite,
+            Gate::Question => Self::Question,
+            Gate::Plan => Self::Plan,
+            Gate::Readiness { .. } => Self::Readiness,
+            Gate::Assignment => Self::Assignment,
+        }
+    }
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pause => "pause",
+            Self::Prerequisite => "prerequisite",
+            Self::Plan => "plan",
+            Self::Readiness => "readiness",
+            Self::Question => "question",
+            Self::Hold => "hold",
+            Self::Archived => "archived",
+            Self::Assignment => "assignment",
+            Self::Filter => "filter",
+            Self::Claimed => "claimed",
+            Self::Running => "running",
+            Self::Handoff => "handoff",
+            Self::Status => "no_ready_work",
+        }
+    }
+}
+/// The `NoEligible` reason: every distinct cause, comma-separated in a fixed order. Items that
+/// are not Ready or In Progress count only when nothing else held work back.
+pub(crate) fn no_eligible_reason(reasons: &std::collections::BTreeSet<Reason>) -> String {
+    let causes: Vec<&str> = reasons
+        .iter()
+        .filter(|r| **r != Reason::Status)
+        .map(|r| r.as_str())
+        .collect();
+    if causes.is_empty() {
+        Reason::Status.as_str().to_owned()
+    } else {
+        causes.join(",")
+    }
+}
+/// The first condition that holds `w`'s implementation, reading [`ControlService::evaluate`].
+/// With `assessable`, readiness an assessment can establish is reported apart, not as a hold.
+fn holds(
+    tx: &mut dyn WriteTransaction,
+    service: &ControlService,
+    root: &WorkRoot,
+    target: &Target,
+) -> Result<(Option<Reason>, bool), StorageError> {
+    let control = service.evaluate(tx.runs(), root, target, ActivationPurpose::Implementation)?;
+    let mut needs_assessment = false;
+    for c in &control.conditions {
+        if c.gate == (Gate::Readiness { assessable: true }) {
+            needs_assessment = true;
+        } else {
+            return Ok((Some(Reason::of(c.gate)), needs_assessment));
+        }
+    }
+    Ok((None, needs_assessment))
+}
+/// Eligibility shared by both queue scopes. Every run gate (pause, holds, prerequisites,
+/// blocking questions, plan, readiness, findings, repository scope) is the implementation
+/// eligibility [`ControlService::evaluate`] derives; this adds only the workflow status and the
+/// queue structure of a feature. Ownership is filtered separately, after these gates.
 fn eligible(
     tx: &mut dyn WriteTransaction,
     service: &ControlService,
     w: &StoredWork,
     feature: Option<&StoredWork>,
     assessment: bool,
-) -> Result<bool, StorageError> {
+) -> Result<Result<(), Reason>, StorageError> {
     let statuses = tx.work().statuses(&w.project_id)?;
     if w.status_id
         .as_ref()
         .and_then(|id| super::workflow::semantic_of(&statuses, id))
         .is_none_or(|s| s != super::workflow::READY && s != super::workflow::IN_PROGRESS)
     {
-        return Ok(false);
+        return Ok(Err(Reason::Status));
     }
-    if !tx.work().open_prerequisites(&w.id)?.is_empty() {
-        return Ok(false);
-    }
-    if tx.runs().open_blocking_question(&RootId(w.id.clone()))? {
-        return Ok(false);
-    }
-    let r = root(feature.unwrap_or(w));
-    let control = service.evaluate(tx.runs(), &r, &Target::Root, ActivationPurpose::Planning)?;
-    if !control.eligible {
-        return Ok(false);
+    let (held, needs_assessment) = holds(tx, service, &root(w), &Target::Root)?;
+    if let Some(reason) = held {
+        return Ok(Err(reason));
     }
     if let Some(f) = feature {
-        if !tx.work().open_prerequisites(&f.id)?.is_empty() {
-            return Ok(false);
-        }
-        if !crate::services::runs::active_blockers(
-            tx.runs(),
-            &BlockerFilter::RootLevel(RootId(w.id.clone())),
-        )?
-        .is_empty()
-        {
-            return Ok(false);
-        }
-        if control_of(tx.runs(), &RootId(w.id.clone()))?.desired == DesiredExecution::Paused {
-            return Ok(false);
-        }
+        // The feature's coordinator already runs this card: its assignment must be eligible too.
+        let r = root(f);
         if let Some(assignment) = tx.runs().live_assignment_for_work(&RootId(w.id.clone()))?
             && assignment.root_id == r.id
-            && !service
+            && let Some(c) = service
                 .evaluate(
                     tx.runs(),
                     &r,
                     &Target::Assignment(assignment.id),
                     ActivationPurpose::Implementation,
                 )?
-                .eligible
+                .conditions
+                .first()
         {
-            return Ok(false);
+            return Ok(Err(Reason::of(c.gate)));
         }
-        let plan = service.scope().plan(tx.runs(), &r)?;
-        let PlanState::Approved { feature: unit, .. } = &plan else {
-            return Ok(false);
-        };
-        let mut needs_assessment =
-            matches!(unit.readiness, Readiness::Missing | Readiness::Stale { .. });
-        if !unit.readiness.is_current() && !needs_assessment {
-            return Ok(false);
-        }
-        let brief = super::model::WorkBrief::of(w)?;
-        for key in &brief.inherits {
-            let Some(unit) = plan.unit(Some(key.as_str())) else {
-                return Ok(false);
-            };
-            if !unit.readiness.is_current() {
-                if matches!(unit.readiness, Readiness::Missing | Readiness::Stale { .. }) {
-                    needs_assessment = true;
-                } else {
-                    return Ok(false);
-                }
-            }
-        }
-        if let Some((_, readiness)) = tx.runs().feature_plan(&r.id)?.and_then(|p| p.readiness)
-            && super::readiness::gating_finding(&readiness, &w.id).is_some()
-        {
-            return Ok(false);
-        }
-        let scope = tx
-            .work()
-            .feature_plan(&f.id)?
-            .and_then(|s| s.approved)
-            .and_then(|p| super::model::active_of(Some(&p)));
-        if let Some(p) = scope
-            && tx
-                .work()
-                .work_repositories(&w.id)?
-                .iter()
-                .any(|id| !p.draft.repository_ids.0.contains(id))
-        {
-            return Ok(false);
-        }
-        return Ok(!needs_assessment || assessment);
+        return Ok(if needs_assessment && !assessment {
+            Err(Reason::Readiness)
+        } else {
+            Ok(())
+        });
     }
     if !w.is_feature() {
-        return Ok(service
-            .evaluate(
-                tx.runs(),
-                &r,
-                &Target::Root,
-                ActivationPurpose::Implementation,
-            )?
-            .eligible);
+        return Ok(Ok(()));
     }
+    // A feature is allocated to assess (missing or stale readiness) or to run its cards.
+    let r = root(w);
     let plan = service.scope().plan(tx.runs(), &r)?;
-    let PlanState::Approved { feature: unit, .. } = &plan else {
-        return Ok(false);
+    let PlanState::Approved { units, .. } = &plan else {
+        return Ok(Err(Reason::Plan));
     };
-    if matches!(unit.readiness, Readiness::Blocked { .. }) {
-        return Ok(false);
-    }
     if super::membership::needs_root_activation(tx, &r.id)? {
-        return Ok(true);
+        return Ok(Ok(()));
     }
     let (_, tasks) = super::queue::queue(tx.work(), &w.project_id, Some(&w.id))?;
     if tasks.is_empty() {
         if super::membership::awaiting_outgoing_handoff(tx, &r.id)? {
-            return Ok(false);
+            return Ok(Err(Reason::Handoff));
         }
-        if let PlanState::Approved { units, .. } = &plan
-            && units
-                .values()
-                .any(|u| matches!(u.readiness, Readiness::Blocked { .. }))
+        if units
+            .values()
+            .any(|u| matches!(u.readiness, Readiness::Blocked { .. }))
         {
-            return Ok(false);
+            return Ok(Err(Reason::Readiness));
         }
-        return Ok(unit.readiness.is_current()
-            || matches!(unit.readiness, Readiness::Missing | Readiness::Stale { .. }));
+        return Ok(Ok(()));
     }
+    let mut first = Reason::Status;
     for candidate in tasks {
-        if eligible(tx, service, &candidate.work, Some(w), true)? {
-            return Ok(true);
+        match eligible(tx, service, &candidate.work, Some(w), true)? {
+            Ok(()) => return Ok(Ok(())),
+            Err(reason) if first == Reason::Status => first = reason,
+            Err(_) => {}
         }
     }
-    Ok(false)
+    Ok(Err(first))
 }
 /// Membership/status changes fence reservations, while a transferred execution keeps its owner.
 pub fn invalidate_work(
@@ -638,36 +665,49 @@ impl WorkService {
         let (_, mut candidates) = super::queue::queue(tx.work(), project, feature.map(|f| &f.id))?;
         // Retained Next behavior: recover interrupted in-progress work before new Ready work.
         candidates.sort_by_key(|c| c.semantic != super::workflow::IN_PROGRESS);
+        // Why each skipped candidate was skipped, reported when nothing is eligible (WORK-10).
+        let mut reasons = std::collections::BTreeSet::new();
         for c in candidates {
             let w = c.work;
+            if c.semantic != super::workflow::READY && c.semantic != super::workflow::IN_PROGRESS {
+                reasons.insert(Reason::Status);
+                continue;
+            }
             let brief = super::model::WorkBrief::of(&w)?;
-            if let Some(repository) = &filters.repository_id
-                && !tx.work().work_repositories(&w.id)?.contains(repository)
-            {
-                continue;
-            }
-            if filters.task_type.as_ref().is_some_and(|kind| {
-                brief.task_type.as_ref().is_none_or(|stored| {
-                    std::mem::discriminant(stored) != std::mem::discriminant(kind)
+            let filtered = if let Some(repository) = &filters.repository_id {
+                !tx.work().work_repositories(&w.id)?.contains(repository)
+            } else {
+                false
+            };
+            if filtered
+                || filters.task_type.as_ref().is_some_and(|kind| {
+                    brief.task_type.as_ref().is_none_or(|stored| {
+                        std::mem::discriminant(stored) != std::mem::discriminant(kind)
+                    })
                 })
-            }) {
+                || filters.label.as_ref().is_some_and(|label| {
+                    !brief
+                        .labels
+                        .iter()
+                        .any(|l| l.0.to_lowercase() == label.to_lowercase())
+                })
+            {
+                reasons.insert(Reason::Filter);
                 continue;
             }
-            if filters.label.as_ref().is_some_and(|label| {
-                !brief
-                    .labels
-                    .iter()
-                    .any(|l| l.0.to_lowercase() == label.to_lowercase())
-            }) {
+            if let Err(reason) = eligible(tx, &self.runs, &w, feature, false)? {
+                reasons.insert(reason);
                 continue;
             }
-            if !eligible(tx, &self.runs, &w, feature, false)? || has_execution(tx, &w)? {
+            if has_execution(tx, &w)? {
+                reasons.insert(Reason::Running);
                 continue;
             }
             if all
                 .iter()
                 .any(|c| c.work_id == w.id && held.contains(&c.id))
             {
+                reasons.insert(Reason::Claimed);
                 continue;
             }
             // Expired reservations are retired before another owner gets a fresh monotonic fence.
@@ -779,7 +819,7 @@ impl WorkService {
         }
         let value = AllocationSelection::Current(AllocationOutcome::NoEligible {
             reused: false,
-            reason: crate::protocol::support::BoundedText("no_ready_work".into()),
+            reason: crate::protocol::support::BoundedText(no_eligible_reason(&reasons)),
             evidence: Some(
                 Refusal::new(
                     DomainErrorCode::DependencyBlocked,
@@ -835,6 +875,8 @@ impl WorkService {
         })
     }
 }
+/// Whether the claimed card's own work inside its root has quiesced: no activation of the card,
+/// no live assignment for it, and none of its process trees or claimed deliveries still running.
 fn work_quiesced(
     tx: &mut dyn WriteTransaction,
     claim: &StoredAllocationClaim,
@@ -843,74 +885,46 @@ fn work_quiesced(
         return quiesced(tx, &claim.root_id);
     }
     let work = RootId(claim.work_id.clone());
-    if tx.runs().live_activation(&work)?.is_some() {
+    let card = RootActivity::of(tx, &work)?;
+    if card.activation.is_some() || !card.processes.is_empty() {
         return Ok(false);
     }
     let assignments = root_assignments(tx.runs(), &claim.root_id, false)?;
-    let ids: std::collections::HashSet<_> = assignments
-        .iter()
-        .filter(|a| a.work_id == work)
-        .map(|a| a.id.clone())
-        .collect();
     if assignments
         .iter()
         .any(|a| a.work_id == work && a.state.is_live())
     {
         return Ok(false);
     }
-    let mut after = None;
-    loop {
-        let page = tx
-            .resources()
-            .processes(&ProcessFilter::Unsettled, after.as_ref(), PAGE)?;
-        if page.iter().any(|p| {
-            p.root_id.as_ref() == Some(&work)
-                || p.assignment_id.as_ref().is_some_and(|a| ids.contains(a))
-        }) {
-            return Ok(false);
-        }
-        if page.len() < usize::from(PAGE) {
-            break;
-        }
-        after = page.last().map(|p| p.id.clone());
-    }
-    let mut after = None;
-    loop {
-        let page = tx
-            .runs()
-            .root_deliveries(&claim.root_id, after.as_ref(), PAGE)?;
-        for id in &page {
-            if let Some(entry) = tx.queue().entry(id)?
-                && entry.state == QueueState::Claimed
-            {
-                let ours = if let Some(operation) = entry.operation_id {
-                    tx.operations().operation(&operation)?.is_some_and(|op| {
-                        op.assignment_id.as_ref().is_some_and(|a| ids.contains(a))
-                    })
+    let ids: std::collections::HashSet<_> = assignments
+        .iter()
+        .filter(|a| a.work_id == work)
+        .map(|a| a.id.clone())
+        .collect();
+    let root = RootActivity::of(tx, &claim.root_id)?;
+    let ours = |assignment: Option<&AssignmentId>| assignment.is_some_and(|a| ids.contains(a));
+    Ok(!root
+        .processes
+        .iter()
+        .any(|p| ours(p.assignment_id.as_ref()))
+        && !root.deliveries.iter().any(|d| {
+            d.claimed
+                && if d.operation {
+                    ours(d.assignment.as_ref())
                 } else {
-                    entry.root_id.as_ref() == Some(&work)
-                };
-                if ours {
-                    return Ok(false);
+                    d.work.as_ref() == Some(&work)
                 }
-            }
-        }
-        if page.len() < usize::from(PAGE) {
-            break;
-        }
-        after = page.last().cloned();
-    }
-    Ok(true)
+        }))
 }
+/// Whether nothing of `root` still runs: no activation (whatever its owner), nothing admitted,
+/// no process tree, no open inference attempt, and the same for its linked cards and for the
+/// cards its assignments work on.
 fn quiesced(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
     if !tx.runs().inference_quiescent(root)? {
         return Ok(false);
     }
-
-    if tx.runs().live_activation(root)?.is_some()
-        || !crate::services::runs::recovery::root_quiesced(tx, root)?
-        || !crate::services::runs::recovery::unsettled_processes(tx, root)?.is_empty()
-    {
+    let activity = RootActivity::of(tx, root)?;
+    if activity.activation.is_some() || !activity.quiesced() {
         return Ok(false);
     }
     if let Some(work) = tx.sessions().work_root(root)? {
@@ -924,11 +938,7 @@ fn quiesced(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, Storag
         if a.state == AssignmentState::Active {
             return Ok(false);
         }
-        if a.work_id != *root
-            && (!crate::services::runs::recovery::root_quiesced(tx, &a.work_id)?
-                || !crate::services::runs::recovery::unsettled_processes(tx, &a.work_id)?
-                    .is_empty())
-        {
+        if a.work_id != *root && !RootActivity::of(tx, &a.work_id)?.quiesced() {
             return Ok(false);
         }
     }
@@ -1013,7 +1023,7 @@ pub fn check_start(
                     Some(&c.id),
                 ));
             }
-            if !eligible(tx, service, &work, None, false)? {
+            if eligible(tx, service, &work, None, false)?.is_err() {
                 return Err(super::refuse(
                     DomainErrorCode::DependencyBlocked,
                     "claim",
@@ -1104,7 +1114,7 @@ fn fully_dependency_blocked(
     let mut dependency = false;
     for c in unfinished {
         dependency |= !c.open_prerequisites.is_empty();
-        if eligible(tx, service, &c.work, Some(w), true)? {
+        if eligible(tx, service, &c.work, Some(w), true)?.is_ok() {
             return Ok(false);
         }
     }
@@ -1384,7 +1394,7 @@ pub(crate) fn request_handoff_yield(
     };
     let (_, tasks) = super::queue::queue(tx.work(), &feature.project_id, Some(&feature.id))?;
     for task in tasks {
-        if eligible(tx, service, &task.work, Some(&feature), true)? {
+        if eligible(tx, service, &task.work, Some(&feature), true)?.is_ok() {
             return Ok(());
         }
     }

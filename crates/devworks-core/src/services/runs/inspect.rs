@@ -187,16 +187,14 @@ impl ControlService {
         let mut processes = Vec::new();
         let mut after: Option<Id> = None;
         loop {
-            let page =
-                snapshot
-                    .resources()
-                    .processes(&ProcessFilter::Unsettled, after.as_ref(), 500)?;
+            let page = snapshot.resources().processes(
+                &ProcessFilter::UnsettledRoot(root.id.clone()),
+                after.as_ref(),
+                500,
+            )?;
             let more = page.len() == 500;
             after = page.last().map(|p| p.id.clone());
-            processes.extend(
-                page.into_iter()
-                    .filter(|p| p.root_id.as_ref() == Some(&root.id)),
-            );
+            processes.extend(page);
             if !more {
                 break;
             }

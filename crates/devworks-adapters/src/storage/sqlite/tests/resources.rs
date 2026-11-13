@@ -111,6 +111,17 @@ fn owned_container_intent_survives_restart_and_stop_listing_is_agent_scoped() {
     });
     assert_eq!(listing.len(), 1);
     assert_eq!(listing[0].id, intent.id);
+    let of_root = |r: &str| {
+        fx.read(|snapshot| {
+            snapshot.resources().containers(
+                &ContainerFilter::AgentWorkMayRunForRoot(root(r)),
+                None,
+                10,
+            )
+        })
+    };
+    assert_eq!(of_root("root-a").len(), 1, "the root's running container");
+    assert!(of_root("root-b").is_empty(), "another root's container");
     let purge = fx
         .read(|r| r.projects().purge_planning(&project("project-a")))
         .unwrap();
