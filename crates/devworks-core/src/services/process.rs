@@ -251,6 +251,9 @@ struct Live {
     record: StoredProcess,
     /// The archival epoch of its project the launch was recorded under (`None`: no project).
     epoch: Option<i64>,
+    /// A stop found the tree running: kept until its settlement is recorded, so a retried poll
+    /// or cancel still records that the stop ended it.
+    stopped: bool,
 }
 
 pub struct ProcessSupervisor {
@@ -507,6 +510,7 @@ impl ProcessSupervisor {
                             tree,
                             epoch,
                             record: running.clone(),
+                            stopped: false,
                         })),
                     );
                     self.pending_cancel
@@ -592,7 +596,7 @@ impl ProcessSupervisor {
                     &mut record,
                     ProcessPhase::Reaped,
                     s.exit_code,
-                    None,
+                    live.stopped.then(|| STOPPED_ON_REQUEST.to_owned()),
                     "ProcessReaped",
                 )?;
                 drop(live);
@@ -676,8 +680,9 @@ impl ProcessSupervisor {
             Ok(s) if s.empty => Some(s),
             _ => None,
         };
-        let stopped = status.is_none();
-        if stopped && record.phase == ProcessPhase::Running {
+        live.stopped |= status.is_none();
+        let stopped = live.stopped;
+        if status.is_none() && record.phase == ProcessPhase::Running {
             match self.write_phase(
                 &mut record,
                 ProcessPhase::Stopping,
@@ -690,7 +695,7 @@ impl ProcessSupervisor {
         }
         let mut observed = String::new();
         let mut graceful = true;
-        let cooperative = if stopped {
+        let cooperative = if status.is_none() {
             live.tree.request_stop()
         } else {
             Ok(true)

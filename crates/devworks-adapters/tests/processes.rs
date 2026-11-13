@@ -2983,7 +2983,28 @@ fn a_refused_record_write_never_skips_the_native_stop() {
         (read(&first), read(&second)),
         (ProcessPhase::Reaped, ProcessPhase::Reaped)
     );
+    // The retried settlement still records that the stop ended each tree.
+    let detail = |p: &OwnedProcess| {
+        let id = p.id.clone();
+        fx.read(move |r| r.resources().process(&id)).unwrap().detail
+    };
+    assert_eq!(detail(&first).as_deref(), Some(STOPPED_ON_REQUEST));
+    assert_eq!(detail(&second).as_deref(), Some(STOPPED_ON_REQUEST));
     assert!(sup.owned().is_empty());
+    // So does a retry by polling.
+    let third = launch();
+    refuse.store(true, Ordering::SeqCst);
+    assert!(
+        sup.cancel(&third, Duration::from_millis(500), Duration::from_secs(10))
+            .is_err()
+    );
+    refuse.store(false, Ordering::SeqCst);
+    assert!(matches!(
+        sup.poll(&third),
+        Ok(Some(StopOutcome::Reaped { .. }))
+    ));
+    assert_eq!(read(&third), ProcessPhase::Reaped);
+    assert_eq!(detail(&third).as_deref(), Some(STOPPED_ON_REQUEST));
 }
 
 // ---------------------------------------------------------------------------------------------
