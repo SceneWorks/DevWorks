@@ -66,3 +66,13 @@ CREATE TRIGGER knowledge_challenges_tally_update AFTER UPDATE OF state, claim_id
  UPDATE knowledge_claims SET open_challenges = open_challenges + 1
   WHERE id = NEW.claim_id AND NEW.state = 'Open';
 END;
+
+-- A usage report reads the attempts and origins of its date range, and the late attempts of the
+-- requests made in it, through time indexes instead of paging all usage history.
+CREATE INDEX usage_attempts_created ON usage_attempts(created_at,attempt_id);
+CREATE INDEX usage_attempts_project_created ON usage_attempts(project_id,created_at,attempt_id);
+CREATE INDEX usage_attempts_request ON usage_attempts(request_id);
+CREATE INDEX router_requests_created ON router_requests(created_at,request_id);
+CREATE INDEX usage_origins_recorded ON usage_origins(recorded_at,source_kind,source_id);
+CREATE INDEX usage_origins_project_recorded
+ ON usage_origins(project_id,recorded_at,source_kind,source_id);

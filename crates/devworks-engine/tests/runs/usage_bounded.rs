@@ -207,3 +207,74 @@ fn a_streamed_frame_and_settled_history_cost_the_usage_host_no_store_work() {
     let large = recovery();
     assert_no_growth("usage recovery page", small, large);
 }
+
+/// A usage report page reads the attempts of its range: an Attempts page and an AssistantUsage
+/// page cost the same with 10 or 100 attempts made after the range.
+#[test]
+fn a_usage_report_page_costs_the_same_behind_tenfold_history_outside_its_range() {
+    use devworks_core::operations::router::UsageInput;
+    use devworks_core::services::usage::reports;
+    const DAY: i64 = 86_400_000;
+    let _native_case = native_runtime_case();
+    let h = Harness::new();
+    let counted = h.open_counted();
+    seed(&h);
+    let f = Fx::over(h, counted.store.clone());
+    let host = AttemptHost::new(f.store.clone(), f.service.clone(), router(&f));
+    let mut n = 0;
+    let mut attempt = || {
+        n += 1;
+        let (context, logical, request) = host_attempt(&f, n);
+        let Admission::Admitted { attempt, .. } = host
+            .admit(context, logical, ReportCategory::Other, request)
+            .unwrap()
+        else {
+            panic!("not admitted")
+        };
+        host.drive(
+            attempt.attempt_id,
+            Box::new(StreamingSource { frames: 0 }),
+            Cancellation::new(),
+        )
+        .unwrap();
+    };
+    let start = f.h.now();
+    for _ in 0..3 {
+        attempt();
+    }
+    f.h.advance(2 * DAY);
+    let info = f.store.info();
+    let ctx = devworks_core::context::HostIngress::new(f.store.as_ref()).context(
+        info.host_actor,
+        PrincipalKind::Host,
+        id("usage-report"),
+        id("native-report"),
+        devworks_core::protocol::Counter::new(info.restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    let page = |kind: &str| {
+        let input: UsageInput = serde_json::from_value(json!({"page": {"limit": 50},
+            "reportKind": kind, "startMs": start.to_string(),
+            "endMs": (start + DAY).to_string()}))
+        .unwrap();
+        counted
+            .count(|| {
+                read(f.store.as_ref(), |s| {
+                    reports::query(s, &ctx, &input, f.h.now())
+                        .map(|_| ())
+                        .map_err(|_| StorageError::InvalidRecord("usage report".into()))
+                })
+            })
+            .1
+    };
+    for _ in 0..10 {
+        attempt();
+    }
+    let small = (page("Attempts"), page("AssistantUsage"));
+    for _ in 0..90 {
+        attempt();
+    }
+    let large = (page("Attempts"), page("AssistantUsage"));
+    assert_no_growth("usage report Attempts page", small.0, large.0);
+    assert_no_growth("usage report AssistantUsage page", small.1, large.1);
+}

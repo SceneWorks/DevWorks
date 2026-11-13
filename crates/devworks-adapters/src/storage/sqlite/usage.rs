@@ -718,10 +718,123 @@ fn feature_totals(c: &Connection, id: &Id) -> Result<StoredFeatureUsageTotals, S
     out.legacy_observation_micro_usd = subtotal;
     Ok(out)
 }
+/// The attribute filters of a [`UsageAttemptFilter`] over attempt alias `a`, as ?3..?13
+/// (project, feature, work, assignment, session, job, -, -, actor, model, connection, purpose).
+const ATTEMPT_FILTER: &str = "(?3 IS NULL OR a.project_id=?3) AND (?4 IS NULL OR a.feature_id=?4) AND (?5 IS NULL OR a.work_id=?5) AND (?6 IS NULL OR a.assignment_id=?6) AND (?7 IS NULL OR a.session_id=?7) AND (?8 IS NULL OR a.job_run_id=?8) AND (?10 IS NULL OR a.actor_id=?10) AND (?11 IS NULL OR a.catalog_model_id=?11) AND (?12 IS NULL OR a.connection_id=?12) AND (?13 IS NULL OR a.purpose=?13)";
+fn attempt_columns() -> String {
+    ATTEMPT_COLS
+        .split(',')
+        .map(|c| format!("a.{c} AS {c}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+fn time_range(start: Option<i64>, end: Option<i64>) -> Result<(i64, i64), StorageError> {
+    range(start, end)?;
+    start
+        .zip(end)
+        .ok_or_else(|| invalid("a time-ordered usage page needs a start and an end"))
+}
+fn attempts_between(
+    c: &Connection,
+    f: &UsageAttemptFilter,
+    after: Option<&(i64, Id)>,
+    limit: u16,
+) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
+    let (start, end) = time_range(f.start_ms, f.end_ms)?;
+    let (at, id) = after.map_or((start, ""), |(at, id)| (*at, id.as_str()));
+    rows(
+        c,
+        &format!(
+            "SELECT {} FROM usage_attempts a WHERE (a.created_at,a.attempt_id)>(?1,?2) AND a.created_at<?9 AND {ATTEMPT_FILTER} ORDER BY a.created_at,a.attempt_id LIMIT ?14",
+            attempt_columns()
+        ),
+        params![
+            at,
+            id,
+            f.project_id.as_ref().map(|v| v.0.as_str()),
+            f.feature_id.as_ref().map(Id::as_str),
+            f.work_id.as_ref().map(Id::as_str),
+            f.assignment_id.as_ref().map(|v| v.0.as_str()),
+            f.session_id.as_ref().map(Id::as_str),
+            f.job_run_id.as_ref().map(Id::as_str),
+            end,
+            f.actor_id.as_ref().map(|v| v.0.as_str()),
+            f.model_id.as_ref().map(Id::as_str),
+            f.connection_id.as_ref().map(Id::as_str),
+            f.purpose,
+            page(limit)?
+        ],
+        decode_attempt,
+    )
+}
+fn late_attempts(
+    c: &Connection,
+    f: &UsageAttemptFilter,
+    after: Option<&Id>,
+    limit: u16,
+) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
+    let (start, end) = time_range(f.start_ms, f.end_ms)?;
+    // Driven from the requests created in the range; CROSS JOIN keeps that order.
+    rows(
+        c,
+        &format!(
+            "SELECT {} FROM router_requests r CROSS JOIN usage_attempts a ON a.request_id=r.request_id WHERE r.created_at>=?1 AND r.created_at<?9 AND a.created_at>=?9 AND a.attempt_id>?2 AND {ATTEMPT_FILTER} ORDER BY a.attempt_id LIMIT ?14",
+            attempt_columns()
+        ),
+        params![
+            start,
+            after.map_or("", Id::as_str),
+            f.project_id.as_ref().map(|v| v.0.as_str()),
+            f.feature_id.as_ref().map(Id::as_str),
+            f.work_id.as_ref().map(Id::as_str),
+            f.assignment_id.as_ref().map(|v| v.0.as_str()),
+            f.session_id.as_ref().map(Id::as_str),
+            f.job_run_id.as_ref().map(Id::as_str),
+            end,
+            f.actor_id.as_ref().map(|v| v.0.as_str()),
+            f.model_id.as_ref().map(Id::as_str),
+            f.connection_id.as_ref().map(Id::as_str),
+            f.purpose,
+            page(limit)?
+        ],
+        decode_attempt,
+    )
+}
+fn origins_between(
+    c: &Connection,
+    f: &UsageOriginFilter,
+    after: Option<&(i64, String, String)>,
+    limit: u16,
+) -> Result<Vec<StoredUsageOrigin>, StorageError> {
+    let (start, end) = time_range(f.start_ms, f.end_ms)?;
+    let (at, kind, id) = after.map_or((start, "", ""), |(at, kind, id)| {
+        (*at, kind.as_str(), id.as_str())
+    });
+    rows(
+        c,
+        &format!(
+            "SELECT {ORIGIN_COLS} FROM usage_origins WHERE (recorded_at,source_kind,source_id)>(?1,?2,?3) AND recorded_at<?4 AND (?5 IS NULL OR project_id=?5) AND (?6 IS NULL OR feature_id=?6) AND (?7 IS NULL OR source_kind=?7) ORDER BY recorded_at,source_kind,source_id LIMIT ?8"
+        ),
+        params![
+            at,
+            kind,
+            id,
+            end,
+            f.project_id.as_ref().map(|v| v.0.as_str()),
+            f.feature_id.as_ref().map(Id::as_str),
+            f.kind,
+            page(limit)?
+        ],
+        decode_origin,
+    )
+}
 macro_rules! usage_reads{($t:ty)=>{impl UsageRead for $t{
+ fn inference_attempts_between(&self,f:&UsageAttemptFilter,after:Option<&(i64,Id)>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{attempts_between(self.conn,f,after,limit)}
+ fn late_inference_attempts(&self,f:&UsageAttemptFilter,after:Option<&Id>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{late_attempts(self.conn,f,after,limit)}
+ fn usage_origins_between(&self,f:&UsageOriginFilter,after:Option<&(i64,String,String)>,limit:u16)->Result<Vec<StoredUsageOrigin>,StorageError>{origins_between(self.conn,f,after,limit)}
  fn inference_attempt(&self,id:&Id)->Result<Option<StoredInferenceAttempt>,StorageError>{attempt(self.conn,id)}
  fn inference_attempts(&self,f:&UsageAttemptFilter,after:Option<&Id>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{range(f.start_ms,f.end_ms)?;rows(self.conn,&format!("SELECT {ATTEMPT_COLS} FROM usage_attempts WHERE attempt_id>?1 AND (?2 IS NULL OR project_id=?2) AND (?3 IS NULL OR feature_id=?3) AND (?4 IS NULL OR work_id=?4) AND (?5 IS NULL OR assignment_id=?5) AND (?6 IS NULL OR session_id=?6) AND (?7 IS NULL OR job_run_id=?7) AND (?8 IS NULL OR created_at>=?8) AND (?9 IS NULL OR created_at<?9) AND (?10 IS NULL OR actor_id=?10) AND (?11 IS NULL OR catalog_model_id=?11) AND (?12 IS NULL OR connection_id=?12) AND (?13 IS NULL OR purpose=?13) ORDER BY attempt_id LIMIT ?14"),params![after.map_or("",Id::as_str),f.project_id.as_ref().map(|v|v.0.as_str()),f.feature_id.as_ref().map(Id::as_str),f.work_id.as_ref().map(Id::as_str),f.assignment_id.as_ref().map(|v|v.0.as_str()),f.session_id.as_ref().map(Id::as_str),f.job_run_id.as_ref().map(Id::as_str),f.start_ms,f.end_ms,f.actor_id.as_ref().map(|v|v.0.as_str()),f.model_id.as_ref().map(Id::as_str),f.connection_id.as_ref().map(Id::as_str),f.purpose,page(limit)?],decode_attempt)}
- fn unquiesced_attempts(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{let cols=ATTEMPT_COLS.split(',').map(|c|format!("a.{c} AS {c}")).collect::<Vec<_>>().join(",");rows(self.conn,&format!("SELECT {cols} FROM usage_attempt_balances b JOIN usage_attempts a ON a.attempt_id=b.attempt_id WHERE b.local_quiescent=0 AND b.attempt_id>?1 ORDER BY b.attempt_id LIMIT ?2"),params![after.map_or("",Id::as_str),page(limit)?],decode_attempt)}
+ fn unquiesced_attempts(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{let cols=attempt_columns();rows(self.conn,&format!("SELECT {cols} FROM usage_attempt_balances b JOIN usage_attempts a ON a.attempt_id=b.attempt_id WHERE b.local_quiescent=0 AND b.attempt_id>?1 ORDER BY b.attempt_id LIMIT ?2"),params![after.map_or("",Id::as_str),page(limit)?],decode_attempt)}
  fn usage_observation(&self,id:&Id,key:&str)->Result<Option<StoredUsageObservation>,StorageError>{observation(self.conn,id,key)}
  fn usage_observations(&self,id:&Id,after:Option<i64>,limit:u16)->Result<Vec<StoredUsageObservation>,StorageError>{nonnegative(after)?;rows(self.conn,&format!("SELECT {OBSERVATION_COLS} FROM usage_observations WHERE attempt_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3"),params![id.as_str(),after.unwrap_or(0),page(limit)?],decode_observation)}
  fn attempt_balance(&self,id:&Id)->Result<Option<StoredAttemptBalance>,StorageError>{balance(self.conn,id)}
