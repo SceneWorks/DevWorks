@@ -149,6 +149,7 @@ impl std::fmt::Debug for ModeBinding {
 }
 
 /// Registered binding of one catalog operation.
+#[derive(Clone)]
 pub struct OperationDescriptor {
     pub name: &'static str,
     pub family: &'static str,
@@ -165,6 +166,37 @@ pub struct OperationDescriptor {
     pub completion: bool,
     /// Every schema revision this operation accepts, ascending, starting at its explicit introduction revision.
     pub revisions: &'static [SchemaRevision],
+    /// The command runs native code with the desktop user's rights or writes outside DevWorks
+    /// storage. Under Project scope it needs a reviewed native grant.
+    pub native_execution: bool,
+    /// A non-human command needs an explicit approval of the exact request, under every profile.
+    pub approval_required: bool,
+    /// Only a human principal may use the operation (not the host, not an agent).
+    pub human_only: bool,
+    /// How a root-bound agent's assignment narrows the operation.
+    pub assignment_scope: AssignmentScope,
+}
+
+/// How a running agent's root and assignment narrow one operation. Every operation states one in
+/// `domain-spec.json` (`operationAuthority`); the generator refuses an operation without it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AssignmentScope {
+    /// Project-scoped: a root binding does not narrow it further.
+    Project,
+    /// The typed input must name the agent's root or its delegated work; a root-bound agent
+    /// without a live assignment is refused.
+    Root,
+    /// As [`Self::Root`], and refused to a root-bound Worker: only a coordinator steers its root.
+    Coordinator,
+    /// The typed input must name the assignment's own or shared references once an assignment is
+    /// bound; a root lineage without an assignment keeps its project policy.
+    Assignment,
+    /// Project-wide: refused to every root-bound agent.
+    RootDenied,
+    /// Project-wide: refused to an agent with a bound assignment.
+    AssignmentDenied,
+    /// Project administration: a root-bound agent may not run its commands.
+    Administration,
 }
 impl OperationDescriptor {
     pub fn binding(&self, mode: Mode) -> Option<&'static ModeBinding> {

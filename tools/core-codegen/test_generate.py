@@ -276,5 +276,45 @@ class SchemaRevisionRules(unittest.TestCase):
                     containing(generate.TYPES)
 
 
+class AuthorityAttributeRules(unittest.TestCase):
+    """Every registered operation states its authority attributes; nothing is inherited by omission."""
+
+    def setUp(self):
+        self.saved = copy.deepcopy(generate.OPERATION_AUTHORITY)
+
+    def tearDown(self):
+        generate.OPERATION_AUTHORITY.clear()
+        generate.OPERATION_AUTHORITY.update(self.saved)
+
+    def refused(self, message):
+        with self.assertRaises(SystemExit) as failure:
+            generate.operations()
+        self.assertIn(message, str(failure.exception))
+
+    def test_every_registered_operation_has_attributes(self):
+        generate.operations()
+        self.assertIn('assignment_scope: AssignmentScope::Coordinator',
+                      generate.gen_catalog(generate.operations()))
+
+    def test_an_operation_without_an_assignment_scope_rule_fails(self):
+        del generate.OPERATION_AUTHORITY['sessions.list']
+        self.refused('operations without authority attributes: sessions.list')
+
+    def test_an_omitted_attribute_fails(self):
+        del generate.OPERATION_AUTHORITY['process.execute']['nativeExecution']
+        self.refused('process.execute: authority attributes must be exactly')
+
+    def test_an_unknown_scope_or_operation_fails(self):
+        generate.OPERATION_AUTHORITY['sessions.list']['assignmentScope'] = 'anywhere'
+        self.refused("sessions.list: unknown assignment scope 'anywhere'")
+        generate.OPERATION_AUTHORITY['sessions.list']['assignmentScope'] = 'project'
+        generate.OPERATION_AUTHORITY['sessions.renamed'] = dict(generate.OPERATION_AUTHORITY['sessions.list'])
+        self.refused('authority attributes for unknown operations: sessions.renamed')
+
+    def test_command_rules_on_a_query_fail(self):
+        generate.OPERATION_AUTHORITY['sessions.list']['nativeExecution'] = True
+        self.refused('sessions.list: native execution, approval and administration apply only to commands')
+
+
 if __name__ == '__main__':
     unittest.main()
