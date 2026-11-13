@@ -538,6 +538,41 @@ struct WatchOrigin {
     requested_tail_bytes: Option<u32>,
 }
 
+/// A watched launch's report to the effect caller, made from the monitor thread: `None` once
+/// the process is launched, or the outcome when it never launched. Which of the two was sent,
+/// not whether the caller still listens, decides who records the outcome.
+pub(crate) struct LaunchReport {
+    to_caller: std::sync::mpsc::Sender<Option<EffectOutcome>>,
+    launched: std::cell::Cell<bool>,
+}
+
+impl LaunchReport {
+    fn new(to_caller: std::sync::mpsc::Sender<Option<EffectOutcome>>) -> Self {
+        Self {
+            to_caller,
+            launched: std::cell::Cell::new(false),
+        }
+    }
+
+    fn launched(&self) {
+        self.launched.set(true);
+        let _ = self.to_caller.send(None);
+    }
+
+    /// Hands `outcome` to the caller as the effect result when the launch was never reported.
+    /// Answers it back for the monitor to record when the launch was reported, or when the
+    /// caller is gone.
+    fn finish(&self, outcome: EffectOutcome) -> Option<EffectOutcome> {
+        if self.launched.get() {
+            return Some(outcome);
+        }
+        self.to_caller
+            .send(Some(outcome))
+            .err()
+            .and_then(|unsent| unsent.0)
+    }
+}
+
 /// Who admitted a process launch, which decides its consumer and its re-authorization.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ExecuteOrigin {
@@ -1402,6 +1437,7 @@ impl ProcessToolService {
             return self.execute(operation);
         }
         let (report, launched) = std::sync::mpsc::channel();
+        let report = LaunchReport::new(report);
         let service = self.clone();
         let monitored = operation.clone();
         self.monitoring
@@ -1409,11 +1445,8 @@ impl ProcessToolService {
             .unwrap_or_else(|p| p.into_inner())
             .insert(operation.id.0.as_str().to_owned());
         std::thread::spawn(move || {
-            let outcome = service.execute_reporting(&monitored, Some(report.clone()));
-            // The launch was already reported (the caller stopped listening): the outcome is
-            // this monitor's to record. Otherwise the caller receives it as the effect result.
-            let reported_launch = report.send(Some(outcome.clone())).is_err();
-            if reported_launch {
+            let outcome = service.execute_reporting(&monitored, Some(&report));
+            if let Some(outcome) = report.finish(outcome) {
                 service.record_watch_outcome(&monitored, &outcome);
             }
             service
@@ -1466,7 +1499,7 @@ impl ProcessToolService {
     fn execute_reporting(
         &self,
         operation: &OperationRecord,
-        launched: Option<std::sync::mpsc::Sender<Option<EffectOutcome>>>,
+        launched: Option<&LaunchReport>,
     ) -> EffectOutcome {
         if operation.capability == "process.cancel" {
             return self.execute_cancel(operation);
@@ -1631,7 +1664,7 @@ impl ProcessToolService {
         tail_limit: usize,
         redactions: Vec<String>,
         install: bool,
-        launched: Option<std::sync::mpsc::Sender<Option<EffectOutcome>>>,
+        launched: Option<&LaunchReport>,
     ) -> EffectOutcome {
         if install {
             let Some(root) = spec.cwd.as_ref() else {
@@ -1665,8 +1698,8 @@ impl ProcessToolService {
             operation.id.0.clone(),
         ) {
             Ok(process) => {
-                if let Some(report) = &launched {
-                    let _ = report.send(None);
+                if let Some(report) = launched {
+                    report.launched();
                 }
                 process
             }
@@ -2737,6 +2770,39 @@ mod tests {
 
     fn id(value: &str) -> Id {
         Id::new(value).expect("test ID")
+    }
+
+    /// The process exited while the caller still held the receiver it had just read the launch
+    /// report from: the monitor records the outcome rather than queueing it for nobody.
+    #[test]
+    fn a_reported_launch_leaves_its_outcome_to_the_monitor_while_the_caller_still_listens() {
+        let exit = || EffectOutcome::Completed(json!({"exitCode": 7}));
+        let (to_caller, from_monitor) = std::sync::mpsc::channel();
+        let report = LaunchReport::new(to_caller);
+        report.launched();
+        assert!(matches!(from_monitor.recv(), Ok(None)));
+        assert!(matches!(
+            report.finish(exit()),
+            Some(EffectOutcome::Completed(_))
+        ));
+        assert!(
+            from_monitor.try_recv().is_err(),
+            "the outcome was queued for the caller"
+        );
+
+        // Never launched: the caller receives the outcome as the effect result.
+        let (to_caller, from_monitor) = std::sync::mpsc::channel();
+        let report = LaunchReport::new(to_caller);
+        assert!(report.finish(exit()).is_none());
+        assert!(matches!(
+            from_monitor.recv(),
+            Ok(Some(EffectOutcome::Completed(_)))
+        ));
+
+        // Never launched and the caller is gone: the monitor still records it.
+        let (to_caller, from_monitor) = std::sync::mpsc::channel();
+        drop(from_monitor);
+        assert!(LaunchReport::new(to_caller).finish(exit()).is_some());
     }
 
     fn spec(profile: &str, credential: bool) -> ProcessSpec {

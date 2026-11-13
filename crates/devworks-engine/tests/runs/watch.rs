@@ -694,3 +694,37 @@ fn long_running_watchers_never_block_their_own_stops() {
         app.shutdown().await;
     });
 }
+
+/// A process that exits before its launch report is consumed still settles with its real exit,
+/// never Lost: the outcome is recorded once the launch was reported, whatever the timing.
+#[test]
+fn an_immediately_exiting_watched_process_keeps_its_exit_status() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-exit-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let ids: Vec<String> = (0..24)
+            .map(|n| {
+                create(&app, &ctx, "exit 7", 10_000, &format!("exit-{n}"))["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        settle_all(&app, &ctx, &refs).await;
+        for watcher in &refs {
+            let outcome = inspect(&app, &ctx, watcher)["outcome"].clone();
+            assert_eq!(outcome["kind"], json!("Failed"), "{watcher}: {outcome}");
+            assert_eq!(outcome["exitCode"], json!(7), "{watcher}: {outcome}");
+        }
+        app.shutdown().await;
+    });
+}
