@@ -2914,6 +2914,86 @@
         "Inventory all records and relationships within the selected project, feature, task and history scope: repository associations, plans, priorities, statuses, dependencies, agent/session and transcript links, decisions and Git/PR/review history, with referenced evidence where present. Preserve source identities or durable ID mappings, attribution, timestamps and provenance. Use a consistent read-only snapshot/export, validate counts and links, and make import resumable without duplicates. Report missing data or mapping failures rather than silently dropping selected records. Preserve historical code references while reconciling links to fresh indexes. Import must not automatically resume old agents, execute queued effects or treat historical checks as current verification."
       ],
       [
+        "h2",
+        "Watchers"
+      ],
+      [
+        "p",
+        "A watcher lets a session start background work or a wait and be woken when it ends, without holding a turn open. These requirements restate the agreed watcher behavior of 4 November 2026 from the implemented watch service."
+      ],
+      [
+        "req",
+        "WATCH-01",
+        "Confirmed",
+        "An agent must be able to start a long-running process, such as a build, a test run or a dev server, as a watcher and keep working. Creating a watcher launches the process through the same process-execution service as a plain run, with the same registered executables, working roots, shell safety checks, and time and output limits, and returns the watcher before the process exits."
+      ],
+      [
+        "req",
+        "WATCH-02",
+        "Confirmed",
+        "Watchers must be listed, inspected and cancelled through the same operations for the UI and for agents. Inspection shows the watcher state, elapsed time, match count and the current redacted output tail. Cancel can stop the process the watcher launched, or only stop observing it. Stopping observation leaves the process running under its owner and reports nothing."
+      ],
+      [
+        "req",
+        "WATCH-03",
+        "Confirmed",
+        "When a watcher settles, DevWorks must deliver what it observed once, to the session that created the watcher, as a host-authored message. Delivery must survive a restart. The message counts as handled only when a turn that carried it completes. Agents and add-ons cannot write watcher messages."
+      ],
+      [
+        "req",
+        "WATCH-04",
+        "Confirmed",
+        "A watcher outcome reports only what was observed: Succeeded, Failed, TimedOut, Cancelled, Interrupted, Lost or Uncertain, with the exit code or signal, the duration and the redacted output tail. Starting a process, or polling one, is never reported as success."
+      ],
+      [
+        "req",
+        "WATCH-05",
+        "Confirmed",
+        "A watcher may poll instead of waiting on one process. A probe runs a command at an interval, waiting twice as long after each run that fails the condition, up to eight intervals, until a run meets it: an exit code (0 by default) and optionally an output pattern. The watcher then settles Succeeded with the run count. A run that cannot launch, or is lost or uncertain, ends the watcher with that outcome."
+      ],
+      [
+        "req",
+        "WATCH-06",
+        "Confirmed",
+        "A watcher may be a timer that fires at a stated time or after a stated delay, settles Succeeded and wakes the session. A timer launches nothing, so every role may create and cancel one, including a read-only reviewer."
+      ],
+      [
+        "req",
+        "WATCH-07",
+        "Confirmed",
+        "A watcher lives as long as its owner. When the owning session ends, or its project is archived or deleted, the watcher is cancelled and the process it launched is stopped, and nothing is delivered. While the owner is paused or held, events wait and are delivered in order after Continue."
+      ],
+      [
+        "req",
+        "WATCH-08",
+        "Confirmed",
+        "Watchers must be honest across shutdown and restart. At an orderly shutdown, a watched process that DevWorks stopped settles Interrupted, and a probe forgets the stopped run and runs again after reopen once the owner continues. A timer that came due while the app was closed fires once. After a crash, a process killed by boot recovery is reported Interrupted."
+      ],
+      [
+        "req",
+        "WATCH-09",
+        "Confirmed",
+        "A watcher may count regular-expression matches in a process output as it streams, or in the lines of a file it watches. By default it completes on the first match. In each-match mode it reports matches in coalesced wakes, at most one per minimum interval (30 seconds by default), each carrying its count, so a burst of matches cannot flood the session and the final count still includes every match."
+      ],
+      [
+        "req",
+        "WATCH-10",
+        "Confirmed",
+        "Launching or stopping a process through a watcher needs everything the process tools require: the process tool family, a role that is not read-only, the shell-tools setting, the shell safety checks (at creation as well as at launch) and, under Project scope, a native-execution exception. A watcher that only observes, such as a timer, needs none of these."
+      ],
+      [
+        "req",
+        "WATCH-11",
+        "Confirmed",
+        "Every polling or file watcher must end. It has a maximum lifetime, set on the watcher or taken from the watch.maxLifetimeMs setting (24 hours by default, inherited from workspace to project), and it settles TimedOut when the lifetime passes, stopping a run in flight."
+      ],
+      [
+        "req",
+        "WATCH-12",
+        "Confirmed",
+        "A backup check must catch what primary delivery missed. When watch.backupEnabled is on (the default) and at least every watch.backupIntervalMs (15 minutes by default, at least 1 minute), it settles an outcome the primary pass never settled, marks Lost a recorded process the operating system reports gone, reminds the owner of a probe that has not run for more than twice its interval or whose source status cannot be established, and delivers pending events with their own IDs. Each such delivery is recorded as a missed primary delivery in history and diagnostics."
+      ],
+      [
         "req",
         "OP-03",
         "Confirmed",

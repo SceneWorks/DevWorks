@@ -1175,6 +1175,27 @@
         "DW-250"
       ],
       "evidence_boundary": "Approved product decision. The planned default of 8,000 tokens and maximum of 32,000 in DW-250 assume 50 to 200 tokens per claim and are not measured."
+    },
+    {
+      "id": "watcher_requirements_20261104",
+      "date": "2026-11-04",
+      "source": "Watcher requirements WATCH-01 to WATCH-12 were agreed on 4 November 2026 and tracked under DW-F14. The agreed wording was held only in the tracker, so the text in the requirements restates them from the implemented watch service and its recorded behavior. Check it against the tracker wording.",
+      "status": "Requirement text recorded in WATCH-01 to WATCH-12; the watch service implements them and its acceptance is tracked in the tracker",
+      "decision": "A watcher starts background work or a wait for a session and wakes that session once, with only what was observed. It covers process, probe, timer and file watchers, bounded lifetime, owner lifecycle, restart behavior, process-tool authority and a backup delivery check.",
+      "requirements": [
+        "WATCH-01",
+        "WATCH-02",
+        "WATCH-03",
+        "WATCH-04",
+        "WATCH-05",
+        "WATCH-06",
+        "WATCH-07",
+        "WATCH-08",
+        "WATCH-09",
+        "WATCH-10",
+        "WATCH-11",
+        "WATCH-12"
+      ]
     }
   ],
   "open_next": "Execute native work from CodeGraph items after revalidation; all native items remain backlog. DW-64 tracks the current commit/push closeout.",

@@ -10,23 +10,23 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "c515967038575693f979b65cccdb37e86a7f00115adec842c1184b61fbc51949",
+    "implementation-slices.json": "17316ff221eaa7b7b6775ad040225f7e39abc764ecef64df355259051a6c42fa",
     "devworks-capability-catalog.json": "2391f8849a5385a0a3f995473402068e9e610ff5d4984fe51b4d8b9aefad0f81",
-    "devworks-requirements-traceability.json": "fdf6d27d17f61c1a41ea87d686314d315b9ed0099e185b2f095f61df9e0aa660",
+    "devworks-requirements-traceability.json": "f4b96e6c122955fe960beab680e63e9910c86afb545652699d89a6a0fafd88f8",
     "codegraph-capability-inventory.json": "54da948de48de4a7d00353ae14d7464feac80cca9bdab6d2a6bb2679caae2c09",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
     "contracts/family-coverage.json": "65df049139b0f7b09bdff043fcb39e3b60680edd93e89c5b56f435913333b9d3",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
-    "codegraph-work-map.json": "7adfb3650fbc6bde7d6a580464ba32015b47edc121a52dfab88ac052b3e46949"
+    "codegraph-work-map.json": "93c551768cd75091f954a0db1757b585b3b6fbaf21b6f6fb8dbab7527c127e25"
   },
   "counts": {
     "slices": 80,
     "operationFamilies": 50,
     "operations": 376,
-    "requirements": 378,
+    "requirements": 390,
     "requirementsByStatus": {
-      "Confirmed": 231,
+      "Confirmed": 243,
       "Proposed": 147
     },
     "inputSchemaCandidates": 376,
@@ -1148,7 +1148,7 @@
         "G01",
         "G11"
       ],
-      "status": "Native implementation in progress; acceptance tracked by DW-13",
+      "status": "Implemented in native services (`workflows.*` and `next_work.*` have registered handlers); acceptance recorded in the tracker item DW-13",
       "readinessAcceptance": "Automatic allocation skips incomplete/unapproved plans and wholly blocked roots without eligible independent work. An otherwise eligible approved feature with missing/stale assessment can activate its coordinator to assess readiness, but cannot dispatch implementation until cleared. Locally blocked roots may allocate assessed independent tasks. Activation/dispatch rechecks changed readiness and finding revisions; keep-working and schedules preserve the shared gate and independent holds.",
       "dependsOn": [
         "DW-012",
@@ -1231,7 +1231,7 @@
         "G04",
         "G10"
       ],
-      "status": "Native implementation in progress; acceptance tracked by DW-14",
+      "status": "Implemented in native services (`approvals.*` and `notifications.*` have registered handlers); acceptance recorded in the tracker item DW-14",
       "readinessAcceptance": "Generic plan approval or notification acknowledgment cannot close readiness findings. Finding-specific human risk acceptance binds the finding/scope/revision and rationale, preserves history and still requires actual prerequisites, enforced permissions and required verification; stale decisions cannot clear changed findings or make incomplete work complete.",
       "dependsOn": [
         "DW-005",
@@ -1828,7 +1828,7 @@
         "G03",
         "G12"
       ],
-      "status": "Native implementation in progress; acceptance tracked by DW-21",
+      "status": "Implemented in native services (`router.usage` and the price operations have registered handlers); acceptance recorded in the tracker item DW-21",
       "integratesOperations": [
         "features.create",
         "features.edit",
@@ -3973,7 +3973,10 @@
         "TOOL-06",
         "TOOL-07",
         "TOOL-08",
-        "TOOL-09"
+        "TOOL-09",
+        "WATCH-01",
+        "WATCH-05",
+        "WATCH-10"
       ],
       "capabilityCases": [
         "CAP-RESOURCES"
@@ -5562,7 +5565,7 @@
         "G04",
         "G10"
       ],
-      "status": "Planned; implementation in progress (DW-94)",
+      "status": "Implemented in native services (`watch.create`, `watch.list`, `watch.inspect` and `watch.cancel` have registered handlers); acceptance recorded in the tracker item DW-94",
       "dependsOn": [
         "DW-049"
       ],
@@ -5572,7 +5575,20 @@
         "watch.inspect",
         "watch.cancel"
       ],
-      "primaryRequirements": [],
+      "primaryRequirements": [
+        "WATCH-01",
+        "WATCH-02",
+        "WATCH-03",
+        "WATCH-04",
+        "WATCH-05",
+        "WATCH-06",
+        "WATCH-07",
+        "WATCH-08",
+        "WATCH-09",
+        "WATCH-10",
+        "WATCH-11",
+        "WATCH-12"
+      ],
       "supportingRequirements": [],
       "capabilityCases": [],
       "sourceEntryIds": [],
@@ -12045,6 +12061,192 @@
       "supportingSlices": [
         "files"
       ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-01",
+      "requirementStatus": "Confirmed",
+      "statement": "An agent must be able to start a long-running process, such as a build, a test run or a dev server, as a watcher and keep working. Creating a watcher launches the process through the same process-execution service as a plain run, with the same registered executables, working roots, shell safety checks, and time and output limits, and returns the watcher before the process exits.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-01",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [
+        "process_tools"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-02",
+      "requirementStatus": "Confirmed",
+      "statement": "Watchers must be listed, inspected and cancelled through the same operations for the UI and for agents. Inspection shows the watcher state, elapsed time, match count and the current redacted output tail. Cancel can stop the process the watcher launched, or only stop observing it. Stopping observation leaves the process running under its owner and reports nothing.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-02",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-03",
+      "requirementStatus": "Confirmed",
+      "statement": "When a watcher settles, DevWorks must deliver what it observed once, to the session that created the watcher, as a host-authored message. Delivery must survive a restart. The message counts as handled only when a turn that carried it completes. Agents and add-ons cannot write watcher messages.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-03",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-04",
+      "requirementStatus": "Confirmed",
+      "statement": "A watcher outcome reports only what was observed: Succeeded, Failed, TimedOut, Cancelled, Interrupted, Lost or Uncertain, with the exit code or signal, the duration and the redacted output tail. Starting a process, or polling one, is never reported as success.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-04",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-05",
+      "requirementStatus": "Confirmed",
+      "statement": "A watcher may poll instead of waiting on one process. A probe runs a command at an interval, waiting twice as long after each run that fails the condition, up to eight intervals, until a run meets it: an exit code (0 by default) and optionally an output pattern. The watcher then settles Succeeded with the run count. A run that cannot launch, or is lost or uncertain, ends the watcher with that outcome.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-05",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [
+        "process_tools"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-06",
+      "requirementStatus": "Confirmed",
+      "statement": "A watcher may be a timer that fires at a stated time or after a stated delay, settles Succeeded and wakes the session. A timer launches nothing, so every role may create and cancel one, including a read-only reviewer.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-06",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-07",
+      "requirementStatus": "Confirmed",
+      "statement": "A watcher lives as long as its owner. When the owning session ends, or its project is archived or deleted, the watcher is cancelled and the process it launched is stopped, and nothing is delivered. While the owner is paused or held, events wait and are delivered in order after Continue.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-07",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-08",
+      "requirementStatus": "Confirmed",
+      "statement": "Watchers must be honest across shutdown and restart. At an orderly shutdown, a watched process that DevWorks stopped settles Interrupted, and a probe forgets the stopped run and runs again after reopen once the owner continues. A timer that came due while the app was closed fires once. After a crash, a process killed by boot recovery is reported Interrupted.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-08",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-09",
+      "requirementStatus": "Confirmed",
+      "statement": "A watcher may count regular-expression matches in a process output as it streams, or in the lines of a file it watches. By default it completes on the first match. In each-match mode it reports matches in coalesced wakes, at most one per minimum interval (30 seconds by default), each carrying its count, so a burst of matches cannot flood the session and the final count still includes every match.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-09",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-10",
+      "requirementStatus": "Confirmed",
+      "statement": "Launching or stopping a process through a watcher needs everything the process tools require: the process tool family, a role that is not read-only, the shell-tools setting, the shell safety checks (at creation as well as at launch) and, under Project scope, a native-execution exception. A watcher that only observes, such as a timer, needs none of these.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-10",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [
+        "process_tools"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-11",
+      "requirementStatus": "Confirmed",
+      "statement": "Every polling or file watcher must end. It has a maximum lifetime, set on the watcher or taken from the watch.maxLifetimeMs setting (24 hours by default, inherited from workspace to project), and it settles TimedOut when the lifetime passes, stopping a run in flight.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-11",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-12",
+      "requirementStatus": "Confirmed",
+      "statement": "A backup check must catch what primary delivery missed. When watch.backupEnabled is on (the default) and at least every watch.backupIntervalMs (15 minutes by default, at least 1 minute), it settles an outcome the primary pass never settled, marks Lost a recorded process the operating system reports gone, reminds the owner of a probe that has not run for more than twice its interval or whose source status cannot be established, and delivers pending events with their own IDs. Each such delivery is recorded as a missed primary delivery in history and diagnostics.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-12",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
     },
     {
