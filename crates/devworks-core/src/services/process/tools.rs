@@ -419,10 +419,34 @@ impl ToolBindings {
     }
 }
 
-/// The canonical file `path` still resolves to, when it is `target`.
+/// The canonical file `path` still resolves to, when it is `target`, in the form a launch
+/// passes as the program.
 fn exact_file(path: &Path, target: &Path) -> Option<PathBuf> {
     let actual = path.canonicalize().ok()?;
-    (actual == target && actual.is_file()).then_some(actual)
+    (actual == target && actual.is_file()).then(|| launch_path(actual))
+}
+
+/// Windows canonical paths carry the verbatim `\\?\` prefix, which the child would see in
+/// its command line. A plain drive path short enough for the classic API means the same file,
+/// so it launches without the prefix; any other verbatim path is kept as it is.
+#[cfg(windows)]
+fn launch_path(canonical: PathBuf) -> PathBuf {
+    let text = canonical.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest)
+            if rest.len() < 260
+                && rest.as_bytes().get(1) == Some(&b':')
+                && rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) =>
+        {
+            PathBuf::from(rest)
+        }
+        _ => canonical,
+    }
+}
+
+#[cfg(not(windows))]
+fn launch_path(canonical: PathBuf) -> PathBuf {
+    canonical
 }
 
 fn exact_directory(path: &Path) -> Option<PathBuf> {
@@ -3231,7 +3255,15 @@ mod tests {
         let resolved = bindings
             .resolve(&spec("Full", false), Some(&project))
             .expect("authorized project root");
-        assert_eq!(resolved.program, executable.to_string_lossy());
+        // The canonical file launches; on Windows without the verbatim prefix.
+        assert_eq!(
+            resolved.program,
+            launch_path(executable.clone()).to_string_lossy()
+        );
+        assert_eq!(
+            resolved.arg0.as_deref(),
+            Some(&*executable.to_string_lossy())
+        );
         assert_eq!(
             resolved.cwd,
             Some(work.canonicalize().expect("canonical work"))
