@@ -308,7 +308,7 @@ fn runtime_identity_meets_the_baseline() {
     let fts: i64 = s
         .with_writer_connection(|c| {
             db(c.query_row(
-                "SELECT count(*) FROM search_fts WHERE search_fts MATCH 'x'",
+                "SELECT count(*) FROM knowledge_claim_fts WHERE knowledge_claim_fts MATCH 'x'",
                 [],
                 |r| r.get(0),
             ))
@@ -367,9 +367,14 @@ fn boot_epochs_record_clean_and_interrupted_shutdowns() {
     assert_eq!(state, "Interrupted");
 }
 
+/// Schema objects, without the planner statistics tables that clean shutdown's
+/// `PRAGMA optimize` creates.
 fn schema(conn: &Connection) -> Vec<(String, String, String, Option<String>)> {
     let mut s = conn
-        .prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name")
+        .prepare(
+            "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_stat%' \
+             ORDER BY type,name",
+        )
         .unwrap();
     s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
         .unwrap()
@@ -623,6 +628,208 @@ fn through(version: i64) -> Vec<Migration> {
         .copied()
         .filter(|m| m.version <= version)
         .collect()
+}
+
+/// Tables migration 52 drops: migration 1 created them and no build ever wrote them.
+const UNWRITTEN_TABLES: [&str; 30] = [
+    "approvals",
+    "provider_connections",
+    "provider_models",
+    "routing_cursors",
+    "router_availability",
+    "price_snapshots",
+    "published_prices",
+    "price_overrides",
+    "inference_requests",
+    "provider_attempts",
+    "tool_calls",
+    "session_events",
+    "resource_grants",
+    "usage_entries",
+    "attempt_costs",
+    "budget_reservations",
+    "documents",
+    "extractions",
+    "knowledge_entries",
+    "knowledge_links",
+    "knowledge_revisions",
+    "knowledge_tags",
+    "knowledge_shares",
+    "search_chunks",
+    "chunk_vectors",
+    "search_fts",
+    "import_mappings",
+    "maintenance_operations",
+    "github_issue_intake",
+    "review_source_evidence",
+];
+
+#[test]
+fn upgraded_store_drops_unwritten_tables_keeps_rebuilt_rows_and_indexes_capability_reads() {
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(51)).unwrap());
+    h.raw()
+        .execute_batch(
+            "INSERT INTO actors VALUES('human-a','human','Human');
+             INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
+             INSERT INTO work_items(id,project_id,kind,title,priority,manual_order,revision,scope_revision,created_at,brief_json)
+               VALUES('feature-a','project-a','feature','F',1,0,1,1,1,'{}');
+             INSERT INTO feature_plans(feature_id,revision,approved_plan_json,approved_by,approved_at,pending_plan_json,pending_revision)
+               VALUES('feature-a',3,'{\"a\":1}','human-a',5,'{\"b\":2}',4);
+             INSERT INTO conversations VALUES('conv-a','feature-a',0);
+             INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
+               VALUES('session-a','conv-a','human-a','feature-a',0,1,'project-a',1);
+             INSERT INTO transcript_chunks(session_id,seq,kind,payload_json,entry_id,batch_id,context_epoch,actor_id,created_at)
+               VALUES('session-a',1,'Message','{\"text\":\"kept\"}','entry-a','batch-a',2,'human-a',7);",
+        )
+        .unwrap();
+    drop(SqliteStore::open_with(h.config(), MIGRATIONS).unwrap());
+    let c = h.raw();
+    let exists = |name: &str| -> bool {
+        c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name=?1)",
+            [name],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    for table in UNWRITTEN_TABLES {
+        assert!(!exists(table), "{table} survived the upgrade");
+    }
+    assert!(
+        !exists("search_fts_data"),
+        "FTS shadow tables go with search_fts"
+    );
+    let columns = |table: &str| -> Vec<String> {
+        let mut s = c
+            .prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
+            .unwrap();
+        s.query_map([table], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    };
+    assert!(!columns("feature_plans").contains(&"pending_proposal_id".to_owned()));
+    assert!(!columns("transcript_chunks").contains(&"provider_attempt_id".to_owned()));
+    let plan: (i64, String, String, i64, String, i64) = c
+        .query_row(
+            "SELECT revision,approved_plan_json,approved_by,approved_at,pending_plan_json,pending_revision FROM feature_plans",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        plan,
+        (
+            3,
+            "{\"a\":1}".into(),
+            "human-a".into(),
+            5,
+            "{\"b\":2}".into(),
+            4
+        )
+    );
+    let chunk: (String, String, String, i64, String, i64) = c
+        .query_row(
+            "SELECT payload_json,entry_id,batch_id,context_epoch,actor_id,created_at FROM transcript_chunks WHERE session_id='session-a' AND seq=1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        chunk,
+        (
+            "{\"text\":\"kept\"}".into(),
+            "entry-a".into(),
+            "batch-a".into(),
+            2,
+            "human-a".into(),
+            7
+        )
+    );
+    assert!(exists("transcript_entry_identity"));
+    let violations: i64 = c
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(violations, 0);
+    // The capability read is served by the new index, with no table scan.
+    let plan = c
+        .prepare(
+            "EXPLAIN QUERY PLAN SELECT id FROM operations WHERE capability=?1 \
+             AND state IN(SELECT value FROM json_each(?2)) AND (?3 IS NULL OR id>?3) \
+             ORDER BY id LIMIT ?4",
+        )
+        .unwrap()
+        .query_map(params!["x", "[\"Pending\"]", None::<String>, 10], |r| {
+            r.get::<_, String>(3)
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join("\n");
+    assert!(
+        plan.contains("SEARCH operations USING COVERING INDEX operations_capability_state"),
+        "{plan}"
+    );
+}
+
+#[test]
+fn upgrade_refuses_to_drop_a_table_that_holds_a_row() {
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(51)).unwrap());
+    h.raw()
+        .execute("INSERT INTO routing_cursors VALUES('pool',1,1)", [])
+        .unwrap();
+    assert!(SqliteStore::open_with(h.config(), MIGRATIONS).is_err());
+    let c = h.raw();
+    let version: i64 = c
+        .query_row("SELECT max(version) FROM schema_migrations", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(version, 51);
+    let kept: i64 = c
+        .query_row("SELECT count(*) FROM routing_cursors", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(kept, 1);
+}
+
+/// Prepared statements SQLite still holds on `c`. A cached statement stays prepared until the
+/// cache evicts it.
+fn live_statements(c: &Connection) -> usize {
+    let mut n = 0;
+    // SAFETY: `c.handle()` is a valid open handle while `c` is borrowed, and sqlite3_next_stmt
+    // only walks the connection's statement list (a null start returns the first statement).
+    let mut stmt = unsafe { rusqlite::ffi::sqlite3_next_stmt(c.handle(), std::ptr::null_mut()) };
+    while !stmt.is_null() {
+        n += 1;
+        // SAFETY: as above; `stmt` came from this connection's statement list.
+        stmt = unsafe { rusqlite::ffi::sqlite3_next_stmt(c.handle(), stmt) };
+    }
+    n
+}
+
+#[test]
+fn writer_and_reader_connections_keep_hundreds_of_cached_statements() {
+    let h = Harness::new();
+    drop(h.store());
+    let path = h.root.0.join(DATABASE_FILE);
+    for role in [conn::Role::Writer, conn::Role::Reader] {
+        let c = conn::open(&path, role, Duration::from_secs(1)).unwrap();
+        let before = live_statements(&c);
+        for i in 0..300 {
+            c.prepare_cached(&format!("SELECT {i}")).unwrap();
+        }
+        // rusqlite's default cache of 16 would keep only the last 16 of these prepared.
+        assert_eq!(live_statements(&c) - before, 300);
+    }
+    let writer = conn::open(&path, conn::Role::Writer, Duration::from_secs(1)).unwrap();
+    let limit: i64 = writer
+        .pragma_query_value(None, "journal_size_limit", |r| r.get(0))
+        .unwrap();
+    assert_eq!(limit, conn::JOURNAL_SIZE_LIMIT_BYTES);
 }
 
 #[test]
@@ -905,16 +1112,21 @@ fn disk_exhaustion_is_visible_and_preserves_committed_data() {
     let h = Harness::new();
     let s = h.store();
     let kept = write(&s, |tx| append(tx, "Kept", json!({}))).unwrap();
-    s.with_writer_connection(|c| {
-        let pages: i64 = db(c.query_row("PRAGMA page_count", [], |r| r.get(0)))?;
-        db(
-            c.query_row(&format!("PRAGMA max_page_count={pages}"), [], |r| {
-                r.get::<_, i64>(0)
-            }),
-        )
-    })
-    .unwrap();
-    let big = "x".repeat(256 * 1024);
+    // Pages freed by dropped tables stay in the file, so the record must outgrow them too.
+    let free_bytes = s
+        .with_writer_connection(|c| {
+            let pages: i64 = db(c.query_row("PRAGMA page_count", [], |r| r.get(0)))?;
+            db(
+                c.query_row(&format!("PRAGMA max_page_count={pages}"), [], |r| {
+                    r.get::<_, i64>(0)
+                }),
+            )?;
+            let free: i64 = db(c.query_row("PRAGMA freelist_count", [], |r| r.get(0)))?;
+            let size: i64 = db(c.query_row("PRAGMA page_size", [], |r| r.get(0)))?;
+            Ok(usize::try_from(free * size).unwrap())
+        })
+        .unwrap();
+    let big = "x".repeat(free_bytes + 256 * 1024);
     let full = write(&s, move |tx| append(tx, "TooBig", json!({ "blob": big })));
     assert!(
         matches!(

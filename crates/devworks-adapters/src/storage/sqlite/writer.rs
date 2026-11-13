@@ -252,10 +252,16 @@ impl Worker {
         }
         if let Some(boot) = &self.cfg.info.boot_id {
             let now = self.cfg.clock.now_ms().get();
-            let _ = self.conn.execute(
+            let recorded = self.conn.execute(
                 "UPDATE app_boots SET stopped_at=?1,shutdown_state='Clean' WHERE id=?2",
                 rusqlite::params![now, boot.as_str()],
             );
+            // Refresh planner statistics only on a store that just committed its clean shutdown:
+            // a failed store (full disk, I/O error, lost lock) is left as it is. A read-only store
+            // has no writer, so it never gets here.
+            if matches!(recorded, Ok(1)) && self.conn.is_autocommit() {
+                let _ = self.conn.execute_batch("PRAGMA optimize");
+            }
         }
     }
 

@@ -17,15 +17,21 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// ownership edge, and its rows keep their session owner. Migration 50 adds watchers and
 /// watcher_events, both owned by their project (schema50 extension); a watcher outside any
 /// project is never a candidate. Migration 51 rebuilds watchers to add probe and timer sources;
-/// it adds no table or ownership edge. Migration 52 rebuilds watchers (match and file columns)
-/// and watcher_events (several events per watcher, match_count); both keep their project owner
-/// and add no table or ownership edge, and a project's purge still removes all of its rows.
+/// it adds no table or ownership edge. Migration 52 drops thirty tables no build wrote, with
+/// their policy rows and purge branches; rebuilds feature_plans and transcript_chunks without the
+/// two always-NULL columns that referenced dropped tables, adding no ownership edge; and adds the
+/// operations_capability_state index. Planner statistics tables (`sqlite_stat*`, created by the
+/// `PRAGMA optimize` that clean shutdown runs) hold no project rows and are not part of the digest.
+/// Migration 53 rebuilds watchers (match and file columns) and watcher_events (several events per
+/// watcher, match_count); both keep their project owner and add no table or ownership edge, and a
+/// project's purge still removes all of their rows.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "ebfb760971e01d5fbc9fc613c71779b980d2750fe6c928932c6a258425ff3a45";
+    "812180517e5371e73f697e8453fcf7611ba29ce30a6506cf7001128d1f8b6844";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(
-        "SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type,name,tbl_name",
+        "SELECT type,name,tbl_name,sql FROM main.sqlite_schema WHERE name NOT LIKE 'sqlite_stat%' \
+         ORDER BY type,name,tbl_name",
     ))?;
     db(statement.query_map([], |row| {
         Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))

@@ -603,13 +603,24 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "6f21259b2a9b29021600e2515886b0d0626ceabfdf095cf1c157f2b45610f3ec",
         rebuilds_tables: true,
     },
-    // Prior writers cannot keep a watcher's match state or record more than one event per
-    // watcher, and the source CHECK widens, so both watcher tables are rebuilt.
+    // Prior builds name the dropped tables and the two dropped columns, so neither a prior
+    // reader nor a prior writer may open the store. feature_plans and transcript_chunks are
+    // rebuilt without the columns that referenced dropped tables.
     Migration {
         version: 52,
         minimum_reader: 52,
         minimum_writer: 52,
-        sql: include_str!("migrations/0052_watcher_matches.sql"),
+        sql: include_str!("migrations/0052_drop_unused_tables.sql"),
+        expected_sha256: "ff5d30440733379049f8a3f9cd64a9ff535bcc819a8337edb77fcd5fea989ed0",
+        rebuilds_tables: true,
+    },
+    // Prior writers cannot keep a watcher's match state or record more than one event per
+    // watcher, and the source CHECK widens, so both watcher tables are rebuilt.
+    Migration {
+        version: 53,
+        minimum_reader: 53,
+        minimum_writer: 53,
+        sql: include_str!("migrations/0053_watcher_matches.sql"),
         expected_sha256: "98b89612ce3caecfafb3533de350b23c0cf6f883e6834944ec8a71a7901a9677",
         rebuilds_tables: true,
     },

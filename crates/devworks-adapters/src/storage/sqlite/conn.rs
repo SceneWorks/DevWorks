@@ -72,6 +72,17 @@ fn register_vec(conn: &Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
+/// Prepared statements each store connection keeps. The adapter holds about 300 fixed statement
+/// texts; rusqlite's default of 16 would re-parse most of them on every call. Statements whose
+/// text varies with input never go through `prepare_cached` (variable-length lists bind one JSON
+/// array instead), so the cache holds only fixed texts.
+pub(crate) const STATEMENT_CACHE_CAPACITY: usize = 512;
+/// Bytes of write-ahead log the writer keeps after a checkpoint resets it. The default automatic
+/// checkpoint runs near 1000 pages (about 4 MiB at 4 KiB pages), so ordinary traffic never
+/// truncates; a log that one large transaction (an index build, a bulk import) grew past 16 MiB
+/// shrinks back instead of keeping its peak size on disk.
+pub(crate) const JOURNAL_SIZE_LIMIT_BYTES: i64 = 16 * 1024 * 1024;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Role {
     Writer,
@@ -95,6 +106,7 @@ pub(crate) fn open(path: &Path, role: Role, busy: Duration) -> Result<Connection
     super::graph::register_name_match(&conn)?;
     super::project_purge::guard::register(&conn, role == Role::Writer)?;
     db(conn.busy_timeout(busy))?;
+    conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
     db(conn.pragma_update(None, "foreign_keys", true))?;
     match role {
         Role::Writer => {
@@ -107,6 +119,7 @@ pub(crate) fn open(path: &Path, role: Role, busy: Duration) -> Result<Connection
                 ));
             }
             db(conn.pragma_update(None, "synchronous", "FULL"))?;
+            db(conn.pragma_update(None, "journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES))?;
             if cfg!(target_os = "macos") {
                 db(conn.pragma_update(None, "fullfsync", true))?;
                 db(conn.pragma_update(None, "checkpoint_fullfsync", true))?;

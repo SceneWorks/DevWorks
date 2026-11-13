@@ -555,6 +555,13 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         indexing,
         config,
     } = composition;
+    // Every error that stops boot passes through this, so each leaves a failed boot diagnostic.
+    // The diagnostics service is part of the composition, so no step runs without one; a store
+    // that cannot take the record is ignored by `record_boot_failure`.
+    let failed = |e: BootError| {
+        diag::record_boot_failure(&diagnostics, &e);
+        e
+    };
     let usage = crate::usage::UsageRuntime::with_process_host(
         store.clone(),
         runs.service.clone(),
@@ -566,7 +573,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     ));
     for suite in &config.automatic_eval_suites {
         devworks_core::protocol::Check::check(suite)
-            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e)))?;
+            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e)))
+            .map_err(failed)?;
     }
     // The one process owner: every owned tree (browsers included) is launched through it. It is
     // built first so the browser service can be composed with it; its recovery still runs at
@@ -584,7 +592,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 composition.validator.clone(),
                 artifacts.clone(),
             )
-            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))?;
+            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))
+            .map_err(failed)?;
         consumers.push(crate::mcp::consumer(service));
     }
     let process_tools = config.process_tools.as_ref().map(|composition| {
@@ -817,10 +826,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 | devworks_core::ports::secrets::SecretError::Denied,
             ) => {}
             Err(_) => {
-                return Err(BootError::Composition(StorageError::unavailable(
+                return Err(failed(BootError::Composition(StorageError::unavailable(
                     Unavailable::Io,
                     "schema credential reference reconciliation failed",
-                )));
+                ))));
             }
         }
         consumers.push(crate::schemas::consumer(store.clone(), service.clone()));
@@ -854,7 +863,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             ),
         );
         if !service.install_selection_indexer(Arc::downgrade(&conventions.indexing())) {
-            return Err(BootError::Composition(StorageError::ScopeDenied));
+            return Err(failed(BootError::Composition(StorageError::ScopeDenied)));
         }
         Some(service)
     } else {
@@ -878,10 +887,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             c.eligibility.take(),
         )));
     }
-    let failed = |e: BootError| {
-        diag::record_boot_failure(&diagnostics, &e);
-        e
-    };
     let mut replies = reply_consumer(
         Arc::new(ReceiptReplies::new(artifacts.clone())),
         store.clone(),
@@ -1020,10 +1025,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 .with_skills(instructions.clone()),
             ));
             let connections = use_cases.connection_service().ok_or_else(|| {
-                BootError::Composition(StorageError::unavailable(
+                failed(BootError::Composition(StorageError::unavailable(
                     Unavailable::UnsupportedRuntime,
                     "native provider composition requires current ConnectionService",
-                ))
+                )))
             })?;
             let schemas = Arc::new(crate::providers::schemas::RegisteredSchemas::new(
                 store.clone(),
@@ -1057,7 +1062,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 router,
                 tokio::runtime::Handle::current(),
             )))
-            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))?;
+            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))
+            .map_err(failed)?;
     }
     if let (Some(provider), Some(service), Some(worker)) =
         (&providers, &embedding_spaces, &embedding_probes)
@@ -1073,7 +1079,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .indexing()
             .set_embeddings(Some(Arc::new(executor.clone())));
         if !worker.install(executor) {
-            return Err(BootError::Composition(StorageError::ScopeDenied));
+            return Err(failed(BootError::Composition(StorageError::ScopeDenied)));
         }
         service.enable_native_qualification();
     }
