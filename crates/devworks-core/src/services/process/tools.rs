@@ -2596,27 +2596,66 @@ impl QueryHandler for ProcessToolService {
             )
         })
         .ok_or_else(not_found)?;
-        let evidence = operation.latest_attempt().and_then(|attempt| {
-            attempt.observations.iter().rev().find_map(|observation| {
-                observation
-                    .pointer("/effect/evidence/outputBase64")
-                    .and_then(Value::as_str)
-                    .and_then(|value| base64::engine::general_purpose::STANDARD.decode(value).ok())
-                    .or_else(|| {
-                        observation
-                            .pointer("/effect/evidence/outputUtf8")
-                            .and_then(Value::as_str)
-                            .map(|value| value.as_bytes().to_vec())
-                    })
-            })
+        // A watched process's effect completes at launch; its monitor records the process's
+        // own completion later as `watchOutcome`. Only that is the end of its output.
+        let watch_outcome = operation.attempts.iter().rev().find_map(|attempt| {
+            attempt
+                .observations
+                .iter()
+                .rev()
+                .find_map(|o| o.get("watchOutcome").cloned())
         });
+        let launch_only = watch_outcome.is_none()
+            && operation.latest_attempt().is_some_and(|attempt| {
+                attempt.observations.iter().any(|observation| {
+                    observation.pointer("/effect/evidence/launched") == Some(&Value::Bool(true))
+                })
+            });
+        let output_of = |evidence: &Value| {
+            evidence
+                .get("outputBase64")
+                .and_then(Value::as_str)
+                .and_then(|value| base64::engine::general_purpose::STANDARD.decode(value).ok())
+                .or_else(|| {
+                    evidence
+                        .get("outputUtf8")
+                        .and_then(Value::as_str)
+                        .map(|value| value.as_bytes().to_vec())
+                })
+        };
+        let effect = |field: &str| {
+            operation.latest_attempt().and_then(|attempt| {
+                attempt
+                    .observations
+                    .iter()
+                    .rev()
+                    .find_map(|observation| observation.pointer(field).cloned())
+            })
+        };
+        let (evidence, completion_truncated) = match &watch_outcome {
+            Some(outcome) => (
+                output_of(outcome),
+                outcome.get("truncated").and_then(Value::as_bool),
+            ),
+            None => (
+                operation.latest_attempt().and_then(|attempt| {
+                    attempt.observations.iter().rev().find_map(|observation| {
+                        observation.pointer("/effect/evidence").and_then(output_of)
+                    })
+                }),
+                effect("/effect/evidence/truncated").and_then(|v| v.as_bool()),
+            ),
+        };
+        let completed = operation.state == OperationState::ObservedComplete && !launch_only;
         let live = self
             .live_output
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .get(process.id.as_str())
             .cloned();
-        if operation.state == OperationState::ObservedComplete && evidence.is_none() {
+        // Launched but no longer monitored and never observed ending: its output is unknown.
+        let unobserved = launch_only && live.is_none() && !self.is_monitoring(&operation.id);
+        if (completed && evidence.is_none()) || unobserved {
             return Err(Refusal::new(
                 DomainErrorCode::OutcomeUnknown,
                 "process_output",
@@ -2697,18 +2736,8 @@ impl QueryHandler for ProcessToolService {
                 base64::engine::general_purpose::STANDARD.encode(&bytes[first..end]),
             ),
             encoding: OutputEncoding::Base64,
-            truncated: live_truncated
-                || operation
-                    .latest_attempt()
-                    .and_then(|attempt| {
-                        attempt.observations.iter().rev().find_map(|observation| {
-                            observation
-                                .pointer("/effect/evidence/truncated")
-                                .and_then(Value::as_bool)
-                        })
-                    })
-                    .unwrap_or(false),
-            complete: operation.state == OperationState::ObservedComplete,
+            truncated: live_truncated || completion_truncated.unwrap_or(false),
+            complete: completed,
         };
         Ok(QueryAnswer {
             stamp: snapshot
