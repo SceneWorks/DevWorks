@@ -128,7 +128,24 @@ impl McpClientService {
         caps.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
         let mut bounded_page = request.clone();
         bounded_page.limit = Limit::new(request.limit.get().min(32)).expect("bounded MCP page");
-        let cap_page = page(&caps, &bounded_page, version).map_err(|error| self.fault(error))?;
+        let operation = if matches!(query.input(), OperationInput::Mcp(ops::Input::Resources(_))) {
+            "mcp.resources"
+        } else {
+            "mcp.prompts"
+        };
+        let binding = list_binding(
+            ctx,
+            operation,
+            &scope,
+            &[
+                server_id.as_str(),
+                catalog_revision.as_str(),
+                resource_uri.unwrap_or(""),
+                prompt_name.unwrap_or(""),
+            ],
+            version,
+        );
+        let cap_page = page(&caps, &bounded_page, &binding).map_err(|error| self.fault(error))?;
         let mut published_bytes = 0usize;
         let mut charge = |content: &Value| -> Result<(), DomainFault> {
             let size = serde_json::to_vec(content)

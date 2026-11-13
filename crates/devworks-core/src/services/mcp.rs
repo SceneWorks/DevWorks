@@ -28,6 +28,7 @@ use crate::protocol::{
     OperationState, ProjectId, RetryAdvice, Revision, RevisionDimension,
 };
 use crate::services::artifacts::ArtifactService;
+use crate::services::cursor::CursorBinding;
 use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -257,25 +258,19 @@ pub fn credential_references(read: &dyn ReadSnapshot) -> Result<BTreeSet<String>
     Ok(references)
 }
 
+/// One page of `items`. The cursor carries the offset, bound to the caller, store, scope
+/// revision and the query it was issued for, so any other binding is `CursorExpired`.
 fn page<T: Clone>(
     items: &[T],
     request: &PageRequest,
-    revision: i64,
+    binding: &CursorBinding,
 ) -> Result<Page<T>, StorageError> {
     let offset = match &request.cursor {
         None => 0,
-        Some(cursor) => {
-            let (version, position) = cursor
-                .0
-                .split_once(':')
-                .ok_or(StorageError::CursorExpired)?;
-            if version.parse::<i64>().ok() != Some(revision) {
-                return Err(StorageError::CursorExpired);
-            }
-            position
-                .parse::<usize>()
-                .map_err(|_| StorageError::CursorExpired)?
-        }
+        Some(cursor) => binding
+            .decode(&cursor.0)?
+            .parse::<usize>()
+            .map_err(|_| StorageError::CursorExpired)?,
     };
     if offset > items.len() {
         return Err(StorageError::CursorExpired);
@@ -285,9 +280,23 @@ fn page<T: Clone>(
         .min(items.len());
     Ok(Page {
         items: BoundedList(items[offset..end].to_vec()),
-        next_cursor: (end < items.len()).then(|| BoundedText(format!("{revision}:{end}"))),
+        next_cursor: (end < items.len()).then(|| BoundedText(binding.encode(&end.to_string()))),
         has_more: end < items.len(),
     })
+}
+
+/// The cursor binding for a listing of `scope`. A project scope names its project; the
+/// workspace scope names none.
+fn list_binding(
+    ctx: &InvocationContext,
+    operation: &str,
+    scope: &ConfigScope,
+    extra: &[&str],
+    revision: i64,
+) -> CursorBinding {
+    let mut parts = vec![scope.project_id().map_or("workspace", |p| p.0.as_str())];
+    parts.extend_from_slice(extra);
+    CursorBinding::new(ctx, operation, &parts, revision)
 }
 
 pub struct McpClientService {
@@ -2746,7 +2755,8 @@ impl QueryHandler for McpClientService {
                         view
                     })
                     .collect();
-                let value = page(&records, &input.page, version).map_err(|e| self.fault(e))?;
+                let binding = list_binding(ctx, "mcp.servers", &scope, &[], version);
+                let value = page(&records, &input.page, &binding).map_err(|e| self.fault(e))?;
                 (version, OperationResult::McpServers { value })
             }
             OperationInput::Mcp(ops::Input::Capabilities(input)) => {
@@ -2781,7 +2791,15 @@ impl QueryHandler for McpClientService {
                         server.read_only_overrides.get(cap.id.as_str()).copied();
                 }
                 capabilities.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
-                let value = page(&capabilities, &input.page, version).map_err(|e| self.fault(e))?;
+                let binding = list_binding(
+                    ctx,
+                    "mcp.capabilities",
+                    &scope,
+                    &[input.server_id.as_str(), input.catalog_revision.as_str()],
+                    version,
+                );
+                let value =
+                    page(&capabilities, &input.page, &binding).map_err(|e| self.fault(e))?;
                 (version, OperationResult::McpCapabilities { value })
             }
             _ => {
@@ -2867,5 +2885,77 @@ mod wire_name_tests {
             wire_name(&"a".repeat(64)).unwrap(),
             format!("mcp_{}", "a".repeat(60))
         );
+    }
+}
+
+#[cfg(test)]
+mod cursor_binding_tests {
+    use super::*;
+    use crate::protocol::{ActorId, ProjectId, StoreId};
+
+    fn ctx(actor: &str, store: &str, project: Option<&str>) -> InvocationContext {
+        InvocationContext::new(
+            ActorId(Id::new(actor).unwrap()),
+            PrincipalKind::Human,
+            Id::new("invocation-1").unwrap(),
+            Id::new("native-ui").unwrap(),
+            StoreId(Id::new(store).unwrap()),
+            Counter::new(0).unwrap(),
+            rev(1),
+        )
+        .with_lineage(project.map(|p| ProjectId(Id::new(p).unwrap())), None, None)
+    }
+
+    fn request(cursor: Option<String>) -> PageRequest {
+        serde_json::from_value(json!({"limit": 2, "cursor": cursor})).unwrap()
+    }
+
+    fn binding(ctx: &InvocationContext, scope: &ConfigScope, revision: i64) -> CursorBinding {
+        list_binding(ctx, "mcp.servers", scope, &[], revision)
+    }
+
+    #[test]
+    fn cursor_expires_under_another_principal_project_store_scope_or_revision() {
+        let items = [1, 2, 3, 4, 5];
+        let alice = ctx("alice", "store-1", None);
+        let scope = ConfigScope::Workspace;
+        let first = page(&items, &request(None), &binding(&alice, &scope, 7)).unwrap();
+        assert_eq!(first.items.0, vec![1, 2]);
+        let cursor = first.next_cursor.unwrap().0;
+        let resumed = page(
+            &items,
+            &request(Some(cursor.clone())),
+            &binding(&alice, &scope, 7),
+        );
+        assert_eq!(resumed.unwrap().items.0, vec![3, 4]);
+
+        let project = ProjectId(Id::new("project-1").unwrap());
+        let others = [
+            (
+                "principal",
+                binding(&ctx("bob", "store-1", None), &scope, 7),
+            ),
+            (
+                "project context",
+                binding(&ctx("alice", "store-1", Some("project-1")), &scope, 7),
+            ),
+            ("store", binding(&ctx("alice", "store-2", None), &scope, 7)),
+            ("scope", binding(&alice, &ConfigScope::Project(project), 7)),
+            ("revision", binding(&alice, &scope, 8)),
+        ];
+        for (what, other) in others {
+            assert!(
+                matches!(
+                    page(&items, &request(Some(cursor.clone())), &other),
+                    Err(StorageError::CursorExpired)
+                ),
+                "a cursor from another {what} must expire"
+            );
+        }
+        let altered = format!("{cursor}0");
+        assert!(matches!(
+            page(&items, &request(Some(altered)), &binding(&alice, &scope, 7)),
+            Err(StorageError::CursorExpired)
+        ));
     }
 }
