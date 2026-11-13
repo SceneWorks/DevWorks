@@ -53,8 +53,9 @@
 //! generation; an **event-handler invocation** may not use `broker.state` compare-and-set or an
 //! effectful `broker.call`: its state change, effect intents, processing receipt and checkpoint
 //! commit together through `broker.commit_event` ([`crate::package::commit_event`]) or not at
-//! all. Brokered host calls (`broker.call` to application operations, HTTP and inference) are
-//! the SDK callback boundary of a later item and are refused as `Unavailable` here.
+//! all. Brokered host calls (`broker.call` to application operations, HTTP, inference and
+//! artifacts) are not yet active and are refused as `Unavailable` with a message that says so
+//! ([`BROKER_CALL_INACTIVE`]); see that constant for what is missing.
 //!
 //! The helper is a separate process for failure containment, not an OS sandbox (see the package
 //! service's trust model).
@@ -2021,6 +2022,12 @@ impl PackageActivity for PackageHost {
     }
 }
 
+/// Refusal of every `broker.call`. Not yet active (tracked by DW-TBD-BROKER): the host has no
+/// per-invocation grant of callable operations, no package connection-handle registry for HTTP
+/// endpoints, no inference attribution for package requests, no artifact read/write path for
+/// packages, and no executor for the `package.broker.*` intents `broker.commit_event` records.
+pub const BROKER_CALL_INACTIVE: &str = "broker.call is not yet active: this host does not broker application, HTTP, inference or artifact calls for packages yet; broker.state and broker.commit_event are available";
+
 /// The broker of a host's sessions.
 struct HostBroker {
     host: Arc<PackageHost>,
@@ -2078,10 +2085,7 @@ impl Broker for HostBroker {
                         "an event handler's effects are intents of broker.commit_event",
                     ));
                 }
-                Err(rpc_error(
-                    RpcErrorClass::Unavailable,
-                    "brokered host calls are not available in this host build",
-                ))
+                Err(rpc_error(RpcErrorClass::Unavailable, BROKER_CALL_INACTIVE))
             }
             PackageRequest::State { params, .. } => {
                 let pinned: i64 = String::from(params.state_generation.clone())

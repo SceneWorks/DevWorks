@@ -8,13 +8,27 @@ use crate::services::usage::accounting::{Admission, AttemptRequest};
 #[derive(Clone, Copy, Debug, Serialize, serde::Deserialize)]
 pub enum ReportCategory {
     Assistant,
+    /// Inference of an agent bound to the code-review role ([`Self::for_agent_role`]).
     CodeReview,
+    /// Not produced yet: no native repository analysis makes inference requests. DW-29 owns the
+    /// model-assisted analysis stages that will report here; until then the Usage screen marks
+    /// this report not yet active.
     RepositoryAnalysis,
     Mcp,
     Other,
     Unknown,
 }
 impl ReportCategory {
+    /// The report path of a managed agent turn, from the role recorded as its usage owner
+    /// (`AuxiliaryOwnership::role`): code-review agents report code review usage, every other
+    /// agent role assistant usage.
+    pub fn for_agent_role(role: &str) -> Self {
+        if role == format!("{:?}", crate::settings::catalog::AgentRole::CodeReviewer) {
+            Self::CodeReview
+        } else {
+            Self::Assistant
+        }
+    }
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Assistant => "Assistant",

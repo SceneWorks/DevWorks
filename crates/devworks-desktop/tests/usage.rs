@@ -1123,6 +1123,10 @@ fn native_usage_six_reports_share_authoritative_filters_utc_buckets_and_partial_
     click(&mut h, Role::ComboBox, "Report");
     click(&mut h, Role::Button, "Repository analysis usage");
     assert_eq!(report_total(&h, "totalTokens").as_deref(), Some("3"));
+    assert!(has_text(
+        &h,
+        devworks_desktop::usage_screen::REPOSITORY_ANALYSIS_INACTIVE
+    ));
     replace(&mut h, "Usage tool", "fixture.tool");
     click(&mut h, Role::ComboBox, "Report");
     click(&mut h, Role::Button, "MCP usage");

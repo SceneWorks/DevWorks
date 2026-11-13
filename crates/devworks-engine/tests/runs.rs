@@ -1777,6 +1777,42 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
         let planned =
             devworks_engine::agent_turns::plan_generation(&app, &context, &route, &binding, &head)
                 .unwrap();
+        assert!(matches!(
+            planned.category,
+            devworks_core::services::router::accounting::ReportCategory::Assistant
+        ));
+        // The same turn of an agent bound to the code-review role reports as code review usage.
+        let rebind = |role: Option<AgentRole>| {
+            let (user, agent) = (fx.user.clone(), session.agent_id.clone());
+            fx.tx(move |_, tx| {
+                let bound = tx.authority().principal(&agent)?.unwrap();
+                let role = role.or(bound.role);
+                bind_principal(
+                    tx,
+                    &user,
+                    NewPrincipalBinding {
+                        actor: agent,
+                        kind: bound.kind,
+                        role,
+                        project_id: bound.project_id,
+                        tool_families: bound.tool_families,
+                        bound_by: bound.bound_by,
+                    },
+                    Some(bound.revision),
+                )
+                .map(|_| bound.role)
+                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+            })
+        };
+        let original = rebind(Some(AgentRole::CodeReviewer));
+        let reviewed =
+            devworks_engine::agent_turns::plan_generation(&app, &context, &route, &binding, &head)
+                .unwrap();
+        assert!(matches!(
+            reviewed.category,
+            devworks_core::services::router::accounting::ReportCategory::CodeReview
+        ));
+        rebind(original);
         assert_eq!(planned.request.request_id, planned.logical.request_id);
         assert_eq!(planned.attempt.output_headroom, 4_000);
         assert_eq!(planned.attempt.expected_context_epoch, Some(0));

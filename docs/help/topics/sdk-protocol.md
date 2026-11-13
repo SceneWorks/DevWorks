@@ -10,7 +10,7 @@ Never invent or copy authority from another invocation. The host owns actor and 
 
 ## Calls and streams
 
-Packages request `broker.call`, `broker.state`, or `broker.commit_event` with stable action keys. The host rechecks current permission and publication. Progress and `package.event` are notifications, not terminal success. Streams respect explicit credit; a heartbeat or cancellation acknowledgment does not prove that work or effects finished.
+Packages request `broker.call`, `broker.state`, or `broker.commit_event` with stable action keys. The host rechecks current permission and publication. `broker.call` is not yet active: this host refuses every brokered application, HTTP, inference and artifact call as `Unavailable`, and records the intents of `broker.commit_event` without executing them. Progress and `package.event` are notifications, not terminal success. Streams respect explicit credit; a heartbeat or cancellation acknowledgment does not prove that work or effects finished.
 
 Return Completed with exact artifacts, Failed with a code, CancelledBeforeEffect only when true, or OutcomeUnknown naming an actual operation. A cancellation after possible dispatch must not be reported as if nothing happened. Stop local work before acknowledging shutdown; ignored cancellation can cause supervised process termination, restart-budget use or quarantine.
 

@@ -216,6 +216,27 @@ impl AgentRole {
     }
 }
 
+/// Settings that Settings shows but no behaviour reads yet. Each description starts with
+/// [`NOT_YET_ACTIVE_PREFIX`] and says what is missing; Settings marks the row not yet active.
+/// Remove a key here, and the prefix from its description, in the change that makes it work.
+pub const NOT_YET_ACTIVE: &[&str] = &[
+    // GitHub change polling, issue import, issue synchronization and triage: DW-40.
+    "github.pollForChanges",
+    "github.importOpenIssues",
+    "github.syncLinkedIssueFields",
+    "github.issueTriageIntervalSeconds",
+    // Exact-head review resolution, the review/fix cycle and merge: DW-41.
+    "delivery.autoMerge",
+    "delivery.maxReviewFixCycles",
+    "reviews.automationWaitSeconds",
+    // Automatic context compaction: no owner item yet (reported with DW-226).
+    "agents.compactionThresholdPercent",
+    // Vision extraction of scanned documents: no owner item yet (reported with DW-226).
+    "knowledge.visionExtraction",
+];
+/// How the description of every [`NOT_YET_ACTIVE`] setting begins.
+pub const NOT_YET_ACTIVE_PREFIX: &str = "Not yet active:";
+
 /// One setting.
 #[derive(Clone, Copy, Debug)]
 pub struct SettingDescriptor {
@@ -235,6 +256,10 @@ impl SettingDescriptor {
     }
     pub fn locked(&self) -> bool {
         self.policy == WritePolicy::HarnessEnforced
+    }
+    /// Shown in Settings, but nothing reads it yet (see [`NOT_YET_ACTIVE`]).
+    pub fn not_yet_active(&self) -> bool {
+        NOT_YET_ACTIVE.contains(&self.key)
     }
     pub fn help_id(&self) -> &'static str {
         self.category.help_id()
@@ -573,7 +598,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.pollForChanges",
             "Poll GitHub for changes",
-            "Pushes, merges, reviews and checks notify agents through authenticated polling.",
+            "Not yet active: DevWorks does not poll GitHub yet, so this switch changes nothing. Once polling is built, pushes, merges, reviews and checks notify agents through authenticated polling.",
             GitHub,
             INHERITED,
             ValueKind::Bool,
@@ -583,7 +608,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.importOpenIssues",
             "Import open issues",
-            "Import existing open issues when a repository is connected and newly reported ones thereafter.",
+            "Not yet active: GitHub issue import is not built yet, so this switch changes nothing. Once it is, existing open issues are imported when a repository is connected, and newly reported ones thereafter.",
             GitHub,
             INHERITED,
             ValueKind::Bool,
@@ -593,7 +618,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.syncLinkedIssueFields",
             "Receive linked issue updates",
-            "Reflect remote issue updates locally. Keep intermediate execution details local; publish a resolution only after completed work is verified.",
+            "Not yet active: GitHub issue synchronization is not built yet, so this switch changes nothing. Once it is, remote issue updates are reflected locally; intermediate execution details stay local and a resolution is published only after completed work is verified.",
             GitHub,
             INHERITED,
             ValueKind::Bool,
@@ -603,7 +628,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.issueTriageIntervalSeconds",
             "Issue triage interval (seconds)",
-            "App-wide minimum interval between automatic issue triage admissions.",
+            "Not yet active: automatic issue triage is not built yet, so this value changes nothing. Once it is, this is the app-wide minimum interval between automatic issue triage admissions.",
             GitHub,
             WORKSPACE,
             POSITIVE,
@@ -613,7 +638,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "delivery.autoMerge",
             "Auto-Merge",
-            "Commit, push, address review feedback and merge when all required checks pass.",
+            "Not yet active: DevWorks does not merge pull requests yet, so this switch changes nothing. Once merging is built, work is committed, pushed, review feedback addressed and the pull request merged when all required checks pass.",
             Delivery,
             INHERITED,
             ValueKind::Bool,
@@ -634,7 +659,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "delivery.maxReviewFixCycles",
             "Review fix cycles",
-            "Maximum review/fix cycles before asking for help. Engineering default.",
+            "Not yet active: the review/fix cycle is not built yet, so this value changes nothing. Once it is, this is the maximum number of review/fix cycles before asking for help. Engineering default.",
             Delivery,
             INHERITED,
             ValueKind::Integer { min: 1, max: 20 },
@@ -680,7 +705,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "reviews.automationWaitSeconds",
             "Automated review wait (seconds)",
-            "Finite wait for a registered review source before the review gate escalates. Engineering default.",
+            "Not yet active: the review gate is not built yet, so this value changes nothing. Once it is, this is the finite wait for a registered review source before the gate escalates. Engineering default.",
             Delivery,
             INHERITED,
             POSITIVE,
@@ -700,7 +725,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "agents.compactionThresholdPercent",
             "Context compaction threshold (%)",
-            "Context usage at which conversations are compacted.",
+            "Not yet active: conversations are not compacted automatically yet, so this value changes nothing. Once they are, this is the context usage at which a conversation is compacted.",
             Agents,
             WORKSPACE,
             ValueKind::Integer { min: 50, max: 95 },
@@ -747,7 +772,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "knowledge.visionExtraction",
             "Vision extraction fallback",
-            "Extract existing text first; use a vision-capable routed model for scanned pages.",
+            "Not yet active: document extraction does not use a vision model yet, so this switch changes nothing. Once it does, existing text is extracted first and a vision-capable routed model reads scanned pages.",
             Knowledge,
             WORKSPACE,
             ValueKind::Bool,

@@ -1,6 +1,6 @@
 # Review and delivery settings
 
-Review and auto-merge preferences apply to current work, exact candidate source and qualified delivery handlers. Approval, passing verification and review are separate evidence. The automated review wait defaults to a finite 900 seconds; expiry should remain a visible wait/escalation, not a fabricated successful review. Changing policy does not rewrite historical test or review identity.
+Auto-Merge, review fix cycles and the automated review wait are not yet active: DevWorks does not resolve reviews or merge pull requests yet, so Settings marks those rows "Not yet active" and saving them changes nothing. Once built, review and auto-merge preferences apply to current work, exact candidate source and qualified delivery handlers. Approval, passing verification and review are separate evidence. The automated review wait defaults to a finite 900 seconds; expiry should remain a visible wait/escalation, not a fabricated successful review. Changing policy does not rewrite historical test or review identity.
 
 ## Apply a change
 

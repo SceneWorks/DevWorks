@@ -664,6 +664,9 @@ impl SettingsScreen {
                     ui.label(RichText::new(d.label).strong());
                     let (text, tone) = status(&item);
                     chip(ui, text, tone);
+                    if d.not_yet_active() {
+                        chip(ui, "Not yet active", Tone::Attention);
+                    }
                     if item.is_dirty() {
                         chip(ui, "Unsaved", Tone::Accent);
                     }
