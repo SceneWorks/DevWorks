@@ -558,6 +558,9 @@ pub struct WorkUi {
     /// Current records of opened features (readiness at schema revision 2).
     pub detail: BTreeMap<String, WorkRecord>,
     pub git: BTreeMap<String, ListState<devworks_core::protocol::records::AttributedGitLink>>,
+    /// Pages of a source-control re-read, shown only once complete: the list on screen stays
+    /// until then, so a refresh never shifts the controls beneath it.
+    git_reread: BTreeMap<String, Vec<devworks_core::protocol::records::AttributedGitLink>>,
     pub runs: BTreeMap<String, RootSnapshot>,
     pub git_inspections:
         BTreeMap<String, Result<devworks_core::protocol::records::GitInspection, String>>,
@@ -625,6 +628,7 @@ impl WorkUi {
         self.allocation_busy.retain(|(p, _)| p != project);
         self.detail.retain(|id, _| !owned(id));
         self.git.retain(|id, _| !owned(id));
+        self.git_reread.retain(|id, _| !owned(id));
         self.runs.retain(|id, _| !owned(id));
         self.git_inspections.retain(|id, _| !owned(id));
         self.features
@@ -1090,8 +1094,20 @@ impl Shell {
             } else {
                 (MessageDraft::default(), Vec::new(), None, None)
             };
+            // A refresh keeps the messages on screen until its replies replace them: emptying
+            // the board meanwhile would remove the controls a click in that frame was aimed at.
+            let (history, inbox) = if same_project {
+                (
+                    std::mem::take(&mut self.work.messages.history),
+                    std::mem::take(&mut self.work.messages.inbox),
+                )
+            } else {
+                (Vec::new(), Vec::new())
+            };
             self.work.messages = MessageBoard {
                 project: Some(project.clone()),
+                history,
+                inbox,
                 draft,
                 events,
                 event_after,
@@ -1179,7 +1195,9 @@ impl Shell {
     }
     fn load_git_links(&mut self, work: &str, cursor: Option<String>) {
         if cursor.is_none() {
-            self.work.git.insert(work.to_owned(), ListState::default());
+            // A first read shows its spinner; a re-read keeps the shown list until it is done.
+            self.work.git.entry(work.to_owned()).or_default();
+            self.work.git_reread.insert(work.to_owned(), Vec::new());
         }
         let root = work.to_owned();
         self.query(
@@ -1759,6 +1777,10 @@ impl Shell {
                 match wops::message_inbox_page(reply) {
                     Ok(page) => {
                         let board = &mut self.work.messages;
+                        // The first page after a refresh replaces what was kept on screen.
+                        if !board.inbox_loaded {
+                            board.inbox.clear();
+                        }
                         board.inbox_has_more = page.items.0.len() == 100;
                         for message in page.items.0 {
                             if let Some(known) =
@@ -1951,15 +1973,23 @@ impl Shell {
             }
             (Slot::WorkGit(id), Reply::Query(q)) => match wops::git_links_result(q) {
                 Ok(page) => {
-                    let state = self.work.git.entry(id.clone()).or_default();
-                    state.items.extend(page.items.0);
-                    state.loaded = true;
-                    state.more = page.has_more;
+                    let pages = self.work.git_reread.entry(id.clone()).or_default();
+                    pages.extend(page.items.0);
                     if let Some(cursor) = page.next_cursor {
                         self.load_git_links(&id, Some(cursor.0));
+                    } else {
+                        let items = self.work.git_reread.remove(&id).unwrap_or_default();
+                        let state = self.work.git.entry(id).or_default();
+                        state.items = items;
+                        state.loaded = true;
+                        state.error = None;
+                        state.more = page.has_more;
                     }
                 }
-                Err(error) => self.work.git.entry(id).or_default().error = Some(error.describe()),
+                Err(error) => {
+                    self.work.git_reread.remove(&id);
+                    self.work.git.entry(id).or_default().error = Some(error.describe());
+                }
             },
             (Slot::WorkDetail(id), Reply::Query(q)) => match wops::work_record(q) {
                 Ok(w) => {
@@ -2850,7 +2880,7 @@ fn message_board(ui: &mut Ui, board: &mut MessageBoard, open: bool, actions: &mu
         chip(ui, error.clone(), Tone::Bad);
     }
     ui.heading("Your inbox");
-    if !board.inbox_loaded {
+    if !board.inbox_loaded && board.inbox.is_empty() {
         widgets::caption(ui, "Loading your messages…");
     } else if board.inbox.is_empty() {
         widgets::caption(ui, "No unread messages.");
@@ -2909,7 +2939,7 @@ fn message_board(ui: &mut Ui, board: &mut MessageBoard, open: bool, actions: &mu
     }
     ui.add_space(10.0);
     ui.heading("Project messages");
-    if !board.history_loaded {
+    if !board.history_loaded && board.history.is_empty() {
         widgets::caption(ui, "Loading message history…");
     } else if board.history.is_empty() {
         widgets::caption(ui, "No project messages yet.");
