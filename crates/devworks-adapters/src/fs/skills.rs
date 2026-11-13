@@ -12,14 +12,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct NativeSkillFiles {
     root: PathBuf,
-    next: AtomicU64,
 }
 impl NativeSkillFiles {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self {
-            root: root.into(),
-            next: AtomicU64::new(0),
-        }
+        Self { root: root.into() }
     }
 }
 
@@ -195,6 +191,10 @@ fn copy_entry(from: &Path, to: &Path) -> io::Result<()> {
 /// retired trees carry the same tag.
 const JOURNAL: &str = ".skill.swap-";
 
+/// Source of swap tags, shared by every adapter in the process so no two running swaps (even
+/// under different roots) share a tag in `ACTIVE`.
+static NEXT_SWAP: AtomicU64 = AtomicU64::new(0);
+
 /// Tags of the swaps running in this process. Recovery leaves their files alone; a journal of
 /// this process whose swap has returned (a restore that failed) is recovered like any other.
 static ACTIVE: Mutex<Option<HashSet<String>>> = Mutex::new(None);
@@ -338,7 +338,7 @@ impl NativeSkillFiles {
             return Err(SkillFileFault::InvalidName);
         }
         let root = self.root()?;
-        let n = self.next.fetch_add(1, Ordering::SeqCst);
+        let n = NEXT_SWAP.fetch_add(1, Ordering::SeqCst);
         let tag = format!("{}-{}", std::process::id(), n);
         let _active = ActiveSwap::new(&tag);
         // Temporary names never include the skill name: a name near the filesystem's length
