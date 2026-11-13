@@ -27,7 +27,9 @@
 //!   too. Secret references, `null`, booleans and empty strings are kept.
 //! * **JSON embedded in text.** An object or array that parses as JSON anywhere in the text is
 //!   redacted as above (and written back compactly) when the text mentions a sensitive name or
-//!   holds a `\u` escape (which can spell one).
+//!   holds a `\u` escape (which can spell one). One that is itself the value of a sensitive name
+//!   or flag on the same line (`--password [..]`, `token={..}`, `"secret": [..]`) is replaced
+//!   whole.
 //! * **Per line**: the value after a credential header (`Authorization:`,
 //!   `Proxy-Authorization:`, `Cookie:`, `X-Api-Key:`); `name=value`, `name:value`,
 //!   `name: value`, `"name":"value"`, `"name": value`, `--name value` and `--name=value` for a
@@ -243,6 +245,13 @@ impl Redactor {
                 Some(Ok(v)) if v.is_object() || v.is_array() => {
                     let end = i + values.byte_offset();
                     out.push_str(&rest[..i]);
+                    // The value of a sensitive flag or name outside it (`--password [..]`,
+                    // `token={..}`): nothing inside it marks it, so all of it goes.
+                    if follows_sensitive_name(&out) {
+                        out.push_str(REDACTED);
+                        rest = &rest[end..];
+                        continue;
+                    }
                     let start = out.len();
                     let redacted = self.redact_json(&v);
                     match serde_json::to_string(&redacted) {
@@ -277,6 +286,31 @@ fn redact_subtree(value: &Value) -> Value {
                 .collect(),
         ),
         Value::Null | Value::Bool(_) => value.clone(),
+    }
+}
+
+/// Whether the text before a value ends with a sensitive name and its separator on the same
+/// line: `name=`, `name:`, `"name": ` or a `--name ` flag (the line pass's name-then-value
+/// forms).
+fn follows_sensitive_name(before: &str) -> bool {
+    let line = before.rsplit('\n').next().unwrap_or(before);
+    let spaced = line.trim_end();
+    let (name_part, flag_only) = match spaced.strip_suffix([':', '=']) {
+        Some(rest) => (rest, false),
+        // Without a separator only a flag followed by whitespace names the value.
+        None if spaced.len() < line.len() => (spaced, true),
+        None => return false,
+    };
+    let name = name_part
+        .trim_end()
+        .trim_end_matches(['"', '\'', '\\'])
+        .rsplit(|c: char| c.is_whitespace() || "\"'\\,&{[(".contains(c))
+        .next()
+        .unwrap_or("");
+    if flag_only {
+        name.starts_with('-') && !name.contains('=') && sensitive(name.trim_start_matches('-'))
+    } else {
+        sensitive(name.trim_start_matches(['-', '?']))
     }
 }
 
@@ -345,7 +379,13 @@ fn redact_pem(text: &str) -> String {
 /// `offset` is the line's byte position in the text and `parsed` the spans of that text the
 /// embedded-JSON pass handled structurally: a value word starting inside one is kept.
 fn redact_line(line: &str, offset: usize, parsed: &[(usize, usize)]) -> String {
-    let structured = |at: usize| parsed.iter().any(|&(s, e)| (s..e).contains(&(offset + at)));
+    // Strictly inside: a value that starts a span had its sensitive name outside the span, so
+    // the structural pass did not redact it for that name.
+    let structured = |at: usize| {
+        parsed
+            .iter()
+            .any(|&(s, e)| s < offset + at && offset + at < e)
+    };
     // ASCII lowercasing keeps byte offsets aligned with `line`.
     let lower = line.to_ascii_lowercase();
     for header in [
@@ -605,6 +645,22 @@ mod tests {
             r.redact_text("cmd --password true"),
             format!("cmd --password {REDACTED}")
         );
+        // A value that parses as JSON after a sensitive flag or name outside it goes whole.
+        for (line, expected) in [
+            ("cmd --password [12345678]", "cmd --password [REDACTED]"),
+            (r#"cmd --password {"a":1}"#, "cmd --password [REDACTED]"),
+            ("cmd --token 12345678", "cmd --token [REDACTED]"),
+            ("password=[1,2]", "password=[REDACTED]"),
+            (
+                r#"retry with token: {"v":7} now"#,
+                "retry with token: [REDACTED] now",
+            ),
+        ] {
+            assert_eq!(r.redact_text(line), expected, "{line}");
+        }
+        // Ordinary JSON after an ordinary flag is kept.
+        let line = r#"cmd --data {"a":1}"#;
+        assert_eq!(r.redact_text(line), line);
         // A sensitive key spelled with a JSON escape is still a sensitive key.
         let escaped_key = r#"{"password":"hunter2"}"#;
         let out = r.redact_text(escaped_key);
