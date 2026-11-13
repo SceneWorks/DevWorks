@@ -501,14 +501,22 @@ impl Shell {
         let tab = match self.route {
             Route::Approvals => self.decisions.tab,
             Route::Knowledge => self.knowledge.tab,
-            Route::Databases => self.graph.tab,
+            Route::Databases => self.databases.tab,
             Route::Usage => self.usage.tab,
             _ => self.routes.get(&self.route).map_or(0, |view| view.tab),
         };
         let selection = match self.route {
             Route::Approvals => self.decisions.selected.as_ref().map(|v| v.id.as_str()),
             Route::Knowledge => self.knowledge.selected.as_ref().map(Id::as_str),
-            Route::Databases => self.graph.selected.as_ref().map(|v| v.node_id.as_str()),
+            Route::Databases => self
+                .databases
+                .selected_object
+                .as_ref()
+                .map(|object| object.id.as_str())
+                .or(self.databases.selected.as_deref()),
+            Route::Repositories if self.graph.opened => {
+                self.graph.selected.as_ref().map(|v| v.node_id.as_str())
+            }
             Route::Jobs => self.jobs.selected.as_deref(),
             Route::AddOns => self.addons.selected.as_deref(),
             Route::Help => self.help.selected.as_ref().map(|(_, topic)| topic.as_str()),

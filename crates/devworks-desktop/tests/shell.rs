@@ -415,6 +415,60 @@ fn home_chat_has_current_first_history_second_and_new_chat_in_the_header() {
     );
 }
 
+#[test]
+fn the_coordinator_notice_names_the_databases_and_repositories_graph_selection() {
+    let root = Root::new("screen-context");
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, "Workspace coordinator");
+    let digest = "0".repeat(64);
+    let node: devworks_core::protocol::records::CodeNode = serde_json::from_value(json!({
+        "nodeId": "graph-node-1", "repositoryId": "repo-1", "viewId": "view-1",
+        "unitKey": "unit-1", "nodeKind": "function", "name": "run", "qualifiedName": "app::run",
+        "properties": [], "propertiesComplete": true, "doNotTrust": false,
+        "trustRevision": "1", "viewDigest": digest, "contentIdentity": "content-1"
+    }))
+    .expect("code node");
+    let object: devworks_core::protocol::records::SchemaObject = serde_json::from_value(json!({
+        "id": "schema-object-1", "viewId": "view-1", "kind": "Table",
+        "qualifiedName": "public.orders",
+        "coverage": {"state": "Complete", "gaps": [], "moreGaps": false}
+    }))
+    .expect("schema object");
+
+    h.state_mut().navigate(Route::Databases);
+    settle(&mut h);
+    h.state_mut().graph.tab = 2;
+    h.state_mut().graph.selected = Some(node.clone());
+    h.state_mut().databases.tab = 1;
+    h.state_mut().databases.selected_object = Some(object);
+    settle(&mut h);
+    assert_eq!(
+        h.query_all_by_label_contains("Subview: Relationships\nSelection: schema-object-1")
+            .count(),
+        1,
+        "Databases reports its own tab and schema object, not the graph's"
+    );
+
+    h.state_mut().navigate(Route::Repositories);
+    h.state_mut().graph.opened = true;
+    settle(&mut h);
+    assert_eq!(
+        h.query_all_by_label_contains("Current screen: Repositories")
+            .count(),
+        1
+    );
+    assert_eq!(
+        h.query_all_by_label_contains("Selection: graph-node-1")
+            .count(),
+        1,
+        "Repositories with the graph open names the graph node"
+    );
+}
+
 // UI-11..13: the toolbar chat icon and the app-level coordinator sidebar.
 #[test]
 fn the_coordinator_sidebar_is_the_home_conversation_and_stays_open_until_closed_or_home() {
