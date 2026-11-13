@@ -1488,6 +1488,7 @@ impl McpClientService {
                 Some(input_schema),
                 output_schema,
                 tool.read_only_hint,
+                None,
             )?);
         }
         for resource in catalog.resources {
@@ -1497,7 +1498,7 @@ impl McpClientService {
                     "invalid MCP resource URI".into(),
                 ));
             }
-            resource_uris.insert(id.as_str().to_owned(), resource.uri);
+            resource_uris.insert(id.as_str().to_owned(), resource.uri.clone());
             capabilities.push(capability(
                 previous,
                 id,
@@ -1508,6 +1509,7 @@ impl McpClientService {
                 None,
                 None,
                 false,
+                Some(resource.uri),
             )?);
         }
         for prompt in catalog.prompts {
@@ -1548,6 +1550,7 @@ impl McpClientService {
                 Some(input_schema),
                 None,
                 false,
+                None,
             )?);
         }
         capabilities.push(capability(
@@ -1562,6 +1565,7 @@ impl McpClientService {
             None,
             None,
             false,
+            None,
         )?);
         self.write_catalog(
             tx,
@@ -2460,6 +2464,7 @@ fn capability(
     input_schema: Option<SchemaRef>,
     output_schema: Option<SchemaRef>,
     read_only: bool,
+    uri: Option<String>,
 ) -> Result<McpCapability, StorageError> {
     if name.is_empty()
         || name.chars().count() > 256
@@ -2481,6 +2486,8 @@ fn capability(
         output_schema,
         read_only,
         revision: rev(1),
+        // A resource names the URI a reader passes to `mcp.resources`.
+        uri: uri.map(BoundedText),
     };
     if let Some(old) = previous.capabilities.iter().find(|old| old.id == cap.id) {
         cap.revision = old.revision.clone();

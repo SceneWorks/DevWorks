@@ -403,6 +403,7 @@ fn configuration_is_durable_and_selection_rejects_unknown_tools() {
         output_schema: None,
         read_only: true,
         revision: Revision::new(1).unwrap(),
+        uri: None,
     };
     let write = McpCapability {
         id: id("mcp-write"),
@@ -518,6 +519,7 @@ fn first_discovery_selects_read_only_hints_up_to_the_selection_bound() {
             output_schema: None,
             read_only: true,
             revision: Revision::new(1).unwrap(),
+            uri: None,
         })
         .collect();
     let service_for_write = service.clone();

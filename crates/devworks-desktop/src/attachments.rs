@@ -398,7 +398,8 @@ mod tests {
             | TaskOutput::Refreshed
             | TaskOutput::TextPreview(_)
             | TaskOutput::Convention(_)
-            | TaskOutput::Instruction(_) => {
+            | TaskOutput::Instruction(_)
+            | TaskOutput::McpContent(_) => {
                 panic!("expected a preview")
             }
         }

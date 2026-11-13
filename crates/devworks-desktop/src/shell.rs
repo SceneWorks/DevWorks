@@ -2236,7 +2236,8 @@ impl Shell {
                         | TaskOutput::Refreshed
                         | TaskOutput::TextPreview(_)
                         | TaskOutput::Convention(_)
-                        | TaskOutput::Instruction(_),
+                        | TaskOutput::Instruction(_)
+                        | TaskOutput::McpContent(_),
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
                 };
@@ -2301,7 +2302,8 @@ impl Shell {
                             | TaskOutput::Refreshed
                             | TaskOutput::TextPreview(_)
                             | TaskOutput::Convention(_)
-                            | TaskOutput::Instruction(_),
+                            | TaskOutput::Instruction(_)
+                            | TaskOutput::McpContent(_),
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }
@@ -2493,6 +2495,12 @@ impl Shell {
                     self.settings.mcp.error = Some(error.describe());
                 }
             },
+            (Slot::McpContent(scope), Reply::Task(_)) if scope != self.mcp_scope_key() => {}
+            (Slot::McpContent(_), Reply::Task(t)) => self.settings.mcp.opened(match t {
+                Ok(TaskOutput::McpContent(text)) => Ok(text),
+                Ok(_) => Err("unexpected reply".into()),
+                Err(error) => Err(error),
+            }),
             (Slot::McpCapabilities(scope, _, _), Reply::Query(_))
                 if scope != self.mcp_scope_key() => {}
             (Slot::McpCapabilities(_, server, cursor), Reply::Query(q)) => {
@@ -3457,6 +3465,28 @@ impl Shell {
         match action {
             McpAction::Reload => self.load_mcp_servers(None),
             McpAction::Catalog(id, _revision) => self.load_mcp_capabilities(id, None),
+            McpAction::Open(id, catalog_revision, request) => {
+                let scope = self.settings.mcp.project.clone();
+                let slot = Slot::McpContent(self.mcp_scope_key());
+                let submitted = self.online().is_ok()
+                    && self.client.as_mut().is_some_and(|client| {
+                        client.task(slot, "Reading MCP content", move |backend| {
+                            ops::mcp_content(
+                                backend,
+                                scope.as_ref(),
+                                &id,
+                                catalog_revision,
+                                &request,
+                            )
+                            .map(TaskOutput::McpContent)
+                        })
+                    });
+                if !submitted {
+                    self.settings
+                        .mcp
+                        .opened(Err("the app is offline or closing".into()));
+                }
+            }
             other => {
                 let (operation, body, secret, pending_server) = match other {
                     McpAction::Configure { body, secret } => ("mcp.configure", body, secret, None),
@@ -3494,7 +3524,9 @@ impl Shell {
                         None,
                         None,
                     ),
-                    McpAction::Reload | McpAction::Catalog(_, _) => unreachable!(),
+                    McpAction::Reload | McpAction::Catalog(_, _) | McpAction::Open(..) => {
+                        unreachable!()
+                    }
                 };
                 let submitted = if let Some(secret) = secret {
                     self.online().is_ok()

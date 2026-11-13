@@ -2451,6 +2451,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `outputSchema` | `?SchemaRef` |
 | `readOnly` | `bool` |
 | `revision` | `Revision` |
+| `uri` | `?Text` · *revision 8+* |
 
 ### McpResource
 

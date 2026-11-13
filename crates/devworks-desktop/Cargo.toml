@@ -44,6 +44,9 @@ egui_kittest = "=0.37.0"
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache"] }
 # Signs a test publisher index (the Add-ons catalog paging test).
 ed25519-dalek = "=2.2.0"
+# An in-process MCP server the Settings resource and prompt test reads from.
+rmcp = { version = "=3.9.0", default-features = false, features = ["server"] }
+tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "io-util"] }
 
 # Native notification APIs already resolved through the platform UI dependencies. No helper
 # process impersonates another application; installed application identity remains required.

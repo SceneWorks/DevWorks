@@ -2259,7 +2259,11 @@
         "input_schema": "?SchemaRef",
         "output_schema": "?SchemaRef",
         "read_only": "bool",
-        "revision": "Revision"
+        "revision": "Revision",
+        "uri": "?Text"
+      },
+      "since": {
+        "uri": 8
       }
     },
     "McpResource": {

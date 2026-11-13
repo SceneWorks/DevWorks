@@ -11340,6 +11340,10 @@
         },
         "serverId": {
           "$ref": "#/$defs/Id"
+        },
+        "uri": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 8
         }
       },
       "required": [
