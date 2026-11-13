@@ -1274,6 +1274,7 @@ dependencies = [
  "base64 0.22.1",
  "jiff",
  "num-rational",
+ "regex",
  "schemars",
  "semver",
  "serde",

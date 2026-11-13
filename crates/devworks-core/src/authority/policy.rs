@@ -362,6 +362,54 @@ fn stops_watched_process(input: &OperationInput) -> bool {
     )
 }
 
+/// Whether the typed input is a watcher creation that launches a command (a process or a probe).
+fn launches_watched_process(input: &OperationInput) -> bool {
+    matches!(
+        input,
+        OperationInput::Watch(watch::Input::Create(create))
+            if create.process.is_some() || create.probe.is_some()
+    )
+}
+
+/// What a watcher request that launches or stops a process needs beyond the watcher tools:
+/// the process tool family, the process tool it uses, a non-reviewer role and shell tools.
+fn watcher_process_authority(
+    ctx: &InvocationContext,
+    binding: Option<&PrincipalBinding>,
+    policy: &EffectivePolicy,
+    input: &OperationInput,
+) -> Verdict {
+    let kind = ctx.principal_kind();
+    let tool = if launches_watched_process(input) {
+        "devworks/process.execute"
+    } else if stops_watched_process(input) {
+        "devworks/process.cancel"
+    } else {
+        return Verdict::Allow;
+    };
+    if matches!(kind, PrincipalKind::Human | PrincipalKind::Host) {
+        return Verdict::Allow;
+    }
+    if binding
+        .and_then(|b| b.tool_families.as_ref())
+        .is_some_and(|selected| !selected.iter().any(|f| f == "process"))
+        || (kind == PrincipalKind::Agent && !policy.tool_selected(tool, true))
+    {
+        return Verdict::Deny(DenialReason::ToolNotSelected);
+    }
+    if kind == PrincipalKind::Agent
+        && binding
+            .and_then(|b| b.role)
+            .is_some_and(AgentRole::read_only)
+    {
+        return Verdict::Deny(DenialReason::ReadOnlyRole);
+    }
+    if kind == PrincipalKind::Agent && !policy.shell_tools {
+        return Verdict::Deny(DenialReason::ShellToolsDisabled);
+    }
+    Verdict::Allow
+}
+
 /// Evaluates one request for a principal. `binding` is the principal's current host binding
 /// (required for every kind except Human and Host). Mandatory restrictions are evaluated first
 /// and hold under every profile.
@@ -533,9 +581,7 @@ pub fn registered_tool_visibility(
         return Verdict::Deny(DenialReason::OutOfProjectScope);
     }
     if let Some(selected) = &binding.tool_families
-        && (!selected.iter().any(|f| f == fam)
-            // A watcher launches through the process tools: it needs that family too.
-            || (op == "watch.create" && !selected.iter().any(|f| f == "process")))
+        && !selected.iter().any(|f| f == fam)
     {
         return Verdict::Deny(DenialReason::ToolNotSelected);
     }
@@ -545,16 +591,12 @@ pub fn registered_tool_visibility(
     {
         return Verdict::Deny(DenialReason::ToolNotSelected);
     }
-    // A watcher launches through process.execute: turning that tool off turns off launching
-    // through a watcher too.
-    if kind == PrincipalKind::Agent
-        && op == "watch.create"
-        && !policy.tool_selected("devworks/process.execute", true)
-    {
-        return Verdict::Deny(DenialReason::ToolNotSelected);
-    }
+    // A watcher that launches or stops a process needs what the process tools need; that
+    // depends on the request, so it is checked with the input (`watcher_process_authority`).
+    // Observing watchers (timers) are open to every role, reviewers included (WATCH-10).
+    let watcher_op = matches!(op, "watch.create" | "watch.cancel");
     let read_only_role = role.is_some_and(AgentRole::read_only);
-    if read_only_role {
+    if read_only_role && !watcher_op {
         if command || effect != EffectClass::ReadOnly {
             return Verdict::Deny(DenialReason::ReadOnlyRole);
         }
@@ -563,10 +605,7 @@ pub fn registered_tool_visibility(
         }
     }
     if kind == PrincipalKind::Agent {
-        // A process watcher launches and stops processes through the process tools.
-        if (fam == "process" || matches!(op, "watch.create" | "watch.cancel"))
-            && !policy.shell_tools
-        {
+        if fam == "process" && !policy.shell_tools {
             return Verdict::Deny(DenialReason::ShellToolsDisabled);
         }
         // Each web tool has its own switch; no other web operation is allowed by them.
@@ -680,16 +719,10 @@ pub(crate) fn evaluate_with_owned_task(
     if !matches!(visible, Verdict::Allow) {
         return visible;
     }
-    // Stopping a watched process is a process cancellation: it needs what process.cancel needs.
-    if stops_watched_process(request.input)
-        && !matches!(kind, PrincipalKind::Human | PrincipalKind::Host)
-        && (binding
-            .and_then(|b| b.tool_families.as_ref())
-            .is_some_and(|selected| !selected.iter().any(|f| f == "process"))
-            || (kind == PrincipalKind::Agent
-                && !policy.tool_selected("devworks/process.cancel", true)))
-    {
-        return Verdict::Deny(DenialReason::ToolNotSelected);
+    // Launching or stopping a process through a watcher needs what the process tools need.
+    let watched = watcher_process_authority(ctx, binding, policy, request.input);
+    if !matches!(watched, Verdict::Allow) {
+        return watched;
     }
     if matches!(kind, PrincipalKind::Human | PrincipalKind::Host)
         || request.binding.mode != Mode::Command
@@ -715,7 +748,12 @@ pub(crate) fn evaluate_with_owned_task(
             reason: DenialReason::ApprovalRequired,
         };
     }
-    if NATIVE_EXECUTION.contains(&op) && profile == AccessProfile::ProjectScope {
+    // A timer watcher launches nothing: it needs no native execution grant.
+    let observing_watcher = op == "watch.create" && !launches_watched_process(request.input);
+    if NATIVE_EXECUTION.contains(&op)
+        && !observing_watcher
+        && profile == AccessProfile::ProjectScope
+    {
         return Verdict::NeedsGrant {
             kind: GrantKind::NativeExecution,
             exact: true,

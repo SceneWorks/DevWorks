@@ -330,6 +330,29 @@ impl ProcessSupervisor {
         self.launch_with_id(ctx, request, policy, Some(process_id))
     }
 
+    /// The SEC-04/05 shell preflight verdict on launching `spec` now, without launching it.
+    pub fn preflight(&self, spec: &ProcessSpec, policy: &LaunchPolicy<'_>) -> CommandVerdict {
+        let argv = spec.argv();
+        let cwd = spec.cwd.as_ref().map(|c| c.to_string_lossy().into_owned());
+        // Destructive targets are resolved as the child will see them: its effective
+        // environment (what it inherits from the host unless cleared, plus what the launch sets)
+        // and its working directory, never the application's own environment.
+        let env = ChildEnvironment::effective(
+            &self.host.environment(),
+            spec.clear_env,
+            &spec.env,
+            self.host.platform() == "windows",
+        );
+        preflight_command_in(
+            policy.fs,
+            policy.roots,
+            &argv,
+            cwd.as_deref(),
+            policy.protected_branches,
+            &env,
+        )
+    }
+
     fn launch_with_id(
         &self,
         ctx: &InvocationContext,
@@ -338,28 +361,7 @@ impl ProcessSupervisor {
         reserved_id: Option<Id>,
     ) -> Result<OwnedProcess, LaunchRefusal> {
         let argv = request.spec.argv();
-        let cwd = request
-            .spec
-            .cwd
-            .as_ref()
-            .map(|c| c.to_string_lossy().into_owned());
-        // Destructive targets are resolved as the child will see them: its effective
-        // environment (what it inherits from the host unless cleared, plus what the launch sets)
-        // and its working directory, never the application's own environment.
-        let env = ChildEnvironment::effective(
-            &self.host.environment(),
-            request.spec.clear_env,
-            &request.spec.env,
-            self.host.platform() == "windows",
-        );
-        let verdict = preflight_command_in(
-            policy.fs,
-            policy.roots,
-            &argv,
-            cwd.as_deref(),
-            policy.protected_branches,
-            &env,
-        );
+        let verdict = self.preflight(&request.spec, policy);
         let git_owner_required = matches!(&verdict,CommandVerdict::NeedsInput { held,.. } if held.contains(&crate::authority::destructive::InputNeeded::GitPushOwnerRequired));
         let owned_git_push = if git_owner_required {
             if let Some(operation) = &request.operation_id {

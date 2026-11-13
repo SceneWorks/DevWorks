@@ -58,14 +58,15 @@ pub struct StoredWatcher {
     pub id: Id,
     pub revision: i64,
     pub phase: WatcherPhase,
-    /// Only `Process` today.
+    /// `Process`, `Probe` or `Timer`.
     pub source_kind: String,
     pub project_id: Option<ProjectId>,
     pub session_id: Id,
     pub actor: ActorId,
     /// The process.execute operation (also the owned process's ID) the watcher launched.
     pub process_operation_id: Option<OperationId>,
-    pub executable_ref: String,
+    /// The launched (or probe) command's registered executable; `None` for a timer.
+    pub executable_ref: Option<String>,
     pub tail_bytes: i64,
     pub outcome: Option<StoredWatchOutcome>,
     pub duration_ms: Option<i64>,
@@ -76,6 +77,29 @@ pub struct StoredWatcher {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub settled_at_ms: Option<i64>,
+    /// A probe's schedule and condition (`Probe` only).
+    pub probe: Option<StoredProbe>,
+    /// When a timer fires (`Timer` only).
+    pub due_at_ms: Option<i64>,
+    /// When a polling watcher ends `TimedOut` unless it settled first.
+    pub expires_at_ms: Option<i64>,
+}
+
+/// A probe watcher's command, condition and schedule. Its current run (if any) is the watcher's
+/// `process_operation_id`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredProbe {
+    /// The first run's `process.execute` operation, whose job every later run repeats.
+    pub job_operation_id: OperationId,
+    pub interval_ms: i64,
+    /// The exit code the condition requires (0 when neither this nor a pattern is set).
+    pub exit_code: Option<i64>,
+    /// A regular expression the run's output must match.
+    pub output_pattern: Option<String>,
+    /// Completed runs.
+    pub runs: i64,
+    /// When the next run starts; `None` while a run is in flight.
+    pub next_run_at_ms: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

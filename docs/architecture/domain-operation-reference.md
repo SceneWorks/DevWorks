@@ -722,11 +722,11 @@ All 375 qualified operations have typed input/result candidates. Existing input 
 
 ### Watch
 
-**Owner:** WatchService. Watchers observe a source on an agent's behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor observed.
+**Owner:** WatchService. Watchers observe a source on an agent's behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching (a process or a probe command) and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles may create observing watchers but cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor or the host clock observed.
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `watch.create` | **Command**<br>`process`: `ProcessSpec`<br>`tailBytes`: `?ByteLimit`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
+| `watch.create` | **Command**<br>`process`: `?ProcessSpec`<br>`probe`: `?WatchProbe`<br>`timer`: `?WatchTimer`<br>`tailBytes`: `?ByteLimit`<br>`maxLifetimeMs`: `?Counter`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
 | `watch.list` | **Query**<br>`sessionId`: `?Id`<br>`states`: `?Items<WatcherState>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherPage` |
 | `watch.inspect` | **Query**<br>`watcherId`: `Id`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
 | `watch.cancel` | **Command**<br>`watcherId`: `Id`<br>`expectedRevision`: `Revision`<br>`stopProcess`: `bool`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
@@ -5501,7 +5501,7 @@ Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `Conven
 
 ### WatchSourceKind
 
-`Process`.
+`Process`, `Probe`, `Timer`.
 
 ### WatchOutcomeKind
 
@@ -5522,6 +5522,36 @@ Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `Conven
 | --- | --- |
 | `processId` | `Id` |
 | `executableRef` | `Id` |
+
+### WatchProbeCondition
+
+| Field | Type |
+| --- | --- |
+| `exitCode` | `?i32` |
+| `outputPattern` | `?Text` |
+
+### WatchProbe
+
+| Field | Type |
+| --- | --- |
+| `process` | `ProcessSpec` |
+| `intervalMs` | `Counter` |
+| `condition` | `WatchProbeCondition` |
+
+### WatchTimer
+
+| Field | Type |
+| --- | --- |
+| `atMs` | `?Counter` |
+| `afterMs` | `?Counter` |
+
+### WatchProbeStatus
+
+| Field | Type |
+| --- | --- |
+| `intervalMs` | `Counter` |
+| `runs` | `Counter` |
+| `nextRunAtMs` | `?Counter` |
 
 ### WatchDeliveryState
 
@@ -5553,6 +5583,9 @@ Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `Conven
 | `state` | `WatcherState` |
 | `sourceKind` | `WatchSourceKind` |
 | `process` | `?WatchProcessSource` |
+| `probe` | `?WatchProbeStatus` |
+| `dueAtMs` | `?Counter` |
+| `expiresAtMs` | `?Counter` |
 | `sessionId` | `Id` |
 | `projectId` | `?ProjectId` |
 | `createdAtMs` | `Counter` |

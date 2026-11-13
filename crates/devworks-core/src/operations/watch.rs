@@ -12,7 +12,7 @@
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Id, Revision};
+use crate::protocol::{Counter, Id, Revision};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -21,14 +21,24 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateInput {
-    pub process: ProcessSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<ProcessSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<WatchProbe>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timer: Option<WatchTimer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tail_bytes: Option<ByteLimit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_lifetime_ms: Option<Counter>,
 }
 impl Check for CreateInput {
     fn check(&self) -> Result<(), String> {
         self.process.check()?;
+        self.probe.check()?;
+        self.timer.check()?;
         self.tail_bytes.check()?;
+        self.max_lifetime_ms.check()?;
         Ok(())
     }
 }

@@ -295,6 +295,21 @@ fn convention_input(op: &str, v: &Value) -> Result<(), String> {
 }
 
 pub fn record(name: &str, v: &Value) -> Result<(), String> {
+    if name == "WatchTimer" {
+        require(
+            present(v, "atMs") != present(v, "afterMs"),
+            "a timer names exactly one of a time and a delay",
+        )?;
+    }
+    if name == "WatchProbe" {
+        require(
+            v["intervalMs"]
+                .as_str()
+                .and_then(|s| s.parse::<i64>().ok())
+                .is_some_and(|ms| ms >= 1000),
+            "a probe runs at most once a second",
+        )?;
+    }
     if name == "EmbeddingSpaceRecord" {
         require(v["dimensions"].as_str().and_then(|s| s.parse::<u32>().ok()).is_some_and(|n| (1..=65536).contains(&n)), "embedding dimensions are 1..65536")?;
         if v["status"] == "Qualified" {require(["qualificationOperation", "qualificationRequestId", "qualificationAttemptId", "resultArtifact"].iter().all(|key| present(v, key)), "qualification requires actual native evidence")?;}
@@ -629,6 +644,21 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             named == 1 && (!present(v, "workspace") || v["workspace"] == true),
             "usage names exactly one of a root, a project and the workspace",
         )?
+    }
+    if op == "watch.create" {
+        let sources = ["process", "probe", "timer"]
+            .iter()
+            .filter(|k| present(v, k))
+            .count();
+        require(sources == 1, "a watcher names exactly one source")?;
+        require(
+            !present(v, "maxLifetimeMs") || present(v, "probe"),
+            "only a probe watcher takes a maximum lifetime",
+        )?;
+        require(
+            !present(v, "tailBytes") || !present(v, "timer"),
+            "a timer watcher has no output tail",
+        )?;
     }
     if op == "indexing.status" {
         // Exactly one target: a repository, or (revision 2) one overlay.

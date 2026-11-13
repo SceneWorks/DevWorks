@@ -367,19 +367,38 @@
     },
     "RetainedMessageKind": {
       "kind": "enum",
-      "values": ["Info", "Question", "Request", "Blocker", "Announcement"]
+      "values": [
+        "Info",
+        "Question",
+        "Request",
+        "Blocker",
+        "Announcement"
+      ]
     },
     "RetainedMessageState": {
       "kind": "enum",
-      "values": ["Open", "Answered", "Declined"]
+      "values": [
+        "Open",
+        "Answered",
+        "Declined"
+      ]
     },
     "RetainedMessageResolution": {
       "kind": "enum",
-      "values": ["Answered", "Declined"]
+      "values": [
+        "Answered",
+        "Declined"
+      ]
     },
     "RetainedDeliveryState": {
       "kind": "enum",
-      "values": ["Pending", "Delivered", "Read", "Answered", "Declined"]
+      "values": [
+        "Pending",
+        "Delivered",
+        "Read",
+        "Answered",
+        "Declined"
+      ]
     },
     "PageRequest": {
       "kind": "record",
@@ -6423,7 +6442,9 @@
     "WatchSourceKind": {
       "kind": "enum",
       "values": [
-        "Process"
+        "Process",
+        "Probe",
+        "Timer"
       ]
     },
     "WatchOutcomeKind": {
@@ -6452,6 +6473,40 @@
       "fields": {
         "process_id": "Id",
         "executable_ref": "Id"
+      }
+    },
+    "WatchProbeCondition": {
+      "kind": "record",
+      "fields": {
+        "exit_code": "?i32",
+        "output_pattern": "?Text"
+      }
+    },
+    "WatchProbe": {
+      "kind": "record",
+      "fields": {
+        "process": "ProcessSpec",
+        "interval_ms": "Counter",
+        "condition": "WatchProbeCondition"
+      }
+    },
+    "WatchTimer": {
+      "kind": "record",
+      "fields": {
+        "at_ms": "?Counter",
+        "after_ms": "?Counter"
+      },
+      "exactlyOne": [
+        "at_ms",
+        "after_ms"
+      ]
+    },
+    "WatchProbeStatus": {
+      "kind": "record",
+      "fields": {
+        "interval_ms": "Counter",
+        "runs": "Counter",
+        "next_run_at_ms": "?Counter"
       }
     },
     "WatchDeliveryState": {
@@ -6487,6 +6542,9 @@
         "state": "WatcherState",
         "source_kind": "WatchSourceKind",
         "process": "?WatchProcessSource",
+        "probe": "?WatchProbeStatus",
+        "due_at_ms": "?Counter",
+        "expires_at_ms": "?Counter",
         "session_id": "Id",
         "project_id": "?ProjectId",
         "created_at_ms": "Counter",
@@ -11167,13 +11225,16 @@
       "operation": "watch.create",
       "mode": "Command",
       "fields": {
-        "process": "ProcessSpec",
-        "tail_bytes": "?ByteLimit"
+        "process": "?ProcessSpec",
+        "probe": "?WatchProbe",
+        "timer": "?WatchTimer",
+        "tail_bytes": "?ByteLimit",
+        "max_lifetime_ms": "?Counter"
       },
       "result": "WatcherRecord",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Launches the watched process through the process.execute domain service (same bindings, preflight, native grant and output bounds) and answers the watcher before the process exits. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles cannot launch a process through a watcher.",
+      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers (timers) and cannot launch a process through a watcher.",
       "introducedRevision": 8
     },
     "watch.list": {
@@ -12186,6 +12247,6 @@
     "artifacts": "Existing immutable source/version/reference/deletion DTOs remain authoritative. Explicit deletion tombstones first, preserves surviving references, and never reactivates an old version.",
     "mcp_server": "Incoming MCP adapter uses shared application services. Internal human configuration only; not automatically MCP-exposed. stdio/loopback HTTP, current principal/grant, explicit scope, read-default policy, receipts and publication revocation apply. Protocol/session/client labels never mint authority.",
     "evals": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
-    "watch": "Watchers observe a source on an agent's behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor observed."
+    "watch": "Watchers observe a source on an agent's behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching (a process or a probe command) and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles may create observing watchers but cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor or the host clock observed."
   }
 }

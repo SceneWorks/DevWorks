@@ -62,6 +62,7 @@ def request(name,mode):
  if name=='knowledge.claim_bundle':body['query']['claimIds']=['claim-a']
  if name=='queue.reconcile':body['resolution']='Reconcile'
  if name.startswith('maintenance.'):body['previewOnly']=True
+ if name=='watch.create':body['process']=sample('ProcessSpec')
  frame={'mode':mode,'protocol':'1.0-draft.1',('queryId' if mode=='Query' else 'requestKey'):'request-a','body':body}
  if d.get('introducedRevision',1)>1:frame['schemaRevision']=d['introducedRevision']
  return frame
@@ -86,6 +87,22 @@ for name,d in OPS.items():
  for mode in ([d['mode']] if d['mode']!='Hybrid' else ['Query','Command']):case('input-'+name+'-'+mode,'domain-request'+('.r'+str(d['introducedRevision'])if d.get('introducedRevision',1)>1 else ''),request(name,mode))
 for name,t in ({n:d['result'] for n,d in OPS.items()}|LEGACY_RESULTS).items():
  case('result-'+name,'operation-result'+('.r'+str(OPS[name]['introducedRevision'])if OPS.get(name,{}).get('introducedRevision',1)>1 else ''),result(name,t))
+# Watcher sources (DW-96): exactly one of a process, a probe and a timer; only a probe takes a
+# maximum lifetime, a timer keeps no output tail, and a probe runs at most once a second.
+_watch=request('watch.create','Command')
+_proc=_watch['body']['process']
+def _watch_body(**members):
+ frame=copy.deepcopy(_watch); frame['body']={'kind':'watch.create',**members}; return frame
+_probe={'process':_proc,'intervalMs':'1000','condition':{'exitCode':0,'outputPattern':'ready'}}
+case('input-watch.create-probe','domain-request.r8',_watch_body(probe=_probe,maxLifetimeMs='60000',tailBytes=64))
+case('input-watch.create-timer-after','domain-request.r8',_watch_body(timer={'afterMs':'5000'}))
+case('input-watch.create-timer-at','domain-request.r8',_watch_body(timer={'atMs':'1700000000000'}))
+case('reject-watch.create-two-sources','domain-request.r8',_watch_body(process=_proc,timer={'afterMs':'5000'}),False,True)
+case('reject-watch.create-no-source','domain-request.r8',_watch_body(),False,True)
+case('reject-watch.create-process-lifetime','domain-request.r8',_watch_body(process=_proc,maxLifetimeMs='60000'),False,True)
+case('reject-watch.create-timer-tail','domain-request.r8',_watch_body(timer={'afterMs':'5000'},tailBytes=64),False,True)
+case('reject-watch.create-probe-too-often','domain-request.r8',_watch_body(probe={**_probe,'intervalMs':'999'}),False,True)
+case('reject-watch.create-timer-both-times','domain-request.r8',_watch_body(timer={'afterMs':'5000','atMs':'1'}),False,False)
 # Stable handwritten assertions cover wrong mode, authority/provenance injection,
 # dangerous ambiguity, partial/unknown effects and cross-operation substitution.
 def mutate(id,base,path,value,typed=False,schema=False,entry=None):

@@ -7482,8 +7482,35 @@
               "const": "watch.create",
               "type": "string"
             },
+            "maxLifetimeMs": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Counter"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "probe": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WatchProbe"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "process": {
-              "$ref": "#/$defs/ProcessSpec"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProcessSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "tailBytes": {
               "anyOf": [
@@ -7494,11 +7521,20 @@
                   "type": "null"
                 }
               ]
+            },
+            "timer": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WatchTimer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
-            "kind",
-            "process"
+            "kind"
           ],
           "type": "object",
           "x-since": 8
@@ -15922,6 +15958,73 @@
           "type": "object"
         }
       ]
+    },
+    "WatchProbe": {
+      "additionalProperties": false,
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/WatchProbeCondition"
+        },
+        "intervalMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessSpec"
+        }
+      },
+      "required": [
+        "process",
+        "intervalMs",
+        "condition"
+      ],
+      "type": "object"
+    },
+    "WatchProbeCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "exitCode": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "outputPattern": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "WatchTimer": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "atMs"
+          ]
+        },
+        {
+          "required": [
+            "afterMs"
+          ]
+        }
+      ],
+      "properties": {
+        "afterMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "atMs": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "type": "object"
     },
     "WatcherState": {
       "enum": [

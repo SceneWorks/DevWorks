@@ -2399,7 +2399,7 @@
 </tr>
 </tbody></table>
 <h3 id="watch">Watch</h3>
-<p><strong>Owner:</strong> WatchService. Watchers observe a source on an agent&#39;s behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor observed.</p>
+<p><strong>Owner:</strong> WatchService. Watchers observe a source on an agent&#39;s behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching (a process or a probe command) and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles may create observing watchers but cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor or the host clock observed.</p>
 <table>
 <thead>
 <tr>
@@ -2410,7 +2410,7 @@
 </thead>
 <tbody><tr>
 <td><code>watch.create</code></td>
-<td><strong>Command</strong><br><code>process</code>: <code>ProcessSpec</code><br><code>tailBytes</code>: <code>?ByteLimit</code><br><br><strong>Schema revisions</strong> 8 (<a href="contracts/domain-request.r8.schema.json">revision 8 input</a>)</td>
+<td><strong>Command</strong><br><code>process</code>: <code>?ProcessSpec</code><br><code>probe</code>: <code>?WatchProbe</code><br><code>timer</code>: <code>?WatchTimer</code><br><code>tailBytes</code>: <code>?ByteLimit</code><br><code>maxLifetimeMs</code>: <code>?Counter</code><br><br><strong>Schema revisions</strong> 8 (<a href="contracts/domain-request.r8.schema.json">revision 8 input</a>)</td>
 <td><code>WatcherRecord</code></td>
 </tr>
 <tr>
@@ -15559,7 +15559,7 @@
 <h3 id="watcherstate">WatcherState</h3>
 <p><code>Active</code>, <code>Stopping</code>, <code>Settled</code>, <code>Cancelled</code>.</p>
 <h3 id="watchsourcekind">WatchSourceKind</h3>
-<p><code>Process</code>.</p>
+<p><code>Process</code>, <code>Probe</code>, <code>Timer</code>.</p>
 <h3 id="watchoutcomekind">WatchOutcomeKind</h3>
 <p><code>Succeeded</code>, <code>Failed</code>, <code>Cancelled</code>, <code>TimedOut</code>, <code>Interrupted</code>, <code>Lost</code>, <code>Uncertain</code>.</p>
 <h3 id="watchoutcome">WatchOutcome</h3>
@@ -15602,6 +15602,82 @@
 <tr>
 <td><code>executableRef</code></td>
 <td><code>Id</code></td>
+</tr>
+</tbody></table>
+<h3 id="watchprobecondition">WatchProbeCondition</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>exitCode</code></td>
+<td><code>?i32</code></td>
+</tr>
+<tr>
+<td><code>outputPattern</code></td>
+<td><code>?Text</code></td>
+</tr>
+</tbody></table>
+<h3 id="watchprobe">WatchProbe</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>process</code></td>
+<td><code>ProcessSpec</code></td>
+</tr>
+<tr>
+<td><code>intervalMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>condition</code></td>
+<td><code>WatchProbeCondition</code></td>
+</tr>
+</tbody></table>
+<h3 id="watchtimer">WatchTimer</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>atMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>afterMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="watchprobestatus">WatchProbeStatus</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>intervalMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>runs</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>nextRunAtMs</code></td>
+<td><code>?Counter</code></td>
 </tr>
 </tbody></table>
 <h3 id="watchdeliverystate">WatchDeliveryState</h3>
@@ -15679,6 +15755,18 @@
 <tr>
 <td><code>process</code></td>
 <td><code>?WatchProcessSource</code></td>
+</tr>
+<tr>
+<td><code>probe</code></td>
+<td><code>?WatchProbeStatus</code></td>
+</tr>
+<tr>
+<td><code>dueAtMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>expiresAtMs</code></td>
+<td><code>?Counter</code></td>
 </tr>
 <tr>
 <td><code>sessionId</code></td>

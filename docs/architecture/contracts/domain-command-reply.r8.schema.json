@@ -26782,6 +26782,32 @@
       ],
       "type": "string"
     },
+    "WatchProbeStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "intervalMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "nextRunAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runs": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "intervalMs",
+        "runs"
+      ],
+      "type": "object"
+    },
     "WatchProcessSource": {
       "additionalProperties": false,
       "properties": {
@@ -26800,7 +26826,9 @@
     },
     "WatchSourceKind": {
       "enum": [
-        "Process"
+        "Process",
+        "Probe",
+        "Timer"
       ],
       "type": "string"
     },
@@ -26832,6 +26860,16 @@
         "createdAtMs": {
           "$ref": "#/$defs/Counter"
         },
+        "dueAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "durationMs": {
           "anyOf": [
             {
@@ -26849,6 +26887,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/WatchEvent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expiresAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
             },
             {
               "type": "null"
@@ -26880,6 +26928,16 @@
         },
         "outputTruncated": {
           "type": "boolean"
+        },
+        "probe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WatchProbeStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "process": {
           "anyOf": [

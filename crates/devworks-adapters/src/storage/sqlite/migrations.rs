@@ -540,6 +540,15 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0050_watchers.sql"),
         rebuilds_tables: false,
     },
+    // Prior writers cannot keep a probe's schedule or a timer's due time, and the source CHECK
+    // widens, so the watchers table is rebuilt.
+    Migration {
+        version: 51,
+        minimum_reader: 51,
+        minimum_writer: 51,
+        sql: include_str!("migrations/0051_watcher_sources.sql"),
+        rebuilds_tables: true,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

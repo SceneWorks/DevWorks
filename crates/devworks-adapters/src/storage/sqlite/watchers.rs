@@ -21,7 +21,7 @@ fn page_limit(limit: u16) -> Result<i64, StorageError> {
     Ok(i64::from(limit))
 }
 
-const WATCHER_COLUMNS: &str = "id,revision,phase,source_kind,project_id,session_id,actor_id,process_operation_id,executable_ref,tail_bytes,outcome_kind,exit_code,signal,outcome_detail,duration_ms,output_tail,output_truncated,stop_requested,created_at,updated_at,settled_at";
+const WATCHER_COLUMNS: &str = "id,revision,phase,source_kind,project_id,session_id,actor_id,process_operation_id,executable_ref,tail_bytes,outcome_kind,exit_code,signal,outcome_detail,duration_ms,output_tail,output_truncated,stop_requested,created_at,updated_at,settled_at,probe_job_operation_id,probe_interval_ms,probe_exit_code,probe_output_pattern,probe_runs,probe_next_run_at,due_at,expires_at";
 
 #[allow(clippy::type_complexity)]
 fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
@@ -47,6 +47,14 @@ fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
         created_at: row.get(18)?,
         updated_at: row.get(19)?,
         settled_at: row.get(20)?,
+        probe_job_operation_id: row.get(21)?,
+        probe_interval_ms: row.get(22)?,
+        probe_exit_code: row.get(23)?,
+        probe_output_pattern: row.get(24)?,
+        probe_runs: row.get(25)?,
+        probe_next_run_at: row.get(26)?,
+        due_at: row.get(27)?,
+        expires_at: row.get(28)?,
     })
 }
 struct WatcherRow {
@@ -58,7 +66,7 @@ struct WatcherRow {
     session_id: String,
     actor_id: String,
     process_operation_id: Option<String>,
-    executable_ref: String,
+    executable_ref: Option<String>,
     tail_bytes: i64,
     outcome_kind: Option<String>,
     exit_code: Option<i64>,
@@ -71,6 +79,14 @@ struct WatcherRow {
     created_at: i64,
     updated_at: i64,
     settled_at: Option<i64>,
+    probe_job_operation_id: Option<String>,
+    probe_interval_ms: Option<i64>,
+    probe_exit_code: Option<i64>,
+    probe_output_pattern: Option<String>,
+    probe_runs: i64,
+    probe_next_run_at: Option<i64>,
+    due_at: Option<i64>,
+    expires_at: Option<i64>,
 }
 impl WatcherRow {
     fn into_stored(self) -> Result<StoredWatcher, StorageError> {
@@ -102,6 +118,19 @@ impl WatcherRow {
             created_at_ms: self.created_at,
             updated_at_ms: self.updated_at,
             settled_at_ms: self.settled_at,
+            probe: match (self.probe_job_operation_id, self.probe_interval_ms) {
+                (Some(job), Some(interval_ms)) => Some(StoredProbe {
+                    job_operation_id: OperationId(id(job)?),
+                    interval_ms,
+                    exit_code: self.probe_exit_code,
+                    output_pattern: self.probe_output_pattern,
+                    runs: self.probe_runs,
+                    next_run_at_ms: self.probe_next_run_at,
+                }),
+                _ => None,
+            },
+            due_at_ms: self.due_at,
+            expires_at_ms: self.expires_at,
         })
     }
 }
@@ -342,7 +371,7 @@ fn write_params(w: &StoredWatcher) -> Vec<rusqlite::types::Value> {
         text(w.session_id.as_str()),
         text(w.actor.0.as_str()),
         opt(w.process_operation_id.as_ref().map(|o| o.0.as_str())),
-        text(&w.executable_ref),
+        opt(w.executable_ref.as_deref()),
         Value::Integer(w.tail_bytes),
         opt(w.outcome.as_ref().map(|o| o.kind.as_str())),
         int(w.outcome.as_ref().and_then(|o| o.exit_code)),
@@ -355,6 +384,14 @@ fn write_params(w: &StoredWatcher) -> Vec<rusqlite::types::Value> {
         Value::Integer(w.created_at_ms),
         Value::Integer(w.updated_at_ms),
         int(w.settled_at_ms),
+        opt(w.probe.as_ref().map(|p| p.job_operation_id.0.as_str())),
+        int(w.probe.as_ref().map(|p| p.interval_ms)),
+        int(w.probe.as_ref().and_then(|p| p.exit_code)),
+        opt(w.probe.as_ref().and_then(|p| p.output_pattern.as_deref())),
+        Value::Integer(w.probe.as_ref().map_or(0, |p| p.runs)),
+        int(w.probe.as_ref().and_then(|p| p.next_run_at_ms)),
+        int(w.due_at_ms),
+        int(w.expires_at_ms),
     ]
 }
 
@@ -373,7 +410,7 @@ impl WatcherRepository for Unit<'_> {
         db(self.conn.execute(
             &format!(
                 "INSERT INTO watchers({WATCHER_COLUMNS}) VALUES({})",
-                placeholders(1, 21)
+                placeholders(1, 29)
             ),
             params_from_iter(write_params(watcher)),
         ))?;
@@ -384,7 +421,7 @@ impl WatcherRepository for Unit<'_> {
         let mut values = write_params(watcher);
         values.push(rusqlite::types::Value::Integer(watcher.revision - 1));
         let changed = db(self.conn.execute(
-            "UPDATE watchers SET revision=?2,phase=?3,source_kind=?4,project_id=?5,session_id=?6,actor_id=?7,process_operation_id=?8,executable_ref=?9,tail_bytes=?10,outcome_kind=?11,exit_code=?12,signal=?13,outcome_detail=?14,duration_ms=?15,output_tail=?16,output_truncated=?17,stop_requested=?18,created_at=?19,updated_at=?20,settled_at=?21 WHERE id=?1 AND revision=?22",
+            "UPDATE watchers SET revision=?2,phase=?3,source_kind=?4,project_id=?5,session_id=?6,actor_id=?7,process_operation_id=?8,executable_ref=?9,tail_bytes=?10,outcome_kind=?11,exit_code=?12,signal=?13,outcome_detail=?14,duration_ms=?15,output_tail=?16,output_truncated=?17,stop_requested=?18,created_at=?19,updated_at=?20,settled_at=?21,probe_job_operation_id=?22,probe_interval_ms=?23,probe_exit_code=?24,probe_output_pattern=?25,probe_runs=?26,probe_next_run_at=?27,due_at=?28,expires_at=?29 WHERE id=?1 AND revision=?30",
             params_from_iter(values),
         ))?;
         if changed != 1 {
