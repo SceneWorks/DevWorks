@@ -184,6 +184,15 @@ fn servers(
     store: &SqliteStore,
     cases: &UseCases,
 ) -> Vec<devworks_core::protocol::records::McpServer> {
+    servers_as(h, store, cases, &context(store))
+}
+
+fn servers_as(
+    h: &Harness,
+    store: &SqliteStore,
+    cases: &UseCases,
+    ctx: &InvocationContext,
+) -> Vec<devworks_core::protocol::records::McpServer> {
     let authority = HostAuthority {
         store,
         clock: &*h.clock,
@@ -198,12 +207,7 @@ fn servers(
         "kind":"mcp.servers","scope":{"kind":"Workspace"},"page":{"limit":10}
     }});
     match cases
-        .query(
-            &gateway,
-            &context(store),
-            "mcp.servers",
-            frame.to_string().as_bytes(),
-        )
+        .query(&gateway, ctx, "mcp.servers", frame.to_string().as_bytes())
         .expect("MCP query registered")
     {
         DomainQueryReply::Result {
@@ -2602,4 +2606,168 @@ fn a_resource_saved_before_capabilities_carried_uris_still_names_its_uri() {
         resource.uri.as_ref().map(|uri| uri.0.as_str()),
         Some("mcp://example/readme")
     );
+}
+
+/// A host without Node.js: a stdio server launched through `npx` cannot start, while remote
+/// servers connect as usual.
+#[derive(Default)]
+struct NoNodeRemote(RecordedRemote);
+impl McpRemote for NoNodeRemote {
+    fn connect(
+        &self,
+        context: &InvocationContext,
+        endpoint: &McpEndpoint,
+    ) -> Result<(), McpRemoteFault> {
+        if self.missing_runtime(&endpoint.transport).is_some() {
+            return Err(McpRemoteFault::UnavailableRuntime);
+        }
+        self.0.connect(context, endpoint)
+    }
+    fn discover(&self, server_id: &Id) -> Result<RemoteCatalog, McpRemoteFault> {
+        self.0.discover(server_id)
+    }
+    fn call_tool(
+        &self,
+        server_id: &Id,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Value, McpRemoteFault> {
+        self.0.call_tool(server_id, name, arguments)
+    }
+    fn read_resource(&self, server_id: &Id, uri: &str) -> Result<Value, McpRemoteFault> {
+        self.0.read_resource(server_id, uri)
+    }
+    fn get_prompt(
+        &self,
+        server_id: &Id,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Value, McpRemoteFault> {
+        self.0.get_prompt(server_id, name, arguments)
+    }
+    fn disconnect(&self, server_id: &Id) -> Result<(), McpRemoteFault> {
+        self.0.disconnect(server_id)
+    }
+    fn missing_runtime(
+        &self,
+        transport: &devworks_core::protocol::records::McpTransport,
+    ) -> Option<String> {
+        match transport {
+            devworks_core::protocol::records::McpTransport::Stdio { process }
+                if process.executable_ref.as_str() == "npx" =>
+            {
+                Some("npx".into())
+            }
+            _ => None,
+        }
+    }
+}
+
+#[test]
+fn a_stdio_server_without_its_runtime_is_flagged_before_connecting_and_does_not_stop_others() {
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
+        tx.actors()
+            .register(&ActorId(id("mcp-agent")), PrincipalKind::Agent, "MCP agent")
+    })
+    .unwrap();
+    bind_agent(&store, None);
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    service
+        .install_remote(
+            store.clone(),
+            Arc::new(NoNodeRemote::default()),
+            Arc::new(JsonSchemaValidator),
+            artifacts(&h),
+        )
+        .unwrap();
+    let cases = UseCases::new().with_mcp(service.clone());
+    let (remote_server, _) = discovered_server(&h, &store, &cases, &service);
+    let offered = || {
+        read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+            service.selected_tool_materials(&context(&store), snapshot)
+        })
+        .unwrap()
+        .into_iter()
+        .map(|material| material.wire_name)
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(offered(), ["lookup"]);
+
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: local },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "no-node-server",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"name":"Node server","transport":{"kind":"Stdio",
+            "process":{"executableRef":"npx","args":["some-mcp-server"],
+                "workingDirectory":{"rootId":"mcp-root","relative":"work"},"environment":[],
+                "profile":"Full","timeoutMs":"5000","outputLimitBytes":"1024"}}}),
+    )
+    else {
+        panic!("stdio server configuration failed");
+    };
+
+    // Before any connection, a human sees which executable this computer lacks.
+    let listed = servers(&h, &store, &cases);
+    let flagged = |list: &[devworks_core::protocol::records::McpServer], id: &Id| {
+        list.iter()
+            .find(|server| &server.id == id)
+            .unwrap()
+            .missing_runtime
+            .as_ref()
+            .map(|text| text.0.clone())
+    };
+    assert_eq!(flagged(&listed, &local.id), Some("npx".into()));
+    assert_eq!(flagged(&listed, &remote_server), None);
+    // It names the saved executable, so an agent does not see it.
+    let agent = HostIngress::new(&*store).context(
+        ActorId(id("mcp-agent")),
+        PrincipalKind::Agent,
+        id("mcp-agent-invocation"),
+        id("mcp-agent-ingress"),
+        Counter::new(store.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    assert_eq!(
+        flagged(&servers_as(&h, &store, &cases, &agent), &local.id),
+        None
+    );
+
+    // Connecting records a diagnostic naming the executable; the other server keeps serving.
+    let DomainDecision::Accepted { operation_id } = command(
+        &h,
+        &store,
+        &cases,
+        "no-node-connect",
+        "mcp.connect",
+        json!({"scope":{"kind":"Workspace"},"serverId":local.id,
+            "expectedRevision":local.revision.get().to_string()}),
+    ) else {
+        panic!("connect was not accepted");
+    };
+    assert!(matches!(
+        service.execute(&dispatched(&store, &operation_id)),
+        McpEffectOutcome::Failed(_)
+    ));
+    let failed = servers(&h, &store, &cases)
+        .into_iter()
+        .find(|server| server.id == local.id)
+        .unwrap();
+    assert!(matches!(
+        failed.state,
+        devworks_core::protocol::records::ItemState::Failed
+    ));
+    let failure = failed.last_failure.expect("diagnostic").0;
+    assert!(
+        failure.contains("`npx` is not available on this computer"),
+        "{failure}"
+    );
+    assert_eq!(offered(), ["lookup"]);
 }

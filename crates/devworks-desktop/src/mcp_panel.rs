@@ -60,6 +60,35 @@ pub fn credential_handles(server: &McpServer) -> Vec<Id> {
     }
 }
 
+/// The runtime a well-known launcher belongs to, so a person knows what to install.
+fn runtime_of(executable: &str) -> Option<&'static str> {
+    let name = executable.trim_end_matches(".exe");
+    match name {
+        "node" | "npx" | "npm" | "pnpm" | "yarn" => Some("Node.js"),
+        "python" | "python3" | "pip" | "pip3" | "uv" | "uvx" | "pipx" => Some("Python"),
+        "deno" => Some("Deno"),
+        "bun" | "bunx" => Some("Bun"),
+        "docker" => Some("Docker"),
+        "java" => Some("Java"),
+        _ => None,
+    }
+}
+
+/// Shown before connecting when this computer cannot find a stdio server's executable.
+pub fn missing_runtime_notice(executable: &str) -> String {
+    match runtime_of(executable) {
+        Some(runtime) => format!(
+            "Runtime not found: `{executable}` ({runtime}) is not available on this computer. \
+             Install {runtime} and make `{executable}` available on PATH, then restart DevWorks \
+             and connect."
+        ),
+        None => format!(
+            "Runtime not found: `{executable}` is not available on this computer. Install it \
+             and make it available on PATH, then restart DevWorks and connect."
+        ),
+    }
+}
+
 /// One line describing a saved transport without any secret value.
 fn describe(configuration: &McpTransport) -> String {
     match configuration {
@@ -92,6 +121,14 @@ fn describe(configuration: &McpTransport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_runtime_notice_names_the_launchers_runtime() {
+        assert!(missing_runtime_notice("npx").contains("`npx` (Node.js)"));
+        assert!(missing_runtime_notice("uvx").contains("Install Python"));
+        let plain = missing_runtime_notice("my-server");
+        assert!(plain.contains("`my-server` is not available"), "{plain}");
+    }
 
     #[test]
     fn discovery_stays_pending_until_its_operation_settles() {
@@ -354,6 +391,12 @@ impl McpPanel {
             }
             if let Some(configuration) = &server.configuration {
                 ui.label(describe(configuration));
+            }
+            if let Some(executable) = &server.missing_runtime {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    missing_runtime_notice(&executable.0),
+                );
             }
             if let Some(failure) = &server.last_failure {
                 ui.colored_label(ui.visuals().error_fg_color, &failure.0);

@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-12",
+  "date": "2026-11-13",
   "status": "Frozen source bytes and schema/ownership bindings verified; method argument/result semantics and actual native parity remain CAP acceptance work",
   "frozenRevision": "afe73560215bbe7593fc59451de5cc3237e3eeca",
   "currentRepositoryHead": "bec77ed044d3ace42366c8143444fa82dafde7aa",
@@ -10481,8 +10481,8 @@
   ],
   "inputSha256": {
     "docs/architecture/codegraph-capability-inventory.json": "54da948de48de4a7d00353ae14d7464feac80cca9bdab6d2a6bb2679caae2c09",
-    "docs/architecture/contracts/family-coverage.json": "3872b35cb48355e3541da031d6c42f05c6ec50762ebe5a378c347a5f163b8ccc",
-    "docs/architecture/implementation-plan.json": "4d18898437c331cf63e84f9c7dbefb0b619bb4260a23371e9695489387e4c95f",
+    "docs/architecture/contracts/family-coverage.json": "36e9e3162a00763bb722a8e5f946810eb8c3229220b24c062751d14b2eddd58c",
+    "docs/architecture/implementation-plan.json": "aca887e3de4edc75eb856dc64a5ecabf38d708057c151931b756ddb4c191edbb",
     "docs/architecture/devworks-capability-catalog.json": "181208735ecadfa5e918392bc54a230e9482cfdf199e7950b8016ced4ab58444"
   },
   "noInference": true,
