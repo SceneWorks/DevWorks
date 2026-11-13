@@ -1260,3 +1260,172 @@ fn a_failed_purge_recovery_stops_boot_with_nothing_running() {
 fn a_failed_os_notification_recovery_stops_boot_with_nothing_running() {
     a_failed_late_step_leaves_nothing_running("os_notification_deliveries", false);
 }
+
+/// A secret facility that fails with an error boot does not treat as "unavailable".
+struct BrokenSecrets;
+impl devworks_core::ports::secrets::SecretStore for BrokenSecrets {
+    fn name(&self) -> &'static str {
+        "broken"
+    }
+    fn put(
+        &self,
+        _: &devworks_core::ports::secrets::SecretKey,
+        _: &devworks_core::ports::secrets::Secret,
+    ) -> Result<(), devworks_core::ports::secrets::SecretError> {
+        Err(devworks_core::ports::secrets::SecretError::Failed(
+            "x".into(),
+        ))
+    }
+    fn get(
+        &self,
+        _: &devworks_core::ports::secrets::SecretKey,
+    ) -> Result<
+        Option<devworks_core::ports::secrets::Secret>,
+        devworks_core::ports::secrets::SecretError,
+    > {
+        Err(devworks_core::ports::secrets::SecretError::Failed(
+            "x".into(),
+        ))
+    }
+    fn delete(
+        &self,
+        _: &devworks_core::ports::secrets::SecretKey,
+    ) -> Result<bool, devworks_core::ports::secrets::SecretError> {
+        Err(devworks_core::ports::secrets::SecretError::Failed(
+            "x".into(),
+        ))
+    }
+    fn list(
+        &self,
+        _: &str,
+    ) -> Result<Vec<devworks_core::protocol::Id>, devworks_core::ports::secrets::SecretError> {
+        Err(devworks_core::ports::secrets::SecretError::Failed(
+            "x".into(),
+        ))
+    }
+}
+
+/// An outgoing MCP remote that is never used; installing it first makes boot's own install fail.
+struct UnusedRemote;
+impl devworks_core::ports::mcp::McpRemote for UnusedRemote {
+    fn connect(
+        &self,
+        _: &InvocationContext,
+        _: &devworks_core::ports::mcp::McpEndpoint,
+    ) -> Result<(), devworks_core::ports::mcp::McpRemoteFault> {
+        unreachable!()
+    }
+    fn discover(
+        &self,
+        _: &devworks_core::protocol::Id,
+    ) -> Result<devworks_core::ports::mcp::RemoteCatalog, devworks_core::ports::mcp::McpRemoteFault>
+    {
+        unreachable!()
+    }
+    fn call_tool(
+        &self,
+        _: &devworks_core::protocol::Id,
+        _: &str,
+        _: Value,
+    ) -> Result<Value, devworks_core::ports::mcp::McpRemoteFault> {
+        unreachable!()
+    }
+    fn read_resource(
+        &self,
+        _: &devworks_core::protocol::Id,
+        _: &str,
+    ) -> Result<Value, devworks_core::ports::mcp::McpRemoteFault> {
+        unreachable!()
+    }
+    fn get_prompt(
+        &self,
+        _: &devworks_core::protocol::Id,
+        _: &str,
+        _: Value,
+    ) -> Result<Value, devworks_core::ports::mcp::McpRemoteFault> {
+        unreachable!()
+    }
+    fn disconnect(
+        &self,
+        _: &devworks_core::protocol::Id,
+    ) -> Result<(), devworks_core::ports::mcp::McpRemoteFault> {
+        unreachable!()
+    }
+}
+
+/// Boots a composition that `break_step` makes fail before the first task starts, then checks
+/// that boot returns the error and the store holds a failed boot diagnostic naming `step`.
+fn a_failed_early_step_is_recorded(step: &str, break_step: impl FnOnce(&mut Composition)) {
+    let h = Harness::new();
+    drop(h.open());
+    let rt = runtime();
+    let (mut composition, parts) = compose(&h, Vec::new());
+    break_step(&mut composition);
+    match rt.block_on(boot(composition)) {
+        Err(BootError::Composition(e)) => assert!(e.to_string().contains(step), "{e}"),
+        Err(other) => panic!("{other:?}"),
+        Ok(_) => panic!("boot succeeded although {step} failed"),
+    }
+    drop(parts);
+    rt.block_on(async { tokio::time::sleep(Duration::from_millis(50)).await });
+    drop(h.open());
+    let db = rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
+    let output: String = db
+        .query_row(
+            "SELECT output FROM diagnostic_records WHERE component='boot' AND code='failed'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("the failed boot is recorded");
+    assert!(output.contains(step), "{output}");
+}
+
+#[test]
+fn an_invalid_eval_suite_stops_boot_with_a_failed_boot_diagnostic() {
+    a_failed_early_step_is_recorded("duplicate eval check identity", |c| {
+        let mut suite: devworks_core::protocol::records::EvalSuiteSnapshot =
+            serde_json::from_value(json!({"id":"suite","revision":"1","name":"Suite","checks":[{
+                "id":"check","ruleRef":"rule","measurement":"Proxy",
+                "predicate":{"kind":"TranscriptContains","entryKind":"UserMessage","text":"hello"}
+            }]}))
+            .unwrap();
+        // The same check twice breaks the suite's own uniqueness rule.
+        let twin = suite.checks.0[0].clone();
+        suite.checks.0.push(twin);
+        c.config.automatic_eval_suites = vec![suite];
+    });
+}
+
+#[test]
+fn a_failed_schema_credential_reconciliation_stops_boot_with_a_failed_boot_diagnostic() {
+    a_failed_early_step_is_recorded("schema credential reference reconciliation", |c| {
+        c.config.schemas = Some(devworks_engine::schemas::SchemaComposition {
+            reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
+            secrets: Arc::new(BrokenSecrets),
+        });
+    });
+}
+
+#[test]
+fn an_mcp_remote_that_is_already_installed_stops_boot_with_a_failed_boot_diagnostic() {
+    a_failed_early_step_is_recorded("outgoing MCP remote already installed", |c| {
+        let service = Arc::new(devworks_core::services::mcp::McpClientService::new(
+            c.ids.clone(),
+        ));
+        let validator: Arc<dyn devworks_core::ports::packages::SchemaValidator> =
+            Arc::new(devworks_adapters::packages::JsonSchemaValidator);
+        service
+            .install_remote(
+                c.store.clone(),
+                Arc::new(UnusedRemote),
+                validator.clone(),
+                c.artifacts.clone(),
+            )
+            .unwrap();
+        c.use_cases = std::mem::replace(&mut c.use_cases, UseCases::new()).with_mcp(service);
+        c.config.mcp = Some(devworks_engine::runtime::McpComposition {
+            validator,
+            factory: Arc::new(|_, _| Arc::new(UnusedRemote)),
+        });
+    });
+}
