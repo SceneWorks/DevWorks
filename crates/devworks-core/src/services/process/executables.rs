@@ -59,6 +59,11 @@ impl PathExecutables {
 
     /// The workspace's `tools.processExecutables`, resolved against this process's `PATH`.
     pub fn from_settings(store: Arc<dyn ApplicationStore>) -> Self {
+        Self::from_settings_on(store, Arc::new(|| std::env::var_os("PATH")))
+    }
+
+    /// The workspace's `tools.processExecutables`, resolved against `search_path`.
+    pub fn from_settings_on(store: Arc<dyn ApplicationStore>, search_path: SearchPath) -> Self {
         Self::new(
             Arc::new(move || {
                 read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
@@ -66,14 +71,23 @@ impl PathExecutables {
                 })
                 .ok()
             }),
-            Arc::new(|| std::env::var_os("PATH")),
+            search_path,
         )
     }
 
     /// The executable `name` selects now, if it is configured and found on PATH.
     pub fn lookup(&self, name: &str) -> Option<ResolvedExecutable> {
+        self.lookup_in(name, (self.names)())
+    }
+
+    /// Like [`Self::lookup`], with the names a caller already read (from its own snapshot, so
+    /// a caller inside a read never opens a second one). `None` keeps the names last read.
+    pub fn lookup_in(
+        &self,
+        name: &str,
+        configured: Option<Vec<String>>,
+    ) -> Option<ResolvedExecutable> {
         let path = (self.search_path)();
-        let configured = (self.names)();
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         // A failed settings read keeps the names last read; none read yet selects nothing.
         let names = configured.unwrap_or_else(|| cache.names.clone());

@@ -200,9 +200,25 @@ impl ToolBindings {
     /// The canonical file `name` selects and the path it was registered at, which the child
     /// keeps as its argv\[0\], after rechecking that the path still resolves to that file.
     pub fn resolve_launch(&self, name: &str) -> Result<(String, String), BindingRefusal> {
-        let (path, target) = self
-            .executable(name)
-            .ok_or(BindingRefusal::UnknownExecutable)?;
+        self.launch_of(self.executable(name, None))
+    }
+
+    /// Like [`Self::resolve_named_executable`] for a caller already inside a read: configured
+    /// names come from `configuration` (that caller's snapshot) instead of a second read.
+    pub fn resolve_named_executable_in(
+        &self,
+        name: &str,
+        configuration: &dyn crate::ports::storage::ConfigurationRead,
+    ) -> Result<String, BindingRefusal> {
+        self.launch_of(self.executable(name, Some(configuration)))
+            .map(|(program, _)| program)
+    }
+
+    fn launch_of(
+        &self,
+        executable: Option<(PathBuf, PathBuf)>,
+    ) -> Result<(String, String), BindingRefusal> {
+        let (path, target) = executable.ok_or(BindingRefusal::UnknownExecutable)?;
         let program = exact_file(&path, &target).ok_or(BindingRefusal::ChangedExecutable)?;
         Ok((
             program.to_string_lossy().into_owned(),
@@ -221,7 +237,11 @@ impl ToolBindings {
         self
     }
 
-    fn executable(&self, name: &str) -> Option<(PathBuf, PathBuf)> {
+    fn executable(
+        &self,
+        name: &str,
+        configuration: Option<&dyn crate::ports::storage::ConfigurationRead>,
+    ) -> Option<(PathBuf, PathBuf)> {
         if let Some(registered) = self.executables.get(name) {
             return Some(registered.clone());
         }
@@ -229,9 +249,11 @@ impl ToolBindings {
         if only.is_some_and(|only| !only.contains(&name)) {
             return None;
         }
-        registry
-            .lookup(name)
-            .map(|resolved| (resolved.invoked_as, resolved.canonical))
+        match configuration {
+            Some(read) => registry.lookup_in(name, super::executables::configured_names(read).ok()),
+            None => registry.lookup(name),
+        }
+        .map(|resolved| (resolved.invoked_as, resolved.canonical))
     }
 
     /// Duplicate IDs fail closed; a host must never let registration order select an executable.

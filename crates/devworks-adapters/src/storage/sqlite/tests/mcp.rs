@@ -2870,7 +2870,10 @@ impl McpRemote for NoNodeRemote {
         context: &InvocationContext,
         endpoint: &McpEndpoint,
     ) -> Result<(), McpRemoteFault> {
-        if self.missing_runtime(&endpoint.transport).is_some() {
+        if matches!(&endpoint.transport,
+            devworks_core::protocol::records::McpTransport::Stdio { process }
+                if process.executable_ref.as_str() == "npx")
+        {
             return Err(McpRemoteFault::UnavailableRuntime);
         }
         self.0.connect(context, endpoint)
@@ -2903,6 +2906,7 @@ impl McpRemote for NoNodeRemote {
     fn missing_runtime(
         &self,
         transport: &devworks_core::protocol::records::McpTransport,
+        _configuration: &dyn devworks_core::ports::storage::ConfigurationRead,
     ) -> Option<String> {
         match transport {
             devworks_core::protocol::records::McpTransport::Stdio { process }

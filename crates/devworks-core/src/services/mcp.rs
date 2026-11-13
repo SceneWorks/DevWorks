@@ -801,10 +801,14 @@ impl McpClientService {
         let endpoint = server.endpoint(&scope);
         let outcome = native.remote.connect(&context, &endpoint);
         let successful = outcome.is_ok();
-        let failure = outcome
-            .as_ref()
-            .err()
-            .map(|fault| BoundedText(connection_failure(&native.remote, &server.transport, fault)));
+        let failure = outcome.as_ref().err().map(|fault| {
+            BoundedText(connection_failure(
+                &native.remote,
+                &*native.store,
+                &server.transport,
+                fault,
+            ))
+        });
         let new_state = if successful {
             ItemState::Healthy
         } else {
@@ -2561,10 +2565,16 @@ fn sampling_decision(
 /// host cannot resolve names that executable, so a person knows which runtime to install.
 fn connection_failure(
     remote: &Arc<dyn McpRemote>,
+    store: &dyn ApplicationStore,
     transport: &McpTransport,
     fault: &McpRemoteFault,
 ) -> String {
-    match (fault, remote.missing_runtime(transport)) {
+    let missing = read_snapshot(store, &ReadOptions::default(), |snapshot| {
+        Ok(remote.missing_runtime(transport, snapshot.configuration()))
+    })
+    .ok()
+    .flatten();
+    match (fault, missing) {
         (McpRemoteFault::UnavailableRuntime, Some(executable)) => format!(
             "Connection failed: the executable `{executable}` is not available on this \
              computer. Install its runtime, make it available on PATH and list it under \
@@ -2750,7 +2760,11 @@ impl QueryHandler for McpClientService {
                             view.missing_runtime = self
                                 .native
                                 .get()
-                                .and_then(|native| native.remote.missing_runtime(&s.transport))
+                                .and_then(|native| {
+                                    native
+                                        .remote
+                                        .missing_runtime(&s.transport, snapshot.configuration())
+                                })
                                 .map(BoundedText);
                         }
                         view
