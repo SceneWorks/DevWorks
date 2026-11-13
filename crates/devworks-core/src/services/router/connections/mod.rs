@@ -58,7 +58,7 @@ use crate::ports::http::{Entropy, HttpTransport, base64url};
 use crate::ports::router::{ConnectionDirectory, ConnectionState, ConnectionStatus};
 use crate::ports::secrets::{
     Secret, SecretError, SecretKey, SecretRef, SecretResolver, SecretStore, SecretUnavailable,
-    SecretValue, reference_handle,
+    reference_handle,
 };
 use crate::ports::storage::{
     ApplicationStore, DiscoveredModel, NewEvent, ReadOptions, ReadSnapshot, RouterRead,
@@ -3636,7 +3636,7 @@ const SETTING_SECRET_PREFIX: &str = "dwsecret-";
 /// The production [`SecretResolver`]: settings references resolve from the same OS secret
 /// store, in this store's namespace (one secret-store abstraction).
 impl SecretResolver for ConnectionService {
-    fn resolve(&self, reference: &SecretRef) -> Result<SecretValue, SecretUnavailable> {
+    fn resolve(&self, reference: &SecretRef) -> Result<Secret, SecretUnavailable> {
         let handle = reference_handle(reference).ok_or(SecretUnavailable::NotFound)?;
         let custody = self
             .read(|r| r.configuration().settings_secret(&handle))
@@ -3654,7 +3654,7 @@ impl SecretResolver for ConnectionService {
         match self.noted(self.secrets.get(&self.key(&handle))) {
             Ok(Some(s)) => {
                 crate::authority::redact::register_resolved_secret(s.expose());
-                Ok(SecretValue::new(s.expose()))
+                Ok(s)
             }
             Ok(None) => Err(SecretUnavailable::NotFound),
             Err(SecretError::Unavailable(_)) | Err(SecretError::Denied) => {

@@ -37,7 +37,9 @@ use devworks_core::ports::packages::{HostPlatform, RuntimeCache};
 use devworks_core::ports::retrieval::NoVectorIndex;
 use devworks_core::ports::router::ConnectionDirectory;
 use devworks_core::ports::secrets::{Secret, SecretResolver, SecretStore, SwitchableSecrets};
-use devworks_core::ports::storage::{ApplicationStore, StorageError, WriteOptions, run_write};
+use devworks_core::ports::storage::{
+    ApplicationStore, ReadOptions, StorageError, WriteOptions, read_snapshot, run_write,
+};
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
 use devworks_core::services::UseCases;
@@ -55,7 +57,7 @@ use devworks_core::services::router::InferenceRouter;
 use devworks_core::services::router::connections::{ConnectionService, IntakeError};
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::sessions::SessionService;
-use devworks_core::services::web::{WebPorts, WebService};
+use devworks_core::services::web::{WebPorts, WebService, read_policy};
 use devworks_core::settings::service::SettingsService;
 use devworks_core::settings::view::Health;
 use devworks_engine::package_host::{HostConfig, IndexPorts, LaunchPorts, RuntimePorts};
@@ -458,13 +460,31 @@ async fn compose(
     // every search and fetch is recorded through the one diagnostics service. The search
     // credential resolves through the provider connection service, i.e. the same OS secret
     // store (one secret-store abstraction).
+    let web_ports = (config.web)(connections.clone());
+    // Package index and bundle downloads use the same resolver, pinned-address transport and
+    // egress policy as web.fetch, read fresh for each download (refused on a read failure).
+    let package_index = {
+        let store = store.clone();
+        NativeIndexTransport::new(
+            web_ports.resolver.clone(),
+            web_ports.transport.clone(),
+            Arc::new(move || {
+                read_snapshot(&*store, &ReadOptions::default(), |s| {
+                    Ok(read_policy(s.configuration()))
+                })
+                .ok()
+                .and_then(Result::ok)
+                .is_some_and(|p| p.allow_private)
+            }),
+        )
+    };
     let web = Arc::new(WebService::new(
         store.clone(),
         artifacts.clone(),
         diagnostics.clone(),
         clock.clone(),
         id_source.clone(),
-        (config.web)(connections.clone()),
+        web_ports,
     ));
     let use_cases = use_cases.with_web(web.clone());
     let purge_client = Arc::new(
@@ -667,7 +687,7 @@ async fn compose(
                 search_path: None,
             }),
             index: Some(IndexPorts {
-                transport: Arc::new(NativeIndexTransport::default()),
+                transport: Arc::new(package_index),
                 verifier: Arc::new(BundleIndexVerifier),
             }),
         }),
