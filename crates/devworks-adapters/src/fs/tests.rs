@@ -1515,3 +1515,46 @@ fn physical_identity_survives_rename_and_refuses_replaced_read_roots() {
     );
     assert_eq!(fs.read(&request), Err(ReadRefusal::RootChanged));
 }
+
+#[test]
+fn retry_denied_waits_out_a_transient_denial_and_returns_the_next_answer() {
+    use std::io::{Error, ErrorKind};
+    let mut calls = 0;
+    let out = super::retry_denied_when(true, || {
+        calls += 1;
+        match calls {
+            1 | 2 => Err::<(), _>(Error::from(ErrorKind::PermissionDenied)),
+            _ => Err(Error::from(ErrorKind::NotFound)),
+        }
+    });
+    assert_eq!(out.unwrap_err().kind(), ErrorKind::NotFound);
+    assert_eq!(calls, 3);
+}
+
+#[test]
+fn retry_denied_retries_nothing_else_and_nothing_off_windows() {
+    use std::io::{Error, ErrorKind};
+    for (retry, kind) in [
+        (true, ErrorKind::NotFound),
+        (true, ErrorKind::Other),
+        (false, ErrorKind::PermissionDenied),
+    ] {
+        let mut calls = 0;
+        let out = super::retry_denied_when(retry, || {
+            calls += 1;
+            Err::<(), _>(Error::from(kind))
+        });
+        assert_eq!(out.unwrap_err().kind(), kind);
+        assert_eq!(calls, 1, "{retry} {kind:?}");
+    }
+    let mut calls = 0;
+    assert_eq!(
+        super::retry_denied_when(true, || {
+            calls += 1;
+            Ok(7)
+        })
+        .unwrap(),
+        7
+    );
+    assert_eq!(calls, 1);
+}
