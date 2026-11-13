@@ -746,6 +746,7 @@ impl InstructionService {
             return Err(stale(&item, a.expected, current));
         }
         let target = visible_revision(tx.instructions(), ctx, &item, a.target)?;
+        let mut confirmed = false;
         let approval_id = match a.proposal {
             // Activation of reviewed agent content: only the exact approved proposal.
             Some(proposal) => {
@@ -803,10 +804,12 @@ impl InstructionService {
                 Some(approval_id)
             }
             None => {
-                // A person restores any previously approved revision directly. Unapproved agent
-                // content is activated only through its reviewed proposal.
+                // A person restores any previously approved revision directly, and confirms a
+                // skill folder change observed on disk the same way. Unapproved agent content is
+                // activated only through its reviewed proposal.
                 require_human(tx, ctx)?;
-                if target.state != InstructionRevisionState::Approved {
+                confirmed = super::awaiting_confirmation(&target);
+                if !confirmed && target.state != InstructionRevisionState::Approved {
                     return Err(refusal(
                         DomainErrorCode::ApprovalRequired,
                         "instruction_revision",
@@ -836,6 +839,21 @@ impl InstructionService {
         }
         let previous = item.active_revision;
         self.check_materializable(&item, &target.resources)?;
+        // The person's confirmation approves the observed change it activates.
+        let mut target = target;
+        if confirmed {
+            let now = tx.now_ms();
+            tx.instructions().set_instruction_revision_state(
+                &item.id,
+                target.revision,
+                InstructionRevisionState::Draft,
+                InstructionRevisionState::Approved,
+                None,
+                Some(now),
+            )?;
+            target.state = InstructionRevisionState::Approved;
+            target.decided_at_ms = Some(now);
+        }
         item.active_revision = Some(target.revision);
         item.confined_project = None;
         item.version += 1;
@@ -876,6 +894,7 @@ impl InstructionService {
                 "contentDigest": target.content_digest,
                 "approvalId": approval_id.as_ref().map(Id::as_str),
                 "proposalId": a.proposal.map(Id::as_str),
+                "confirmedObservation": confirmed,
                 "provenance": provenance(ctx),
             }),
         )?;

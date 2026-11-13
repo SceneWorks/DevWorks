@@ -339,6 +339,27 @@ fn discover(fx: &Fx, app: &Runtime, ctx: &InvocationContext) -> Value {
     )
     .unwrap()
 }
+/// The newest revision in a skill's history.
+fn newest(fx: &Fx, app: &Runtime, ctx: &InvocationContext, id: &Value) -> Value {
+    fx.query(
+        app,
+        ctx,
+        "skills.history",
+        json!({"instructionId":id,"page":{"limit":1}}),
+    )
+    .unwrap()["items"][0]
+        .clone()
+}
+/// Confirms, as the person would from each skill's history, every skill folder change observed
+/// on disk that awaits confirmation.
+fn confirm_observed(fx: &Fx, app: &Runtime, user: &InvocationContext) {
+    for item in discover(fx, app, user)["items"].as_array().unwrap() {
+        let newest = newest(fx, app, user, &item["id"]);
+        if labels(&newest).contains(&"awaiting-confirmation".into()) {
+            applied(fx.command(app, user, "skills.rollback", json!({"instructionId":item["id"],"expectedRevision":newest["revision"],"targetRevision":newest["revision"]})));
+        }
+    }
+}
 fn setting(store: &dyn ApplicationStore, role: AgentRole) -> String {
     read(store, |s| {
         Ok(
@@ -390,6 +411,11 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
             boot_sync.skipped.iter().any(|(n, reason)| n == "colon" && reason.contains("unsupported file name")),
             "{boot_sync:?}"
         );
+        // Skill folders seen for the first time wait for the person's confirmation.
+        let pending = discover(&fx, &app, &agent);
+        assert!(labels(find(&pending, "alpha", "shared")).contains(&"awaiting-confirmation".into()), "{pending}");
+        assert!(app.effective_skills().unwrap().skills.is_empty());
+        confirm_observed(&fx, &app, &user);
         let page = discover(&fx, &app, &agent);
         assert_eq!(page["items"].as_array().unwrap().len(), 3, "{page}");
         let alpha = find(&page, "alpha", "shared");
@@ -457,8 +483,14 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
         let first = app.effective_skills().unwrap();
         assert_eq!(first.skills.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["alpha", "beta"]);
         assert_eq!(first.skills[1].root_id, "skills-harness");
-        // An external edit of a user-owned shared file is observed as a new active revision.
+        // An external edit of a user-owned shared file is recorded as revision 2 awaiting the
+        // person's confirmation; revision 1 stays in effect until the person confirms it.
         std::fs::write(fx.shared.join("alpha/SKILL.md"), "Do alpha better.").unwrap();
+        let before = find(&discover(&fx, &app, &user), "alpha", "shared").clone();
+        assert_eq!(before["revision"], "1");
+        assert!(labels(&before).contains(&"disk-change-pending".into()), "{before}");
+        assert_eq!(app.effective_skills().unwrap().digest, first.digest);
+        confirm_observed(&fx, &app, &user);
         let page = discover(&fx, &app, &user);
         let alpha2 = find(&page, "alpha", "shared");
         assert_eq!(alpha2["revision"], "2");
@@ -532,6 +564,8 @@ fn shared_skills_are_discovered_in_place_and_harness_skills_take_precedence() {
             "RevisionConflict"
         );
         assert_eq!(std::fs::read(fx.harness.join("beta/notes.md")).unwrap(), b"added on disk");
+        assert_eq!(newest(&fx, &app, &user, &beta["id"])["revision"], "2");
+        confirm_observed(&fx, &app, &user);
         assert_eq!(find(&discover(&fx, &app, &user), "beta", "harness")["revision"], "2");
         // While the target's harness directory cannot be captured, no save may replace it.
         #[cfg(unix)]
@@ -702,6 +736,7 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
     runtime().block_on(async {
         let (user, agent, reviewer) = fx.principals();
         let app = boot(fx.composition()).await.unwrap();
+        confirm_observed(&fx, &app, &user);
         let shared = find(&discover(&fx, &app, &agent), "alpha", "shared").clone();
         // Revision 3 of skills.resources reports each resource's execute permission.
         let located = fx
@@ -797,6 +832,82 @@ fn agent_skill_changes_take_effect_only_through_exact_human_approval() {
             refused(fx.command(&app, &user, "skills.rollback", json!({"instructionId":draft["id"],"expectedRevision":latest.to_string(),"targetRevision":"2"}))),
             "ApprovalRequired"
         );
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn an_on_disk_skill_change_stays_pending_until_a_person_confirms_it() {
+    let fx = Fx::new();
+    write_skill(&fx.shared, "alpha", &[("SKILL.md", "Do alpha.")]);
+    write_skill(&fx.harness, "gamma", &[("SKILL.md", "Do gamma.")]);
+    runtime().block_on(async {
+        let (user, agent, _) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        let effective = |app: &Runtime| {
+            app.effective_skills()
+                .unwrap()
+                .skills
+                .iter()
+                .map(|s| (s.name.clone(), s.revision))
+                .collect::<Vec<_>>()
+        };
+        // A skill folder seen for the first time is recorded but not in effect.
+        let page = discover(&fx, &app, &user);
+        for (name, origin) in [("alpha", "shared"), ("gamma", "harness")] {
+            let record = find(&page, name, origin);
+            let l = labels(record);
+            assert!(
+                l.contains(&"awaiting-confirmation".into()) && l.contains(&"state:draft".into()),
+                "{record}"
+            );
+            assert!(!l.contains(&"active".into()) && record["approved"] == false, "{record}");
+        }
+        assert_eq!(effective(&app), []);
+        let alpha = find(&page, "alpha", "shared").clone();
+        let gamma = find(&page, "gamma", "harness").clone();
+        // An agent can neither activate nor propose the observed change.
+        let direct = fx.command(&app, &agent, "skills.rollback", json!({"instructionId":alpha["id"],"expectedRevision":"1","targetRevision":"1"}));
+        assert!(!matches!(&direct, CommandReply::Recorded{receipt,..} if matches!(receipt.decision, DomainDecision::Applied{..})), "{direct:?}");
+        assert_eq!(
+            refused(fx.command(&app, &agent, "skills.propose", json!({"instructionId":alpha["id"],"expectedRevision":"1","contentDigest":digest_of(&alpha)}))),
+            "PermissionDenied"
+        );
+        assert_eq!(effective(&app), []);
+        // The person's confirmation approves and activates it.
+        for record in [&alpha, &gamma] {
+            let confirmed = applied(fx.command(&app, &user, "skills.rollback", json!({"instructionId":record["id"],"expectedRevision":"1","targetRevision":"1"})));
+            assert!(labels(&confirmed).contains(&"active".into()) && confirmed["approved"] == true, "{confirmed}");
+        }
+        assert_eq!(effective(&app), [("alpha".to_owned(), 1), ("gamma".to_owned(), 1)]);
+        // A later edit on disk, of a shared and of a harness skill, leaves revision 1 active.
+        std::fs::write(fx.shared.join("alpha/SKILL.md"), "Do alpha, edited on disk.").unwrap();
+        std::fs::write(fx.harness.join("gamma/SKILL.md"), "Do gamma, edited on disk.").unwrap();
+        let page = discover(&fx, &app, &user);
+        for (name, origin) in [("alpha", "shared"), ("gamma", "harness")] {
+            let record = find(&page, name, origin);
+            assert_eq!(record["revision"], "1");
+            assert!(labels(record).contains(&"disk-change-pending".into()), "{record}");
+            let pending = newest(&fx, &app, &user, &record["id"]);
+            assert_eq!(pending["revision"], "2");
+            assert!(labels(&pending).contains(&"awaiting-confirmation".into()), "{pending}");
+        }
+        assert_eq!(effective(&app), [("alpha".to_owned(), 1), ("gamma".to_owned(), 1)]);
+        // Repeated syncs record nothing new and never replace the pending harness edit.
+        assert_eq!(app.instructions().unwrap().sync().unwrap().observed, 0);
+        assert_eq!(std::fs::read(fx.harness.join("gamma/SKILL.md")).unwrap(), b"Do gamma, edited on disk.");
+        // Confirming revision 2 activates it, with the person's confirmation in its history.
+        for record in [&alpha, &gamma] {
+            applied(fx.command(&app, &user, "skills.rollback", json!({"instructionId":record["id"],"expectedRevision":"2","targetRevision":"2"})));
+        }
+        assert_eq!(effective(&app), [("alpha".to_owned(), 2), ("gamma".to_owned(), 2)]);
+        let page = discover(&fx, &app, &user);
+        assert!(!labels(find(&page, "alpha", "shared")).contains(&"disk-change-pending".into()));
+        assert_eq!(std::fs::read(fx.harness.join("gamma/SKILL.md")).unwrap(), b"Do gamma, edited on disk.");
+        let events = read(&*fx.store, |s| s.history().page(&EventFilter::Aggregate{kind:"instruction".into(),id:alpha["id"].as_str().unwrap().into()},0,500));
+        let activations: Vec<_> = events.events.iter().filter(|e| e.kind == "InstructionActivated").collect();
+        assert_eq!(activations.len(), 2);
+        assert!(activations.iter().all(|e| e.actor.0.as_str() == "user" && e.payload["confirmedObservation"] == true));
         app.shutdown().await;
     });
 }
@@ -1173,6 +1284,7 @@ fn provider_contexts_bind_skills_gate_dispatch_and_adopt_changes_at_an_epoch() {
     runtime().block_on(async {
         let (user, _, _) = fx.principals();
         let app = boot(fx.composition()).await.unwrap();
+        confirm_observed(&fx, &app, &user);
         let base = devworks_core::providers::context::ProviderContext {
             version: 1,
             instructions: vec![devworks_core::providers::context::TextBlock {
@@ -1279,6 +1391,7 @@ fn provider_contexts_bind_skills_gate_dispatch_and_adopt_changes_at_an_epoch() {
             "an unchanged skill set keeps the context"
         );
         std::fs::write(fx.shared.join("alpha/SKILL.md"), "Do alpha, revised.").unwrap();
+        confirm_observed(&fx, &app, &user);
         let adopted = app
             .adopt_instruction_epoch(&host, &session_id, &previous, &binding, &[])
             .unwrap();
@@ -1321,6 +1434,7 @@ fn provider_contexts_bind_skills_gate_dispatch_and_adopt_changes_at_an_epoch() {
         assert_eq!(adoption.payload["transitions"], json!(["alpha"]));
         // A refused transition (here: from a stale epoch) records no adoption.
         std::fs::write(fx.shared.join("alpha/SKILL.md"), "Do alpha, third.").unwrap();
+        confirm_observed(&fx, &app, &user);
         assert!(
             app.adopt_instruction_epoch(&host, &session_id, &previous, &binding, &[])
                 .is_err()

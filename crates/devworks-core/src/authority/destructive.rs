@@ -124,6 +124,10 @@ pub struct ProtectedRoots {
     pub repositories: Vec<RegisteredRepository>,
     pub worktrees: Vec<OwnedWorktree>,
     pub app_data_root: Option<String>,
+    /// Skill folders (`~/.agents/skills`, `<data-root>/skills`): no command may create, change
+    /// or remove anything inside them, so a skill changes only through skill saves and
+    /// approvals ([`ProtectedRoots::with_skill_roots`]).
+    pub skill_roots: Vec<String>,
     /// The store (and restore epoch) the registered roots were read from. Only roots read from
     /// a store ([`ProtectedRoots::read`]) can honor a primary deletion permit, and only one
     /// minted on that same store, epoch and registry revision.
@@ -179,8 +183,19 @@ impl ProtectedRoots {
             repositories,
             worktrees,
             app_data_root,
+            skill_roots: Vec::new(),
             store: None,
         }
+    }
+    /// Adds the skill folders no command may write; the revision covers them too.
+    pub fn with_skill_roots(mut self, roots: impl IntoIterator<Item = String>) -> Self {
+        self.skill_roots.extend(roots);
+        let mut basis = self.revision.clone();
+        for root in &self.skill_roots {
+            basis.push_str(&format!("\ns|{root}"));
+        }
+        self.revision = sha256_hex(basis.as_bytes());
+        self
     }
 }
 
@@ -240,6 +255,7 @@ pub enum BlockReason {
     WholeContentErasure,
     ProtectedUserDirectory,
     ApplicationData,
+    SkillDirectory,
     WorktreeNotOwned,
     WorktreeInUse,
     EscapesScope,
@@ -255,6 +271,7 @@ impl BlockReason {
             Self::WholeContentErasure => "WholeContentErasure",
             Self::ProtectedUserDirectory => "ProtectedUserDirectory",
             Self::ApplicationData => "ApplicationData",
+            Self::SkillDirectory => "SkillDirectory",
             Self::WorktreeNotOwned => "WorktreeNotOwned",
             Self::WorktreeInUse => "WorktreeInUse",
             Self::EscapesScope => "EscapesScope",
@@ -277,6 +294,9 @@ impl BlockReason {
             Self::ProtectedUserDirectory => "This would delete your home directory.",
             Self::ApplicationData => {
                 "DevWorks data changes only through application operations such as restore."
+            }
+            Self::SkillDirectory => {
+                "Skill folders change only through skill saves and approvals, so a person reviews every change before it takes effect."
             }
             Self::WorktreeNotOwned => "This is not a worktree DevWorks owns.",
             Self::WorktreeInUse => "The worktree is still running or in use.",
@@ -556,6 +576,13 @@ pub fn preflight(
         Some((_, Ok(p))) => Some(p),
         None => None,
     };
+    let mut skills = Vec::with_capacity(roots.skill_roots.len());
+    for root in &roots.skill_roots {
+        match locate(fs, root) {
+            Ok(p) => skills.push(p),
+            Err(()) => return unresolved(root),
+        }
+    }
     let permitted = match &plan.scope {
         IntendedScope::PrimaryRepositoryDeletion(permit) => Some(permit.repository_id().clone()),
         _ => None,
@@ -569,12 +596,14 @@ pub fn preflight(
     }
     protected_ids.extend(home.located.identity);
     protected_ids.extend(app_data.as_ref().and_then(|a| a.located.identity));
+    protected_ids.extend(skills.iter().filter_map(|s| s.located.identity));
     let protected_dirs = || {
         repositories
             .iter()
             .flat_map(|r| std::iter::once(&r.root).chain(r.git_dirs.iter()))
             .chain(std::iter::once(&home))
             .chain(app_data.iter())
+            .chain(skills.iter())
     };
 
     // Expand globs into a bounded explicit set; whole-content erasure of a protected directory
@@ -668,7 +697,7 @@ pub fn preflight(
             plan,
             &repositories,
             Some(&home),
-            app_data.as_ref(),
+            (app_data.as_ref(), &skills),
             roots,
             fs,
         ) {
@@ -707,7 +736,7 @@ fn classify(
     plan: &EffectPlan,
     repositories: &[Repository],
     home: Option<&Protected>,
-    app_data: Option<&Protected>,
+    (app_data, skills): (Option<&Protected>, &[Protected]),
     roots: &ProtectedRoots,
     fs: &dyn FilesystemResolver,
 ) -> Result<TargetClass, BlockReason> {
@@ -729,6 +758,14 @@ fn classify(
             .iter()
             .any(|a| same(a, &p.located) || (kind.recursive() && ancestor_of(a, &p.located)))
     };
+    // A skill folder, anything inside it, or a recursive step over it: a write there would be
+    // observed as a skill change. Checked before application data, which holds a skill folder.
+    if skills
+        .iter()
+        .any(|s| hits(s) || affected.iter().any(|x| ancestor_of(&s.located, x)))
+    {
+        return Err(BlockReason::SkillDirectory);
+    }
     if let Some(a) = app_data
         && (hits(a) || affected.iter().any(|x| ancestor_of(&a.located, x)))
     {

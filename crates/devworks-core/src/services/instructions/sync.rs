@@ -1,7 +1,11 @@
 //! Host observation of instruction sources: skill directories (shared and harness) and the
 //! effective role settings. Each observed change is captured as host artifacts and recorded as
-//! a new approved, active revision in one unit of work. Repeated syncs are idempotent; a
-//! source that cannot be read is reported and leaves its items unchanged.
+//! a new revision in one unit of work. A changed or newly seen skill directory becomes a
+//! revision awaiting a person's confirmation (the host cannot tell who wrote it): the previous
+//! revision, if any, stays active until a person confirms the new one with `skills.rollback`.
+//! A role setting change is recorded approved and active, since settings change only through
+//! the settings owner. Repeated syncs are idempotent; a source that cannot be read is reported
+//! and leaves its items unchanged.
 use super::scan::{self, ScannedFile, ScannedSkill};
 use super::{InstructionService, event, role_item_id};
 use crate::ports::IdKind;
@@ -23,7 +27,7 @@ use std::sync::Arc;
 /// What one sync did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SyncReport {
-    /// New revisions recorded from observed sources.
+    /// New revisions recorded from observed sources (skill changes await confirmation).
     pub observed: usize,
     /// Harness skill directories written from their active revision.
     pub materialized: usize,
@@ -396,15 +400,17 @@ impl InstructionService {
                 }
             };
             let host = tx.store().host_actor.clone();
+            // Anyone, an agent's command included, may have written the directory: the change
+            // waits for a person's confirmation and the active revision stays as it was.
             let revision = record_capture(
                 tx,
                 &artifacts,
                 &item,
                 &staged_in,
                 RecordedRevision {
-                    state: InstructionRevisionState::Approved,
+                    state: InstructionRevisionState::Draft,
                     author: host.clone(),
-                    origin: json!({"kind": "Observed", "source": source}),
+                    origin: json!({"kind": super::OBSERVED_ORIGIN, "source": source}),
                     applicability: Vec::new(),
                     title: format!("Skill {}", item.name),
                     carried_resources: None,
@@ -412,13 +418,11 @@ impl InstructionService {
                 },
             )?;
             item.latest_revision = revision.revision;
-            item.active_revision = Some(revision.revision);
-            // Once something is in effect the item is no longer one project's draft.
+            // The directory exists in the workspace: the item is no longer one project's draft.
             item.confined_project = None;
+            // What is on disk; the last write of a harness directory stays as it was, so the
+            // pending change is never mistaken for an interrupted write and replaced.
             item.observed_digest = Some(revision.content_digest.clone());
-            if origin == InstructionOrigin::Harness {
-                item.materialized_digest = Some(revision.content_digest.clone());
-            }
             item.present = true;
             item.root_path = Some(root_path);
             item.source_path = Some(source_path);
@@ -430,7 +434,7 @@ impl InstructionService {
                 &host,
                 &item,
                 "InstructionRevisionObserved",
-                json!({"revision": revision.revision, "contentDigest": revision.content_digest, "source": source}),
+                json!({"revision": revision.revision, "contentDigest": revision.content_digest, "source": source, "awaitingConfirmation": true}),
             )?;
             Ok(true)
         });

@@ -519,6 +519,56 @@ fn a_target_replaced_after_its_check_is_refused_at_the_step() {
 }
 
 #[test]
+fn commands_cannot_write_into_or_remove_skill_folders() {
+    let mut t = tree("skills");
+    // `~/.agents/skills` and `<data-root>/skills`; the shared folder need not exist yet. Paths
+    // are written as the host composes them, without a link in between (the temporary folder
+    // itself may be one).
+    let base = std::fs::canonicalize(&t.s.0).unwrap();
+    let at = |rel: &str| base.join(rel).to_string_lossy().into_owned();
+    let shared = at("home/.agents/skills");
+    let harness = at("data/skills");
+    std::fs::create_dir_all(&harness).unwrap();
+    std::fs::create_dir_all(base.join("home")).unwrap();
+    let plain = t.roots.clone();
+    t.roots = plain
+        .clone()
+        .with_skill_roots([shared.clone(), harness.clone()]);
+    let fs = NativeFilesystem::new();
+    let cwd = t.s.p("outside");
+    let verdicts = |script: &str| match assess_command(
+        &["bash".to_owned(), "-c".to_owned(), script.to_owned()],
+        Some(&cwd),
+    ) {
+        ShellAssessment::Destructive { plans, .. } => plans
+            .iter()
+            .map(|p| preflight(&fs, &t.roots, p).verdict)
+            .collect::<Vec<_>>(),
+        other => panic!("{script}: {other:?}"),
+    };
+    let refused = PreflightVerdict::Blocked(BlockReason::SkillDirectory);
+    for root in [&shared, &harness] {
+        for script in [
+            format!("echo 'Do evil.' > {root}/evil/SKILL.md"),
+            format!("rm -rf {root}"),
+        ] {
+            assert!(verdicts(&script).contains(&refused), "{script}");
+        }
+    }
+    // Writes over an existing skill file are refused too, and the folders' parents are not
+    // protected.
+    std::fs::create_dir_all(format!("{shared}/beta")).unwrap();
+    std::fs::write(format!("{shared}/beta/SKILL.md"), "Do beta.").unwrap();
+    assert!(verdicts(&format!("echo x > {shared}/beta/SKILL.md")).contains(&refused));
+    assert_eq!(
+        verdicts(&format!("echo x > {}", at("home/notes.md"))),
+        [PreflightVerdict::Allowed]
+    );
+    // The registry revision covers the skill folders.
+    assert_ne!(t.roots.revision, plain.revision);
+}
+
+#[test]
 fn shell_plans_resolve_to_actual_targets_before_dispatch() {
     let t = tree("shell");
     let fs = NativeFilesystem::new();
