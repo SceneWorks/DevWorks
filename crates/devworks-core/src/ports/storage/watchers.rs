@@ -83,6 +83,28 @@ pub struct StoredWatcher {
     pub due_at_ms: Option<i64>,
     /// When a polling watcher ends `TimedOut` unless it settled first.
     pub expires_at_ms: Option<i64>,
+    /// A regular expression over the process's output or the file, and what it has matched.
+    pub matching: Option<StoredMatch>,
+    /// The watched file (`File` only), resolved when the watcher was created.
+    pub file_path: Option<String>,
+}
+
+/// A watcher's match rule and its progress through the source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredMatch {
+    pub pattern: String,
+    /// Report every match in intermediate events (rather than complete on the first).
+    pub each: bool,
+    /// Least time between two match events.
+    pub min_interval_ms: Option<i64>,
+    /// Bytes of the source already scanned (complete lines only).
+    pub scanned: i64,
+    /// Matches found but not yet reported in an event.
+    pub pending: i64,
+    /// Matches found in all.
+    pub total: i64,
+    /// When the last match event was recorded.
+    pub last_event_at_ms: Option<i64>,
 }
 
 /// A probe watcher's command, condition and schedule. Its current run (if any) is the watcher's
@@ -145,6 +167,8 @@ pub struct StoredWatchEvent {
     pub created_at_ms: i64,
     pub delivered_at_ms: Option<i64>,
     pub acknowledged_at_ms: Option<i64>,
+    /// `None` for the watcher's one outcome event; the coalesced count of a match event.
+    pub match_count: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

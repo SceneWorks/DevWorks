@@ -22,8 +22,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// two always-NULL columns that referenced dropped tables, adding no ownership edge; and adds the
 /// operations_capability_state index. Planner statistics tables (`sqlite_stat*`, created by the
 /// `PRAGMA optimize` that clean shutdown runs) hold no project rows and are not part of the digest.
+/// Migration 53 rebuilds watchers (match and file columns) and watcher_events (several events per
+/// watcher, match_count); both keep their project owner and add no table or ownership edge, and a
+/// project's purge still removes all of their rows.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "db064058f36bea2bb08d90c2cbf4b14e8eada50140f27e4a9dbf4bc15a311e2d";
+    "812180517e5371e73f697e8453fcf7611ba29ce30a6506cf7001128d1f8b6844";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

@@ -103,6 +103,14 @@ case('reject-watch.create-process-lifetime','domain-request.r8',_watch_body(proc
 case('reject-watch.create-timer-tail','domain-request.r8',_watch_body(timer={'afterMs':'5000'},tailBytes=64),False,True)
 case('reject-watch.create-probe-too-often','domain-request.r8',_watch_body(probe={**_probe,'intervalMs':'999'}),False,True)
 case('reject-watch.create-timer-both-times','domain-request.r8',_watch_body(timer={'afterMs':'5000','atMs':'1'}),False,False)
+# Matches (DW-95): a regex over a launched process's output or a file; a file watcher needs one.
+_file={'path':_proc['workingDirectory']}
+_match={'pattern':'ready','each':True,'minIntervalMs':'1000'}
+case('input-watch.create-process-match','domain-request.r8',_watch_body(process=_proc,matching={'pattern':'ready','each':False}))
+case('input-watch.create-file-match','domain-request.r8',_watch_body(file=_file,matching=_match,maxLifetimeMs='60000'))
+case('reject-watch.create-file-without-match','domain-request.r8',_watch_body(file=_file),False,True)
+case('reject-watch.create-timer-match','domain-request.r8',_watch_body(timer={'afterMs':'5000'},matching=_match),False,True)
+case('reject-watch.create-match-too-often','domain-request.r8',_watch_body(process=_proc,matching={**_match,'minIntervalMs':'99'}),False,True)
 # Stable handwritten assertions cover wrong mode, authority/provenance injection,
 # dangerous ambiguity, partial/unknown effects and cross-operation substitution.
 def mutate(id,base,path,value,typed=False,schema=False,entry=None):

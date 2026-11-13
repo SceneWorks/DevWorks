@@ -2415,7 +2415,7 @@
 </thead>
 <tbody><tr>
 <td><code>watch.create</code></td>
-<td><strong>Command</strong><br><code>process</code>: <code>?ProcessSpec</code><br><code>probe</code>: <code>?WatchProbe</code><br><code>timer</code>: <code>?WatchTimer</code><br><code>tailBytes</code>: <code>?ByteLimit</code><br><code>maxLifetimeMs</code>: <code>?Counter</code><br><br><strong>Schema revisions</strong> 8 (<a href="contracts/domain-request.r8.schema.json">revision 8 input</a>)</td>
+<td><strong>Command</strong><br><code>process</code>: <code>?ProcessSpec</code><br><code>probe</code>: <code>?WatchProbe</code><br><code>timer</code>: <code>?WatchTimer</code><br><code>file</code>: <code>?WatchFile</code><br><code>matching</code>: <code>?WatchMatch</code><br><code>tailBytes</code>: <code>?ByteLimit</code><br><code>maxLifetimeMs</code>: <code>?Counter</code><br><br><strong>Schema revisions</strong> 8 (<a href="contracts/domain-request.r8.schema.json">revision 8 input</a>)</td>
 <td><code>WatcherRecord</code></td>
 </tr>
 <tr>
@@ -15576,7 +15576,7 @@
 <h3 id="watcherstate">WatcherState</h3>
 <p><code>Active</code>, <code>Stopping</code>, <code>Settled</code>, <code>Cancelled</code>.</p>
 <h3 id="watchsourcekind">WatchSourceKind</h3>
-<p><code>Process</code>, <code>Probe</code>, <code>Timer</code>.</p>
+<p><code>Process</code>, <code>Probe</code>, <code>Timer</code>, <code>File</code>.</p>
 <h3 id="watchoutcomekind">WatchOutcomeKind</h3>
 <p><code>Succeeded</code>, <code>Failed</code>, <code>Cancelled</code>, <code>TimedOut</code>, <code>Interrupted</code>, <code>Lost</code>, <code>Uncertain</code>.</p>
 <h3 id="watchoutcome">WatchOutcome</h3>
@@ -15673,6 +15673,40 @@
 </tr>
 <tr>
 <td><code>afterMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="watchfile">WatchFile</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>path</code></td>
+<td><code>RegisteredPath</code></td>
+</tr>
+</tbody></table>
+<h3 id="watchmatch">WatchMatch</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>pattern</code></td>
+<td><code>Text</code></td>
+</tr>
+<tr>
+<td><code>each</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>minIntervalMs</code></td>
 <td><code>?Counter</code></td>
 </tr>
 </tbody></table>
@@ -15783,6 +15817,10 @@
 </tr>
 <tr>
 <td><code>expiresAtMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>matches</code></td>
 <td><code>?Counter</code></td>
 </tr>
 <tr>

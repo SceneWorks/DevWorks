@@ -30,3 +30,7 @@ url = "=2.5.8"
 [features]
 # Reusable behavioral contract suite for `ports::storage` implementations (STORE-11).
 contract-suite = []
+[target.'cfg(unix)'.dependencies]
+# Opening a watched file without blocking on a FIFO; version already resolved in the workspace.
+libc = "=0.2.191"
+

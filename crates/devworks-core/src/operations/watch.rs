@@ -28,6 +28,10 @@ pub struct CreateInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timer: Option<WatchTimer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<WatchFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching: Option<WatchMatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tail_bytes: Option<ByteLimit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lifetime_ms: Option<Counter>,
@@ -37,6 +41,8 @@ impl Check for CreateInput {
         self.process.check()?;
         self.probe.check()?;
         self.timer.check()?;
+        self.file.check()?;
+        self.matching.check()?;
         self.tail_bytes.check()?;
         self.max_lifetime_ms.check()?;
         Ok(())
