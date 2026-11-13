@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-12",
+  "date": "2026-11-13",
   "status": "Frozen source bytes and schema/ownership bindings verified; method argument/result semantics and actual native parity remain CAP acceptance work",
   "frozenRevision": "afe73560215bbe7593fc59451de5cc3237e3eeca",
   "currentRepositoryHead": "bec77ed044d3ace42366c8143444fa82dafde7aa",
@@ -7,7 +7,7 @@
   "sourceEntries": 558,
   "retainedEntries": 494,
   "excludedEntries": 64,
-  "qualifiedOperations": 375,
+  "qualifiedOperations": 376,
   "unboundOperationInputs": 0,
   "unboundOperationResults": 0,
   "files": [
@@ -10481,9 +10481,9 @@
   ],
   "inputSha256": {
     "docs/architecture/codegraph-capability-inventory.json": "54da948de48de4a7d00353ae14d7464feac80cca9bdab6d2a6bb2679caae2c09",
-    "docs/architecture/contracts/family-coverage.json": "3872b35cb48355e3541da031d6c42f05c6ec50762ebe5a378c347a5f163b8ccc",
-    "docs/architecture/implementation-plan.json": "4d18898437c331cf63e84f9c7dbefb0b619bb4260a23371e9695489387e4c95f",
-    "docs/architecture/devworks-capability-catalog.json": "181208735ecadfa5e918392bc54a230e9482cfdf199e7950b8016ced4ab58444"
+    "docs/architecture/contracts/family-coverage.json": "8b813a677e655f6628bc9b5b1d155de9c365a11c84f02f98e0fe314538f16a6f",
+    "docs/architecture/implementation-plan.json": "d506e465ebc5488c8297c6f9676d843ae2a68ff041a8fc8808783edd9275c1ef",
+    "docs/architecture/devworks-capability-catalog.json": "2391f8849a5385a0a3f995473402068e9e610ff5d4984fe51b4d8b9aefad0f81"
   },
   "noInference": true,
   "allPassed": true

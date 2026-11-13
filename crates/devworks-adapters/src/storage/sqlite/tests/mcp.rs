@@ -61,6 +61,8 @@ impl McpRemote for RecordedRemote {
                 input_schema: json!({"type":"object"}),
                 output_schema: None,
                 read_only_hint: true,
+                title: None,
+                destructive_hint: None,
             }],
             resources: vec![],
             prompts: vec![],
@@ -404,6 +406,9 @@ fn configuration_is_durable_and_selection_rejects_unknown_tools() {
         read_only: true,
         revision: Revision::new(1).unwrap(),
         uri: None,
+        title: None,
+        destructive: None,
+        read_only_override: None,
     };
     let write = McpCapability {
         id: id("mcp-write"),
@@ -520,6 +525,9 @@ fn first_discovery_selects_read_only_hints_up_to_the_selection_bound() {
             read_only: true,
             revision: Revision::new(1).unwrap(),
             uri: None,
+            title: None,
+            destructive: None,
+            read_only_override: None,
         })
         .collect();
     let service_for_write = service.clone();
@@ -761,6 +769,8 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
             input_schema: schema,
             output_schema: Some(json!({"type":"object"})),
             read_only_hint: true,
+            title: None,
+            destructive_hint: None,
         }],
         resources: vec![],
         prompts: vec![],
@@ -890,6 +900,8 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
                             input_schema: json!({"type":"object"}),
                             output_schema: None,
                             read_only_hint: false,
+                            title: None,
+                            destructive_hint: None,
                         })
                         .collect(),
                     resources: vec![],
@@ -908,6 +920,8 @@ fn remote_catalog_keeps_stable_schema_ids_and_invalidates_changed_selection() {
                 input_schema: json!({"type":"object"}),
                 output_schema: None,
                 read_only_hint: false,
+                title: None,
+                destructive_hint: None,
             })
             .collect(),
         resources: vec![],
@@ -1758,6 +1772,8 @@ fn a_vanished_selected_tool_stays_unavailable_and_returns_selected() {
         input_schema: json!({"type":"object"}),
         output_schema: None,
         read_only_hint,
+        title: None,
+        destructive_hint: None,
     };
     let publish = |expected: i64, tools: Vec<RemoteTool>| {
         let (service, server_id) = (service.clone(), server.id.clone());
@@ -1919,6 +1935,8 @@ fn a_reviewer_is_offered_no_default_selected_mcp_tool() {
                     input_schema: json!({"type":"object"}),
                     output_schema: None,
                     read_only_hint: true,
+                    title: None,
+                    destructive_hint: None,
                 }],
                 resources: vec![],
                 prompts: vec![],
@@ -2012,6 +2030,8 @@ fn two_servers_with_the_same_tool_name_get_distinct_agent_aliases() {
                         input_schema: json!({"type":"object"}),
                         output_schema: None,
                         read_only_hint: false,
+                        title: None,
+                        destructive_hint: None,
                     }],
                     resources: vec![],
                     prompts: vec![],
@@ -2151,6 +2171,8 @@ fn saved_configuration_is_shown_to_humans_at_revision_eight_and_a_new_token_keep
                     input_schema: json!({"type":"object"}),
                     output_schema: None,
                     read_only_hint: true,
+                    title: None,
+                    destructive_hint: None,
                 }],
                 resources: vec![],
                 prompts: vec![],
@@ -2602,4 +2624,234 @@ fn a_resource_saved_before_capabilities_carried_uris_still_names_its_uri() {
         resource.uri.as_ref().map(|uri| uri.0.as_str()),
         Some("mcp://example/readme")
     );
+}
+
+fn annotated_catalog(titled: bool) -> RemoteCatalog {
+    let tool = |name: &str, read_only: bool, destructive: Option<bool>, title: &str| RemoteTool {
+        name: name.into(),
+        description: format!("{name} a record"),
+        input_schema: json!({"type":"object"}),
+        output_schema: None,
+        read_only_hint: read_only,
+        title: titled.then(|| title.into()),
+        destructive_hint: if titled { destructive } else { None },
+    };
+    RemoteCatalog {
+        tools: vec![
+            tool("lookup", true, None, "Look up a record"),
+            tool("purge", false, Some(true), "Purge records"),
+        ],
+        resources: vec![],
+        prompts: vec![],
+    }
+}
+
+#[test]
+fn a_human_read_only_classification_survives_rediscovery_and_decides_the_default_selection() {
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    run_write(&*store, WriteOptions::default(), |tx| {
+        tx.actors()
+            .register(&ActorId(id("mcp-user")), PrincipalKind::Human, "MCP user")?;
+        tx.actors()
+            .register(&ActorId(id("mcp-agent")), PrincipalKind::Agent, "MCP agent")
+    })
+    .unwrap();
+    bind_agent(&store, None);
+    let service = Arc::new(McpClientService::new(h.ids.clone()));
+    service
+        .install_remote(
+            store.clone(),
+            Arc::new(RecordedRemote::default()),
+            Arc::new(JsonSchemaValidator),
+            artifacts(&h),
+        )
+        .unwrap();
+    let cases = UseCases::new().with_mcp(service.clone());
+    let DomainDecision::Applied {
+        result: OperationResult::McpConfigure { value: server },
+    } = command(
+        &h,
+        &store,
+        &cases,
+        "classified-server",
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"name":"Records",
+            "transport":{"kind":"Http","endpoint":"https://mcp.example.test/mcp"}}),
+    )
+    else {
+        panic!("MCP server configuration failed");
+    };
+    let publish = |titled: bool| {
+        let current = servers(&h, &store, &cases)
+            .into_iter()
+            .find(|record| record.id == server.id)
+            .unwrap();
+        let (service, server_id) = (service.clone(), server.id.clone());
+        run_write(&*store, WriteOptions::default(), move |tx| {
+            service.publish_remote_catalog(
+                tx,
+                &ConfigScope::Workspace,
+                &server_id,
+                &current.catalog_revision,
+                annotated_catalog(titled),
+            )
+        })
+        .unwrap();
+    };
+    let catalog = || {
+        let current = servers(&h, &store, &cases)
+            .into_iter()
+            .find(|record| record.id == server.id)
+            .unwrap();
+        let DomainQueryReply::Result {
+            result: OperationResult::McpCapabilities { value },
+            ..
+        } = capabilities(
+            &h,
+            &store,
+            &cases,
+            &server.id,
+            current.catalog_revision.get(),
+        )
+        else {
+            panic!("capabilities query failed");
+        };
+        (current, value.items.0)
+    };
+    let tool = |caps: &[McpCapability], name: &str| {
+        caps.iter()
+            .find(|cap| cap.kind.0 == "tool" && cap.name.0 == name)
+            .unwrap()
+            .clone()
+    };
+
+    // A first catalog saved before tools carried annotations: the hinted tool is selected.
+    publish(false);
+    let (current, caps) = catalog();
+    let (lookup, purge) = (tool(&caps, "lookup"), tool(&caps, "purge"));
+    assert_eq!(
+        current.selected_tool_ids.0,
+        std::slice::from_ref(&lookup.id)
+    );
+
+    // The server now gives titles and a destructive hint; they are kept and shown, and the
+    // saved selection survives them.
+    publish(true);
+    let (current, caps) = catalog();
+    assert_eq!(
+        current.selected_tool_ids.0,
+        std::slice::from_ref(&lookup.id)
+    );
+    let titled = tool(&caps, "purge");
+    assert_eq!(
+        titled.title.as_ref().map(|t| t.0.as_str()),
+        Some("Purge records")
+    );
+    assert_eq!(titled.destructive, Some(true));
+    assert_eq!(tool(&caps, "lookup").destructive, None);
+
+    // Only a human classifies a tool.
+    let agent = HostIngress::new(&*store).context(
+        ActorId(id("mcp-agent")),
+        PrincipalKind::Agent,
+        id("mcp-agent-invocation"),
+        id("mcp-agent-ingress"),
+        Counter::new(store.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    let authority = HostAuthority {
+        store: &*store,
+        clock: &*h.clock,
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*store,
+        ids: &*h.ids,
+    };
+    let frame = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":8,
+        "requestKey":"agent-classify","body":{"kind":"mcp.classify_tool",
+        "scope":{"kind":"Workspace"},"serverId":server.id,
+        "expectedRevision":current.revision.get().to_string(),"toolId":purge.id,"readOnly":true}});
+    match cases
+        .command(
+            &gateway,
+            &agent,
+            "mcp.classify_tool",
+            frame.to_string().as_bytes(),
+        )
+        .unwrap()
+    {
+        CommandReply::Recorded { receipt, .. } => assert!(
+            matches!(&receipt.decision, DomainDecision::Refused { .. }),
+            "{:?}",
+            receipt.decision
+        ),
+        CommandReply::Rejected { .. } => {}
+        other => panic!("unexpected agent classify reply: {other:?}"),
+    }
+
+    // A human marks the hinted tool not read-only and the other read-only. The saved selection
+    // does not change.
+    let classify = |key: &str, tool: &Id, read_only: bool| {
+        let revision = servers(&h, &store, &cases)
+            .into_iter()
+            .find(|record| record.id == server.id)
+            .unwrap()
+            .revision;
+        command(
+            &h,
+            &store,
+            &cases,
+            key,
+            "mcp.classify_tool",
+            json!({"scope":{"kind":"Workspace"},"serverId":server.id,
+                "expectedRevision":revision.get().to_string(),"toolId":tool,"readOnly":read_only}),
+        )
+    };
+    assert!(matches!(
+        classify("classify-lookup", &lookup.id, false),
+        DomainDecision::Applied { .. }
+    ));
+    assert!(matches!(
+        classify("classify-purge", &purge.id, true),
+        DomainDecision::Applied { .. }
+    ));
+    let (current, caps) = catalog();
+    assert_eq!(
+        current.selected_tool_ids.0,
+        std::slice::from_ref(&lookup.id)
+    );
+    assert_eq!(tool(&caps, "lookup").read_only_override, Some(false));
+    assert_eq!(tool(&caps, "purge").read_only_override, Some(true));
+
+    // Rediscovery keeps the classification.
+    publish(true);
+    let (_, caps) = catalog();
+    assert_eq!(tool(&caps, "lookup").read_only_override, Some(false));
+    assert_eq!(tool(&caps, "purge").read_only_override, Some(true));
+
+    // A new endpoint resets the catalog; on the next first discovery the classification, not
+    // the server's hint, decides what starts selected.
+    let current = servers(&h, &store, &cases)
+        .into_iter()
+        .find(|record| record.id == server.id)
+        .unwrap();
+    assert!(matches!(
+        command(
+            &h,
+            &store,
+            &cases,
+            "classified-new-endpoint",
+            "mcp.configure",
+            json!({"scope":{"kind":"Workspace"},"serverId":server.id,
+                "expectedRevision":current.revision,"name":"Records",
+                "transport":{"kind":"Http","endpoint":"https://mcp2.example.test/mcp"}}),
+        ),
+        DomainDecision::Applied { .. }
+    ));
+    publish(true);
+    let (current, _) = catalog();
+    assert_eq!(current.selected_tool_ids.0, std::slice::from_ref(&purge.id));
 }

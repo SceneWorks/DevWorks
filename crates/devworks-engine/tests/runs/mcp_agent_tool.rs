@@ -263,6 +263,8 @@ fn agent_turn(calls: Vec<(&'static str, &'static str)>) -> Turn {
                                 "required":["ticket"]}),
                             output_schema: None,
                             read_only_hint: true,
+                            title: None,
+                            destructive_hint: None,
                         }],
                         resources: vec![],
                         prompts: vec![],

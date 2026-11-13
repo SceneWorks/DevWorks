@@ -628,3 +628,84 @@ fn settings_opens_a_servers_resources_and_prompts_as_untrusted_content() {
         let _ = remote.cancel().await;
     });
 }
+
+#[test]
+fn settings_shows_tool_annotations_and_saves_a_read_only_classification() {
+    use devworks_core::ports::mcp::{RemoteCatalog, RemoteTool};
+    use devworks_core::ports::storage::ConfigScope;
+    use devworks_core::protocol::Revision;
+    let _case = native_runtime_case();
+    let root = Root::new("mcp-settings-classify");
+    let engine = Engine::start(config(&root.0)).expect("desktop runtime boots");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1800.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, Category::Tools.label());
+    settle(&mut h);
+    type_into(&mut h, "MCP server name", "Records server");
+    type_into(&mut h, "MCP HTTPS endpoint", "http://127.0.0.1:9/mcp");
+    click(&mut h, Role::Button, "Add server");
+    settle(&mut h);
+    let server = h.state().settings.mcp.selected.clone().expect("server");
+    let service = engine.host().runtime().mcp_service().expect("MCP service");
+    let store = engine.host().runtime().store().clone();
+    let discovered = server.clone();
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        service.publish_remote_catalog(
+            tx,
+            &ConfigScope::Workspace,
+            &discovered,
+            &Revision::new(1).unwrap(),
+            RemoteCatalog {
+                tools: vec![RemoteTool {
+                    name: "purge".into(),
+                    description: "Purge records".into(),
+                    input_schema: serde_json::json!({"type":"object"}),
+                    output_schema: None,
+                    read_only_hint: false,
+                    title: Some("Purge records".into()),
+                    destructive_hint: Some(true),
+                }],
+                resources: vec![],
+                prompts: vec![],
+            },
+        )
+    })
+    .unwrap();
+    click(&mut h, Role::Button, "Refresh MCP servers");
+    settle(&mut h);
+    click(&mut h, Role::Button, "Refresh capabilities");
+    settle(&mut h);
+    assert!(
+        h.query_all_by_label_contains("Purge records (purge) · destructive hint")
+            .next()
+            .is_some(),
+        "the tool's title and destructive hint are shown"
+    );
+
+    h.get_by_role_and_label(Role::ComboBox, "Read-only classification for purge")
+        .click_accesskit();
+    h.step();
+    h.step();
+    h.query_all_by_label("Read-only")
+        .find(|node| node.accesskit_node().role() != Role::ComboBox)
+        .expect("read-only option")
+        .click_accesskit();
+    settle(&mut h);
+    let purge = h
+        .state()
+        .settings
+        .mcp
+        .capabilities
+        .iter()
+        .find(|cap| cap.name.0 == "purge")
+        .expect("purge tool")
+        .clone();
+    assert_eq!(purge.read_only_override, Some(true));
+    assert!(
+        h.query_all_by_label_contains("read-only (set by you)")
+            .next()
+            .is_some(),
+        "the person's classification replaces the hint"
+    );
+}

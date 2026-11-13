@@ -135,6 +135,8 @@ fn a_selected_server_samples_through_the_boot_installed_sampler_during_an_agent_
                             input_schema: json!({"type":"object"}),
                             output_schema: None,
                             read_only_hint: false,
+                            title: None,
+                            destructive_hint: None,
                         }],
                         resources: vec![],
                         prompts: vec![],

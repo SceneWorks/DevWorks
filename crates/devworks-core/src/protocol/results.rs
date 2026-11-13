@@ -670,6 +670,9 @@ pub enum OperationResult {
     McpDiscover { value: Page<McpCapability> },
     #[serde(rename = "mcp.select_tools")]
     McpSelectTools { value: McpServer },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "mcp.classify_tool")]
+    McpClassifyTool { value: McpServer },
     #[serde(rename = "mcp.resources")]
     McpResources { value: Page<McpResource> },
     #[serde(rename = "mcp.prompts")]
@@ -1115,6 +1118,7 @@ impl OperationResult {
             Self::McpRemove { .. } => "mcp.remove",
             Self::McpDiscover { .. } => "mcp.discover",
             Self::McpSelectTools { .. } => "mcp.select_tools",
+            Self::McpClassifyTool { .. } => "mcp.classify_tool",
             Self::McpResources { .. } => "mcp.resources",
             Self::McpPrompts { .. } => "mcp.prompts",
             Self::McpCapabilities { .. } => "mcp.capabilities",
@@ -1496,6 +1500,7 @@ impl Check for OperationResult {
             Self::McpRemove { value } => value.check()?,
             Self::McpDiscover { value } => value.check()?,
             Self::McpSelectTools { value } => value.check()?,
+            Self::McpClassifyTool { value } => value.check()?,
             Self::McpResources { value } => value.check()?,
             Self::McpPrompts { value } => value.check()?,
             Self::McpCapabilities { value } => value.check()?,
@@ -1717,6 +1722,7 @@ impl Revisioned for OperationResult {
             Self::McpRemove { value } => value.retain_revision(revision),
             Self::McpDiscover { value } => value.retain_revision(revision),
             Self::McpSelectTools { value } => value.retain_revision(revision),
+            Self::McpClassifyTool { value } => value.retain_revision(revision),
             Self::McpCapabilities { value } => value.retain_revision(revision),
             Self::AddonsCatalog { value } => value.retain_revision(revision),
             Self::AddonsInstall { value } => value.retain_revision(revision),
@@ -1782,6 +1788,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::McpRemove { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::McpClassifyTool { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::WatchCreate { .. } if revision < 8 => {

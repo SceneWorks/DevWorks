@@ -26,6 +26,9 @@ pub enum McpAction {
     Sampling(Id, i64, i64, Vec<Id>),
     /// Read one resource or prompt of a server at a catalog revision.
     Open(Id, i64, McpContentRequest),
+    /// Classify a tool as read-only or not in place of the server's hint (`None` returns it to
+    /// the hint): server, server revision, tool.
+    Classify(Id, i64, Id, Option<bool>),
 }
 
 /// A read in flight: the server it was sent to and what it reads.
@@ -58,6 +61,31 @@ pub fn credential_handles(server: &McpServer) -> Vec<Id> {
             .collect(),
         None => Vec::new(),
     }
+}
+
+/// The tool's title when the server gives one, with its wire name beside it.
+fn tool_title(cap: &McpCapability) -> String {
+    match &cap.title {
+        Some(title) if title.0 != cap.name.0 => format!("{} ({})", title.0, cap.name.0),
+        _ => cap.name.0.clone(),
+    }
+}
+
+/// How the tool is classified and what the server says about it. A person's classification
+/// replaces the server's untrusted read-only hint.
+fn tool_tags(cap: &McpCapability) -> String {
+    let read_only = match cap.read_only_override {
+        Some(true) => " · read-only (set by you)",
+        Some(false) => " · not read-only (set by you)",
+        None if cap.read_only => " · read-only hint",
+        None => "",
+    };
+    let destructive = if cap.destructive == Some(true) {
+        " · destructive hint"
+    } else {
+        ""
+    };
+    format!("{read_only}{destructive}")
 }
 
 /// One line describing a saved transport without any secret value.
@@ -512,29 +540,56 @@ impl McpPanel {
                     // schema; agents are not offered it until the server lists it again.
                     let label = format!(
                         "{}{}{}",
-                        cap.name.0,
-                        if cap.read_only {
-                            " · read-only hint"
-                        } else {
-                            ""
-                        },
+                        tool_title(cap),
+                        tool_tags(cap),
                         if cap.input_schema.is_none() {
                             " · unavailable: the server no longer lists it"
                         } else {
                             ""
                         }
                     );
-                    if ui
-                        .checkbox(&mut checked, label)
-                        .on_hover_text(&cap.description.0)
-                        .changed()
-                    {
-                        if checked {
-                            self.selection.push(cap.id.clone());
-                        } else {
-                            self.selection.retain(|id| id != &cap.id);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .checkbox(&mut checked, label)
+                            .on_hover_text(&cap.description.0)
+                            .changed()
+                        {
+                            if checked {
+                                self.selection.push(cap.id.clone());
+                            } else {
+                                self.selection.retain(|id| id != &cap.id);
+                            }
                         }
-                    }
+                        let current = cap.read_only_override;
+                        let mut chosen = current;
+                        let shown = match current {
+                            Some(true) => "Read-only",
+                            Some(false) => "Not read-only",
+                            None => "Server hint",
+                        };
+                        let name = format!("Read-only classification for {}", cap.name.0);
+                        egui::ComboBox::from_id_salt(("mcp-classify", cap.id.as_str()))
+                            .selected_text(shown)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut chosen, None, "Server hint");
+                                ui.selectable_value(&mut chosen, Some(true), "Read-only");
+                                ui.selectable_value(&mut chosen, Some(false), "Not read-only");
+                            })
+                            .response
+                            .widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::Role::ComboBox, true, &name)
+                            });
+                        if chosen != current && online && !self.busy && server_idle {
+                            self.busy = true;
+                            self.error = None;
+                            actions.push(McpAction::Classify(
+                                server_id.clone(),
+                                revision,
+                                cap.id.clone(),
+                                chosen,
+                            ));
+                        }
+                    });
                 }
                 if ui
                     .add_enabled(

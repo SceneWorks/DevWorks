@@ -4,7 +4,7 @@ Status: architecture baseline 1.1. This is the complete ownership and dependency
 
 ## Success and remaining commitments
 
-The register assigns all 378 requirements, 375 operations across 50 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 80 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 378 requirements, 376 operations across 50 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 80 local slices and no unowned operations, requirements or retained entries.
 
 All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
@@ -837,7 +837,7 @@ Native outgoing client HTTP/stdio lifecycle, credentials, discovery/tool selecti
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** `mcp.servers`, `mcp.configure`, `mcp.connect`, `mcp.disable`, `mcp.remove`, `mcp.discover`, `mcp.select_tools`, `mcp.resources`, `mcp.prompts`, `mcp.capabilities`
+**Operations:** `mcp.servers`, `mcp.configure`, `mcp.connect`, `mcp.disable`, `mcp.remove`, `mcp.discover`, `mcp.select_tools`, `mcp.classify_tool`, `mcp.resources`, `mcp.prompts`, `mcp.capabilities`
 
 **Primary requirement cases:** AT-MCP-01, AT-MCP-02, AT-MCP-03, AT-MCP-04, AT-MCP-05, AT-MCP-06
 

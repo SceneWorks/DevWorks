@@ -74,6 +74,10 @@ pub struct RemoteTool {
     pub output_schema: Option<Value>,
     /// A remote hint for initial user selection, never proof of a verified read.
     pub read_only_hint: bool,
+    /// The tool's human-readable title, when the server gives one.
+    pub title: Option<String>,
+    /// The server's untrusted destructiveHint, when it gives one.
+    pub destructive_hint: Option<bool>,
 }
 
 pub struct RemoteResource {

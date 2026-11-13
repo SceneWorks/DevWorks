@@ -37,7 +37,7 @@ mod content;
 
 const NAMESPACE: &str = "outgoing_mcp";
 const SCHEMA_VERSION: i64 = 1;
-pub const OPERATIONS: [&str; 10] = [
+pub const OPERATIONS: [&str; 11] = [
     "mcp.servers",
     "mcp.configure",
     "mcp.connect",
@@ -45,6 +45,7 @@ pub const OPERATIONS: [&str; 10] = [
     "mcp.remove",
     "mcp.discover",
     "mcp.select_tools",
+    "mcp.classify_tool",
     "mcp.capabilities",
     "mcp.resources",
     "mcp.prompts",
@@ -74,6 +75,11 @@ struct StoredServer {
     /// never offered; it is selected again when the server lists it again unchanged.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     retired: BTreeMap<String, McpCapability>,
+    /// A person's read-only classification of a tool, by capability ID, in place of the
+    /// server's hint. It is kept apart from the catalog so rediscovery and a transport reset
+    /// keep it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    read_only_overrides: BTreeMap<String, bool>,
 }
 
 impl StoredServer {
@@ -1512,6 +1518,10 @@ impl McpClientService {
                 output_schema,
                 tool.read_only_hint,
                 None,
+                tool.title.filter(|title| {
+                    !title.is_empty() && title.chars().count() <= 256 && !title.contains('\0')
+                }),
+                tool.destructive_hint,
             )?);
         }
         for resource in catalog.resources {
@@ -1533,6 +1543,8 @@ impl McpClientService {
                 None,
                 false,
                 Some(resource.uri),
+                None,
+                None,
             )?);
         }
         for prompt in catalog.prompts {
@@ -1574,6 +1586,8 @@ impl McpClientService {
                 None,
                 false,
                 None,
+                None,
+                None,
             )?);
         }
         capabilities.push(capability(
@@ -1588,6 +1602,8 @@ impl McpClientService {
             None,
             None,
             false,
+            None,
+            None,
             None,
         )?);
         self.write_catalog(
@@ -1678,8 +1694,18 @@ impl McpClientService {
                 .entry(old.id.as_str().to_owned())
                 .or_insert_with(|| old.clone());
         }
+        // A title is display only, and a record saved before tools carried their destructive
+        // hint takes the new one; any other change is a different tool.
+        let annotated = |old: &McpCapability, new: &McpCapability| {
+            let mut old = old.clone();
+            old.title = new.title.clone();
+            if old.destructive.is_none() {
+                old.destructive = new.destructive;
+            }
+            old
+        };
         let same = |a: &McpCapability, b: &McpCapability| {
-            serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
+            serde_json::to_value(annotated(a, b)).ok() == serde_json::to_value(b).ok()
         };
         // A returning tool carries a newer revision than its last available version; compare
         // what it is, not when it was numbered.
@@ -1695,16 +1721,24 @@ impl McpClientService {
                 }
                 serde_json::to_value(cap).ok()
             };
-            unnumbered(a) == unnumbered(b)
+            unnumbered(&annotated(a, b)) == unnumbered(b)
         };
         let mut capabilities = capabilities;
         let mut retired = BTreeMap::new();
         let mut selected = Vec::new();
         if first_discovery {
+            // A person's classification decides in place of the server's hint.
+            let overrides = &server.read_only_overrides;
             selected.extend(
                 capabilities
                     .iter()
-                    .filter(|cap| cap.kind.0 == "tool" && cap.read_only)
+                    .filter(|cap| {
+                        cap.kind.0 == "tool"
+                            && overrides
+                                .get(cap.id.as_str())
+                                .copied()
+                                .unwrap_or(cap.read_only)
+                    })
                     .take(128)
                     .map(|cap| cap.id.clone()),
             );
@@ -1880,6 +1914,7 @@ impl McpClientService {
                 schemas: BTreeMap::new(),
                 resource_uris: BTreeMap::new(),
                 retired: BTreeMap::new(),
+                read_only_overrides: BTreeMap::new(),
             };
             let view = stored.view(ctx);
             state.servers.push(stored);
@@ -1957,6 +1992,80 @@ impl McpClientService {
             .append_revision(&scope, NAMESPACE, version, SCHEMA_VERSION, body)?;
         Ok(DomainDecision::Applied {
             result: OperationResult::McpSelectTools { value: result },
+        })
+    }
+
+    /// `mcp.classify_tool`: a person decides whether a tool counts as read-only, or returns it
+    /// to the server's hint. It changes no saved selection.
+    fn classify_tool(
+        &self,
+        ctx: &InvocationContext,
+        tx: &mut dyn WriteTransaction,
+        input: &ops::ClassifyToolInput,
+    ) -> Result<DomainDecision, Failure> {
+        if ctx.principal_kind() != PrincipalKind::Human {
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "mcp_classification",
+                None,
+            )
+            .into());
+        }
+        let scope = active_server_scope(ctx, &requested_scope(&input.scope), tx.projects())?;
+        let (version, mut state) = current(tx.configuration(), &scope)?;
+        let server = state
+            .servers
+            .iter_mut()
+            .find(|s| s.public.id == input.server_id)
+            .ok_or_else(|| {
+                Refusal::new(
+                    DomainErrorCode::NotFound,
+                    "mcp_server",
+                    Some(input.server_id.clone()),
+                )
+            })?;
+        if server.public.revision != input.expected_revision {
+            return Err(StorageError::RevisionConflict(Box::new(RevisionConflict {
+                dimension: RevisionDimension::Configuration,
+                target_kind: "mcp_server",
+                target_id: input.server_id.clone(),
+                expected: input.expected_revision.clone(),
+                current: server.public.revision.clone(),
+            }))
+            .into());
+        }
+        if !server
+            .capabilities
+            .iter()
+            .any(|cap| cap.kind.0 == "tool" && cap.id == input.tool_id)
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::InvalidArgument,
+                "mcp_tool",
+                Some(input.tool_id.clone()),
+            )
+            .into());
+        }
+        let key = input.tool_id.as_str().to_owned();
+        if server.read_only_overrides.get(&key).copied() == input.read_only {
+            return Ok(DomainDecision::NoChange {
+                result: OperationResult::McpClassifyTool {
+                    value: server.view(ctx),
+                },
+            });
+        }
+        match input.read_only {
+            Some(read_only) => server.read_only_overrides.insert(key, read_only),
+            None => server.read_only_overrides.remove(&key),
+        };
+        server.public.revision = rev(server.public.revision.get() + 1);
+        let result = server.view(ctx);
+        let body = serde_json::to_value(state)
+            .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
+        tx.configuration()
+            .append_revision(&scope, NAMESPACE, version, SCHEMA_VERSION, body)?;
+        Ok(DomainDecision::Applied {
+            result: OperationResult::McpClassifyTool { value: result },
         })
     }
 
@@ -2497,6 +2606,8 @@ fn capability(
     output_schema: Option<SchemaRef>,
     read_only: bool,
     uri: Option<String>,
+    title: Option<String>,
+    destructive: Option<bool>,
 ) -> Result<McpCapability, StorageError> {
     if name.is_empty()
         || name.chars().count() > 256
@@ -2520,6 +2631,9 @@ fn capability(
         revision: rev(1),
         // A resource names the URI a reader passes to `mcp.resources`.
         uri: uri.map(BoundedText),
+        title: title.map(BoundedText),
+        destructive,
+        read_only_override: None,
     };
     if let Some(old) = previous.capabilities.iter().find(|old| old.id == cap.id) {
         cap.revision = old.revision.clone();
@@ -2535,7 +2649,13 @@ fn capability(
                 .as_ref()
                 .map_or_else(|| old.revision.clone(), |s| s.revision.clone());
         }
-        if serde_json::to_value(old).ok() != serde_json::to_value(&cap).ok() {
+        // A title is display only, and a hint the saved record never had is not a change.
+        let mut compared = old.clone();
+        compared.title = cap.title.clone();
+        if compared.destructive.is_none() {
+            compared.destructive = cap.destructive;
+        }
+        if serde_json::to_value(&compared).ok() != serde_json::to_value(&cap).ok() {
             cap.revision = rev(old.revision.get() + 1);
             if let Some(schema) = &mut cap.input_schema {
                 schema.revision = cap.revision.clone();
@@ -2614,6 +2734,10 @@ impl QueryHandler for McpClientService {
                     ))));
                 }
                 let mut capabilities = server.capabilities;
+                for cap in &mut capabilities {
+                    cap.read_only_override =
+                        server.read_only_overrides.get(cap.id.as_str()).copied();
+                }
                 capabilities.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
                 let value = page(&capabilities, &input.page, version).map_err(|e| self.fault(e))?;
                 (version, OperationResult::McpCapabilities { value })
@@ -2649,6 +2773,10 @@ impl CommandHandler for McpClientService {
             }
             OperationInput::Mcp(ops::Input::SelectTools(input)) => {
                 let result = self.select_tools(ctx, tx, input);
+                decided(tx, result)
+            }
+            OperationInput::Mcp(ops::Input::ClassifyTool(input)) => {
+                let result = self.classify_tool(ctx, tx, input);
                 decided(tx, result)
             }
             OperationInput::Mcp(ops::Input::Connect(input)) => {

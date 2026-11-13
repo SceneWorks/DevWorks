@@ -3532,6 +3532,13 @@ impl Shell {
                         None,
                         None,
                     ),
+                    McpAction::Classify(id, revision, tool, read_only) => {
+                        let mut body = serde_json::json!({"scope":ops::mcp_scope(self.settings.mcp.project.as_ref()),"serverId":id,"expectedRevision":revision.to_string(),"toolId":tool});
+                        if let Some(read_only) = read_only {
+                            body["readOnly"] = serde_json::json!(read_only);
+                        }
+                        ("mcp.classify_tool", body, None, None)
+                    }
                     McpAction::Reload | McpAction::Catalog(_, _) | McpAction::Open(..) => {
                         unreachable!()
                     }
