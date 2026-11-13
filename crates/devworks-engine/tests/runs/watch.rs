@@ -327,6 +327,34 @@ fn inspect(app: &Runtime, ctx: &InvocationContext, watcher: &str) -> Value {
     }
 }
 
+fn output(app: &Runtime, ctx: &InvocationContext, process: &str) -> (String, Value) {
+    match app
+        .query(
+            ctx,
+            "process.output",
+            // process.output is carried at the default schema revision.
+            &serde_json::to_vec(&json!({"mode": "Query", "protocol": "1.0-draft.1",
+                "queryId": "output", "body": {"kind": "process.output",
+                "processId": process, "afterBytes": "0", "maxBytes": 4096}}))
+            .unwrap(),
+        )
+        .unwrap()
+    {
+        DomainQueryReply::Result { result, .. } => match result {
+            OperationResult::ProcessOutput { value } => {
+                let value = serde_json::to_value(value).unwrap();
+                let bytes = devworks_core::services::browser::cdp::decode_base64(
+                    value["content"].as_str().unwrap(),
+                )
+                .unwrap();
+                (String::from_utf8(bytes).unwrap(), value)
+            }
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+}
+
 fn create(
     app: &Runtime,
     ctx: &InvocationContext,
@@ -740,6 +768,55 @@ fn a_stopped_watcher_is_cancelled_even_when_its_process_exits_cleanly() {
         settle_all(&app, &ctx, &[trapping_id]).await;
         let outcome = inspect(&app, &ctx, trapping_id)["outcome"].clone();
         assert_eq!(outcome["kind"], json!("Cancelled"), "{outcome}");
+        app.shutdown().await;
+    });
+}
+
+/// `process.output` reads a watched process: its live output while it runs, then the output its
+/// monitor captured once it ends (its effect completing at launch is not the end of its output).
+#[test]
+fn process_output_reads_a_watched_process_while_it_runs_and_after_it_ends() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-output-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watcher = create(
+            &app,
+            &ctx,
+            "echo started; while [ ! -f done ]; do sleep 0.05; done; echo finished",
+            60_000,
+            "w-output",
+        );
+        let process = watcher["process"]["processId"].as_str().unwrap().to_owned();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let live = loop {
+            let running = read(&**app.store(), |s| s.resources().process(&id(&process)))
+                .is_some_and(|p| p.phase == ProcessPhase::Running);
+            if running {
+                let (text, value) = output(&app, &ctx, &process);
+                if text.contains("started") {
+                    break value;
+                }
+            }
+            assert!(std::time::Instant::now() < deadline, "no live output");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert_eq!(live["complete"], json!(false), "{live}");
+        assert_eq!(live["state"], json!("Dispatching"), "{live}");
+        std::fs::write(work.join("work").join("done"), b"").unwrap();
+        let watcher_id = watcher["id"].as_str().unwrap();
+        settle_all(&app, &ctx, &[watcher_id]).await;
+        let (text, value) = output(&app, &ctx, &process);
+        assert_eq!(text, "started\nfinished\n", "{value}");
+        assert_eq!(value["complete"], json!(true), "{value}");
+        assert_eq!(value["state"], json!("ObservedComplete"), "{value}");
         app.shutdown().await;
     });
 }
