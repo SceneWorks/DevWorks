@@ -1264,6 +1264,56 @@ fn watchers_are_interrupted_at_shutdown_and_resume_on_reopen() {
     });
 }
 
+/// A process that hit its own time limit before shutdown keeps that outcome: only what the
+/// shutdown itself stopped is interrupted.
+#[test]
+fn a_run_that_timed_out_before_shutdown_keeps_its_outcome() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-timeout-shutdown-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watcher = create(&app, &ctx, "sleep 30", 300, "w-timed-out");
+        let run = OperationId(id(watcher["process"]["processId"].as_str().unwrap()));
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !read(&**app.store(), |s| s.operations().operation(&run)).is_some_and(|op| {
+            op.attempts.iter().any(|a| {
+                a.observations
+                    .iter()
+                    .any(|o| o.get("watchOutcome").is_some())
+            })
+        }) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the run never timed out"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Shut down before any pass observed the timeout.
+        app.shutdown().await;
+        drop(app);
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        app.watchers().unwrap().settle().unwrap();
+        let record = read(&**app.store(), |s| {
+            s.watchers().watcher(&id(watcher["id"].as_str().unwrap()))
+        })
+        .unwrap();
+        assert_eq!(
+            record.outcome.as_ref().map(|o| o.kind.as_str()),
+            Some("TimedOut"),
+            "{record:?}"
+        );
+        app.shutdown().await;
+    });
+}
+
 /// A probe whose condition never holds ends TimedOut at its maximum lifetime.
 #[test]
 fn a_polling_watcher_past_its_maximum_lifetime_ends_timed_out() {

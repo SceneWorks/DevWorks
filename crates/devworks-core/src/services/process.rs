@@ -320,7 +320,7 @@ impl ProcessSupervisor {
 
     /// A journaled process tool reserves its public process ID with its operation receipt, so
     /// output and cancellation can address the attempt before a child is launched.
-    pub(super) fn launch_reserved(
+    pub fn launch_reserved(
         &self,
         ctx: &InvocationContext,
         request: LaunchRequest,
@@ -778,6 +778,15 @@ impl ProcessSupervisor {
             None => Ok(outcome),
             Some(error) => Err(StopFailure { outcome, error }),
         }
+    }
+
+    /// Asks for the stop of a tree that may not be recorded yet (a launch in progress): the stop is
+    /// held and applied as soon as a launch with this ID registers its tree.
+    pub fn hold_cancel(&self, id: &Id) {
+        self.pending_cancel
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(id.as_str().to_owned());
     }
 
     /// Cancels every owned tree in `scope`, sharing one bound: the writer stop before Git

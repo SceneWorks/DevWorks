@@ -1035,9 +1035,18 @@ impl ProcessToolService {
             },
             lease: None,
         };
-        let _ = self
+        let stop = self
             .processes
             .cancel(&owned, Duration::from_secs(1), Duration::from_secs(5));
+        // Not recorded yet: a dispatch past its checks may still launch it, so the stop is held
+        // for that launch to apply as soon as the tree registers.
+        if let Err(crate::services::process::StopFailure {
+            error: StorageError::NotFound { .. },
+            ..
+        }) = stop
+        {
+            self.processes.hold_cancel(process_id);
+        }
     }
 
     /// Records one more run of the watched `process.execute` job `source` (a probe's next run)

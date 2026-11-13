@@ -169,10 +169,18 @@ impl WatchService {
     /// a process watcher whose process the shutdown stopped ends `Interrupted`, and a probe whose
     /// run it stopped forgets that run and runs again as soon as DevWorks reopens. Timers and
     /// waiting probes need nothing: they resume on reopen. Returns how many watchers it changed.
-    pub fn close_at_shutdown(&self) -> Result<usize, StorageError> {
+    pub fn close_at_shutdown(
+        &self,
+        stopped: &std::collections::HashSet<Id>,
+        deadline: std::time::Instant,
+    ) -> Result<usize, StorageError> {
         let mut changed = 0;
         let mut after: Option<Id> = None;
         loop {
+            // Bounded by the shutdown: what is left is observed by the next boot instead.
+            if std::time::Instant::now() >= deadline {
+                return Ok(changed);
+            }
             let page = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
                 read.watchers().open_watchers(after.as_ref(), PAGE)
             })?;
@@ -181,7 +189,14 @@ impl WatchService {
             };
             after = Some(last.id.clone());
             for watcher in &page {
-                if watcher.process_operation_id.is_none() {
+                // Only a run whose tree this shutdown stopped: one stopped earlier (its own time
+                // limit, a requested stop) keeps the outcome it recorded.
+                if !watcher
+                    .process_operation_id
+                    .as_ref()
+                    .is_some_and(|run| stopped.contains(&run.0))
+                    || std::time::Instant::now() >= deadline
+                {
                     continue;
                 }
                 let id = watcher.id.clone();
@@ -298,14 +313,21 @@ impl WatchService {
     ) -> Result<bool, StorageError> {
         // An ended session's events are never delivered (its watchers are cancelled), so they
         // are not staged on every pass.
-        let open = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-            Ok(read
-                .sessions()
-                .session(&event.session_id)?
-                .is_some_and(|session| !session.closed()))
+        let session = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            read.sessions().session(&event.session_id)
         })?;
-        if !open {
+        let Some(session) = session.filter(|session| !session.closed()) else {
             return Ok(false);
+        };
+        // A held owner's events wait without staging a notice on every pass; the write below
+        // checks again, against a pause that lands meanwhile.
+        if let (Some(control), Some(root)) = (self.control.clone(), session.root_id.clone()) {
+            let permitted = run_write(&*self.store, WriteOptions::default(), move |tx| {
+                control.root_permits_dispatch(tx, &root)
+            })?;
+            if !permitted {
+                return Ok(false);
+            }
         }
         let text = notice_text(event);
         let staged = self
@@ -932,9 +954,9 @@ fn end_with_owner_in(tx: &mut dyn WriteTransaction, id: &Id) -> Result<Step, Sto
     Ok(Step::Expired(run.filter(|_| in_flight)))
 }
 
-/// Applies the shutdown's stop of `id`'s current run: whether the shutdown stopped it is read
-/// from the process record (stopped while running and not at the watcher's request, or not
-/// verified stopped). A run that ended on its own, or never launched, is left for the next pass.
+/// Applies the shutdown's stop of `id`'s current run, which the shutdown reported stopping: it
+/// ended it if the record says the stop found it running (or could not verify it stopped). A run
+/// that had already exited keeps its own outcome for the next pass.
 fn interrupt_in(tx: &mut dyn WriteTransaction, id: &Id) -> Result<bool, StorageError> {
     let Some(mut watcher) = tx.watchers().watcher(id)? else {
         return Ok(false);

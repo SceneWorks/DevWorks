@@ -2822,7 +2822,13 @@ impl Runtime {
         // next boot, which observes the stopped trees instead.
         if let Some(watchers) = &self.watchers {
             let watchers = watchers.clone();
-            let _ = tokio::task::spawn_blocking(move || watchers.close_at_shutdown()).await;
+            let stopped: std::collections::HashSet<_> =
+                stopped.stopped.iter().map(|(id, _)| id.clone()).collect();
+            let budget = left();
+            let deadline = std::time::Instant::now() + budget;
+            let pass =
+                tokio::task::spawn_blocking(move || watchers.close_at_shutdown(&stopped, deadline));
+            let _ = tokio::time::timeout(budget, pass).await;
         }
         match refresh_shutdown {
             Err(error) if stopped.reconciliation.is_ok() => stopped.reconciliation = Err(error),

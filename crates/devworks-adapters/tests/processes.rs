@@ -2489,6 +2489,41 @@ fn launch_preflight_blocks_destructive_commands_before_anything_runs() {
     assert_eq!(failed[0].root_id, Some(root("root-a")));
 }
 
+/// A stop asked for before a launch recorded its tree is held, and the launch stops the tree as
+/// soon as it registers.
+#[cfg(unix)]
+#[test]
+fn a_stop_held_before_the_launch_records_its_tree_is_applied_at_launch() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let sup = fx.supervisor();
+    let (fs, roots) = policy_parts();
+    let policy = LaunchPolicy {
+        fs: &fs,
+        roots: &roots,
+        protected_branches: &[],
+    };
+    let a = fx.agent("agent-a", "project-a", "s-a");
+    let reserved = id("held-launch");
+    sup.hold_cancel(&reserved);
+    let p = sup
+        .launch_reserved(
+            &a,
+            LaunchRequest {
+                spec: sleeping_tree(30),
+                operation_id: None,
+                lease: None,
+                approved_hold: false,
+            },
+            &policy,
+            reserved.clone(),
+        )
+        .unwrap();
+    let stored = fx.read(|r| r.resources().process(&p.id)).unwrap();
+    assert_eq!(stored.phase, ProcessPhase::Reaped, "{stored:?}");
+    assert_eq!(NativeProcessHost.probe(&p.identity), Probe::Gone);
+}
+
 /// The record says when a requested stop ended a running tree, whatever its exit code; a tree
 /// that exited on its own before the stop keeps its own outcome.
 #[cfg(unix)]
