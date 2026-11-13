@@ -1572,6 +1572,61 @@ fn the_backup_check_reminds_only_about_stalled_or_unknown_watchers() {
     });
 }
 
+/// A watcher whose process the host can no longer establish (its record could not be verified
+/// stopped) wakes its owner with a reminder to check it.
+#[test]
+fn the_backup_check_reminds_when_a_source_status_cannot_be_established() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-backup-unknown-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let session = ctx.session_id().unwrap().clone();
+        let watchers = app.watchers().expect("watchers composed");
+        assert_eq!(watchers.backup_if_due().unwrap(), None);
+        let watcher = create(&app, &ctx, "sleep 30", 60_000, "w-unknown");
+        let process = watcher["process"]["processId"].as_str().unwrap().to_owned();
+        until_running(&app, &process).await;
+        // The record now says the tree could not be verified stopped.
+        let target = id(&process);
+        write(&**app.store(), move |tx| {
+            let mut record = tx.resources().process(&target)?.expect("record");
+            let expected = record.revision;
+            record.phase = ProcessPhase::Uncertain;
+            record.revision += 1;
+            tx.resources().update_process(&record, expected)
+        })
+        .unwrap();
+        fx.h.advance(900_000);
+        let pass = watchers
+            .backup_if_due()
+            .unwrap()
+            .expect("a backup check ran");
+        assert_eq!((pass.caught, pass.reminded), (0, 1), "{pass:?}");
+        let id_text = watcher["id"].as_str().unwrap();
+        assert!(
+            watcher_history(&app, id_text)
+                .iter()
+                .any(|k| k == "WatcherReminder")
+        );
+        let delivered = notices(&fx, &session);
+        assert_eq!(delivered.len(), 1, "{delivered:?}");
+        assert_eq!(delivered[0]["source"], json!(id_text));
+        assert_eq!(
+            inspect(&app, &ctx, id_text)["state"],
+            json!("Active"),
+            "only reminded"
+        );
+        app.shutdown().await;
+    });
+}
+
 /// A probe whose condition never holds ends TimedOut at its maximum lifetime.
 #[test]
 fn a_polling_watcher_past_its_maximum_lifetime_ends_timed_out() {
