@@ -1559,6 +1559,15 @@ fn the_backup_check_reminds_only_about_stalled_or_unknown_watchers() {
             json!(probe_id),
             "the reminder names its watcher"
         );
+        // Past its lifetime the stalled probe ends TimedOut instead of being reminded again.
+        fx.h.advance(86_400_000);
+        let pass = watchers
+            .backup_if_due()
+            .unwrap()
+            .expect("a backup check ran");
+        assert_eq!(pass.reminded, 0, "{pass:?}");
+        let record = inspect(&app, &ctx, &probe_id);
+        assert_eq!(record["outcome"]["kind"], json!("TimedOut"), "{record}");
         app.shutdown().await;
     });
 }

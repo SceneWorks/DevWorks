@@ -304,6 +304,11 @@ impl WatchService {
     /// reminded, if it must. An outcome found here is settled (and later delivered as a backup).
     fn backup_check(&self, watcher: &StoredWatcher) -> Result<Option<&'static str>, StorageError> {
         let now = self.clock.now_ms().get();
+        // A probe past its lifetime ends TimedOut, stalled or not: no reminder for it.
+        if watcher.expires_at_ms.is_some_and(|end| now >= end) {
+            self.advance(watcher)?;
+            return Ok(None);
+        }
         if watcher.source_kind == "Probe"
             && let Some(probe) = &watcher.probe
             && probe
@@ -321,9 +326,9 @@ impl WatchService {
         let Some(run) = &watcher.process_operation_id else {
             return Ok(None);
         };
-        if self.processes.is_monitoring(run) {
-            return Ok(None);
-        }
+        // A registered monitor is not proof the source is healthy (it may be stuck): the OS is
+        // asked either way.
+        let monitoring = self.processes.is_monitoring(run);
         let record = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
             read.resources().process(&run.0)
         })?;
@@ -335,6 +340,11 @@ impl WatchService {
             ProcessPhase::Running | ProcessPhase::Stopping => {
                 match self.processes.probe_watched_run(&record) {
                     Some(Probe::Alive) => Ok(None),
+                    // Its monitor may be about to record the real outcome, or may be stuck: the
+                    // host cannot tell, so the owner is asked to check rather than told Lost.
+                    Some(Probe::Gone) if monitoring => Ok(Some(
+                        "its process has ended but its outcome was not recorded",
+                    )),
                     Some(Probe::Gone) => {
                         let id = watcher.id.clone();
                         let run = run.clone();
@@ -381,6 +391,7 @@ impl WatchService {
         let service = self.artifacts.clone();
         let id = watcher.id.clone();
         let host = host.clone().with_session(watcher.session_id.clone());
+        let control = self.control.clone();
         let committed = run_write(&*self.store, WriteOptions::default(), move |tx| {
             let Some(watcher) = tx.watchers().watcher(&id)? else {
                 return Ok(false);
@@ -389,6 +400,12 @@ impl WatchService {
                 return Ok(false);
             };
             if !watcher.phase.is_open() || session.closed() {
+                return Ok(false);
+            }
+            // As for delivery: an owner paused or held meanwhile receives nothing.
+            if let (Some(control), Some(root)) = (&control, &session.root_id)
+                && !control.root_permits_dispatch(tx, root)?
+            {
                 return Ok(false);
             }
             let scope = session
