@@ -137,12 +137,14 @@ fn command_only(d: &OperationDescriptor) -> bool {
 
 /// The recorded native-execution decisions that changed behaviour (each now needs a reviewed
 /// native grant under Project scope). `git.pull_request` was reviewed and stays non-native.
-const NEWLY_NATIVE: [&str; 5] = [
+const NEWLY_NATIVE: [&str; 7] = [
     "git.integrate",
     "git.cleanup",
     "desktop.input",
     "browser.sessions",
     "database.execute_write",
+    "database.apply_migration",
+    "database.direct_schema_change",
 ];
 
 #[test]
@@ -197,6 +199,10 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
                 "{op} input check {old:?} became {new:?}"
             );
         }
+    }
+    // The recorded native-execution decisions.
+    for op in NEWLY_NATIVE {
+        assert!(registry::find(op).unwrap().native_execution, "{op}");
     }
     assert!(!registry::find("git.pull_request").unwrap().native_execution);
 }
