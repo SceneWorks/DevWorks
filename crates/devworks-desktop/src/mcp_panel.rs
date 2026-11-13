@@ -122,6 +122,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_classification_reload_keeps_unsaved_tool_selection() {
+        let server = Id::new("server-a").unwrap();
+        let mut record: McpServer = serde_json::from_value(json!({
+            "id":"server-a","name":"Server","revision":"3","state":"Healthy","transport":"http",
+            "selectedToolIds":["saved-tool"],"catalogRevision":"2"
+        }))
+        .unwrap();
+        record.selected_tool_ids.0 = vec![Id::new("saved-tool").unwrap()];
+        let mut panel = McpPanel {
+            servers: vec![record],
+            selected: Some(server.clone()),
+            ..McpPanel::default()
+        };
+        // An unsaved checkbox edit, then a saved classification.
+        panel.selection = vec![Id::new("unsaved-tool").unwrap()];
+        panel.keep_selection = true;
+        panel.loaded_catalog(&server, vec![], false);
+        assert_eq!(panel.selection, vec![Id::new("unsaved-tool").unwrap()]);
+        assert!(!panel.keep_selection);
+        // Any other reload shows the saved selection.
+        panel.loaded_catalog(&server, vec![], false);
+        assert_eq!(panel.selection, vec![Id::new("saved-tool").unwrap()]);
+    }
+
+    #[test]
     fn discovery_stays_pending_until_its_operation_settles() {
         let mut panel = McpPanel::default();
         let server = Id::new("server-a").unwrap();
@@ -173,6 +198,9 @@ pub struct McpPanel {
     confirm_remove: Option<Id>,
     /// Credential handles of the server being removed, released once the removal is saved.
     pub removing: Option<Vec<Id>>,
+    /// A classification was saved while the person may have unsaved checkbox edits; the
+    /// catalog reload it causes keeps them instead of resetting to the saved selection.
+    pub keep_selection: bool,
     /// The JSON arguments typed for each prompt, by capability ID.
     pub prompt_arguments: std::collections::BTreeMap<String, String>,
     /// The resource or prompt being read: its title until the reply arrives.
@@ -263,6 +291,9 @@ impl McpPanel {
             self.capabilities = capabilities;
         }
         if !append {
+            if std::mem::take(&mut self.keep_selection) {
+                return;
+            }
             self.selection = self
                 .servers
                 .iter()
@@ -342,6 +373,7 @@ impl McpPanel {
                         self.content = None;
                         self.capabilities.clear();
                         self.selection = server.selected_tool_ids.0.clone();
+                        self.keep_selection = false;
                         self.form_from = Some(server.clone());
                         actions.push(McpAction::Catalog(
                             server.id.clone(),
@@ -582,6 +614,7 @@ impl McpPanel {
                         if chosen != current && online && !self.busy && server_idle {
                             self.busy = true;
                             self.error = None;
+                            self.keep_selection = true;
                             actions.push(McpAction::Classify(
                                 server_id.clone(),
                                 revision,

@@ -2584,6 +2584,7 @@ impl Shell {
                     Err(error) => {
                         self.settings.mcp.reconnect = None;
                         self.settings.mcp.removing = None;
+                        self.settings.mcp.keep_selection = false;
                         self.settings.mcp.pending_server = None;
                         self.settings.mcp.pending_operation = None;
                         self.settings.mcp.error = Some(error.describe());
