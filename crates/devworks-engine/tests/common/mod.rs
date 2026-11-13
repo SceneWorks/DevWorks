@@ -146,8 +146,8 @@ impl Drop for Harness {
     }
 }
 
-/// The SQLite store with a probe that counts its work: read snapshots and SQLite
-/// virtual-machine steps on the read and on the write connections.
+/// The SQLite store with a probe that counts its work: read snapshots, SQLite virtual-machine
+/// steps on the read and on the write connections, and database pages the reads fetched.
 pub struct CountingStore {
     pub store: Arc<dyn ApplicationStore>,
     pub probe: Arc<WorkProbe>,
@@ -158,12 +158,14 @@ pub struct StoreWork {
     pub snapshots: u64,
     pub read_steps: u64,
     pub write_steps: u64,
+    pub read_pages: u64,
 }
 impl CountingStore {
     /// The store work `request` performs; nothing else may use the store meanwhile.
     pub fn count<T>(&self, request: impl FnOnce() -> T) -> (T, StoreWork) {
         let p = &self.probe;
-        let (snapshots, read, write) = (p.snapshots(), p.read_steps(), p.write_steps());
+        let (snapshots, read, write, pages) =
+            (p.snapshots(), p.read_steps(), p.write_steps(), p.read_pages());
         let value = request();
         (
             value,
@@ -171,6 +173,7 @@ impl CountingStore {
                 snapshots: p.snapshots() - snapshots,
                 read_steps: p.read_steps() - read,
                 write_steps: p.write_steps() - write,
+                read_pages: p.read_pages() - pages,
             },
         )
     }
@@ -179,7 +182,8 @@ impl CountingStore {
 /// Asserts that the store work of one request did not grow when unrelated history grew: no
 /// more read snapshots, and at most 2% more SQLite steps on either connection. The allowance
 /// covers B-tree bookkeeping a larger table can add to the same insert or seek; work that
-/// visits history grows with it, far past 2%.
+/// visits history grows with it, far past 2%. Pages read are reported but not compared here:
+/// an indexed seek fetches one more page once its B-tree gains a level.
 pub fn assert_no_growth(path: &str, small: StoreWork, large: StoreWork) {
     eprintln!("{path}: before {small:?}, after tenfold history {large:?}");
     let within = |small: u64, large: u64| large <= small + small / 50;

@@ -125,16 +125,41 @@ pub struct SqliteConfig {
     pub work_probe: Option<Arc<WorkProbe>>,
 }
 
-/// Store work counted by [`SqliteConfig::work_probe`]: read snapshots, and SQLite
-/// virtual-machine steps on the read and on the write connections (one progress callback per
-/// step, so a scan costs steps in proportion to the rows it visits).
+/// Store work counted by [`SqliteConfig::work_probe`]: read snapshots, SQLite virtual-machine
+/// steps on the read and on the write connections (one progress callback per step, so a scan
+/// costs steps in proportion to the rows it visits) and database pages the reads fetched.
 #[derive(Debug, Default)]
 pub struct WorkProbe {
     snapshots: AtomicU64,
     read_steps: AtomicU64,
     write_steps: AtomicU64,
+    read_pages: AtomicU64,
+}
+/// Database pages the connection has fetched (page cache hits and misses): a large value read
+/// costs a page per overflow page, which virtual-machine steps do not show.
+fn page_fetches(conn: &Connection) -> u64 {
+    let mut total = 0u64;
+    for status in [
+        rusqlite::ffi::SQLITE_DBSTATUS_CACHE_HIT,
+        rusqlite::ffi::SQLITE_DBSTATUS_CACHE_MISS,
+    ] {
+        let (mut current, mut highwater) = (0, 0);
+        // SAFETY: `conn.handle()` is this open connection's handle while `conn` is borrowed,
+        // and sqlite3_db_status only writes the two counters passed to it.
+        let rc = unsafe {
+            rusqlite::ffi::sqlite3_db_status(conn.handle(), status, &mut current, &mut highwater, 0)
+        };
+        if rc == rusqlite::ffi::SQLITE_OK {
+            total += u64::try_from(current).unwrap_or(0);
+        }
+    }
+    total
 }
 impl WorkProbe {
+    /// Database pages the read connections fetched so far.
+    pub fn read_pages(&self) -> u64 {
+        self.read_pages.load(Ordering::SeqCst)
+    }
     /// Read snapshots opened so far.
     pub fn snapshots(&self) -> u64 {
         self.snapshots.load(Ordering::SeqCst)
@@ -596,7 +621,13 @@ impl ApplicationStore for SqliteStore {
                 stamp,
                 host_actor: &self.info.host_actor,
             };
+            let pages = self.work_probe.as_ref().map(|_| page_fetches(conn));
             work(&snapshot)?;
+            if let (Some(probe), Some(before)) = (&self.work_probe, pages) {
+                probe
+                    .read_pages
+                    .fetch_add(page_fetches(conn).saturating_sub(before), Ordering::SeqCst);
+            }
             if expired() {
                 return Err(StorageError::Cancelled);
             }
