@@ -847,6 +847,7 @@ fn a_failed_rebuild_migration_leaves_nothing_and_restores_foreign_keys() {
             minimum_reader: 8,
             minimum_writer: 8,
             sql,
+            expected_sha256: "",
             rebuilds_tables: true,
         });
         let conn = h.raw();
