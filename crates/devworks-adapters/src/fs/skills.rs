@@ -3,9 +3,11 @@
 //! the old or the new tree. Nothing outside this root is ever written; shared skill folders are
 //! only read, through the source-tree adapter.
 use devworks_core::ports::skill_files::{SkillFile, SkillFileFault, SkillFiles};
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct NativeSkillFiles {
@@ -193,6 +195,36 @@ fn copy_entry(from: &Path, to: &Path) -> io::Result<()> {
 /// retired trees carry the same tag.
 const JOURNAL: &str = ".skill.swap-";
 
+/// Tags of the swaps running in this process. Recovery leaves their files alone; a journal of
+/// this process whose swap has returned (a restore that failed) is recovered like any other.
+static ACTIVE: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+fn is_active(tag: &str) -> bool {
+    ACTIVE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .is_some_and(|set| set.contains(tag))
+}
+/// Marks a swap active until dropped.
+struct ActiveSwap(String);
+impl ActiveSwap {
+    fn new(tag: &str) -> Self {
+        ACTIVE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_or_insert_with(HashSet::new)
+            .insert(tag.to_string());
+        Self(tag.to_string())
+    }
+}
+impl Drop for ActiveSwap {
+    fn drop(&mut self) {
+        if let Some(set) = ACTIVE.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+            set.remove(&self.0);
+        }
+    }
+}
+
 /// Removes a directory tree, a file or a link.
 fn remove_entry(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
@@ -208,14 +240,13 @@ fn remove_entry(path: &Path) -> io::Result<()> {
 /// otherwise the swap finished, and the retired and staging trees are leftovers. A journal of
 /// this process belongs to a swap still in progress here and is left alone.
 fn recover_swaps(root: &Path) -> io::Result<()> {
-    let own = format!("{}-", std::process::id());
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let file = entry.file_name();
         let Some(tag) = file.to_str().and_then(|f| f.strip_prefix(JOURNAL)) else {
             continue;
         };
-        if tag.starts_with(&own) {
+        if is_active(tag) {
             continue;
         }
         let retired = root.join(format!(".skill.old-{tag}"));
@@ -249,7 +280,7 @@ fn recover_swaps(root: &Path) -> io::Result<()> {
         }) else {
             continue;
         };
-        if tag.starts_with(&own) || root.join(format!("{JOURNAL}{tag}")).exists() {
+        if is_active(tag) || root.join(format!("{JOURNAL}{tag}")).exists() {
             continue;
         }
         remove_entry(&entry.path())?;
@@ -292,12 +323,24 @@ impl SkillFiles for NativeSkillFiles {
         Ok(root)
     }
     fn materialize(&self, name: &str, files: &[SkillFile]) -> Result<(), SkillFileFault> {
+        self.materialize_with(name, files, &rename)
+    }
+}
+impl NativeSkillFiles {
+    /// `rename` is a parameter only so tests can make the swap renames fail.
+    fn materialize_with(
+        &self,
+        name: &str,
+        files: &[SkillFile],
+        rename: &dyn Fn(&Path, &Path) -> io::Result<()>,
+    ) -> Result<(), SkillFileFault> {
         if !valid_segment(name) || name.starts_with('.') {
             return Err(SkillFileFault::InvalidName);
         }
         let root = self.root()?;
         let n = self.next.fetch_add(1, Ordering::SeqCst);
         let tag = format!("{}-{}", std::process::id(), n);
+        let _active = ActiveSwap::new(&tag);
         // Temporary names never include the skill name: a name near the filesystem's length
         // limit must still have a staging and a retired tree. Hidden, so scans skip them.
         let staging = root.join(format!(".skill.new-{tag}"));
@@ -359,8 +402,9 @@ impl SkillFiles for NativeSkillFiles {
             })?;
         }
         if let Err(e) = rename(&staging, &live) {
-            if had_live {
-                let _ = rename(&retired, &live);
+            // The journal goes only once the live tree is back; otherwise it stays so the next
+            // use of the root restores the retired tree.
+            if had_live && rename(&retired, &live).is_ok() {
                 let _ = fs::remove_file(&journal);
             }
             let _ = remove_tree(&staging);
@@ -441,6 +485,46 @@ mod tests {
             .collect();
         left.sort();
         assert_eq!(left, ["alpha", "beta"]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_swap_whose_restore_also_fails_keeps_its_journal_for_the_next_open() {
+        let root = temp();
+        let files = NativeSkillFiles::new(&root);
+        files
+            .materialize("alpha", &[skill("SKILL.md", b"one")])
+            .unwrap();
+        let base = files.root().unwrap();
+        fs::write(base.join("alpha/.env"), b"secret").unwrap();
+        // The live tree moves aside; then both the swap-in and the restore fail.
+        let fail_into_live = |from: &Path, to: &Path| {
+            if to.file_name().is_some_and(|n| n == "alpha") {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected"))
+            } else {
+                rename(from, to)
+            }
+        };
+        let err = files
+            .materialize_with("alpha", &[skill("SKILL.md", b"two")], &fail_into_live)
+            .unwrap_err();
+        assert!(matches!(err, SkillFileFault::Io(m) if m.contains("injected")));
+        assert!(!base.join("alpha").exists());
+        let names = |dir: &Path| -> Vec<String> {
+            let mut v: Vec<String> = fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        assert!(names(&base).iter().any(|n| n.starts_with(JOURNAL)));
+        // The next open of the root restores the live tree and clears the leftovers.
+        let reopened = NativeSkillFiles::new(&root);
+        let base = reopened.root().unwrap();
+        assert_eq!(fs::read(base.join("alpha/SKILL.md")).unwrap(), b"one");
+        assert_eq!(fs::read(base.join("alpha/.env")).unwrap(), b"secret");
+        assert_eq!(names(&base), ["alpha"]);
         let _ = fs::remove_dir_all(&root);
     }
 
