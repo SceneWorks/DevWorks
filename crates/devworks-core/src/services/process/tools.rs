@@ -7,6 +7,7 @@
 //! not an OS sandbox. The current authority policy requires an exact native exception under
 //! Project scope; its effective execution profile is still `Full`. No confined launcher is
 //! qualified, so `Project` and `Confined` are refused instead of silently upgraded.
+use super::executables::PathExecutables;
 use super::{
     LaunchPolicy, LaunchRefusal, LaunchRequest, OwnedProcess, ProcessSupervisor, StopOutcome,
 };
@@ -74,7 +75,11 @@ pub struct RegisteredCredential {
 
 #[derive(Clone, Debug, Default)]
 pub struct ToolBindings {
+    /// Explicit registrations: the registered path and its canonical file.
     executables: HashMap<String, (PathBuf, PathBuf)>,
+    /// Configured names resolved on PATH when first selected, optionally limited to a fixed
+    /// set (a container backend may select only its own CLI).
+    path_executables: Option<(Arc<PathExecutables>, Option<&'static [&'static str]>)>,
     roots: HashMap<String, RegisteredWorkingRoot>,
     credentials: HashMap<String, RegisteredCredential>,
 }
@@ -187,14 +192,46 @@ impl ToolBindings {
 
     /// A backend selector resolves only a host-registered executable, rechecking its exact
     /// target at dispatch. Missing runtimes remain unavailable; no PATH fallback occurs here.
+    /// Returns the canonical file to launch.
     pub fn resolve_named_executable(&self, name: &str) -> Result<String, BindingRefusal> {
+        self.resolve_launch(name).map(|(program, _)| program)
+    }
+
+    /// The canonical file `name` selects and the path it was registered at, which the child
+    /// keeps as its argv\[0\], after rechecking that the path still resolves to that file.
+    pub fn resolve_launch(&self, name: &str) -> Result<(String, String), BindingRefusal> {
         let (path, target) = self
-            .executables
-            .get(name)
+            .executable(name)
             .ok_or(BindingRefusal::UnknownExecutable)?;
-        exact_file(path, target)
-            .map(|path| path.to_string_lossy().into_owned())
-            .ok_or(BindingRefusal::ChangedExecutable)
+        let program = exact_file(&path, &target).ok_or(BindingRefusal::ChangedExecutable)?;
+        Ok((
+            program.to_string_lossy().into_owned(),
+            path.to_string_lossy().into_owned(),
+        ))
+    }
+
+    /// Lets these bindings select the configured names in `registry` (all of them, or only
+    /// those in `only`). An explicit registration of the same name takes precedence.
+    pub fn with_path_executables(
+        mut self,
+        registry: Arc<PathExecutables>,
+        only: Option<&'static [&'static str]>,
+    ) -> Self {
+        self.path_executables = Some((registry, only));
+        self
+    }
+
+    fn executable(&self, name: &str) -> Option<(PathBuf, PathBuf)> {
+        if let Some(registered) = self.executables.get(name) {
+            return Some(registered.clone());
+        }
+        let (registry, only) = self.path_executables.as_ref()?;
+        if only.is_some_and(|only| !only.contains(&name)) {
+            return None;
+        }
+        registry
+            .lookup(name)
+            .map(|resolved| (resolved.invoked_as, resolved.canonical))
     }
 
     /// Duplicate IDs fail closed; a host must never let registration order select an executable.
@@ -285,10 +322,7 @@ impl ToolBindings {
                 }
             }
         }
-        let executable = self
-            .executables
-            .get(input.executable_ref.as_str())
-            .ok_or(BindingRefusal::UnknownExecutable)?;
+        let (program, arg0) = self.resolve_launch(input.executable_ref.as_str())?;
         let root = self
             .roots
             .get(input.working_directory.root_id.as_str())
@@ -298,14 +332,13 @@ impl ToolBindings {
         {
             return Err(BindingRefusal::OutOfProject);
         }
-        let program =
-            exact_file(&executable.0, &executable.1).ok_or(BindingRefusal::ChangedExecutable)?;
         let root_path = exact_directory(&root.path).ok_or(BindingRefusal::ChangedRoot)?;
         let cwd = exact_directory(&root_path.join(&input.working_directory.relative.0))
             .filter(|p| p.starts_with(&root_path))
             .ok_or(BindingRefusal::ChangedRoot)?;
         Ok(NativeProcessSpec {
-            program: program.to_string_lossy().into_owned(),
+            program,
+            arg0: Some(arg0),
             args: input.args.0.iter().map(|x| x.0.clone()).collect(),
             cwd: Some(cwd),
             env: input
@@ -364,9 +397,10 @@ impl ToolBindings {
     }
 }
 
+/// The canonical file `path` still resolves to, when it is `target`.
 fn exact_file(path: &Path, target: &Path) -> Option<PathBuf> {
     let actual = path.canonicalize().ok()?;
-    (actual == target && actual.is_file()).then_some(path.to_path_buf())
+    (actual == target && actual.is_file()).then_some(actual)
 }
 
 fn exact_directory(path: &Path) -> Option<PathBuf> {
@@ -1579,13 +1613,7 @@ impl ProcessToolService {
                 ),
                 _ => return Err(BindingRefusal::UnsupportedManifest),
             };
-        let executable = self
-            .bindings
-            .executables
-            .get(program)
-            .ok_or(BindingRefusal::UnknownExecutable)?;
-        let executable =
-            exact_file(&executable.0, &executable.1).ok_or(BindingRefusal::ChangedExecutable)?;
+        let (executable, arg0) = self.bindings.resolve_launch(program)?;
         let mut env = vec![
             (
                 "HOME".into(),
@@ -1610,7 +1638,8 @@ impl ProcessToolService {
         env.extend(extra_env);
         Ok(InstallPlan {
             spec: NativeProcessSpec {
-                program: executable.to_string_lossy().into_owned(),
+                program: executable,
+                arg0: Some(arg0),
                 args,
                 cwd: Some(root),
                 env,

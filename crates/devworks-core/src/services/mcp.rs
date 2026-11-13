@@ -2567,7 +2567,8 @@ fn connection_failure(
     match (fault, remote.missing_runtime(transport)) {
         (McpRemoteFault::UnavailableRuntime, Some(executable)) => format!(
             "Connection failed: the executable `{executable}` is not available on this \
-             computer. Install its runtime, make it available on PATH, then reconnect."
+             computer. Install its runtime, make it available on PATH and list it under \
+             Process executables in Agent tools settings, then reconnect."
         ),
         _ => format!("Connection failed: {fault:?}"),
     }

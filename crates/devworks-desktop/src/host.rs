@@ -79,63 +79,6 @@ pub const UI_INGRESS: &str = "desktop-ui";
 /// Lifetime of an upload ticket minted for an attachment (it is spent at once).
 pub const UPLOAD_TICKET_MS: i64 = 10 * 60 * 1000;
 
-/// Snapshot the host's executable search path at boot. IDs are ordinary command names so the
-/// tool caller selects a host-owned executable without passing a path. The first PATH match
-/// wins, as it would for a native command; the binding rechecks the resolved file at dispatch.
-fn process_executables_on_path()
--> Vec<devworks_core::services::process::tools::RegisteredExecutable> {
-    use devworks_core::services::process::tools::RegisteredExecutable;
-    let mut seen = std::collections::HashSet::new();
-    let mut registered = Vec::new();
-    let Some(path) = std::env::var_os("PATH") else {
-        return registered;
-    };
-    for directory in std::env::split_paths(&path).filter(|path| path.is_absolute()) {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            #[cfg(windows)]
-            let name = match path.extension().and_then(|extension| extension.to_str()) {
-                Some(extension) if extension.eq_ignore_ascii_case("exe") => path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or(name),
-                _ => continue,
-            };
-            let Ok(id) = Id::new(name) else {
-                continue;
-            };
-            if seen.contains(id.as_str()) {
-                continue;
-            }
-            let Ok(canonical) = path.canonicalize() else {
-                continue;
-            };
-            let Ok(metadata) = std::fs::metadata(&canonical) else {
-                continue;
-            };
-            if !metadata.is_file() {
-                continue;
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if metadata.permissions().mode() & 0o111 == 0 {
-                    continue;
-                }
-            }
-            seen.insert(id.as_str().to_owned());
-            registered.push(RegisteredExecutable { id, path });
-        }
-    }
-    registered
-}
-
 #[cfg(target_os = "macos")]
 fn macos_major_version() -> u32 {
     std::process::Command::new("/usr/bin/sw_vers")
@@ -243,12 +186,19 @@ impl DesktopConfig {
     }
 }
 
+/// Container backends select only their own CLI among the configured executables.
+const CONTAINER_EXECUTABLES: &[&str] = &["docker", "podman", "container"];
+
 fn container_bindings(
     config: &DesktopConfig,
-    executables: Vec<devworks_core::services::process::tools::RegisteredExecutable>,
+    executables: Arc<devworks_core::services::process::executables::PathExecutables>,
 ) -> Result<devworks_core::services::process::tools::ToolBindings, &'static str> {
-    devworks_core::services::process::tools::ToolBindings::new(executables, std::iter::empty())?
-        .with_credentials(config.container_credentials.clone())
+    devworks_core::services::process::tools::ToolBindings::new(
+        std::iter::empty::<devworks_core::services::process::tools::RegisteredExecutable>(),
+        std::iter::empty(),
+    )?
+    .with_path_executables(executables, Some(CONTAINER_EXECUTABLES))
+    .with_credentials(config.container_credentials.clone())
 }
 
 /// How often the connection service's background step runs (device codes are polled at their
@@ -502,57 +452,55 @@ async fn compose(
         reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
         secrets: secrets.clone(),
     });
-    let executables = process_executables_on_path();
-    let container_executables: Vec<_> = executables
-        .iter()
-        .filter(|executable| matches!(executable.id.as_str(), "docker" | "podman" | "container"))
-        .cloned()
-        .collect();
-    if !container_executables.is_empty() {
-        let bindings = container_bindings(config, container_executables)
-            .map_err(|reason| StartError::Thread(reason.into()))?;
-        let container_private_files = Arc::new(
-            devworks_adapters::containers::NativeRegistryAuth::new(
-                config.data_root.join("container-auth"),
-            )
-            .map_err(|reason| StartError::Thread(reason.into()))?,
-        );
-        runtime_config.containers = Some(devworks_engine::runtime::ContainerComposition {
-            bindings,
-            filesystem: Arc::new(NativeFilesystem::new()),
-            protected_roots: ProtectedRoots::new(
-                Vec::new(),
-                Vec::new(),
-                Some(config.data_root.display().to_string()),
-            ),
-            secrets: secrets.clone(),
-            registry_auth: container_private_files.clone(),
-            workload_environment: container_private_files,
-            host: devworks_core::services::containers::probe::HostPlatform {
-                os: std::env::consts::OS,
-                arch: std::env::consts::ARCH,
-                macos_major: macos_major_version(),
-            },
-        });
-    }
+    // The configured executable names (`tools.processExecutables`), each resolved on PATH
+    // when a tool first selects it: nothing scans PATH before the first frame.
+    let executables = Arc::new(
+        devworks_core::services::process::executables::PathExecutables::from_settings(
+            store.clone(),
+        ),
+    );
+    let container_bindings = container_bindings(config, executables.clone())
+        .map_err(|reason| StartError::Thread(reason.into()))?;
+    let container_private_files = Arc::new(
+        devworks_adapters::containers::NativeRegistryAuth::new(
+            config.data_root.join("container-auth"),
+        )
+        .map_err(|reason| StartError::Thread(reason.into()))?,
+    );
+    runtime_config.containers = Some(devworks_engine::runtime::ContainerComposition {
+        bindings: container_bindings,
+        filesystem: Arc::new(NativeFilesystem::new()),
+        protected_roots: ProtectedRoots::new(
+            Vec::new(),
+            Vec::new(),
+            Some(config.data_root.display().to_string()),
+        ),
+        secrets: secrets.clone(),
+        registry_auth: container_private_files.clone(),
+        workload_environment: container_private_files,
+        host: devworks_core::services::containers::probe::HostPlatform {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            macos_major: macos_major_version(),
+        },
+    });
     let mcp_bindings = devworks_core::services::process::tools::ToolBindings::new(
-        executables.clone(),
+        std::iter::empty(),
         config.process_working_roots.clone(),
     )
+    .map(|bindings| bindings.with_path_executables(executables, None))
     .and_then(|bindings| bindings.with_credentials(config.process_credentials.clone()))
     .map_err(|reason| StartError::Thread(reason.into()))?;
-    if !executables.is_empty() {
-        runtime_config.process_tools = Some(devworks_engine::runtime::ProcessToolComposition {
-            bindings: mcp_bindings.clone(),
-            filesystem: Arc::new(NativeFilesystem::new()),
-            protected_roots: ProtectedRoots::new(
-                Vec::new(),
-                Vec::new(),
-                Some(config.data_root.display().to_string()),
-            ),
-            secrets: secrets.clone(),
-        });
-    }
+    runtime_config.process_tools = Some(devworks_engine::runtime::ProcessToolComposition {
+        bindings: mcp_bindings.clone(),
+        filesystem: Arc::new(NativeFilesystem::new()),
+        protected_roots: ProtectedRoots::new(
+            Vec::new(),
+            Vec::new(),
+            Some(config.data_root.display().to_string()),
+        ),
+        secrets: secrets.clone(),
+    });
     let mcp_secrets = secrets.clone();
     let mcp_namespace = store.info().store_id.0.as_str().to_owned();
     let mcp_data_root = config.data_root.display().to_string();
@@ -1375,7 +1323,15 @@ mod metadata_runtime_tests {
 mod container_credential_boundary_tests {
     use super::*;
     use devworks_core::ports::secrets::{SecretKey, SessionSecrets};
+    use devworks_core::services::process::executables::PathExecutables;
     use devworks_core::services::process::tools::{BindingRefusal, RegisteredCredential};
+
+    fn no_executables() -> Arc<PathExecutables> {
+        Arc::new(PathExecutables::new(
+            Arc::new(|| Some(Vec::new())),
+            Arc::new(|| None),
+        ))
+    }
 
     #[test]
     fn process_grant_does_not_become_a_container_grant() {
@@ -1393,13 +1349,13 @@ mod container_credential_boundary_tests {
                 &Secret::new("private-token"),
             )
             .unwrap();
-        let bindings = container_bindings(&config, Vec::new()).unwrap();
+        let bindings = container_bindings(&config, no_executables()).unwrap();
         assert_eq!(
             bindings.resolve_container_credential(&grant.id, None, &secrets, "store-1"),
             Err(BindingRefusal::UnknownCredential)
         );
         config.container_credentials.push(grant.clone());
-        let bindings = container_bindings(&config, Vec::new()).unwrap();
+        let bindings = container_bindings(&config, no_executables()).unwrap();
         assert_eq!(
             bindings.resolve_container_credential(&grant.id, None, &secrets, "store-1"),
             Ok("private-token".into())

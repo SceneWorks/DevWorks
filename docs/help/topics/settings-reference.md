@@ -66,6 +66,18 @@ Tier Low members.
 
 Configured models allocated round-robin for Tier Low.
 
+## tools.overrides
+
+Selected agent tools.
+
+- Default: `serde_json::Map::<String`
+- Scope: Workspace only
+- Adoption: Value>::new()
+- Policy: NextSafeStep
+- Section: Tools
+
+Explicit per-tool choices shared by agents. Missing tools use their origin's default; reviewer read-only rules and other safety controls still apply.
+
 ## tools.webSearch
 
 Web search.
@@ -174,6 +186,18 @@ Shell commands.
 
 Allow agents the authorized process execution tools.
 
+## tools.processExecutables
+
+Process executables.
+
+- Default: `[ "git", "sh", "bash", "make", "cargo", "rustc", "node", "npm", "npx", "pnpm", "yarn", "deno", "bun", "bunx", "python3", "python", "uv", "uvx", "pipx", "go", "bundle", "composer", "java", "dotnet", "swift", "docker", "podman", "container" ]`
+- Scope: Workspace only
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Tools
+
+Command names that process tools, project dependency installs, container backends and local MCP servers may launch. Each name is looked up on PATH when it is first used and runs from its resolved real file; a program not named here cannot be selected wherever it is installed. The default covers the version control, build, package and container tools DevWorks itself runs. Shells and language runtimes run arbitrary code: access rules, approvals and command checks still decide what runs.
+
 ## safety.accessProfile
 
 Agent access.
@@ -260,7 +284,7 @@ Import existing open issues when a repository is connected and newly reported on
 
 ## github.syncLinkedIssueFields
 
-Synchronize linked issue fields.
+Receive linked issue updates.
 
 - Default: `true`
 - Scope: Workspace → Project
@@ -268,7 +292,7 @@ Synchronize linked issue fields.
 - Policy: Configurable
 - Section: GitHub
 
-Two-way synchronization of linked issue fields.
+Reflect remote issue updates locally. Keep intermediate execution details local; publish a resolution only after completed work is verified.
 
 ## github.issueTriageIntervalSeconds
 
@@ -317,6 +341,42 @@ Review fix cycles.
 - Section: Delivery
 
 Maximum review/fix cycles before asking for help. Engineering default.
+
+## watch.backupEnabled
+
+Watcher backup check.
+
+- Default: `true`
+- Scope: Workspace only
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Agents
+
+Periodically re-check every unfinished or unacknowledged watcher by a separate path, so an outcome whose first delivery was missed still reaches its agent, and an agent whose watcher stalled is reminded to check it. Engineering default.
+
+## watch.backupIntervalMs
+
+Watcher backup check interval (ms).
+
+- Default: `900_000`
+- Scope: Workspace only
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Agents
+
+How often the watcher backup check runs while some agent has an unfinished or unacknowledged watcher. Engineering default.
+
+## watch.maxLifetimeMs
+
+Polling watcher lifetime (ms).
+
+- Default: `86_400_000`
+- Scope: Workspace → Project
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Agents
+
+Longest a polling watcher (a probe command) keeps checking before it ends TimedOut, unless the watcher sets its own. A day covers slow deploys and queues without leaving forgotten probes running. Engineering default.
 
 ## reviews.automationWaitSeconds
 

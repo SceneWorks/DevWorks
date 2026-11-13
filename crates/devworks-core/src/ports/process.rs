@@ -18,6 +18,11 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProcessSpec {
     pub program: String,
+    /// The name the child sees as its argv\[0\] on Unix when it differs from `program`: a host
+    /// launches a registered executable from its canonical file, and multi-call programs (for
+    /// example rustup's `cargo` link) choose what to run from this name. `None` uses `program`.
+    /// Windows passes `program`.
+    pub arg0: Option<String>,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
     /// Variables set for the child (after clearing, when `clear_env`).
@@ -60,6 +65,7 @@ impl ProcessSpec {
         let (program, args) = argv.split_first()?;
         Some(Self {
             program: program.clone(),
+            arg0: None,
             args: args.to_vec(),
             cwd: None,
             env: Vec::new(),
@@ -72,9 +78,9 @@ impl ProcessSpec {
             stdin: None,
         })
     }
-    /// The program followed by its arguments.
+    /// The program, as the child sees it, followed by its arguments.
     pub fn argv(&self) -> Vec<String> {
-        std::iter::once(self.program.clone())
+        std::iter::once(self.arg0.clone().unwrap_or_else(|| self.program.clone()))
             .chain(self.args.iter().cloned())
             .collect()
     }
