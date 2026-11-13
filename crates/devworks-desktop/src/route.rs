@@ -2,6 +2,7 @@
 //! navigation group, subviews, inner sidebar and the item that delivers its content. The shell,
 //! later coordinator screen context (COORD-09, DW-15/16) and Help bindings (DW-52) read the same
 //! registry, so titles and topics cannot drift between hard-coded catalogs.
+use crate::screen::ScreenId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -70,6 +71,8 @@ pub struct Screen {
     pub pending: Option<Pending>,
     /// A header action that opens a secondary route.
     pub link: Option<(&'static str, Route)>,
+    /// The screen that loads, refreshes and draws this route.
+    pub owner: ScreenId,
 }
 
 /// Content owned by a later item.
@@ -96,6 +99,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Approvals,
@@ -109,6 +113,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Portfolio,
@@ -122,6 +127,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Overview,
@@ -135,6 +141,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &["Features", "Issues", "Working", "Needs you"],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Features,
@@ -148,6 +155,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &["Planned", "In progress", "In review", "Complete"],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Issues,
@@ -161,6 +169,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Repositories,
@@ -176,6 +185,7 @@ pub static SCREENS: [Screen; 20] = [
         // Reviews subviews show their owners (DW-28, DW-29).
         pending: None,
         link: Some(("Indexing logs", Route::Indexing)),
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Agents,
@@ -192,6 +202,7 @@ pub static SCREENS: [Screen; 20] = [
             "DW-15, DW-9",
         ),
         link: Some(("Resource reservations", Route::Resources)),
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Artifacts,
@@ -205,6 +216,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Knowledge,
@@ -218,6 +230,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Dreaming,
@@ -231,6 +244,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: pending("dreaming runs, proposals and revert", "DW-32"),
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Databases,
@@ -244,6 +258,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Jobs,
@@ -257,6 +272,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Usage,
@@ -270,6 +286,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Help,
@@ -283,6 +300,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
+        owner: ScreenId::Help,
     },
     Screen {
         route: Route::Settings,
@@ -296,6 +314,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: Some(("Add-ons", Route::AddOns)),
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Resources,
@@ -309,6 +328,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: Some(("Browser sessions", Route::Browser)),
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Browser,
@@ -322,6 +342,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::Indexing,
@@ -336,6 +357,7 @@ pub static SCREENS: [Screen; 20] = [
         // Runs, their diagnostics and the indexing sources (DW-23).
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
     Screen {
         route: Route::AddOns,
@@ -349,6 +371,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
+        owner: ScreenId::Legacy,
     },
 ];
 

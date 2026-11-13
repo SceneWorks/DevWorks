@@ -1,7 +1,36 @@
 //! Native Help frames. Topic selection, versions, passage boundaries and permission facts are
 //! provided by the shared Help service; this module only selects operations and wire revision.
-use crate::{backend::Backend, ops};
+use crate::{
+    backend::{Backend, Slot},
+    ops,
+};
 use serde_json::{Value, json};
+
+/// The Help requests the screen waits for. The names are persisted (see [`Slot`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum HelpSlot {
+    /// A topic page (list generation, appended to the shown page).
+    HelpTopics(u64, bool),
+    /// The periodic catalog check (list generation).
+    HelpProbe(u64),
+    /// A passage read (read generation).
+    HelpRead(u64),
+    HelpGenerate,
+}
+impl From<HelpSlot> for Slot {
+    fn from(slot: HelpSlot) -> Self {
+        Slot::Help(slot)
+    }
+}
+impl TryFrom<Slot> for HelpSlot {
+    type Error = Slot;
+    fn try_from(slot: Slot) -> Result<Self, Slot> {
+        match slot {
+            Slot::Help(slot) => Ok(slot),
+            other => Err(other),
+        }
+    }
+}
 
 pub const PASSAGE_CHARS: u32 = 16_000;
 pub const TOPICS_PER_PAGE: u16 = 50;
