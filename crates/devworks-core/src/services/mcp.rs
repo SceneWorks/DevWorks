@@ -124,6 +124,14 @@ pub(crate) fn requested_scope(scope: &Option<DataScope>) -> DataScope {
     scope.clone().unwrap_or(DataScope::Workspace)
 }
 
+/// The provider-facing tool name: `mcp_` plus the first 60 characters of the stored digest.
+fn wire_name(digest: &str) -> Result<String, StorageError> {
+    let prefix = digest
+        .get(..60)
+        .ok_or_else(|| StorageError::InvalidRecord("invalid MCP tool ID".into()))?;
+    Ok(format!("mcp_{prefix}"))
+}
+
 fn scope(
     ctx: &InvocationContext,
     requested: &DataScope,
@@ -404,7 +412,7 @@ impl McpClientService {
                     selected.push(McpToolMaterial {
                         alias: ToolSchema {
                             capability_id: capability,
-                            wire_name: format!("mcp_{}", &digest[..60]),
+                            wire_name: wire_name(digest)?,
                             input_schema: reference.clone(),
                         },
                         schema: schema.clone(),
@@ -2841,5 +2849,23 @@ impl CommandHandler for McpClientService {
                 .into()),
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod wire_name_tests {
+    use super::*;
+
+    #[test]
+    fn short_or_non_ascii_digest_is_an_error() {
+        assert!(matches!(
+            wire_name("abc"),
+            Err(StorageError::InvalidRecord(_))
+        ));
+        assert!(wire_name(&format!("a{}", "é".repeat(30))).is_err());
+        assert_eq!(
+            wire_name(&"a".repeat(64)).unwrap(),
+            format!("mcp_{}", "a".repeat(60))
+        );
     }
 }
