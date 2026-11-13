@@ -3974,3 +3974,46 @@ fn settings_secret_failed_intake_preserves_fallback_after_successful_cleanup() {
     );
     assert!(!cx.database_text().contains("fixture-failed-settings-value"));
 }
+
+#[test]
+fn a_settings_secret_resolved_through_the_resolver_never_reaches_a_diagnostic_export() {
+    use devworks_core::ports::secrets::SecretResolver;
+    use devworks_core::protocol::records::Severity;
+    use devworks_core::services::diagnostics::{DiagnosticService, LogEntry, LogQuery};
+    // No recognisable shape and no sensitive name beside it: only registration catches it.
+    const VALUE: &str = "plain words qx7 orchard lantern";
+    let cx = Cx::new();
+    let reference = cx.svc.stage_setting_secret(Secret::new(VALUE)).unwrap();
+    assert!(matches!(
+        recorded(save_settings_credential(
+            &cx,
+            json!({"secretRef":reference.as_str()})
+        )),
+        DomainDecision::Applied { .. }
+    ));
+    // A diagnostics service composed on its own: nothing registers the value on it directly.
+    let diagnostics =
+        DiagnosticService::new(cx.store.clone(), cx.h.ids.clone(), cx.h.clock.clone(), None);
+    assert_eq!(cx.svc.resolve(&reference).unwrap().expose(), VALUE);
+    diagnostics
+        .log(LogEntry {
+            output: Some(format!("the search provider echoed {VALUE}")),
+            ..LogEntry::new(
+                "client",
+                "echo",
+                Severity::Error,
+                format!("refused: {VALUE}"),
+            )
+        })
+        .expect("logged");
+    let export = diagnostics
+        .render_export(&cx.user(), &LogQuery::default())
+        .unwrap();
+    assert_eq!(export.records, 1);
+    let text = String::from_utf8(export.bytes).unwrap();
+    assert!(!text.contains(VALUE), "{text}");
+    assert!(
+        text.contains("the search provider echoed [REDACTED]"),
+        "{text}"
+    );
+}

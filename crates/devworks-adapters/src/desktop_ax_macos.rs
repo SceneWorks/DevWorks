@@ -91,16 +91,27 @@ fn settable(element: &CFType, key: &str) -> bool {
     }
 }
 
-fn array_values(value: &CFType, cap: usize) -> Vec<CFType> {
+/// Returns the element count when `value` is a CFArray, and `None` for any other CF type.
+fn array_len(value: &CFType) -> Option<usize> {
     let raw = value.as_CFTypeRef();
+    // SAFETY: CFGetTypeID accepts any non-null CF object, and `value` is a live CFType.
     if unsafe { CFGetTypeID(raw) != CFArrayGetTypeID() } {
-        return Vec::new();
+        return None;
     }
-    // SAFETY: callers pass only values returned for AXChildren/AX action names, both CFArrayRef.
-    let len = unsafe { CFArrayGetCount(raw) }.max(0) as usize;
+    // SAFETY: the type id check above proves `raw` is a CFArrayRef.
+    Some(unsafe { CFArrayGetCount(raw) }.max(0) as usize)
+}
+
+fn array_values(value: &CFType, cap: usize) -> Vec<CFType> {
+    let Some(len) = array_len(value) else {
+        return Vec::new();
+    };
+    let raw = value.as_CFTypeRef();
     (0..len.min(cap))
         .filter_map(|index| {
+            // SAFETY: `array_len` proved `raw` is a CFArray and `index < len`.
             let child = unsafe { CFArrayGetValueAtIndex(raw, index as isize) };
+            // SAFETY: the array owns `child`; the get rule retains it for the CFType.
             (!child.is_null()).then(|| unsafe { CFType::wrap_under_get_rule(child) })
         })
         .collect()
@@ -205,7 +216,7 @@ fn observe() -> Result<(AccessibilitySnapshot, HashMap<String, CFType>), Desktop
             .collect();
         if depth < 16 {
             if let Some(children) = attribute(&element, "AXChildren") {
-                let child_count = unsafe { CFArrayGetCount(children.as_CFTypeRef()) };
+                let child_count = array_len(&children).unwrap_or(0);
                 if child_count > 64 {
                     truncated = true;
                 }
@@ -354,5 +365,26 @@ pub fn inject_target(
         -25202 => Err(DesktopFault::StaleTarget),
         -25205 | -25206 => Err(DesktopFault::Unsupported),
         _ => Err(DesktopFault::NativeFailure),
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use core_foundation::array::CFArray;
+
+    #[test]
+    fn non_array_value_has_no_length_or_values() {
+        let value = CFString::new("not an array").as_CFType();
+        assert_eq!(array_len(&value), None);
+        assert!(array_values(&value, 64).is_empty());
+    }
+
+    #[test]
+    fn array_value_reports_length_and_honours_cap() {
+        let items = [CFString::new("a"), CFString::new("b"), CFString::new("c")];
+        let value = CFArray::from_CFTypes(&items).as_CFType();
+        assert_eq!(array_len(&value), Some(3));
+        assert_eq!(array_values(&value, 2).len(), 2);
     }
 }

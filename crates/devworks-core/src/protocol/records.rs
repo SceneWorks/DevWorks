@@ -17840,6 +17840,7 @@ pub enum WatchSourceKind {
     Process,
     Probe,
     Timer,
+    File,
 }
 impl Check for WatchSourceKind {
     fn check(&self) -> Result<(), String> {
@@ -17979,6 +17980,43 @@ impl Check for WatchTimer {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchFile {
+    pub path: RegisteredPath,
+}
+impl Check for WatchFile {
+    fn check(&self) -> Result<(), String> {
+        self.path.check()?;
+        crate::protocol::rules::record(
+            "WatchFile",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchMatch {
+    pub pattern: Text,
+    pub each: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_interval_ms: Option<Counter>,
+}
+impl Check for WatchMatch {
+    fn check(&self) -> Result<(), String> {
+        self.pattern.check()?;
+        self.each.check()?;
+        self.min_interval_ms.check()?;
+        crate::protocol::rules::record(
+            "WatchMatch",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WatchProbeStatus {
     pub interval_ms: Counter,
     pub runs: Counter,
@@ -18070,6 +18108,8 @@ pub struct WatcherRecord {
     pub due_at_ms: Option<Counter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matches: Option<Counter>,
     pub session_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
@@ -18098,6 +18138,7 @@ impl Check for WatcherRecord {
         self.probe.check()?;
         self.due_at_ms.check()?;
         self.expires_at_ms.check()?;
+        self.matches.check()?;
         self.session_id.check()?;
         self.project_id.check()?;
         self.created_at_ms.check()?;

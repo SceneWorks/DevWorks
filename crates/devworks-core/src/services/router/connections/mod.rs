@@ -1330,7 +1330,10 @@ impl ConnectionService {
     fn load(&self, c: &StoredConnection, handle: &Id) -> Result<Option<Credential>, AccessError> {
         let why = match self.noted(self.secrets.get(&self.key(handle))) {
             Ok(Some(s)) => match Credential::parse(&s) {
-                Some(credential) => return Ok(Some(credential)),
+                Some(credential) => {
+                    register_credential(&credential);
+                    return Ok(Some(credential));
+                }
                 None => "the stored credential is unreadable",
             },
             Ok(None) => "the stored credential is missing; sign in or enter the key again",
@@ -1447,6 +1450,7 @@ impl ConnectionService {
         };
         match outcome {
             Ok(rotated) => {
+                register_credential(&Credential::OAuth(rotated.clone()));
                 self.live().ambiguous.remove(c.id.as_str());
                 let account = rotated.account.clone();
                 let access = rotated.access.clone();
@@ -3613,6 +3617,19 @@ fn configure_decision_model(
 // ---------------------------------------------------------------------------------------------
 // Ports
 
+/// Registers a provider credential read from the secret store with the process-wide redactor,
+/// so a provider error body or process output that echoes it is redacted.
+fn register_credential(credential: &Credential) {
+    use crate::authority::redact::register_resolved_secret;
+    match credential {
+        Credential::ApiKey(k) => register_resolved_secret(k.expose()),
+        Credential::OAuth(t) => {
+            register_resolved_secret(t.access.expose());
+            register_resolved_secret(t.refresh.expose());
+        }
+    }
+}
+
 /// The prefix of settings secret references (`dwsecret-`).
 const SETTING_SECRET_PREFIX: &str = "dwsecret-";
 
@@ -3635,7 +3652,10 @@ impl SecretResolver for ConnectionService {
             return Err(SecretUnavailable::NotFound);
         }
         match self.noted(self.secrets.get(&self.key(&handle))) {
-            Ok(Some(s)) => Ok(SecretValue::new(s.expose())),
+            Ok(Some(s)) => {
+                crate::authority::redact::register_resolved_secret(s.expose());
+                Ok(SecretValue::new(s.expose()))
+            }
             Ok(None) => Err(SecretUnavailable::NotFound),
             Err(SecretError::Unavailable(_)) | Err(SecretError::Denied) => {
                 Err(SecretUnavailable::Locked)

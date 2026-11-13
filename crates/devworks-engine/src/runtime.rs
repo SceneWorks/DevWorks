@@ -490,6 +490,7 @@ pub struct Runtime {
     containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
     desktop: Option<Arc<devworks_core::services::desktop::DesktopService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
+    git_wake: Arc<Notify>,
     help: Option<Arc<devworks_core::services::help::HelpService>>,
     browser_supervision: Arc<BrowserSupervision>,
     packages: Option<Arc<PackageHost>>,
@@ -1333,8 +1334,12 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }));
+    let git_wake = Arc::new(Notify::new());
     if let Some(service) = &git {
-        tasks.push(tokio::spawn(crate::git::run(service.clone())));
+        tasks.push(tokio::spawn(crate::git::run(
+            service.clone(),
+            git_wake.clone(),
+        )));
     }
     if let Some(b) = &browser {
         let svc = b.clone();
@@ -1387,6 +1392,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         prices: prices.clone(),
         notifications: notifications.clone(),
         indexing: index_supervisor.clone(),
+        changes: watch::channel(0).0,
         handle: tokio::runtime::Handle::current(),
     });
     if let Some(service) = &help {
@@ -1513,6 +1519,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         containers,
         desktop,
         git,
+        git_wake,
         help,
         browser_supervision,
         shutdown_grace: config.shutdown_grace,
@@ -2641,6 +2648,12 @@ impl Runtime {
     pub fn approval_resumes(&self) -> &Arc<ResumeDispatcher> {
         &self.resumes
     }
+    /// Changes each time an admitted command may have changed domain state: a new receipt
+    /// that is not a refusal, or an unknown outcome. Approval decisions and their readmissions
+    /// are admitted commands, so a caller waiting on one wakes here instead of polling.
+    pub fn state_changes(&self) -> watch::Receiver<u64> {
+        self.admitter.changes.subscribe()
+    }
 
     /// Admits a command. A command that may have committed (`Recorded`, or a lost
     /// acknowledgment) wakes delivery for the reply intent its receipt committed, an applied
@@ -2767,9 +2780,6 @@ impl Runtime {
         // Browser sessions close through the process owner (their records settle and profiles
         // are removed) before the remaining owned trees are stopped. Like every wait above, it
         // starts only after the run-control hold committed and is abandoned at the one deadline:
-        if let Some(git) = &self.git {
-            git.stop();
-        }
         // a close that does not return in time leaves its trees to the owned-tree stop below.
         if let Some(b) = self.browser.clone() {
             let closing = tokio::task::spawn_blocking(move || b.shutdown());
@@ -2905,6 +2915,11 @@ impl Runtime {
             let _ = connections.close();
         }
         self.usage.stop();
+        // The Git reconcile loop must end before shutdown joins the boot tasks.
+        if let Some(git) = &self.git {
+            git.stop();
+            self.git_wake.notify_one();
+        }
         if let Some(worker) = &self.prices {
             worker.stop();
         }
@@ -3054,6 +3069,8 @@ struct Admitter {
     prices: Option<Arc<crate::prices::PriceSupervisor>>,
     notifications: Option<Arc<OsNotificationSupervisor>>,
     indexing: Option<Arc<IndexSupervisor>>,
+    /// Counts admissions that may have changed domain state (see [`Runtime::state_changes`]).
+    changes: watch::Sender<u64>,
     /// The Tokio runtime [`boot`] ran on (a project archival's immediate stop is spawned there).
     handle: tokio::runtime::Handle,
 }
@@ -3169,6 +3186,18 @@ impl Admitter {
             Ok(CommandReply::CommandStatusUnknown { .. }) => (true, true),
             _ => (false, false),
         };
+        // A replayed receipt or a refusal records nothing new in domain state, so it cannot
+        // unblock a waiter; counting it would wake the caller that submitted it.
+        let changed = match &outcome {
+            Ok(CommandReply::Recorded {
+                receipt, replayed, ..
+            }) => !replayed && !matches!(receipt.decision, DomainDecision::Refused { .. }),
+            Ok(CommandReply::CommandStatusUnknown { .. }) => true,
+            _ => false,
+        };
+        if changed {
+            self.changes.send_modify(|n| *n = n.wrapping_add(1));
+        }
         if committed {
             self.dispatcher.wakeup().wake();
             self.usage.notify();

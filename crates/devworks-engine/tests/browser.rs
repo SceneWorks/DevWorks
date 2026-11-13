@@ -2504,6 +2504,66 @@ fn shutdown_closes_sessions_and_boot_recovery_settles_an_earlier_boots_sessions(
     assert!(report.profiles_removed >= 1);
 }
 
+/// Boots a runtime with Git composed and the default 30 s shutdown bound.
+fn git_fx() -> (Fx, Arc<devworks_core::services::git::GitService>) {
+    let h = Harness::new();
+    let platform = Arc::new(FakePlatform::new(&h.root));
+    let rt = runtime();
+    let store = h.open();
+    seed_project(&h);
+    let user = principal(&*store, "user-a", PrincipalKind::Human);
+    let real: Arc<dyn BrowserPlatform> = platform.clone();
+    let mut composition = composition(
+        &h,
+        store.clone(),
+        real,
+        config(),
+        platform.unverified_stop.clone(),
+    );
+    composition.git = Some(source_fixture(&h, &*store, user.principal()));
+    composition.config.shutdown_bound = Duration::from_secs(30);
+    let app = rt.block_on(boot(composition)).unwrap();
+    let git = app.git().expect("git is composed").clone();
+    let fx = Fx {
+        h: Some(h),
+        rt,
+        app: Some(app),
+        platform,
+        user,
+        keys: Default::default(),
+    };
+    (fx, git)
+}
+
+/// The Git reconcile loop is stopped before the boot tasks are joined, so shutdown with Git
+/// composed does not wait out the shutdown bound for it.
+#[test]
+fn shutdown_with_git_composed_joins_the_git_loop_without_waiting_out_the_bound() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (mut fx, git) = git_fx();
+    fx.drive(100);
+    assert!(!git.is_stopped());
+    let started = Instant::now();
+    fx.shutdown();
+    let took = started.elapsed();
+    assert!(
+        took < Duration::from_secs(5),
+        "shutdown took {took:?} with a 30 s bound"
+    );
+    assert!(git.is_stopped());
+}
+
+/// Dropping the runtime without `shutdown` ends the Git loop too.
+#[test]
+fn dropping_the_runtime_with_git_composed_stops_the_git_loop() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (mut fx, git) = git_fx();
+    fx.drive(100);
+    assert!(!git.is_stopped());
+    drop(fx.app.take());
+    assert!(git.is_stopped());
+}
+
 /// Closing the browser sessions at shutdown waits only after the run-control hold committed and
 /// only within the one shutdown bound: a close that does not return is abandoned at the
 /// deadline, so it can neither delay the hold nor keep shutdown from finishing.

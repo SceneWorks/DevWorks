@@ -548,6 +548,22 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
             "a timer names exactly one of a time and a delay",
         )?;
     }
+    if name == "WatchMatch" {
+        require(
+            v["pattern"]
+                .as_str()
+                .is_some_and(|p| !p.is_empty() && p.len() <= 1024),
+            "a match pattern is 1 to 1024 bytes",
+        )?;
+        require(
+            v.get("minIntervalMs").is_none_or(|ms| {
+                ms.as_str()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .is_some_and(|ms| ms >= 100)
+            }),
+            "matches wake at most ten times a second",
+        )?;
+    }
     if name == "WatchProbe" {
         require(
             v["intervalMs"]
@@ -1200,14 +1216,22 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
         )?
     }
     if op == "watch.create" {
-        let sources = ["process", "probe", "timer"]
+        let sources = ["process", "probe", "timer", "file"]
             .iter()
             .filter(|k| present(v, k))
             .count();
         require(sources == 1, "a watcher names exactly one source")?;
         require(
-            !present(v, "maxLifetimeMs") || present(v, "probe"),
-            "only a probe watcher takes a maximum lifetime",
+            !present(v, "maxLifetimeMs") || present(v, "probe") || present(v, "file"),
+            "only a probe or file watcher takes a maximum lifetime",
+        )?;
+        require(
+            !present(v, "matching") || present(v, "process") || present(v, "file"),
+            "a match reads a launched process's output or a file",
+        )?;
+        require(
+            !present(v, "file") || present(v, "matching"),
+            "a file watcher needs a match",
         )?;
         require(
             !present(v, "tailBytes") || !present(v, "timer"),

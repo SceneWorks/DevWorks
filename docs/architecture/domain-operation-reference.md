@@ -727,7 +727,7 @@ All 376 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `watch.create` | **Command**<br>`process`: `?ProcessSpec`<br>`probe`: `?WatchProbe`<br>`timer`: `?WatchTimer`<br>`tailBytes`: `?ByteLimit`<br>`maxLifetimeMs`: `?Counter`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
+| `watch.create` | **Command**<br>`process`: `?ProcessSpec`<br>`probe`: `?WatchProbe`<br>`timer`: `?WatchTimer`<br>`file`: `?WatchFile`<br>`matching`: `?WatchMatch`<br>`tailBytes`: `?ByteLimit`<br>`maxLifetimeMs`: `?Counter`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
 | `watch.list` | **Query**<br>`sessionId`: `?Id`<br>`states`: `?Items<WatcherState>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherPage` |
 | `watch.inspect` | **Query**<br>`watcherId`: `Id`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
 | `watch.cancel` | **Command**<br>`watcherId`: `Id`<br>`expectedRevision`: `Revision`<br>`stopProcess`: `bool`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
@@ -5506,7 +5506,7 @@ Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `Conven
 
 ### WatchSourceKind
 
-`Process`, `Probe`, `Timer`.
+`Process`, `Probe`, `Timer`, `File`.
 
 ### WatchOutcomeKind
 
@@ -5550,6 +5550,20 @@ Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `Conven
 | `atMs` | `?Counter` |
 | `afterMs` | `?Counter` |
 
+### WatchFile
+
+| Field | Type |
+| --- | --- |
+| `path` | `RegisteredPath` |
+
+### WatchMatch
+
+| Field | Type |
+| --- | --- |
+| `pattern` | `Text` |
+| `each` | `bool` |
+| `minIntervalMs` | `?Counter` |
+
 ### WatchProbeStatus
 
 | Field | Type |
@@ -5591,6 +5605,7 @@ Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `Conven
 | `probe` | `?WatchProbeStatus` |
 | `dueAtMs` | `?Counter` |
 | `expiresAtMs` | `?Counter` |
+| `matches` | `?Counter` |
 | `sessionId` | `Id` |
 | `projectId` | `?ProjectId` |
 | `createdAtMs` | `Counter` |
