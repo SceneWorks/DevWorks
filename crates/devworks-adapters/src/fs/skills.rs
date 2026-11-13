@@ -195,32 +195,34 @@ const JOURNAL: &str = ".skill.swap-";
 /// under different roots) share a tag in `ACTIVE`.
 static NEXT_SWAP: AtomicU64 = AtomicU64::new(0);
 
-/// Tags of the swaps running in this process. Recovery leaves their files alone; a journal of
-/// this process whose swap has returned (a restore that failed) is recovered like any other.
-static ACTIVE: Mutex<Option<HashSet<String>>> = Mutex::new(None);
-fn is_active(tag: &str) -> bool {
+/// Swaps running in this process, as (canonical root, tag). Recovery leaves their files alone;
+/// a journal of this process whose swap has returned (a restore that failed) is recovered like
+/// any other.
+static ACTIVE: Mutex<Option<HashSet<(PathBuf, String)>>> = Mutex::new(None);
+fn is_active(root: &Path, tag: &str) -> bool {
     ACTIVE
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .as_ref()
-        .is_some_and(|set| set.contains(tag))
+        .is_some_and(|set| set.contains(&(root.to_path_buf(), tag.to_string())))
 }
 /// Marks a swap active until dropped.
-struct ActiveSwap(String);
+struct ActiveSwap(PathBuf, String);
 impl ActiveSwap {
-    fn new(tag: &str) -> Self {
+    fn new(root: &Path, tag: &str) -> Self {
+        let key = (root.to_path_buf(), tag.to_string());
         ACTIVE
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .get_or_insert_with(HashSet::new)
-            .insert(tag.to_string());
-        Self(tag.to_string())
+            .insert(key);
+        Self(root.to_path_buf(), tag.to_string())
     }
 }
 impl Drop for ActiveSwap {
     fn drop(&mut self) {
         if let Some(set) = ACTIVE.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
-            set.remove(&self.0);
+            set.remove(&(self.0.clone(), self.1.clone()));
         }
     }
 }
@@ -246,7 +248,7 @@ fn recover_swaps(root: &Path) -> io::Result<()> {
         let Some(tag) = file.to_str().and_then(|f| f.strip_prefix(JOURNAL)) else {
             continue;
         };
-        if is_active(tag) {
+        if is_active(root, tag) {
             continue;
         }
         let retired = root.join(format!(".skill.old-{tag}"));
@@ -280,7 +282,7 @@ fn recover_swaps(root: &Path) -> io::Result<()> {
         }) else {
             continue;
         };
-        if is_active(tag) || root.join(format!("{JOURNAL}{tag}")).exists() {
+        if is_active(root, tag) || root.join(format!("{JOURNAL}{tag}")).exists() {
             continue;
         }
         remove_entry(&entry.path())?;
@@ -340,7 +342,7 @@ impl NativeSkillFiles {
         let root = self.root()?;
         let n = NEXT_SWAP.fetch_add(1, Ordering::SeqCst);
         let tag = format!("{}-{}", std::process::id(), n);
-        let _active = ActiveSwap::new(&tag);
+        let _active = ActiveSwap::new(&root, &tag);
         // Temporary names never include the skill name: a name near the filesystem's length
         // limit must still have a staging and a retired tree. Hidden, so scans skip them.
         let staging = root.join(format!(".skill.new-{tag}"));
@@ -526,6 +528,37 @@ mod tests {
         assert_eq!(fs::read(base.join("alpha/.env")).unwrap(), b"secret");
         assert_eq!(names(&base), ["alpha"]);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_swap_finishing_elsewhere_leaves_a_running_swap_untouched() {
+        let (root_a, root_b) = (temp(), temp());
+        let a = NativeSkillFiles::new(&root_a);
+        let b = NativeSkillFiles::new(&root_b);
+        a.materialize("alpha", &[skill("SKILL.md", b"one")])
+            .unwrap();
+        let base = a.root().unwrap();
+        let during = std::cell::Cell::new(false);
+        // While a's swap has its journal written and its live tree moving aside, another
+        // adapter completes a whole swap and a opens its root again.
+        let overlap = |from: &Path, to: &Path| {
+            if !during.replace(true) {
+                b.materialize("beta", &[skill("SKILL.md", b"b")]).unwrap();
+                a.root().unwrap();
+                let left: Vec<String> = fs::read_dir(&base)
+                    .unwrap()
+                    .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                    .collect();
+                assert!(left.iter().any(|n| n.starts_with(JOURNAL)));
+                assert!(left.iter().any(|n| n.starts_with(".skill.new-")));
+            }
+            rename(from, to)
+        };
+        a.materialize_with("alpha", &[skill("SKILL.md", b"two")], &overlap)
+            .unwrap();
+        assert_eq!(fs::read(base.join("alpha/SKILL.md")).unwrap(), b"two");
+        let _ = fs::remove_dir_all(&root_a);
+        let _ = fs::remove_dir_all(&root_b);
     }
 
     #[test]
