@@ -1513,10 +1513,12 @@ fn step_in(
     let now = tx.now_ms();
     // Matches first: a first-match watcher completes on its first, an each-match watcher records
     // them and reports them no more often than its minimum interval.
+    // An intermediate report does not end the pass: the same pass still settles an expired
+    // or ended source.
     if watcher.matching.is_some()
-        && let Some(step) = matches_in(tx, &mut watcher, update, now)?
+        && let Some(Step::Settled) = matches_in(tx, &mut watcher, update, now)?
     {
-        return Ok(step);
+        return Ok(Step::Settled);
     }
     match watcher.source_kind.as_str() {
         "Timer" => {
@@ -1802,8 +1804,29 @@ fn final_matches(operation: &OperationRecord) -> Option<i64> {
 fn scan_file(path: &str, from: i64, pattern: &str) -> Option<(i64, i64)> {
     use std::io::{Read, Seek, SeekFrom};
     const MAX_READ: u64 = 16 * 1024 * 1024;
-    let mut file = std::fs::File::open(path).ok()?;
-    let len = i64::try_from(file.metadata().ok()?.len()).ok()?;
+    // The path was resolved under its registered root (directory canonical, no symlink); it
+    // must still resolve to itself, so a symlink placed there later cannot lead outside.
+    if std::fs::canonicalize(path).ok()? != std::path::Path::new(path) {
+        return None;
+    }
+    // Only a regular file is read, opened without blocking (a FIFO with no writer would stall
+    // every watcher's pass); the opened file is checked again.
+    if !std::fs::symlink_metadata(path).ok()?.file_type().is_file() {
+        return None;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let mut file = options.open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let len = i64::try_from(metadata.len()).ok()?;
     let from = if len < from { 0 } else { from };
     if len == from {
         return Some((from, 0));
@@ -1813,8 +1836,11 @@ fn scan_file(path: &str, from: i64, pattern: &str) -> Option<(i64, i64)> {
     file.take(((len - from) as u64).min(MAX_READ))
         .read_to_end(&mut bytes)
         .ok()?;
-    let Some(end) = bytes.iter().rposition(|b| *b == b'\n').map(|i| i + 1) else {
-        return Some((from, 0));
+    let end = match bytes.iter().rposition(|b| *b == b'\n') {
+        Some(i) => i + 1,
+        // A line longer than one read is counted in pieces, so the scan moves past it.
+        None if bytes.len() as u64 == MAX_READ => bytes.len(),
+        None => return Some((from, 0)),
     };
     let mut counter = MatchCounter::new(pattern)?;
     counter.feed(&bytes[..end]);
@@ -2595,6 +2621,63 @@ mod tests {
         ] {
             assert!(watch_outcome_recorded(&run(state)), "{state:?}");
         }
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("devworks-scan-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    /// A line longer than one read is passed in pieces; matches after it are still found.
+    #[test]
+    fn a_file_scan_moves_past_a_line_longer_than_one_read() {
+        let dir = scratch("long-line");
+        let path = dir.join("big.log");
+        let mut bytes = vec![b'x'; 16 * 1024 * 1024 + 10];
+        bytes.extend_from_slice(b"\nERROR here\n");
+        std::fs::write(&path, &bytes).unwrap();
+        let path = path.to_string_lossy().into_owned();
+        let (to, found) = scan_file(&path, 0, "ERROR").unwrap();
+        assert_eq!(
+            (to, found),
+            (16 * 1024 * 1024, 0),
+            "the oversized window is passed"
+        );
+        let (end, found) = scan_file(&path, to, "ERROR").unwrap();
+        assert_eq!((end, found), (bytes.len() as i64, 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A symlink placed at the watched path, or anything but a regular file, is never read.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_scan_reads_only_the_regular_file_at_its_own_path() {
+        let dir = scratch("special");
+        let outside = scratch("outside").join("secret.log");
+        std::fs::write(&outside, b"ERROR secret\n").unwrap();
+        let link = dir.join("link.log");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert_eq!(
+            scan_file(&link.to_string_lossy(), 0, "ERROR"),
+            None,
+            "symlink refused"
+        );
+        let fifo = dir.join("pipe.log");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        // Returns at once (no writer would block an ordinary open).
+        assert_eq!(
+            scan_file(&fifo.to_string_lossy(), 0, "ERROR"),
+            None,
+            "FIFO refused"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(outside.parent().unwrap());
     }
 
     #[test]

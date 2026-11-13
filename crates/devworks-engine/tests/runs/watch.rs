@@ -1778,6 +1778,49 @@ fn a_file_match_completes_or_reports_each_coalesced_match() {
     });
 }
 
+/// A file that matches on every pass still ends its watcher at its maximum lifetime.
+#[test]
+fn a_constantly_matching_file_watcher_still_expires() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-file-expiry-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watchers = app.watchers().expect("watchers composed");
+        let watcher = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"file": {"path": {"rootId": "watch-root", "relative": "work/busy.log"}},
+                "matching": {"pattern": "hit", "each": true, "minIntervalMs": "100"},
+                "maxLifetimeMs": "1000"}),
+            "w-busy",
+        );
+        let id_text = watcher["id"].as_str().unwrap();
+        let log = work.join("work").join("busy.log");
+        for _ in 0..15 {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log)
+                .unwrap();
+            f.write_all(b"hit\n").unwrap();
+            fx.h.advance(100);
+            watchers.settle().unwrap();
+        }
+        let record = inspect(&app, &ctx, id_text);
+        assert_eq!(record["outcome"]["kind"], json!("TimedOut"), "{record}");
+        app.shutdown().await;
+    });
+}
+
 /// About a thousand matches a second wake the owner no more often than the minimum interval,
 /// and the reported counts add up to every match.
 #[test]
