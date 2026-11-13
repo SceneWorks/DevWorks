@@ -871,26 +871,36 @@ impl McpClientService {
             return McpEffectOutcome::Failed("invalid MCP disconnect payload".into());
         };
         let removing = op.capability == "mcp.remove";
-        let still_off = read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
-            let (_, state) = current(snapshot.configuration(), &scope)?;
-            Ok(
-                match state.servers.iter().find(|s| s.public.id == server_id) {
-                    None => true,
-                    Some(saved) => !removing && saved.public.disabled == Some(true),
-                },
-            )
-        });
-        match still_off {
-            Ok(true) => match native.remote.disconnect(&server_id) {
-                Ok(()) => McpEffectOutcome::Completed(server),
-                Err(fault) => {
-                    McpEffectOutcome::Unknown(format!("MCP session did not close: {fault:?}"))
+        // The check runs while the remote holds the server's session lock, so an enable that
+        // lands first keeps its session and one that lands later reconnects after the close.
+        let mut read_error = None;
+        let mut still_off =
+            || match read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
+                let (_, state) = current(snapshot.configuration(), &scope)?;
+                Ok(
+                    match state.servers.iter().find(|s| s.public.id == server_id) {
+                        None => true,
+                        Some(saved) => !removing && saved.public.disabled == Some(true),
+                    },
+                )
+            }) {
+                Ok(off) => off,
+                Err(error) => {
+                    read_error = Some(error);
+                    false
                 }
-            },
-            Ok(false) => McpEffectOutcome::Completed(server),
-            Err(error) => McpEffectOutcome::NotApplied(format!(
+            };
+        let closed = native.remote.disconnect_if(&server_id, &mut still_off);
+        if let Some(error) = read_error {
+            return McpEffectOutcome::NotApplied(format!(
                 "MCP configuration could not be read before disconnect: {error}"
-            )),
+            ));
+        }
+        match closed {
+            Ok(()) => McpEffectOutcome::Completed(server),
+            Err(fault) => {
+                McpEffectOutcome::Unknown(format!("MCP session did not close: {fault:?}"))
+            }
         }
     }
 
@@ -1253,6 +1263,7 @@ impl McpClientService {
                     server.public.id == server_for_write
                         && server.public.revision.get() == pending_revision
                         && server.public.catalog_revision == expected_catalog
+                        && server.public.disabled != Some(true)
                 }) {
                     return Err(StorageError::InvalidRecord(
                         "MCP configuration changed during discovery".into(),
@@ -2249,6 +2260,15 @@ impl McpClientService {
                 expected: input.expected_catalog_revision.clone(),
                 current: server.public.catalog_revision.clone(),
             }))
+            .into());
+        }
+        // Discovery reconnects, so a disabled server is discovered only after a human enables it.
+        if server.public.disabled == Some(true) {
+            return Err(Refusal::new(
+                DomainErrorCode::Conflict,
+                "mcp_server_disabled",
+                Some(input.server_id.clone()),
+            )
             .into());
         }
         let pending_revision = server.public.revision.get();

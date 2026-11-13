@@ -407,7 +407,7 @@ impl McpPanel {
                 }
                 if ui
                     .add_enabled(
-                        online && !self.busy && server_idle,
+                        online && !self.busy && server_idle && !disabled,
                         egui::Button::new("Discover capabilities"),
                     )
                     .clicked()

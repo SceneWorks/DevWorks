@@ -175,4 +175,18 @@ pub trait McpRemote: Send + Sync {
     }
     /// Drops a connection and stops its app-owned process tree when present.
     fn disconnect(&self, server_id: &Id) -> Result<(), McpRemoteFault>;
+    /// Drops the connection only when `still_off` answers true. A remote that serializes
+    /// reconnects evaluates it while holding the server's session lock, so a reconnect
+    /// cannot slip between the check and the close.
+    fn disconnect_if(
+        &self,
+        server_id: &Id,
+        still_off: &mut dyn FnMut() -> bool,
+    ) -> Result<(), McpRemoteFault> {
+        if still_off() {
+            self.disconnect(server_id)
+        } else {
+            Ok(())
+        }
+    }
 }

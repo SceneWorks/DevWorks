@@ -2376,6 +2376,45 @@ fn a_disabled_server_stops_serving_until_a_human_enables_it_and_a_removed_one_is
     }
     assert_eq!(servers(&h, &store, &cases)[0].disabled, Some(true));
 
+    // Discovery would reconnect, so it is refused while the server is disabled, for an agent
+    // and for a human alike.
+    let catalog_revision = servers(&h, &store, &cases)[0].catalog_revision.clone();
+    let frame = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":8,
+        "requestKey":"lifecycle-agent-discover","body":{"kind":"mcp.discover",
+        "scope":{"kind":"Workspace"},"serverId":server,"expectedCatalogRevision":catalog_revision}});
+    match cases
+        .command(
+            &gateway,
+            &agent,
+            "mcp.discover",
+            frame.to_string().as_bytes(),
+        )
+        .unwrap()
+    {
+        CommandReply::Recorded { receipt, .. } => assert!(
+            matches!(&receipt.decision, DomainDecision::Refused { .. }),
+            "{:?}",
+            receipt.decision
+        ),
+        CommandReply::Rejected { .. } => {}
+        other => panic!("unexpected agent discover reply: {other:?}"),
+    }
+    assert!(matches!(
+        command(
+            &h,
+            &store,
+            &cases,
+            "lifecycle-human-discover",
+            "mcp.discover",
+            json!({"scope":{"kind":"Workspace"},"serverId":server,
+                "expectedCatalogRevision":catalog_revision}),
+        ),
+        DomainDecision::Refused { fault }
+            if fault.code == devworks_core::protocol::DomainErrorCode::Conflict
+    ));
+    assert_eq!(servers(&h, &store, &cases)[0].disabled, Some(true));
+    assert!(offered().is_empty());
+
     // A human connect enables it again and reconnects with the prior selection.
     let DomainDecision::Accepted { operation_id } = command(
         &h,
