@@ -490,6 +490,7 @@ pub struct Runtime {
     containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
     desktop: Option<Arc<devworks_core::services::desktop::DesktopService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
+    git_wake: Arc<Notify>,
     help: Option<Arc<devworks_core::services::help::HelpService>>,
     browser_supervision: Arc<BrowserSupervision>,
     packages: Option<Arc<PackageHost>>,
@@ -1333,8 +1334,12 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }));
+    let git_wake = Arc::new(Notify::new());
     if let Some(service) = &git {
-        tasks.push(tokio::spawn(crate::git::run(service.clone())));
+        tasks.push(tokio::spawn(crate::git::run(
+            service.clone(),
+            git_wake.clone(),
+        )));
     }
     if let Some(b) = &browser {
         let svc = b.clone();
@@ -1513,6 +1518,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         containers,
         desktop,
         git,
+        git_wake,
         help,
         browser_supervision,
         shutdown_grace: config.shutdown_grace,
@@ -2767,9 +2773,6 @@ impl Runtime {
         // Browser sessions close through the process owner (their records settle and profiles
         // are removed) before the remaining owned trees are stopped. Like every wait above, it
         // starts only after the run-control hold committed and is abandoned at the one deadline:
-        if let Some(git) = &self.git {
-            git.stop();
-        }
         // a close that does not return in time leaves its trees to the owned-tree stop below.
         if let Some(b) = self.browser.clone() {
             let closing = tokio::task::spawn_blocking(move || b.shutdown());
@@ -2905,6 +2908,11 @@ impl Runtime {
             let _ = connections.close();
         }
         self.usage.stop();
+        // The Git reconcile loop must end before shutdown joins the boot tasks.
+        if let Some(git) = &self.git {
+            git.stop();
+            self.git_wake.notify_one();
+        }
         if let Some(worker) = &self.prices {
             worker.stop();
         }
