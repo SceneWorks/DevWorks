@@ -447,6 +447,7 @@ pub fn registered_tool_visibility(
             | "agents.events"
             | "mcp.configure"
             | "mcp.select_tools"
+            | "mcp.classify_tool"
             | "mcp.disable"
             | "mcp.remove"
     ) && kind != PrincipalKind::Human

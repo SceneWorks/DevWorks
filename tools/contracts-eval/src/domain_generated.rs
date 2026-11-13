@@ -6198,6 +6198,27 @@ pub struct McpCapability {
     )]
     #[schemars(with = "Text", extend("x-since" = 8))]
     pub uri: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 8))]
+    pub title: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 8))]
+    pub destructive: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 8))]
+    pub read_only_override: Option<bool>,
 }
 impl Check for McpCapability {
     fn check(&self) -> Result<(), String> {
@@ -6211,6 +6232,9 @@ impl Check for McpCapability {
         self.read_only.check()?;
         self.revision.check()?;
         self.uri.check()?;
+        self.title.check()?;
+        self.destructive.check()?;
+        self.read_only_override.check()?;
         super::domain_rules::record(
             "McpCapability",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -6223,6 +6247,15 @@ impl Revisioned for McpCapability {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 8 {
             self.uri = None;
+        }
+        if revision < 8 {
+            self.title = None;
+        }
+        if revision < 8 {
+            self.destructive = None;
+        }
+        if revision < 8 {
+            self.read_only_override = None;
         }
     }
 }
@@ -22594,6 +22627,17 @@ pub enum DomainCommand {
         server_id: Id,
         expected_catalog_revision: Revision,
     },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "mcp.classify_tool")]
+    McpClassifyTool {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<DataScope>,
+        server_id: Id,
+        expected_revision: Revision,
+        tool_id: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        read_only: Option<bool>,
+    },
     #[serde(rename = "mcp.select_tools")]
     McpSelectTools {
         #[serde(
@@ -23093,6 +23137,7 @@ impl DomainCommand {
             Self::McpDisable { .. } => "mcp.disable",
             Self::McpRemove { .. } => "mcp.remove",
             Self::McpDiscover { .. } => "mcp.discover",
+            Self::McpClassifyTool { .. } => "mcp.classify_tool",
             Self::McpSelectTools { .. } => "mcp.select_tools",
             Self::AddonsConfigure { .. } => "addons.configure",
             Self::AddonsPropose { .. } => "addons.propose",
@@ -24713,6 +24758,19 @@ impl Check for DomainCommand {
                 server_id.check()?;
                 expected_catalog_revision.check()?;
             }
+            Self::McpClassifyTool {
+                scope,
+                server_id,
+                expected_revision,
+                tool_id,
+                read_only,
+            } => {
+                scope.check()?;
+                server_id.check()?;
+                expected_revision.check()?;
+                tool_id.check()?;
+                read_only.check()?;
+            }
             Self::McpSelectTools {
                 scope,
                 server_id,
@@ -25486,6 +25544,9 @@ impl Revisioned for DomainCommand {
             Self::McpRemove { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
+            Self::McpClassifyTool { .. } if revision < 8 => {
+                Err("operation predates its introduction".into())
+            }
             Self::NotificationsMarkRead { .. } if revision < 3 => {
                 Err("operation predates its introduction".into())
             }
@@ -26075,6 +26136,9 @@ pub enum OperationResult {
     McpRemove { value: McpServer },
     #[serde(rename = "mcp.discover")]
     McpDiscover { value: Page<McpCapability> },
+    #[schemars(extend("x-since" = 8))]
+    #[serde(rename = "mcp.classify_tool")]
+    McpClassifyTool { value: McpServer },
     #[serde(rename = "mcp.select_tools")]
     McpSelectTools { value: McpServer },
     #[serde(rename = "mcp.resources")]
@@ -26592,6 +26656,7 @@ impl OperationResult {
             Self::McpDisable { .. } => "mcp.disable",
             Self::McpRemove { .. } => "mcp.remove",
             Self::McpDiscover { .. } => "mcp.discover",
+            Self::McpClassifyTool { .. } => "mcp.classify_tool",
             Self::McpSelectTools { .. } => "mcp.select_tools",
             Self::McpResources { .. } => "mcp.resources",
             Self::McpPrompts { .. } => "mcp.prompts",
@@ -26973,6 +27038,7 @@ impl Check for OperationResult {
             Self::McpDisable { value } => value.check()?,
             Self::McpRemove { value } => value.check()?,
             Self::McpDiscover { value } => value.check()?,
+            Self::McpClassifyTool { value } => value.check()?,
             Self::McpSelectTools { value } => value.check()?,
             Self::McpResources { value } => value.check()?,
             Self::McpPrompts { value } => value.check()?,
@@ -27229,6 +27295,7 @@ impl Revisioned for OperationResult {
             Self::McpDisable { value } => value.retain_revision(revision),
             Self::McpRemove { value } => value.retain_revision(revision),
             Self::McpDiscover { value } => value.retain_revision(revision),
+            Self::McpClassifyTool { value } => value.retain_revision(revision),
             Self::McpSelectTools { value } => value.retain_revision(revision),
             Self::McpCapabilities { value } => value.retain_revision(revision),
             Self::AddonsCatalog { value } => value.retain_revision(revision),
@@ -27299,6 +27366,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::McpRemove { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::McpClassifyTool { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {

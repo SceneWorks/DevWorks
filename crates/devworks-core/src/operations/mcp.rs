@@ -198,6 +198,32 @@ impl Revisioned for SelectToolsInput {
     }
 }
 
+/// `mcp.classify_tool` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClassifyToolInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<DataScope>,
+    pub server_id: Id,
+    pub expected_revision: Revision,
+    pub tool_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<bool>,
+}
+impl Check for ClassifyToolInput {
+    fn check(&self) -> Result<(), String> {
+        self.scope.check()?;
+        self.server_id.check()?;
+        self.expected_revision.check()?;
+        self.tool_id.check()?;
+        self.read_only.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for ClassifyToolInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// `mcp.resources` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -320,6 +346,8 @@ pub enum Input {
     Discover(DiscoverInput),
     /// `mcp.select_tools` (Command).
     SelectTools(SelectToolsInput),
+    /// `mcp.classify_tool` (Command).
+    ClassifyTool(ClassifyToolInput),
     /// `mcp.resources` (Query).
     Resources(ResourcesInput),
     /// `mcp.prompts` (Query).
@@ -337,6 +365,7 @@ impl Input {
             Self::Remove(_) => "mcp.remove",
             Self::Discover(_) => "mcp.discover",
             Self::SelectTools(_) => "mcp.select_tools",
+            Self::ClassifyTool(_) => "mcp.classify_tool",
             Self::Resources(_) => "mcp.resources",
             Self::Prompts(_) => "mcp.prompts",
             Self::Capabilities(_) => "mcp.capabilities",
@@ -351,6 +380,7 @@ impl Input {
             Self::Remove(_) => Mode::Command,
             Self::Discover(_) => Mode::Command,
             Self::SelectTools(_) => Mode::Command,
+            Self::ClassifyTool(_) => Mode::Command,
             Self::Resources(_) => Mode::Query,
             Self::Prompts(_) => Mode::Query,
             Self::Capabilities(_) => Mode::Query,

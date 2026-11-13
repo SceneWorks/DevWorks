@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1981), 1981);
+    assert_eq!(run("domain-fixtures.json", 1983), 1983);
 }
 
 #[test]
@@ -448,8 +448,8 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // Native accessibility targeting adds five selected revision-3 admissions.
     // skills.resources revision 3 (resource paths) adds one; outgoing MCP adds revision 8
     // of its eight operations; the four watch operations arrive at revision 8; mcp.disable
-    // and mcp.remove arrive at revision 8.
-    assert_eq!(admitted.len(), 627);
+    // and mcp.remove arrive at revision 8, and so does mcp.classify_tool.
+    assert_eq!(admitted.len(), 628);
 }
 
 #[test]

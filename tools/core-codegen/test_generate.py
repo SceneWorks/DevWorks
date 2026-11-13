@@ -16,7 +16,7 @@ _SPEC.loader.exec_module(generate)
 
 
 MCP = ('mcp.servers', 'mcp.configure', 'mcp.connect', 'mcp.disable', 'mcp.remove',
-       'mcp.discover', 'mcp.select_tools',
+       'mcp.discover', 'mcp.select_tools', 'mcp.classify_tool',
        'mcp.resources', 'mcp.prompts', 'mcp.capabilities')
 
 class SchemaRevisionRules(unittest.TestCase):

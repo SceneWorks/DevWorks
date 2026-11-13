@@ -2262,10 +2262,16 @@
         "output_schema": "?SchemaRef",
         "read_only": "bool",
         "revision": "Revision",
-        "uri": "?Text"
+        "uri": "?Text",
+        "title": "?Label",
+        "destructive": "?bool",
+        "read_only_override": "?bool"
       },
       "since": {
-        "uri": 8
+        "uri": 8,
+        "title": 8,
+        "destructive": 8,
+        "read_only_override": 8
       }
     },
     "McpResource": {
@@ -10255,6 +10261,22 @@
       "authority": "Scoped",
       "rules": "Catalog changes invalidate old selected schema revisions before use. The first discovery of a newly added server selects its read-only-hinted tools (MCP-06); later discoveries never add to the human selection, and a hint is never a verified read."
     },
+    "mcp.classify_tool": {
+      "operation": "mcp.classify_tool",
+      "mode": "Command",
+      "fields": {
+        "scope": "?DataScope",
+        "server_id": "Id",
+        "expected_revision": "Revision",
+        "tool_id": "Id",
+        "read_only": "?bool"
+      },
+      "result": "McpServer",
+      "effect": "Local",
+      "authority": "Configuration",
+      "rules": "Human only. Sets whether a tool counts as read-only in place of the server's untrusted readOnlyHint, or clears the override when read_only is absent. The override survives rediscovery and decides the tool's default selection on the server's next first discovery; it never changes a saved selection and is never a verified read.",
+      "introducedRevision": 8
+    },
     "mcp.select_tools": {
       "operation": "mcp.select_tools",
       "mode": "Command",
@@ -11445,6 +11467,9 @@
     ],
     "mcp.discover": [
       1,
+      8
+    ],
+    "mcp.classify_tool": [
       8
     ],
     "mcp.select_tools": [
