@@ -1182,6 +1182,105 @@ fn container_create_receipt_atomically_records_ownership_before_effect_delivery(
 }
 
 #[test]
+fn agent_container_create_refuses_dot_directory_mounts_and_keeps_the_request() {
+    let _serial = serial();
+    let mut fx = Fx::new();
+    let runner = Arc::new(ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    ));
+    let service = Arc::new(
+        ContainerService::new(
+            fx.store.clone(),
+            runner,
+            ToolBindings::default(),
+            HostPlatform {
+                os: std::env::consts::OS,
+                arch: std::env::consts::ARCH,
+                macos_major: 0,
+            },
+            fx.h.ids.clone(),
+        )
+        .with_resources(fx.svc.clone()),
+    );
+    fx.cases = fx.cases.with_containers(service.clone());
+    std::fs::create_dir_all(fx.h.root.join(".git").join("hooks")).unwrap();
+    std::fs::create_dir_all(fx.h.root.join("dw188-src")).unwrap();
+    let repository_root = fx.h.root.canonicalize().unwrap();
+    fx.write(move |tx| {
+        let now = tx.now_ms();
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("mount-repo"),
+            location: repository_root.to_string_lossy().into_owned(),
+            name: "Mount repository".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: "Active".into(),
+            languages: Vec::new(),
+            revision: 1,
+            registered_at_ms: now,
+        })?;
+        tx.projects()
+            .set_members(&project("project-a"), &[id("mount-repo")])
+    });
+    let context = fx.agent("agent-a", "project-a", "s-a");
+    for (key, relative, read_only) in [
+        ("dot-git-ro", ".git", true),
+        ("dot-git-rw", ".git", false),
+        ("dot-other", ".dw188-hidden", false),
+    ] {
+        let reply = fx.command_keyed(
+            &context,
+            "containers.create",
+            key,
+            json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:latest",
+                "command":[],"mounts":[{"source":{"rootId":"mount-repo","relative":relative},
+                    "destination":"/mnt","readOnly":read_only}],
+                "ports":[],"environment":[],"resourceIds":[]}}),
+            Some(1),
+        );
+        let operation_id = match recorded(reply).0 {
+            DomainDecision::Accepted { operation_id } => operation_id,
+            other => panic!("the request is recorded and refused at the mount: {other:?}"),
+        };
+        let operation = fx
+            .read(|snapshot| snapshot.operations().operation(&operation_id))
+            .unwrap();
+        assert!(
+            matches!(
+                service.execute_effect(&operation, &fx.authority()),
+                ContainerEffectOutcome::Failed(reason) if reason.contains("not safely registered")
+            ),
+            "{relative} read_only={read_only}"
+        );
+    }
+    // An ordinary child passes the mount check; it fails later only because no engine
+    // executable is registered here, never with the mount refusal.
+    let reply = fx.command_keyed(
+        &context,
+        "containers.create",
+        "ordinary-child",
+        json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:latest",
+            "command":[],"mounts":[{"source":{"rootId":"mount-repo","relative":"dw188-src"},
+                "destination":"/mnt","readOnly":false}],
+            "ports":[],"environment":[],"resourceIds":[]}}),
+        Some(1),
+    );
+    let operation_id = match recorded(reply).0 {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("expected accepted create: {other:?}"),
+    };
+    let operation = fx
+        .read(|snapshot| snapshot.operations().operation(&operation_id))
+        .unwrap();
+    assert!(!matches!(
+        service.execute_effect(&operation, &fx.authority()),
+        ContainerEffectOutcome::Failed(reason) if reason.contains("not safely registered")
+    ));
+}
+
+#[test]
 fn actor_scoped_project_artifact_is_hidden_from_same_project_peer() {
     let _serial = serial();
     let fx = Fx::new();
