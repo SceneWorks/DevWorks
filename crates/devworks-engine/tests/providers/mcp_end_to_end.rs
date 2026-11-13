@@ -1,6 +1,6 @@
 //! A selected in-process MCP server samples during an agent's dispatched tool call. The request
 //! crosses the real native client, the boot-installed sampler and the router to scripted
-//! provider bytes; no model runs.
+//! provider bytes; no model runs. The same session then serves the disable lifecycle checks.
 use super::*;
 use devworks_adapters::mcp::NativeMcpClients;
 use devworks_core::authority::destructive::ProtectedRoots;
@@ -299,6 +299,68 @@ fn a_selected_server_samples_through_the_boot_installed_sampler_during_an_agent_
                 ))
                 .is_empty()
             );
+
+            // A disconnect whose check answers no keeps the live session.
+            let native = clients.get().unwrap().clone();
+            let (kept, server_id) = (native.clone(), server.id.clone());
+            tokio::task::spawn_blocking(move || {
+                use devworks_core::ports::mcp::McpRemote;
+                kept.disconnect_if(&server_id, &mut || false).unwrap();
+                kept.discover(&server_id).expect("session kept");
+            })
+            .await
+            .unwrap();
+            // A human disable closes it, and observing that operation again from the async
+            // runtime reconciles on a blocking worker instead of panicking.
+            let revision = read(f.store.as_ref(), |s| {
+                Ok(s.configuration()
+                    .current(&ConfigScope::Workspace, "outgoing_mcp")?
+                    .unwrap()
+                    .body["servers"][0]["public"]["revision"]
+                    .to_string()
+                    .trim_matches('"')
+                    .to_owned())
+            });
+            let DomainDecision::Accepted { operation_id } = decision(
+                &app,
+                &human,
+                "mcp.disable",
+                json!({"scope":{"kind":"Workspace"},"serverId":server.id,
+                    "expectedRevision":revision}),
+            ) else {
+                panic!("disable was not accepted");
+            };
+            let disabled = within("dispatched MCP disable", async {
+                loop {
+                    let current = read(f.store.as_ref(), |s| {
+                        s.operations().operation(&operation_id)
+                    })
+                    .unwrap();
+                    if current.state == OperationState::ObservedComplete {
+                        break current;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            })
+            .await;
+            let (closed, server_id) = (native.clone(), server.id.clone());
+            assert!(
+                tokio::task::spawn_blocking(move || {
+                    use devworks_core::ports::mcp::McpRemote;
+                    closed.discover(&server_id)
+                })
+                .await
+                .unwrap()
+                .is_err()
+            );
+            let effect = devworks_engine::mcp::consumer(service.clone())
+                .effect
+                .unwrap();
+            assert!(matches!(
+                effect.observe(disabled).await,
+                devworks_engine::dispatch::EffectResult::Completed(_)
+            ));
+            drop((effect, native));
             let _ = remote.cancel().await;
             app.shutdown().await;
             // The installed sampler does not keep the MCP service, its native client or the

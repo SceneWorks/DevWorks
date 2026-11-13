@@ -32,7 +32,13 @@ impl EffectExecutor for Effects {
 
     fn observe(&self, operation: OperationRecord) -> EffectFuture {
         let service = self.0.clone();
-        Box::pin(async move { result(service.observe(&operation)) })
+        // Observation may close a native session, which blocks; keep it off the async workers.
+        Box::pin(async move {
+            match tokio::task::spawn_blocking(move || service.observe(&operation)).await {
+                Ok(outcome) => result(outcome),
+                Err(_) => EffectResult::Unknown("outgoing MCP observation panicked".into()),
+            }
+        })
     }
 }
 

@@ -784,6 +784,36 @@ impl McpRemote for NativeMcpClients {
             Ok(())
         }
     }
+
+    fn disconnect_if(
+        &self,
+        server_id: &Id,
+        still_off: &mut dyn FnMut() -> bool,
+    ) -> Result<(), McpRemoteFault> {
+        let slot = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(server_id.as_str())
+            .cloned();
+        let Some(slot) = slot else {
+            still_off();
+            return Ok(());
+        };
+        // `connect` takes this lock before replacing a session, so the check and the close
+        // see the same session.
+        let mut guard = self.runtime.block_on(slot.lock());
+        if !still_off() {
+            return Ok(());
+        }
+        match guard.take() {
+            Some(session) => self
+                .runtime
+                .block_on(session.wire.close())
+                .map_err(map_connect_fault),
+            None => Ok(()),
+        }
+    }
 }
 
 impl McpWireSession {
