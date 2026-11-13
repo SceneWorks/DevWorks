@@ -450,18 +450,19 @@ fn c_and_cpp_definitions_includes_namespaces_and_linkage() {
 
 #[test]
 fn csharp_types_members_and_inheritance() {
-    // C# is outside the retained LanguageSpecs (Roslyn in CodeGraph): the structural walk.
+    // C# is outside the retained LanguageSpecs (Roslyn in CodeGraph): a native spec of the same
+    // engine, so qualified names are the engine's.
     let cs = extract(
         "src/A.cs",
         "using System.Text;\nnamespace N {\n  public class A : Base, IThing {\n    public A() {}\n    public void M() { Foo(); x.Bar(); }\n    public int P { get; set; }\n    void Foo() {}\n  }\n  interface IThing {}\n  record R(int X);\n}\n",
     );
-    let (a, ..) = def(&cs, "Class", "N.A");
-    def(&cs, "Constructor", "N.A.A");
-    let (m, ..) = def(&cs, "Method", "N.A.M");
-    let (foo, ..) = def(&cs, "Method", "N.A.Foo");
-    def(&cs, "Property", "N.A.P");
-    def(&cs, "Interface", "N.IThing");
-    def(&cs, "Record", "N.R");
+    let (a, ..) = def(&cs, "Class", "#type:N#type:A");
+    def(&cs, "Constructor", "#type:N#type:A#method:A()");
+    let (m, ..) = def(&cs, "Method", "#type:N#type:A#method:M()");
+    let (foo, ..) = def(&cs, "Method", "#type:N#type:A#method:Foo()");
+    def(&cs, "Property", "#type:N#type:A#property:P");
+    def(&cs, "Interface", "#type:N#type:IThing");
+    def(&cs, "Record", "#type:N#type:R");
     assert!(local(&cs, "CALLS", m, foo));
     assert_eq!(
         symbol(&cs, "INHERITS", a, "Base").map(|s| s.0),
@@ -947,11 +948,11 @@ fn javascript_and_typescript_modules_classes_and_requires() {
         "web/app.js",
         "const x = require('./x');\nimport y from 'y';\nclass A extends B { m() { f(); this.g(); } g() {} }\nfunction f() {}\nconst k = () => f();\n",
     );
-    let (a, ..) = def(&js, "Class", "A");
-    let (m, ..) = def(&js, "Method", "A.m");
-    let (g, ..) = def(&js, "Method", "A.g");
-    let (f, ..) = def(&js, "Function", "f");
-    let (k, ..) = def(&js, "Function", "k");
+    let (a, ..) = def(&js, "Class", "#type:A");
+    let (m, ..) = def(&js, "Method", "#type:A#method:m()");
+    let (g, ..) = def(&js, "Method", "#type:A#method:g()");
+    let (f, ..) = def(&js, "Function", "#function:f()");
+    let (k, ..) = def(&js, "Function", "#function:k()");
     assert!(local(&js, "CALLS", m, f) && local(&js, "CALLS", m, g) && local(&js, "CALLS", k, f));
     assert!(symbol(&js, "INHERITS", a, "B").is_some());
     assert_eq!(imports(&js), vec!["./x".to_owned(), "y".into()]);
@@ -960,23 +961,74 @@ fn javascript_and_typescript_modules_classes_and_requires() {
         "web/c.ts",
         "import { a } from './a';\nexport class C extends D implements E { m(): void { this.n(); } n() {} }\ninterface E extends F {}\nenum K { A }\nnamespace NS { export function inner() {} }\n",
     );
-    let (c, ..) = def(&ts, "Class", "C");
+    let (c, ..) = def(&ts, "Class", "#type:C");
     assert!(
         symbol(&ts, "INHERITS", c, "D").is_some() && symbol(&ts, "IMPLEMENTS", c, "E").is_some()
     );
-    def(&ts, "Interface", "E");
-    def(&ts, "Enum", "K");
-    def(&ts, "Namespace", "NS");
-    def(&ts, "Function", "NS.inner");
+    def(&ts, "Interface", "#type:E");
+    def(&ts, "Enum", "#type:K");
+    def(&ts, "Namespace", "#type:NS");
+    def(&ts, "Function", "#type:NS#function:inner()");
     assert_eq!(imports(&ts), vec!["./a".to_owned()]);
     let tsx = extract(
         "web/v.tsx",
         "import React from 'react';\nexport function View() { return <div>{f()}</div>; }\nfunction f() { return 1; }\n",
     );
-    let (v, ..) = def(&tsx, "Function", "View");
-    let (f, ..) = def(&tsx, "Function", "f");
+    let (v, ..) = def(&tsx, "Function", "#function:View()");
+    let (f, ..) = def(&tsx, "Function", "#function:f()");
     assert!(local(&tsx, "CALLS", v, f));
     assert_eq!(tsx.parse_errors, 0);
+}
+
+#[test]
+fn csharp_javascript_and_typescript_native_specs_keep_their_own_reading() {
+    // C#: an alias or `static` using names the imported namespace; a generic call names the
+    // method; interface bases are all IMPLEMENTS; a property has no signature.
+    let cs = extract(
+        "src/B.cs",
+        "using Foo = Bar.Baz;\nusing static System.Console;\nnamespace A.B { interface IA : IB, IC {}\n class W { int P => 0; void G<T>() { x.Run<int>(); H<T>(); } void H<T>() {} } }\n",
+    );
+    assert_eq!(
+        imports(&cs),
+        vec!["Bar.Baz".to_owned(), "System.Console".into()]
+    );
+    let (ia, ..) = def(&cs, "Interface", "#type:A.B#type:IA");
+    assert!(
+        symbol(&cs, "IMPLEMENTS", ia, "IB").is_some()
+            && symbol(&cs, "INHERITS", ia, "IB").is_none()
+    );
+    let (g, ..) = def(&cs, "Method", "#type:A.B#type:W#method:G()");
+    let (h, ..) = def(&cs, "Method", "#type:A.B#type:W#method:H()");
+    def(&cs, "Property", "#type:A.B#type:W#property:P");
+    assert!(symbol(&cs, "CALLS", g, "Run").is_some());
+    assert!(local(&cs, "CALLS", g, h));
+    assert!(cs.edges.iter().all(|e| !is_ext(e)), "no baseline markers");
+
+    // JavaScript and TypeScript: only a declarator bound to a function is a definition; `$` is
+    // a callee; `require` imports whether or not it sits in a callable and is never a call;
+    // `super()`, `a[0]()` and a bare string export are neither calls nor imports.
+    let js = extract(
+        "web/m.ts",
+        "const n = 5, { d } = pair();\nconst f = (x: number): string => $(x);\nexport const r = require('r');\nexport default 'use strict';\nfunction g() { const q = require(\"q\"); a[0](); }\nclass A extends B { constructor() { super(); } }\nthis.top();\n",
+    );
+    no_def(&js, "#function:n()");
+    no_def(&js, "#function:d()");
+    let (f, ..) = def(&js, "Function", "#function:f(x:number)");
+    assert_eq!(prop(&js, f, "return_type"), Some(": string"));
+    assert!(symbol(&js, "CALLS", f, "$").is_some());
+    assert_eq!(imports(&js), vec!["q".to_owned(), "r".into()]);
+    assert!(symbol(&js, "CALLS", 0, "require").is_none());
+    assert!(
+        js.edges
+            .iter()
+            .all(|e| e.kind != "CALLS"
+                || !matches!(&e.target, EdgeTarget::Symbol(s) if s == "super"))
+    );
+    assert_eq!(
+        symbol(&js, "CALLS", 0, "top"),
+        Some((Resolution::Unresolved, 0.45))
+    );
+    assert!(js.edges.iter().all(|e| !is_ext(e)), "no baseline markers");
 }
 
 #[test]
