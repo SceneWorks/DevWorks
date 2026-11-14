@@ -1,4 +1,5 @@
 //! Durable, explicit context changes. The old artifact and transcript remain immutable.
+use crate::turn_error::artifact_read_fault;
 use devworks_core::{
     context::InvocationContext,
     ports::{IdKind, storage::*},
@@ -38,6 +39,7 @@ pub(crate) fn epoch_root(
 
 /// Only the immutable first version of a host-published continuation can carry an epoch
 /// witness. User-created copies, later edited versions and foreign bindings are not descendants.
+/// A host-published compaction input is a descendant only for a compaction request.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn verify_descendant(
     store: &dyn ApplicationStore,
@@ -50,10 +52,11 @@ pub(crate) fn verify_descendant(
     connection_id: &Id,
     model_id: &Id,
     profile: &str,
+    compaction: bool,
 ) -> Result<(), StorageError> {
     let (_, provenance) = artifacts
         .read_exact(store, ctx, reference, 8 * 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?;
+        .map_err(artifact_read_fault)?;
     read_snapshot(store, &ReadOptions::default(), |read| {
         let version = read
             .artifacts()
@@ -73,10 +76,11 @@ pub(crate) fn verify_descendant(
             || version.source["producedBy"] != host.as_str()
             || provenance["principalKind"] != "Host"
             || provenance["producedBy"] != host.as_str()
-            || !matches!(
-                derived["kind"].as_str(),
-                Some("ProviderTurnContinuation" | "ProviderOperationUpdateContext")
-            )
+            || !match derived["kind"].as_str() {
+                Some("ProviderTurnContinuation" | "ProviderOperationUpdateContext") => true,
+                Some(crate::compaction::INPUT_KIND) => compaction,
+                _ => false,
+            }
             || derived["sessionId"] != session_id.as_str()
             || derived["epochRoot"] != json!(root)
             || !derived["observedSequence"]
@@ -95,6 +99,9 @@ pub(crate) fn verify_descendant(
         Ok(())
     })
 }
+
+/// The most opaque provider blocks one epoch change records as omitted sources.
+pub(crate) const MAX_OMITTED_NATIVE: usize = 127;
 
 pub(crate) struct EpochChange {
     pub previous_epoch: i64,
@@ -138,7 +145,7 @@ pub(crate) fn current_source(
     })?;
     let (bytes, provenance) = artifacts
         .read_exact(store, ctx, source, 8 * 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?;
+        .map_err(artifact_read_fault)?;
     let tracked = matches!(
         provenance["derived"]["kind"].as_str(),
         Some(
@@ -154,7 +161,7 @@ pub(crate) fn current_source(
             crate::tool_turn::append_operation_updates(store, artifacts, ctx, session_id, source)?;
         let (bytes, provenance) = artifacts
             .read_exact(store, ctx, &latest, 8 * 1024 * 1024)
-            .map_err(|_| StorageError::ScopeDenied)?;
+            .map_err(artifact_read_fault)?;
         let derived = &provenance["derived"];
         if derived["binding"] != json!(binding) {
             return Err(StorageError::ScopeDenied);
@@ -278,7 +285,7 @@ pub(crate) fn publish(
         ContextChangeReason::InstructionAdoption => "InstructionAdoption",
         ContextChangeReason::Compaction => "Compaction",
     };
-    if omitted.len() > 127 {
+    if omitted.len() > MAX_OMITTED_NATIVE {
         return Err(StorageError::InvalidRecord(
             "too many omitted native blocks".into(),
         ));

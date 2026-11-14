@@ -19,10 +19,7 @@ fn closed<T: DeserializeOwned + Serialize>(encoded: &str) -> Option<T> {
     (serde_json::to_value(&typed).ok()? == raw).then_some(typed)
 }
 fn digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    devworks_core::fingerprint::is_sha256_hex(value)
 }
 pub(super) fn partition(
     conn: &Connection,
@@ -106,7 +103,7 @@ pub(super) fn partition(
         for candidate in snapshot
             .rows
             .iter()
-            .filter(|r| selected.contains(&(r.table.clone(), r.key_digest.clone())))
+            .filter(|r| selected.contains(&(r.table.as_str().to_owned(), r.key_digest.clone())))
         {
             assign(
                 candidate,

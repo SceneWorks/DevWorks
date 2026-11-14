@@ -29,16 +29,13 @@ fn nonempty(s: &str) -> bool {
     !s.is_empty() && !s.contains('\0')
 }
 fn digest(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    devworks_core::fingerprint::is_sha256_hex(s)
 }
 fn hash(v: &impl Serialize) -> Result<String, StorageError> {
-    let s = devworks_core::jcs::canonicalize(
+    devworks_core::fingerprint::canonical_digest(
         &serde_json::to_value(v).map_err(|_| invalid("GitHub canonical data"))?,
     )
-    .map_err(|_| invalid("GitHub canonical data"))?;
-    Ok(devworks_core::fingerprint::sha256_hex(s.as_bytes()))
+    .map_err(|_| invalid("GitHub canonical data"))
 }
 fn key(k: &GithubIssueKey) -> Result<String, StorageError> {
     if k.number <= 0 {

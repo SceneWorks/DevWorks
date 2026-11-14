@@ -36,7 +36,6 @@
 //! position is the session's `next_sequence - 1`, advanced only by a committed batch.
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
-use crate::jcs;
 use crate::ports::IdKind;
 use crate::ports::storage::{
     ApplicationStore, NewEvent, SessionRead, StorageError, StoredBatch, StoredCheckpoint,
@@ -219,9 +218,8 @@ pub enum AppendPath {
 /// Digest of the batch's meaning, including the attributed writer.
 pub fn batch_digest(actor: &ActorId, batch: &SessionBatch) -> Result<String, StorageError> {
     let value = json!({"actor": actor.0.as_str(), "batch": batch});
-    let canonical = jcs::canonicalize(&value)
-        .map_err(|e| StorageError::InvalidRecord(format!("batch canonicalization: {e:?}")))?;
-    Ok(sha256_hex(canonical.as_bytes()))
+    crate::fingerprint::canonical_digest(&value)
+        .map_err(|e| StorageError::InvalidRecord(format!("batch canonicalization: {e:?}")))
 }
 
 fn body_kind(body: &TranscriptBody) -> &'static str {
@@ -833,7 +831,7 @@ fn write_batch(
             "checkpointSequence": batch.checkpoint.as_ref().map(|_| last),
             "contextSources": batch.context_sources.len(),
             "usage": batch.usage.len(),
-            "principalKind": format!("{:?}", ctx.principal_kind()),
+            "principalKind": ctx.principal_kind().as_str().to_string(),
             "invocationId": ctx.invocation_id().as_str(),
         }),
     })?;

@@ -806,6 +806,23 @@ fn native_task_lifecycle_transport(
         other => panic!("{other:?}"),
     };
     let record = read(&*store, |s| s.operations().operation(&commit)).unwrap();
+    let mut unknown_kind = record.clone();
+    assert_eq!(
+        unknown_kind.payload["kind"], "Human",
+        "the stored kind is the wire name"
+    );
+    unknown_kind.payload["kind"] = serde_json::json!("Robot");
+    // Another operation id, so settling the refusal does not release this worktree's real
+    // pending reservation.
+    unknown_kind.id = devworks_core::protocol::OperationId(id("unknown-kind-op"));
+    assert!(
+        matches!(service.execute(&unknown_kind), EffectOutcome::Failed(_)),
+        "an unrecognised stored principal kind is refused, not run as Host"
+    );
+    assert!(!matches!(
+        service.observe(&unknown_kind),
+        EffectOutcome::Completed(_)
+    ));
     let lost = service.execute(&record);
     assert!(matches!(lost, EffectOutcome::Unknown(_)), "{lost:?}");
     assert_eq!(

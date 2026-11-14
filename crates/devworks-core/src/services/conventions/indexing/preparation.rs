@@ -36,11 +36,7 @@ fn invalid(message: &str) -> StorageError {
     StorageError::InvalidRecord(message.into())
 }
 fn digest(value: &Value) -> Result<String, StorageError> {
-    Ok(sha256_hex(
-        crate::jcs::canonicalize(value)
-            .map_err(|_| invalid("embedding identity"))?
-            .as_bytes(),
-    ))
+    crate::fingerprint::canonical_digest(value).map_err(|_| invalid("embedding identity"))
 }
 fn query_key(
     ctx: &InvocationContext,

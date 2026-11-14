@@ -20,6 +20,8 @@ pub enum Route {
     Dreaming,
     Databases,
     Jobs,
+    /// Every agent's watchers.
+    Watchers,
     Usage,
     Help,
     Settings,
@@ -86,7 +88,7 @@ const fn pending(what: &'static str, owner: &'static str) -> Option<Pending> {
     Some(Pending { what, owner })
 }
 
-pub static SCREENS: [Screen; 20] = [
+pub static SCREENS: [Screen; 21] = [
     Screen {
         route: Route::Chat,
         id: "chat",
@@ -216,7 +218,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Artifacts,
     },
     Screen {
         route: Route::Knowledge,
@@ -258,7 +260,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Databases,
     },
     Screen {
         route: Route::Jobs,
@@ -275,6 +277,20 @@ pub static SCREENS: [Screen; 20] = [
         owner: ScreenId::Legacy,
     },
     Screen {
+        route: Route::Watchers,
+        id: "watchers",
+        title: "Watchers",
+        summary: "What agents are watching for, across every project.",
+        group: NavGroup::Bottom,
+        help_topic: "watchers",
+        subviews: &[],
+        inner_sidebar: None,
+        summary_strip: &[],
+        pending: None,
+        link: None,
+        owner: ScreenId::Watchers,
+    },
+    Screen {
         route: Route::Usage,
         id: "usage",
         title: "Usage & costs",
@@ -286,7 +302,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Usage,
     },
     Screen {
         route: Route::Help,
@@ -328,7 +344,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: Some(("Browser sessions", Route::Browser)),
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Resources,
     },
     Screen {
         route: Route::Browser,
@@ -342,7 +358,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Browser,
     },
     Screen {
         route: Route::Indexing,
@@ -376,7 +392,7 @@ pub static SCREENS: [Screen; 20] = [
 ];
 
 /// The navigation order of the left sidebar (UI-14).
-pub const NAV_ORDER: [Route; 16] = [
+pub const NAV_ORDER: [Route; 17] = [
     Route::Chat,
     Route::Approvals,
     Route::Portfolio,
@@ -390,6 +406,7 @@ pub const NAV_ORDER: [Route; 16] = [
     Route::Dreaming,
     Route::Databases,
     Route::Jobs,
+    Route::Watchers,
     Route::Usage,
     Route::Help,
     Route::Settings,

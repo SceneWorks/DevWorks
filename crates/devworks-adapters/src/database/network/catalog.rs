@@ -240,3 +240,37 @@ pub(super) fn profile(
         json!({"driver":driver,"serverVersion":version,"authentication":"Password","tls":tls,"readOnlyBoundary":"Explicit source credentials and fixed server catalog statements; no caller SQL or source-table SELECT", "supportedMetadata":supported,"unsupportedMetadata":unsupported,"limitations":limitations}),
     )
 }
+/// Accepts a server only when its leading release (`parts` numeric components, e.g. `17` or
+/// `8.4`) is one the catalog statements are qualified against. Pre-release suffixes such as
+/// `18beta1` do not match. The refusal names the fixed supported list, never server text.
+pub(super) fn qualified_release(
+    version: &str,
+    parts: usize,
+    qualified: &[&str],
+    supported: &'static str,
+) -> Result<(), MetadataFailure> {
+    let refused = MetadataFailure::UnsupportedServerVersion { supported };
+    let bytes = version.as_bytes();
+    let mut end = 0;
+    for part in 0..parts {
+        if part > 0 {
+            if bytes.get(end) != Some(&b'.') {
+                return Err(refused);
+            }
+            end += 1;
+        }
+        let start = end;
+        while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+            end += 1;
+        }
+        if end == start {
+            return Err(refused);
+        }
+    }
+    if !matches!(bytes.get(end), None | Some(b'.' | b' ' | b'-'))
+        || !qualified.contains(&&version[..end])
+    {
+        return Err(refused);
+    }
+    Ok(())
+}

@@ -27,15 +27,18 @@ fn open(engine: &devworks_desktop::host::Engine, root: &Root) -> Ui {
     let mut h = harness(shell(engine, root, Script::default()), 1600.0, 1100.0);
     settle(&mut h);
     click_nav(&mut h, "Help");
-    ready(&mut h);
+    ready(&mut h, root);
     assert!(h.state().help.loaded, "real Help service answered");
     assert!(h.state().help.error.is_none(), "{:?}", h.state().help.error);
     h
 }
-fn ready(h: &mut Ui) {
-    step_until(h, "real initial Help publication", |shell| {
-        !shell.help.topics.is_empty() && !shell.help.generating
-    });
+fn ready(h: &mut Ui, root: &Root) {
+    step_until_progressing(
+        h,
+        "real initial Help publication",
+        || root.write_progress(),
+        |shell| !shell.help.topics.is_empty() && !shell.help.generating,
+    );
     settle(h);
 }
 fn press(h: &mut Ui, label: &str) {
@@ -183,7 +186,7 @@ fn native_help_search_and_bounded_passages_use_local_version_references() {
     h.state_mut().navigate(Route::Chat);
     settle(&mut h);
     click_nav(&mut h, "Help");
-    ready(&mut h);
+    ready(&mut h, &root);
     assert_eq!(h.state().help.query, query);
     assert_eq!(selected(&h), (topic.id.as_str(), topic.version.0.as_str()));
     assert_eq!(
@@ -218,7 +221,7 @@ fn native_help_generation_unknown_outcome_replays_the_exact_frame_after_relaunch
     );
     settle(&mut h);
     click_nav(&mut h, "Help");
-    ready(&mut h);
+    ready(&mut h, &root);
     assert!(h.state().help.snapshot.as_ref().unwrap().can_generate);
     press(&mut h, "Regenerate capability documentation");
     assert!(h.state().help.generating && h.state().help.generation_unknown);
@@ -359,7 +362,7 @@ fn native_read_only_help_needs_no_artifact_or_addon_authority_and_cannot_generat
     );
     settle(&mut h);
     click_nav(&mut h, "Help");
-    ready(&mut h);
+    ready(&mut h, &root);
     let snapshot = h
         .state()
         .help
@@ -645,7 +648,7 @@ fn native_stale_generation_refusal_keeps_the_inspected_version_and_unsaved_searc
     );
     settle(&mut h);
     click_nav(&mut h, "Help");
-    ready(&mut h);
+    ready(&mut h, &root);
     let topic = h.state().help.topics[0].clone();
     press(
         &mut h,
@@ -966,7 +969,7 @@ fn native_help_rebases_passage_cursor_after_unrelated_catalog_revision_without_c
         "Keep my unsent conversation draft",
     );
     press(&mut h, "Help for current screen");
-    ready(&mut h);
+    ready(&mut h, &root);
     replace(&mut h, "Search local Help", "Stable cursor marker");
     press(&mut h, "Search Help");
     let topic=h.state().help.topics.iter().find(|topic|matches!(&topic.provenance,Some(HelpProvenance::Package{package_id,..}) if package_id.as_str()=="local-help-fixture")).expect("actual signed package guide").clone();

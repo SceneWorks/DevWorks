@@ -57,7 +57,7 @@ pub struct InstructionSourceStamp {
 impl InstructionStamp {
     pub fn validate(&self) -> bool {
         fn digest(value: &str) -> bool {
-            value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            crate::fingerprint::is_sha256_hex(value)
         }
         if self.targets.is_empty()
             || self.targets.len() > 256
@@ -124,7 +124,7 @@ pub struct SkillStampEntry {
 }
 impl SkillStamp {
     pub fn validate(&self) -> bool {
-        let digest = |v: &str| v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit());
+        let digest = |v: &str| crate::fingerprint::is_sha256_hex(v);
         digest(&self.digest)
             // Both skill roots may each hold their maximum of distinct names.
             && self.skills.len() <= MAX_STAMPED_SKILLS

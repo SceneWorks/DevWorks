@@ -477,10 +477,10 @@ impl McpClientService {
                         .ok_or_else(|| {
                             StorageError::InvalidRecord("selected MCP schema missing".into())
                         })?;
-                    let canonical = crate::jcs::canonicalize(schema).map_err(|_| {
+                    let actual = crate::fingerprint::canonical_digest(schema).map_err(|_| {
                         StorageError::InvalidRecord("selected MCP schema invalid".into())
                     })?;
-                    if sha256_hex(canonical.as_bytes()) != reference.sha256.as_str() {
+                    if actual != reference.sha256.as_str() {
                         return Err(StorageError::InvalidRecord(
                             "selected MCP schema changed".into(),
                         ));
@@ -682,7 +682,7 @@ impl McpClientService {
                     "serverRevision":material.server_revision.get(),"catalogRevision":material.catalog_revision.get(),
                     "capabilityId":material.capability_id,"schema":material.alias.input_schema,
                     "wireName":material.wire_name,"arguments":arguments,
-                    "principal":ctx.principal(),"principalKind":format!("{:?}",ctx.principal_kind()),
+                    "principal":ctx.principal(),"principalKind":ctx.principal_kind().as_str().to_string(),
                     "sessionId":ctx.session_id(),"projectId":ctx.project_id(),"fences":fences,"call":call,
                 }),
             })?;
@@ -758,14 +758,13 @@ impl McpClientService {
         else {
             return McpEffectOutcome::Failed("invalid MCP effect principal".into());
         };
-        let kind = match op.payload.get("principalKind").and_then(Value::as_str) {
-            Some("Human") => PrincipalKind::Human,
-            Some("Agent") => PrincipalKind::Agent,
-            Some("Package") => PrincipalKind::Package,
-            Some("McpClient") => PrincipalKind::McpClient,
-            Some("Schedule") => PrincipalKind::Schedule,
-            Some("Host") => PrincipalKind::Host,
-            _ => return McpEffectOutcome::Failed("invalid MCP principal kind".into()),
+        let Some(kind) = op
+            .payload
+            .get("principalKind")
+            .and_then(Value::as_str)
+            .and_then(PrincipalKind::parse)
+        else {
+            return McpEffectOutcome::Failed("invalid MCP principal kind".into());
         };
         let Some(fences) = op
             .payload
@@ -869,10 +868,14 @@ impl McpClientService {
         let endpoint = server.endpoint(&scope);
         let outcome = native.remote.connect(&context, &endpoint);
         let successful = outcome.is_ok();
-        let failure = outcome
-            .as_ref()
-            .err()
-            .map(|fault| BoundedText(connection_failure(&native.remote, &server.transport, fault)));
+        let failure = outcome.as_ref().err().map(|fault| {
+            BoundedText(connection_failure(
+                &native.remote,
+                &*native.store,
+                &server.transport,
+                fault,
+            ))
+        });
         let new_state = if successful {
             ItemState::Healthy
         } else {
@@ -1064,10 +1067,13 @@ impl McpClientService {
         else {
             return McpEffectOutcome::Failed("invalid MCP tool principal".into());
         };
-        let principal_kind = match op.payload.get("principalKind").and_then(Value::as_str) {
-            Some("Agent") => PrincipalKind::Agent,
-            Some("Host") => PrincipalKind::Host,
-            _ => return McpEffectOutcome::Failed("invalid MCP tool principal kind".into()),
+        let Some(principal_kind @ (PrincipalKind::Agent | PrincipalKind::Host)) = op
+            .payload
+            .get("principalKind")
+            .and_then(Value::as_str)
+            .and_then(PrincipalKind::parse)
+        else {
+            return McpEffectOutcome::Failed("invalid MCP tool principal kind".into());
         };
         let Some(session_id) = op
             .payload
@@ -1905,11 +1911,6 @@ impl McpClientService {
         tx: &mut dyn WriteTransaction,
         input: &ops::ConfigureInput,
     ) -> Result<DomainDecision, Failure> {
-        if ctx.principal_kind() != PrincipalKind::Human {
-            return Err(
-                Refusal::new(DomainErrorCode::PermissionDenied, "mcp_configuration", None).into(),
-            );
-        }
         if let McpTransport::Http {
             credential_ref: Some(handle),
             ..
@@ -2027,11 +2028,6 @@ impl McpClientService {
         tx: &mut dyn WriteTransaction,
         input: &ops::SelectToolsInput,
     ) -> Result<DomainDecision, Failure> {
-        if ctx.principal_kind() != PrincipalKind::Human {
-            return Err(
-                Refusal::new(DomainErrorCode::PermissionDenied, "mcp_selection", None).into(),
-            );
-        }
         scope(ctx, &requested_scope(&input.scope), tx.projects())?;
         let scope = active_server_scope(ctx, &requested_scope(&input.scope), tx.projects())?;
         let (version, mut state) = current(tx.configuration(), &scope)?;
@@ -2096,14 +2092,6 @@ impl McpClientService {
         tx: &mut dyn WriteTransaction,
         input: &ops::ClassifyToolInput,
     ) -> Result<DomainDecision, Failure> {
-        if ctx.principal_kind() != PrincipalKind::Human {
-            return Err(Refusal::new(
-                DomainErrorCode::PermissionDenied,
-                "mcp_classification",
-                None,
-            )
-            .into());
-        }
         let scope = active_server_scope(ctx, &requested_scope(&input.scope), tx.projects())?;
         let (version, mut state) = current(tx.configuration(), &scope)?;
         let server = state
@@ -2241,7 +2229,7 @@ impl McpClientService {
                 "serverId": input.server_id,
                 "pendingRevision": pending_revision,
                 "principal": ctx.principal(),
-                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "principalKind": ctx.principal_kind().as_str().to_string(),
                 "sessionId": ctx.session_id(),
                 "fences": command.authorization().fences(),
             }),
@@ -2309,11 +2297,6 @@ impl McpClientService {
                 .into());
             }
         };
-        if ctx.principal_kind() != PrincipalKind::Human {
-            return Err(
-                Refusal::new(DomainErrorCode::PermissionDenied, "mcp_configuration", None).into(),
-            );
-        }
         let requested = requested_scope(requested);
         scope(ctx, &requested, tx.projects())?;
         let scope = active_server_scope(ctx, &requested, tx.projects())?;
@@ -2522,7 +2505,7 @@ impl McpClientService {
             payload: json!({
                 "scope":scope.key(),"serverId":input.server_id,"pendingRevision":pending_revision,
                 "catalogRevision":input.expected_catalog_revision.get(),
-                "principal":ctx.principal(),"principalKind":format!("{:?}",ctx.principal_kind()),
+                "principal":ctx.principal(),"principalKind":ctx.principal_kind().as_str().to_string(),
                 "sessionId":ctx.session_id(),"fences":command.authorization().fences(),
             }),
         })?;
@@ -2648,13 +2631,20 @@ fn sampling_decision(
 /// host cannot resolve names that executable, so a person knows which runtime to install.
 fn connection_failure(
     remote: &Arc<dyn McpRemote>,
+    store: &dyn ApplicationStore,
     transport: &McpTransport,
     fault: &McpRemoteFault,
 ) -> String {
-    match (fault, remote.missing_runtime(transport)) {
+    let missing = read_snapshot(store, &ReadOptions::default(), |snapshot| {
+        Ok(remote.missing_runtime(transport, snapshot.configuration()))
+    })
+    .ok()
+    .flatten();
+    match (fault, missing) {
         (McpRemoteFault::UnavailableRuntime, Some(executable)) => format!(
             "Connection failed: the executable `{executable}` is not available on this \
-             computer. Install its runtime, make it available on PATH, then reconnect."
+             computer. Install its runtime, make it available on PATH and list it under \
+             Process executables in Agent tools settings, then reconnect."
         ),
         _ => format!("Connection failed: {fault:?}"),
     }
@@ -2836,7 +2826,11 @@ impl QueryHandler for McpClientService {
                             view.missing_runtime = self
                                 .native
                                 .get()
-                                .and_then(|native| native.remote.missing_runtime(&s.transport))
+                                .and_then(|native| {
+                                    native
+                                        .remote
+                                        .missing_runtime(&s.transport, snapshot.configuration())
+                                })
                                 .map(BoundedText);
                         }
                         view

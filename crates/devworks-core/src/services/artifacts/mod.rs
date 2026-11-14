@@ -304,11 +304,7 @@ fn conflict(
 // Scope
 
 /// Which projects' references the invoking principal may act on.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AuthorizedScope {
-    Workspace,
-    Project(ProjectId),
-}
+pub use crate::authority::reach::Reach as AuthorizedScope;
 impl AuthorizedScope {
     fn covers(&self, project: &ProjectId) -> bool {
         match self {
@@ -325,24 +321,14 @@ impl AuthorizedScope {
     }
 }
 
-/// The principal's reference scope from its current host binding: the user and the host act
-/// workspace-wide; a principal confined to a project (the authority port already refused any
-/// invocation outside it) acts only on that project's references.
-pub fn authorized_scope(
-    authority: &dyn crate::ports::storage::AuthorityRead,
+/// The principal's reference scope ([`crate::authority::reach::reach`]), refusing a principal
+/// that has none.
+fn authorized_scope(
+    authority: &dyn AuthorityRead,
     ctx: &InvocationContext,
-) -> Result<AuthorizedScope, StorageError> {
-    if matches!(
-        ctx.principal_kind(),
-        PrincipalKind::Human | PrincipalKind::Host
-    ) {
-        return Ok(AuthorizedScope::Workspace);
-    }
-    let bound = authority.principal(ctx.principal())?;
-    Ok(match bound.and_then(|b| b.project_id) {
-        Some(p) => AuthorizedScope::Project(p),
-        None => AuthorizedScope::Workspace,
-    })
+) -> Result<AuthorizedScope, Failure> {
+    crate::authority::reach::reach(authority, ctx)?
+        .ok_or_else(|| Refusal::new(DomainErrorCode::PermissionDenied, "principal", None).into())
 }
 
 /// Who is looking at artifacts: the invocation, the principal's current authorized scope from
@@ -360,39 +346,16 @@ impl<'a> Viewer<'a> {
         authority: &dyn AuthorityRead,
         ctx: &'a InvocationContext,
     ) -> Result<Self, StorageError> {
-        if matches!(
-            ctx.principal_kind(),
-            PrincipalKind::Human | PrincipalKind::Host
-        ) {
-            return Ok(Self {
-                ctx,
-                coordinator: false,
-                authorized: Some(AuthorizedScope::Workspace),
+        let authorized = crate::authority::reach::reach(authority, ctx)?;
+        let coordinator = authorized == Some(AuthorizedScope::Workspace)
+            && ctx.principal_kind() == PrincipalKind::Agent
+            && authority.principal(ctx.principal())?.is_some_and(|b| {
+                b.kind == PrincipalKind::Agent && b.role == Some(AgentRole::WorkspaceCoordinator)
             });
-        }
-        Ok(match authority.principal(ctx.principal())? {
-            Some(b) if !b.active => Self {
-                ctx,
-                coordinator: false,
-                authorized: None,
-            },
-            Some(b) => Self {
-                ctx,
-                coordinator: ctx.principal_kind() == PrincipalKind::Agent
-                    && b.kind == PrincipalKind::Agent
-                    && b.role == Some(AgentRole::WorkspaceCoordinator)
-                    && b.project_id.is_none(),
-                authorized: Some(
-                    b.project_id
-                        .map_or(AuthorizedScope::Workspace, AuthorizedScope::Project),
-                ),
-            },
-            // A non-human principal with no host binding has no authorized scope: fail closed.
-            None => Self {
-                ctx,
-                coordinator: false,
-                authorized: None,
-            },
+        Ok(Self {
+            ctx,
+            coordinator,
+            authorized,
         })
     }
     /// The workspace-level audience of what `owner` owns: the owner itself, the user, the host
@@ -619,7 +582,7 @@ pub(crate) fn retained_convention(
     let digest = |key: &str| {
         derived[key]
             .as_str()
-            .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            .is_some_and(crate::fingerprint::is_sha256_hex)
     };
     match derived["kind"].as_str() {
         Some("ConventionContent") => id("conventionId") && digest("sourceDigest"),
@@ -882,7 +845,7 @@ fn event(
     if let Some(map) = payload.as_object_mut() {
         map.insert(
             "principalKind".into(),
-            json!(format!("{:?}", ctx.principal_kind())),
+            json!(ctx.principal_kind().as_str().to_string()),
         );
         map.insert("invocationId".into(), json!(ctx.invocation_id().as_str()));
         if let Some(s) = ctx.session_id() {
@@ -1044,6 +1007,9 @@ pub struct ArtifactService {
     pub(crate) pending: std::sync::Mutex<Vec<(StagingRef, Value)>>,
     /// Generations this service is removing right now (best-effort coordination only).
     pub(crate) removing: std::sync::Mutex<std::collections::HashSet<(String, String)>>,
+    /// Custody of project-scoped preview cache files; without it they stay uncached.
+    pub(crate) project_previews:
+        Option<Arc<crate::services::projects::managed_files::ManagedFileCustody>>,
 }
 
 impl ArtifactService {
@@ -1064,7 +1030,16 @@ impl ArtifactService {
             readers: Readers::default(),
             pending: std::sync::Mutex::new(Vec::new()),
             removing: std::sync::Mutex::new(std::collections::HashSet::new()),
+            project_previews: None,
         }
+    }
+    /// Cache project previews under managed-file custody, so a purge can account for them.
+    pub fn with_project_previews(
+        mut self,
+        custody: Arc<crate::services::projects::managed_files::ManagedFileCustody>,
+    ) -> Self {
+        self.project_previews = Some(custody);
+        self
     }
 
     fn correlation(&self) -> CorrelationId {
@@ -1472,7 +1447,7 @@ fn new_version(
             "source": staged.source,
             "operationId": staged.operation_id.0.as_str(),
             "producedBy": ctx.principal().0.as_str(),
-            "principalKind": format!("{:?}", ctx.principal_kind()),
+            "principalKind": ctx.principal_kind().as_str().to_string(),
             "sessionId": ctx.session_id().map(Id::as_str),
             "repositoryId": staged.origin.repository_id.as_ref().map(Id::as_str),
             "repositoryRevision": staged.origin.repository_revision,
@@ -1575,7 +1550,7 @@ impl ArtifactService {
             created_at_ms: now,
             provenance: json!({
                 "producedBy": ctx.principal().0.as_str(),
-                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "principalKind": ctx.principal_kind().as_str().to_string(),
                 "sessionId": ctx.session_id().map(Id::as_str),
                 "assignmentId": ctx.assignment_id().map(|a| a.0.as_str()),
                 "invocationId": ctx.invocation_id().as_str(),
@@ -2241,7 +2216,14 @@ impl ArtifactService {
                 let p = preview::build(&v.media_type, &head, v.byte_count as u64);
                 let bytes = preview::encode_cached(&p);
                 let _ = match project {
-                    Some(project) => self.files.write_project_derived(project, &pid, &bytes),
+                    Some(project) => match &self.project_previews {
+                        Some(custody) => {
+                            custody.write_project_preview(&*self.files, project, &pid, &bytes)
+                        }
+                        None => Err(FileFault::Unsupported(
+                            "project cache custody unavailable".into(),
+                        )),
+                    },
                     None => self.files.write_derived(&pid, &bytes),
                 };
                 p

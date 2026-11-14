@@ -20,7 +20,7 @@ use devworks_core::protocol::records::{
 };
 use devworks_core::protocol::results::{DomainDecision, OperationResult};
 use devworks_core::protocol::{
-    AttemptId, CommandReply, Counter, Id, OperationState, Protocol, Revision,
+    AttemptId, CommandReply, Counter, Id, OperationState, Protocol, RetryAdvice, Revision,
 };
 use devworks_core::providers::context::{
     ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext, ResultBlock,
@@ -49,6 +49,7 @@ use crate::agent_supervisor::AgentTurnExecutor;
 use crate::providers::driver::NativeInvocation;
 use crate::runs::{LaunchEnd, LaunchFuture};
 use crate::store;
+use crate::turn_error::{TurnError, artifact_read_fault};
 use devworks_core::services::runs::substrate::ActivationFailure;
 use devworks_core::services::usage::accounting::AttemptEnd;
 
@@ -86,15 +87,8 @@ impl AgentTurnExecutor for NativeAgentTurnExecutor {
     }
 }
 
-fn turn_failure(error: StorageError) -> LaunchEnd {
-    let detail = format!("native agent turn: {error:?}");
-    let failure = match error {
-        StorageError::ScopeDenied
-        | StorageError::InvalidRecord(_)
-        | StorageError::NotFound { .. } => ActivationFailure::Deterministic(detail),
-        _ => ActivationFailure::Transient(detail),
-    };
-    LaunchEnd::Failed(failure)
+fn turn_failure(error: impl Into<TurnError>) -> LaunchEnd {
+    LaunchEnd::Failed(error.into().activation_failure())
 }
 
 fn cancelled() -> LaunchEnd {
@@ -187,7 +181,7 @@ async fn drive_agent_turn(
             outcome: ActivationOutcome::Completed,
             detail: None,
         },
-        Err(StorageError::Cancelled) if cancellation.is_cancelled() => cancelled(),
+        Err(error) if error.is_cancelled() && cancellation.is_cancelled() => cancelled(),
         Err(error) if retry_at_ms.is_some() => LaunchEnd::Failed(ActivationFailure::RateLimited {
             until_ms: retry_at_ms.expect("checked above"),
             detail: format!("native agent provider cooldown: {error:?}"),
@@ -267,13 +261,18 @@ async fn wait_for_state_change(
     }
 }
 
+/// The turn fails on this many consecutive stale-head refusals of one request against one context
+/// version. A real race changes the head or the request on the retry, so a repeat is not a race;
+/// the third attempt only adds margin.
+const STALE_HEAD_ATTEMPTS: u32 = 3;
+
 async fn run_native_loop(
     runtime: &Arc<Runtime>,
     ctx: &InvocationContext,
     agent: &AgentRecord,
     mut stop: Stop<'_>,
     retry_at_ms: &mut Option<i64>,
-) -> Result<(), StorageError> {
+) -> Result<(), TurnError> {
     let cancellation = stop.cancellation;
     // Marked seen before each dispatch, so a change committed while a call is dispatched still
     // wakes the wait that follows it.
@@ -283,9 +282,13 @@ async fn run_native_loop(
     let mut recovered = runtime.recover_native_context_head(ctx, session_id)?;
     let mut window = 0;
     let mut completed_windows = 0;
+    // The digest of the last context this turn compacted to.
+    let mut compacted: Option<String> = None;
+    // Consecutive stale-head refusals of one request against one context version.
+    let mut stale_refusals = None;
     loop {
         if cancellation.is_cancelled() {
-            return Err(StorageError::Cancelled);
+            return Err(StorageError::Cancelled.into());
         }
         let (mut head, mut binding, observed_sequence) = match recovered.take() {
             Some(value) => value,
@@ -327,10 +330,10 @@ async fn run_native_loop(
                     let bytes = runtime
                         .artifacts()
                         .read_exact(runtime.store().as_ref(), ctx, &head, 8 * 1024 * 1024)
-                        .map_err(|_| StorageError::ScopeDenied)?
+                        .map_err(artifact_read_fault)?
                         .0;
-                    let mut context: ProviderContext =
-                        serde_json::from_slice(&bytes).map_err(|_| StorageError::ScopeDenied)?;
+                    let mut context: ProviderContext = serde_json::from_slice(&bytes)
+                        .map_err(|_| StorageError::InvalidRecord("agent context head".into()))?;
                     context.messages.push(Message {
                         role: MessageRole::User,
                         content: vec![ContentBlock::Text {
@@ -449,7 +452,40 @@ async fn run_native_loop(
             .ok_or(StorageError::ScopeDenied)?
             .1;
         acknowledge_native_instructions(runtime, ctx, agent).await?;
+        // A context this turn just compacted is sent as it is, even if it still reaches the
+        // threshold: compacting it again could not shrink it.
+        if compacted.as_deref() != Some(head.sha256.as_str())
+            && compaction_due(runtime, ctx, &route, &head, window)?
+        {
+            match compact(
+                runtime,
+                ctx,
+                &route,
+                &binding,
+                &head,
+                cancellation,
+                retry_at_ms,
+            )
+            .await
+            {
+                Ok(root) => compacted = Some(root.sha256.as_str().to_owned()),
+                Err(TurnError::Store(StorageError::ScopeDenied))
+                    if crate::tool_turn::native_head_became_stale(
+                        runtime.store().as_ref(),
+                        ctx,
+                        session_id,
+                        &head,
+                    )? => {}
+                Err(error) => return Err(error),
+            }
+            recovered = runtime.recover_native_context_head(ctx, session_id)?;
+            continue;
+        }
         let invocation = plan_generation_window(runtime, ctx, &route, &binding, &head, window)?;
+        let attempt = (
+            invocation.request.request_id.clone(),
+            head.version_id.clone(),
+        );
         changes.borrow_and_update();
         let dispatched = tokio::time::Instant::now();
         let worker = Arc::clone(runtime);
@@ -459,7 +495,7 @@ async fn run_native_loop(
             handle.block_on(worker.produce_and_dispatch_native_turn(invocation, Some(stopped)))
         })
         .await
-        .map_err(|error| StorageError::InvalidRecord(format!("agent turn worker: {error}")))?;
+        .map_err(|error| TurnError::Worker(format!("agent turn worker: {error}")))?;
         let progress = match progress {
             Ok(progress) => progress,
             Err(StorageError::ScopeDenied)
@@ -470,13 +506,30 @@ async fn run_native_loop(
                     &head,
                 )? =>
             {
+                // A concurrent publication changes the head or the request on the retry. The
+                // same request refused against the same head again is not a race.
+                stale_refusals = match stale_refusals.take() {
+                    Some((count, last)) if last == attempt => Some((count + 1, last)),
+                    _ => Some((1, attempt)),
+                };
+                if let Some((count, (request_id, version_id))) = &stale_refusals
+                    && *count >= STALE_HEAD_ATTEMPTS
+                {
+                    return Err(TurnError::Store(StorageError::InvalidRecord(format!(
+                        "agent turn made no progress: request {} against context version {} \
+                         was refused {count} times",
+                        request_id.as_str(),
+                        version_id.as_str()
+                    ))));
+                }
                 recovered = runtime.recover_native_context_head(ctx, session_id)?;
                 continue;
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         };
+        stale_refusals = None;
         if cancellation.is_cancelled() {
-            return Err(StorageError::Cancelled);
+            return Err(StorageError::Cancelled.into());
         }
         match progress.provider.result.outcome {
             Some(AttemptEnd::Completed) if progress.continuation.is_some() => {
@@ -502,13 +555,13 @@ async fn run_native_loop(
                     .recover_native_context_head(ctx, session_id)?
                     .or(Some((head, binding, observed_sequence)));
             }
-            Some(AttemptEnd::Cancelled) => return Err(StorageError::Cancelled),
+            Some(AttemptEnd::Cancelled) => return Err(StorageError::Cancelled.into()),
             outcome => {
                 *retry_at_ms = progress.provider.result.retry_at_ms;
-                return Err(StorageError::InvalidRecord(format!(
-                    "agent inference did not yield a settled continuation: {outcome:?}; faults: {:?}",
-                    progress.provider.result.faults
-                )));
+                return Err(TurnError::Provider {
+                    outcome,
+                    faults: progress.provider.result.faults,
+                });
             }
         }
     }
@@ -607,7 +660,7 @@ async fn dispatch_pending_off_thread(
     ctx: &InvocationContext,
     session_id: &Id,
     cancellation: &Cancellation,
-) -> Result<(), StorageError> {
+) -> Result<(), TurnError> {
     let worker = Arc::clone(runtime);
     let ctx = ctx.clone();
     let session_id = session_id.clone();
@@ -616,7 +669,7 @@ async fn dispatch_pending_off_thread(
         worker.dispatch_pending_tool_calls_cancellable(&ctx, &session_id, Some(&cancellation))
     })
     .await
-    .map_err(|error| StorageError::InvalidRecord(format!("agent tool worker: {error}")))??;
+    .map_err(|error| TurnError::Worker(format!("agent tool worker: {error}")))??;
     Ok(())
 }
 
@@ -772,6 +825,211 @@ fn tool_window_count(total: usize) -> usize {
     total.div_ceil(MAX_ALIASES_PER_TURN).max(1)
 }
 
+/// Estimated input tokens of the next request from `head` with tool window `window`: the context
+/// and the offered tool definitions, by the attributed estimate of four bytes per token. Tool-call
+/// arguments and native blocks the context only references count at their artifact size, and
+/// tools at their resolved definition, since the request carries their content.
+pub fn context_tokens(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    head: &ArtifactRef,
+    window: usize,
+) -> Result<i64, StorageError> {
+    measure(runtime, ctx, head, window).map(|size| size.tokens)
+}
+
+struct RequestSize {
+    /// Estimated input tokens of the whole request.
+    tokens: i64,
+    /// Estimated tokens compaction keeps: instructions, the first message and tool definitions.
+    fixed_tokens: i64,
+    /// Native blocks in the context.
+    natives: usize,
+}
+
+fn measure(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    head: &ArtifactRef,
+    window: usize,
+) -> Result<RequestSize, StorageError> {
+    use devworks_core::providers::materialize::SchemaDocuments;
+    let schemas = runtime
+        .providers()
+        .ok_or(StorageError::ScopeDenied)?
+        .schemas();
+    let selected = schemas.selected_agent_tools(ctx)?;
+    let mut tool_bytes = 0usize;
+    for alias in tool_window(&selected, window)? {
+        // The encoder sends the resolved definition; an unresolvable one is refused there.
+        let bytes = match schemas.tool(ctx, alias) {
+            Ok(tool) => serde_json::to_vec(&(&tool.schema, &tool.description, &tool.wire_name)),
+            Err(_) => serde_json::to_vec(alias),
+        }
+        .map_err(|error| StorageError::InvalidRecord(format!("tool schemas: {error}")))?;
+        tool_bytes = tool_bytes
+            .checked_add(bytes.len())
+            .ok_or(StorageError::ScopeDenied)?;
+    }
+    let (context_bytes, _) = runtime
+        .artifacts()
+        .read_exact(runtime.store().as_ref(), ctx, head, 32 * 1024 * 1024)
+        .map_err(|_| StorageError::ScopeDenied)?;
+    let context: ProviderContext = serde_json::from_slice(&context_bytes)
+        .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?;
+    let blocks = || context.messages.iter().flat_map(|message| &message.content);
+    let referenced = blocks()
+        .filter_map(|block| match block {
+            ContentBlock::ToolCall { arguments, .. } => Some(arguments.byte_length.get()),
+            ContentBlock::Native { artifact, .. } => Some(artifact.byte_length.get()),
+            _ => None,
+        })
+        .try_fold(0i64, i64::checked_add)
+        .ok_or(StorageError::ScopeDenied)?;
+    let natives = blocks()
+        .filter(|block| matches!(block, ContentBlock::Native { .. }))
+        .count();
+    let tool_bytes = i64::try_from(tool_bytes).map_err(|_| StorageError::ScopeDenied)?;
+    let bytes = head
+        .byte_length
+        .get()
+        .checked_add(tool_bytes)
+        .and_then(|bytes| bytes.checked_add(referenced))
+        .ok_or(StorageError::ScopeDenied)?;
+    // Compaction keeps the first message without an earlier summary, which it replaces.
+    let fixed = ProviderContext {
+        messages: context
+            .messages
+            .iter()
+            .take(1)
+            .map(|message| Message {
+                role: message.role.clone(),
+                content: message
+                    .content
+                    .iter()
+                    .filter(|block| !crate::compaction::is_summary(block))
+                    .cloned()
+                    .collect(),
+            })
+            .collect(),
+        ..context.clone()
+    };
+    let fixed_bytes = serde_json::to_vec(&fixed)
+        .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?
+        .len();
+    let fixed_bytes = i64::try_from(fixed_bytes)
+        .ok()
+        .and_then(|bytes| bytes.checked_add(tool_bytes))
+        .ok_or(StorageError::ScopeDenied)?;
+    Ok(RequestSize {
+        tokens: devworks_core::services::sessions::token_estimate(bytes),
+        fixed_tokens: devworks_core::services::sessions::token_estimate(fixed_bytes),
+        natives,
+    })
+}
+
+/// The next request reaches `agents.compactionThresholdPercent` of the routed model's context
+/// window while the part compaction keeps stays under it, or its context holds as many native
+/// blocks as one epoch change can record as omitted. When the kept part alone reaches the
+/// threshold, compacting cannot help and the request is sent as before.
+fn compaction_due(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    head: &ArtifactRef,
+    window: usize,
+) -> Result<bool, StorageError> {
+    let (limit, percent) =
+        read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+            let model = read
+                .router()
+                .route_model(&route.model_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            Ok((
+                model.context_tokens,
+                devworks_core::settings::service::compaction_threshold_percent(
+                    read.configuration(),
+                )?,
+            ))
+        })?;
+    let size = measure(runtime, ctx, head, window)?;
+    let reaches = |tokens: i64| {
+        limit.is_some_and(|limit| tokens.saturating_mul(100) >= limit.saturating_mul(percent))
+    };
+    Ok(size.natives >= crate::context_epoch::MAX_OMITTED_NATIVE
+        || (reaches(size.tokens) && !reaches(size.fixed_tokens)))
+}
+
+/// Summarize `head` through the agent's own pinned route and publish the summary as the root of
+/// the next context epoch.
+async fn compact(
+    runtime: &Arc<Runtime>,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    binding: &NativeBinding,
+    head: &ArtifactRef,
+    cancellation: &Cancellation,
+    retry_at_ms: &mut Option<i64>,
+) -> Result<ArtifactRef, TurnError> {
+    let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let store = runtime.store().as_ref();
+    let source = crate::context_epoch::current_source(
+        store,
+        runtime.artifacts(),
+        ctx,
+        session_id,
+        head,
+        binding,
+    )?;
+    // Refuse a context the new epoch could not record before paying for its summary.
+    crate::compaction::omitted_native(&source.context, binding)?;
+    let input = crate::compaction::publish_input(
+        store,
+        runtime.artifacts(),
+        ctx,
+        session_id,
+        binding,
+        &source,
+    )?;
+    let invocation = plan_compaction(runtime, ctx, route, binding, &input)?;
+    let providers = Arc::clone(runtime.providers().ok_or(StorageError::ScopeDenied)?);
+    let stopped = cancellation.clone();
+    let handle = tokio::runtime::Handle::current();
+    let produced = tokio::task::spawn_blocking(move || {
+        handle.block_on(providers.produce_cancellable(invocation, Some(stopped)))
+    })
+    .await
+    .map_err(|error| TurnError::Worker(format!("agent compaction worker: {error}")))??;
+    let result = produced.result;
+    let summary = match (result.outcome, result.result_artifact) {
+        (Some(AttemptEnd::Completed), Some(summary)) => summary,
+        (Some(AttemptEnd::Cancelled), _) => return Err(StorageError::Cancelled.into()),
+        (outcome, _) => {
+            *retry_at_ms = result.retry_at_ms;
+            return Err(TurnError::Provider {
+                outcome,
+                faults: result.faults,
+            });
+        }
+    };
+    let bytes = runtime
+        .artifacts()
+        .read_exact(store, ctx, &summary, 8 * 1024 * 1024)
+        .map_err(artifact_read_fault)?
+        .0;
+    let summary = String::from_utf8(bytes)
+        .map_err(|_| StorageError::InvalidRecord("compaction summary is not text".into()))?;
+    Ok(crate::compaction::publish_compacted(
+        store,
+        runtime.artifacts(),
+        ctx,
+        session_id,
+        binding,
+        source,
+        &summary,
+    )?)
+}
+
 fn output_headroom(context_tokens: Option<i64>) -> i64 {
     context_tokens
         .map(|window| (window / 4).max(1))
@@ -790,7 +1048,7 @@ pub fn route_context_head(
     head_digest: Option<&str>,
     tools_required: bool,
     needs_images: bool,
-) -> Result<RouteChoice, StorageError> {
+) -> Result<RouteChoice, TurnError> {
     let (intent, effort, mut required, pin_revision, reviewer) =
         read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
             let session = read
@@ -890,9 +1148,10 @@ pub fn route_context_head(
     } else {
         ctx.clone()
     };
+    let refused = |detail: String, retry| TurnError::Command { detail, retry };
     let reply = runtime
         .command(&route_ctx, "router.route", &frame)
-        .map_err(|error| StorageError::InvalidRecord(format!("agent route gateway: {error}")))?;
+        .map_err(|error| refused(format!("agent route gateway: {error}"), RetryAdvice::Never))?;
     let choice = match reply {
         CommandReply::Recorded { receipt, .. } => match receipt.decision {
             DomainDecision::Applied {
@@ -901,30 +1160,45 @@ pub fn route_context_head(
             | DomainDecision::NoChange {
                 result: OperationResult::RouterRoute { value },
             } => Ok(value),
-            DomainDecision::Refused { fault } => Err(StorageError::InvalidRecord(format!(
-                "agent route refused: {fault:?}"
-            ))),
-            _ => Err(StorageError::InvalidRecord("agent route reply".into())),
+            // A recorded refusal replays under this stable request key until the head or pin
+            // changes, so repeating the same turn cannot reach a new routing decision.
+            DomainDecision::Refused { fault } => Err(refused(
+                format!("agent route refused: {fault:?}"),
+                RetryAdvice::Never,
+            )),
+            _ => Err(refused("agent route reply".into(), RetryAdvice::Never)),
         },
-        CommandReply::Rejected { .. } => Err(StorageError::ScopeDenied),
-        CommandReply::CommandStatusUnknown { .. } | CommandReply::ReceiptPurged { .. } => Err(
-            StorageError::InvalidRecord("agent route status unconfirmed".into()),
-        ),
-    }?;
-    read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
-        let pin = read
-            .router()
-            .session_pin(session_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if pin.pin_id != choice.pin_id
-            || pin.revision != choice.pin_revision.get()
-            || pin.model_id != choice.model_id
-            || pin.connection_id != choice.connection_id
-        {
-            return Err(StorageError::ScopeDenied);
+        CommandReply::Rejected { code, retry, .. } => {
+            Err(refused(format!("agent route rejected: {code:?}"), retry))
         }
-        Ok(choice)
-    })
+        // The request key is stable for this head, so a purged receipt repeats.
+        CommandReply::ReceiptPurged { .. } => Err(refused(
+            "agent route receipt purged".into(),
+            RetryAdvice::Never,
+        )),
+        CommandReply::CommandStatusUnknown { .. } => Err(refused(
+            "agent route status unconfirmed".into(),
+            RetryAdvice::ResolveReceipt,
+        )),
+    }?;
+    Ok(read_snapshot(
+        runtime.store().as_ref(),
+        &ReadOptions::default(),
+        |read| {
+            let pin = read
+                .router()
+                .session_pin(session_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if pin.pin_id != choice.pin_id
+                || pin.revision != choice.pin_revision.get()
+                || pin.model_id != choice.model_id
+                || pin.connection_id != choice.connection_id
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            Ok(choice)
+        },
+    )?)
 }
 
 fn context_has_images(context: &ProviderContext) -> bool {
@@ -949,7 +1223,7 @@ fn context_head_has_images(
     let bytes = runtime
         .artifacts()
         .read_exact(runtime.store().as_ref(), ctx, head, 32 * 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?
+        .map_err(artifact_read_fault)?
         .0;
     let context: ProviderContext = serde_json::from_slice(&bytes)
         .map_err(|error| StorageError::InvalidRecord(format!("agent route context: {error}")))?;
@@ -1098,7 +1372,7 @@ pub fn ensure_membership_context(
     runtime: &Runtime,
     ctx: &InvocationContext,
     agent: &AgentRecord,
-) -> Result<(), StorageError> {
+) -> Result<(), TurnError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     let pending = read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
         let session = read
@@ -1166,7 +1440,7 @@ pub fn ensure_membership_context(
             let (bytes, provenance) = runtime
                 .artifacts()
                 .read_exact(runtime.store().as_ref(), &host, &reference, 8 * 1024 * 1024)
-                .map_err(|_| StorageError::ScopeDenied)?;
+                .map_err(artifact_read_fault)?;
             let context: ProviderContext =
                 serde_json::from_slice(&bytes).map_err(|_| StorageError::ScopeDenied)?;
             let binding: NativeBinding =
@@ -1206,7 +1480,7 @@ pub fn ensure_membership_context(
                             &reference,
                         )?;
                         if material.observed_sequence != sequence {
-                            return Err(StorageError::ScopeDenied);
+                            return Err(StorageError::ScopeDenied.into());
                         }
                         context = material.context;
                     }
@@ -1216,7 +1490,7 @@ pub fn ensure_membership_context(
                         ..
                     }) => {
                         if interrupted_at != sequence {
-                            return Err(StorageError::ScopeDenied);
+                            return Err(StorageError::ScopeDenied.into());
                         }
                         context.messages.push(Message {
                             role: MessageRole::User,
@@ -1257,7 +1531,7 @@ pub fn ensure_membership_context(
     };
     let missing_head_facts = if source.is_none() && sequence > 0 {
         if unpublished_turn(runtime.store().as_ref(), ctx, session_id, 0)?.is_some() {
-            return Err(StorageError::ScopeDenied);
+            return Err(StorageError::ScopeDenied.into());
         }
         handoff_fact_messages(runtime, session_id, 0, sequence)?
     } else {
@@ -1396,7 +1670,7 @@ pub fn ensure_membership_context(
     runtime
         .artifacts()
         .settle_host_bytes(runtime.store().as_ref(), &staged, committed.is_ok());
-    committed
+    Ok(committed?)
 }
 
 /// The epoch row must name an existing transcript position. A queued child can move before
@@ -1627,6 +1901,30 @@ pub fn plan_generation_window(
     head: &ArtifactRef,
     window: usize,
 ) -> Result<NativeInvocation, StorageError> {
+    plan_request(runtime, ctx, route, binding, head, Some(window))
+}
+
+/// A compaction request for the agent's own pinned route: the exact `input` context, no tools,
+/// router purpose `Compaction`, and usage attributed like the agent's other requests.
+pub(crate) fn plan_compaction(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    binding: &NativeBinding,
+    input: &ArtifactRef,
+) -> Result<NativeInvocation, StorageError> {
+    plan_request(runtime, ctx, route, binding, input, None)
+}
+
+/// `window` selects the offered tools of a generation request; `None` plans a compaction.
+fn plan_request(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    binding: &NativeBinding,
+    head: &ArtifactRef,
+    window: Option<usize>,
+) -> Result<NativeInvocation, StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     let root_id = ctx.root_id().ok_or(StorageError::ScopeDenied)?;
     let project_id = ctx.project_id().ok_or(StorageError::ScopeDenied)?;
@@ -1634,15 +1932,21 @@ pub fn plan_generation_window(
         return Err(StorageError::ScopeDenied);
     }
     let providers = runtime.providers().ok_or(StorageError::ScopeDenied)?;
-    let selected = providers.schemas().selected_agent_tools(ctx)?;
-    let tools = tool_window(&selected, window)?.to_vec();
+    let tools = match window {
+        Some(window) => {
+            let selected = providers.schemas().selected_agent_tools(ctx)?;
+            tool_window(&selected, window)?.to_vec()
+        }
+        None => Vec::new(),
+    };
+    let compaction = window.is_none();
     let tool_bytes = serde_json::to_vec(&tools)
         .map_err(|error| StorageError::InvalidRecord(format!("tool schemas: {error}")))?
         .len();
     let (context_bytes, _) = runtime
         .artifacts()
         .read_exact(runtime.store().as_ref(), ctx, head, 32 * 1024 * 1024)
-        .map_err(|error| StorageError::InvalidRecord(format!("agent context read: {error:?}")))?;
+        .map_err(artifact_read_fault)?;
     let provider_context: ProviderContext = serde_json::from_slice(&context_bytes)
         .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?;
     let requires_images = context_has_images(&provider_context);
@@ -1656,18 +1960,27 @@ pub fn plan_generation_window(
         .get()
         .checked_add(i64::try_from(tool_bytes).map_err(|_| StorageError::ScopeDenied)?)
         .ok_or(StorageError::ScopeDenied)?;
+    // The epoch is part of the identity: two epochs whose roots have identical bytes must not
+    // share a request, while a restart within one epoch still replays the same request.
+    let mut identity = format!(
+        "{}:{}:{}:{}:{}:{}",
+        session_id.as_str(),
+        binding.context_epoch.get(),
+        head.sha256.as_str(),
+        route.pin_id.as_str(),
+        route.pin_revision.get(),
+        window.unwrap_or(0)
+    );
+    if compaction {
+        // A compaction input republished after a restart has the same bytes under a new
+        // version: it is a new request, not a replay of the first one.
+        identity.push(':');
+        identity.push_str(head.version_id.as_str());
+    }
     let request_id = Id::new(format!(
-        "agent-request-{}",
-        sha256_hex(
-            format!(
-                "{}:{}:{}:{}:{window}",
-                session_id.as_str(),
-                head.sha256.as_str(),
-                route.pin_id.as_str(),
-                route.pin_revision.get()
-            )
-            .as_bytes()
-        )
+        "agent-{}-{}",
+        if compaction { "compaction" } else { "request" },
+        sha256_hex(identity.as_bytes())
     ))
     .map_err(|_| StorageError::ScopeDenied)?;
     let info = runtime.store().info();
@@ -1796,7 +2109,9 @@ pub fn plan_generation_window(
         )?,
         protocol: Protocol::Draft1,
         request_id: request_id.clone(),
-        purpose: if owner
+        purpose: if compaction {
+            InferencePurpose::Compaction
+        } else if owner
             .dispatch
             .as_ref()
             .is_some_and(|dispatch| dispatch.implementation)
@@ -1837,7 +2152,11 @@ pub fn plan_generation_window(
     .map_err(|error| StorageError::InvalidRecord(format!("agent inference JSON: {error}")))?;
     let logical = RequestAdmission {
         request_id: request_id.clone(),
-        purpose: Purpose::Conversation,
+        purpose: if compaction {
+            Purpose::Compaction
+        } else {
+            Purpose::Conversation
+        },
         session_id: Some(session_id.clone()),
         project_id: Some(project_id.clone()),
         root_id: Some(root_id.clone()),
@@ -1846,6 +2165,7 @@ pub fn plan_generation_window(
         pin_id: Some(route.pin_id.clone()),
         args_digest: sha256_hex(canonical.as_bytes()),
     };
+    let category = ReportCategory::for_agent_role(&owner.role);
     let attempt = AttemptRequest {
         admission_key: request_id.clone(),
         request_id,
@@ -1884,7 +2204,7 @@ pub fn plan_generation_window(
         instruction_targets: Some(instruction_targets),
         context: ctx.clone(),
         logical,
-        category: ReportCategory::Assistant,
+        category,
         attempt,
         request: inference,
         nested: None,

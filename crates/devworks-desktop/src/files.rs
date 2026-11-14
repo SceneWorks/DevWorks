@@ -1,6 +1,7 @@
 //! The desktop crate's only way to read a local file it did not create: regular files only,
 //! never blocking on or following into special files, and never reading past a bound. Picked,
-//! dropped and pasted attachments, their previews and the saved window state all read here.
+//! dropped and pasted attachments, their previews, picked add-on bundles and the saved window
+//! state all read here.
 use std::io::Read;
 use std::path::Path;
 
@@ -55,6 +56,41 @@ pub fn read_regular(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
         return Err(too_large());
     }
     Ok(bytes)
+}
+
+/// SHA-256 (lowercase hex) and length of a regular file of at most `max` bytes, opened through
+/// [`open_regular`]; a larger file, or one that grows past `max` while it is read, is refused
+/// with `FileTooLarge`.
+pub fn sha256_regular(path: &Path, max: u64) -> std::io::Result<(String, u64)> {
+    use sha2::{Digest, Sha256};
+    let too_large = || {
+        std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            format!("larger than {max} bytes"),
+        )
+    };
+    let (file, len) = open_regular(path)?;
+    if len > max {
+        return Err(too_large());
+    }
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut n = 0u64;
+    // One byte past the limit detects a file that grew since it was checked.
+    let mut f = file.take(max.saturating_add(1));
+    loop {
+        let read = f.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+        n += read as u64;
+    }
+    if n > max {
+        return Err(too_large());
+    }
+    let digest = hasher.finalize();
+    Ok((digest.iter().map(|b| format!("{b:02x}")).collect(), n))
 }
 
 #[cfg(test)]

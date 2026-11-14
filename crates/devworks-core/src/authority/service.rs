@@ -22,7 +22,7 @@ use crate::protocol::data::{ArtifactCommand, ArtifactDeletion, ArtifactQuery, Gi
 use crate::protocol::provider::UserContent;
 use crate::protocol::records::BrowserLocation;
 use crate::protocol::{ActorId, EventId, Id, ProjectId, RootId, Subject};
-use crate::registry::{self, Mode};
+use crate::registry::{self, AssignmentScope, Mode};
 use crate::settings::catalog::AgentRole;
 use crate::settings::service::PrincipalRoles;
 use serde::{Deserialize, Serialize};
@@ -122,7 +122,7 @@ fn deny(reason: DenialReason) -> Denied {
 fn reviewed_verdict(verdict: Verdict, operation: &str) -> Verdict {
     match verdict {
         Verdict::Allow => Verdict::NeedsGrant {
-            kind: if policy::NATIVE_EXECUTION.contains(&operation) {
+            kind: if registry::find(operation).is_some_and(|d| d.native_execution) {
                 GrantKind::NativeExecution
             } else {
                 GrantKind::Operation
@@ -189,8 +189,8 @@ pub struct EffectivePermissions {
 pub struct HostAuthority<'a> {
     pub store: &'a dyn ApplicationStore,
     pub clock: &'a dyn Clock,
-    /// Branch names protected in addition to `main`/`master`, for example remote default
-    /// branches the Git adapter knows.
+    /// Branch names protected in addition to `main`/`master` and the default branch of the
+    /// repository a typed push targets (which the authority reads from the store itself).
     pub protected_branches: &'a [String],
 }
 
@@ -342,43 +342,20 @@ fn agent_assignment_scope(
     let Some(root) = ctx.root_id() else {
         return Ok(());
     };
-    if !matches!(
-        request.input,
-        OperationInput::Tasks(_)
-            | OperationInput::Approvals(_)
-            | OperationInput::Artifacts(_)
-            | OperationInput::Features(_)
-            | OperationInput::Issues(_)
-            | OperationInput::Jobs(_)
-            | OperationInput::NextWork(_)
-            | OperationInput::Runs(_)
-            | OperationInput::History(_)
-            | OperationInput::Indexing(_)
-            | OperationInput::Knowledge(
-                knowledge::Input::Diagnostics(_) | knowledge::Input::ImportUserData(_)
-            )
-            | OperationInput::Git(git::Input::Commit(_) | git::Input::PullRequest(_))
-            | OperationInput::Browser(browser::Input::Navigate(_) | browser::Input::Upload(_))
-            | OperationInput::Sessions(sessions::Input::AppendMessage(_))
-    ) {
-        return Ok(());
-    }
-    // A root lineage without a delegated assignment retains the pre-existing policies.
-    // New coordinator/Worker turns carry an assignment below.
-    if matches!(
-        request.input,
-        OperationInput::Artifacts(_)
-            | OperationInput::Jobs(_)
-            | OperationInput::Approvals(_)
-            | OperationInput::Git(git::Input::Commit(_) | git::Input::PullRequest(_))
-            | OperationInput::Browser(browser::Input::Navigate(_) | browser::Input::Upload(_))
-            | OperationInput::Sessions(sessions::Input::AppendMessage(_))
-            | OperationInput::Knowledge(
-                knowledge::Input::Diagnostics(_) | knowledge::Input::ImportUserData(_)
-            )
-    ) && assignment.is_none()
-    {
-        return Ok(());
+    match request.descriptor.assignment_scope {
+        // Project-scoped operations; administration commands were refused to root-bound agents
+        // by policy, so only their queries reach here.
+        AssignmentScope::Project | AssignmentScope::Administration => return Ok(()),
+        // A root lineage without a delegated assignment retains the pre-existing policies.
+        // New coordinator/Worker turns carry an assignment below.
+        AssignmentScope::Assignment | AssignmentScope::AssignmentDenied if assignment.is_none() => {
+            return Ok(());
+        }
+        AssignmentScope::Root
+        | AssignmentScope::Coordinator
+        | AssignmentScope::RootDenied
+        | AssignmentScope::Assignment
+        | AssignmentScope::AssignmentDenied => {}
     }
     let assignment_id = ctx
         .assignment_id()
@@ -773,13 +750,36 @@ fn agent_assignment_scope(
             },
         },
         OperationInput::Indexing(_) => false,
-        _ => true,
+        // An operation whose assignment scope needs its target checked, but that has no check
+        // here, is outside every assignment.
+        _ => false,
     };
     if allowed {
         Ok(())
     } else {
         Err(DenialReason::OutOfAssignmentScope)
     }
+}
+
+/// `configured`, plus the protected branches of the repository a typed Git push targets.
+fn request_protected_branches(
+    s: &dyn ReadSnapshot,
+    input: &crate::operations::OperationInput,
+    configured: &[String],
+) -> Result<Vec<String>, StorageError> {
+    use crate::operations::{OperationInput, git};
+    use crate::protocol::data::GitCommand;
+    let mut protected = configured.to_vec();
+    if let OperationInput::Git(git::Input::Push(push)) = input
+        && let GitCommand::Push { worktree_id, .. } = &push.command
+        && let Some(tree) = s.git().git_worktree(worktree_id)?
+    {
+        protected.extend(policy::repository_protected_branches(
+            s,
+            &tree.repository_id,
+        )?);
+    }
+    Ok(protected)
 }
 
 pub(crate) fn decide_in(
@@ -803,6 +803,9 @@ pub(crate) fn decide_in(
     }
     let binding = bound(s, ctx).map_err(unavailable)?;
     let policy = resolve_policy(s.configuration(), ctx.project_id()).map_err(unavailable)?;
+    // A pushed ref is also protected when it is its repository's default branch.
+    let protected_branches =
+        &request_protected_branches(s, request.input, protected_branches).map_err(unavailable)?;
     let mut verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, protected_branches);
     if matches!(verdict, Verdict::Allow | Verdict::NeedsGrant { .. }) {
         agent_assignment_scope(s, ctx, request).map_err(deny)?;
@@ -1159,7 +1162,7 @@ pub(crate) fn record(
     if let Some(map) = payload.as_object_mut() {
         map.insert(
             "principalKind".into(),
-            json!(format!("{:?}", ctx.principal_kind())),
+            json!(ctx.principal_kind().as_str().to_string()),
         );
         map.insert("invocationId".into(), json!(ctx.invocation_id().as_str()));
         let sources: Vec<&str> = ctx.authority_sources().iter().map(Id::as_str).collect();
@@ -1319,7 +1322,7 @@ fn mint_grant_in(
         GrantKind::Operation => {}
         GrantKind::NativeExecution => {
             if binding.request_digest.is_none()
-                || !policy::NATIVE_EXECUTION.contains(&binding.operation.as_str())
+                || !registry::find(&binding.operation).is_some_and(|d| d.native_execution)
             {
                 return Err(AdminError::Invalid(
                     "a native grant binds one exact native execution request",

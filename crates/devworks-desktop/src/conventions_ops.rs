@@ -1,8 +1,27 @@
 //! Frames and typed projections for the shared convention owner. No native second store.
 use crate::{
-    backend::Backend,
+    backend::{Backend, screen_slot},
     ops::{self, Failure},
 };
+
+/// The convention requests the screen waits for, each under its scope key. The names are
+/// persisted (see [`crate::backend::Slot`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ConventionsSlot {
+    /// A Knowledge listing page (its request generation).
+    ConventionsList(String, u64, bool, bool),
+    ConventionRead(String, u64),
+    ConventionEditor(String, String, u64),
+    ConventionVersions(String, u64, bool),
+    ConventionResources(String, u64, bool),
+    ConventionParents(String, String, u64, bool),
+    ConventionCommand(String, String),
+    ConventionOperation(String, String),
+    ConventionPrepare(String, String),
+    ConventionArtifact(String, String),
+    ConventionTransfer(String, String),
+}
+screen_slot!(ConventionsSlot, Conventions);
 use devworks_core::{
     gateway::{CommandOutcome, QueryOutcome},
     protocol::{

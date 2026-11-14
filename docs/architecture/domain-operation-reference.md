@@ -506,7 +506,7 @@ All 376 qualified operations have typed input/result candidates. Existing input 
 | `process.execute` | **Command**<br>`spec`: `ProcessSpec` | `ProcessRecord` |
 | `process.output` | **Query**<br>`processId`: `Id`<br>`afterBytes`: `Counter`<br>`maxBytes`: `ByteLimit` | `ProcessOutput` |
 | `process.cancel` | **Command**<br>`processId`: `Id`<br>`expectedRevision`: `Revision` | `ProcessRecord` |
-| `process.install_project_dependencies` | **Command**<br>`repositoryId`: `Id`<br>`expectedRevision`: `Revision`<br>`manifest`: `ArtifactRef`<br>`profile`: `ToolProfile` | `ProcessRecord` |
+| `process.install_project_dependencies` | **Command**<br>`repositoryId`: `Id`<br>`expectedRevision`: `Revision`<br>`manifest`: `ArtifactRef`<br>`profile`: `ToolProfile`<br>`allowScripts`: `?bool`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `ProcessRecord` |
 | `process.request_system_install` | **Command**<br>`packageSpec`: `ArtifactRef`<br>`contentDigest`: `Digest`<br>`reason`: `Content` | `ProposalRecord` |
 
 ### Web
@@ -728,7 +728,7 @@ All 376 qualified operations have typed input/result candidates. Existing input 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
 | `watch.create` | **Command**<br>`process`: `?ProcessSpec`<br>`probe`: `?WatchProbe`<br>`timer`: `?WatchTimer`<br>`file`: `?WatchFile`<br>`matching`: `?WatchMatch`<br>`tailBytes`: `?ByteLimit`<br>`maxLifetimeMs`: `?Counter`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
-| `watch.list` | **Query**<br>`sessionId`: `?Id`<br>`states`: `?Items<WatcherState>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherPage` |
+| `watch.list` | **Query**<br>`sessionId`: `?Id`<br>`featureId`: `?RootId`<br>`states`: `?Items<WatcherState>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherPage` |
 | `watch.inspect` | **Query**<br>`watcherId`: `Id`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
 | `watch.cancel` | **Command**<br>`watcherId`: `Id`<br>`expectedRevision`: `Revision`<br>`stopProcess`: `bool`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
 
@@ -5593,6 +5593,17 @@ Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `Conven
 | `items` | `Rows<WatcherRecord>` |
 | `nextCursor` | `?Cursor` |
 
+### WatchOwner
+
+| Field | Type |
+| --- | --- |
+| `agentId` | `ActorId` |
+| `workId` | `?RootId` |
+| `workTitle` | `?Text` |
+| `featureId` | `?RootId` |
+| `featureTitle` | `?Text` |
+| `assignmentId` | `?AssignmentId` |
+
 ### WatcherRecord
 
 | Field | Type |
@@ -5608,9 +5619,11 @@ Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `Conven
 | `matches` | `?Counter` |
 | `sessionId` | `Id` |
 | `projectId` | `?ProjectId` |
+| `owner` | `?WatchOwner` |
 | `createdAtMs` | `Counter` |
 | `settledAtMs` | `?Counter` |
 | `elapsedMs` | `Counter` |
+| `lastPolledAtMs` | `?Counter` |
 | `outcome` | `?WatchOutcome` |
 | `durationMs` | `?Counter` |
 | `outputTail` | `?Content` |

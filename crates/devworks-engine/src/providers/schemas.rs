@@ -33,7 +33,7 @@ fn mode_namespace(mode: Mode) -> &'static str {
     }
 }
 
-fn builtin_operation(capability: &str) -> Option<(&str, Option<Mode>)> {
+pub(crate) fn builtin_operation(capability: &str) -> Option<(&str, Option<Mode>)> {
     if let Some(operation) = capability.strip_prefix("devworks-query/") {
         Some((operation, Some(Mode::Query)))
     } else if let Some(operation) = capability.strip_prefix("devworks-command/") {
@@ -481,7 +481,7 @@ impl RegisteredSchemas {
         Ok(bytes)
     }
 }
-fn schema_ref(
+pub(crate) fn schema_ref(
     op: &str,
     mode: Mode,
     revision: SchemaRevision,
@@ -639,9 +639,9 @@ impl SchemaDocuments for RegisteredSchemas {
                     .descriptor
                     .as_ref()
                     .ok_or(ProviderError::MaterialUnavailable)?;
-                let canonical = devworks_core::jcs::canonicalize(descriptor)
+                let digest = devworks_core::fingerprint::canonical_digest(descriptor)
                     .map_err(|_| ProviderError::MaterialUnavailable)?;
-                if sha256_hex(canonical.as_bytes()) != contribution.contract_digest
+                if digest != contribution.contract_digest
                     || descriptor["meta"]["inputSchema"] != json!(alias.input_schema)
                 {
                     return Err(ProviderError::MaterialUnavailable);

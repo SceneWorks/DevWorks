@@ -101,6 +101,22 @@ pub fn check_value(d: &SettingDescriptor, v: &Value) -> Vec<Issue> {
             )),
             None => out.push(ty("instruction text")),
         },
+        ValueKind::ExecutableNames => match v.as_array() {
+            Some(items) => {
+                let mut seen = std::collections::HashSet::new();
+                if items.len() > 64
+                    || !items.iter().all(|x| {
+                        x.as_str()
+                            .is_some_and(|s| crate::protocol::Id::new(s).is_ok() && seen.insert(s))
+                    })
+                {
+                    out.push(ty(
+                        "at most 64 unique command names (letters, digits, _ and -)",
+                    ));
+                }
+            }
+            None => out.push(ty("a list of command names")),
+        },
         ValueKind::ModelList => match v.as_array() {
             Some(items) => {
                 let valid_id = |x: &Value| {
@@ -152,10 +168,7 @@ pub fn check_value(d: &SettingDescriptor, v: &Value) -> Vec<Issue> {
                         && location.len() <= 2048
                         && (location.starts_with("https://")
                             || std::path::Path::new(location).is_absolute());
-                    let key_ok = public.len() == 64
-                        && public
-                            .bytes()
-                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+                    let key_ok = crate::fingerprint::is_lower_hex(public, 64);
                     if !location_ok || !key_ok {
                         out.push(Issue::blocking(
                             key,

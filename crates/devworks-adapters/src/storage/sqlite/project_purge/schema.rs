@@ -31,13 +31,17 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// knowledge_challenges, which only update the claim those rows already belong to; and moves
 /// each outgoing MCP server's catalog into its own configuration_revisions namespace in the same
 /// scope. It adds no table or ownership edge: the tallies are columns of their claim, and the
-/// catalogs are configuration rows of the scope that already owns the server. Migration 55 drops
-/// session_usage and job_run_usage, with their policy rows, after copying their items into
-/// usage_origins; adds usage_origins.committed_seq, four usage_origins indexes and the recreated
-/// update trigger. usage_origins keeps its project owner (`project_id`), so a project's purge
-/// removes the copied rows with it, and adds no table or ownership edge.
+/// catalogs are configuration rows of the scope that already owns the server. Migration 55 adds
+/// two partial indexes, owned_process_root_unsettled and owned_containers_root_agent_work; it
+/// adds no table, column or ownership edge, and both tables keep their purge policy. Migration 56
+/// adds the nullable default_ref column to repository_sources; the row keeps its owner, and the
+/// migration adds no table or ownership edge. Migration 57 drops session_usage and
+/// job_run_usage, with their policy rows, after copying their items into usage_origins; adds
+/// usage_origins.committed_seq, four usage_origins indexes and the recreated update trigger.
+/// usage_origins keeps its project owner (`project_id`), so a project's purge removes the copied
+/// rows with it, and adds no table or ownership edge.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "2b58b536e0880b6c5a0f1a0ae34deb4ad63df8f67c0b12259c91a2a5050a4d81";
+    "742cb9e72c67fa0d852a15c656d83e589ae6c0db89e708fbde54edbf74e2cbc0";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

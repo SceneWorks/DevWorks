@@ -30,13 +30,12 @@
 use super::catalog::{Adoption, AgentRole, catalog, descriptor};
 use super::model::{
     self, AdoptedRevisions, Layer, NAMESPACE, Plan, body, chain, current_chain, current_layer,
-    effective_values, layer_at, layers_at, plan, restore_assignments, scope_of,
+    effective_values, layer_at, layers_at, plan, restore_assignments,
 };
 use super::validate::{Issue, codes};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
-use crate::jcs;
 use crate::operations::{OperationInput, settings as ops};
 use crate::ports::storage::{
     ConfigRevision, ConfigScope, ConfigurationRead, NewEvent, NewProposal, ProposalChange,
@@ -355,7 +354,7 @@ fn page(items: Vec<SettingEntry>) -> Page<SettingEntry> {
 
 fn digest(entries: &[SettingAssignment]) -> String {
     let v = serde_json::to_value(entries).expect("assignments");
-    sha256_hex(jcs::canonicalize(&v).expect("bounded JSON").as_bytes())
+    crate::fingerprint::canonical_digest(&v).expect("bounded JSON")
 }
 
 /// How a principal's save is handled.
@@ -442,7 +441,7 @@ fn save(
     roles: &dyn PrincipalRoles,
     input: &ops::SaveRevisionInput,
 ) -> Result<DomainDecision, Failure> {
-    let scope = scope_of(&input.scope);
+    let scope = crate::ports::storage::ConfigScope::from(&input.scope);
     require_scope(&*tx.configuration(), &scope)?;
     let writer = writer(tx, ctx, roles)?;
     let current = current_layer(&*tx.configuration(), &scope)?;
@@ -1246,9 +1245,9 @@ impl QueryHandler for SettingsService {
         };
         let read = snapshot.configuration();
         let scope = match input {
-            ops::Input::ReadEffective(i) => scope_of(&i.scope),
-            ops::Input::Validate(i) => scope_of(&i.scope),
-            ops::Input::ExplainSource(i) => scope_of(&i.scope),
+            ops::Input::ReadEffective(i) => crate::ports::storage::ConfigScope::from(&i.scope),
+            ops::Input::Validate(i) => crate::ports::storage::ConfigScope::from(&i.scope),
+            ops::Input::ExplainSource(i) => crate::ports::storage::ConfigScope::from(&i.scope),
             ops::Input::SaveRevision(_) => {
                 return Err(self.fault(Refusal::new(
                     DomainErrorCode::UnsupportedCapability,
@@ -1341,5 +1340,29 @@ pub fn max_subagents(
         .filter(|n| *n > 0)
         .ok_or_else(|| {
             StorageError::InvalidRecord("effective subagent allowance is a positive integer".into())
+        })
+}
+
+/// The workspace's context compaction threshold: the percentage of the routed model's context
+/// window at which an agent's context is compacted before its next provider request.
+pub fn compaction_threshold_percent(read: &dyn ConfigurationRead) -> Result<i64, StorageError> {
+    let source = effective_entries(
+        read,
+        &ConfigScope::Workspace,
+        &["agents.compactionThresholdPercent"],
+    )
+    .map_err(|error| match error {
+        Failure::Storage(error) => error,
+        _ => StorageError::InvalidRecord("effective compaction threshold".into()),
+    })?
+    .remove(0);
+    source
+        .value
+        .value
+        .0
+        .as_i64()
+        .filter(|n| (1..=100).contains(n))
+        .ok_or_else(|| {
+            StorageError::InvalidRecord("effective compaction threshold is a percentage".into())
         })
 }

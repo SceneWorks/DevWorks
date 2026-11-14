@@ -239,9 +239,12 @@ impl GitService {
         let force = matches!(mode, PushMode::ForceWithLease);
         if force
             && (expected_remote.is_none()
-                || matches!(
-                    target_ref.to_ascii_lowercase().as_str(),
-                    "refs/heads/main" | "refs/heads/master"
+                || crate::authority::policy::protected_ref(
+                    target_ref,
+                    &crate::authority::policy::repository_protected_branches_in(
+                        tx,
+                        &tree.repository_id,
+                    )?,
                 ))
         {
             return Err(refuse(

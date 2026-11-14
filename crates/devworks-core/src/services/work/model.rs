@@ -1,5 +1,4 @@
 //! The stored shape of work (the brief, the plan slot bodies) and its wire projection.
-use crate::fingerprint::sha256_hex;
 use crate::ports::storage::{FEATURE, StorageError, StoredWork, WORKFLOW_QUEUE, WorkRead};
 use crate::protocol::data::{Coverage, CoverageState};
 use crate::protocol::provider::{ArtifactRef, Digest};
@@ -105,11 +104,7 @@ pub fn pending_of(v: Option<&Value>) -> Option<PendingPlan> {
 }
 
 fn digest_of(v: &Value) -> String {
-    sha256_hex(
-        crate::jcs::canonicalize(v)
-            .unwrap_or_else(|_| v.to_string())
-            .as_bytes(),
-    )
+    crate::fingerprint::canonical_digest_or_text(v)
 }
 /// The binding digest of a plan draft (internal conflict/approval token, not a version).
 pub fn plan_digest(d: &PlanDraft) -> String {

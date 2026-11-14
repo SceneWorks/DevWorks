@@ -1,6 +1,6 @@
 # Usage, prices, and budget coverage
 
-Usage reports belong to the actual accounting producer installed in this build. If the screen reports unavailable accounting, do not interpret a blank report as free usage or zero activity. A configured model price is an estimate source, not a provider receipt.
+Usage reports belong to the actual accounting producer installed in this build. Code review usage holds the inference of agents bound to the code-review role. Repository analysis usage is not yet active: no DevWorks repository analysis makes model requests yet, so that report shows only imported or unattributed usage. If the screen reports unavailable accounting, do not interpret a blank report as free usage or zero activity. A configured model price is an estimate source, not a provider receipt.
 
 ## Interpret available reports
 
@@ -12,6 +12,6 @@ Historical attempts retain the quote and source revision they admitted under. Ch
 
 ## Budgets
 
-Feature caps, when available, reserve and admit work atomically, warn at 75%, and require Continue after a cap stop. Issues and jobs do not acquire feature caps merely because their costs are reported. Unknown price coverage remains visible and does not erase other controls.
+Feature caps, when available, reserve and admit work atomically, warn at 75%, and require Continue after a cap stop. At 75% the feature's coordinator receives a warning in its inbox with the amount spent, the limit and the remaining allowance. Issues and jobs do not acquire feature caps merely because their costs are reported. Unknown price coverage remains visible and does not erase other controls.
 
 See [Routing](help:routing-context), [Settings](help:settings-Routing), and [Recovery](help:recovery) for current availability and uncertain outcomes.

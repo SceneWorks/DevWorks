@@ -41,7 +41,9 @@
 //!   committed package registry, provides the quiescence barrier the package service publishes
 //!   behind, and brokers package requests: an event-handler invocation changes state and admits
 //!   effects only through `broker.commit_event` (never `broker.state` compare-and-set or an
-//!   effectful `broker.call`). See the module documentation and core
+//!   effectful `broker.call`), and `broker.call` reaches only what the invocation's grants
+//!   allow, as its invoking principal. An agent's package tool call runs as a durable
+//!   `package.invoke` operation ([`package_tools`]). See the module documentation and core
 //!   `services::packages` (trust model: a helper is a separate process, not an OS sandbox).
 //! * **Receipt replies.** [`replies::reply_consumer`] registers core's receipt reply publisher
 //!   as an asynchronous consumer: every recorded receipt's durable typed reply is published
@@ -80,8 +82,10 @@
 //! process launcher and power facility arrive as the core `ProcessHost` and `PowerPort` ports, so
 //! the engine still depends on no adapter) and, in this fixed order:
 //!
-//! 1. **Composes delivery.** The dispatcher is built with every required consumer — the receipt
-//!    reply consumer ([`replies::reply_consumer`], over the composition's one artifact service and
+//! 1. **Builds every engine-owned service** before any recovery step, each configured through
+//!    its constructor; recovery and the background loops then run over that finished set.
+//!    Delivery is composed here: the dispatcher is built with every required consumer — the
+//!    receipt reply consumer ([`replies::reply_consumer`], over the composition's one artifact service and
 //!    store) — plus the caller's consumers. A missing required consumer would leave every
 //!    `Recorded` receipt's reply pending forever, so the caller cannot omit it; a caller consumer
 //!    reusing its name is refused. Nothing is claimed yet.
@@ -204,6 +208,7 @@ pub mod agent_supervisor;
 pub mod agent_turns;
 pub mod approvals;
 pub mod browser;
+mod compaction;
 mod context_epoch;
 pub mod conventions;
 pub mod desktop;
@@ -221,12 +226,14 @@ pub mod mcp_sampling;
 pub mod notifications;
 pub mod package;
 pub mod package_host;
+pub mod package_tools;
 pub mod replies;
 pub mod resources;
 pub mod runs;
 pub mod runtime;
 mod store;
 mod tool_turn;
+pub mod turn_error;
 pub use tool_turn::ResolvedToolCall;
 pub mod usage;
 pub mod watch;

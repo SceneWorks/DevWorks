@@ -129,6 +129,9 @@ pub struct StoredRepositorySource {
     pub object_format: String,
     /// The `origin` remote as configured (never stored when it embeds credentials).
     pub remote_url: Option<String>,
+    /// The repository's default branch (`refs/heads/...`): the branch the `origin` remote's
+    /// HEAD names, as the local clone records it. Absent when the clone records none.
+    pub default_ref: Option<String>,
     /// Advances whenever the observed identity changes.
     pub revision: i64,
     pub observed_at_ms: i64,

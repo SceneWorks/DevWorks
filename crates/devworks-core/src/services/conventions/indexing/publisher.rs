@@ -88,7 +88,7 @@ fn current(
         .actors()
         .actor_kind(&job.actor)?
         .ok_or(StorageError::ScopeDenied)?;
-    if format!("{kind:?}") != job.actor_kind {
+    if kind.as_str() != job.actor_kind {
         return Err(StorageError::ScopeDenied);
     }
     let context =
@@ -389,13 +389,10 @@ impl IndexService {
                 .into_iter()
                 .map(|(term, frequency)| ConventionTerm { term, frequency })
                 .collect::<Vec<_>>();
-            let digest = sha256_hex(
-                crate::jcs::canonicalize(
-                    &serde_json::to_value(&terms).map_err(|_| invalid("index terms"))?,
-                )
-                .map_err(|_| invalid("index terms"))?
-                .as_bytes(),
-            );
+            let digest = crate::fingerprint::canonical_digest(
+                &serde_json::to_value(&terms).map_err(|_| invalid("index terms"))?,
+            )
+            .map_err(|_| invalid("index terms"))?;
             let (g, id) = (generation.clone(), id.clone());
             self.index_write(run, move |tx| {
                 if section {

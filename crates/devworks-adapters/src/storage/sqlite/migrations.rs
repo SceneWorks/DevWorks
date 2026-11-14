@@ -635,14 +635,32 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "0368b2a55b935d1720e26269a5b7805a37df20d81a0f4e210611cd2c6eb452c2",
         rebuilds_tables: false,
     },
+    // Two partial indexes only: prior builds read and write the store unchanged.
+    Migration {
+        version: 55,
+        minimum_reader: 54,
+        minimum_writer: 54,
+        sql: include_str!("migrations/0055_root_activity_indexes.sql"),
+        expected_sha256: "5aac48f5b8bb5d074caf82c25eb26595cc6cfce2f04831854edff3eb1e3c5e0e",
+        rebuilds_tables: false,
+    },
+    // A prior writer would refresh a repository source without its default branch.
+    Migration {
+        version: 56,
+        minimum_reader: 56,
+        minimum_writer: 56,
+        sql: include_str!("migrations/0056_repository_default_branch.sql"),
+        expected_sha256: "432211adc752b138515ce31f0fec31e1d36e0ff55fc4f7b586a6d15e33276aca",
+        rebuilds_tables: false,
+    },
     // Prior builds read and write session_usage and job_run_usage, so neither a prior reader
     // nor a prior writer may open the store. Source rows without a usage origin are copied
     // into usage_origins first; no table another table references is rebuilt.
     Migration {
-        version: 55,
-        minimum_reader: 55,
-        minimum_writer: 55,
-        sql: include_str!("migrations/0055_drop_usage_copies.sql"),
+        version: 57,
+        minimum_reader: 57,
+        minimum_writer: 57,
+        sql: include_str!("migrations/0057_drop_usage_copies.sql"),
         expected_sha256: "bc4b4453bc4f1b35027b1655b588e221013752dbfd3ffe79db0ef0e0844a3885",
         rebuilds_tables: false,
     },

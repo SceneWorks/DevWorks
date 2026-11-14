@@ -1,6 +1,6 @@
 //! Native review and client coordination for the exact purge manifest.
 use super::*;
-use crate::{conventions_screen::Scope, project_purge::Live};
+use crate::project_purge::Live;
 use devworks_core::{
     ports::storage::ProjectPurgeClientScope,
     protocol::records::{ProjectPurgeEntry, ProjectPurgeManifest, ProjectRecord, PurgePhase},
@@ -77,36 +77,6 @@ impl Shell {
         }
         for (p, f) in &self.projects.base {
             put(p, "directory", json!(f.buffer));
-        }
-        for (scope, state) in &self.conventions.states {
-            let p = match scope {
-                Scope::Project(p) => p.as_str(),
-                Scope::Workspace => "",
-            };
-            {
-                let draft = |d: &crate::conventions_screen::Draft| json!({"title":d.title,"slug":d.slug,"base":d.base,"anchor":d.anchor,"markdown":*d.markdown,"raw":*d.raw,"parent":d.parent,"path":d.parent_path,"applicability":d.applicability,"editorState":format!("{d:?}")});
-                put(
-                    p,
-                    "conventions",
-                    json!({"new":state.new_draft.as_ref().map(draft),"drafts":state.drafts.iter().map(|(id,d)|(id,draft(d))).collect::<BTreeMap<_,_>>(),"query":state.text,"slug":state.slug_input,"path":state.path_input,"upload":state.upload.as_ref().map(|d|json!({"base":d.base,"path":d.path.to_string_lossy(),"name":d.name,"mediaType":d.media_type})),"resources":state.resource_drafts.iter().map(|(k,d)|(k,json!({"record":d.resource,"base":d.base,"name":d.name,"mediaType":d.media_type,"retired":d.retired,"replacement":d.replacement.as_ref().map(|p|p.to_string_lossy())}))).collect::<BTreeMap<_,_>>(),"moves":state.move_drafts.iter().map(|(k,d)|(k,json!({"base":d.base,"anchor":d.anchor,"scope":d.scope,"parent":d.parent,"order":d.order}))).collect::<BTreeMap<_,_>>()}),
-                );
-            }
-        }
-        for (scope, state) in &self.conventions.states {
-            let owner = match scope {
-                Scope::Project(p) => p.as_str(),
-                Scope::Workspace => "",
-            };
-            let paths = live.paths.entry(owner.into()).or_default();
-            if let Some(upload) = &state.upload {
-                paths.push(upload.path.clone());
-            }
-            paths.extend(
-                state
-                    .resource_drafts
-                    .values()
-                    .filter_map(|d| d.replacement.clone()),
-            );
         }
         if let Some(p) = self.knowledge.purge_owner() {
             if let Some(d) = &self.knowledge.draft {
@@ -221,11 +191,6 @@ impl Shell {
             self.selected_project = None;
         }
         self.work.remove_purged(scope);
-        self.conventions.states.remove(&Scope::Project(p.into()));
-        if self.conventions.scope == Scope::Project(p.into()) {
-            self.conventions.scope = Scope::Workspace;
-        }
-        self.conventions.projects.retain(|(id, _)| id != p);
         if self.knowledge.purge_owner() == Some(p) {
             self.knowledge = KnowledgeScreen::new();
         }
@@ -252,13 +217,6 @@ impl Shell {
             self.projects.indexing.message = None;
         }
         self.projects.indexing.runs = Default::default();
-        self.usage.data = None;
-        self.usage.options.clear();
-        self.usage.applied = None;
-        self.usage.loading = false;
-        if self.usage.draft.project.as_deref() == Some(p) {
-            self.usage.draft.project = None;
-        }
 
         self.knowledge.projects.retain(|(id, _)| id != p);
         if let Some(project) = &mut self.purge.project
@@ -282,32 +240,6 @@ impl Shell {
             self.jobs = Default::default();
         }
         self.jobs.form = job_form;
-        if self.graph.project.as_deref() == Some(p) {
-            self.graph = Default::default();
-        }
-        if self.databases.project.as_deref() == Some(p) {
-            self.databases.project = None;
-            self.databases.clear_explorer();
-            self.databases.loaded = false;
-        }
-        if let Some(d) = &mut self.databases.draft {
-            if let Some(a) = d
-                .config
-                .get_mut("projectAccess")
-                .and_then(|v| v.as_array_mut())
-            {
-                a.retain(|v| v.get("projectId").and_then(|v| v.as_str()) != Some(p));
-            }
-            if d.scope.as_deref() == Some(p) {
-                d.scope = None;
-            }
-        }
-        self.artifacts
-            .items
-            .retain(|r| !scope.deleted_artifact_ids.contains(&r.artifact.artifact_id));
-        self.browser_parts.remove(&Some(p.into()));
-        self.browser = Default::default();
-        self.resources = Default::default();
         if self.work.board.as_deref().is_some_and(work) {
             self.work.board = None;
         }

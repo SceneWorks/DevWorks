@@ -310,7 +310,7 @@ pub fn record_link(
         payload: json!({"kind": new.kind.as_str(), "targetKind": target_kind, "targetId": target_id,
             "supersedes": new.supersedes.as_ref().map(Id::as_str),
             "repositoryId": repository_id.as_ref().map(Id::as_str), "revision": revision,
-            "principalKind": format!("{:?}", ctx.principal_kind()),
+            "principalKind": ctx.principal_kind().as_str().to_string(),
             "sessionId": ctx.session_id().map(Id::as_str)}),
     })?;
     let link = StoredLink {
@@ -1226,10 +1226,9 @@ impl HistoryService {
                 ))
             }
             (None, None, Some(true)) => {
-                let authorized =
-                    crate::services::artifacts::authorized_scope(snapshot.authority(), ctx)?;
+                let authorized = crate::services::knowledge::reach(snapshot.authority(), ctx)?;
                 if ctx.project_id().is_some()
-                    || authorized != crate::services::artifacts::AuthorizedScope::Workspace
+                    || authorized != crate::authority::reach::Reach::Workspace
                 {
                     return Err(Refusal::new(
                         DomainErrorCode::PermissionDenied,

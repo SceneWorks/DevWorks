@@ -101,7 +101,7 @@ impl ImportService {
         let job = Job {
             kind: KIND.into(),
             actor: ctx.principal().clone(),
-            actor_kind: format!("{:?}", ctx.principal_kind()),
+            actor_kind: ctx.principal_kind().as_str().to_string(),
             source_context: approvals::save_source_context(ctx),
             fences: command.authorization().fences().to_vec(),
             delivery: delivery.clone(),
@@ -216,8 +216,13 @@ pub(super) fn validate(
         .conventions()
         .convention_import(&op.id)?
         .ok_or_else(|| invalid("missing import"))?;
-    access::scope_in(tx, &ctx, Some(&model::scope(&draft.scope)), true)
-        .map_err(|_| StorageError::ScopeDenied)?;
+    access::scope_in(
+        tx,
+        &ctx,
+        Some(&crate::protocol::data::DataScope::from(&draft.scope)),
+        true,
+    )
+    .map_err(|_| StorageError::ScopeDenied)?;
     if tx
         .queue()
         .entry(&job.delivery)?
@@ -230,13 +235,5 @@ pub(super) fn validate(
 }
 
 pub(super) fn principal_kind(value: &str) -> Result<PrincipalKind, StorageError> {
-    Ok(match value {
-        "Human" => PrincipalKind::Human,
-        "Host" => PrincipalKind::Host,
-        "Agent" => PrincipalKind::Agent,
-        "Package" => PrincipalKind::Package,
-        "McpClient" => PrincipalKind::McpClient,
-        "Schedule" => PrincipalKind::Schedule,
-        _ => return Err(StorageError::ScopeDenied),
-    })
+    PrincipalKind::parse(value).ok_or(StorageError::ScopeDenied)
 }

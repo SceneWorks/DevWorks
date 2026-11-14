@@ -34,6 +34,7 @@
 //! identity is `Lost` (its effects are unknown). It then runs the resource boot reconciliation.
 //! Only a person can declare a `Lost` or `Uncertain` tree stopped
 //! ([`ProcessSupervisor::confirm_stopped`]), and that is recorded as their statement.
+pub mod executables;
 pub mod tools;
 use crate::authority::destructive::{FilesystemResolver, ProtectedRoots};
 use crate::authority::redact::Redactor;

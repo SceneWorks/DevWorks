@@ -83,6 +83,7 @@ pub trait ProjectPurgeFiles: Send + Sync {
     fn client_keepers(
         &self,
         _selection: &PurgeFileSelection,
+        _records: &dyn crate::ports::managed_files::PurgeFileRecords,
         paths: &[std::path::PathBuf],
     ) -> Result<Vec<PurgeFileOwner>, PurgeFileFault> {
         if paths.is_empty() {
@@ -97,6 +98,7 @@ pub trait ProjectPurgeFiles: Send + Sync {
     fn inventory(
         &self,
         selection: &PurgeFileSelection,
+        records: &dyn crate::ports::managed_files::PurgeFileRecords,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<PurgeFileSnapshot, PurgeFileFault>;
     /// Recheck one exact witness and remove only that entry. Missing is success;
@@ -105,6 +107,7 @@ pub trait ProjectPurgeFiles: Send + Sync {
     fn remove_reviewed(
         &self,
         witness: &PurgeFileWitness,
+        records: &dyn crate::ports::managed_files::PurgeFileRecords,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<(), PurgeFileFault>;
 }

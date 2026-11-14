@@ -514,7 +514,10 @@ impl PriceService {
                 return RefreshOutcome::Failed("unknown official price provider".into());
             };
             let now = self.clock.now_ms().get();
-            let fetched = source.fetch(provider, now).and_then(|r| {
+            let fetched = source.fetch(provider, now).and_then(|mut r| {
+                if r.provider == provider {
+                    super::derivation::derive_official_tariffs(&mut r)?;
+                }
                 if r.provider != provider
                     || r.source_url != provider.source_url()
                     || r.tariffs.is_empty()
@@ -522,8 +525,7 @@ impl PriceService {
                     || r.verified_at_ms < r.fetched_at_ms
                     || r.parser_version.is_empty()
                     || r.parser_version.len() > 128
-                    || r.source_digest.len() != 64
-                    || !r.source_digest.bytes().all(|b| b.is_ascii_hexdigit())
+                    || !crate::fingerprint::is_sha256_hex(&r.source_digest)
                     || r.effective_date.as_ref().is_some_and(|v| v.len() > 128)
                     || r.verified_at_ms > now
                 {

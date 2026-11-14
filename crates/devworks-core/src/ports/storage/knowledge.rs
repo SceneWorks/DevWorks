@@ -28,6 +28,34 @@ pub enum KnowledgeScope {
     Workspace,
     Project(ProjectId),
 }
+impl From<&crate::protocol::data::DataScope> for KnowledgeScope {
+    fn from(scope: &crate::protocol::data::DataScope) -> Self {
+        match scope {
+            crate::protocol::data::DataScope::Workspace => Self::Workspace,
+            crate::protocol::data::DataScope::Project { project_id } => {
+                Self::Project(project_id.clone())
+            }
+        }
+    }
+}
+impl From<&KnowledgeScope> for crate::protocol::data::DataScope {
+    fn from(scope: &KnowledgeScope) -> Self {
+        match scope {
+            KnowledgeScope::Workspace => Self::Workspace,
+            KnowledgeScope::Project(project_id) => Self::Project {
+                project_id: project_id.clone(),
+            },
+        }
+    }
+}
+impl From<&KnowledgeScope> for super::ConfigScope {
+    fn from(scope: &KnowledgeScope) -> Self {
+        match scope {
+            KnowledgeScope::Workspace => Self::Workspace,
+            KnowledgeScope::Project(project_id) => Self::Project(project_id.clone()),
+        }
+    }
+}
 impl KnowledgeScope {
     /// The stored key: `workspace` or `project:<id>`.
     pub fn key(&self) -> String {

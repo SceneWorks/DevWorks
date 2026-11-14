@@ -11,10 +11,7 @@ use crate::{
     protocol::{
         ActorId, EventId, Id, OperationId, OperationState, ProjectId, StoreId, data::DataScope,
     },
-    services::{
-        approvals,
-        conventions::{access, model},
-    },
+    services::{approvals, conventions::access},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -110,7 +107,8 @@ fn narrow(
             }
         }
     } else {
-        if model::scope_storage(&bound_scope(ctx)) != model::scope_storage(scope)
+        if crate::ports::storage::KnowledgeScope::from(&bound_scope(ctx))
+            != crate::ports::storage::KnowledgeScope::from(scope)
             && !matches!(scope, DataScope::Workspace)
         {
             return Err(StorageError::ScopeDenied);
@@ -183,7 +181,7 @@ fn check(
         .actors()
         .actor_kind(&job.actor)?
         .ok_or(StorageError::ScopeDenied)?;
-    if format!("{kind:?}") != job.actor_kind {
+    if kind.as_str() != job.actor_kind {
         return Err(StorageError::ScopeDenied);
     }
     let context = event_context(tx, &job.event_id, job.selection_revision, &job.actor, kind)?;
@@ -276,7 +274,7 @@ impl IndexService {
             selection_revision: selected_revision,
             source_context: approvals::save_source_context(ctx),
             actor: ctx.principal().clone(),
-            actor_kind: format!("{:?}", ctx.principal_kind()),
+            actor_kind: ctx.principal_kind().as_str().to_string(),
             store_id: ctx.store_id().clone(),
             restore_epoch: ctx.restore_epoch().get(),
             fences: commands::source_fences(tx, ctx)?,

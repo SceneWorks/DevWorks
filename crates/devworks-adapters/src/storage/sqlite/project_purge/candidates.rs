@@ -109,7 +109,7 @@ fn table_rows(
             .map(|byte| format!("{byte:02x}"))
             .collect();
         output.push(ProjectPurgeCandidate {
-            table: table.into(),
+            table: super::record_kind(table)?,
             key_digest,
             row_digest,
         });
@@ -371,7 +371,7 @@ mod tests {
         super::super::guard::register(&c, true).unwrap();
         c.execute_batch("BEGIN IMMEDIATE").unwrap();
         let permits = [super::super::guard::Permit {
-            table: candidate.table.clone(),
+            table: candidate.table.as_str().to_owned(),
             key_digest: candidate.key_digest.clone(),
             action: "Delete".into(),
         }]

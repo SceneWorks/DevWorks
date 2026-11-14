@@ -11,13 +11,14 @@ use crate::fingerprint::sha256_hex;
 use crate::operations::{OperationInput, git, watch};
 use crate::ports::AuthorityRequest;
 use crate::ports::storage::{
-    ConfigScope, ConfigurationRead, GrantKind, PrincipalBinding, StorageError,
+    ConfigScope, ConfigurationRead, GithubRead, GrantKind, PrincipalBinding, ReadSnapshot,
+    StorageError, WriteTransaction,
 };
-use crate::protocol::ProjectId;
 use crate::protocol::data::{GitCommand, PushMode};
-use crate::registry::{AuthorityClass, EffectClass, Mode};
+use crate::protocol::{Id, ProjectId};
+use crate::registry::{AssignmentScope, AuthorityClass, EffectClass, Mode};
 use crate::settings::catalog::{AgentRole, TOOL_OVERRIDES_KEY, descriptor};
-use crate::settings::model::{chain, current_chain, scope_of};
+use crate::settings::model::{chain, current_chain};
 use std::collections::BTreeMap;
 
 /// Setting that selects the access profile (Full is the initial default for new projects).
@@ -41,47 +42,6 @@ pub const PROTECTED_REFS: [&str; 2] = ["refs/heads/main", "refs/heads/master"];
 /// its own egress policy, sends none of the user's credentials and records what it observed as
 /// untrusted evidence, so a read-only reviewer keeps the same selected read tools as every agent.
 pub const UNVERIFIED_READ_FAMILIES: [&str; 4] = ["mcp", "addons", "database", "browser"];
-
-/// Commands that run arbitrary native code with the desktop user's rights. Under Project scope
-/// they need a reviewed native grant, because no confined launcher is qualified; there is no
-/// fallback to Full.
-pub const NATIVE_EXECUTION: [&str; 18] = [
-    "git.worktree",
-    "git.commit",
-    "git.push",
-    "process.execute",
-    // A process watcher launches through process.execute.
-    "watch.create",
-    "process.install_project_dependencies",
-    "containers.build",
-    "containers.pull",
-    "containers.create",
-    "containers.start",
-    "containers.exec",
-    "mcp.connect",
-    "mcp.discover",
-    "addons.install",
-    "addons.update",
-    "addons.enable",
-    "addons.rollback",
-    "addons.configure",
-];
-
-/// Commands a non-human principal may run only with an explicit approval for the exact request:
-/// destructive project and repository-index changes and skill/role activation (archiving fences
-/// and stops a project's work at once, deletion tombstones it, index removal drops a shared
-/// registration's index for every project). `process.request_system_install` only stages a
-/// proposal and performs no installation; its later approval is the human decision.
-/// The user's own command is its confirmation.
-pub const APPROVAL_REQUIRED: [&str; 5] = [
-    "projects.archive",
-    "projects.delete",
-    "repositories.remove_index",
-    // Activation of a skill or role revision: agent content takes effect only by replay of an
-    // exact human approval of the proposed revision (SKILL-07, SET-05).
-    "skills.rollback",
-    "roles.rollback",
-];
 
 /// The selectable access profiles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -182,7 +142,7 @@ pub fn resolve_policy(
         Some(e) => (
             e.value.value.0.as_str().and_then(AccessProfile::parse),
             Some(Provenance {
-                scope: scope_of(&e.source_scope),
+                scope: crate::ports::storage::ConfigScope::from(&e.source_scope),
                 revision: e.revision.get(),
             }),
         ),
@@ -430,6 +390,50 @@ pub fn protected_ref(target: &str, extra: &[String]) -> bool {
         .any(|p| p == name)
 }
 
+/// The branches protected in `repository` besides `main` and `master`: its default branch, as
+/// discovery last recorded it from the clone (`refs/remotes/origin/HEAD`), or else as GitHub
+/// reported it for the repository's active binding.
+pub fn repository_protected_branches(
+    s: &dyn ReadSnapshot,
+    repository: &Id,
+) -> Result<Vec<String>, StorageError> {
+    let local = s
+        .indexing()
+        .repository_source(repository)?
+        .and_then(|source| source.default_ref);
+    default_branch(local, s.github(), repository)
+}
+
+/// [`repository_protected_branches`] inside a unit of work.
+pub fn repository_protected_branches_in(
+    tx: &mut dyn WriteTransaction,
+    repository: &Id,
+) -> Result<Vec<String>, StorageError> {
+    let local = tx
+        .indexing()
+        .repository_source(repository)?
+        .and_then(|source| source.default_ref);
+    default_branch(local, tx.github(), repository)
+}
+
+/// The recorded local default branch, else the bound GitHub repository's default branch.
+fn default_branch(
+    local: Option<String>,
+    github: &dyn GithubRead,
+    repository: &Id,
+) -> Result<Vec<String>, StorageError> {
+    if local.is_some() {
+        return Ok(local.into_iter().collect());
+    }
+    Ok(github
+        .github_repository(repository)?
+        .and_then(|bound| bound.default_branch)
+        .filter(|branch| !branch.is_empty())
+        .map(|branch| format!("refs/heads/{branch}"))
+        .into_iter()
+        .collect())
+}
+
 pub fn evaluate(
     ctx: &InvocationContext,
     binding: Option<&PrincipalBinding>,
@@ -455,50 +459,21 @@ pub fn registered_tool_visibility(
     let fam = family(op);
     let class = selected.authority;
     let command = selected.mode == Mode::Command;
-    // These project-wide operations have no target that can be narrowed to the running root.
-    // Agents use addressed reads and writes for their root and delegated task references.
-    // Ordering a feature's own task queue and editing its blockers are narrowed to the root by
-    // the assignment check (`agent_assignment_scope`).
-    if kind == PrincipalKind::Agent
-        && ctx.root_id().is_some()
-        && matches!(
-            op,
-            "features.list"
-                | "features.create"
-                | "features.prioritize"
-                | "issues.list"
-                | "issues.create"
-                | "issues.prioritize"
-                | "tasks.list"
-        )
-    {
-        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    let agent = kind == PrincipalKind::Agent;
+    // Project-wide operations have no target that can be narrowed to the running root or
+    // assignment. Agents use addressed reads and writes for their root and delegated references.
+    match descriptor.assignment_scope {
+        AssignmentScope::RootDenied if agent && ctx.root_id().is_some() => {
+            return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+        }
+        AssignmentScope::AssignmentDenied if agent && ctx.assignment_id().is_some() => {
+            return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+        }
+        _ => {}
     }
-    if kind == PrincipalKind::Agent && ctx.assignment_id().is_some() && op == "artifacts.list" {
-        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
-    }
-    if kind == PrincipalKind::Agent && ctx.assignment_id().is_some() && op.starts_with("jobs.") {
-        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
-    }
-    if kind == PrincipalKind::Agent
-        && ctx.assignment_id().is_some()
-        && matches!(op, "approvals.list" | "approvals.review_queue")
-    {
-        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
-    }
-    // Project-wide message views belong to the human UI. Agent sessions use their addressed
-    // inbox; never advertise a project history or event feed they cannot read.
-    if matches!(
-        op,
-        "agents.history"
-            | "agents.events"
-            | "mcp.configure"
-            | "mcp.select_tools"
-            | "mcp.classify_tool"
-            | "mcp.disable"
-            | "mcp.remove"
-    ) && kind != PrincipalKind::Human
-    {
+    // Project-wide message views and MCP administration belong to the human UI. Agent sessions
+    // use their addressed inbox; never advertise a project history or event feed they cannot read.
+    if descriptor.human_only && kind != PrincipalKind::Human {
         return Verdict::Deny(DenialReason::HumanOnly);
     }
 
@@ -537,36 +512,18 @@ pub fn registered_tool_visibility(
     };
     // A task or feature assignment never grants project administration. Rootless agents retain
     // their existing project policy and approval path; humans retain direct authority above.
-    if kind == PrincipalKind::Agent
+    if agent
         && ctx.root_id().is_some()
         && command
-        && (matches!(fam, "projects" | "workflows" | "roles")
-            || op == "repositories.remove_index"
-            || op == "next_work.claim_project_queue"
+        && (descriptor.assignment_scope == AssignmentScope::Administration
             || class == AuthorityClass::Configuration)
-        && (role != Some(AgentRole::WorkspaceCoordinator) || ctx.root_id().is_some())
     {
         return Verdict::Deny(DenialReason::OutOfAssignmentScope);
     }
+    // Only a coordinator steers its root and plans its feature.
     if ctx.root_id().is_some()
         && role == Some(AgentRole::Worker)
-        && matches!(
-            op,
-            "runs.start"
-                | "runs.pause"
-                | "runs.continue"
-                | "runs.redirect"
-                | "runs.stop"
-                | "tasks.create"
-                | "tasks.sync_plan"
-                | "tasks.prioritize"
-                | "tasks.dependency_links"
-                | "features.dependencies"
-                | "features.edit"
-                | "features.edit_plan"
-                | "features.request_plan_approval"
-                | "next_work.claim_feature_task"
-        )
+        && descriptor.assignment_scope == AssignmentScope::Coordinator
     {
         return Verdict::Deny(DenialReason::OutOfAssignmentScope);
     }
@@ -597,7 +554,8 @@ pub fn registered_tool_visibility(
     // A watcher that launches or stops a process needs what the process tools need; that
     // depends on the request, so it is checked with the input (`watcher_process_authority`).
     // Observing watchers (timers) are open to every role, reviewers included (WATCH-10).
-    let watcher_op = matches!(op, "watch.create" | "watch.cancel");
+    // Every other watcher operation is a read.
+    let watcher_op = fam == "watch";
     let read_only_role = role.is_some_and(AgentRole::read_only);
     if read_only_role && !watcher_op {
         if command || effect != EffectClass::ReadOnly {
@@ -695,7 +653,6 @@ pub(crate) fn evaluate_with_owned_task(
     owned_task_force: bool,
 ) -> Verdict {
     let kind = ctx.principal_kind();
-    let op = request.descriptor.name;
     let class = request.binding.authority;
     // Mandatory for every principal, including the user and the host.
     if let Some(target) = force_push_target(request.input)
@@ -742,7 +699,7 @@ pub(crate) fn evaluate_with_owned_task(
         return Verdict::Deny(DenialReason::HumanOnly);
     }
     if (force_push_target(request.input).is_some() && !owned_task_force)
-        || APPROVAL_REQUIRED.contains(&op)
+        || request.descriptor.approval_required
     {
         // Explicit approvals stay effective under Full access.
         return Verdict::NeedsGrant {
@@ -752,8 +709,11 @@ pub(crate) fn evaluate_with_owned_task(
         };
     }
     // A timer watcher launches nothing: it needs no native execution grant.
-    let observing_watcher = op == "watch.create" && !launches_watched_process(request.input);
-    if NATIVE_EXECUTION.contains(&op)
+    let observing_watcher = matches!(
+        request.input,
+        OperationInput::Watch(watch::Input::Create(_))
+    ) && !launches_watched_process(request.input);
+    if request.descriptor.native_execution
         && !observing_watcher
         && profile == AccessProfile::ProjectScope
     {
