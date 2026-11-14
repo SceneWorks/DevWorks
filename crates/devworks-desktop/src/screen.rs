@@ -32,6 +32,7 @@ pub enum ScreenId {
     Artifacts,
     Resources,
     Browser,
+    Watchers,
 }
 impl ScreenId {
     /// The screen's key in persisted pending state (`PendingMemory::screens`).
@@ -47,6 +48,7 @@ impl ScreenId {
             Self::Artifacts => "artifacts",
             Self::Resources => "resources",
             Self::Browser => "browser",
+            Self::Watchers => "watchers",
         }
     }
 }

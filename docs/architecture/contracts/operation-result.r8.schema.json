@@ -20274,6 +20274,68 @@
       ],
       "type": "string"
     },
+    "WatchOwner": {
+      "additionalProperties": false,
+      "properties": {
+        "agentId": {
+          "$ref": "#/$defs/Id"
+        },
+        "assignmentId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "featureId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "featureTitle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workTitle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "agentId"
+      ],
+      "type": "object"
+    },
     "WatchProbeStatus": {
       "additionalProperties": false,
       "properties": {
@@ -20399,6 +20461,16 @@
         "id": {
           "$ref": "#/$defs/Id"
         },
+        "lastPolledAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "matches": {
           "anyOf": [
             {
@@ -20431,6 +20503,16 @@
         },
         "outputTruncated": {
           "type": "boolean"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WatchOwner"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "probe": {
           "anyOf": [

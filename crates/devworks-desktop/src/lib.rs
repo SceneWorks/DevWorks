@@ -69,6 +69,8 @@ pub mod theme;
 pub mod usage_ops;
 pub mod usage_screen;
 pub mod virtual_list;
+pub mod watch_ops;
+pub mod watchers_screen;
 pub mod web_panel;
 pub mod widgets;
 pub mod work_ops;

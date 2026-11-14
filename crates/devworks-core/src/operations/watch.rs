@@ -12,7 +12,7 @@
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Counter, Id, Revision};
+use crate::protocol::{Counter, Id, Revision, RootId};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -59,12 +59,15 @@ pub struct ListInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub states: Option<Items<WatcherState>>,
     pub page: PageRequest,
 }
 impl Check for ListInput {
     fn check(&self) -> Result<(), String> {
         self.session_id.check()?;
+        self.feature_id.check()?;
         self.states.check()?;
         self.page.check()?;
         Ok(())

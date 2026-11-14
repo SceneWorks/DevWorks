@@ -287,6 +287,10 @@ macro_rules! watcher_reads {
                         values.push(rusqlite::types::Value::Null);
                         "project_id IS NULL AND ?1 IS NULL"
                     }
+                    WatcherFilter::All => {
+                        values.push(rusqlite::types::Value::Null);
+                        "?1 IS NULL"
+                    }
                 };
                 values.push(before.map_or(rusqlite::types::Value::Null, |(at, _)| at.into()));
                 values.push(before.map_or(rusqlite::types::Value::Null, |(_, b)| {

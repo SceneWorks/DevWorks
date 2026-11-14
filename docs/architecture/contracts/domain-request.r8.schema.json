@@ -11733,6 +11733,16 @@
         {
           "additionalProperties": false,
           "properties": {
+            "featureId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "kind": {
               "const": "watch.list",
               "type": "string"
