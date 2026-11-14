@@ -469,7 +469,7 @@ async fn run_native_loop(
             .await
             {
                 Ok(root) => compacted = Some(root.sha256.as_str().to_owned()),
-                Err(StorageError::ScopeDenied)
+                Err(TurnError::Store(StorageError::ScopeDenied))
                     if crate::tool_turn::native_head_became_stale(
                         runtime.store().as_ref(),
                         ctx,
@@ -970,7 +970,7 @@ async fn compact(
     head: &ArtifactRef,
     cancellation: &Cancellation,
     retry_at_ms: &mut Option<i64>,
-) -> Result<ArtifactRef, StorageError> {
+) -> Result<ArtifactRef, TurnError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     let store = runtime.store().as_ref();
     let source = crate::context_epoch::current_source(
@@ -999,27 +999,27 @@ async fn compact(
         handle.block_on(providers.produce_cancellable(invocation, Some(stopped)))
     })
     .await
-    .map_err(|error| StorageError::InvalidRecord(format!("agent compaction worker: {error}")))??;
+    .map_err(|error| TurnError::Worker(format!("agent compaction worker: {error}")))??;
     let result = produced.result;
     let summary = match (result.outcome, result.result_artifact) {
         (Some(AttemptEnd::Completed), Some(summary)) => summary,
-        (Some(AttemptEnd::Cancelled), _) => return Err(StorageError::Cancelled),
+        (Some(AttemptEnd::Cancelled), _) => return Err(StorageError::Cancelled.into()),
         (outcome, _) => {
             *retry_at_ms = result.retry_at_ms;
-            return Err(StorageError::InvalidRecord(format!(
-                "agent context compaction did not complete: {outcome:?}; faults: {:?}",
-                result.faults
-            )));
+            return Err(TurnError::Provider {
+                outcome,
+                faults: result.faults,
+            });
         }
     };
     let bytes = runtime
         .artifacts()
         .read_exact(store, ctx, &summary, 8 * 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?
+        .map_err(artifact_read_fault)?
         .0;
     let summary = String::from_utf8(bytes)
         .map_err(|_| StorageError::InvalidRecord("compaction summary is not text".into()))?;
-    crate::compaction::publish_compacted(
+    Ok(crate::compaction::publish_compacted(
         store,
         runtime.artifacts(),
         ctx,
@@ -1027,7 +1027,7 @@ async fn compact(
         binding,
         source,
         &summary,
-    )
+    )?)
 }
 
 fn output_headroom(context_tokens: Option<i64>) -> i64 {
