@@ -1844,6 +1844,82 @@ fn a_constantly_matching_file_watcher_still_expires() {
     });
 }
 
+/// A file watcher may read a file in a registered repository the project has as a member, like
+/// a process watcher, with no static working-root binding; a repository outside the project is
+/// refused.
+#[test]
+fn a_file_watcher_reads_a_member_repository_without_a_static_binding() {
+    use devworks_core::ports::storage::StoredRepository;
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-repo-file-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    std::fs::create_dir_all(work.join("member")).unwrap();
+    std::fs::create_dir_all(work.join("outsider")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let register = |name: &str, member: bool| {
+            let location = work.join(name).to_string_lossy().into_owned();
+            let repository = id(&format!("repo-{name}"));
+            fx.tx(move |_, tx| {
+                let now = tx.now_ms();
+                tx.projects().insert_repository(&StoredRepository {
+                    id: repository.clone(),
+                    location,
+                    name: "repository".into(),
+                    remote_url: None,
+                    primary: true,
+                    lifecycle: "Active".into(),
+                    languages: Vec::new(),
+                    revision: 1,
+                    registered_at_ms: now,
+                })?;
+                if member {
+                    let project = ProjectId(id("project-a"));
+                    let mut members = tx.projects().members(&project)?;
+                    members.push(repository);
+                    tx.projects().set_members(&project, &members)?;
+                }
+                Ok(())
+            });
+        };
+        register("member", true);
+        register("outsider", false);
+        let watcher = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"file": {"path": {"rootId": "repo-member", "relative": "app.log"}},
+                "matching": {"pattern": "READY", "each": false}}),
+            "w-member-file",
+        );
+        std::fs::write(work.join("member").join("app.log"), b"server READY\n").unwrap();
+        let id_text = watcher["id"].as_str().unwrap();
+        settle_all(&app, &ctx, &[id_text]).await;
+        assert_eq!(
+            inspect(&app, &ctx, id_text)["outcome"]["kind"],
+            json!("Succeeded")
+        );
+        let refused = decision(
+            &app,
+            &ctx,
+            json!({"file": {"path": {"rootId": "repo-outsider", "relative": "app.log"}},
+                "matching": {"pattern": "READY", "each": false}}),
+            "w-outsider-file",
+        );
+        assert!(
+            matches!(refused, DomainDecision::Refused { .. }),
+            "{refused:?}"
+        );
+        app.shutdown().await;
+    });
+}
+
 /// About a thousand matches a second wake the owner no more often than the minimum interval,
 /// and the reported counts add up to every match.
 #[test]

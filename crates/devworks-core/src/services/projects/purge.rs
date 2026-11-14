@@ -391,27 +391,11 @@ fn page(
         ],
         stored.scope_revision,
     );
-    let offset = request
-        .cursor
-        .as_ref()
-        .map(|c| {
-            binding
-                .decode(&c.0)
-                .and_then(|s| s.parse::<usize>().map_err(|_| StorageError::CursorExpired))
-        })
-        .transpose()?
-        .unwrap_or(0);
-    if offset > stored.entries.len() {
-        return Err(StorageError::CursorExpired.into());
-    }
-    let end = offset
-        .saturating_add(request.limit.get() as usize)
-        .min(stored.entries.len());
-    let has_more = end < stored.entries.len();
+    let page = cursor::slice(&binding, stored.entries, request)?;
     let entries = crate::protocol::records::ProjectPurgeEntryPage {
-        items: BoundedList(stored.entries[offset..end].to_vec()),
-        has_more,
-        next_cursor: has_more.then(|| BoundedText(binding.encode(&end.to_string()))),
+        items: BoundedList(page.items.0),
+        has_more: page.has_more,
+        next_cursor: page.next_cursor,
     };
     Ok(crate::protocol::records::ProjectPurgeManifestPage {
         manifest: stored.manifest,
