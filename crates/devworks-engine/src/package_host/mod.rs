@@ -53,12 +53,15 @@
 //! generation; an **event-handler invocation** may not use `broker.state` compare-and-set or an
 //! effectful `broker.call`: its state change, effect intents, processing receipt and checkpoint
 //! commit together through `broker.commit_event` ([`crate::package::commit_event`]) or not at
-//! all. Brokered host calls (`broker.call` to application operations, HTTP, inference and
-//! artifacts) are not yet active and are refused as `Unavailable` with a message that says so
-//! ([`BROKER_CALL_INACTIVE`]); see that constant for what is missing.
+//! all. `broker.call` is checked against the invocation's grants, which the host resolves at
+//! admission from the approved manifest and the invoking principal ([`broker`]): application
+//! operations run as the invoking principal through the ordinary gateway, are journaled with the
+//! package as actor and answer with a result artifact. Brokered HTTP, inference and artifact
+//! reads and writes check their grant and are not yet active (`Unavailable`).
 //!
 //! The helper is a separate process for failure containment, not an OS sandbox (see the package
 //! service's trust model).
+pub mod broker;
 pub mod discovery;
 pub mod session;
 
@@ -91,7 +94,7 @@ use session::{Broker, Reply, Session, Slot, rpc_error};
 use std::collections::{BTreeSet, HashMap};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Engineering defaults of the package host.
@@ -243,6 +246,26 @@ struct SlotContext {
     state_generation: i64,
     kind: InvocationKind,
     access: BTreeSet<String>,
+    /// What `broker.call` may reach (resolved at admission).
+    grants: broker::Grants,
+    /// The invocation's durable operation (the stable identity of its brokered calls).
+    operation_id: String,
+    /// Artifact versions of this invocation: its input and the broker's results for it.
+    artifacts: Mutex<BTreeSet<(String, String, String)>>,
+}
+impl SlotContext {
+    fn in_scope(&self, artifact: &wire::ArtifactRef) -> bool {
+        self.artifacts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains(&broker::artifact_key(artifact))
+    }
+    fn admit_artifact(&self, artifact: &wire::ArtifactRef) {
+        self.artifacts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(broker::artifact_key(artifact));
+    }
 }
 
 /// One invocation request.
@@ -253,8 +276,14 @@ pub struct InvokeRequest {
     pub input: wire::ArtifactRef,
     pub operation_id: Id,
     pub deadline: Duration,
+    /// Narrows the application operations the package may call (empty narrows nothing).
     pub allowed_operations: Vec<wire::QualifiedId>,
     pub kind: InvocationKind,
+    /// The principal that invoked it: brokered application calls run as it (none without it).
+    pub principal: Option<InvocationContext>,
+    /// The manifest digest the caller resolved: admission is refused when another version is
+    /// active (`None` admits the active version).
+    pub expected_digest: Option<String>,
 }
 
 /// Why an invocation was not admitted. Nothing was sent to a helper.
@@ -269,6 +298,8 @@ pub enum InvokeRefusal {
     NotReady(String),
     ShuttingDown,
     Storage(String),
+    /// Another version than the caller resolved is active.
+    VersionChanged,
 }
 
 /// Why an admitted invocation was not sent.
@@ -380,6 +411,15 @@ impl InvocationHandle {
     pub fn wait(&self, timeout: Duration) -> Option<InvokeOutcome> {
         self.run.slot.wait(timeout).map(outcome)
     }
+    /// Whether `artifact` belongs to this invocation (its input or a result the broker produced
+    /// for it): what a caller may accept as the invocation's output.
+    pub fn in_scope(&self, artifact: &wire::ArtifactRef) -> bool {
+        self.run
+            .slot
+            .context
+            .downcast_ref::<SlotContext>()
+            .is_some_and(|c| c.in_scope(artifact))
+    }
     /// Cancels (see [`Running::cancel`]) and returns what is proven about the outcome.
     pub fn cancel(&self) -> InvokeOutcome {
         self.run.cancel();
@@ -455,6 +495,8 @@ pub struct PackageHost {
     /// (a reconciliation's retirement included) observes it, never a longer one of its own.
     shutdown_by: Mutex<Option<Instant>>,
     me: Mutex<std::sync::Weak<PackageHost>>,
+    /// What brokered application calls need (attached by the runtime once composed).
+    broker: OnceLock<broker::BrokerPorts>,
 }
 
 struct Gate {
@@ -539,6 +581,7 @@ impl PackageHost {
             pass: Mutex::new(()),
             shutdown_by: Mutex::new(None),
             me: Mutex::new(std::sync::Weak::new()),
+            broker: OnceLock::new(),
         });
         *host.me.lock().unwrap_or_else(|p| p.into_inner()) = Arc::downgrade(&host);
         host
@@ -552,6 +595,10 @@ impl PackageHost {
     }
     pub fn service(&self) -> &Arc<PackageService> {
         &self.service
+    }
+    /// Attaches what brokered application calls need (once; later calls change nothing).
+    pub fn attach_broker(&self, ports: broker::BrokerPorts) {
+        let _ = self.broker.set(ports);
     }
     /// How many restart budgets the host tracks (one per desired instance key at most).
     pub fn tracked_budgets(&self) -> usize {
@@ -1599,6 +1646,13 @@ impl PackageHost {
                 generation: p.state_generation,
                 config_revision: p.config_revision,
             };
+            if req
+                .expected_digest
+                .as_ref()
+                .is_some_and(|d| *d != key.digest)
+            {
+                return Err(InvokeRefusal::VersionChanged);
+            }
             // Admission is atomic with the barrier: both are decided under the barrier lock.
             {
                 let mut b = self.barriers.lock().unwrap_or_else(|p| p.into_inner());
@@ -1736,6 +1790,14 @@ impl PackageHost {
                 state_generation: p.state_generation,
                 kind,
                 access: inst.inspection.access.iter().cloned().collect(),
+                grants: broker::Grants::resolve(
+                    &inst.inspection,
+                    &req.contribution_id,
+                    req.principal.clone(),
+                    &req.allowed_operations,
+                ),
+                operation_id: req.operation_id.as_str().to_owned(),
+                artifacts: Mutex::new(BTreeSet::from([broker::artifact_key(&req.input)])),
             }),
         });
         let (req_package, req_contribution) = (req.package_id.clone(), req.contribution_id.clone());
@@ -2022,12 +2084,6 @@ impl PackageActivity for PackageHost {
     }
 }
 
-/// Refusal of every `broker.call`. Not yet active (tracked by DW-286): the host has no
-/// per-invocation grant of callable operations, no package connection-handle registry for HTTP
-/// endpoints, no inference attribution for package requests, no artifact read/write path for
-/// packages, and no executor for the `package.broker.*` intents `broker.commit_event` records.
-pub const BROKER_CALL_INACTIVE: &str = "broker.call is not yet active: this host does not broker application, HTTP, inference or artifact calls for packages yet; broker.state and broker.commit_event are available";
-
 /// The broker of a host's sessions.
 struct HostBroker {
     host: Arc<PackageHost>,
@@ -2085,7 +2141,22 @@ impl Broker for HostBroker {
                         "an event handler's effects are intents of broker.commit_event",
                     ));
                 }
-                Err(rpc_error(RpcErrorClass::Unavailable, BROKER_CALL_INACTIVE))
+                let answer = broker::call(&self.host, ctx, &slot, params);
+                if let Err(refused) = &answer
+                    && matches!(refused.data.class, RpcErrorClass::PermissionDenied)
+                {
+                    // A refused call never ran; its attempt is attributed to the package.
+                    self.host.enqueue_attribute(
+                        &(
+                            ctx.package_id.clone(),
+                            json!({"contributionId": slot.contribution_id}),
+                        ),
+                        "PackageBrokerCallRefused",
+                        json!({"invocationId": slot.invocation_id,
+                            "actionKey": params.action_key.as_str(), "reason": refused.message}),
+                    );
+                }
+                answer
             }
             PackageRequest::State { params, .. } => {
                 let pinned: i64 = String::from(params.state_generation.clone())

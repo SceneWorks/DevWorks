@@ -1,22 +1,69 @@
 //! Settings → Roles and skills: the `skills.*` / `roles.*` gateway operations, text reads
 //! through `artifacts.read`, and draft text stored through `artifacts.save` before the draft
 //! command. Commands keep their exact frames; an unknown outcome is settled by Confirm outcomes.
-use super::Shell;
 use crate::{
-    backend::{Reply, Slot, TaskOutput, is_unknown},
-    instructions_ops::{self as iop, Kind, TaskResult},
+    attachments,
+    backend::{Reply, TaskOutput, is_unknown},
+    instructions_ops::{self as iop, InstructionsSlot, Kind, TaskResult},
     instructions_screen::{InstructionAction, InstructionsPanel, Pending, Stage},
+    memory::RouteMemory,
     ops,
     route::Route,
+    screen::{Cx, Screen, ScreenContext, ScreenId, controller},
     widgets::Tone,
 };
 use devworks_core::settings::catalog::AgentRole;
+use eframe::egui::Ui;
 
 const UNKNOWN: &str = "The outcome is not confirmed yet. Use Confirm outcomes; the exact \
                        request is resubmitted and nothing is applied twice.";
 
-impl Shell {
-    pub(super) fn instruction_action(&mut self, action: InstructionAction) {
+controller!(InstructionsCtl, instructions: InstructionsPanel);
+
+/// Settings draws the panel among its items and hands its actions to [`InstructionsPanel::act`].
+impl Screen for InstructionsPanel {
+    type Slot = InstructionsSlot;
+    const ID: ScreenId = ScreenId::Instructions;
+    fn load(&mut self, _cx: &mut Cx, _route: Route) {}
+    fn refresh(&mut self, _cx: &mut Cx, _route: Route) {}
+    fn apply(&mut self, cx: &mut Cx, slot: InstructionsSlot, reply: Reply) {
+        let unhandled = InstructionsCtl {
+            instructions: self,
+            cx,
+        }
+        .apply_instructions(slot, reply);
+        if let Some((slot, reply)) = unhandled {
+            cx.unhandled(&slot, reply);
+        }
+    }
+    /// The panel on its own.
+    fn ui(&mut self, cx: &mut Cx, _route: Route, ui: &mut Ui) {
+        let mut actions = Vec::new();
+        InstructionsPanel::ui(self, ui, cx.online().is_ok(), &mut actions);
+        for action in actions {
+            self.act(cx, action);
+        }
+    }
+    fn context(&self, _route: Route, mem: &RouteMemory) -> ScreenContext {
+        ScreenContext {
+            tab: mem.tab,
+            selection: mem.selection.clone(),
+        }
+    }
+}
+
+impl InstructionsPanel {
+    pub(super) fn act(&mut self, cx: &mut Cx, action: InstructionAction) {
+        InstructionsCtl {
+            instructions: self,
+            cx,
+        }
+        .instruction_action(action);
+    }
+}
+
+impl InstructionsCtl<'_, '_> {
+    fn instruction_action(&mut self, action: InstructionAction) {
         match action {
             InstructionAction::Load => self.load_instructions(),
             InstructionAction::LoadDetail => self.load_instruction_detail(),
@@ -38,7 +85,14 @@ impl Shell {
     }
 
     fn panel(&mut self) -> &mut InstructionsPanel {
-        &mut self.settings.instructions
+        self.instructions
+    }
+
+    /// Removes a file the shell created (recorded as owned when it was created).
+    fn remove_owned(&self, path: Option<&std::path::Path>) {
+        if let (Some(p), Some(b)) = (path, self.backend()) {
+            attachments::remove_owned(p, &b.scratch_dir());
+        }
     }
 
     fn load_instructions(&mut self) {
@@ -54,7 +108,7 @@ impl Shell {
         for role in AgentRole::ALL {
             let id = iop::role_id(role);
             let submitted = self.query(
-                Slot::InstructionRole(id.clone()),
+                InstructionsSlot::InstructionRole(id.clone()),
                 "Reading role instructions",
                 "roles.read",
                 {
@@ -85,7 +139,7 @@ impl Shell {
 
     fn discover_page(&mut self, generation: u64, cursor: Option<String>) {
         if !self.query(
-            Slot::InstructionSkills(generation),
+            InstructionsSlot::InstructionSkills(generation),
             "Discovering skills",
             "skills.discover",
             move |b| iop::query(b, "skills.discover", iop::discover_body(cursor.as_deref())),
@@ -153,7 +207,7 @@ impl Shell {
     fn history_page(&mut self, kind: Kind, id: String, generation: u64, cursor: Option<String>) {
         let op = kind.history_op();
         if !self.query(
-            Slot::InstructionHistory(generation),
+            InstructionsSlot::InstructionHistory(generation),
             "Reading instruction history",
             op,
             move |b| iop::query(b, op, iop::history_body(&id, cursor.as_deref())),
@@ -170,7 +224,7 @@ impl Shell {
         cursor: Option<String>,
     ) {
         if !self.query(
-            Slot::InstructionResources(generation),
+            InstructionsSlot::InstructionResources(generation),
             "Reading skill resources",
             "skills.resources",
             move |b| iop::resources_query(b, iop::resources_body(&id, revision, cursor.as_deref())),
@@ -187,7 +241,7 @@ impl Shell {
         let submitted = self.online().is_ok()
             && self.client.as_mut().is_some_and(|c| {
                 c.task(
-                    Slot::InstructionText(generation),
+                    InstructionsSlot::InstructionText(generation).into(),
                     "Reading instruction text",
                     move |b| iop::load_text(b, &content),
                 )
@@ -246,7 +300,7 @@ impl Shell {
         let submitted = self.online().is_ok()
             && self.client.as_mut().is_some_and(|c| {
                 c.task(
-                    Slot::InstructionPrepare(token),
+                    InstructionsSlot::InstructionPrepare(token).into(),
                     "Preparing instruction text",
                     move |b| iop::prepare_save(b, &title, &text),
                 )
@@ -273,7 +327,7 @@ impl Shell {
         let token = self.panel().next_token();
         let op = kind.rollback_op();
         let submitted = self.command(
-            Slot::InstructionCommand(token),
+            InstructionsSlot::InstructionCommand(token),
             "Restoring an instruction revision",
             op,
             move |b| iop::command(b, op, iop::rollback_body(&id, expected, target)),
@@ -305,9 +359,13 @@ impl Shell {
         self.panel().message = Some((Tone::Bad, text));
     }
 
-    pub(super) fn apply_instructions(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
+    fn apply_instructions(
+        &mut self,
+        slot: InstructionsSlot,
+        reply: Reply,
+    ) -> Option<(InstructionsSlot, Reply)> {
         match (slot, reply) {
-            (Slot::InstructionSkills(generation), Reply::Query(q)) => {
+            (InstructionsSlot::InstructionSkills(generation), Reply::Query(q)) => {
                 if generation != self.panel().skills_generation {
                     return None;
                 }
@@ -349,7 +407,7 @@ impl Shell {
                     }
                 }
             }
-            (Slot::InstructionRole(id), Reply::Query(q)) => {
+            (InstructionsSlot::InstructionRole(id), Reply::Query(q)) => {
                 let result = iop::record(q).map_err(|e| e.describe());
                 let p = self.panel();
                 if let (Ok(r), Some(sel)) = (&result, &mut p.selected)
@@ -368,7 +426,7 @@ impl Shell {
                     self.load_instruction_detail();
                 }
             }
-            (Slot::InstructionHistory(generation), Reply::Query(q)) => {
+            (InstructionsSlot::InstructionHistory(generation), Reply::Query(q)) => {
                 if generation != self.panel().detail.generation {
                     return None;
                 }
@@ -398,7 +456,7 @@ impl Shell {
                     }
                 }
             }
-            (Slot::InstructionResources(generation), Reply::Query(q)) => {
+            (InstructionsSlot::InstructionResources(generation), Reply::Query(q)) => {
                 if generation != self.panel().detail.resources_generation {
                     return None;
                 }
@@ -427,7 +485,7 @@ impl Shell {
                     }
                 }
             }
-            (Slot::InstructionText(generation), Reply::Task(result)) => {
+            (InstructionsSlot::InstructionText(generation), Reply::Task(result)) => {
                 let d = &mut self.panel().detail;
                 if generation != d.text_generation {
                     return None;
@@ -438,7 +496,7 @@ impl Shell {
                     Err(e) => Err(e),
                 });
             }
-            (Slot::InstructionPrepare(token), Reply::Task(result)) => {
+            (InstructionsSlot::InstructionPrepare(token), Reply::Task(result)) => {
                 let Some(_) = self.pending_for(token) else {
                     // Prepared for a change no longer pending: release its staged file.
                     if let Ok(TaskOutput::Instruction(TaskResult::Prepared { staged, .. })) = result
@@ -454,7 +512,7 @@ impl Shell {
                             p.stage = Stage::Storing;
                         }
                         if !self.command(
-                            Slot::InstructionArtifact(token),
+                            InstructionsSlot::InstructionArtifact(token),
                             "Storing instruction text",
                             "artifacts.save",
                             move |_| frame,
@@ -469,7 +527,7 @@ impl Shell {
                     Err(e) => self.fail_instruction(token, e),
                 }
             }
-            (Slot::InstructionArtifact(token), Reply::Command(outcome)) => {
+            (InstructionsSlot::InstructionArtifact(token), Reply::Command(outcome)) => {
                 let Some(pending) = self.pending_for(token) else {
                     // A restored, confirmed text save without its draft (after a restart).
                     if !is_unknown(&outcome) {
@@ -505,7 +563,7 @@ impl Shell {
                             p.stage = Stage::Saving;
                         }
                         if !self.command(
-                            Slot::InstructionCommand(token),
+                            InstructionsSlot::InstructionCommand(token),
                             "Saving instructions",
                             op,
                             move |b| {
@@ -522,7 +580,7 @@ impl Shell {
                     ),
                 }
             }
-            (Slot::InstructionCommand(token), Reply::Command(outcome)) => {
+            (InstructionsSlot::InstructionCommand(token), Reply::Command(outcome)) => {
                 let pending = self.pending_for(token);
                 let known = pending.is_some();
                 let restore = pending.as_ref().is_some_and(|p| p.draft.is_none());

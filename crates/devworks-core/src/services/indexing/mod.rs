@@ -710,7 +710,7 @@ impl IndexCoordinator {
                         json!({
                             "kind": kind, "repositoryId": r.id.as_str(),
                             "configRevision": current.revision, "configDigest": effective.digest,
-                            "principalKind": format!("{:?}", ctx.principal_kind()),
+                            "principalKind": ctx.principal_kind().as_str().to_string(),
                         }),
                     )?;
                     changed = true;
@@ -808,7 +808,7 @@ impl IndexCoordinator {
                 "semanticPackages": next.semantic_packages,
                 "excludePatterns": next.exclude_patterns,
                 "maxFileBytes": next.max_file_bytes,
-                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "principalKind": ctx.principal_kind().as_str().to_string(),
             }),
         )?;
         Ok(DomainDecision::Applied {
@@ -960,7 +960,7 @@ impl IndexCoordinator {
                 json!({
                     "attempt": run.attempt, "wasQueued": run.state == RUN_QUEUED,
                     "batchId": run.batch_id.as_str(),
-                    "principalKind": format!("{:?}", ctx.principal_kind()),
+                    "principalKind": ctx.principal_kind().as_str().to_string(),
                 }),
             )?;
             changed.push(run.id.clone());
@@ -1076,7 +1076,7 @@ impl IndexCoordinator {
             json!({
                 "worktreeId": o.worktree_id.as_ref().map(Id::as_str), "viewId": o.view_id.as_ref().map(Id::as_str),
                 "historyKept": true,
-                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "principalKind": ctx.principal_kind().as_str().to_string(),
             }),
         )?;
         Ok(DomainDecision::Applied {

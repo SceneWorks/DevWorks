@@ -185,7 +185,7 @@ fn authority_witness(
     if let Some(invocation) = source_context["invocationContext"].as_object_mut() {
         invocation.remove("invocation");
     }
-    json!({"sourceContext":source_context,"policy":policy,"principal":principal.map(|p|json!({"actor":p.actor,"kind":format!("{:?}",p.kind),"active":p.active,"revision":p.revision.to_string(),"projectId":p.project_id,"role":p.role.map(|r|r.as_str()),"tools":p.tool_families}))})
+    json!({"sourceContext":source_context,"policy":policy,"principal":principal.map(|p|json!({"actor":p.actor,"kind":p.kind.as_str(),"active":p.active,"revision":p.revision.to_string(),"projectId":p.project_id,"role":p.role.map(|r|r.as_str()),"tools":p.tool_families}))})
 }
 fn resolved(
     selection: Selection,
