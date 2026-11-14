@@ -88,11 +88,11 @@ use crate::protocol::records::{
 };
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::{
-    BoundedList, BoundedText, DynamicJson, Label, Page, Probability, RelativePath,
+    BoundedList, BoundedText, DynamicJson, Label, Limit, Page, Probability, RelativePath,
 };
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, OperationState, ProjectId};
 use crate::registry::SchemaRevision;
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::{
     Failure, Refusal, content, counter, decided, label, not_found, query_fault, require_project,
     rev,
@@ -639,30 +639,21 @@ fn receipt_of(
 // ---------------------------------------------------------------------------------------------
 // Paging
 
-/// One page of claims: rows strictly after `after`, at most `limit`, and whether more follow.
-/// The repository maximum is never exceeded: a full page of the maximum probes one more row.
-fn claim_page(
+/// Claims in `query`'s order strictly after the position `after`, at most `n`: the read the
+/// shared pager pages.
+fn claims(
     read: &dyn KnowledgeRead,
     query: &ClaimQuery,
-    after: Option<(i64, String)>,
-    limit: usize,
-) -> Result<(Vec<StoredClaim>, bool), StorageError> {
-    let limit = limit.clamp(1, KNOWLEDGE_PAGE_MAX as usize);
-    let ask = (limit + 1).min(KNOWLEDGE_PAGE_MAX as usize) as u16;
-    let mut rows =
-        read.knowledge_claims(query, after.as_ref().map(|(t, id)| (*t, id.as_str())), ask)?;
-    let more = if rows.len() > limit {
-        rows.truncate(limit);
-        true
-    } else if rows.len() == limit && (ask as usize) == limit {
-        let last = rows.last().expect("full page");
-        !read
-            .knowledge_claims(query, Some((sort_key(query, last), last.id.as_str())), 1)?
-            .is_empty()
-    } else {
-        false
-    };
-    Ok((rows, more))
+    after: Option<&str>,
+    n: u16,
+) -> Result<Vec<StoredClaim>, StorageError> {
+    let after = after.map(parse_position).transpose()?;
+    read.knowledge_claims(query, after.as_ref().map(|(t, id)| (*t, id.as_str())), n)
+}
+
+/// A claim's position in `query`'s order.
+fn claim_position(query: &ClaimQuery, c: &StoredClaim) -> String {
+    format!("{}|{}", sort_key(query, c), c.id.as_str())
 }
 
 /// The sort time of a claim in `query`'s order.
@@ -677,8 +668,7 @@ fn sort_key(query: &ClaimQuery, c: &StoredClaim) -> i64 {
     }
 }
 
-fn decode_position(binding: &CursorBinding, cursor: &str) -> Result<(i64, String), StorageError> {
-    let at = binding.decode(cursor)?;
+fn parse_position(at: &str) -> Result<(i64, String), StorageError> {
     let (t, id) = at.split_once('|').ok_or(StorageError::CursorExpired)?;
     Ok((
         t.parse().map_err(|_| StorageError::CursorExpired)?,
@@ -780,31 +770,18 @@ impl KnowledgeService {
         parts.push(format!("{query:?}"));
         parts.push(limit.to_string());
         let binding = CursorBinding::new(ctx, "knowledge.search", &refs(&parts), exact_revision);
-        let after = match &i.page.cursor {
-            None => None,
-            Some(c) => Some(decode_position(&binding, &c.0)?),
-        };
-        let (rows, more) = claim_page(k, &query, after, limit)?;
+        let mut request = i.page.clone();
+        request.limit = Limit::new(u32::try_from(limit).expect("page size")).expect("page size");
+        let rows = cursor::page(
+            &binding,
+            &request,
+            |after, n| claims(k, &query, after, n),
+            |c| claim_position(&query, c),
+        )?;
         let th = thresholds(snapshot.configuration(), &scoped.readable)?;
-        let items = rows
-            .iter()
-            .map(|c| claim_wire(k, c, &th))
-            .collect::<Result<Vec<_>, _>>()?;
-        let next_cursor = match (more, rows.last()) {
-            (true, Some(last)) => Some(BoundedText(binding.encode(&format!(
-                "{}|{}",
-                sort_key(&query, last),
-                last.id.as_str()
-            )))),
-            _ => None,
-        };
         Ok((
             OperationResult::KnowledgeSearch {
-                value: Page {
-                    items: BoundedList(items),
-                    has_more: next_cursor.is_some(),
-                    next_cursor,
-                },
+                value: rows.try_into_page(|c| claim_wire(k, &c, &th))?,
             },
             exact_revision,
         ))
@@ -852,30 +829,17 @@ impl KnowledgeService {
             &refs(&parts),
             exact_revision,
         );
-        let after = match &i.page.cursor {
-            None => None,
-            Some(c) => Some(decode_position(&binding, &c.0)?),
-        };
-        let (rows, more) = claim_page(k, &query, after, limit)?;
-        let items = rows
-            .iter()
-            .map(|c| claim_wire(k, c, &th))
-            .collect::<Result<Vec<_>, _>>()?;
-        let next_cursor = match (more, rows.last()) {
-            (true, Some(last)) => Some(BoundedText(binding.encode(&format!(
-                "{}|{}",
-                sort_key(&query, last),
-                last.id.as_str()
-            )))),
-            _ => None,
-        };
+        let mut request = i.page.clone();
+        request.limit = Limit::new(u32::try_from(limit).expect("page size")).expect("page size");
+        let rows = cursor::page(
+            &binding,
+            &request,
+            |after, n| claims(k, &query, after, n),
+            |c| claim_position(&query, c),
+        )?;
         Ok((
             OperationResult::KnowledgeTaggedLessons {
-                value: Page {
-                    items: BoundedList(items),
-                    has_more: next_cursor.is_some(),
-                    next_cursor,
-                },
+                value: rows.try_into_page(|c| claim_wire(k, &c, &th))?,
             },
             exact_revision,
         ))
@@ -1326,15 +1290,15 @@ impl KnowledgeService {
         };
         let k = knowledge_read(snapshot);
         let mut out = Vec::new();
-        let mut after: Option<(i64, String)> = None;
+        let mut after: Option<String> = None;
         loop {
-            let (rows, more) = claim_page(k, &query, after.clone(), KNOWLEDGE_PAGE_MAX as usize)?;
+            let rows = claims(k, &query, after.as_deref(), KNOWLEDGE_PAGE_MAX)?;
             for c in &rows {
                 out.push(claim_wire(k, c, &th)?);
             }
-            match (more, rows.last()) {
-                (true, Some(last)) => {
-                    after = Some((sort_key(&query, last), last.id.as_str().to_owned()))
+            match rows.last() {
+                Some(last) if rows.len() == usize::from(KNOWLEDGE_PAGE_MAX) => {
+                    after = Some(claim_position(&query, last))
                 }
                 _ => return Ok(out),
             }

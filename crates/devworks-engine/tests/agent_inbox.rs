@@ -12,7 +12,7 @@ use devworks_core::protocol::{CommandReply, ProjectId};
 use devworks_core::services::UseCases;
 use devworks_core::services::agents::AgentService;
 use devworks_core::services::agents::retained::{
-    AckSelection, MessageKind, PostSpec, Recipient, post_message,
+    AckSelection, MessageKind, PostSpec, Recipient, inbox_binding, inbox_cursor, post_message,
 };
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::runs::scope::ScriptedScope;
@@ -398,7 +398,8 @@ fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
     let head = common::read(store.as_ref(), |snapshot| {
         snapshot.runs().agent_delivery_head()
     });
-    let cursor = devworks_core::services::agents::retained::inbox_cursor(head).unwrap();
+    let inbox = inbox_binding(&user, &ProjectId(id("project-a")), &Recipient::Human);
+    let cursor = inbox_cursor(&inbox, head).unwrap();
     assert!(matches!(ack("ack-through", json!({
         "kind":"agents.ack", "projectId":"project-a", "upTo":cursor
     })), CommandReply::Recorded { receipt, .. }
@@ -424,8 +425,12 @@ fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
             json!({"kind":"agents.ack","projectId":"project-a","upTo":"Zm9v"}),
         ),
         (
+            "ack-pre-upgrade-cursor",
+            json!({"kind":"agents.ack","projectId":"project-a","upTo":"aWI6MA"}),
+        ),
+        (
             "ack-ahead-cursor",
-            json!({"kind":"agents.ack","projectId":"project-a","upTo":devworks_core::services::agents::retained::inbox_cursor(head + 1).unwrap()}),
+            json!({"kind":"agents.ack","projectId":"project-a","upTo":inbox_cursor(&inbox, head + 1).unwrap()}),
         ),
     ] {
         let reply = ack(key, body);
@@ -475,7 +480,10 @@ fn selected_receive_waits_replays_and_acknowledges_through_the_native_gateway() 
         matches!(&empty, CommandReply::Recorded { receipt, .. }
         if matches!(&receipt.decision, DomainDecision::NoChange {
             result: OperationResult::AgentsReceive { value }
-        } if value.items.0.is_empty() && value.next_cursor.0 == "aWI6MA")),
+        } if value.items.0.is_empty() && value.next_cursor.0 == inbox_cursor(
+            &inbox_binding(&user, &ProjectId(id("project-a")), &Recipient::Human),
+            0,
+        ).unwrap())),
         "{empty:?}"
     );
     let receive = json!({"kind":"agents.receive","projectId":"project-a","waitSeconds":2});

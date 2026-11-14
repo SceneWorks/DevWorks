@@ -930,21 +930,20 @@ fn totals(facts: &[&Fact], gaps: &mut Gaps) -> SResult<UsageTotals> {
     }
     wire(json!({"attempts":values[0].to_string(),"trackedMicroUsd":values[1].to_string(),"reportedMicroUsd":values[2].to_string(),"estimatedMicroUsd":values[3].to_string(),"reservedMicroUsd":values[4].to_string(),"localFreeAttempts":values[5].to_string(),"untrackedAttempts":values[6].to_string(),"unknownTailAttempts":values[7].to_string(),"incompleteAttempts":values[8].to_string(),"monetaryIncompleteAttempts":values[9].to_string(),"legacyUsageFacts":values[10].to_string(),"legacyUntrackedFacts":values[11].to_string(),"legacyObservationMicroUsd":values[12].to_string()})).map_err(Into::into)
 }
-fn cursor_range(cursor: &str) -> Result<(i64, i64, &str), StorageError> {
-    let mut parts = cursor.splitn(4, '.');
-    if parts.next() != Some("usage1") {
+/// A usage position: the resolved date range the listing started with, then the row offset.
+fn cursor_range(position: &str) -> Result<(i64, i64, usize), StorageError> {
+    let mut parts = position.split('.');
+    let (Some(start), Some(end), Some(offset), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
         return Err(StorageError::CursorExpired);
-    }
-    let start = parts
-        .next()
-        .and_then(|v| v.parse::<i64>().ok())
-        .ok_or(StorageError::CursorExpired)?;
-    let end = parts
-        .next()
-        .and_then(|v| v.parse::<i64>().ok())
-        .ok_or(StorageError::CursorExpired)?;
-    let inner = parts.next().ok_or(StorageError::CursorExpired)?;
-    Ok((start, end, inner))
+    };
+    let parse = |v: &str| v.parse::<i64>().map_err(|_| StorageError::CursorExpired);
+    Ok((
+        parse(start)?,
+        parse(end)?,
+        offset.parse().map_err(|_| StorageError::CursorExpired)?,
+    ))
 }
 trait RowSource<T>: Serialize {
     fn len(&self) -> usize;
@@ -983,17 +982,13 @@ fn page<T: Clone + Serialize>(
         ],
         q.context.read_revision.get(),
     );
-    let start = i
-        .page
-        .cursor
-        .as_ref()
-        .map(|c| {
-            binding
-                .decode(cursor_range(&c.0)?.2)
-                .and_then(|s| s.parse::<usize>().map_err(|_| StorageError::CursorExpired))
-        })
-        .transpose()?
-        .unwrap_or(0);
+    let start = match binding.resume(&i.page)? {
+        None => 0,
+        Some(at) => match cursor_range(&at)? {
+            (start, end, offset) if (start, end) == (q.start, q.end) => offset,
+            _ => return Err(StorageError::CursorExpired.into()),
+        },
+    };
     if start > rows.len() {
         return Err(StorageError::CursorExpired.into());
     }
@@ -1024,14 +1019,7 @@ fn page<T: Clone + Serialize>(
         (start..end)
             .map(|index| rows.row(index))
             .collect::<SResult<Vec<_>>>()?,
-        more.then(|| {
-            BoundedText(format!(
-                "usage1.{}.{}.{}",
-                q.start,
-                q.end,
-                binding.encode(&end.to_string())
-            ))
-        }),
+        more.then(|| binding.cursor(&format!("{}.{}.{end}", q.start, q.end))),
         more,
     ))
 }
@@ -1047,7 +1035,11 @@ fn query_with_mode(
         .page
         .cursor
         .as_ref()
-        .map(|c| cursor_range(&c.0).map(|(start, end, _)| (start, end)))
+        .map(|c| {
+            crate::services::cursor::peek(&c.0)
+                .and_then(|at| cursor_range(&at))
+                .map(|(start, end, _)| (start, end))
+        })
         .transpose()?;
     let q = Query::new(read, ctx, input, now_ms, resolved, legacy_all_dates)?;
     let mut gaps = Gaps::default();
