@@ -225,7 +225,7 @@ pub fn record_usage(
     usage: &StoredJobUsage,
 ) -> Result<StoredJobUsage, StorageError> {
     owned_run(tx, &usage.run_id)?;
-    let recorded = tx.jobs().record_usage(usage)?;
+    let recorded = tx.jobs().prepare_usage(usage)?;
     crate::services::usage::ingest::job_usage(tx, &recorded)?;
     Ok(recorded)
 }

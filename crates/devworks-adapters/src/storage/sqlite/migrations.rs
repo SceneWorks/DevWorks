@@ -635,6 +635,17 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "0368b2a55b935d1720e26269a5b7805a37df20d81a0f4e210611cd2c6eb452c2",
         rebuilds_tables: false,
     },
+    // Prior builds read and write session_usage and job_run_usage, so neither a prior reader
+    // nor a prior writer may open the store. Source rows without a usage origin are copied
+    // into usage_origins first; no table another table references is rebuilt.
+    Migration {
+        version: 55,
+        minimum_reader: 55,
+        minimum_writer: 55,
+        sql: include_str!("migrations/0055_drop_usage_copies.sql"),
+        expected_sha256: "bc4b4453bc4f1b35027b1655b588e221013752dbfd3ffe79db0ef0e0844a3885",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

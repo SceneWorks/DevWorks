@@ -358,7 +358,7 @@ fn write_budget(c: &Connection, r: &StoredFeatureBudget, update: bool) -> Result
         1,
     )
 }
-const ORIGIN_COLS: &str = "source_kind,source_id,attempt_id,request_id,project_id,feature_id,work_id,session_id,job_run_id,payload_json,recorded_at,priced_micro_usd,classification,monetary_complete,incomplete,unknown_tail";
+const ORIGIN_COLS: &str = "source_kind,source_id,attempt_id,request_id,project_id,feature_id,work_id,session_id,job_run_id,payload_json,recorded_at,priced_micro_usd,classification,monetary_complete,incomplete,unknown_tail,committed_seq";
 fn decode_origin(v: &Value) -> Result<StoredUsageOrigin, StorageError> {
     Ok(StoredUsageOrigin {
         source_kind: field(v, "source_kind")?,
@@ -377,6 +377,7 @@ fn decode_origin(v: &Value) -> Result<StoredUsageOrigin, StorageError> {
         monetary_complete: boolean(v, "monetary_complete")?,
         incomplete: boolean(v, "incomplete")?,
         unknown_tail: boolean(v, "unknown_tail")?,
+        committed_sequence: field(v, "committed_seq")?,
     })
 }
 fn write_origin(c: &Connection, r: &StoredUsageOrigin, update: bool) -> Result<(), StorageError> {
@@ -401,6 +402,7 @@ fn write_origin(c: &Connection, r: &StoredUsageOrigin, update: bool) -> Result<(
             sql(&r.monetary_complete)?,
             sql(&r.incomplete)?,
             sql(&r.unknown_tail)?,
+            sql(&r.committed_sequence)?,
         ],
         update,
         2,
@@ -1307,6 +1309,11 @@ impl UsageRepository for Unit<'_> {
         classification(&r.classification)?;
         nonnegative(r.priced_micro_usd)?;
         nonnegative(Some(r.recorded_at_ms))?;
+        if (r.source_kind == "SessionUsage") != r.committed_sequence.is_some() {
+            return Err(invalid(
+                "a committed sequence belongs to session usage origins only",
+            ));
+        }
         validate_origin_scope(self, r)?;
         if let Some(id) = &r.attempt_id {
             let a = attempt(self.conn, id)?.ok_or_else(|| missing("attempt", id))?;

@@ -898,7 +898,6 @@ fn write_batch(
             item: serde_json::to_value(u)
                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
         };
-        tx.sessions().insert_usage(&usage)?;
         crate::services::usage::ingest::session_usage(tx, &usage)?;
     }
     if let Some(checkpoint) = &batch.checkpoint {
