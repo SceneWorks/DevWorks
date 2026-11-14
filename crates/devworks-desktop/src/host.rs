@@ -1420,8 +1420,10 @@ mod skill_root_protection_tests {
             scratch.join("home/.agents/skills"),
             scratch.join("data/skills"),
         ] {
-            // A command names paths with `/` separators, which every platform accepts.
+            // A command names paths with `/` separators, which every platform accepts, quoted
+            // for `sh` so a temporary folder with a space in its name stays one word.
             let root = root.display().to_string().replace('\\', "/");
+            let root = format!("'{}'", root.replace('\'', r"'\''"));
             let script = format!("echo 'Do evil.' > {root}/evil/SKILL.md");
             let ShellAssessment::Destructive { plans, .. } = assess_command(
                 &["sh".to_owned(), "-c".to_owned(), script.clone()],
