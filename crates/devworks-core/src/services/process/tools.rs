@@ -436,9 +436,9 @@ struct InstallCommand {
 ///
 /// - Cargo: `cargo fetch` (downloads only; nothing is compiled, so no `build.rs` runs) instead
 ///   of `cargo build`.
-/// - npm, pnpm and Yarn 1: `--ignore-scripts`. The arguments are Yarn 1's; Yarn 2+ does not
-///   document `--ignore-scripts`, and for it `YARN_ENABLE_SCRIPTS=false` (which overrides its rc
-///   files) stops third-party package scripts.
+/// - npm, pnpm and Yarn 1: `--ignore-scripts`. Yarn 2+ (told apart by its lockfile) does not
+///   accept that option; it gets `--mode=skip-build` (no build script runs at all) and
+///   `YARN_ENABLE_SCRIPTS=false`, which overrides its rc files.
 /// - uv: `--no-build` (no source distribution is built, so no build backend runs) and
 ///   `--no-install-workspace` (the project and its workspace members are not built either).
 /// - pip: `--only-binary :all:`, and only for a requirements file in which nothing could
@@ -503,9 +503,20 @@ fn install_command(
             }
         }
         "yarn.lock" => {
-            let mut args = strings(&["install", "--frozen-lockfile"]);
-            no_scripts(&mut args, &["--ignore-scripts"]);
-            args.extend(["--cwd".into(), root_text]);
+            // A Yarn 2+ lockfile carries a `__metadata` entry; Yarn 1's does not. The process
+            // already runs in `root`.
+            let berry = manifest
+                .split(|byte| *byte == b'\n')
+                .any(|line| line.starts_with(b"__metadata:"));
+            let mut args;
+            if berry {
+                args = strings(&["install", "--immutable"]);
+                no_scripts(&mut args, &["--mode=skip-build"]);
+            } else {
+                args = strings(&["install", "--frozen-lockfile"]);
+                no_scripts(&mut args, &["--ignore-scripts"]);
+                args.extend(["--cwd".into(), root_text]);
+            }
             InstallCommand {
                 program: "yarn",
                 args,
@@ -583,18 +594,20 @@ fn install_command(
 /// environment variables in it; any of those could build a package, so such a file needs
 /// `allowScripts`.
 fn binary_only_requirements(manifest: &[u8]) -> bool {
-    const OPTIONS: &[&str] = &[
-        "-i",
-        "--index-url",
-        "--extra-index-url",
-        "--no-index",
-        "-f",
-        "--find-links",
-        "--prefer-binary",
-        "--require-hashes",
-        "--pre",
-        "--trusted-host",
+    // (option, takes a value)
+    const GLOBAL: &[(&str, bool)] = &[
+        ("-i", true),
+        ("--index-url", true),
+        ("--extra-index-url", true),
+        ("--no-index", false),
+        ("-f", true),
+        ("--find-links", true),
+        ("--prefer-binary", false),
+        ("--require-hashes", false),
+        ("--pre", false),
+        ("--trusted-host", true),
     ];
+    const PER_REQUIREMENT: &[(&str, bool)] = &[("--hash", true)];
     const ARCHIVES: &[&str] = &[
         ".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz", ".tar.xz", ".txz",
     ];
@@ -620,14 +633,18 @@ fn binary_only_requirements(manifest: &[u8]) -> bool {
         if code.contains('$') {
             return false;
         }
-        if code.starts_with('-') {
-            let option = code
-                .split(|c: char| c == '=' || c.is_whitespace())
-                .next()
-                .unwrap_or_default();
-            return OPTIONS.contains(&option);
+        // Like pip, the options start at the first token that starts with `-`; every one of
+        // them must be allowed, not just the first.
+        let tokens: Vec<&str> = code.split_whitespace().collect();
+        let first_option = tokens
+            .iter()
+            .position(|token| token.starts_with('-'))
+            .unwrap_or(tokens.len());
+        let (requirement, options) = tokens.split_at(first_option);
+        if requirement.is_empty() {
+            return allowed_options(options, GLOBAL);
         }
-        let (requirement, options) = code.split_once(" --").unwrap_or((code, ""));
+        let requirement = requirement.join(" ");
         let requirement = requirement.split(';').next().unwrap_or_default().trim();
         let lower = requirement.to_ascii_lowercase();
         requirement
@@ -636,11 +653,37 @@ fn binary_only_requirements(manifest: &[u8]) -> bool {
             .is_some_and(|c| c.is_ascii_alphanumeric())
             && !requirement.contains(['@', '/', '\\', ':'])
             && !ARCHIVES.iter().any(|archive| lower.ends_with(archive))
-            && options
-                .split(" --")
-                .filter(|option| !option.trim().is_empty())
-                .all(|option| option.trim_start().starts_with("hash"))
+            && allowed_options(options, PER_REQUIREMENT)
     })
+}
+
+/// Whether every token of a requirements-file line's options is one of `allowed`, each taking
+/// its value inline (`--name=value`) or as the next token when it takes one. Quoted tokens are
+/// refused, since pip unquotes options and a quoted token could hide another option.
+fn allowed_options(tokens: &[&str], allowed: &[(&str, bool)]) -> bool {
+    let quoted = |token: &str| token.contains(['"', '\'']);
+    let mut tokens = tokens.iter();
+    while let Some(token) = tokens.next() {
+        if quoted(token) {
+            return false;
+        }
+        let (name, inline) = match token.split_once('=') {
+            Some((name, _)) => (name, true),
+            None => (*token, false),
+        };
+        let Some(&(_, valued)) = allowed.iter().find(|(option, _)| *option == name) else {
+            return false;
+        };
+        if valued && !inline {
+            match tokens.next() {
+                Some(value) if !value.starts_with('-') && !quoted(value) => {}
+                _ => return false,
+            }
+        } else if !valued && inline {
+            return false;
+        }
+    }
+    true
 }
 
 /// Secret values can straddle a capture page or budget boundary. Remove any retained suffix
@@ -3574,6 +3617,20 @@ mod tests {
             Err(BindingRefusal::ScriptsRequired)
         );
         assert!(install_command("requirements.txt", root, b"-e .\n", true).is_ok());
+        // A Yarn 2+ lockfile selects Yarn 2+'s own switch; it has no `--ignore-scripts`.
+        let berry = b"__metadata:\n  version: 8\n".as_slice();
+        let off = install_command("yarn.lock", root, berry, false).expect("yarn 2+");
+        assert_eq!(
+            off.args,
+            names(&["install", "--immutable", "--mode=skip-build"])
+        );
+        assert!(
+            off.env
+                .contains(&("YARN_ENABLE_SCRIPTS".into(), "false".into()))
+        );
+        let on = install_command("yarn.lock", root, berry, true).expect("yarn 2+");
+        assert_eq!(on.args, names(&["install", "--immutable"]));
+        assert!(on.env.is_empty());
     }
 
     #[test]
@@ -3601,6 +3658,15 @@ mod tests {
             "git+https://example.invalid/repo.git#egg=pkg\n",
             "pkg-1.0.tar.gz\n",
             "pkg --config-settings=key=value\n",
+            // Every option on a line counts, not only the first.
+            "--no-index --requirement nested.txt\n",
+            "--prefer-binary -r nested.txt\n",
+            "-i https://example.invalid/simple -e .\n",
+            "--no-index=1\n",
+            "--index-url\n",
+            "requests --hash=sha256:aaaa -r nested.txt\n",
+            "requests -c constraints.txt\n",
+            "requests --hash=sha256:aaaa \"-r\" nested.txt\n",
             "${PKG}\n",
             "requests\n.\n",
         ] {
