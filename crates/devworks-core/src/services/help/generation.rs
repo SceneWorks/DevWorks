@@ -161,10 +161,10 @@ impl HelpService {
         }
         let kind = tx.actors().actor_kind(&job.actor)?;
         if !matches!(
-            (kind, job.actor_kind.as_str()),
-            (Some(crate::context::PrincipalKind::Human), "Human")
-                | (Some(crate::context::PrincipalKind::Host), "Host")
-        ) {
+            kind,
+            Some(crate::context::PrincipalKind::Human | crate::context::PrincipalKind::Host)
+        ) || kind.map(|k| k.as_str()) != Some(job.actor_kind.as_str())
+        {
             return Err(invalid("Help generation principal changed"));
         }
         let record = tx

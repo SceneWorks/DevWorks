@@ -40,3 +40,21 @@ avoid competing partial cache contents. Parallel groups reduce each job's requir
 work, without promising total wall time or lower billed compute. There is no new
 workflow or trigger, inference execution, model download, or required-check waiver.
 Hosted current-head CI, automated review, merge and acceptance remain pending.
+
+## DW-335: one macOS job
+
+GitHub allows the organization five hosted macOS jobs at a time, and the four macOS jobs
+per PR (clippy and the three groups above) took most of them. macOS now runs one job,
+named `test (macos-latest)`: one build, clippy, then every workspace test through
+`cargo nextest run --workspace` and the doctests through `cargo test --workspace --doc`.
+`.config/nextest.toml` keeps the limits that test binaries otherwise set with in-process
+mutexes. An Ubuntu job named `clippy (macos-latest)` passes only when that job's clippy
+step passed, so both required check names still report. Test temp files go to a RAM disk,
+because the SQLite store requests F_FULLFSYNC on macOS. That covers both `TMPDIR` and
+`<target>/tmp`, which is `CARGO_TARGET_TMPDIR` for the engine and desktop test helpers. On a dev Mac the adapters unit
+tests took 376 s under `cargo test`, 287 s under nextest and 119 s under nextest with the
+RAM disk; CI took 513 s for them under `cargo test` (run 43554082293). Ubuntu and Windows
+keep the groups above. The `pick macOS runners` job sends this one job to an idle
+self-hosted `devworks-mac` runner, or to `macos-latest` when none is idle. Several of those
+runners share one Mac, so the job caps nextest at three test threads and names its RAM disk
+after the runner.

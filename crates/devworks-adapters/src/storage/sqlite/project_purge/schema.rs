@@ -31,9 +31,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// knowledge_challenges, which only update the claim those rows already belong to; and moves
 /// each outgoing MCP server's catalog into its own configuration_revisions namespace in the same
 /// scope. It adds no table or ownership edge: the tallies are columns of their claim, and the
-/// catalogs are configuration rows of the scope that already owns the server.
+/// catalogs are configuration rows of the scope that already owns the server. Migration 55 adds
+/// two partial indexes, owned_process_root_unsettled and owned_containers_root_agent_work; it
+/// adds no table, column or ownership edge, and both tables keep their purge policy.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "fc2a7fc0d88b558309af7da78e6710dc92c592b51a930f0c71c09aec65bae549";
+    "6114192011efe4351949a7980632a3f563b79a3803fdccf45847f45f551ad57c";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

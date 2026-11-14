@@ -70,10 +70,10 @@ Configured models allocated round-robin for Tier Low.
 
 Selected agent tools.
 
-- Default: `serde_json::Map::<String`
+- Default: `serde_json::Map::<String, Value>::new()`
 - Scope: Workspace only
-- Adoption: Value>::new()
-- Policy: NextSafeStep
+- Adoption: NextSafeStep
+- Policy: Configurable
 - Section: Tools
 
 Explicit per-tool choices shared by agents. Missing tools use their origin's default; reviewer read-only rules and other safety controls still apply.

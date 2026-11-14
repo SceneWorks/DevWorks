@@ -141,6 +141,76 @@ fn package_source_attachment(p: &ApprovalViewRecord) -> bool {
         && reviewed.0.pointer("/source/bundle")
             == Some(&serde_json::to_value(artifact).expect("typed package source"))
 }
+/// The readable review of an agent's `containers.create`: the image and command, each mount
+/// source with its host path and read-only flag, and each published port with its bind address.
+/// `None` when the proposal is not one or its review is held in an evidence artifact instead.
+fn container_create_review(p: &ApprovalViewRecord) -> Option<Vec<String>> {
+    if p.operation_kind.0 != "containers.create" {
+        return None;
+    }
+    let reviewed = &p.reviewed_content.as_ref()?.0;
+    if reviewed["operation"] != "containers.create" {
+        return None;
+    }
+    let text = |v: &serde_json::Value| v.as_str().unwrap_or("?").to_owned();
+    let mut lines = vec![format!("Image: {}", text(&reviewed["image"]))];
+    let command: Vec<String> = reviewed["command"].as_array()?.iter().map(text).collect();
+    lines.push(if command.is_empty() {
+        "Command: image default".into()
+    } else {
+        format!("Command: {}", command.join(" "))
+    });
+    let mounts = reviewed["mounts"].as_array()?;
+    if mounts.is_empty() {
+        lines.push("Mounts: none".into());
+    }
+    for mount in mounts {
+        lines.push(format!(
+            "Mount {} ({} / {}) at {}, {}",
+            text(&mount["hostPath"]),
+            text(&mount["source"]["rootId"]),
+            text(&mount["source"]["relative"]),
+            text(&mount["destination"]),
+            if mount["readOnly"].as_bool()? {
+                "read-only"
+            } else {
+                "writable"
+            }
+        ));
+    }
+    let ports = reviewed["ports"].as_array()?;
+    if ports.is_empty() {
+        lines.push("Published ports: none".into());
+    }
+    for port in ports {
+        lines.push(format!(
+            "Port {}/{} on {} to container port {}{}",
+            port["hostPort"].as_u64()?,
+            text(&port["protocol"]),
+            text(&port["bindAddress"]),
+            port["containerPort"].as_u64()?,
+            if port["exposeBeyondLoopback"].as_bool()? {
+                ", reachable from other machines"
+            } else {
+                ""
+            }
+        ));
+    }
+    for entry in reviewed["environment"].as_array().into_iter().flatten() {
+        lines.push(match entry["credentialRef"].as_str() {
+            Some(credential) => format!(
+                "Environment {} from credential {credential}",
+                text(&entry["name"])
+            ),
+            None => format!(
+                "Environment {}={}",
+                text(&entry["name"]),
+                text(&entry["value"])
+            ),
+        });
+    }
+    Some(lines)
+}
 fn required_approval_text(
     p: &ApprovalViewRecord,
 ) -> Option<devworks_core::protocol::provider::ArtifactRef> {
@@ -1315,6 +1385,12 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
             }
         }
     }
+    if let Some(lines) = container_create_review(p) {
+        ui.label(RichText::new("Container to create").strong());
+        for line in lines {
+            ui.add(egui::Label::new(line).wrap().selectable(true));
+        }
+    }
     if let Some(content) = &p.reviewed_content {
         json_view(ui, "Reviewed binding and evidence", content);
     }
@@ -1480,6 +1556,31 @@ mod artifact_review_tests {
     fn proposal(operation: &str) -> ApprovalViewRecord {
         let artifact = json!({"artifactId":"source","versionId":"version","sha256":"a".repeat(64),"byteLength":"123","mediaType":"application/vnd.devworks.package"});
         serde_json::from_value(json!({"id":"review","revision":"1","contentDigest":"b".repeat(64),"state":"Pending","operationKind":operation,"targetId":"pack","targetRevision":"1","summary":"Review exact package","artifact":artifact,"payload":{"kind":"SavedOperation","schemaRevision":"1","input":{}},"reviewedContent":{"operation":operation,"inspection":{},"source":{"bundle":artifact}}})).unwrap()
+    }
+    #[test]
+    fn container_create_review_lists_mounts_ports_and_image() {
+        let mut p: ApprovalViewRecord = serde_json::from_value(json!({"id":"review","revision":"1","contentDigest":"b".repeat(64),"state":"Pending","operationKind":"containers.create","targetId":"project-a","targetRevision":"1","summary":"Review container","payload":{"kind":"SavedOperation","schemaRevision":"8","input":{}},
+            "reviewedContent":{"operation":"containers.create","engineId":"docker","projectId":"project-a","image":"alpine:3.20","command":["sh","-c","serve"],
+                "mounts":[{"source":{"rootId":"repo","relative":"src"},"hostPath":"/work/repo/src","destination":"/src","readOnly":true},
+                          {"source":{"rootId":"repo","relative":"data"},"hostPath":"/work/repo/data","destination":"/data","readOnly":false}],
+                "ports":[{"hostPort":8080,"containerPort":80,"protocol":"tcp","exposeBeyondLoopback":false,"bindAddress":"127.0.0.1"},
+                         {"hostPort":5353,"containerPort":53,"protocol":"udp","exposeBeyondLoopback":true,"bindAddress":"all host interfaces"}],
+                "environment":[{"name":"MODE","value":"dev"},{"name":"TOKEN","credentialRef":"cred-1"}],"resourceIds":[]}})).unwrap();
+        assert_eq!(
+            container_create_review(&p).unwrap(),
+            [
+                "Image: alpine:3.20",
+                "Command: sh -c serve",
+                "Mount /work/repo/src (repo / src) at /src, read-only",
+                "Mount /work/repo/data (repo / data) at /data, writable",
+                "Port 8080/tcp on 127.0.0.1 to container port 80",
+                "Port 5353/udp on all host interfaces to container port 53, reachable from other machines",
+                "Environment MODE=dev",
+                "Environment TOKEN from credential cred-1",
+            ]
+        );
+        p.operation_kind.0 = "git.commit".into();
+        assert!(container_create_review(&p).is_none());
     }
     #[test]
     fn only_exact_owner_package_sources_are_optional_binary_attachments() {
