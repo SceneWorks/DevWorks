@@ -384,7 +384,7 @@ pub(crate) fn invalidate_for_configuration(
                 ctx.project_id(),
                 (OVERLAY_AGGREGATE, &o.id, next.revision),
                 "IndexOverlayStale",
-                json!({"reason": next.reason, "principalKind": format!("{:?}", ctx.principal_kind())}),
+                json!({"reason": next.reason, "principalKind": ctx.principal_kind().as_str().to_string()}),
             )?;
             n += 1;
         }
@@ -603,7 +603,7 @@ pub(crate) fn refresh(
             "commit": commit.map(|(oid, _)| oid.as_str()), "ref": commit.and_then(|(_, r)| r.as_deref()),
             "observedCapture": snapshot.and_then(|s| s.capture_digest.clone()),
             "observedHead": snapshot.and_then(|s| s.head_oid.clone()),
-            "principalKind": format!("{:?}", ctx.principal_kind()),
+            "principalKind": ctx.principal_kind().as_str().to_string(),
         }),
     )?;
     history(
@@ -613,7 +613,7 @@ pub(crate) fn refresh(
         (RUN_AGGREGATE, &run.id, run.revision),
         "IndexRunQueued",
         json!({"kind": RUN_OVERLAY, "repositoryId": r.id.as_str(), "overlayId": overlay_id.as_str(),
-            "principalKind": format!("{:?}", ctx.principal_kind())}),
+            "principalKind": ctx.principal_kind().as_str().to_string()}),
     )?;
     Ok(DomainDecision::Applied {
         result: OperationResult::IndexingRefreshOverlay {

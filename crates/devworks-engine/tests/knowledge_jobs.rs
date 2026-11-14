@@ -117,67 +117,74 @@ fn applied(reply: DomainCommandReply) -> OperationResult {
     }
 }
 
+/// Registers the user, records `claims` claims of source `run-9` and confirms a delete by that
+/// source, so its first batch has run and the rest waits as a durable job. Returns the write id.
+fn start_deletion(app: &App, claims: usize) -> Id {
+    let registered = ActorId(id("user-a"));
+    write(&*app.store, move |tx| {
+        tx.actors()
+            .register(&registered, PrincipalKind::Human, "user-a")
+    })
+    .unwrap();
+    for b in 0..claims / 100 {
+        let drafts: Vec<Value> = (0..100)
+            .map(|i| {
+                json!({"kind": "Fact", "subjectId": "s", "predicate": "states",
+                    "value": format!("fact {b}-{i}"), "confidence": 0.7, "evidenceIds": [],
+                    "tags": [], "source": "run-9"})
+            })
+            .collect();
+        applied(app.cmd(
+            "knowledge.record",
+            2,
+            json!({"scope": {"kind": "Workspace"}, "batch": {
+            "entities": [{"clientId": "s", "label": format!("Run {b}"), "entityType": "t",
+                "aliases": [], "source": "run-9"}],
+            "evidence": [], "claims": drafts}}),
+        ));
+    }
+    let (digest, revision) = match app.q(
+        "knowledge.diagnostics",
+        json!({"scope": {"kind": "Workspace"}, "sourceId": "run-9"}),
+    ) {
+        OperationResult::KnowledgeDiagnostics { value } => {
+            let d = value
+                .items
+                .0
+                .iter()
+                .find(|d| d.component.0 == "knowledge.preview")
+                .unwrap()
+                .id
+                .as_str()
+                .to_owned();
+            let rev = read(&*app.store, |r| {
+                r.knowledge()
+                    .knowledge_scope_revision(&KnowledgeScope::Workspace)
+            });
+            (d, rev)
+        }
+        other => panic!("{other:?}"),
+    };
+    let summary = match applied(app.cmd(
+        "knowledge.delete_by_source",
+        1,
+        json!({"scope": {"kind": "Workspace"}, "sourceId": "run-9",
+        "expectedScopeRevision": revision.to_string(), "previewDigest": digest}),
+    )) {
+        OperationResult::KnowledgeDeleteBySource { value } => value,
+        other => panic!("{other:?}"),
+    };
+    summary.id
+}
+
 #[test]
 fn an_interrupted_source_deletion_resumes_at_boot_and_finishes_the_whole_source() {
     let h = Harness::new();
     let claims = DELETION_BATCH * 2 + 100;
     let (write, job_entry) = {
         let app = App::boot(&h);
-        let registered = ActorId(id("user-a"));
-        write(&*app.store, move |tx| {
-            tx.actors()
-                .register(&registered, PrincipalKind::Human, "user-a")
-        })
-        .unwrap();
-        for b in 0..claims / 100 {
-            let drafts: Vec<Value> = (0..100)
-                .map(|i| {
-                    json!({"kind": "Fact", "subjectId": "s", "predicate": "states",
-                        "value": format!("fact {b}-{i}"), "confidence": 0.7, "evidenceIds": [],
-                        "tags": [], "source": "run-9"})
-                })
-                .collect();
-            applied(app.cmd(
-                "knowledge.record",
-                2,
-                json!({"scope": {"kind": "Workspace"}, "batch": {
-                "entities": [{"clientId": "s", "label": format!("Run {b}"), "entityType": "t",
-                    "aliases": [], "source": "run-9"}],
-                "evidence": [], "claims": drafts}}),
-            ));
-        }
-        let (digest, revision) = match app.q(
-            "knowledge.diagnostics",
-            json!({"scope": {"kind": "Workspace"}, "sourceId": "run-9"}),
-        ) {
-            OperationResult::KnowledgeDiagnostics { value } => {
-                let d = value
-                    .items
-                    .0
-                    .iter()
-                    .find(|d| d.component.0 == "knowledge.preview")
-                    .unwrap()
-                    .id
-                    .as_str()
-                    .to_owned();
-                let rev = read(&*app.store, |r| {
-                    r.knowledge()
-                        .knowledge_scope_revision(&KnowledgeScope::Workspace)
-                });
-                (d, rev)
-            }
-            other => panic!("{other:?}"),
-        };
-        let summary = match applied(app.cmd(
-            "knowledge.delete_by_source",
-            1,
-            json!({"scope": {"kind": "Workspace"}, "sourceId": "run-9",
-            "expectedScopeRevision": revision.to_string(), "previewDigest": digest}),
-        )) {
-            OperationResult::KnowledgeDeleteBySource { value } => value,
-            other => panic!("{other:?}"),
-        };
-        let r = app.status(&summary.id);
+        let summary_id = start_deletion(&app, claims);
+        let r = app.status(&summary_id);
         assert!(matches!(r.state, OperationState::Dispatching));
         assert_eq!(r.claim_count.unwrap().get(), DELETION_BATCH as i64);
         // The process stops while a dispatcher holds the job's next batch: its transaction
@@ -191,7 +198,7 @@ fn an_interrupted_source_deletion_resumes_at_boot_and_finishes_the_whole_source(
         let entry = write(&*app.store, move |tx| tx.queue().claim_ready(&ghost))
             .unwrap()
             .remove(0);
-        (summary.id, entry.id)
+        (summary_id, entry.id)
     };
 
     // Next boot: the dispatcher recovers the stranded claim and the consumer finishes the job.
@@ -223,4 +230,49 @@ fn an_interrupted_source_deletion_resumes_at_boot_and_finishes_the_whole_source(
             .knowledge_source_claims(&KnowledgeScope::Workspace, "run-9", None, 500)
     });
     assert!(left.is_empty());
+}
+
+#[test]
+fn a_deletion_job_with_an_unrecognised_principal_kind_is_refused() {
+    let h = Harness::new();
+    let claims = DELETION_BATCH + 100;
+    let app = App::boot(&h);
+    let write_id = start_deletion(&app, claims);
+    let before = app.status(&write_id);
+    assert!(matches!(before.state, OperationState::Dispatching));
+    let wid = write_id.clone();
+    write(&*app.store, move |tx| {
+        let mut job = tx.knowledge().knowledge_source_deletion(&wid)?.unwrap();
+        job.principal_kind = "Robot".into();
+        tx.knowledge().put_knowledge_source_deletion(&job)
+    })
+    .unwrap();
+    let d = dispatcher(
+        &h,
+        app.store.clone(),
+        vec![source_deletion_consumer(app.knowledge.clone())],
+    );
+    let rt = runtime();
+    rt.block_on(async {
+        within("the refused deletion job", async {
+            d.tick().await.unwrap();
+            let _ = d.run_until_idle().await;
+        })
+        .await;
+    });
+    let after = app.status(&write_id);
+    assert!(
+        !matches!(after.state, OperationState::ObservedComplete),
+        "{:?}",
+        after.state
+    );
+    assert_eq!(
+        after.claim_count, before.claim_count,
+        "no further batch ran as another principal"
+    );
+    let left = read(&*app.store, |r| {
+        r.knowledge()
+            .knowledge_source_claims(&KnowledgeScope::Workspace, "run-9", None, 500)
+    });
+    assert!(!left.is_empty(), "the source was not deleted");
 }

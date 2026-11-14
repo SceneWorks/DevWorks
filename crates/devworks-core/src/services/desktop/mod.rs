@@ -115,7 +115,7 @@ impl InputJob {
     ) -> Self {
         Self {
             actor: ctx.principal().clone(),
-            kind: format!("{:?}", ctx.principal_kind()),
+            kind: ctx.principal_kind().as_str().to_string(),
             session: ctx.session_id().cloned(),
             project: ctx.project_id().cloned(),
             root: ctx.root_id().cloned(),
@@ -135,15 +135,7 @@ impl InputJob {
         store: &dyn ApplicationStore,
         operation: &OperationId,
     ) -> Option<InvocationContext> {
-        let kind = match self.kind.as_str() {
-            "Human" => PrincipalKind::Human,
-            "Agent" => PrincipalKind::Agent,
-            "Package" => PrincipalKind::Package,
-            "McpClient" => PrincipalKind::McpClient,
-            "Schedule" => PrincipalKind::Schedule,
-            "Host" => PrincipalKind::Host,
-            _ => return None,
-        };
+        let kind = PrincipalKind::parse(&self.kind)?;
         if store.info().restore_epoch != self.restore_epoch {
             return None;
         }
@@ -1162,7 +1154,7 @@ impl QueryHandler for DesktopService {
                 .cloned()
                 .map_or(ArtifactScope::Workspace, ArtifactScope::Project),
             producer: ctx.principal().clone(),
-            principal_kind: format!("{:?}", ctx.principal_kind()),
+            principal_kind: ctx.principal_kind().as_str().to_string(),
             agent_session: ctx.session_id().cloned(),
             root: ctx.root_id().cloned(),
             assignment: ctx.assignment_id().cloned(),

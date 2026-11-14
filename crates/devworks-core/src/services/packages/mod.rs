@@ -360,18 +360,6 @@ fn package_conflict(
     )
 }
 
-/// The context's principal kind as recorded.
-fn kind_name(k: PrincipalKind) -> &'static str {
-    match k {
-        PrincipalKind::Human => "Human",
-        PrincipalKind::Agent => "Agent",
-        PrincipalKind::Package => "Package",
-        PrincipalKind::McpClient => "McpClient",
-        PrincipalKind::Schedule => "Schedule",
-        PrincipalKind::Host => "Host",
-    }
-}
-
 /// History event of a package transition.
 pub(crate) fn event(
     tx: &mut dyn WriteTransaction,
@@ -779,7 +767,7 @@ impl PackageService {
                         .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
                     provenance: json!({
                         "installedBy": ctx.principal().0.as_str(),
-                        "principalKind": kind_name(ctx.principal_kind()),
+                        "principalKind": ctx.principal_kind().as_str(),
                         "sessionId": ctx.session_id().map(Id::as_str),
                         "agentAuthored": agent_authored,
                         "proposalId": proposal.as_ref().map(|p| p.id.as_str()),
@@ -1661,7 +1649,7 @@ impl PackageService {
                     .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
                 provenance: json!({
                     "installedBy": ctx.principal().0.as_str(),
-                    "principalKind": kind_name(ctx.principal_kind()),
+                    "principalKind": ctx.principal_kind().as_str(),
                     "sessionId": ctx.session_id().map(Id::as_str),
                     "agentAuthored": true,
                     "proposalId": id.as_str(),
@@ -1711,7 +1699,7 @@ impl PackageService {
             base_package_id: i.base_package_id.as_ref().map(|b| b.as_str().to_owned()),
             originator: ctx.principal().clone(),
             origin: json!({
-                "kind": kind_name(ctx.principal_kind()),
+                "kind": ctx.principal_kind().as_str(),
                 "sessionId": ctx.session_id().map(Id::as_str),
                 "projectId": ctx.project_id().map(|p| p.0.as_str()),
                 "rootId": ctx.root_id().map(|r| r.0.as_str()),

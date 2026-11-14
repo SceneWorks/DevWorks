@@ -972,7 +972,7 @@ pub fn record_refusal(
                 "rationale": decision.rationale(),
                 "target": decision.offending,
                 "repositoryId": repository,
-                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "principalKind": ctx.principal_kind().as_str().to_string(),
                 "authoritySources": sources,
                 "registryRevision": decision.registry_revision,
             }),
