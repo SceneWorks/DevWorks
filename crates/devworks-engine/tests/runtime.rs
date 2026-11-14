@@ -698,3 +698,35 @@ fn an_applied_delete_starts_a_collection_pass_that_removes_the_released_file() {
     );
     rt.block_on(app.shutdown()).into_result().unwrap();
 }
+
+/// Every background loop waits on its stop signal as well as its interval: with every interval
+/// an hour long, shutdown ends in well under its 30 s bound instead of waiting out a loop's sleep.
+#[test]
+fn shutdown_with_hour_long_intervals_finishes_well_under_the_bound() {
+    let h = Harness::new();
+    let rt = runtime();
+    let store = h.open();
+    let mut c = composition(&h, store, Arc::new(native(&h)), sources(&h));
+    let hour = Duration::from_secs(3600);
+    c.config.collect_interval = hour;
+    c.config.housekeeping_interval = hour;
+    c.config.diagnostics_interval = hour;
+    c.config.browser_interval = hour;
+    c.config.scheduler_interval = hour;
+    c.config.eval_interval = hour;
+    c.config.approval_resume_interval = hour;
+    c.config.notification_interval = hour;
+    c.config.watch_interval = hour;
+    c.config.shutdown_bound = Duration::from_secs(30);
+    let app = rt.block_on(boot(c)).unwrap();
+    // Every loop finishes its first pass and enters its wait.
+    rt.block_on(async { tokio::time::sleep(Duration::from_millis(300)).await });
+    let started = std::time::Instant::now();
+    rt.block_on(app.shutdown()).into_result().unwrap();
+    let took = started.elapsed();
+    eprintln!("shutdown with hour-long intervals took {took:?}");
+    assert!(
+        took < Duration::from_secs(5),
+        "shutdown took {took:?} with a 30 s bound"
+    );
+}

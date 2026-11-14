@@ -184,7 +184,9 @@ def main():
         'repositories':'repositories', 'indexing':'indexing', 'work':'workflow',
         'notifications':'approvals', 'help':'help', 'usage':'usage',
         'prices':'usage', 'graph':'code-exploration', 'instructions':'settings-Instructions',
-        'watchers':'watchers'
+        'watchers':'watchers', 'agents':'agents', 'conventions':'conventions',
+        'schemas':'databases', 'embedding_spaces':'routing-context', 'mcp':'mcp-servers',
+        'process_tools':'process-tools', 'containers':'containers', 'desktop':'desktop-control'
     }
     for owner in re.findall(r'pub fn with_(\w+)\(', services):
         if owner not in owners or owners[owner] not in ids:

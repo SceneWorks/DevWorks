@@ -35,24 +35,6 @@ pub use crate::authority::redact::SecretRef;
 // Read side for settings credentials (`{"secretRef": "dwsecret-..."}` values), which the web
 // tools resolve their search credential through.
 
-/// A resolved credential. Its `Debug` never shows the value.
-#[derive(Clone, PartialEq, Eq)]
-pub struct SecretValue(String);
-impl SecretValue {
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-    /// The value, for the one request that must carry it.
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-}
-impl fmt::Debug for SecretValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("SecretValue(..)")
-    }
-}
-
 /// Why a reference did not resolve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SecretUnavailable {
@@ -66,7 +48,7 @@ pub enum SecretUnavailable {
 
 /// The native secret store, read side, for settings secret references.
 pub trait SecretResolver: Send + Sync {
-    fn resolve(&self, reference: &SecretRef) -> Result<SecretValue, SecretUnavailable>;
+    fn resolve(&self, reference: &SecretRef) -> Result<Secret, SecretUnavailable>;
 }
 
 /// No native secret store is composed: every reference is `Unsupported`. Production hosts
@@ -74,7 +56,7 @@ pub trait SecretResolver: Send + Sync {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoSecretStore;
 impl SecretResolver for NoSecretStore {
-    fn resolve(&self, _: &SecretRef) -> Result<SecretValue, SecretUnavailable> {
+    fn resolve(&self, _: &SecretRef) -> Result<Secret, SecretUnavailable> {
         Err(SecretUnavailable::Unsupported)
     }
 }

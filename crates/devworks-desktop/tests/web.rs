@@ -10,7 +10,7 @@ use common::*;
 use devworks_adapters::web::transport::NativeTransport;
 use devworks_core::ports::secrets::{Secret, SessionSecrets};
 use devworks_core::ports::web::{
-    HopRequest, HopResponse, HttpTransport, NetFault, Resolver, SearchFault, SearchHit, SearchPage,
+    HopRequest, HopResponse, HopTransport, NetFault, Resolver, SearchFault, SearchHit, SearchPage,
     SearchProvider, SearchRequest,
 };
 use devworks_core::services::web::WebPorts;
@@ -50,7 +50,7 @@ impl Resolver for Names {
 
 /// The native transport with the scripted public address mapped onto the local server.
 struct Mapped(NativeTransport, SocketAddr);
-impl HttpTransport for Mapped {
+impl HopTransport for Mapped {
     fn get(&self, request: &HopRequest<'_>) -> Result<HopResponse, NetFault> {
         let mut r = request.clone();
         if r.addr.ip() == PUBLIC.parse::<IpAddr>().unwrap() {
@@ -106,7 +106,7 @@ fn agent_tools_settings_fetch_search_and_show_web_activity() {
     let root = Root::new("web-panel");
     let mut config = config(&root.0);
     let addr = server();
-    let transport: Arc<dyn HttpTransport> = Arc::new(Mapped(NativeTransport::new(), addr));
+    let transport: Arc<dyn HopTransport> = Arc::new(Mapped(NativeTransport::new(), addr));
     config.web = Arc::new(move |secrets| WebPorts {
         resolver: Arc::new(Names),
         transport: transport.clone(),
@@ -205,7 +205,7 @@ fn a_search_credential_stored_through_the_secret_store_resolves_for_web_search()
     config.secrets = Some(secrets.clone());
     let provider = Arc::new(Recorded::default());
     let recorded = provider.clone();
-    let transport: Arc<dyn HttpTransport> = Arc::new(Mapped(
+    let transport: Arc<dyn HopTransport> = Arc::new(Mapped(
         NativeTransport::new(),
         "127.0.0.1:9".parse().unwrap(),
     ));
