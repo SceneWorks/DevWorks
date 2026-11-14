@@ -153,6 +153,7 @@ async fn drive_agent_turn(
         std::future::pending::<()>().await;
     });
     let mut retry_at_ms = None;
+    let mut credentials_rejected = false;
     let result = run_native_loop(
         &runtime,
         &ctx,
@@ -162,6 +163,7 @@ async fn drive_agent_turn(
             stopped,
         },
         &mut retry_at_ms,
+        &mut credentials_rejected,
     )
     .await;
     bridge.abort();
@@ -192,6 +194,12 @@ async fn drive_agent_turn(
             until_ms: retry_at_ms.expect("checked above"),
             detail: format!("native agent provider cooldown: {error:?}"),
         }),
+        // The provider rejected the credential: its credentials hold explains the wait and
+        // clears on repair. Retrying (not escalating) lets the root resume even when the repair
+        // lands before this failure is reported.
+        Err(error) if credentials_rejected => LaunchEnd::Failed(ActivationFailure::Transient(
+            format!("native agent provider rejected the credential: {error:?}"),
+        )),
         Err(error) => turn_failure(error),
     }
 }
@@ -273,6 +281,7 @@ async fn run_native_loop(
     agent: &AgentRecord,
     mut stop: Stop<'_>,
     retry_at_ms: &mut Option<i64>,
+    credentials_rejected: &mut bool,
 ) -> Result<(), StorageError> {
     let cancellation = stop.cancellation;
     // Marked seen before each dispatch, so a change committed while a call is dispatched still
@@ -505,6 +514,12 @@ async fn run_native_loop(
             Some(AttemptEnd::Cancelled) => return Err(StorageError::Cancelled),
             outcome => {
                 *retry_at_ms = progress.provider.result.retry_at_ms;
+                *credentials_rejected = progress
+                    .provider
+                    .result
+                    .faults
+                    .iter()
+                    .any(|fault| fault.starts_with("Authentication:"));
                 return Err(StorageError::InvalidRecord(format!(
                     "agent inference did not yield a settled continuation: {outcome:?}; faults: {:?}",
                     progress.provider.result.faults
