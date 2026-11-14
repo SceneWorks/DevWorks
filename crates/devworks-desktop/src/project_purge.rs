@@ -85,6 +85,15 @@ fn load_checked(path: &std::path::Path) -> Option<Memory> {
         }
     }
 }
+/// Removes the reviewed set-aside copy, which may hold a purged project's drafts and frames and
+/// cannot be partitioned by project.
+fn remove_set_aside(state: &State) -> Result<(), PurgeFileFault> {
+    match std::fs::remove_file(&state.set_aside) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(PurgeFileFault::Io),
+    }
+}
 fn fault(_: purge::MemoryPurgeFault) -> PurgeFileFault {
     PurgeFileFault::Unattributed
 }
@@ -307,6 +316,7 @@ impl ProjectPurgeClient for NativePurgeClient {
             .get(key)
             .is_some_and(|f| f.scope == *scope && f.digest == digest)
         {
+            remove_set_aside(&state)?;
             self.sources.revoke_project(&scope.project_id);
             return if state.online && state.awaiting_ui.contains(key) {
                 Err(PurgeFileFault::InUse)
@@ -318,13 +328,6 @@ impl ProjectPurgeClient for NativePurgeClient {
         // A restart loses volatile editors, but not the reviewed persisted draft witness.
         if snapshot.digest != digest || snapshot.pending {
             return Err(PurgeFileFault::Changed);
-        }
-        // The reviewed set-aside copy may hold this project's drafts and frames and cannot be
-        // partitioned, so it goes before the fence is recorded.
-        match std::fs::remove_file(&state.set_aside) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err(PurgeFileFault::Io),
         }
         let mut after = partition.sessions.after;
         let mut live = state.live.clone();
@@ -349,6 +352,9 @@ impl ProjectPurgeClient for NativePurgeClient {
         state.live.paths.remove(key);
         state.cleaned.push(scope.clone());
         self.sources.revoke_project(&scope.project_id);
+        // After the fence is durable: a failure here (or a restart) is retried through the
+        // fence above, never against a witness the removal already changed.
+        remove_set_aside(&state)?;
         if state.online {
             state.awaiting_ui.insert(key.into());
             Err(PurgeFileFault::InUse)
@@ -633,6 +639,34 @@ mod tests {
             let text = std::fs::read_to_string(entry.unwrap().path()).unwrap_or_default();
             assert!(!text.contains("PRIVATE-"), "{text}");
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_purge_whose_fence_save_failed_is_retried_with_the_set_aside_copy_intact() {
+        let root =
+            std::env::temp_dir().join(format!("dw233-retry-{}", HostIds::new().token("fixture")));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("ui-state.json");
+        std::fs::write(&path, br#"{"version":1,"fieldFromANewerBuild":true}"#).unwrap();
+        let client = client(path.clone());
+        client
+            .publish(Memory::default(), Live::default(), true)
+            .unwrap();
+        let reviewed = client.inspect(&scope()).unwrap();
+        // A directory in the file's place makes the fence save fail.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir_all(path.join("occupied")).unwrap();
+        assert_eq!(
+            client.remove_reviewed(&scope(), &reviewed.digest),
+            Err(PurgeFileFault::Io)
+        );
+        assert!(set_aside(&path).exists());
+        std::fs::remove_dir_all(&path).unwrap();
+        assert_eq!(
+            client.remove_reviewed(&scope(), &reviewed.digest),
+            Err(PurgeFileFault::InUse)
+        );
+        assert!(!set_aside(&path).exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 }
