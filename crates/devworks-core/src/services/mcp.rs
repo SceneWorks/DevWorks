@@ -1907,11 +1907,6 @@ impl McpClientService {
         tx: &mut dyn WriteTransaction,
         input: &ops::ConfigureInput,
     ) -> Result<DomainDecision, Failure> {
-        if ctx.principal_kind() != PrincipalKind::Human {
-            return Err(
-                Refusal::new(DomainErrorCode::PermissionDenied, "mcp_configuration", None).into(),
-            );
-        }
         if let McpTransport::Http {
             credential_ref: Some(handle),
             ..
@@ -2029,11 +2024,6 @@ impl McpClientService {
         tx: &mut dyn WriteTransaction,
         input: &ops::SelectToolsInput,
     ) -> Result<DomainDecision, Failure> {
-        if ctx.principal_kind() != PrincipalKind::Human {
-            return Err(
-                Refusal::new(DomainErrorCode::PermissionDenied, "mcp_selection", None).into(),
-            );
-        }
         scope(ctx, &requested_scope(&input.scope), tx.projects())?;
         let scope = active_server_scope(ctx, &requested_scope(&input.scope), tx.projects())?;
         let (version, mut state) = current(tx.configuration(), &scope)?;
@@ -2098,14 +2088,6 @@ impl McpClientService {
         tx: &mut dyn WriteTransaction,
         input: &ops::ClassifyToolInput,
     ) -> Result<DomainDecision, Failure> {
-        if ctx.principal_kind() != PrincipalKind::Human {
-            return Err(Refusal::new(
-                DomainErrorCode::PermissionDenied,
-                "mcp_classification",
-                None,
-            )
-            .into());
-        }
         let scope = active_server_scope(ctx, &requested_scope(&input.scope), tx.projects())?;
         let (version, mut state) = current(tx.configuration(), &scope)?;
         let server = state
@@ -2311,11 +2293,6 @@ impl McpClientService {
                 .into());
             }
         };
-        if ctx.principal_kind() != PrincipalKind::Human {
-            return Err(
-                Refusal::new(DomainErrorCode::PermissionDenied, "mcp_configuration", None).into(),
-            );
-        }
         let requested = requested_scope(requested);
         scope(ctx, &requested, tx.projects())?;
         let scope = active_server_scope(ctx, &requested, tx.projects())?;
