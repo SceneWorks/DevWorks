@@ -64,6 +64,8 @@ struct Request {
     assignment_id: Option<AssignmentId>,
     fences: Vec<AuthorityFence>,
     call: ToolCallKey,
+    /// The invoking agent's activation binding `(activation, owner epoch)`, when it has one.
+    activation: Option<(Id, i64)>,
 }
 impl Request {
     fn to_json(&self) -> Value {
@@ -73,6 +75,7 @@ impl Request {
             "principalKind": self.principal_kind, "sessionId": self.session_id,
             "projectId": self.project_id, "rootId": self.root_id,
             "assignmentId": self.assignment_id, "fences": self.fences, "call": self.call,
+            "activation": self.activation,
         })
     }
     fn from_json(v: &Value) -> Option<Self> {
@@ -94,6 +97,7 @@ impl Request {
             assignment_id: field!("assignmentId"),
             fences: field!("fences"),
             call: field!("call"),
+            activation: field!("activation"),
         })
     }
 }
@@ -232,6 +236,7 @@ pub fn queue(
         assignment_id: ctx.assignment_id().cloned(),
         fences,
         call: key.clone(),
+        activation: ctx.activation().map(|(id, epoch)| (id.clone(), epoch)),
     };
     let ctx = ctx.clone();
     run_write(store, WriteOptions::default(), move |tx| {
@@ -356,6 +361,12 @@ fn execute(
             request.assignment_id.clone(),
         )
         .with_session(request.session_id.clone());
+    // `with_lineage` clears it: the activation binding is restored last, and the current
+    // activation checks of the operations it reaches still apply.
+    let ctx = match &request.activation {
+        Some((activation, epoch)) => ctx.with_activation(activation.clone(), *epoch),
+        None => ctx,
+    };
     // The authority the call was recorded under must still hold, and the session must still be
     // the principal's open session.
     let current = read_snapshot(&**store, &ReadOptions::default(), |s| {
