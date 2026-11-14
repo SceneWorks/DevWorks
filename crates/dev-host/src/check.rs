@@ -246,7 +246,9 @@ mod tests {
         let root = marked_root(&scratch);
         let err = check(&vars_for(&root), &Fake(false)).unwrap_err();
         assert!(err.contains("simulated system volume"), "{err}");
-        assert!(err.contains("mounted at"), "{err}");
+        // The wording depends on where the scratch folder lives (e.g. TMPDIR under /Volumes),
+        // so compare with what `missing_mount` says for this root.
+        assert!(err.contains(&missing_mount(&root)), "{err}");
     }
 
     #[test]
@@ -264,7 +266,7 @@ mod tests {
         let scratch = Scratch::new("missing");
         let root = scratch.path().join("absent");
         let err = check(&vars_for(&root), &Fake(true)).unwrap_err();
-        assert!(err.contains("mounted at"), "{err}");
+        assert!(err.contains(&missing_mount(&root)), "{err}");
         assert!(!root.exists());
     }
 
