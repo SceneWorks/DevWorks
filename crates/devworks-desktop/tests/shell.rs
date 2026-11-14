@@ -1774,6 +1774,7 @@ struct Counted {
     operation: &'static str,
     queries: std::sync::Mutex<Vec<Instant>>,
     publications: std::sync::atomic::AtomicUsize,
+    checkpoints: std::sync::atomic::AtomicUsize,
 }
 impl Counted {
     fn queries(&self) -> Vec<Instant> {
@@ -1781,6 +1782,14 @@ impl Counted {
     }
     fn publications(&self) -> usize {
         self.publications.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    /// Publications that also save the checkpoint (the autosave, a purge review starting).
+    fn checkpoints(&self) -> usize {
+        self.checkpoints.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    /// Publications of the frame loop, which save nothing.
+    fn snapshots(&self) -> usize {
+        self.publications() - self.checkpoints()
     }
 }
 impl Backend for Counted {
@@ -1801,6 +1810,10 @@ impl Backend for Counted {
     ) -> Result<Option<Vec<devworks_core::ports::storage::ProjectPurgeClientScope>>, String> {
         self.publications
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if save {
+            self.checkpoints
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         self.inner.purge_client_publish(memory, live, save)
     }
     fn purge_client_acknowledge(
@@ -1860,6 +1873,7 @@ fn counted(
         operation,
         queries: Default::default(),
         publications: Default::default(),
+        checkpoints: Default::default(),
     });
     (backend, send)
 }
@@ -1914,13 +1928,16 @@ fn a_hint_burst_reloads_the_visible_list_at_most_once_a_second_and_once_after_it
 }
 
 /// Steps `frames` frames without input and returns how many of them drained a reply (a hint's
-/// refresh, the periodic refresh). Only those frames may publish a purge snapshot.
+/// refresh, the periodic refresh). Only those frames may publish the frame's snapshot. The
+/// autosave checkpoints (`save`) state that changed since the last save, so each checkpoint
+/// follows either a reply or the state the window started with.
 fn idle_frames(
     h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
     backend: &Counted,
     frames: usize,
 ) -> usize {
     let mut replied = 0;
+    let checkpoints = backend.checkpoints();
     for frame in 0..frames {
         // Every request has its reply queued, so the next frame drains exactly these.
         assert!(h.state().wait_idle());
@@ -1928,18 +1945,23 @@ fn idle_frames(
             .state()
             .client()
             .is_some_and(|c| !c.activities().is_empty());
-        let before = backend.publications();
+        let before = backend.snapshots();
         h.step();
         if reply {
             replied += 1;
         } else {
             assert_eq!(
-                backend.publications(),
+                backend.snapshots(),
                 before,
                 "idle frame {frame} drained no reply but published a snapshot"
             );
         }
     }
+    let saved = backend.checkpoints() - checkpoints;
+    assert!(
+        saved <= 1 + replied,
+        "{saved} checkpoints in an idle window with {replied} replies"
+    );
     replied
 }
 
