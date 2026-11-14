@@ -9,6 +9,10 @@ Conditional compilation: a declaration under a cfg that is false on every platfo
 `false`, and `all`/`any`/`not` combinations of those) does not count. Any other cfg, such as
 `windows` or `feature = "x"`, counts as reachable.
 
+Macros: `macro_rules!` bodies are skipped, since they compile only when expanded. When a macro
+that declares modules is invoked, or an invocation's tokens declare modules, the check fails and
+says the declaration is unsupported, instead of guessing what the expansion compiles.
+
 Usage: python3 -I tools/ci/test-reachability.py [REPO_ROOT]
 """
 
@@ -24,6 +28,8 @@ ESCAPE = re.compile(r'\\(.)', re.S)
 # Tokens of lexed text: string placeholders, identifiers (raw or not), single punctuation.
 TOKEN = re.compile(r'"\d+"|r#\w+|\w+|[^\s\w]')
 IDENT = re.compile(r"(?:r#)?[A-Za-z_]\w*")
+# Keywords that can precede `!(`, `![` or `!{` without being a macro invocation (`if !(x)`).
+KEYWORDS = {"if", "while", "match", "return", "in", "let", "else", "break", "yield", "move", "mut", "ref"}
 
 
 def lex(source):
@@ -121,11 +127,32 @@ def path_attribute(attributes, strings):
     return None
 
 
+class Unsupported(Exception):
+    """A module declaration the checker cannot resolve without expanding macros."""
+
+
+def declares_module(tokens):
+    """True when a token tree contains an out-of-line `mod name;` (or `mod $name;` in a macro)."""
+    for k, token in enumerate(tokens):
+        rest = tokens[k + 1:k + 4]
+        if token == "mod" and len(rest) >= 2 and IDENT.fullmatch(rest[0]) and rest[1] == ";":
+            return True
+        if token == "mod" and len(rest) == 3 and rest[0] == "$" and rest[2] == ";":
+            return True
+    return False
+
+
 def mod_declarations(source):
-    """Yield (enclosing inline module names, #[path] value or None, name) for each live `mod name;`."""
+    """Yield (enclosing inline modules, #[path] value or None, name) for each live `mod name;`.
+
+    Each enclosing inline module is a (name, #[path] value or None) pair. Macro bodies are not
+    compiled unless expanded, so `macro_rules!` bodies are skipped; a macro that declares modules
+    and is invoked, or an invocation whose tokens declare modules, raises Unsupported.
+    """
     text, strings = lex(source)
     tokens = TOKEN.findall(text)
-    frames = [(None, True)]  # (inline module name or None for other blocks, compiled)
+    frames = [(None, None, True)]  # (inline module name or None for other blocks, #[path], compiled)
+    declaring_macros, invoked = set(), set()
     attributes, i = [], 0
     while i < len(tokens):
         token = tokens[i]
@@ -136,7 +163,7 @@ def mod_declarations(source):
             attribute = tokens[start + 1:end]
             if inner:
                 if never_compiled(attribute):
-                    frames[-1] = (frames[-1][0], False)
+                    frames[-1] = (*frames[-1][:2], False)
             else:
                 attributes.append(attribute)
             i = end + 1
@@ -146,23 +173,40 @@ def mod_declarations(source):
             if i < len(tokens) and tokens[i] == "(":
                 i = closing(tokens, i) + 1
             continue
+        if (token == "macro_rules" and i + 3 < len(tokens) and tokens[i + 1] == "!"
+                and tokens[i + 3] in ("(", "[", "{")):
+            end = closing(tokens, i + 3)
+            if declares_module(tokens[i + 4:end]):
+                declaring_macros.add(tokens[i + 2])
+            attributes, i = [], end + 1
+            continue
+        if (IDENT.fullmatch(token) and token not in KEYWORDS and i + 2 < len(tokens)
+                and tokens[i + 1] == "!" and tokens[i + 2] in ("(", "[", "{")):
+            end = closing(tokens, i + 2)
+            if declares_module(tokens[i + 3:end]):
+                raise Unsupported(f"`{token}!` invocation declares modules; declare them without a macro")
+            invoked.add(token)
+            attributes, i = [], end + 1
+            continue
         if token == "mod" and i + 2 < len(tokens) and IDENT.fullmatch(tokens[i + 1]) and tokens[i + 2] in (";", "{"):
             name = tokens[i + 1].removeprefix("r#")
             compiled = not any(never_compiled(a) for a in attributes)
+            path = path_attribute(attributes, strings)
             if tokens[i + 2] == ";":
-                if compiled and all(live for _, live in frames):
-                    inline = [n for n, _ in frames if n is not None]
-                    yield inline, path_attribute(attributes, strings), name
+                if compiled and all(live for _, _, live in frames):
+                    yield [(n, p) for n, p, _ in frames if n is not None], path, name
             else:
-                frames.append((name, compiled))
+                frames.append((name, path, compiled))
             attributes, i = [], i + 3
             continue
         if token == "{":
-            frames.append((None, True))
+            frames.append((None, None, True))
         elif token == "}" and len(frames) > 1:
             frames.pop()
         attributes = []
         i += 1
+    if used := sorted(declaring_macros & invoked):
+        raise Unsupported(f"macro {', '.join(used)} declares modules and is invoked; declare them without a macro")
 
 
 def child_files(file, owns_directory, source):
@@ -170,18 +214,24 @@ def child_files(file, owns_directory, source):
 
     A file "owns its directory" when it is a target root, a mod.rs, or was loaded through #[path];
     its plain `mod x;` children then live next to it. Otherwise (`dir/foo.rs`) they live in
-    `dir/foo/`. Enclosing inline modules add one directory each. A #[path] value is relative to
-    the declaring file's directory, or, inside inline modules, to that same base plus the inline
-    module directories. Returns (child path, child owns its directory) pairs.
+    `dir/foo/`. Each enclosing inline module adds its name as a directory, or replaces it with its
+    own #[path]. A #[path] outside any inline module is relative to the declaring file's directory;
+    inside one it is relative to the inline module's directory. Returns (child path, child owns its
+    directory) pairs.
     """
     children = []
     for inline, path, name in mod_declarations(source):
         base = file.parent if owns_directory else file.parent / file.stem
+        directory = None  # None: no enclosing inline module
+        for module, module_path in inline:
+            if module_path is not None:
+                directory = (file.parent if directory is None else directory) / module_path
+            else:
+                directory = (base if directory is None else directory) / module
         if path is not None:
-            parent = base.joinpath(*inline) if inline else file.parent
-            children.append(((parent / path).resolve(), True))
+            children.append((((file.parent if directory is None else directory) / path).resolve(), True))
             continue
-        base = base.joinpath(*inline)
+        base = base if directory is None else directory
         flat, nested = base / f"{name}.rs", base / name / "mod.rs"
         if flat.is_file():
             children.append((flat.resolve(), False))
@@ -247,7 +297,11 @@ def main(argv):
     checked = 0
     for crate in crates(repo):
         checked += 1
-        found.extend(orphans(crate))
+        try:
+            found.extend(orphans(crate))
+        except Unsupported as error:
+            print(f"cannot check {crate.relative_to(repo)}/tests: {error}", file=sys.stderr)
+            return 1
     for file in found:
         print(f"unreachable test source (no test target compiles it): {file.relative_to(repo)}")
     if found:

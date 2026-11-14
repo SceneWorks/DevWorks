@@ -94,6 +94,34 @@ class Reachability(unittest.TestCase):
         })
         self.assertEqual(orphan_names(root), [])
 
+    def test_inline_module_path_sets_its_childrens_directory(self):
+        root = crate(self.root, {
+            'root.rs': ('#[path = "renamed"] mod group { mod child; mod inner { mod deep; } #[path = "p.rs"] mod p; }\n'
+                        'mod cases;\n'),
+            'renamed/child.rs': '', 'renamed/inner/deep.rs': '', 'renamed/p.rs': '',
+            'group/child.rs': '',  # the name is not the directory once #[path] overrides it
+            'cases/mod.rs': 'mod x;\n',
+            # In non-mod-rs x.rs, a top-level inline #[path] is relative to x.rs's own directory.
+            'cases/x.rs': '#[path = "ren2"] mod g { mod c; }\n',
+            'cases/ren2/c.rs': '',
+        })
+        self.assertEqual(orphan_names(root), ['group/child.rs'])
+
+    def test_macro_bodies_do_not_count_and_invoked_module_macros_are_unsupported(self):
+        root = crate(self.root, {
+            'root.rs': ('macro_rules! unused { () => { mod hidden; mod $m; }; }\nmod cases;\n'
+                        'fn f() -> bool { if !(true) { return false; } true }\n'),
+            'hidden.rs': '', 'cases/mod.rs': '', 'cases/hidden.rs': '',
+        })
+        self.assertEqual(orphan_names(root), ['cases/hidden.rs'])
+        (root / 'tests' / 'cases' / 'mod.rs').write_text(
+            'macro_rules! declare { ($m:ident) => { mod $m; }; }\ndeclare!(hidden);\n', encoding='utf-8')
+        with self.assertRaisesRegex(reach.Unsupported, 'declare'):
+            reach.orphans(root)
+        (root / 'tests' / 'cases' / 'mod.rs').write_text('wrap! { mod hidden; }\n', encoding='utf-8')
+        with self.assertRaisesRegex(reach.Unsupported, 'wrap'):
+            reach.orphans(root)
+
     def test_permanently_disabled_cfg_is_not_reachable_but_platform_cfg_is(self):
         root = crate(self.root, {
             'root.rs': 'mod c;\n',
