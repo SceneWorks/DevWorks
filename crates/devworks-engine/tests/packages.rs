@@ -225,6 +225,8 @@ struct Spec {
     config_schema: Option<Value>,
     /// Invocations the helper multiplexes (`requestedLimits.maxConcurrent`).
     max_concurrent: u32,
+    /// The declared effect of every tool contribution.
+    effect: &'static str,
 }
 impl Spec {
     fn new(package: &str, version: &str) -> Self {
@@ -249,6 +251,7 @@ impl Spec {
             help_source: None,
             config_schema: None,
             max_concurrent: 4,
+            effect: "ReadCandidate",
         }
     }
     fn ids(&self) -> Vec<String> {
@@ -317,7 +320,7 @@ fn bundle(spec: &Spec) -> (Vec<u8>, String) {
                 "inputSchema": schema(&format!("{}/input", spec.package), &"b".repeat(64)),
                 "outputSchema": schema(&format!("{}/output", spec.package), &"c".repeat(64)),
                 "helpTopic": "help", "required": false, "cancellation": "Cooperative"},
-                "requestedEffect": "ReadCandidate"})
+                "requestedEffect": spec.effect})
         })
         .collect();
     let manifest = json!({
@@ -810,6 +813,8 @@ impl App {
             deadline: self.deadline.lock().unwrap().unwrap_or(Duration::from_secs(30)),
             allowed_operations: vec![],
             kind,
+            principal: None,
+            expected_digest: None,
         })
     }
     /// Waits until `f` holds for the package's record.
@@ -980,6 +985,8 @@ fn a_person_installs_a_signed_pack_whose_helper_handshakes_and_serves_invocation
             deadline: Duration::from_secs(5),
             allowed_operations: vec![],
             kind: InvocationKind::Ordinary,
+            principal: None,
+            expected_digest: None,
         }),
         Err(InvokeRefusal::NoSuchContribution)
     ));
@@ -1567,6 +1574,8 @@ fn an_admission_racing_a_closing_session_waits_for_the_restart() {
         deadline: Duration::from_secs(30),
         allowed_operations: vec![],
         kind: InvocationKind::Ordinary,
+        principal: None,
+        expected_digest: None,
     };
     let racing = std::thread::spawn(move || {
         host.invoke(request)
@@ -2015,6 +2024,8 @@ fn the_host_enforces_deadlines_and_caps_concurrent_invocations() {
             deadline: Duration::from_secs(10),
             allowed_operations: vec![],
             kind: InvocationKind::Ordinary,
+            principal: None,
+            expected_digest: None,
         });
         (
             r.map(|h| h.wait(Duration::from_secs(10)).is_some()),
@@ -2809,6 +2820,8 @@ fn big_invoke(
         deadline,
         allowed_operations: ops,
         kind: InvocationKind::Ordinary,
+        principal: None,
+        expected_digest: None,
     })
 }
 
@@ -4056,6 +4069,8 @@ fn invocation_deadline_and_handle_do_not_wait_for_a_busy_history_writer() {
             scope: InvocationScope::Workspace,
             input: serde_json::from_value(json!({"artifactId": "i", "versionId": "v", "sha256": "e".repeat(64), "byteLength": "1", "mediaType": "a/b"})).unwrap(),
             operation_id: id("op-history-bound"), deadline: Duration::from_millis(200), allowed_operations: vec![], kind: InvocationKind::Ordinary,
+            principal: None,
+            expected_digest: None,
         });
         let _ = tx.send(result);
     });
@@ -4502,6 +4517,8 @@ fn a_runtime_probe_launched_after_shutdown_is_stopped_immediately() {
 
 #[path = "packages/approvals.rs"]
 mod approvals;
+#[path = "packages/broker.rs"]
+mod broker;
 
 #[path = "packages/help_guides.rs"]
 mod help_guides;

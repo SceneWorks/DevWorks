@@ -33,7 +33,7 @@ fn mode_namespace(mode: Mode) -> &'static str {
     }
 }
 
-fn builtin_operation(capability: &str) -> Option<(&str, Option<Mode>)> {
+pub(crate) fn builtin_operation(capability: &str) -> Option<(&str, Option<Mode>)> {
     if let Some(operation) = capability.strip_prefix("devworks-query/") {
         Some((operation, Some(Mode::Query)))
     } else if let Some(operation) = capability.strip_prefix("devworks-command/") {
@@ -481,7 +481,7 @@ impl RegisteredSchemas {
         Ok(bytes)
     }
 }
-fn schema_ref(
+pub(crate) fn schema_ref(
     op: &str,
     mode: Mode,
     revision: SchemaRevision,

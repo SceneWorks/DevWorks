@@ -26,6 +26,44 @@ pub enum PrincipalKind {
     Host,
 }
 
+impl PrincipalKind {
+    /// Every variant, for exhaustive tests.
+    pub const ALL: [PrincipalKind; 6] = [
+        PrincipalKind::Human,
+        PrincipalKind::Agent,
+        PrincipalKind::Package,
+        PrincipalKind::McpClient,
+        PrincipalKind::Schedule,
+        PrincipalKind::Host,
+    ];
+
+    /// The persisted name. These strings are stored data and must not change; they equal the
+    /// variant names that earlier versions wrote with `{:?}`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            PrincipalKind::Human => "Human",
+            PrincipalKind::Agent => "Agent",
+            PrincipalKind::Package => "Package",
+            PrincipalKind::McpClient => "McpClient",
+            PrincipalKind::Schedule => "Schedule",
+            PrincipalKind::Host => "Host",
+        }
+    }
+
+    /// The only parser of a persisted kind. An unrecognised string is `None`; callers refuse it.
+    pub fn parse(value: &str) -> Option<PrincipalKind> {
+        match value {
+            "Human" => Some(PrincipalKind::Human),
+            "Agent" => Some(PrincipalKind::Agent),
+            "Package" => Some(PrincipalKind::Package),
+            "McpClient" => Some(PrincipalKind::McpClient),
+            "Schedule" => Some(PrincipalKind::Schedule),
+            "Host" => Some(PrincipalKind::Host),
+            _ => None,
+        }
+    }
+}
+
 /// A worktree identity resolved by trusted ingress from the durable ownership ledger.
 /// Tool arguments cannot construct this value or replace its ownership revision.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -608,6 +646,17 @@ mod human_decision_tests {
                 _ => unreachable!(),
             }
             assert!(!changed.project_purge_matches(&input), "{field}");
+        }
+    }
+
+    #[test]
+    fn principal_kind_strings_match_legacy_debug_text_and_round_trip() {
+        for kind in PrincipalKind::ALL {
+            assert_eq!(kind.as_str(), format!("{kind:?}"));
+            assert_eq!(PrincipalKind::parse(kind.as_str()), Some(kind));
+        }
+        for bad in ["", "human", "Unknown", "Agent ", "Service"] {
+            assert_eq!(PrincipalKind::parse(bad), None, "{bad:?}");
         }
     }
 }

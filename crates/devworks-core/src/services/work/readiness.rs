@@ -516,7 +516,7 @@ fn record(
     if let Some(m) = payload.as_object_mut() {
         m.insert(
             "principalKind".into(),
-            json!(format!("{:?}", ctx.principal_kind())),
+            json!(ctx.principal_kind().as_str().to_string()),
         );
     }
     let id = EventId(tx.new_id(IdKind::Event));

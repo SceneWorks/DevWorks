@@ -2405,6 +2405,33 @@ pub fn resource_reservation_records(h: &mut dyn StoreHarness) {
                 .len(),
             1
         );
+        let mut rooted = tx.resources().insert_process(NewProcess {
+            id: id("proc-b"),
+            platform: "unix".into(),
+            program: "sleep".into(),
+            argv_sha256: "b".repeat(64),
+            operation_id: None,
+            lease_id: None,
+            actor: ActorId(id("host")),
+            session_id: None,
+            project_id: None,
+            root_id: Some(RootId(id("root-a"))),
+            assignment_id: None,
+        })?;
+        let of_root = |tx: &mut dyn WriteTransaction, root: &str| {
+            tx.resources()
+                .processes(&ProcessFilter::UnsettledRoot(RootId(id(root))), None, 10)
+                .map(|page| page.into_iter().map(|p| p.id).collect::<Vec<_>>())
+        };
+        assert_eq!(of_root(tx, "root-a")?, vec![id("proc-b")]);
+        assert!(of_root(tx, "root-b")?.is_empty());
+        rooted.phase = ProcessPhase::Failed;
+        rooted.revision = 2;
+        tx.resources().update_process(&rooted, 1)?;
+        assert!(
+            of_root(tx, "root-a")?.is_empty(),
+            "a settled tree is not listed"
+        );
         Ok(())
     })
     .unwrap();

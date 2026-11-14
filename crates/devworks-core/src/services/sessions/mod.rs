@@ -212,7 +212,7 @@ pub(crate) fn content(s: &str) -> BoundedText<0, 65536> {
     BoundedText(s.chars().take(65536).collect())
 }
 /// Tokens of `bytes` by the conservative attributed estimate (4 bytes per token, rounded up).
-pub(crate) fn token_estimate(bytes: i64) -> i64 {
+pub fn token_estimate(bytes: i64) -> i64 {
     (bytes.max(0) + 3) / 4
 }
 
@@ -336,7 +336,7 @@ fn session_event(
     if let Some(map) = payload.as_object_mut() {
         map.insert(
             "principalKind".into(),
-            json!(format!("{:?}", ctx.principal_kind())),
+            json!(ctx.principal_kind().as_str().to_string()),
         );
         map.insert("invocationId".into(), json!(ctx.invocation_id().as_str()));
     }
