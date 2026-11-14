@@ -1187,6 +1187,9 @@ impl Fx {
         let h = self.h.take().unwrap();
         let platform = self.platform.clone();
         drop(self);
+        if !graceful {
+            h.wait_released();
+        }
         between(&h);
         Fx::boot(h, platform)
     }

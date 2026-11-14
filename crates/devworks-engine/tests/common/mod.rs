@@ -3,7 +3,7 @@
 //! used as synchronization.
 #![allow(dead_code, clippy::result_large_err)]
 use devworks_adapters::storage::sqlite::{
-    DATABASE_FILE, SqliteConfig, SqliteStore, WorkProbe, seed_migrated_store,
+    DATABASE_FILE, LOCK_FILE, SqliteConfig, SqliteStore, WorkProbe, seed_migrated_store,
 };
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::ports::storage::*;
@@ -110,6 +110,23 @@ impl Harness {
         CountingStore {
             store: Arc::new(self.open_sqlite_with(Some(probe.clone()))),
             probe,
+        }
+    }
+    /// Waits until no store owns the data root. An app dropped without shutdown (a simulated
+    /// crash) can leave a detached thread, such as the browser egress proxy, to drop the last
+    /// store handle; that drop stops the writer, whose closing checkpoint flushes to disk, while
+    /// the test would already reopen. A real crash ends the process, so nothing waits there.
+    pub fn wait_released(&self) {
+        let lock = std::fs::File::open(self.root.join(LOCK_FILE)).expect("data-root lock file");
+        let deadline = std::time::Instant::now() + HANG_BUDGET;
+        loop {
+            match lock.try_lock_shared() {
+                Ok(()) => return lock.unlock().expect("release probe lock"),
+                Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(e) => panic!("data root not released within 30 s: {e:?}"),
+            }
         }
     }
     fn open_sqlite_with(&self, probe: Option<Arc<WorkProbe>>) -> SqliteStore {
