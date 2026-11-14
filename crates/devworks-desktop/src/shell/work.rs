@@ -612,7 +612,7 @@ impl WorkUi {
         self.workflows.remove(project);
         let claims = scope
             .record_ids
-            .get("allocation_claims")
+            .get(&devworks_core::ports::storage::ProjectRecordKind::AllocationClaims)
             .cloned()
             .unwrap_or_default();
         self.allocation_claims

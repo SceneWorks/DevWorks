@@ -52,6 +52,7 @@ use devworks_core::services::knowledge::KnowledgeService;
 use devworks_core::services::mcp::McpClientService;
 use devworks_core::services::packages::PackageService;
 use devworks_core::services::process::ShutdownReport;
+use devworks_core::services::projects::managed_files::ManagedFileCustody;
 use devworks_core::services::resources::ResourceService;
 use devworks_core::services::router::InferenceRouter;
 use devworks_core::services::router::connections::{ConnectionService, IntakeError};
@@ -350,20 +351,25 @@ async fn compose(
 ) -> Result<Host, StartError> {
     let store: Arc<dyn ApplicationStore> = sqlite.clone();
     let id_source: Arc<dyn IdSource> = ids.clone();
+    let custody = Arc::new(ManagedFileCustody::new(store.clone()));
     let sources = Arc::new(
-        HostArtifactSources::new(clock.clone(), id_source.clone()).with_store(store.clone()),
+        HostArtifactSources::new(clock.clone(), id_source.clone())
+            .with_project_fence(custody.clone()),
     );
-    let artifact_files = Arc::new(
-        NativeArtifactFiles::new(config.data_root.clone(), config.data_root.join("cache"))
-            .with_store(store.clone()),
-    );
-    let artifacts = Arc::new(ArtifactService::new(
-        artifact_files.clone(),
-        sources.clone(),
-        Arc::new(NativeFilesystem::new()),
-        clock.clone(),
-        id_source.clone(),
+    let artifact_files = Arc::new(NativeArtifactFiles::new(
+        config.data_root.clone(),
+        config.data_root.join("cache"),
     ));
+    let artifacts = Arc::new(
+        ArtifactService::new(
+            artifact_files.clone(),
+            sources.clone(),
+            Arc::new(NativeFilesystem::new()),
+            clock.clone(),
+            id_source.clone(),
+        )
+        .with_project_previews(custody),
+    );
     let settings = Arc::new(SettingsService {
         roles: Arc::new(HostRoles {
             store: store.clone(),
@@ -515,7 +521,6 @@ async fn compose(
             devworks_adapters::fs::purge::NativeProjectPurgeFiles::new(
                 config.data_root.clone(),
                 config.data_root.join("cache"),
-                store.clone(),
             )
             .with_paste_root(config.data_root.join("staging-ui"))
             .with_read_fence(artifacts.clone()),
@@ -716,12 +721,11 @@ async fn compose(
     let runtime = Arc::new(boot(composition).await.map_err(StartError::Boot)?);
     // A previous boot cannot still be producing a paste. Live draft files require the
     // client keeper snapshot; this owner only reconciles incomplete reserved writes.
-    if let Err(error) = devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
-        config.data_root.join("staging-ui"),
-        store.clone(),
-    )
-    .recover_abandoned()
-    {
+    if let Err(error) = ManagedFileCustody::new(store.clone()).recover_client_staging(
+        &devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
+            config.data_root.join("staging-ui"),
+        ),
+    ) {
         // Its durable Writing row continues to hold purge preparation on uncertainty.
         eprintln!("UI staging recovery remains held: {error}");
     }
@@ -1198,11 +1202,14 @@ impl Backend for DesktopBackend {
         self.host.data_root.join("staging-ui")
     }
     fn stage_pasted_image(&self, session: Option<&Id>, png: &[u8]) -> Result<PathBuf, String> {
-        devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
-            self.scratch_dir(),
-            self.host.runtime.store().clone(),
+        ManagedFileCustody::new(self.host.runtime.store().clone()).stage_paste(
+            &devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
+                self.scratch_dir(),
+            ),
+            session,
+            &self.host.ids.next_id(IdKind::Artifact),
+            png,
         )
-        .write(session, &self.host.ids.next_id(IdKind::Artifact), png)
     }
     fn stage_project_text(
         &self,
@@ -1210,11 +1217,10 @@ impl Backend for DesktopBackend {
         extension: &str,
         bytes: &[u8],
     ) -> Result<PathBuf, String> {
-        devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
-            self.scratch_dir(),
-            self.host.runtime.store().clone(),
-        )
-        .write_project(
+        ManagedFileCustody::new(self.host.runtime.store().clone()).stage_project_text(
+            &devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
+                self.scratch_dir(),
+            ),
             project,
             &self.host.ids.next_id(IdKind::Artifact),
             extension,

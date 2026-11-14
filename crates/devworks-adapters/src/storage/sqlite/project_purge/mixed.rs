@@ -125,9 +125,9 @@ pub(super) fn stage_operations(
                 unresolved,
             );
         } else {
-            rows.remove(&(candidate.table.clone(), key.clone()));
-            unresolved.insert((candidate.table.clone(), key.clone()), ProjectPurgeUnresolved {
-                table: candidate.table.clone(), key_digest: key,
+            rows.remove(&(candidate.table, key.clone()));
+            unresolved.insert((candidate.table, key.clone()), ProjectPurgeUnresolved {
+                table: candidate.table, key_digest: key,
                 reason: devworks_core::ports::storage::ProjectPurgeUnresolvedReason::AutomaticSnapshot,
             });
         }
@@ -162,11 +162,17 @@ pub(super) fn session_scope(
         if owner.as_deref() != Some(project.0.as_str()) || !root_matches {
             let key =
                 super::guard::key_digest(&serde_json::to_string(&[id]).expect("session key"))?;
-            rows.remove(&("sessions".into(), key.clone()));
+            rows.remove(&(
+                devworks_core::ports::storage::ProjectRecordKind::Sessions,
+                key.clone(),
+            ));
             unresolved.insert(
-                ("sessions".into(), key.clone()),
+                (
+                    devworks_core::ports::storage::ProjectRecordKind::Sessions,
+                    key.clone(),
+                ),
                 ProjectPurgeUnresolved {
-                    table: "sessions".into(),
+                    table: devworks_core::ports::storage::ProjectRecordKind::Sessions,
                     key_digest: key,
                     reason:
                         devworks_core::ports::storage::ProjectPurgeUnresolvedReason::LegacyMapping,
@@ -450,7 +456,7 @@ pub(super) fn source_heads(
                     tuple.push(db(reference.get::<_, String>(1))?);
                 }
                 let key = (
-                    table.into(),
+                    super::record_kind(table)?,
                     super::guard::key_digest(
                         &serde_json::to_string(&tuple).expect("source reference key"),
                     )?,

@@ -1044,6 +1044,9 @@ pub struct ArtifactService {
     pub(crate) pending: std::sync::Mutex<Vec<(StagingRef, Value)>>,
     /// Generations this service is removing right now (best-effort coordination only).
     pub(crate) removing: std::sync::Mutex<std::collections::HashSet<(String, String)>>,
+    /// Custody of project-scoped preview cache files; without it they stay uncached.
+    pub(crate) project_previews:
+        Option<Arc<crate::services::projects::managed_files::ManagedFileCustody>>,
 }
 
 impl ArtifactService {
@@ -1064,7 +1067,16 @@ impl ArtifactService {
             readers: Readers::default(),
             pending: std::sync::Mutex::new(Vec::new()),
             removing: std::sync::Mutex::new(std::collections::HashSet::new()),
+            project_previews: None,
         }
+    }
+    /// Cache project previews under managed-file custody, so a purge can account for them.
+    pub fn with_project_previews(
+        mut self,
+        custody: Arc<crate::services::projects::managed_files::ManagedFileCustody>,
+    ) -> Self {
+        self.project_previews = Some(custody);
+        self
     }
 
     fn correlation(&self) -> CorrelationId {
@@ -2241,7 +2253,14 @@ impl ArtifactService {
                 let p = preview::build(&v.media_type, &head, v.byte_count as u64);
                 let bytes = preview::encode_cached(&p);
                 let _ = match project {
-                    Some(project) => self.files.write_project_derived(project, &pid, &bytes),
+                    Some(project) => match &self.project_previews {
+                        Some(custody) => {
+                            custody.write_project_preview(&*self.files, project, &pid, &bytes)
+                        }
+                        None => Err(FileFault::Unsupported(
+                            "project cache custody unavailable".into(),
+                        )),
+                    },
                     None => self.files.write_derived(&pid, &bytes),
                 };
                 p

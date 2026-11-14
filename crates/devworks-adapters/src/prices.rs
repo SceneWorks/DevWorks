@@ -3,7 +3,8 @@
 //! order into a flat list of model prices. Unknown/ambiguous structure refuses publication.
 use devworks_core::ports::http::{HttpRequest, HttpTransport};
 use devworks_core::ports::usage::{
-    FetchedPriceCatalog, OfficialPriceProvider, PriceFetchError, PriceSource, PublishedTariff,
+    DeclaredPriceModifiers, FetchedPriceCatalog, MAX_PUBLISHED_TARIFFS, OfficialPriceProvider,
+    PriceFetchError, PriceSource, PublishedTariff,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -11,7 +12,6 @@ use std::sync::Arc;
 
 const PARSER_VERSION: &str = "official-markdown-v1";
 const MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024;
-const MAX_RATES: usize = 20_000;
 
 pub struct OfficialPriceSource {
     http: Arc<dyn HttpTransport>,
@@ -161,116 +161,8 @@ fn anthropic_models(cell: &str) -> Result<ModelContext, PriceFetchError> {
     Ok((models, lower, upper))
 }
 
-fn fixed_rate(amount: &str) -> Result<u128, PriceFetchError> {
-    let (whole, fraction) = amount.split_once('.').unwrap_or((amount, ""));
-    if fraction.len() > 12 {
-        return Err(changed("rate exceeds exact precision"));
-    }
-    let whole: u128 = whole.parse().map_err(|_| changed("invalid rate"))?;
-    let fractional: u128 = if fraction.is_empty() {
-        0
-    } else {
-        fraction.parse().map_err(|_| changed("invalid rate"))?
-    };
-    whole
-        .checked_mul(1_000_000_000_000)
-        .and_then(|v| v.checked_add(fractional * 10_u128.pow(12 - fraction.len() as u32)))
-        .ok_or_else(|| changed("rate overflow"))
-}
-fn scale_rate(amount: &str, numerator: &str, denominator: &str) -> Result<String, PriceFetchError> {
-    let numerator = fixed_rate(amount)?
-        .checked_mul(fixed_rate(numerator)?)
-        .ok_or_else(|| changed("rate multiplication overflow"))?;
-    let denominator = fixed_rate(denominator)?;
-    if denominator == 0 || numerator % denominator != 0 {
-        return Err(changed("rate modifier exceeds exact precision"));
-    }
-    let value = numerator / denominator;
-    let fractional = format!("{:012}", value % 1_000_000_000_000);
-    let fractional = fractional.trim_end_matches('0');
-    Ok(if fractional.is_empty() {
-        (value / 1_000_000_000_000).to_string()
-    } else {
-        format!("{}.{fractional}", value / 1_000_000_000_000)
-    })
-}
-fn complete_anthropic_rates(
-    text: &str,
-    tariffs: &mut Vec<PublishedTariff>,
-) -> Result<(), PriceFetchError> {
-    let source = tariffs.clone();
-    for selected in source
-        .iter()
-        .filter(|r| r.charge_kind == "Input" && matches!(r.service_tier.as_str(), "Batch" | "Fast"))
-    {
-        let marker = if selected.service_tier == "Batch" {
-            "These multipliers stack with other pricing modifiers"
-        } else {
-            "apply on top of fast mode pricing"
-        };
-        if !text.contains(marker) {
-            return Err(changed("cache/service modifier declaration changed"));
-        }
-        let same = |r: &&PublishedTariff| {
-            r.upstream_model_id == selected.upstream_model_id
-                && r.service_tier == "Standard"
-                && r.context_lower_exclusive == selected.context_lower_exclusive
-                && r.context_upper_inclusive == selected.context_upper_inclusive
-                && r.modality == selected.modality
-        };
-        let base = source
-            .iter()
-            .filter(same)
-            .find(|r| r.charge_kind == "Input")
-            .ok_or_else(|| changed("missing base rate for service modifier"))?;
-        for cache in source
-            .iter()
-            .filter(same)
-            .filter(|r| matches!(r.charge_kind.as_str(), "CacheRead" | "CacheWrite"))
-        {
-            let mut rate = cache.clone();
-            rate.service_tier = selected.service_tier.clone();
-            if tariffs.iter().any(|existing| {
-                existing.upstream_model_id == rate.upstream_model_id
-                    && existing.service_tier == rate.service_tier
-                    && existing.context_lower_exclusive == rate.context_lower_exclusive
-                    && existing.context_upper_inclusive == rate.context_upper_inclusive
-                    && existing.modality == rate.modality
-                    && existing.charge_kind == rate.charge_kind
-                    && existing.cache_ttl_seconds == rate.cache_ttl_seconds
-                    && existing.region == rate.region
-                    && existing.endpoint_profile == rate.endpoint_profile
-                    && existing.unit == rate.unit
-                    && existing.units == rate.units
-            }) {
-                continue;
-            }
-            rate.amount_usd =
-                scale_rate(&cache.amount_usd, &selected.amount_usd, &base.amount_usd)?;
-            tariffs.push(rate);
-        }
-    }
-    if text.contains("1.1x pricing multiplier") && text.contains("inference_geo") {
-        for row in tariffs.clone() {
-            let version: Vec<_> = row
-                .upstream_model_id
-                .split('-')
-                .filter_map(|v| v.parse::<u32>().ok())
-                .collect();
-            if version.first().is_some_and(|v| {
-                *v > 4 || (*v == 4 && version.get(1).is_some_and(|minor| *minor >= 6))
-            }) {
-                let mut regional = row;
-                regional.region = Some("us".into());
-                regional.amount_usd = scale_rate(&regional.amount_usd, "1.1", "1")?;
-                tariffs.push(regional);
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Parse a complete official document. Identical repeated tariff rows are deduplicated;
+/// Parse a complete official document into the rows it publishes and the modifiers it
+/// declares; derived rows are core rules (`services::prices::derivation`). Identical repeated tariff rows are deduplicated;
 /// conflicting duplicates refuse the entire snapshot and preserve the last published catalog.
 pub fn parse_catalog(
     provider: OfficialPriceProvider,
@@ -466,7 +358,7 @@ pub fn parse_catalog(
                     } else {
                         rates.insert(key, rate);
                     }
-                    if rates.len() > MAX_RATES {
+                    if rates.len() > MAX_PUBLISHED_TARIFFS {
                         return Err(changed("too many tariff rows"));
                     }
                 }
@@ -477,13 +369,14 @@ pub fn parse_catalog(
     if !saw_primary || rates.is_empty() {
         return Err(changed("no complete primary pricing table"));
     }
-    let mut tariffs: Vec<_> = rates.into_values().collect();
-    if provider == OfficialPriceProvider::Anthropic {
-        complete_anthropic_rates(text, &mut tariffs)?;
-    }
-    if tariffs.len() > MAX_RATES {
-        return Err(changed("too many tariff rows after declared modifiers"));
-    }
+    let tariffs: Vec<_> = rates.into_values().collect();
+    let modifiers = DeclaredPriceModifiers {
+        batch_cache_multipliers_stack: text
+            .contains("These multipliers stack with other pricing modifiers"),
+        fast_cache_multipliers_apply: text.contains("apply on top of fast mode pricing"),
+        regional_multiplier: text.contains("1.1x pricing multiplier")
+            && text.contains("inference_geo"),
+    };
     Ok(FetchedPriceCatalog {
         provider,
         source_url: provider.source_url().into(),
@@ -496,6 +389,7 @@ pub fn parse_catalog(
         verified_at_ms: now_ms,
         effective_date: None,
         tariffs,
+        modifiers,
     })
 }
 
@@ -604,35 +498,137 @@ mod tests {
         status: u16,
     }
     #[test]
-    fn service_modifiers_preserve_model_specific_cache_prices() {
-        let source = "# Pricing\n## Model pricing\n| Model | Base input tokens | 5m cache writes | 1h cache writes | Cache hits and refreshes | Output tokens |\n| --- | --- | --- | --- | --- | --- |\n| Claude Unit 5.5 | $4 / MTok | $5 / MTok | $8 / MTok | $0.20 / MTok | $20 / MTok |\n### Fast mode pricing\n| Model | Input | Output |\n| --- | --- | --- |\n| Claude Unit 5.5 | $8 USD / MTok | $40 USD / MTok |\nCache multipliers apply on top of fast mode pricing.\n### Batch processing\n| Model | Batch input | Batch output |\n| --- | --- | --- |\n| Claude Unit 5.5 | $2 / MTok | $10 / MTok |\nThese multipliers stack with other pricing modifiers.\nUsing inference_geo incurs a 1.1x pricing multiplier.\n";
-        let parsed = parse_catalog(OfficialPriceProvider::Anthropic, source.as_bytes(), 0).unwrap();
-        let rate = |tier: &str, region: Option<&str>, kind: &str, ttl: Option<i64>| {
-            &parsed
-                .tariffs
-                .iter()
-                .find(|r| {
-                    r.service_tier == tier
-                        && r.region.as_deref() == region
-                        && r.charge_kind == kind
-                        && r.cache_ttl_seconds == ttl
-                })
-                .unwrap()
-                .amount_usd
-        };
-        assert_eq!(rate("Fast", None, "CacheRead", None), "0.4");
-        assert_eq!(rate("Batch", None, "CacheRead", None), "0.1");
-        assert_eq!(rate("Fast", Some("us"), "CacheWrite", Some(3600)), "17.6");
-        assert!(
-            parse_catalog(
-                OfficialPriceProvider::Anthropic,
-                source
-                    .replace("apply on top of fast mode pricing", "changed rule")
-                    .as_bytes(),
-                0
-            )
-            .is_err()
+    fn service_modifier_declarations_are_reported_without_deriving_rows() {
+        let parsed =
+            parse_catalog(OfficialPriceProvider::Anthropic, MODIFIED.as_bytes(), 0).unwrap();
+        assert_eq!(
+            parsed.modifiers,
+            DeclaredPriceModifiers {
+                batch_cache_multipliers_stack: true,
+                fast_cache_multipliers_apply: true,
+                regional_multiplier: true,
+            }
         );
+        // 3 standard rows x 5 prices, 1 fast row x 2, 3 batch rows x 2: published rows only.
+        assert_eq!(parsed.tariffs.len(), 23);
+        assert!(parsed.tariffs.iter().all(|r| r.region.is_none()));
+        let changed = parse_catalog(
+            OfficialPriceProvider::Anthropic,
+            MODIFIED
+                .replace("apply on top of fast mode pricing", "changed rule")
+                .as_bytes(),
+            0,
+        )
+        .unwrap();
+        assert!(!changed.modifiers.fast_cache_multipliers_apply);
+    }
+
+    const MODIFIED: &str = "# Pricing\n## Model pricing\n| Model | Base input tokens | 5m cache writes | 1h cache writes | Cache hits and refreshes | Output tokens |\n| --- | --- | --- | --- | --- | --- |\n| Claude Unit 5.5 (for prompts up to 100,000 tokens) | $4 / MTok | $5 / MTok | $8 / MTok | $0.20 / MTok | $20 / MTok |\n| Claude Unit 5.5 (for prompts over 100,000 tokens) | $8 / MTok | $10 / MTok | $16 / MTok | $0.40 / MTok | $40 / MTok |\n| Claude Legacy 4.5 | $3 / MTok | $3.75 / MTok | $6 / MTok | $0.30 / MTok | $15 / MTok |\n### Fast mode pricing\n| Model | Input | Output |\n| --- | --- | --- |\n| Claude Unit 5.5 (for prompts up to 100,000 tokens) | $24 USD / MTok | $120 USD / MTok |\nCache multipliers apply on top of fast mode pricing.\n### Batch processing\n| Model | Batch input | Batch output |\n| --- | --- | --- |\n| Claude Unit 5.5 (for prompts up to 100,000 tokens) | $2 / MTok | $10 / MTok |\n| Claude Unit 5.5 (for prompts over 100,000 tokens) | $4 / MTok | $20 / MTok |\n| Claude Legacy 4.5 | $1.50 / MTok | $7.50 / MTok |\nThese multipliers stack with other pricing modifiers.\nUsing inference_geo incurs a 1.1x pricing multiplier.\n";
+
+    /// Model, tier, context bounds, charge, cache TTL, region and amount of one tariff row.
+    type Row = (
+        &'static str,
+        &'static str,
+        Option<i64>,
+        Option<i64>,
+        &'static str,
+        Option<i64>,
+        Option<&'static str>,
+        &'static str,
+    );
+
+    /// Rows the adapter produced before tier and regional derivation moved to core, in order.
+    #[rustfmt::skip]
+    const DERIVED_BEFORE_MOVE: &[Row] = &[
+        ("claude-legacy-4-5", "Batch", None, None, "Input", None, None, "1.50"),
+        ("claude-legacy-4-5", "Batch", None, None, "Output", None, None, "7.50"),
+        ("claude-legacy-4-5", "Standard", None, None, "CacheRead", None, None, "0.30"),
+        ("claude-legacy-4-5", "Standard", None, None, "CacheWrite", Some(300), None, "3.75"),
+        ("claude-legacy-4-5", "Standard", None, None, "CacheWrite", Some(3600), None, "6"),
+        ("claude-legacy-4-5", "Standard", None, None, "Input", None, None, "3"),
+        ("claude-legacy-4-5", "Standard", None, None, "Output", None, None, "15"),
+        ("claude-unit-5-5", "Batch", Some(100000), None, "Input", None, None, "4"),
+        ("claude-unit-5-5", "Batch", Some(100000), None, "Output", None, None, "20"),
+        ("claude-unit-5-5", "Batch", None, Some(100000), "Input", None, None, "2"),
+        ("claude-unit-5-5", "Batch", None, Some(100000), "Output", None, None, "10"),
+        ("claude-unit-5-5", "Fast", None, Some(100000), "Input", None, None, "24"),
+        ("claude-unit-5-5", "Fast", None, Some(100000), "Output", None, None, "120"),
+        ("claude-unit-5-5", "Standard", Some(100000), None, "CacheRead", None, None, "0.40"),
+        ("claude-unit-5-5", "Standard", Some(100000), None, "CacheWrite", Some(300), None, "10"),
+        ("claude-unit-5-5", "Standard", Some(100000), None, "CacheWrite", Some(3600), None, "16"),
+        ("claude-unit-5-5", "Standard", Some(100000), None, "Input", None, None, "8"),
+        ("claude-unit-5-5", "Standard", Some(100000), None, "Output", None, None, "40"),
+        ("claude-unit-5-5", "Standard", None, Some(100000), "CacheRead", None, None, "0.20"),
+        ("claude-unit-5-5", "Standard", None, Some(100000), "CacheWrite", Some(300), None, "5"),
+        ("claude-unit-5-5", "Standard", None, Some(100000), "CacheWrite", Some(3600), None, "8"),
+        ("claude-unit-5-5", "Standard", None, Some(100000), "Input", None, None, "4"),
+        ("claude-unit-5-5", "Standard", None, Some(100000), "Output", None, None, "20"),
+        ("claude-legacy-4-5", "Batch", None, None, "CacheRead", None, None, "0.15"),
+        ("claude-legacy-4-5", "Batch", None, None, "CacheWrite", Some(300), None, "1.875"),
+        ("claude-legacy-4-5", "Batch", None, None, "CacheWrite", Some(3600), None, "3"),
+        ("claude-unit-5-5", "Batch", Some(100000), None, "CacheRead", None, None, "0.2"),
+        ("claude-unit-5-5", "Batch", Some(100000), None, "CacheWrite", Some(300), None, "5"),
+        ("claude-unit-5-5", "Batch", Some(100000), None, "CacheWrite", Some(3600), None, "8"),
+        ("claude-unit-5-5", "Batch", None, Some(100000), "CacheRead", None, None, "0.1"),
+        ("claude-unit-5-5", "Batch", None, Some(100000), "CacheWrite", Some(300), None, "2.5"),
+        ("claude-unit-5-5", "Batch", None, Some(100000), "CacheWrite", Some(3600), None, "4"),
+        ("claude-unit-5-5", "Fast", None, Some(100000), "CacheRead", None, None, "1.2"),
+        ("claude-unit-5-5", "Fast", None, Some(100000), "CacheWrite", Some(300), None, "30"),
+        ("claude-unit-5-5", "Fast", None, Some(100000), "CacheWrite", Some(3600), None, "48"),
+        ("claude-unit-5-5", "Batch", Some(100000), None, "Input", None, Some("us"), "4.4"),
+        ("claude-unit-5-5", "Batch", Some(100000), None, "Output", None, Some("us"), "22"),
+        ("claude-unit-5-5", "Batch", None, Some(100000), "Input", None, Some("us"), "2.2"),
+        ("claude-unit-5-5", "Batch", None, Some(100000), "Output", None, Some("us"), "11"),
+        ("claude-unit-5-5", "Fast", None, Some(100000), "Input", None, Some("us"), "26.4"),
+        ("claude-unit-5-5", "Fast", None, Some(100000), "Output", None, Some("us"), "132"),
+        ("claude-unit-5-5", "Standard", Some(100000), None, "CacheRead", None, Some("us"), "0.44"),
+        ("claude-unit-5-5", "Standard", Some(100000), None, "CacheWrite", Some(300), Some("us"), "11"),
+        ("claude-unit-5-5", "Standard", Some(100000), None, "CacheWrite", Some(3600), Some("us"), "17.6"),
+        ("claude-unit-5-5", "Standard", Some(100000), None, "Input", None, Some("us"), "8.8"),
+        ("claude-unit-5-5", "Standard", Some(100000), None, "Output", None, Some("us"), "44"),
+        ("claude-unit-5-5", "Standard", None, Some(100000), "CacheRead", None, Some("us"), "0.22"),
+        ("claude-unit-5-5", "Standard", None, Some(100000), "CacheWrite", Some(300), Some("us"), "5.5"),
+        ("claude-unit-5-5", "Standard", None, Some(100000), "CacheWrite", Some(3600), Some("us"), "8.8"),
+        ("claude-unit-5-5", "Standard", None, Some(100000), "Input", None, Some("us"), "4.4"),
+        ("claude-unit-5-5", "Standard", None, Some(100000), "Output", None, Some("us"), "22"),
+        ("claude-unit-5-5", "Batch", Some(100000), None, "CacheRead", None, Some("us"), "0.22"),
+        ("claude-unit-5-5", "Batch", Some(100000), None, "CacheWrite", Some(300), Some("us"), "5.5"),
+        ("claude-unit-5-5", "Batch", Some(100000), None, "CacheWrite", Some(3600), Some("us"), "8.8"),
+        ("claude-unit-5-5", "Batch", None, Some(100000), "CacheRead", None, Some("us"), "0.11"),
+        ("claude-unit-5-5", "Batch", None, Some(100000), "CacheWrite", Some(300), Some("us"), "2.75"),
+        ("claude-unit-5-5", "Batch", None, Some(100000), "CacheWrite", Some(3600), Some("us"), "4.4"),
+        ("claude-unit-5-5", "Fast", None, Some(100000), "CacheRead", None, Some("us"), "1.32"),
+        ("claude-unit-5-5", "Fast", None, Some(100000), "CacheWrite", Some(300), Some("us"), "33"),
+        ("claude-unit-5-5", "Fast", None, Some(100000), "CacheWrite", Some(3600), Some("us"), "52.8"),
+    ];
+
+    #[test]
+    fn parsed_rows_with_core_derivation_match_the_former_adapter_output() {
+        let mut parsed =
+            parse_catalog(OfficialPriceProvider::Anthropic, MODIFIED.as_bytes(), 0).unwrap();
+        devworks_core::services::prices::derivation::derive_official_tariffs(&mut parsed).unwrap();
+        let derived = parsed
+            .tariffs
+            .iter()
+            .map(|r| {
+                assert_eq!(
+                    (r.modality.as_str(), r.unit.as_str(), r.units),
+                    ("Text", "Token", 1_000_000)
+                );
+                assert!(r.endpoint_profile.is_none());
+                (
+                    r.upstream_model_id.as_str(),
+                    r.service_tier.as_str(),
+                    r.context_lower_exclusive,
+                    r.context_upper_inclusive,
+                    r.charge_kind.as_str(),
+                    r.cache_ttl_seconds,
+                    r.region.as_deref(),
+                    r.amount_usd.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(derived, DERIVED_BEFORE_MOVE);
     }
     #[test]
     fn explicit_character_units_and_published_free_rates_are_not_missing_values() {

@@ -1,6 +1,7 @@
 //! Exact typed request affinity for local pending work and stale query fencing.
 //! Prose, labels, navigation and filesystem strings never establish ownership.
 use super::*;
+use devworks_core::ports::storage::ProjectRecordKind as K;
 use devworks_core::{
     admission::{Selection, decode},
     operations::{OperationInput, projects},
@@ -67,47 +68,47 @@ pub fn affinity(
         {
             return Ok(Affinity::Owned);
         }
-        let fields: &[(&str, &str)] = match family {
+        let fields: &[(&str, K)] = match family {
             "approvals" => &[
-                ("approvalId", "decision_approvals"),
-                ("proposalId", "decision_approvals"),
+                ("approvalId", K::DecisionApprovals),
+                ("proposalId", K::DecisionApprovals),
             ],
             "notifications" => &[
-                ("notificationId", "notifications"),
-                ("notificationIds", "notifications"),
+                ("notificationId", K::Notifications),
+                ("notificationIds", K::Notifications),
             ],
             "jobs" => &[
-                ("scheduleId", "schedules"),
-                ("jobId", "schedules"),
-                ("runId", "job_runs"),
+                ("scheduleId", K::Schedules),
+                ("jobId", K::Schedules),
+                ("runId", K::JobRuns),
             ],
-            "browser" => &[("sessionId", "browser_sessions")],
+            "browser" => &[("sessionId", K::BrowserSessions)],
             "knowledge" => &[
-                ("claimId", "knowledge_claims"),
-                ("entityId", "knowledge_entities"),
-                ("challengeId", "knowledge_challenges"),
-                ("evidenceId", "knowledge_evidence"),
-                ("relationId", "knowledge_relations"),
+                ("claimId", K::KnowledgeClaims),
+                ("entityId", K::KnowledgeEntities),
+                ("challengeId", K::KnowledgeChallenges),
+                ("evidenceId", K::KnowledgeEvidence),
+                ("relationId", K::KnowledgeRelations),
             ],
             "conventions" => &[
-                ("conventionId", "convention_heads"),
-                ("resourceId", "convention_resource_heads"),
+                ("conventionId", K::ConventionHeads),
+                ("resourceId", K::ConventionResourceHeads),
             ],
-            "resources" => &[("resourceId", "resources"), ("leaseId", "resource_leases")],
+            "resources" => &[("resourceId", K::Resources), ("leaseId", K::ResourceLeases)],
             "artifacts" | "documents" => &[
-                ("artifactId", "artifacts"),
-                ("versionId", "artifact_versions"),
+                ("artifactId", K::Artifacts),
+                ("versionId", K::ArtifactVersions),
             ],
-            "process" => &[("processId", "owned_processes")],
-            "indexing" => &[("overlayId", "index_overlays"), ("runId", "index_runs")],
-            "next_work" => &[("claimId", "allocation_claims")],
-            "settings" => &[("proposalId", "configuration_proposals")],
+            "process" => &[("processId", K::OwnedProcesses)],
+            "indexing" => &[("overlayId", K::IndexOverlays), ("runId", K::IndexRuns)],
+            "next_work" => &[("claimId", K::AllocationClaims)],
+            "settings" => &[("proposalId", K::ConfigurationProposals)],
             _ => &[],
         };
         if fields.iter().any(|(field, table)| {
             scope
                 .record_ids
-                .get(*table)
+                .get(table)
                 .is_some_and(|ids| named(value, field, ids))
         }) {
             return Ok(Affinity::Owned);

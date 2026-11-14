@@ -754,6 +754,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     if let Some(p) = &config.purge {
         projects = projects.with_purge(Arc::new(
             devworks_core::services::projects::purge::PurgeCoordinator::new(
+                store.clone(),
                 ids.clone(),
                 p.files.clone(),
                 p.client.clone(),

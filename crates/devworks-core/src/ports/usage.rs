@@ -114,8 +114,25 @@ impl OfficialPriceProvider {
     }
 }
 
+/// Upper bound on the tariff rows of one official catalog, before and after derivation.
+pub const MAX_PUBLISHED_TARIFFS: usize = 20_000;
+
+/// Pricing modifiers an official source declares in prose. The source adapter only reports
+/// whether each declaration is present; the derived tier and regional rows are core rules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeclaredPriceModifiers {
+    /// Cache multipliers stack with the Batch service modifier.
+    pub batch_cache_multipliers_stack: bool,
+    /// Cache multipliers apply on top of the Fast service price.
+    pub fast_cache_multipliers_apply: bool,
+    /// A 1.1x multiplier applies to requests pinned to a processing region.
+    pub regional_multiplier: bool,
+}
+
 /// Fully parsed public source, staged outside a write transaction before conditional
 /// publication. Snapshot IDs/revisions are assigned by the storage owner at publication.
+/// `tariffs` holds the rows the source publishes; derived rows are added by
+/// `services::prices::derivation` before validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FetchedPriceCatalog {
     pub provider: OfficialPriceProvider,
@@ -126,6 +143,7 @@ pub struct FetchedPriceCatalog {
     pub verified_at_ms: i64,
     pub effective_date: Option<String>,
     pub tariffs: Vec<PublishedTariff>,
+    pub modifiers: DeclaredPriceModifiers,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -514,7 +514,10 @@ impl PriceService {
                 return RefreshOutcome::Failed("unknown official price provider".into());
             };
             let now = self.clock.now_ms().get();
-            let fetched = source.fetch(provider, now).and_then(|r| {
+            let fetched = source.fetch(provider, now).and_then(|mut r| {
+                if r.provider == provider {
+                    super::derivation::derive_official_tariffs(&mut r)?;
+                }
                 if r.provider != provider
                     || r.source_url != provider.source_url()
                     || r.tariffs.is_empty()

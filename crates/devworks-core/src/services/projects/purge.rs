@@ -17,6 +17,7 @@ pub struct PurgeCoordinator {
     ids: Arc<dyn IdSource>,
     files: Arc<dyn ProjectPurgeFiles>,
     client: Arc<dyn ProjectPurgeClient>,
+    records: super::managed_files::ManagedFileCustody,
 }
 
 /// Executes only effects already committed by the logical owner. Restarts claim those
@@ -26,6 +27,7 @@ pub struct PurgeWorker {
     ids: Arc<dyn IdSource>,
     files: Arc<dyn ProjectPurgeFiles>,
     client: Arc<dyn ProjectPurgeClient>,
+    records: super::managed_files::ManagedFileCustody,
 }
 impl PurgeWorker {
     pub fn new(
@@ -35,6 +37,7 @@ impl PurgeWorker {
         client: Arc<dyn ProjectPurgeClient>,
     ) -> Self {
         Self {
+            records: super::managed_files::ManagedFileCustody::new(store.clone()),
             store,
             ids,
             files,
@@ -79,7 +82,7 @@ impl PurgeWorker {
             } else {
                 match &admitted.intent {
                     crate::ports::project_purge::PurgeEffectIntent::File { witness } => {
-                        self.files.remove_reviewed(witness, stopped)
+                        self.files.remove_reviewed(witness, &self.records, stopped)
                     }
                     crate::ports::project_purge::PurgeEffectIntent::Client { scope, digest } => {
                         self.client.remove_reviewed(scope, digest)
@@ -154,11 +157,17 @@ struct Snapshot {
 }
 impl PurgeCoordinator {
     pub fn new(
+        store: Arc<dyn crate::ports::storage::ApplicationStore>,
         ids: Arc<dyn IdSource>,
         files: Arc<dyn ProjectPurgeFiles>,
         client: Arc<dyn ProjectPurgeClient>,
     ) -> Self {
-        Self { ids, files, client }
+        Self {
+            ids,
+            files,
+            client,
+            records: super::managed_files::ManagedFileCustody::new(store),
+        }
     }
     fn snapshot(
         &self,
@@ -182,7 +191,11 @@ impl PurgeCoordinator {
         }
         let kept_owners = self
             .files
-            .client_keepers(&inventory.removing_files, &client.surviving_paths)
+            .client_keepers(
+                &inventory.removing_files,
+                &self.records,
+                &client.surviving_paths,
+            )
             .map_err(file_fault)?;
         if !kept_owners.is_empty() {
             client.surviving_artifacts.extend(
@@ -211,11 +224,11 @@ impl PurgeCoordinator {
         }
         let removing = self
             .files
-            .inventory(&inventory.removing_files, &mut || false)
+            .inventory(&inventory.removing_files, &self.records, &mut || false)
             .map_err(file_fault)?;
         let kept = self
             .files
-            .inventory(&inventory.kept_files, &mut || false)
+            .inventory(&inventory.kept_files, &self.records, &mut || false)
             .map_err(file_fault)?;
         Ok(Snapshot {
             inventory,
@@ -411,7 +424,7 @@ fn build(
         let action = serde_json::to_string(&row.action).expect("row action");
         let reason = serde_json::to_string(&row.reason).expect("row reason");
         *groups
-            .entry((row.table.clone(), action, reason))
+            .entry((row.table.as_str().to_owned(), action, reason))
             .or_default() += 1;
         if row.action == ProjectPurgeRowAction::Keep {
             kept_records += 1;
@@ -556,7 +569,7 @@ mod tests {
     use crate::ports::project_purge::{PurgeFileOwner, PurgeFileSelection, PurgeFileWitness};
     use crate::ports::storage::{
         AccessMode, ProjectPurgeCandidates, ProjectPurgeClientScope, ProjectPurgePlanning,
-        ProjectPurgeRowWitness,
+        ProjectPurgeRowWitness, ProjectRecordKind,
     };
     use crate::protocol::{StoreId, support::Check};
     fn id(s: &str) -> Id {
@@ -644,7 +657,7 @@ mod tests {
             .planning
             .rows
             .push(ProjectPurgeRowWitness {
-                table: "sessions".into(),
+                table: ProjectRecordKind::Sessions,
                 key_digest: "1".repeat(64),
                 row_digest: "2".repeat(64),
                 action: ProjectPurgeRowAction::Delete,
@@ -689,7 +702,7 @@ mod tests {
             .planning
             .rows
             .push(ProjectPurgeRowWitness {
-                table: "events".into(),
+                table: ProjectRecordKind::Events,
                 key_digest: "3".repeat(64),
                 row_digest: "4".repeat(64),
                 action: ProjectPurgeRowAction::Keep,

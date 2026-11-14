@@ -119,6 +119,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+pub mod managed_files;
 pub mod purge;
 
 /// The operations [`ProjectService`] is registered for.

@@ -1181,6 +1181,7 @@ impl ProjectPurgeFiles for NoPurgeOwners {
     fn inventory(
         &self,
         _: &PurgeFileSelection,
+        _: &dyn devworks_core::ports::managed_files::PurgeFileRecords,
         _: &mut dyn FnMut() -> bool,
     ) -> Result<PurgeFileSnapshot, PurgeFileFault> {
         Err(PurgeFileFault::Unsupported)
@@ -1188,6 +1189,7 @@ impl ProjectPurgeFiles for NoPurgeOwners {
     fn remove_reviewed(
         &self,
         _: &PurgeFileWitness,
+        _: &dyn devworks_core::ports::managed_files::PurgeFileRecords,
         _: &mut dyn FnMut() -> bool,
     ) -> Result<(), PurgeFileFault> {
         Err(PurgeFileFault::Unsupported)

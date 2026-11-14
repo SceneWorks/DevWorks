@@ -9,7 +9,7 @@ use crate::fs::artifacts::{NativeArtifactFiles, Step};
 use crate::storage::sqlite::{MIGRATION_0006_SHA256, MIGRATIONS, SqliteStore};
 use devworks_core::admission::{self, Selection};
 use devworks_core::authority::HostAuthority;
-use devworks_core::authority::destructive::BlockReason;
+use devworks_core::authority::destructive::{BlockReason, FileIdentity};
 use devworks_core::authority::reads::ReadRoot;
 use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
@@ -42,6 +42,7 @@ use devworks_core::services::artifacts::{
     ArtifactService, INTEGRITY_TARGET, QUOTA_TARGET, SHARED_REFERENCES_REMAIN, STAGE_CAPABILITY,
     StageRequest, StagedFile, Staging, version_ref, versions_digest,
 };
+use devworks_core::services::projects::managed_files::ManagedFileCustody;
 use devworks_core::settings::catalog::{AgentRole, descriptor};
 use devworks_core::settings::service::SettingsService;
 use serde_json::{Value, json};
@@ -188,17 +189,20 @@ impl Fx {
     /// root and source handles.
     fn open(h: Harness, sources: Arc<Sources>, n: Arc<AtomicU64>) -> Self {
         let store = Arc::new(h.store());
-        let files = Arc::new(
-            NativeArtifactFiles::new(h.root.0.clone(), h.root.0.with_extension("cache"))
-                .with_store(store.clone()),
-        );
-        let svc = Arc::new(ArtifactService::new(
-            files.clone(),
-            sources.clone(),
-            Arc::new(NativeFilesystem::new()),
-            h.clock.clone(),
-            h.ids.clone(),
+        let files = Arc::new(NativeArtifactFiles::new(
+            h.root.0.clone(),
+            h.root.0.with_extension("cache"),
         ));
+        let svc = Arc::new(
+            ArtifactService::new(
+                files.clone(),
+                sources.clone(),
+                Arc::new(NativeFilesystem::new()),
+                h.clock.clone(),
+                h.ids.clone(),
+            )
+            .with_project_previews(Arc::new(ManagedFileCustody::new(store.clone()))),
+        );
         let settings = Arc::new(SettingsService {
             roles: Arc::new(devworks_core::authority::HostRoles {
                 store: store.clone(),
@@ -2532,16 +2536,11 @@ impl ArtifactFiles for HookFiles {
     fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
         self.inner.write_derived(k, b)
     }
-    fn write_project_derived(
-        &self,
-        project: &ProjectId,
-        key: &str,
-        bytes: &[u8],
-    ) -> Result<(), FileFault> {
-        self.inner.write_project_derived(project, key, bytes)
+    fn derived_root(&self) -> Result<FileIdentity, FileFault> {
+        self.inner.derived_root()
     }
-    fn recover_project_derived(&self) -> Result<(), FileFault> {
-        self.inner.recover_project_derived()
+    fn remove_derived_remnants(&self, key: &str, root: FileIdentity) -> Result<(), FileFault> {
+        self.inner.remove_derived_remnants(key, root)
     }
     fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
         self.inner.read_derived(k, m)
@@ -2568,13 +2567,16 @@ impl Fx {
         files: Arc<dyn ArtifactFiles>,
         sources: Arc<dyn ArtifactSources>,
     ) -> (Arc<ArtifactService>, UseCases) {
-        let svc = Arc::new(ArtifactService::new(
-            files,
-            sources,
-            Arc::new(NativeFilesystem::new()),
-            self.h.clock.clone(),
-            self.h.ids.clone(),
-        ));
+        let svc = Arc::new(
+            ArtifactService::new(
+                files,
+                sources,
+                Arc::new(NativeFilesystem::new()),
+                self.h.clock.clone(),
+                self.h.ids.clone(),
+            )
+            .with_project_previews(Arc::new(ManagedFileCustody::new(self.store.clone()))),
+        );
         let cases = UseCases::new().with_artifacts(svc.clone());
         (svc, cases)
     }
@@ -3999,16 +4001,11 @@ impl ArtifactFiles for Faulty {
     fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
         self.inner.write_derived(k, b)
     }
-    fn write_project_derived(
-        &self,
-        project: &ProjectId,
-        key: &str,
-        bytes: &[u8],
-    ) -> Result<(), FileFault> {
-        self.inner.write_project_derived(project, key, bytes)
+    fn derived_root(&self) -> Result<FileIdentity, FileFault> {
+        self.inner.derived_root()
     }
-    fn recover_project_derived(&self) -> Result<(), FileFault> {
-        self.inner.recover_project_derived()
+    fn remove_derived_remnants(&self, key: &str, root: FileIdentity) -> Result<(), FileFault> {
+        self.inner.remove_derived_remnants(key, root)
     }
     fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
         self.inner.read_derived(k, m)
@@ -5926,12 +5923,12 @@ fn purge_planning_kept_artifact_subjects_retain_minimal_assignment_resource_and_
         crate::fs::purge::NativeProjectPurgeFiles::new(
             fx.h.root.0.clone(),
             fx.h.root.0.with_extension("cache"),
-            fx.store.clone(),
         )
         .with_read_fence(fx.svc.clone()),
     );
     let client = Arc::new(EmptyClient);
     let coordinator = Arc::new(PurgeCoordinator::new(
+        fx.store.clone(),
         fx.h.ids.clone(),
         files.clone(),
         client.clone(),
