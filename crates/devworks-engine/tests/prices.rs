@@ -1808,6 +1808,17 @@ fn a_stalled_price_source_does_not_keep_the_tokio_runtime_alive_after_app_shutdo
         }
     };
     host.join().unwrap();
+    // A short shutdown bound abandons work that already queued a write; the store's writer
+    // thread still commits it (CONTROL-09). Wait until both write queues are empty, so the
+    // snapshot below holds everything admitted before shutdown and the comparison sees only
+    // what the released source does. An empty write adds no event.
+    for priority in [WritePriority::Authoritative, WritePriority::Bulk] {
+        let options = WriteOptions {
+            priority,
+            ..WriteOptions::default()
+        };
+        run_write(&*store, options, |_| Ok(())).unwrap();
+    }
     let before = read(&*store, |s| {
         Ok((
             s.stamp().clone(),
@@ -1817,14 +1828,29 @@ fn a_stalled_price_source_does_not_keep_the_tokio_runtime_alive_after_app_shutdo
     });
     gate.release();
     runtime().block_on(app.price_refreshes().unwrap().drain());
-    assert_eq!(
-        read(&*store, |s| Ok((
+    let after = read(&*store, |s| {
+        Ok((
             s.stamp().clone(),
             s.usage().price_status("openai")?,
-            s.usage().price_status("anthropic")?
-        ))),
-        before
-    );
+            s.usage().price_status("anthropic")?,
+        ))
+    });
+    if after != before {
+        let events = read(&*store, |s| {
+            s.history()
+                .page(&EventFilter::All, before.0.committed_sequence, 32)
+        });
+        eprintln!(
+            "late events after shutdown (after sequence {}): {:?}",
+            before.0.committed_sequence,
+            events
+                .events
+                .iter()
+                .map(|e| (&e.kind, &e.aggregate_kind, &e.aggregate_id))
+                .collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(after, before);
 }
 
 fn embedding_price_candidate(fx: &Fx) -> devworks_core::protocol::Id {
