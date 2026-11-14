@@ -1643,6 +1643,30 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
             },
         });
         let app = Arc::new(boot(composed).await.unwrap());
+        // The person confirms the shared skill seen for the first time, so it is in effect.
+        let alpha = read(&*fx.store, |s| {
+            s.instructions().instruction_items(
+                &InstructionFilter {
+                    kind: Some(InstructionKind::Skill),
+                    scopes: vec![ConfigScope::Workspace],
+                    name: None,
+                },
+                None,
+                10,
+            )
+        })
+        .pop()
+        .expect("alpha observed");
+        let frame = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":1,
+            "requestKey":fx.key(),"body":{"kind":"skills.rollback","instructionId":alpha.id.as_str(),
+            "expectedRevision":"1","targetRevision":"1"}});
+        let confirmed = app
+            .command(&fx.user, "skills.rollback", frame.to_string().as_bytes())
+            .unwrap();
+        assert!(
+            matches!(&confirmed, CommandReply::Recorded { receipt, .. } if matches!(receipt.decision, DomainDecision::Applied { .. })),
+            "{confirmed:?}"
+        );
         applied(&fx.start(&fx.user, "root-i", 1, 1));
         let activation = fx.launch("coordinator-first-prompt");
         let host = principal(&*fx.store, "first-prompt-host", PrincipalKind::Host);

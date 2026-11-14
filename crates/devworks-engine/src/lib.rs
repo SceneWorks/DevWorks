@@ -231,6 +231,7 @@ pub mod turn_error;
 pub use tool_turn::ResolvedToolCall;
 pub mod usage;
 pub mod watch;
+mod workers;
 
 pub use dispatch::{
     AsyncDelivery, AsyncDeliveryHandler, AsyncFuture, AsyncOutcome, Consumer, Delivery,
