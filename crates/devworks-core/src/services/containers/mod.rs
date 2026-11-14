@@ -1,4 +1,5 @@
 //! Selected container backend operations and owned agent-work lifecycle (DW-49).
+pub mod approval;
 pub mod backend;
 mod commands;
 mod effects;

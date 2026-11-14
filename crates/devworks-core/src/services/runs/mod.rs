@@ -1844,7 +1844,7 @@ impl ControlService {
                 b,
                 json!({
                     "via": "runs.continue",
-                    "principalKind": format!("{:?}", ctx.principal_kind()),
+                    "principalKind": ctx.principal_kind().as_str().to_string(),
                     "resumeGrant": grant,
                 }),
             )?;

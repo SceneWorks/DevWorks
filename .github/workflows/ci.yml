@@ -18,6 +18,26 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  pick_mac_runners:
+    name: pick macOS runners
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      foundation: ${{ steps.pick.outputs.foundation }}
+      engine: ${{ steps.pick.outputs.engine }}
+      desktop: ${{ steps.pick.outputs.desktop }}
+      clippy: ${{ steps.pick.outputs.clippy }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Idle self-hosted Macs labelled devworks-mac take macOS jobs; the rest use macos-latest.
+      - id: pick
+        env:
+          GH_TOKEN: ${{ secrets.MAC_RUNNER_QUERY_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: bash tools/ci/pick-mac-runners.sh
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
@@ -28,6 +48,10 @@ jobs:
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt
       - run: cargo fmt --all --check
+      - name: Every test source is compiled by a test target
+        run: |
+          python3 -I tools/ci/test_test_reachability.py
+          python3 -I tools/ci/test-reachability.py
 
   codegen:
     name: generated contracts are current
@@ -38,6 +62,37 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: contracts-eval
+          workspaces: tools/contracts-eval -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The contracts-eval pipeline from tools/contracts-eval/README.md, in its order, so the
+      # emitted schemas, fixtures and register below come from the current domain-spec.json.
+      - name: Regenerate contracts-eval domain DTOs
+        run: python3 tools/contracts-eval/build_domain_contracts.py
+      - name: Build and test contracts-eval
+        run: cargo test --locked --no-fail-fast --manifest-path tools/contracts-eval/Cargo.toml
+      - name: Emit contract schemas
+        run: cargo run --locked --manifest-path tools/contracts-eval/Cargo.toml -- emit docs/architecture/contracts
+      - name: Regenerate contract fixtures and register
+        shell: bash
+        run: |
+          python3 tools/contracts-eval/make_domain_fixtures.py
+          # Keep the recorded date: the register is current when only the run date differs.
+          date="$(python3 -c 'import json; print(json.load(open("docs/architecture/contracts/family-coverage.json"))["date"])')"
+          python3 tools/contracts-eval/build_register.py --date "$date"
+      - name: Check fixtures and scenarios against the contracts-eval decoders
+        shell: bash
+        run: |
+          probe=tools/contracts-eval/target/debug/devworks-contract-probe
+          for set in fixtures provider-package-fixtures data-delivery-fixtures domain-fixtures; do
+            if ! "$probe" check "docs/architecture/contracts/$set.json" > "$RUNNER_TEMP/$set.json"; then
+              python3 -c 'import json, sys; [print(json.dumps(c)) for c in json.load(open(sys.argv[1]))["cases"] if not c["passed"]]' "$RUNNER_TEMP/$set.json" || true
+              exit 1
+            fi
+          done
+          "$probe" scenario-check docs/architecture/contracts/provider-package-scenarios.json
       - name: Check the generator's schema-revision rules
         run: python3 -m unittest discover -s tools/core-codegen -p 'test_*.py'
       - name: Check Help coverage against the code
@@ -52,7 +107,9 @@ jobs:
 
   clippy:
     name: clippy (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    needs: pick_mac_runners
+    if: ${{ !cancelled() }}
+    runs-on: ${{ matrix.os == 'macos-latest' && fromJSON(needs.pick_mac_runners.outputs.clippy || '"macos-latest"') || matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -60,10 +117,20 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # The runner service keeps the PATH from its configuration, which may predate rustup.
+      - name: Keep build output between runs on a self-hosted Mac
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          dir="$HOME/.cache/devworks-ci/$RUNNER_NAME/target-clippy"
+          rm -rf "$dir/tmp"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: clippy
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -136,14 +203,26 @@ jobs:
 
   macos_foundation:
     name: test (macos-foundation)
-    runs-on: macos-latest
+    needs: pick_mac_runners
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(needs.pick_mac_runners.outputs.foundation || '"macos-latest"') }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # The runner service keeps the PATH from its configuration, which may predate rustup.
+      - name: Keep build output between runs on a self-hosted Mac
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          dir="$HOME/.cache/devworks-ci/$RUNNER_NAME/target-foundation"
+          rm -rf "$dir/tmp"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: test-foundation
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -153,14 +232,26 @@ jobs:
 
   macos_desktop:
     name: test (macos-desktop)
-    runs-on: macos-latest
+    needs: pick_mac_runners
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(needs.pick_mac_runners.outputs.desktop || '"macos-latest"') }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # The runner service keeps the PATH from its configuration, which may predate rustup.
+      - name: Keep build output between runs on a self-hosted Mac
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          dir="$HOME/.cache/devworks-ci/$RUNNER_NAME/target-desktop"
+          rm -rf "$dir/tmp"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: test-desktop
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -170,14 +261,26 @@ jobs:
 
   macos_engine:
     name: test (macos-engine)
-    runs-on: macos-latest
+    needs: pick_mac_runners
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(needs.pick_mac_runners.outputs.engine || '"macos-latest"') }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # The runner service keeps the PATH from its configuration, which may predate rustup.
+      - name: Keep build output between runs on a self-hosted Mac
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          dir="$HOME/.cache/devworks-ci/$RUNNER_NAME/target-engine"
+          rm -rf "$dir/tmp"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: test-engine
           save-if: ${{ github.ref == 'refs/heads/main' }}

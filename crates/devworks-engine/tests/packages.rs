@@ -225,6 +225,8 @@ struct Spec {
     config_schema: Option<Value>,
     /// Invocations the helper multiplexes (`requestedLimits.maxConcurrent`).
     max_concurrent: u32,
+    /// The declared effect of every tool contribution.
+    effect: &'static str,
 }
 impl Spec {
     fn new(package: &str, version: &str) -> Self {
@@ -249,6 +251,7 @@ impl Spec {
             help_source: None,
             config_schema: None,
             max_concurrent: 4,
+            effect: "ReadCandidate",
         }
     }
     fn ids(&self) -> Vec<String> {
@@ -317,7 +320,7 @@ fn bundle(spec: &Spec) -> (Vec<u8>, String) {
                 "inputSchema": schema(&format!("{}/input", spec.package), &"b".repeat(64)),
                 "outputSchema": schema(&format!("{}/output", spec.package), &"c".repeat(64)),
                 "helpTopic": "help", "required": false, "cancellation": "Cooperative"},
-                "requestedEffect": "ReadCandidate"})
+                "requestedEffect": spec.effect})
         })
         .collect();
     let manifest = json!({
@@ -434,6 +437,8 @@ struct App {
     artifact_files: Option<Arc<dyn devworks_core::ports::files::ArtifactFiles>>,
     /// The host's restart budget per instance key (`config()` otherwise).
     restart_limit: Option<u32>,
+    /// The host's handshake bound (`config()` otherwise).
+    handshake: Option<Duration>,
     healthy_after: Option<Duration>,
     host_tick: Option<Duration>,
     probe_timeout: Option<Duration>,
@@ -533,6 +538,7 @@ impl App {
             files,
             artifact_files: None,
             restart_limit: None,
+            handshake: None,
             healthy_after: None,
             host_tick: None,
             probe_timeout: None,
@@ -642,6 +648,7 @@ impl App {
                 config: HostConfig {
                     runtime_timeout: self.probe_timeout.unwrap_or(config().runtime_timeout),
                     restart_limit: self.restart_limit.unwrap_or(config().restart_limit),
+                    handshake: self.handshake.unwrap_or(config().handshake),
                     healthy_after: self.healthy_after.unwrap_or(config().healthy_after),
                     tick: self.host_tick.unwrap_or(config().tick),
                     restart_backoff: self.retry_backoff.unwrap_or(config().restart_backoff),
@@ -806,6 +813,8 @@ impl App {
             deadline: self.deadline.lock().unwrap().unwrap_or(Duration::from_secs(30)),
             allowed_operations: vec![],
             kind,
+            principal: None,
+            expected_digest: None,
         })
     }
     /// Waits until `f` holds for the package's record.
@@ -831,6 +840,7 @@ impl App {
             std::thread::sleep(Duration::from_millis(25));
         }
     }
+    #[track_caller]
     fn ready(&self, package: &str) {
         let until = Instant::now() + PATIENCE;
         loop {
@@ -842,7 +852,9 @@ impl App {
             }
             assert!(
                 Instant::now() < until,
-                "{package} never became ready: {s:?}"
+                "{package} never became ready: {s:?}\nlogs: {:?}\nfailure: {:?}",
+                self.logs(package),
+                read(&*self.store, |s| s.packages().package(package)).and_then(|p| p.failure)
             );
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -973,6 +985,8 @@ fn a_person_installs_a_signed_pack_whose_helper_handshakes_and_serves_invocation
             deadline: Duration::from_secs(5),
             allowed_operations: vec![],
             kind: InvocationKind::Ordinary,
+            principal: None,
+            expected_digest: None,
         }),
         Err(InvokeRefusal::NoSuchContribution)
     ));
@@ -1560,6 +1574,8 @@ fn an_admission_racing_a_closing_session_waits_for_the_restart() {
         deadline: Duration::from_secs(30),
         allowed_operations: vec![],
         kind: InvocationKind::Ordinary,
+        principal: None,
+        expected_digest: None,
     };
     let racing = std::thread::spawn(move || {
         host.invoke(request)
@@ -2008,6 +2024,8 @@ fn the_host_enforces_deadlines_and_caps_concurrent_invocations() {
             deadline: Duration::from_secs(10),
             allowed_operations: vec![],
             kind: InvocationKind::Ordinary,
+            principal: None,
+            expected_digest: None,
         });
         (
             r.map(|h| h.wait(Duration::from_secs(10)).is_some()),
@@ -2802,6 +2820,8 @@ fn big_invoke(
         deadline,
         allowed_operations: ops,
         kind: InvocationKind::Ordinary,
+        principal: None,
+        expected_digest: None,
     })
 }
 
@@ -3908,7 +3928,13 @@ fn the_registry_is_read_whole_and_a_new_identity_beyond_capacity_is_refused() {
 fn an_explicit_retry_restarts_a_helper_even_before_reconciliation_saw_its_failure() {
     let _s = serial();
     let fail = Marker::absent("retry-pack", "fail-on-activate");
-    let mut a = App::new();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    // Every start except the deliberate failure must succeed, but a loaded machine can take
+    // longer than the shared 1.5 s handshake bound to launch a helper (z-busy alone answers
+    // after 1.2 s): with a budget of one, a single timeout records the failure and the package
+    // never becomes ready. The deliberate failure exits at once and needs no bound.
+    a.handshake = Some(PATIENCE / 2);
+    a.boot();
     // One start per budget: the first failure spends it.
     a.restart_limit = Some(1);
     package(a.install(&a.user, &Spec::new("retry-pack", "1.0.0")));
@@ -4043,6 +4069,8 @@ fn invocation_deadline_and_handle_do_not_wait_for_a_busy_history_writer() {
             scope: InvocationScope::Workspace,
             input: serde_json::from_value(json!({"artifactId": "i", "versionId": "v", "sha256": "e".repeat(64), "byteLength": "1", "mediaType": "a/b"})).unwrap(),
             operation_id: id("op-history-bound"), deadline: Duration::from_millis(200), allowed_operations: vec![], kind: InvocationKind::Ordinary,
+            principal: None,
+            expected_digest: None,
         });
         let _ = tx.send(result);
     });
@@ -4489,6 +4517,8 @@ fn a_runtime_probe_launched_after_shutdown_is_stopped_immediately() {
 
 #[path = "packages/approvals.rs"]
 mod approvals;
+#[path = "packages/broker.rs"]
+mod broker;
 
 #[path = "packages/help_guides.rs"]
 mod help_guides;

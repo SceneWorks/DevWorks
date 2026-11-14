@@ -18,6 +18,7 @@
 //! The retained route identity is `route:{repository}:{method}:{path}`; units are repository
 //! scoped here, so the qualified name is `route:{method}:{path}` and the repository is the
 //! unit's.
+use super::manifests::dir_of;
 use devworks_core::ports::indexing::{EdgeTarget, ExtractedEdge, ExtractedNode, Resolution, Span};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -1095,10 +1096,6 @@ fn split_as(text: &str) -> Vec<&str> {
         }
     }
     vec![text]
-}
-
-fn dir_of(p: &str) -> &str {
-    p.rfind('/').map_or("", |i| &p[..i])
 }
 
 /// The Rust module path of a file below its crate root (`api/users.rs` → `api::users`;

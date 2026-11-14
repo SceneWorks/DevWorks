@@ -1,4 +1,4 @@
-use super::catalog::{Catalog, Query, profile};
+use super::catalog::{Catalog, Query, profile, qualified_release};
 use super::*;
 use futures_util::TryStreamExt;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel};
@@ -34,6 +34,17 @@ const QUERIES: &[Query] = &[
         sql: r#"SELECT CASE WHEN DATALENGTH(metadata.document)>65536 THEN NULL ELSE metadata.document END FROM (SELECT (SELECT s.name AS [schema],'Procedure' AS kind,o.name AS name,LEFT(m.definition,65536) AS definition,CAST(CASE WHEN DATALENGTH(m.definition)>131072 THEN 1 ELSE 0 END AS bit) AS truncated,JSON_QUERY((SELECT o.type_desc AS routineType,JSON_QUERY((SELECT COALESCE(NULLIF(p.name,''),'return') AS name,CONVERT(varchar(20),p.parameter_id) AS ordinal,CASE WHEN p.parameter_id=0 THEN 'RETURN' WHEN p.is_output=1 THEN 'OUT' ELSE 'IN' END AS mode,t.name AS dataType,p.is_nullable AS nullable FROM sys.parameters p JOIN sys.types t ON t.user_type_id=p.user_type_id WHERE p.object_id=o.object_id ORDER BY p.parameter_id FOR JSON PATH)) AS parameters FOR JSON PATH,WITHOUT_ARRAY_WRAPPER)) AS metadata FOR JSON PATH,WITHOUT_ARRAY_WRAPPER) AS document FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id LEFT JOIN sys.sql_modules m ON m.object_id=o.object_id WHERE o.type IN('P','PC','FN','IF','TF','FS','FT') AND o.is_ms_shipped=0) metadata"#,
     },
 ];
+/// ProductVersion majors whose sys catalogs the queries above are qualified against in CI:
+/// 14 = SQL Server 2017, 15 = 2019, 16 = 2022, 17 = 2025.
+const QUALIFIED: &[&str] = &["14", "15", "16", "17"];
+fn version_gate(version: &str) -> Result<(), MetadataFailure> {
+    qualified_release(
+        version,
+        1,
+        QUALIFIED,
+        "SQL Server 2017, 2019, 2022 or 2025 (ProductVersion 14, 15, 16 or 17)",
+    )
+}
 fn classify(error: tiberius::error::Error) -> MetadataFailure {
     if matches!(error.code(), Some(18456 | 229 | 916 | 4060)) {
         MetadataFailure::AccessDenied
@@ -98,9 +109,7 @@ pub(super) async fn read(
         .try_get::<&str, _>(0)
         .map_err(|_| MetadataFailure::InvalidMetadata)?
         .ok_or(MetadataFailure::InvalidMetadata)?;
-    if !version.starts_with("16.") {
-        return Err(MetadataFailure::UnsupportedProfile);
-    }
+    version_gate(version)?;
     let tls = if matches!(target.tls, SchemaTlsMode::LoopbackPlaintext) {
         "LoopbackPlaintext"
     } else {
@@ -222,4 +231,23 @@ pub(super) async fn read(
         c = catalog.collector;
     }
     Ok(c.finish(profile))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn accepts_exactly_the_qualified_product_versions() {
+        for version in ["14.0.3500.1", "15.0.4430.1", "16.0.4305.5", "17.0.1000.7"] {
+            assert_eq!(version_gate(version), Ok(()), "{version}");
+        }
+        for version in ["13.0.7037.1", "18.0.1.1", "12.0.6024.0", "1.0", "", "160.0"] {
+            assert_eq!(
+                version_gate(version),
+                Err(MetadataFailure::UnsupportedServerVersion {
+                    supported: "SQL Server 2017, 2019, 2022 or 2025 (ProductVersion 14, 15, 16 or 17)",
+                }),
+                "{version}"
+            );
+        }
+    }
 }

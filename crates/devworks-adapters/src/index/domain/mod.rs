@@ -27,9 +27,7 @@ use devworks_core::ports::indexing::{
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
 
-/// Most nodes and edges kept per file (as the generic walk: beyond them the file is partial).
-const MAX_NODES: usize = 10_000;
-const MAX_EDGES: usize = 40_000;
+use super::treesitter::{MAX_EDGES, MAX_NODES};
 
 /// The retained confidence bands as edge confidences.
 fn band(p: &Map<String, Value>) -> Option<f32> {

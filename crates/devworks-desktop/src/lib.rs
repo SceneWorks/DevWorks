@@ -34,6 +34,7 @@
 #![allow(clippy::large_enum_variant, clippy::result_large_err)]
 
 pub mod addons;
+pub mod artifacts_screen;
 pub mod attachments;
 pub mod backend;
 pub mod chat;
@@ -75,4 +76,5 @@ pub mod work_ops;
 /// The application version shown in the sidebar footer.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod databases_ops;
 pub mod databases_screen;

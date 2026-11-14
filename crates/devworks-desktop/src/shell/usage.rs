@@ -1,9 +1,12 @@
 //! Usage/price request lifecycle. Exact command frames use the shell's durable retry path.
 use super::*;
 use crate::{
-    usage_ops as uops,
-    usage_screen::{Action, PriceDraft, TariffForm},
+    backend::Unresolved,
+    screen::{Cx, Screen, ScreenContext, ScreenId, controller},
+    usage_ops::{self as uops, UsageSlot},
+    usage_screen::{Action, PriceDraft, TariffForm, UsageScreen},
 };
+use devworks_core::ports::storage::ProjectPurgeClientScope;
 use devworks_core::protocol::{OperationState, records::*, results::OperationResult};
 use serde_json::json;
 
@@ -14,10 +17,59 @@ fn values(input: &str) -> Vec<&str> {
         .filter(|s| !s.is_empty())
         .collect()
 }
-impl Shell {
-    pub(super) fn restore_price_command(&mut self, slot: &Slot, frame: &[u8]) {
-        self.usage.price_busy = true;
-        self.usage.message = Some(
+controller!(UsageCtl, usage: UsageScreen);
+
+impl Screen for UsageScreen {
+    type Slot = UsageSlot;
+    const ID: ScreenId = ScreenId::Usage;
+    fn load(&mut self, cx: &mut Cx, _route: Route) {
+        self.tab = cx.routes.entry(Route::Usage).or_default().tab;
+        UsageCtl { usage: self, cx }.load_usage();
+        cx.load_router_catalog();
+        if !cx.projects.list.loaded {
+            cx.load_projects();
+        }
+    }
+    fn refresh(&mut self, cx: &mut Cx, _route: Route) {
+        if self.tab == 2 && !self.prices_loading {
+            UsageCtl { usage: self, cx }.refresh_visible_prices();
+        }
+    }
+    fn apply(&mut self, cx: &mut Cx, slot: UsageSlot, reply: Reply) {
+        if let Some((slot, reply)) = (UsageCtl { usage: self, cx }).apply_usage(slot, reply) {
+            cx.unhandled(&slot, reply);
+        }
+    }
+    fn ui(&mut self, cx: &mut Cx, _route: Route, ui: &mut Ui) {
+        UsageCtl { usage: self, cx }.usage_screen(ui);
+    }
+    fn restore_in_flight(&mut self, slot: &UsageSlot, u: &Unresolved) {
+        if matches!(slot, UsageSlot::PriceOverride | UsageSlot::PriceRefresh) {
+            self.restore_price_command(slot, u.frame());
+        }
+    }
+    fn remove_purged(&mut self, scope: &ProjectPurgeClientScope) {
+        let p = scope.project_id.0.as_str();
+        self.data = None;
+        self.options.clear();
+        self.applied = None;
+        self.loading = false;
+        if self.draft.project.as_deref() == Some(p) {
+            self.draft.project = None;
+        }
+    }
+    fn context(&self, _route: Route, mem: &RouteMemory) -> ScreenContext {
+        ScreenContext {
+            tab: self.tab,
+            selection: mem.selection.clone(),
+        }
+    }
+}
+
+impl UsageScreen {
+    fn restore_price_command(&mut self, slot: &UsageSlot, frame: &[u8]) {
+        self.price_busy = true;
+        self.message = Some(
             "A submitted price change is awaiting confirmation. Its original request is retained."
                 .into(),
         );
@@ -26,7 +78,7 @@ impl Shell {
         };
         let body = &v["body"];
         match slot {
-            Slot::PriceOverride => {
+            UsageSlot::PriceOverride => {
                 let (Some(model), Some(revision)) =
                     (body["modelId"].as_str(), body["expectedRevision"].as_str())
                 else {
@@ -47,12 +99,12 @@ impl Shell {
                     revision: revision.into(),
                     tariffs,
                 };
-                self.usage.price_saving = Some(draft.clone());
-                self.usage.price_draft = Some(draft);
+                self.price_saving = Some(draft.clone());
+                self.price_draft = Some(draft);
             }
-            Slot::PriceRefresh => {
+            UsageSlot::PriceRefresh => {
                 if let Some(providers) = body["providerIds"].as_array() {
-                    self.usage.price_providers = providers
+                    self.price_providers = providers
                         .iter()
                         .filter_map(serde_json::Value::as_str)
                         .collect::<Vec<_>>()
@@ -62,7 +114,10 @@ impl Shell {
             _ => {}
         }
     }
-    pub(super) fn load_usage(&mut self) {
+}
+
+impl UsageCtl<'_, '_> {
+    fn load_usage(&mut self) {
         if self.usage.tab == 2 {
             self.load_prices(false);
             return;
@@ -81,7 +136,7 @@ impl Shell {
         self.usage.loading = true;
         self.usage.error = None;
         self.query(
-            Slot::Usage(generation, false),
+            UsageSlot::Usage(generation, false),
             "Loading usage report",
             "router.usage",
             move |b| uops::query(b, "router.usage", body),
@@ -99,7 +154,7 @@ impl Shell {
             return;
         };
         self.query(
-            Slot::UsageOptions(generation),
+            UsageSlot::UsageOptions(generation),
             "Loading available usage filter values",
             "router.usage",
             move |b| uops::query(b, "router.usage", body),
@@ -117,7 +172,7 @@ impl Shell {
         };
         self.usage.loading = true;
         self.query(
-            Slot::Usage(self.usage.generation, true),
+            UsageSlot::Usage(self.usage.generation, true),
             "Loading more usage rows",
             "router.usage",
             move |b| uops::query(b, "router.usage", body),
@@ -126,15 +181,15 @@ impl Shell {
     /// Keep a user's loaded page set intact when a background refresh publishes a new catalog.
     /// A partial first page already owns a cursor: probing also preserves a More gesture
     /// before its append reply arrives. Completed single pages can be reloaded normally.
-    pub(super) fn refresh_visible_prices(&mut self) {
+    fn refresh_visible_prices(&mut self) {
         if self.usage.price_pages <= 1
             && self.usage.prices.as_ref().is_none_or(|page| !page.has_more)
         {
             self.reload_applied_prices();
-        } else if !self.pending(&Slot::PriceProbe(self.usage.price_generation)) {
+        } else if !self.pending(&UsageSlot::PriceProbe(self.usage.price_generation)) {
             let generation = self.usage.price_generation;
             self.query(
-                Slot::PriceProbe(generation),
+                UsageSlot::PriceProbe(generation),
                 "Checking for updated price catalog",
                 "router.price_status",
                 move |b| {
@@ -156,13 +211,13 @@ impl Shell {
         let generation = self.usage.price_generation;
         self.usage.prices_loading = true;
         self.query(
-            Slot::Prices(generation, false),
+            UsageSlot::Prices(generation, false),
             "Refreshing applied price catalog",
             "router.price_status",
             move |b| uops::query(b, "router.price_status", body),
         );
     }
-    pub(super) fn load_prices(&mut self, append: bool) {
+    fn load_prices(&mut self, append: bool) {
         let body = if append {
             let Some(cursor) = self
                 .usage
@@ -193,7 +248,7 @@ impl Shell {
         self.usage.prices_loading = true;
         let generation = self.usage.price_generation;
         self.query(
-            Slot::Prices(generation, append),
+            UsageSlot::Prices(generation, append),
             "Loading price catalog",
             "router.price_status",
             move |b| uops::query(b, "router.price_status", body),
@@ -225,9 +280,7 @@ impl Shell {
             .zip(record.endpoint_profile.as_ref())
             .map(|(u, p)| (u.0.as_str(), p))
             .or_else(|| {
-                self.chat
-                    .routing
-                    .catalog
+                self.catalog
                     .iter()
                     .find(|r| r.id.as_str() == model)
                     .map(|r| (r.upstream_model_id.0.as_str(), &r.endpoint_profile))
@@ -348,7 +401,7 @@ impl Shell {
         self.usage.price_saving = Some(draft);
         self.usage.price_busy = true;
         if !self.command(
-            Slot::PriceOverride,
+            UsageSlot::PriceOverride,
             "Saving tariff override",
             "router.price_override",
             move |b| uops::command(b, "router.price_override", body),
@@ -384,7 +437,7 @@ impl Shell {
         self.usage.price_busy = true;
         // Refresh retains its original revision 1 contract; status and override negotiate 3.
         if !self.command(
-            Slot::PriceRefresh,
+            UsageSlot::PriceRefresh,
             "Requesting official price refresh",
             "router.price_refresh",
             move |b| ops::command_frame(b, "router.price_refresh", body),
@@ -392,7 +445,7 @@ impl Shell {
             self.usage.price_busy = false;
         }
     }
-    pub(super) fn poll_price_refresh(&mut self, ctx: &egui::Context) {
+    fn poll_price_refresh(&mut self, ctx: &egui::Context) {
         let Some(operation) = self.usage.refresh.as_ref() else {
             return;
         };
@@ -400,18 +453,18 @@ impl Shell {
             .usage
             .last_refresh
             .is_none_or(|at| at.elapsed() >= Duration::from_secs(3))
-            && !self.pending(&Slot::PriceOperation)
+            && !self.pending(&UsageSlot::PriceOperation)
         {
             let id = operation.operation_id.clone();
             self.usage.last_refresh = Some(Instant::now());
-            self.query(Slot::PriceOperation,"Checking price refresh completion","history.operation_status",move|b|json!({"protocol":ops::PROTOCOL,"queryId":b.token("q"),"query":{"kind":"history.operation_status","operationId":id}}).to_string().into_bytes());
+            self.query(UsageSlot::PriceOperation,"Checking price refresh completion","history.operation_status",move|b|json!({"protocol":ops::PROTOCOL,"queryId":b.token("q"),"query":{"kind":"history.operation_status","operationId":id}}).to_string().into_bytes());
         }
         ctx.request_repaint_after(Duration::from_secs(3));
     }
-    pub(super) fn apply_usage(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
+    fn apply_usage(&mut self, slot: UsageSlot, reply: Reply) -> Option<(UsageSlot, Reply)> {
         match (slot, reply) {
-            (Slot::Usage(generation, _), _) if generation != self.usage.generation => {}
-            (Slot::Usage(_, append), Reply::Query(q)) => {
+            (UsageSlot::Usage(generation, _), _) if generation != self.usage.generation => {}
+            (UsageSlot::Usage(_, append), Reply::Query(q)) => {
                 self.usage.loading = false;
                 match uops::usage(q) {
                     Ok(data) => {
@@ -427,8 +480,8 @@ impl Shell {
                     Err(e) => self.usage.error = Some(e.describe()),
                 }
             }
-            (Slot::UsageOptions(generation), _) if generation != self.usage.generation => {}
-            (Slot::UsageOptions(generation), Reply::Query(q)) => match uops::usage(q) {
+            (UsageSlot::UsageOptions(generation), _) if generation != self.usage.generation => {}
+            (UsageSlot::UsageOptions(generation), Reply::Query(q)) => match uops::usage(q) {
                 Ok(UsageQueryResult::Filters { filters }) => {
                     self.usage.options.extend(filters.items.0);
                     if let Some(cursor) = filters.next_cursor {
@@ -438,8 +491,9 @@ impl Shell {
                 Ok(_) => self.usage.error = Some("Unexpected usage filter response".into()),
                 Err(e) => self.usage.error = Some(e.describe()),
             },
-            (Slot::PriceProbe(generation), _) if generation != self.usage.price_generation => {}
-            (Slot::PriceProbe(_), Reply::Query(q)) => match uops::prices(q) {
+            (UsageSlot::PriceProbe(generation), _) if generation != self.usage.price_generation => {
+            }
+            (UsageSlot::PriceProbe(_), Reply::Query(q)) => match uops::prices(q) {
                 Ok(current) => {
                     self.usage.price_update_available =
                         self.usage.prices.as_ref().is_some_and(|previous| {
@@ -448,8 +502,8 @@ impl Shell {
                 }
                 Err(e) => self.usage.price_error = Some(e.describe()),
             },
-            (Slot::Prices(generation, _), _) if generation != self.usage.price_generation => {}
-            (Slot::Prices(_, append), Reply::Query(q)) => {
+            (UsageSlot::Prices(generation, _), _) if generation != self.usage.price_generation => {}
+            (UsageSlot::Prices(_, append), Reply::Query(q)) => {
                 self.usage.prices_loading = false;
                 match uops::prices(q) {
                     Ok(mut result) => {
@@ -512,7 +566,7 @@ impl Shell {
                     Err(e) => self.usage.price_error = Some(e.describe()),
                 }
             }
-            (Slot::PriceOverride, Reply::Command(q)) => {
+            (UsageSlot::PriceOverride, Reply::Command(q)) => {
                 self.usage.price_busy = is_unknown(&q);
                 match uops::overridden(q) {
                     Ok(_) => {
@@ -526,7 +580,7 @@ impl Shell {
                     Err(e) => self.usage.price_error = Some(e.describe()),
                 }
             }
-            (Slot::PriceRefresh, Reply::Command(q)) => {
+            (UsageSlot::PriceRefresh, Reply::Command(q)) => {
                 self.usage.price_busy = is_unknown(&q);
                 match uops::refreshed(q) {
                     Ok(operation) => {
@@ -540,7 +594,7 @@ impl Shell {
                     Err(e) => self.usage.price_error = Some(e.describe()),
                 }
             }
-            (Slot::PriceOperation, Reply::Query(q)) => match ops::query_result(q) {
+            (UsageSlot::PriceOperation, Reply::Query(q)) => match ops::query_result(q) {
                 Ok((OperationResult::HistoryOperationStatus { value }, _)) => {
                     let complete = matches!(value.state, OperationState::ObservedComplete);
                     let terminal = complete
@@ -567,9 +621,8 @@ impl Shell {
         }
         None
     }
-    pub(super) fn usage_screen(&mut self, ui: &mut Ui) {
+    fn usage_screen(&mut self, ui: &mut Ui) {
         self.usage.tab = self.routes.entry(Route::Usage).or_default().tab;
-        let online = self.online();
         let projects = self
             .projects
             .list
@@ -578,12 +631,7 @@ impl Shell {
             .map(|p| (p.id.0.as_str().into(), p.name.0.clone()))
             .collect::<Vec<_>>();
         let mut actions = Vec::new();
-        self.usage.ui(
-            ui,
-            online.as_ref().map(|_| ()).map_err(String::as_str),
-            &projects,
-            &mut actions,
-        );
+        self.usage.ui(ui, self.cx.online(), &projects, &mut actions);
         self.routes.entry(Route::Usage).or_default().tab = self.usage.tab;
         for action in actions {
             match action {
@@ -608,11 +656,7 @@ impl Shell {
                     }
                 }
                 Action::OpenWork(id) => self.open_work(&id),
-                Action::OpenSession(id) => {
-                    self.chat.selected = Some(id.clone());
-                    self.load_transcript(&id);
-                    self.navigate(Route::Chat);
-                }
+                Action::OpenSession(id) => self.open_session(id),
             }
         }
         self.poll_price_refresh(ui.ctx());

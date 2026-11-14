@@ -21,9 +21,10 @@ use crate::operations::{OperationInput, process as ops};
 use crate::ports::process::{NativeIdentity, Probe, ProcessSpec as NativeProcessSpec};
 use crate::ports::secrets::{SecretKey, SecretStore};
 use crate::ports::storage::{
-    ApplicationStore, ArtifactState, ConfigScope, DeliveryFilter, NewEvent, NewOperation,
-    NewQueueEntry, OperationRecord, ProcessPhase, ReadOptions, ReadSnapshot, StorageError,
-    StoredApproval, StoredProcess, WriteTransaction, read_snapshot,
+    ApplicationStore, ArtifactState, ConfigScope, DeliveryFilter, GrantKind, NewEvent,
+    NewOperation, NewQueueEntry, OperationRecord, ProcessPhase, ReadOptions, ReadSnapshot,
+    StorageError, StoredApproval, StoredGitWorktree, StoredProcess, StoredRepository,
+    WriteTransaction, read_snapshot,
 };
 use crate::ports::{
     AuthorityPort, AuthorityRequest, CommandHandler, Decided, HandlerFailure, IdKind, IdSource,
@@ -95,7 +96,9 @@ pub enum BindingRefusal {
     UnknownManifest,
     ChangedManifest,
     UnsupportedManifest,
-    MissingWorktree,
+    /// The manifest's install cannot run without package lifecycle scripts; the request must
+    /// set `allowScripts`.
+    ScriptsRequired,
 }
 
 impl ToolBindings {
@@ -390,6 +393,355 @@ fn exact_directory(path: &Path) -> Option<PathBuf> {
     (actual == path && actual.is_dir()).then_some(actual)
 }
 
+/// Whether the invocation's project (if it has one) has `repository` as a member.
+fn visible_to(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    repository: &Id,
+) -> Result<bool, StorageError> {
+    Ok(match ctx.project_id() {
+        Some(project) => snapshot.projects().members(project)?.contains(repository),
+        None => true,
+    })
+}
+
+/// Whether `tree` is a live worktree this invocation owns: same owner, root and assignment.
+fn owned_by(tree: &StoredGitWorktree, ctx: &InvocationContext) -> bool {
+    !tree.removed
+        && tree.owner == *ctx.principal()
+        && tree.owner_root_id.as_ref() == ctx.root_id()
+        && tree.owner_assignment_id.as_ref() == ctx.assignment_id()
+}
+
+/// Whether a dependency install may run package lifecycle scripts (arbitrary dependency code):
+/// the user's own request, the replay of a person's approval of the exact request (the staged
+/// saved-operation approval), or a request admitted by spending a reviewed native grant, which
+/// always binds the exact request. Anything else is refused `ApprovalRequired` and staged.
+fn scripts_approved(ctx: &InvocationContext, native_grant: bool) -> bool {
+    ctx.principal_kind() == PrincipalKind::Human
+        || ctx.reviewed_operation().is_some()
+        || native_grant
+}
+
+/// One package-manager invocation of a dependency install.
+#[derive(Debug, PartialEq, Eq)]
+struct InstallCommand {
+    program: &'static str,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+}
+
+/// The package-manager command for the bound manifest `name` (with contents `manifest`) in
+/// `root`. Unless `allow_scripts`, it runs no package lifecycle scripts:
+///
+/// - Cargo: `cargo fetch` (downloads only; nothing is compiled, so no `build.rs` runs) instead
+///   of `cargo build`.
+/// - npm, pnpm and Yarn 1: `--ignore-scripts`; pnpm also `--ignore-pnpmfile` (its hooks run
+///   regardless of scripts). Yarn 2+ (told apart by its lockfile) does not accept
+///   `--ignore-scripts`; it gets `--mode=skip-build` (no build script runs at all) and
+///   `YARN_ENABLE_SCRIPTS=false`, which overrides its rc files. A Yarn release or plugin the
+///   repository configures is refused separately (see [`install_runs_repository_code`], which
+///   also covers Cargo configuration and toolchain files).
+/// - uv: `--no-build` (no source distribution is built, so no build backend runs) and
+///   `--no-install-workspace` (the project and its workspace members are not built either).
+/// - pip: `--only-binary :all:`, and only for a requirements file in which nothing could
+///   re-enable a source build (see [`binary_only_requirements`]).
+/// - Composer: `--no-scripts` and `--no-plugins` (plugins run code on install).
+/// - Go: `go mod download` runs no package code either way.
+/// - Bundler has no switch that stops the Gemfile (Ruby) or native gem extensions from
+///   running, so a Bundler install needs `allow_scripts`.
+fn install_command(
+    name: &str,
+    root: &Path,
+    manifest: &[u8],
+    allow_scripts: bool,
+) -> Result<InstallCommand, BindingRefusal> {
+    let path = |relative: &str| root.join(relative).to_string_lossy().into_owned();
+    let root_text = root.to_string_lossy().into_owned();
+    let strings = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect();
+    let no_scripts = |args: &mut Vec<String>, flags: &[&str]| {
+        if !allow_scripts {
+            args.extend(flags.iter().map(|flag| (*flag).to_owned()));
+        }
+    };
+    let pair = |name: &str, value: String| (name.to_owned(), value);
+    let command = match name {
+        "Cargo.toml" | "Cargo.lock" => {
+            let mut args: Vec<String> = strings(&[if allow_scripts { "build" } else { "fetch" }]);
+            if name == "Cargo.lock" {
+                args.push("--locked".into());
+            }
+            args.extend(["--manifest-path".into(), path("Cargo.toml")]);
+            InstallCommand {
+                program: "cargo",
+                args,
+                env: vec![
+                    pair("CARGO_HOME", path(".devworks-cache/cargo")),
+                    pair("CARGO_TARGET_DIR", path("target")),
+                ],
+            }
+        }
+        "package-lock.json" | "package.json" => {
+            let mut args: Vec<String> = strings(&[if name == "package.json" {
+                "install"
+            } else {
+                "ci"
+            }]);
+            no_scripts(&mut args, &["--ignore-scripts"]);
+            args.extend(["--prefix".into(), root_text]);
+            InstallCommand {
+                program: "npm",
+                args,
+                env: vec![pair("NPM_CONFIG_CACHE", path(".devworks-cache/npm"))],
+            }
+        }
+        "pnpm-lock.yaml" => {
+            let mut args = strings(&["install", "--frozen-lockfile"]);
+            // `.pnpmfile.cjs` hooks run even with `--ignore-scripts`.
+            no_scripts(&mut args, &["--ignore-scripts", "--ignore-pnpmfile"]);
+            args.extend(["--dir".into(), root_text]);
+            InstallCommand {
+                program: "pnpm",
+                args,
+                env: vec![],
+            }
+        }
+        "yarn.lock" => {
+            // A Yarn 2+ lockfile carries a `__metadata` entry; Yarn 1's does not. The process
+            // already runs in `root`.
+            let berry = manifest
+                .split(|byte| *byte == b'\n')
+                .any(|line| line.starts_with(b"__metadata:"));
+            let mut args;
+            if berry {
+                args = strings(&["install", "--immutable"]);
+                no_scripts(&mut args, &["--mode=skip-build"]);
+            } else {
+                args = strings(&["install", "--frozen-lockfile"]);
+                no_scripts(&mut args, &["--ignore-scripts"]);
+                args.extend(["--cwd".into(), root_text]);
+            }
+            InstallCommand {
+                program: "yarn",
+                args,
+                env: if allow_scripts {
+                    vec![]
+                } else {
+                    vec![pair("YARN_ENABLE_SCRIPTS", "false".into())]
+                },
+            }
+        }
+        "pyproject.toml" | "uv.lock" => {
+            let mut args = vec!["sync".into(), "--project".into(), root_text];
+            if name == "uv.lock" {
+                args.push("--frozen".into());
+            }
+            no_scripts(&mut args, &["--no-build", "--no-install-workspace"]);
+            InstallCommand {
+                program: "uv",
+                args,
+                env: vec![pair("UV_CACHE_DIR", path(".devworks-cache/uv"))],
+            }
+        }
+        "requirements.txt" => {
+            if !allow_scripts && !binary_only_requirements(manifest) {
+                return Err(BindingRefusal::ScriptsRequired);
+            }
+            let mut args = strings(&["-m", "pip", "install"]);
+            no_scripts(&mut args, &["--only-binary", ":all:"]);
+            args.extend([
+                "--target".into(),
+                path(".devworks-deps/python"),
+                "-r".into(),
+                path(name),
+            ]);
+            InstallCommand {
+                program: "python3",
+                args,
+                env: vec![pair("PIP_CACHE_DIR", path(".devworks-cache/pip"))],
+            }
+        }
+        "go.mod" => InstallCommand {
+            program: "go",
+            args: strings(&["mod", "download"]),
+            env: vec![pair("GOMODCACHE", path(".devworks-deps/go"))],
+        },
+        "Gemfile.lock" => {
+            if !allow_scripts {
+                return Err(BindingRefusal::ScriptsRequired);
+            }
+            InstallCommand {
+                program: "bundle",
+                args: vec!["install".into(), "--gemfile".into(), path("Gemfile")],
+                env: vec![pair("BUNDLE_PATH", path("vendor/bundle"))],
+            }
+        }
+        "composer.lock" => {
+            let mut args = strings(&["install"]);
+            no_scripts(&mut args, &["--no-scripts", "--no-plugins"]);
+            args.extend(["--working-dir".into(), root_text]);
+            InstallCommand {
+                program: "composer",
+                args,
+                env: vec![],
+            }
+        }
+        _ => return Err(BindingRefusal::UnsupportedManifest),
+    };
+    Ok(command)
+}
+
+/// Whether a pip requirements file names only packages from an index, so that
+/// `--only-binary :all:` leaves pip nothing to build from source. A file may itself set
+/// `--no-binary` or `--only-binary :none:`, include other files (`-r`, `-c`), name an editable
+/// or a direct reference (a URL, a path, an archive) or pass build settings, and pip expands
+/// environment variables in it; any of those could build a package, so such a file needs
+/// `allowScripts`.
+fn binary_only_requirements(manifest: &[u8]) -> bool {
+    // (option, takes a value)
+    const GLOBAL: &[(&str, bool)] = &[
+        ("-i", true),
+        ("--index-url", true),
+        ("--extra-index-url", true),
+        ("--no-index", false),
+        ("-f", true),
+        ("--find-links", true),
+        ("--prefer-binary", false),
+        ("--require-hashes", false),
+        ("--pre", false),
+        ("--trusted-host", true),
+    ];
+    const PER_REQUIREMENT: &[(&str, bool)] = &[("--hash", true)];
+    // Every final suffix of a source archive pip recognizes (.zip, .tar, .tar.gz, .tgz,
+    // .tar.bz2, .tbz, .tar.xz, .txz, .tlz, .tar.lz, .tar.lzma), and .tbz2 as well.
+    const ARCHIVES: &[&str] = &[
+        ".zip", ".tar", ".gz", ".tgz", ".bz2", ".tbz", ".tbz2", ".xz", ".txz", ".tlz", ".lz",
+        ".lzma",
+    ];
+    let Ok(text) = std::str::from_utf8(manifest) else {
+        return false;
+    };
+    let text = text.replace("\\\r\n", "").replace("\\\n", "");
+    text.lines().all(|line| {
+        // pip drops a comment that starts the line or follows whitespace.
+        let mut code = line;
+        let mut previous = None;
+        for (index, character) in line.char_indices() {
+            if character == '#' && previous.is_none_or(char::is_whitespace) {
+                code = &line[..index];
+                break;
+            }
+            previous = Some(character);
+        }
+        let code = code.trim();
+        if code.is_empty() {
+            return true;
+        }
+        if code.contains('$') {
+            return false;
+        }
+        // Like pip, the options start at the first token that starts with `-`; every one of
+        // them must be allowed, not just the first.
+        let tokens: Vec<&str> = code.split_whitespace().collect();
+        let first_option = tokens
+            .iter()
+            .position(|token| token.starts_with('-'))
+            .unwrap_or(tokens.len());
+        let (requirement, options) = tokens.split_at(first_option);
+        if requirement.is_empty() {
+            return allowed_options(options, GLOBAL);
+        }
+        let requirement = requirement.join(" ");
+        let requirement = requirement.split(';').next().unwrap_or_default().trim();
+        // The project name ends where its extras, version specifier or a space start; pip
+        // strips extras before it recognizes a local archive.
+        let name = requirement
+            .split(['[', '<', '>', '=', '!', '~', ' ', '('])
+            .next()
+            .unwrap_or_default();
+        let lower = name.to_ascii_lowercase();
+        name.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            && !requirement.contains(['@', '/', '\\', ':'])
+            && !ARCHIVES.iter().any(|archive| lower.ends_with(archive))
+            && allowed_options(options, PER_REQUIREMENT)
+    })
+}
+
+/// Whether the manager would run a program the repository configures before (or instead of)
+/// the install itself, which no install option stops; such an install needs `allowScripts`.
+///
+/// - Yarn: any rc file in the repository root or in the install's home (inside the
+///   repository). An rc file can name a Yarn release (`yarnPath`, `yarn-path`) or plugins, and
+///   YAML can spell those keys in ways a text search misses, so any rc file counts.
+/// - Cargo: a Cargo configuration in the repository root or in the install's `CARGO_HOME`
+///   (inside the repository), which can name the compiler, wrappers or credential providers
+///   that even `cargo fetch` runs; and a toolchain file naming a toolchain by path (a TOML key
+///   spelled with an escape needs `\`, so a file with `path`, `/` or `\` counts).
+fn install_runs_repository_code(name: &str, root: &Path) -> bool {
+    let present = |path: PathBuf| match std::fs::symlink_metadata(&path) {
+        Ok(_) => true,
+        // An entry that cannot be inspected cannot be ruled out.
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    };
+    match name {
+        "yarn.lock" => [root.to_path_buf(), root.join(".devworks-home")]
+            .iter()
+            .flat_map(|directory| [directory.join(".yarnrc.yml"), directory.join(".yarnrc")])
+            .any(present),
+        "Cargo.toml" | "Cargo.lock" => {
+            let configured = [root.join(".cargo"), root.join(".devworks-cache/cargo")]
+                .iter()
+                .flat_map(|directory| [directory.join("config"), directory.join("config.toml")])
+                .any(present);
+            let toolchain_path = ["rust-toolchain", "rust-toolchain.toml"]
+                .iter()
+                .any(|file| match std::fs::read(root.join(file)) {
+                    Ok(text) => {
+                        let text = String::from_utf8_lossy(&text);
+                        text.contains("path") || text.contains(['/', '\\'])
+                    }
+                    Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+                });
+            configured || toolchain_path
+        }
+        _ => false,
+    }
+}
+
+/// Whether every token of a requirements-file line's options is one of `allowed`, each taking
+/// its value inline (`--name=value`) or as the next token when it takes one. Quoted tokens are
+/// refused, since pip unquotes options and a quoted token could hide another option.
+fn allowed_options(tokens: &[&str], allowed: &[(&str, bool)]) -> bool {
+    let quoted = |token: &str| token.contains(['"', '\'']);
+    let mut tokens = tokens.iter();
+    while let Some(token) = tokens.next() {
+        if quoted(token) {
+            return false;
+        }
+        let (name, inline) = match token.split_once('=') {
+            Some((name, _)) => (name, true),
+            None => (*token, false),
+        };
+        let Some(&(_, valued)) = allowed.iter().find(|(option, _)| *option == name) else {
+            return false;
+        };
+        if valued && !inline {
+            match tokens.next() {
+                Some(value) if !value.starts_with('-') && !quoted(value) => {}
+                _ => return false,
+            }
+        } else if !valued && inline {
+            return false;
+        }
+    }
+    true
+}
+
 /// Secret values can straddle a capture page or budget boundary. Remove any retained suffix
 /// matching the beginning of a secret before publishing an incomplete output prefix.
 pub(crate) fn redacted_output(bytes: &[u8], values: &[String], incomplete: bool) -> Vec<u8> {
@@ -674,6 +1026,8 @@ struct InstallJob {
     expected_revision: crate::protocol::Revision,
     manifest: ArtifactRef,
     profile: ToolProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    allow_scripts: Option<bool>,
 }
 
 impl InstallJob {
@@ -684,7 +1038,7 @@ impl InstallJob {
     ) -> Self {
         Self {
             actor: ctx.principal().clone(),
-            kind: format!("{:?}", ctx.principal_kind()),
+            kind: ctx.principal_kind().as_str().to_string(),
             session: ctx.session_id().cloned(),
             project: ctx.project_id().cloned(),
             root: ctx.root_id().cloned(),
@@ -697,9 +1051,14 @@ impl InstallJob {
             expected_revision: input.expected_revision.clone(),
             manifest: input.manifest.clone(),
             profile: input.profile.clone(),
+            allow_scripts: input.allow_scripts,
         }
     }
-    fn context(&self, store: &dyn ApplicationStore, operation: &OperationId) -> InvocationContext {
+    fn context(
+        &self,
+        store: &dyn ApplicationStore,
+        operation: &OperationId,
+    ) -> Option<InvocationContext> {
         process_context(
             store,
             operation,
@@ -720,6 +1079,7 @@ impl InstallJob {
             expected_revision: self.expected_revision.clone(),
             manifest: self.manifest.clone(),
             profile: self.profile.clone(),
+            allow_scripts: self.allow_scripts,
         }
     }
 }
@@ -732,7 +1092,7 @@ impl ExecuteJob {
     fn from_context(ctx: &InvocationContext, fingerprint: &Fingerprint, spec: ProcessSpec) -> Self {
         Self {
             actor: ctx.principal().clone(),
-            kind: format!("{:?}", ctx.principal_kind()),
+            kind: ctx.principal_kind().as_str().to_string(),
             session: ctx.session_id().cloned(),
             project: ctx.project_id().cloned(),
             root: ctx.root_id().cloned(),
@@ -747,7 +1107,11 @@ impl ExecuteJob {
         }
     }
 
-    fn context(&self, store: &dyn ApplicationStore, operation: &OperationId) -> InvocationContext {
+    fn context(
+        &self,
+        store: &dyn ApplicationStore,
+        operation: &OperationId,
+    ) -> Option<InvocationContext> {
         process_context(
             store,
             operation,
@@ -777,15 +1141,8 @@ fn process_context(
     restore_epoch: i64,
     policy_revision: i64,
     authority_sources: &[Id],
-) -> InvocationContext {
-    let kind = match kind {
-        "Human" => PrincipalKind::Human,
-        "Agent" => PrincipalKind::Agent,
-        "Package" => PrincipalKind::Package,
-        "McpClient" => PrincipalKind::McpClient,
-        "Schedule" => PrincipalKind::Schedule,
-        _ => PrincipalKind::Host,
-    };
+) -> Option<InvocationContext> {
+    let kind = PrincipalKind::parse(kind)?;
     let mut context = InvocationContext::new(
         actor.clone(),
         kind,
@@ -802,7 +1159,7 @@ fn process_context(
     for source in authority_sources {
         context = context.with_authority_source(source.clone());
     }
-    context
+    Some(context)
 }
 
 pub struct ProcessToolService {
@@ -1288,8 +1645,8 @@ impl ProcessToolService {
     }
 
     /// The static bindings, plus `root_id` resolved from storage when no static binding names
-    /// it: a project member repository, or a live worktree this caller owns (same owner, root and
-    /// assignment) whose directory is still the recorded one.
+    /// it: a live worktree this caller owns whose directory is still the recorded one, or a
+    /// project member repository resolved by [`Self::repository_root`].
     fn bindings_with_root(
         &self,
         root_id: &Id,
@@ -1298,55 +1655,27 @@ impl ProcessToolService {
         let mut bindings = self.bindings.clone();
         if !bindings.roots.contains_key(root_id.as_str()) {
             let path = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
-                let id = root_id;
-                if let Some(tree) = snapshot.git().git_worktree(id)? {
-                    if tree.removed {
-                        return Ok(None);
-                    }
-                    let visible = match ctx.project_id() {
-                        Some(project) => snapshot
-                            .projects()
-                            .members(project)?
-                            .contains(&tree.repository_id),
-                        None => true,
-                    };
-                    let owned = tree.owner == *ctx.principal()
-                        && tree.owner_root_id.as_ref() == ctx.root_id()
-                        && tree.owner_assignment_id.as_ref() == ctx.assignment_id();
-                    if !visible || !owned {
-                        return Ok(None);
-                    }
-                    let Some(location) = &tree.location else {
-                        return Ok(None);
-                    };
-                    let actual =
-                        self.fs.resolve(&tree.path, None).ok().and_then(|resolved| {
-                            resolved.target.and_then(|target| target.identity)
-                        });
-                    if actual != Some(location.root) {
-                        return Ok(None);
-                    }
-                    return Ok(Some(PathBuf::from(tree.path)));
+                if let Some(tree) = snapshot.git().git_worktree(root_id)? {
+                    let usable = visible_to(snapshot, ctx, &tree.repository_id)?
+                        && owned_by(&tree, ctx)
+                        && self.at_recorded_location(&tree);
+                    return Ok(if usable {
+                        Ok(PathBuf::from(tree.path))
+                    } else {
+                        Err(BindingRefusal::UnknownRoot)
+                    });
                 }
-                if let Some(repository) = snapshot.projects().repository(id)? {
-                    if repository.lifecycle == "Deleted" {
-                        return Ok(None);
+                match snapshot.projects().repository(root_id)? {
+                    Some(repository)
+                        if repository.lifecycle != "Deleted"
+                            && visible_to(snapshot, ctx, &repository.id)? =>
+                    {
+                        self.repository_root(snapshot, ctx, &repository)
                     }
-                    let visible = match ctx.project_id() {
-                        Some(project) => snapshot
-                            .projects()
-                            .members(project)?
-                            .contains(&repository.id),
-                        None => true,
-                    };
-                    if visible {
-                        return Ok(Some(PathBuf::from(repository.location)));
-                    }
+                    _ => Ok(Err(BindingRefusal::UnknownRoot)),
                 }
-                Ok(None)
             })
-            .map_err(|_| BindingRefusal::ChangedRoot)?
-            .ok_or(BindingRefusal::UnknownRoot)?;
+            .map_err(|_| BindingRefusal::ChangedRoot)??;
             bindings.roots.insert(
                 root_id.as_str().to_owned(),
                 RegisteredWorkingRoot {
@@ -1357,6 +1686,56 @@ impl ProcessToolService {
             );
         }
         Ok(bindings)
+    }
+
+    /// The one working-root rule for a registered repository, shared by `process.execute`
+    /// (and the watchers that launch through it) and `process.install_project_dependencies`:
+    /// the caller's own live worktree of the repository in its current root and assignment
+    /// when it has one, otherwise the repository's primary checkout. A worktree the caller owns
+    /// whose directory is no longer the recorded one is refused rather than replaced by the
+    /// primary checkout.
+    fn repository_root(
+        &self,
+        snapshot: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        repository: &StoredRepository,
+    ) -> Result<Result<PathBuf, BindingRefusal>, StorageError> {
+        if let Some(work) = ctx.root_id() {
+            let mut after = None;
+            let mut moved = false;
+            loop {
+                let page = snapshot.git().git_worktrees(&work.0, after.as_ref(), 500)?;
+                if page.is_empty() {
+                    break;
+                }
+                for tree in &page {
+                    if tree.repository_id != repository.id || !owned_by(tree, ctx) {
+                        continue;
+                    }
+                    if self.at_recorded_location(tree) {
+                        return Ok(Ok(PathBuf::from(&tree.path)));
+                    }
+                    moved = true;
+                }
+                after = page.last().map(|tree| tree.id.clone());
+            }
+            if moved {
+                return Ok(Err(BindingRefusal::ChangedRoot));
+            }
+        }
+        Ok(Ok(PathBuf::from(&repository.location)))
+    }
+
+    /// Whether the worktree's directory is still the one recorded when it was created.
+    fn at_recorded_location(&self, tree: &StoredGitWorktree) -> bool {
+        let Some(location) = &tree.location else {
+            return false;
+        };
+        self.fs
+            .resolve(&tree.path, None)
+            .ok()
+            .and_then(|resolved| resolved.target.and_then(|target| target.identity))
+            == Some(location.root)
     }
 
     fn install_plan(
@@ -1377,12 +1756,7 @@ impl ProcessToolService {
             if repository.revision != input.expected_revision.get() {
                 return Ok(Err(BindingRefusal::StaleRepository));
             }
-            if let Some(project) = ctx.project_id()
-                && !snapshot
-                    .projects()
-                    .members(project)?
-                    .contains(&repository.id)
-            {
+            if !visible_to(snapshot, ctx, &repository.id)? {
                 return Ok(Err(BindingRefusal::UnknownRepository));
             }
             let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
@@ -1405,49 +1779,7 @@ impl ProcessToolService {
             if !exact {
                 return Ok(Err(BindingRefusal::ChangedManifest));
             }
-            let path = if let Some(work) = ctx.root_id() {
-                let mut after = None;
-                let mut selected = None;
-                loop {
-                    let page = snapshot.git().git_worktrees(&work.0, after.as_ref(), 500)?;
-                    if page.is_empty() {
-                        break;
-                    }
-                    for tree in &page {
-                        if tree.repository_id == repository.id
-                            && !tree.removed
-                            && tree.owner == *ctx.principal()
-                            && tree.owner_root_id.as_ref() == ctx.root_id()
-                            && tree.owner_assignment_id.as_ref() == ctx.assignment_id()
-                        {
-                            let Some(location) = &tree.location else {
-                                continue;
-                            };
-                            let actual =
-                                self.fs.resolve(&tree.path, None).ok().and_then(|resolved| {
-                                    resolved.target.and_then(|target| target.identity)
-                                });
-                            if actual == Some(location.root) {
-                                selected = Some(PathBuf::from(&tree.path));
-                                break;
-                            }
-                        }
-                    }
-                    if selected.is_some() {
-                        break;
-                    }
-                    after = page.last().map(|tree| tree.id.clone());
-                }
-                selected.ok_or(BindingRefusal::MissingWorktree)
-            } else if matches!(
-                ctx.principal_kind(),
-                PrincipalKind::Human | PrincipalKind::Host
-            ) {
-                Ok(PathBuf::from(repository.location))
-            } else {
-                Err(BindingRefusal::MissingWorktree)
-            };
-            Ok(path)
+            self.repository_root(snapshot, ctx, &repository)
         })
         .map_err(|_| BindingRefusal::ChangedRoot)??;
         let root = exact_directory(&root).ok_or(BindingRefusal::ChangedRoot)?;
@@ -1481,140 +1813,18 @@ impl ProcessToolService {
                 continue;
             };
             if sha256_hex(&bytes) == input.manifest.sha256.0
-                && selected.replace((*name).to_owned()).is_some()
+                && selected.replace(((*name).to_owned(), bytes)).is_some()
             {
                 return Err(BindingRefusal::ChangedManifest);
             }
         }
-        let name = selected.ok_or(BindingRefusal::ChangedManifest)?;
-        let root_text = root.to_string_lossy().into_owned();
-        let manifest = root.join(&name).to_string_lossy().into_owned();
-        let (program, args, extra_env): (&str, Vec<String>, Vec<(String, String)>) =
-            match name.as_str() {
-                "Cargo.toml" | "Cargo.lock" => (
-                    "cargo",
-                    std::iter::once("build".into())
-                        .chain((name == "Cargo.lock").then_some("--locked".into()))
-                        .chain([
-                            "--manifest-path".into(),
-                            root.join("Cargo.toml").to_string_lossy().into_owned(),
-                        ])
-                        .collect(),
-                    vec![
-                        (
-                            "CARGO_HOME".into(),
-                            root.join(".devworks-cache/cargo")
-                                .to_string_lossy()
-                                .into_owned(),
-                        ),
-                        (
-                            "CARGO_TARGET_DIR".into(),
-                            root.join("target").to_string_lossy().into_owned(),
-                        ),
-                    ],
-                ),
-                "package-lock.json" => (
-                    "npm",
-                    vec!["ci".into(), "--prefix".into(), root_text.clone()],
-                    vec![(
-                        "NPM_CONFIG_CACHE".into(),
-                        root.join(".devworks-cache/npm")
-                            .to_string_lossy()
-                            .into_owned(),
-                    )],
-                ),
-                "package.json" => (
-                    "npm",
-                    vec!["install".into(), "--prefix".into(), root_text.clone()],
-                    vec![(
-                        "NPM_CONFIG_CACHE".into(),
-                        root.join(".devworks-cache/npm")
-                            .to_string_lossy()
-                            .into_owned(),
-                    )],
-                ),
-                "pnpm-lock.yaml" => (
-                    "pnpm",
-                    vec![
-                        "install".into(),
-                        "--frozen-lockfile".into(),
-                        "--dir".into(),
-                        root_text.clone(),
-                    ],
-                    vec![],
-                ),
-                "yarn.lock" => (
-                    "yarn",
-                    vec![
-                        "install".into(),
-                        "--frozen-lockfile".into(),
-                        "--cwd".into(),
-                        root_text.clone(),
-                    ],
-                    vec![],
-                ),
-                "pyproject.toml" | "uv.lock" => (
-                    "uv",
-                    ["sync".into(), "--project".into(), root_text.clone()]
-                        .into_iter()
-                        .chain((name == "uv.lock").then_some("--frozen".into()))
-                        .collect(),
-                    vec![(
-                        "UV_CACHE_DIR".into(),
-                        root.join(".devworks-cache/uv")
-                            .to_string_lossy()
-                            .into_owned(),
-                    )],
-                ),
-                "requirements.txt" => (
-                    "python3",
-                    vec![
-                        "-m".into(),
-                        "pip".into(),
-                        "install".into(),
-                        "--target".into(),
-                        root.join(".devworks-deps/python")
-                            .to_string_lossy()
-                            .into_owned(),
-                        "-r".into(),
-                        manifest,
-                    ],
-                    vec![(
-                        "PIP_CACHE_DIR".into(),
-                        root.join(".devworks-cache/pip")
-                            .to_string_lossy()
-                            .into_owned(),
-                    )],
-                ),
-                "go.mod" => (
-                    "go",
-                    vec!["mod".into(), "download".into()],
-                    vec![(
-                        "GOMODCACHE".into(),
-                        root.join(".devworks-deps/go")
-                            .to_string_lossy()
-                            .into_owned(),
-                    )],
-                ),
-                "Gemfile.lock" => (
-                    "bundle",
-                    vec![
-                        "install".into(),
-                        "--gemfile".into(),
-                        root.join("Gemfile").to_string_lossy().into_owned(),
-                    ],
-                    vec![(
-                        "BUNDLE_PATH".into(),
-                        root.join("vendor/bundle").to_string_lossy().into_owned(),
-                    )],
-                ),
-                "composer.lock" => (
-                    "composer",
-                    vec!["install".into(), "--working-dir".into(), root_text.clone()],
-                    vec![],
-                ),
-                _ => return Err(BindingRefusal::UnsupportedManifest),
-            };
+        let (name, bytes) = selected.ok_or(BindingRefusal::ChangedManifest)?;
+        let allow_scripts = input.allow_scripts == Some(true);
+        if !allow_scripts && install_runs_repository_code(&name, &root) {
+            return Err(BindingRefusal::ScriptsRequired);
+        }
+        let command = install_command(&name, &root, &bytes, allow_scripts)?;
+        let program = command.program;
         let executable = self
             .bindings
             .executables
@@ -1643,11 +1853,19 @@ impl ProcessToolService {
                 env.push(("RUSTUP_HOME".into(), home.to_string_lossy().into_owned()));
             }
         }
-        env.extend(extra_env);
+        env.extend(command.env);
+        if !allow_scripts {
+            // HOME is inside the repository, so its Git configuration (an `sshCommand`, a
+            // credential helper) is repository-controlled; a manager fetching a Git dependency
+            // reads no global or system Git configuration.
+            let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+            env.push(("GIT_CONFIG_GLOBAL".into(), null.into()));
+            env.push(("GIT_CONFIG_NOSYSTEM".into(), "1".into()));
+        }
         Ok(InstallPlan {
             spec: NativeProcessSpec {
                 program: executable.to_string_lossy().into_owned(),
-                args,
+                args: command.args,
                 cwd: Some(root),
                 env,
                 clear_env: true,
@@ -1780,7 +1998,9 @@ impl ProcessToolService {
                 _ => {}
             }
         }
-        let ctx = job.context(&*self.store, &operation.id);
+        let Some(ctx) = job.context(&*self.store, &operation.id) else {
+            return EffectOutcome::Failed("invalid process principal kind".into());
+        };
         let admitted_by = if job.watch.is_some() {
             "watch.create"
         } else {
@@ -1872,7 +2092,9 @@ impl ProcessToolService {
         let Ok(job) = serde_json::from_value::<InstallJob>(operation.payload.clone()) else {
             return EffectOutcome::Failed("invalid project install intent".into());
         };
-        let ctx = job.context(&*self.store, &operation.id);
+        let Some(ctx) = job.context(&*self.store, &operation.id) else {
+            return EffectOutcome::Failed("invalid process principal kind".into());
+        };
         let Some(descriptor) = crate::registry::find("process.install_project_dependencies") else {
             return EffectOutcome::Failed("project install descriptor unavailable".into());
         };
@@ -2626,6 +2848,27 @@ impl ProcessToolService {
         if let Err(reason) = prepared {
             return decided(tx, Err(binding_refusal(*reason).into()));
         }
+        if input.allow_scripts == Some(true) {
+            let mut native_grant = false;
+            for spent in command.authorization().authority_grants() {
+                native_grant |= tx
+                    .authority()
+                    .authority_grant(&spent.grant_id)?
+                    .is_some_and(|grant| grant.kind == GrantKind::NativeExecution);
+            }
+            if !scripts_approved(ctx, native_grant) {
+                // The host stages an approval of this exact request; its replay runs it.
+                return decided(
+                    tx,
+                    Err(Refusal::new(
+                        DomainErrorCode::ApprovalRequired,
+                        "install_scripts_review",
+                        Some(input.repository_id.clone()),
+                    )
+                    .into()),
+                );
+            }
+        }
         let repository = tx.projects().repository(&input.repository_id)?;
         let Some(repository) = repository.filter(|repository| repository.lifecycle != "Deleted")
         else {
@@ -2712,7 +2955,7 @@ pub(crate) fn binding_refusal(reason: BindingRefusal) -> Refusal {
         BindingRefusal::UnknownManifest => (DomainErrorCode::NotFound, "manifest"),
         BindingRefusal::ChangedManifest => (DomainErrorCode::SourceChanged, "manifest"),
         BindingRefusal::UnsupportedManifest => (DomainErrorCode::UnsupportedCapability, "manifest"),
-        BindingRefusal::MissingWorktree => (DomainErrorCode::PermissionDenied, "process_root"),
+        BindingRefusal::ScriptsRequired => (DomainErrorCode::InvalidArgument, "install_scripts"),
         BindingRefusal::DuplicateEnvironment | BindingRefusal::InvalidLimits => {
             (DomainErrorCode::InvalidArgument, "process_spec")
         }
@@ -3284,6 +3527,331 @@ mod tests {
         assert_eq!(later.retained(), b"efg");
         assert_eq!(later.seen(), 10);
         assert!(later.truncated());
+    }
+
+    /// Each supported manager's install runs with lifecycle scripts disabled unless the request
+    /// allows them; the allowed form is the manager's ordinary install.
+    #[test]
+    fn each_manager_installs_without_lifecycle_scripts_unless_allowed() {
+        let root = Path::new("/repo");
+        let at = |relative: &str| root.join(relative).to_string_lossy().into_owned();
+        let names = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        let requirements = b"requests==2.32.3 --hash=sha256:abc\n".as_slice();
+        // (manifest, without scripts, with scripts, extra environment without scripts)
+        type Case<'a> = (&'a str, Vec<String>, Vec<String>, Vec<(&'a str, &'a str)>);
+        let cases: Vec<Case> = vec![
+            (
+                "Cargo.toml",
+                names(&["fetch", "--manifest-path", &at("Cargo.toml")]),
+                names(&["build", "--manifest-path", &at("Cargo.toml")]),
+                vec![],
+            ),
+            (
+                "Cargo.lock",
+                names(&["fetch", "--locked", "--manifest-path", &at("Cargo.toml")]),
+                names(&["build", "--locked", "--manifest-path", &at("Cargo.toml")]),
+                vec![],
+            ),
+            (
+                "package-lock.json",
+                names(&["ci", "--ignore-scripts", "--prefix", "/repo"]),
+                names(&["ci", "--prefix", "/repo"]),
+                vec![],
+            ),
+            (
+                "package.json",
+                names(&["install", "--ignore-scripts", "--prefix", "/repo"]),
+                names(&["install", "--prefix", "/repo"]),
+                vec![],
+            ),
+            (
+                "pnpm-lock.yaml",
+                names(&[
+                    "install",
+                    "--frozen-lockfile",
+                    "--ignore-scripts",
+                    "--ignore-pnpmfile",
+                    "--dir",
+                    "/repo",
+                ]),
+                names(&["install", "--frozen-lockfile", "--dir", "/repo"]),
+                vec![],
+            ),
+            (
+                "yarn.lock",
+                names(&[
+                    "install",
+                    "--frozen-lockfile",
+                    "--ignore-scripts",
+                    "--cwd",
+                    "/repo",
+                ]),
+                names(&["install", "--frozen-lockfile", "--cwd", "/repo"]),
+                vec![("YARN_ENABLE_SCRIPTS", "false")],
+            ),
+            (
+                "pyproject.toml",
+                names(&[
+                    "sync",
+                    "--project",
+                    "/repo",
+                    "--no-build",
+                    "--no-install-workspace",
+                ]),
+                names(&["sync", "--project", "/repo"]),
+                vec![],
+            ),
+            (
+                "uv.lock",
+                names(&[
+                    "sync",
+                    "--project",
+                    "/repo",
+                    "--frozen",
+                    "--no-build",
+                    "--no-install-workspace",
+                ]),
+                names(&["sync", "--project", "/repo", "--frozen"]),
+                vec![],
+            ),
+            (
+                "requirements.txt",
+                names(&[
+                    "-m",
+                    "pip",
+                    "install",
+                    "--only-binary",
+                    ":all:",
+                    "--target",
+                    &at(".devworks-deps/python"),
+                    "-r",
+                    &at("requirements.txt"),
+                ]),
+                names(&[
+                    "-m",
+                    "pip",
+                    "install",
+                    "--target",
+                    &at(".devworks-deps/python"),
+                    "-r",
+                    &at("requirements.txt"),
+                ]),
+                vec![],
+            ),
+            (
+                "go.mod",
+                names(&["mod", "download"]),
+                names(&["mod", "download"]),
+                vec![],
+            ),
+            (
+                "composer.lock",
+                names(&[
+                    "install",
+                    "--no-scripts",
+                    "--no-plugins",
+                    "--working-dir",
+                    "/repo",
+                ]),
+                names(&["install", "--working-dir", "/repo"]),
+                vec![],
+            ),
+        ];
+        for (name, without, with, extra) in cases {
+            let off = install_command(name, root, requirements, false).expect(name);
+            let on = install_command(name, root, requirements, true).expect(name);
+            assert_eq!(off.program, on.program, "{name}");
+            assert_eq!(off.args, without, "{name} without scripts");
+            assert_eq!(on.args, with, "{name} with scripts");
+            for (key, value) in &extra {
+                assert!(
+                    off.env.contains(&((*key).to_owned(), (*value).to_owned())),
+                    "{name}: {:?}",
+                    off.env
+                );
+            }
+            assert!(
+                !on.env.iter().any(|(key, _)| key == "YARN_ENABLE_SCRIPTS"),
+                "{name}"
+            );
+        }
+        // Bundler has no switch that keeps the Gemfile and native extensions from running.
+        assert_eq!(
+            install_command("Gemfile.lock", root, b"", false),
+            Err(BindingRefusal::ScriptsRequired)
+        );
+        let bundle = install_command("Gemfile.lock", root, b"", true).expect("bundler");
+        assert_eq!(
+            bundle.args,
+            names(&["install", "--gemfile", &at("Gemfile")])
+        );
+        // A requirements file that could build from source needs allowScripts.
+        assert_eq!(
+            install_command("requirements.txt", root, b"-e .\n", false),
+            Err(BindingRefusal::ScriptsRequired)
+        );
+        assert!(install_command("requirements.txt", root, b"-e .\n", true).is_ok());
+        // A Yarn 2+ lockfile selects Yarn 2+'s own switch; it has no `--ignore-scripts`.
+        let berry = b"__metadata:\n  version: 8\n".as_slice();
+        let off = install_command("yarn.lock", root, berry, false).expect("yarn 2+");
+        assert_eq!(
+            off.args,
+            names(&["install", "--immutable", "--mode=skip-build"])
+        );
+        assert!(
+            off.env
+                .contains(&("YARN_ENABLE_SCRIPTS".into(), "false".into()))
+        );
+        let on = install_command("yarn.lock", root, berry, true).expect("yarn 2+");
+        assert_eq!(on.args, names(&["install", "--immutable"]));
+        assert!(on.env.is_empty());
+    }
+
+    #[test]
+    fn only_a_requirements_file_of_index_packages_installs_without_scripts() {
+        for safe in [
+            "",
+            "# pinned\nrequests==2.32.3\n",
+            "requests[socks]>=2,<3 ; python_version >= \"3.9\"  # comment\n",
+            "--index-url https://pypi.org/simple\n--prefer-binary\nnumpy\n",
+            "-i https://example.invalid/simple\nflask \\\n  ==3.0.0\n",
+            "--require-hashes\nidna==3.7 --hash=sha256:aaaa --hash=sha256:bbbb\n",
+        ] {
+            assert!(binary_only_requirements(safe.as_bytes()), "{safe:?}");
+        }
+        for unsafe_file in [
+            "--no-binary :all:\nrequests\n",
+            "--only-binary :none:\nrequests\n",
+            "-e .\n",
+            "--editable ./pkg\n",
+            "-r other.txt\n",
+            "-c constraints.txt\n",
+            "./local-package\n",
+            "/abs/path/pkg\n",
+            "pkg @ https://example.invalid/pkg-1.0.tar.gz\n",
+            "git+https://example.invalid/repo.git#egg=pkg\n",
+            "pkg-1.0.tar.gz\n",
+            "pkg.tlz\n",
+            "pkg.zip[extra]\n",
+            "pkg.tar.gz [extra] ==1.0\n",
+            "pkg-1.0.tar.lzma\n",
+            "pkg-1.0.TAR.LZ\n",
+            "pkg --config-settings=key=value\n",
+            // Every option on a line counts, not only the first.
+            "--no-index --requirement nested.txt\n",
+            "--prefer-binary -r nested.txt\n",
+            "-i https://example.invalid/simple -e .\n",
+            "--no-index=1\n",
+            "--index-url\n",
+            "requests --hash=sha256:aaaa -r nested.txt\n",
+            "requests -c constraints.txt\n",
+            "requests --hash=sha256:aaaa \"-r\" nested.txt\n",
+            "${PKG}\n",
+            "requests\n.\n",
+        ] {
+            assert!(
+                !binary_only_requirements(unsafe_file.as_bytes()),
+                "{unsafe_file:?}"
+            );
+        }
+        assert!(!binary_only_requirements(&[0xff, 0xfe]));
+    }
+
+    #[test]
+    fn a_manager_program_the_repository_configures_needs_install_scripts() {
+        let root = std::env::temp_dir().join(format!("devworks-tool-rc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for directory in [".devworks-home", ".cargo", ".devworks-cache/cargo"] {
+            std::fs::create_dir_all(root.join(directory)).expect("test root");
+        }
+        for name in ["yarn.lock", "Cargo.toml", "Cargo.lock", "package.json"] {
+            assert!(!install_runs_repository_code(name, &root), "{name}");
+        }
+        // A toolchain file without a path is fine.
+        std::fs::write(
+            root.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.95\"\n",
+        )
+        .expect("toolchain");
+        assert!(!install_runs_repository_code("Cargo.toml", &root));
+        for (name, file, text) in [
+            ("yarn.lock", ".yarnrc.yml", "nodeLinker: node-modules\n"),
+            (
+                "yarn.lock",
+                ".yarnrc.yml",
+                "\"yarn\\u0050ath\": ./local.cjs\n",
+            ),
+            ("yarn.lock", ".yarnrc", "yarn-path \"./tools/yarn.js\"\n"),
+            ("yarn.lock", ".devworks-home/.yarnrc.yml", "yarnPath: x\n"),
+            (
+                "Cargo.toml",
+                ".cargo/config.toml",
+                "[build]\nrustc = \"./hook\"\n",
+            ),
+            (
+                "Cargo.lock",
+                ".cargo/config",
+                "[build]\nrustc-wrapper = \"x\"\n",
+            ),
+            ("Cargo.toml", ".devworks-cache/cargo/config.toml", "[net]\n"),
+            (
+                "Cargo.toml",
+                "rust-toolchain.toml",
+                "[toolchain]\npath = \"./t\"\n",
+            ),
+            (
+                "Cargo.toml",
+                "rust-toolchain.toml",
+                "[toolchain]\n\"\\u0070ath\" = \"t\"\n",
+            ),
+            ("Cargo.lock", "rust-toolchain", "./custom-toolchain\n"),
+        ] {
+            let before = std::fs::read(root.join(file)).ok();
+            std::fs::write(root.join(file), text).expect("config");
+            assert!(install_runs_repository_code(name, &root), "{file}: {text}");
+            assert!(!install_runs_repository_code("package.json", &root));
+            match before {
+                Some(bytes) => std::fs::write(root.join(file), bytes).expect("restore"),
+                None => std::fs::remove_file(root.join(file)).expect("remove config"),
+            }
+        }
+        std::fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[test]
+    fn install_scripts_run_only_for_the_user_an_approved_replay_or_a_native_grant() {
+        let ctx = |kind| {
+            InvocationContext::new(
+                crate::protocol::ActorId(id("caller-1")),
+                kind,
+                id("invocation-1"),
+                id("ingress-1"),
+                crate::protocol::StoreId(id("store-1")),
+                counter(0),
+                rev(1),
+            )
+        };
+        assert!(scripts_approved(&ctx(PrincipalKind::Human), false));
+        for kind in [
+            PrincipalKind::Agent,
+            PrincipalKind::Host,
+            PrincipalKind::Package,
+            PrincipalKind::McpClient,
+            PrincipalKind::Schedule,
+        ] {
+            assert!(!scripts_approved(&ctx(kind), false), "{kind:?}");
+            assert!(scripts_approved(&ctx(kind), true), "{kind:?}");
+        }
+        let reviewed =
+            ctx(PrincipalKind::Agent).with_reviewed_operation(crate::context::ReviewedOperation {
+                approval_id: id("approval-1"),
+                approver: crate::protocol::ActorId(id("user-1")),
+                operation: "process.install_project_dependencies".into(),
+                schema_revision: 8,
+                request_digest: "a".repeat(64),
+                owner_binding: json!({}),
+            });
+        assert!(scripts_approved(&reviewed, false));
     }
 
     #[test]

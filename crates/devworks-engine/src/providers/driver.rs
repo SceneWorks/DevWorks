@@ -632,6 +632,7 @@ impl NativeProviders {
                     &attempt.query.connection_id,
                     &attempt.query.catalog_model_id,
                     &attempt.query.endpoint_profile,
+                    compaction,
                 )?;
             }
             if attempt.cache_diagnostics.len() >= 128 {

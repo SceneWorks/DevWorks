@@ -771,7 +771,7 @@ impl WebService {
 pub(super) fn invoker(ctx: &InvocationContext) -> Value {
     json!({
         "principal": ctx.principal().0.as_str(),
-        "principalKind": format!("{:?}", ctx.principal_kind()),
+        "principalKind": ctx.principal_kind().as_str().to_string(),
         "sessionId": ctx.session_id().map(Id::as_str),
         "rootId": ctx.root_id().map(|r| r.0.as_str()),
         "assignmentId": ctx.assignment_id().map(|a| a.0.as_str()),

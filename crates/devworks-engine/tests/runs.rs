@@ -8493,8 +8493,17 @@ mod auxiliary_tests;
 #[path = "runs/watch.rs"]
 mod watch_tests;
 
+#[path = "runs/install.rs"]
+mod install_tests;
+
 #[path = "runs/mcp_agent_tool.rs"]
 mod mcp_agent_tool;
 
 #[path = "runs/approval_wait.rs"]
 mod approval_wait;
+
+#[path = "runs/compaction.rs"]
+mod compaction;
+
+#[path = "runs/epoch_request.rs"]
+mod epoch_request;

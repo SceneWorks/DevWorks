@@ -19,7 +19,7 @@ pub(super) struct Selected {
 
 pub(crate) fn owner(ctx: &InvocationContext) -> String {
     let worktree=ctx.worktree().map(|tree|json!({"id":tree.id(),"workId":tree.work_id(),"repositoryId":tree.repository_id(),"ownershipRevision":tree.ownership_revision()}));
-    sha256_hex(json!({"actor":ctx.principal(),"kind":format!("{:?}",ctx.principal_kind()),"project":ctx.project_id(),"root":ctx.root_id(),"assignment":ctx.assignment_id(),"session":ctx.session_id(),"ingress":ctx.ingress_namespace(),"worktree":worktree}).to_string().as_bytes())
+    sha256_hex(json!({"actor":ctx.principal(),"kind":ctx.principal_kind().as_str().to_string(),"project":ctx.project_id(),"root":ctx.root_id(),"assignment":ctx.assignment_id(),"session":ctx.session_id(),"ingress":ctx.ingress_namespace(),"worktree":worktree}).to_string().as_bytes())
 }
 
 pub(crate) fn scope_digest(scope: &DataScope) -> String {
