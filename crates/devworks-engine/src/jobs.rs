@@ -90,14 +90,34 @@ impl Scheduler {
         inference: Arc<dyn InferenceJobs>,
         processes: Arc<ProcessSupervisor>,
     ) -> Arc<Self> {
+        Self::with_stop(
+            store,
+            service,
+            native,
+            inference,
+            processes,
+            Duration::from_secs(5),
+            Duration::from_secs(30),
+        )
+    }
+    /// [`Self::new`] with the cooperative grace and bound of one cancellation's process stop.
+    pub fn with_stop(
+        store: Arc<dyn ApplicationStore>,
+        service: Arc<JobService>,
+        native: Arc<dyn NativeJobDispatch>,
+        inference: Arc<dyn InferenceJobs>,
+        processes: Arc<ProcessSupervisor>,
+        stop_grace: Duration,
+        stop_bound: Duration,
+    ) -> Arc<Self> {
         Arc::new(Self {
             store,
             service,
             native,
             inference,
             processes,
-            stop_grace: Duration::from_secs(5),
-            stop_bound: Duration::from_secs(30),
+            stop_grace,
+            stop_bound,
             retry_backoff: Duration::from_millis(100),
             running: Mutex::new(HashMap::new()),
             live: Mutex::new(HashSet::new()),

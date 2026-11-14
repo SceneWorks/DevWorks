@@ -80,8 +80,10 @@
 //! process launcher and power facility arrive as the core `ProcessHost` and `PowerPort` ports, so
 //! the engine still depends on no adapter) and, in this fixed order:
 //!
-//! 1. **Composes delivery.** The dispatcher is built with every required consumer — the receipt
-//!    reply consumer ([`replies::reply_consumer`], over the composition's one artifact service and
+//! 1. **Builds every engine-owned service** before any recovery step, each configured through
+//!    its constructor; recovery and the background loops then run over that finished set.
+//!    Delivery is composed here: the dispatcher is built with every required consumer — the
+//!    receipt reply consumer ([`replies::reply_consumer`], over the composition's one artifact service and
 //!    store) — plus the caller's consumers. A missing required consumer would leave every
 //!    `Recorded` receipt's reply pending forever, so the caller cannot omit it; a caller consumer
 //!    reusing its name is refused. Nothing is claimed yet.

@@ -183,6 +183,28 @@ pub struct RunSupervisor {
     archive_stops: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
+/// What the runtime configures a [`RunSupervisor`] with at construction.
+pub struct RunSettings {
+    /// Cooperative stop period of a root's owned trees when it is stopped.
+    pub stop_grace: Duration,
+    /// The bound of one root's owned-tree stop.
+    pub stop_bound: Duration,
+    /// The container owner whose agent work a root stop also stops.
+    pub containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
+    /// The dispatcher's wakeup (see [`RunSupervisor::set_dispatcher_wakeup`]).
+    pub dispatcher: Option<Wakeup>,
+}
+impl Default for RunSettings {
+    fn default() -> Self {
+        Self {
+            stop_grace: Duration::from_secs(5),
+            stop_bound: Duration::from_secs(30),
+            containers: None,
+            dispatcher: None,
+        }
+    }
+}
+
 impl RunSupervisor {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -194,21 +216,44 @@ impl RunSupervisor {
         hooks: Arc<dyn LifecycleHooks>,
         owner: Id,
     ) -> Arc<Self> {
+        Self::configured(
+            store,
+            clock,
+            service,
+            processes,
+            launcher,
+            hooks,
+            owner,
+            RunSettings::default(),
+        )
+    }
+    /// [`Self::new`] with the runtime's settings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn configured(
+        store: Arc<dyn ApplicationStore>,
+        clock: Arc<dyn Clock>,
+        service: Arc<ControlService>,
+        processes: Arc<ProcessSupervisor>,
+        launcher: Option<Arc<dyn ActivationLauncher>>,
+        hooks: Arc<dyn LifecycleHooks>,
+        owner: Id,
+        settings: RunSettings,
+    ) -> Arc<Self> {
         Arc::new(Self {
             store,
             clock,
             service,
             processes,
-            containers: None,
+            containers: settings.containers,
             launcher: Mutex::new(launcher),
             hooks,
             owner,
             wake_jump_ms: 10_000,
-            stop_grace: Duration::from_secs(5),
-            stop_bound: Duration::from_secs(30),
+            stop_grace: settings.stop_grace,
+            stop_bound: settings.stop_bound,
             stop_batch: 500,
             stop_cursor: Mutex::new(None),
-            dispatcher: Mutex::new(None),
+            dispatcher: Mutex::new(settings.dispatcher),
             last: Mutex::new(None),
             stopping: AtomicBool::new(false),
             wake: Notify::new(),
@@ -238,12 +283,6 @@ impl RunSupervisor {
         drop(slot);
         self.notify();
         Ok(())
-    }
-    pub fn with_containers(
-        &mut self,
-        containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
-    ) {
-        self.containers = containers;
     }
     /// The owner identity recorded on this supervisor's activation claims.
     pub fn owner(&self) -> &Id {
