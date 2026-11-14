@@ -833,7 +833,7 @@ fn write_batch(
             "checkpointSequence": batch.checkpoint.as_ref().map(|_| last),
             "contextSources": batch.context_sources.len(),
             "usage": batch.usage.len(),
-            "principalKind": format!("{:?}", ctx.principal_kind()),
+            "principalKind": ctx.principal_kind().as_str().to_string(),
             "invocationId": ctx.invocation_id().as_str(),
         }),
     })?;

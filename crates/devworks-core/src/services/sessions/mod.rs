@@ -336,7 +336,7 @@ fn session_event(
     if let Some(map) = payload.as_object_mut() {
         map.insert(
             "principalKind".into(),
-            json!(format!("{:?}", ctx.principal_kind())),
+            json!(ctx.principal_kind().as_str().to_string()),
         );
         map.insert("invocationId".into(), json!(ctx.invocation_id().as_str()));
     }

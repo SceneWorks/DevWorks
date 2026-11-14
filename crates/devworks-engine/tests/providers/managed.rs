@@ -1,4 +1,5 @@
 //! Actual managed run gates win over unchanged originating-producer wire counters.
+//! Compiled by the `runs` test target through `tests/runs/usage.rs`, whose run fixture it uses.
 use super::*;
 use devworks_adapters::fs::{
     NativeFilesystem, artifacts::NativeArtifactFiles, sources::HostArtifactSources,

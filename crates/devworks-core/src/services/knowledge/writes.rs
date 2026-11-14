@@ -780,7 +780,7 @@ fn build_claim(
         origin_ref,
         autonomous,
         author_kind: prior.map_or_else(
-            || format!("{:?}", w.ctx.principal_kind()),
+            || w.ctx.principal_kind().as_str().to_string(),
             |p| p.body.author_kind.clone(),
         ),
         verified_at_ms: None,
@@ -2919,17 +2919,6 @@ fn deletion_batch(
     Ok(out)
 }
 
-fn principal_kind_of(s: &str) -> PrincipalKind {
-    match s {
-        "Human" => PrincipalKind::Human,
-        "Agent" => PrincipalKind::Agent,
-        "Package" => PrincipalKind::Package,
-        "McpClient" => PrincipalKind::McpClient,
-        "Schedule" => PrincipalKind::Schedule,
-        _ => PrincipalKind::Host,
-    }
-}
-
 /// The confirming invocation, rebuilt for a later batch: the job is the user's committed
 /// decision, so each batch is attributed to them (it grants nothing new).
 fn job_context(
@@ -2939,7 +2928,7 @@ fn job_context(
     let bad = |what: &str| StorageError::InvalidRecord(format!("source deletion {what}"));
     let mut ctx = InvocationContext::new(
         job.actor.clone(),
-        principal_kind_of(&job.principal_kind),
+        PrincipalKind::parse(&job.principal_kind).ok_or_else(|| bad("principal kind"))?,
         job.write_id.clone(),
         Id::new("knowledge-source-deletion").map_err(|_| bad("ingress"))?,
         tx.store().store_id.clone(),
@@ -3083,7 +3072,7 @@ fn delete_by_source(
         digest: plan.digest.clone(),
         state: if first.done { "Complete" } else { "Running" }.into(),
         actor: ctx.principal().clone(),
-        principal_kind: format!("{:?}", ctx.principal_kind()),
+        principal_kind: ctx.principal_kind().as_str().to_string(),
         session_id: ctx.session_id().cloned(),
         invocation_project: ctx.project_id().cloned(),
         restore_epoch: ctx.restore_epoch().get(),
@@ -3441,7 +3430,7 @@ fn import_user_data(
                 confidence: c.confidence,
                 origin: "User".into(),
                 autonomous: false,
-                author_kind: format!("{:?}", ctx.principal_kind()),
+                author_kind: ctx.principal_kind().as_str().to_string(),
                 evidence_ids: vec![evidence.id.clone()],
                 ..ClaimBody::default()
             },
