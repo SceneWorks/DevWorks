@@ -336,8 +336,11 @@ pub struct Live {
     pending_children: Vec<(usize, Child)>,
     /// Targets whose page committed a local document and is to be torn down.
     pending_teardown: Vec<usize>,
-    /// Sessions of attached workers whose requests are not intercepted yet.
+    /// Sessions of attached workers, worklets and unrecorded frames, paused until their
+    /// requests are intercepted.
     pending_workers: Vec<String>,
+    /// The egress proxy every connection of the browser goes through; it stops with the session.
+    pub egress_proxy: Option<Box<dyn crate::ports::browser::RunningProxy>>,
     /// Where this session's artifact pages are served: `<origin>/<unguessable token>/`.
     artifact_prefix: String,
     next_artifact: u64,
@@ -493,6 +496,7 @@ impl Live {
             pending_children: Vec::new(),
             pending_teardown: Vec::new(),
             pending_workers: Vec::new(),
+            egress_proxy: None,
             artifact_prefix: format!("{ARTIFACT_ORIGIN}/{}/", unguessable()),
             next_artifact: 0,
             started: Instant::now(),
@@ -578,12 +582,7 @@ impl Live {
             json!({"discover": true}),
             bounds.call,
         )?;
-        self.call(
-            None,
-            "Target.setAutoAttach",
-            json!({"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true}),
-            bounds.call,
-        )?;
+        self.call(None, "Target.setAutoAttach", auto_attach(), bounds.call)?;
         let targets = self.call(None, "Target.getTargets", json!({}), bounds.call)?;
         for info in targets
             .get("targetInfos")
@@ -696,10 +695,7 @@ impl Live {
             ("Log.enable", json!({})),
             ("DOM.enable", json!({})),
             // Out-of-process (cross-site) frames attach as flattened child sessions.
-            (
-                "Target.setAutoAttach",
-                json!({"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true}),
-            ),
+            ("Target.setAutoAttach", auto_attach()),
         ] {
             self.cdp.call(Some(&s), method, params, bounds.call)?;
         }
@@ -764,10 +760,7 @@ impl Live {
             ("Network.enable", json!({})),
             ("Log.enable", json!({})),
             ("DOM.enable", json!({})),
-            (
-                "Target.setAutoAttach",
-                json!({"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true}),
-            ),
+            ("Target.setAutoAttach", auto_attach()),
             ("Runtime.runIfWaitingForDebugger", json!({})),
         ] {
             self.cdp.call(Some(&s), method, params, bounds.call)?;
@@ -831,6 +824,7 @@ impl Live {
                         "info": info, "sessionId": p.get("sessionId"),
                     })),
                     Some("iframe") => {
+                        let mut recorded = false;
                         if let (Some(i), Some(parent), Some(child), Some(frame)) = (
                             ti,
                             e.session.clone(),
@@ -842,21 +836,26 @@ impl Live {
                                 frame: frame.to_owned(),
                                 parent,
                             };
-                            if self.targets[i].child_of_session(child).is_none()
-                                && self.targets[i].children.len() < MAX_FRAMES
-                            {
+                            recorded = self.targets[i].child_of_session(child).is_some();
+                            if !recorded && self.targets[i].children.len() < MAX_FRAMES {
                                 self.targets[i].children.push(c.clone());
                                 self.pending_children.push((i, c));
+                                recorded = true;
                             }
                         }
+                        // A frame this session does not record still runs only once its
+                        // requests are intercepted.
+                        if !recorded && let Some(s) = p.get("sessionId").and_then(Value::as_str) {
+                            self.pending_workers.push(s.to_owned());
+                        }
                     }
-                    // A worker's own requests pass the same interception as its page's.
-                    Some("worker" | "shared_worker" | "service_worker") => {
+                    // A worker's (or worklet's, or any other attached target's) own requests
+                    // pass the same interception as its page's, before it runs.
+                    _ => {
                         if let Some(s) = p.get("sessionId").and_then(Value::as_str) {
                             self.pending_workers.push(s.to_owned());
                         }
                     }
-                    _ => {}
                 }
             }
             "Target.targetCreated" => {
@@ -1146,12 +1145,30 @@ impl Live {
                     self.refuse_target(&info, bounds);
                     continue;
                 }
-                let r = match p.get("sessionId").and_then(Value::as_str) {
+                let session = p
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let r = match &session {
                     Some(s) => self.register(&info, s, "popup", bounds).map(Some),
                     None => self.attach(&info, "popup", bounds),
                 };
+                // An auto-attached page waits until its interception is enabled (by
+                // registration, on this or an earlier session): it runs now.
+                let r = match (r, &session) {
+                    (Ok(_), Some(s)) => self
+                        .cdp
+                        .call(
+                            Some(s),
+                            "Runtime.runIfWaitingForDebugger",
+                            json!({}),
+                            bounds.call,
+                        )
+                        .map(drop),
+                    (r, _) => r.map(drop),
+                };
                 match r {
-                    Ok(_) => {}
+                    Ok(()) => {}
                     // A target that went away before registration finished is not an error.
                     Err(CdpError::Remote { .. }) => {}
                     Err(e) => return Err(e),
@@ -2381,6 +2398,14 @@ fn intercepted() -> Value {
         .map(|p| json!({"urlPattern": p, "requestStage": "Request"}))
         .collect();
     json!({"patterns": patterns})
+}
+
+/// The `Target.setAutoAttach` parameters (flattened sessions). Every target attached this way
+/// (popup, out-of-process frame, worker, worklet) starts paused, and runs only once this client
+/// has enabled interception on its session and sent `Runtime.runIfWaitingForDebugger`, so none
+/// of its requests can precede the gate.
+fn auto_attach() -> Value {
+    json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true})
 }
 
 /// A local root on the way from the page to a document: its session, the map from its viewport

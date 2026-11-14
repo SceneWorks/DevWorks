@@ -37,7 +37,9 @@ use devworks_core::ports::packages::{HostPlatform, RuntimeCache};
 use devworks_core::ports::retrieval::NoVectorIndex;
 use devworks_core::ports::router::ConnectionDirectory;
 use devworks_core::ports::secrets::{Secret, SecretResolver, SecretStore, SwitchableSecrets};
-use devworks_core::ports::storage::{ApplicationStore, StorageError, WriteOptions, run_write};
+use devworks_core::ports::storage::{
+    ApplicationStore, ReadOptions, StorageError, WriteOptions, read_snapshot, run_write,
+};
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
 use devworks_core::services::UseCases;
@@ -55,7 +57,7 @@ use devworks_core::services::router::InferenceRouter;
 use devworks_core::services::router::connections::{ConnectionService, IntakeError};
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::sessions::SessionService;
-use devworks_core::services::web::{WebPorts, WebService};
+use devworks_core::services::web::{WebPorts, WebService, read_policy};
 use devworks_core::settings::service::SettingsService;
 use devworks_core::settings::view::Health;
 use devworks_engine::package_host::{HostConfig, IndexPorts, LaunchPorts, RuntimePorts};
@@ -241,6 +243,21 @@ impl DesktopConfig {
                 .map(|home| PathBuf::from(home).join(".agents").join("skills")),
         }
     }
+}
+
+/// What every command launch is checked against: the application data folder and both skill
+/// folders, so an agent's command can never write a skill change that sync would observe.
+pub(crate) fn protected_roots(config: &DesktopConfig) -> ProtectedRoots {
+    ProtectedRoots::new(
+        Vec::new(),
+        Vec::new(),
+        Some(config.data_root.display().to_string()),
+    )
+    .with_skill_roots(
+        std::iter::once(config.data_root.join("skills"))
+            .chain(config.shared_skills.clone())
+            .map(|p| p.display().to_string()),
+    )
 }
 
 fn container_bindings(
@@ -458,13 +475,31 @@ async fn compose(
     // every search and fetch is recorded through the one diagnostics service. The search
     // credential resolves through the provider connection service, i.e. the same OS secret
     // store (one secret-store abstraction).
+    let web_ports = (config.web)(connections.clone());
+    // Package index and bundle downloads use the same resolver, pinned-address transport and
+    // egress policy as web.fetch, read fresh for each download (refused on a read failure).
+    let package_index = {
+        let store = store.clone();
+        NativeIndexTransport::new(
+            web_ports.resolver.clone(),
+            web_ports.transport.clone(),
+            Arc::new(move || {
+                read_snapshot(&*store, &ReadOptions::default(), |s| {
+                    Ok(read_policy(s.configuration()))
+                })
+                .ok()
+                .and_then(Result::ok)
+                .is_some_and(|p| p.allow_private)
+            }),
+        )
+    };
     let web = Arc::new(WebService::new(
         store.clone(),
         artifacts.clone(),
         diagnostics.clone(),
         clock.clone(),
         id_source.clone(),
-        (config.web)(connections.clone()),
+        web_ports,
     ));
     let use_cases = use_cases.with_web(web.clone());
     let purge_client = Arc::new(
@@ -520,11 +555,7 @@ async fn compose(
         runtime_config.containers = Some(devworks_engine::runtime::ContainerComposition {
             bindings,
             filesystem: Arc::new(NativeFilesystem::new()),
-            protected_roots: ProtectedRoots::new(
-                Vec::new(),
-                Vec::new(),
-                Some(config.data_root.display().to_string()),
-            ),
+            protected_roots: protected_roots(config),
             secrets: secrets.clone(),
             registry_auth: container_private_files.clone(),
             workload_environment: container_private_files,
@@ -545,17 +576,13 @@ async fn compose(
         runtime_config.process_tools = Some(devworks_engine::runtime::ProcessToolComposition {
             bindings: mcp_bindings.clone(),
             filesystem: Arc::new(NativeFilesystem::new()),
-            protected_roots: ProtectedRoots::new(
-                Vec::new(),
-                Vec::new(),
-                Some(config.data_root.display().to_string()),
-            ),
+            protected_roots: protected_roots(config),
             secrets: secrets.clone(),
         });
     }
     let mcp_secrets = secrets.clone();
     let mcp_namespace = store.info().store_id.0.as_str().to_owned();
-    let mcp_data_root = config.data_root.display().to_string();
+    let mcp_roots = protected_roots(config);
     let mcp_clients: Arc<std::sync::OnceLock<Arc<NativeMcpClients>>> = Arc::default();
     let installed_mcp = mcp_clients.clone();
     runtime_config.mcp = Some(devworks_engine::runtime::McpComposition {
@@ -567,7 +594,7 @@ async fn compose(
                 mcp_secrets.clone(),
                 mcp_namespace.clone(),
                 Arc::new(NativeFilesystem::new()),
-                ProtectedRoots::new(Vec::new(), Vec::new(), Some(mcp_data_root.clone())),
+                mcp_roots.clone(),
                 Vec::new(),
                 handle,
             ));
@@ -655,11 +682,7 @@ async fn compose(
             service: packages,
             launch: LaunchPorts {
                 fs: Arc::new(NativeFilesystem::new()),
-                roots: ProtectedRoots::new(
-                    Vec::new(),
-                    Vec::new(),
-                    Some(config.data_root.display().to_string()),
-                ),
+                roots: protected_roots(config),
                 protected_branches: Vec::new(),
             },
             config: HostConfig::default(),
@@ -668,7 +691,7 @@ async fn compose(
                 search_path: None,
             }),
             index: Some(IndexPorts {
-                transport: Arc::new(NativeIndexTransport::default()),
+                transport: Arc::new(package_index),
                 verifier: Arc::new(BundleIndexVerifier),
             }),
         }),
@@ -1405,5 +1428,50 @@ mod container_credential_boundary_tests {
             bindings.resolve_container_credential(&grant.id, None, &secrets, "store-1"),
             Ok("private-token".into())
         );
+    }
+}
+
+#[cfg(test)]
+mod skill_root_protection_tests {
+    use super::*;
+    use devworks_core::authority::destructive::{BlockReason, PreflightVerdict, preflight};
+    use devworks_core::authority::shell::{ShellAssessment, assess_command};
+
+    #[test]
+    fn agent_commands_cannot_write_either_skill_folder() {
+        let scratch =
+            std::env::temp_dir().join(format!("devworks-skill-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("home")).unwrap();
+        // A plain path without links (Windows resolves to a `\\?\` path; the host's paths
+        // are plain).
+        let canonical = std::fs::canonicalize(&scratch).unwrap();
+        let canonical = canonical.to_string_lossy();
+        let scratch = PathBuf::from(canonical.strip_prefix(r"\\?\").unwrap_or(&canonical));
+        std::fs::create_dir_all(scratch.join("data/skills")).unwrap();
+        let mut config = DesktopConfig::new(scratch.join("data"));
+        // `~/.agents/skills` before the person ever created it.
+        config.shared_skills = Some(scratch.join("home/.agents/skills"));
+        let roots = protected_roots(&config);
+        for root in [
+            scratch.join("home/.agents/skills"),
+            scratch.join("data/skills"),
+        ] {
+            // A command names paths with `/` separators, which every platform accepts.
+            let root = root.display().to_string().replace('\\', "/");
+            let script = format!("echo 'Do evil.' > {root}/evil/SKILL.md");
+            let ShellAssessment::Destructive { plans, .. } = assess_command(
+                &["sh".to_owned(), "-c".to_owned(), script.clone()],
+                Some(&scratch.display().to_string()),
+            ) else {
+                panic!("{script}: the write is assessed");
+            };
+            assert_eq!(
+                preflight(&NativeFilesystem::new(), &roots, &plans[0]).verdict,
+                PreflightVerdict::Blocked(BlockReason::SkillDirectory),
+                "{script}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 }

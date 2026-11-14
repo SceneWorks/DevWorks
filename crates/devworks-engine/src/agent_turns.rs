@@ -267,6 +267,11 @@ async fn wait_for_state_change(
     }
 }
 
+/// The turn fails on this many consecutive stale-head refusals of one request against one context
+/// version. A real race changes the head or the request on the retry, so a repeat is not a race;
+/// the third attempt only adds margin.
+const STALE_HEAD_ATTEMPTS: u32 = 3;
+
 async fn run_native_loop(
     runtime: &Arc<Runtime>,
     ctx: &InvocationContext,
@@ -285,6 +290,8 @@ async fn run_native_loop(
     let mut completed_windows = 0;
     // The digest of the last context this turn compacted to.
     let mut compacted: Option<String> = None;
+    // Consecutive stale-head refusals of one request against one context version.
+    let mut stale_refusals = None;
     loop {
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
@@ -481,6 +488,10 @@ async fn run_native_loop(
             continue;
         }
         let invocation = plan_generation_window(runtime, ctx, &route, &binding, &head, window)?;
+        let attempt = (
+            invocation.request.request_id.clone(),
+            head.version_id.clone(),
+        );
         changes.borrow_and_update();
         let dispatched = tokio::time::Instant::now();
         let worker = Arc::clone(runtime);
@@ -501,11 +512,28 @@ async fn run_native_loop(
                     &head,
                 )? =>
             {
+                // A concurrent publication changes the head or the request on the retry. The
+                // same request refused against the same head again is not a race.
+                stale_refusals = match stale_refusals.take() {
+                    Some((count, last)) if last == attempt => Some((count + 1, last)),
+                    _ => Some((1, attempt)),
+                };
+                if let Some((count, (request_id, version_id))) = &stale_refusals
+                    && *count >= STALE_HEAD_ATTEMPTS
+                {
+                    return Err(StorageError::InvalidRecord(format!(
+                        "agent turn made no progress: request {} against context version {} \
+                         was refused {count} times",
+                        request_id.as_str(),
+                        version_id.as_str()
+                    )));
+                }
                 recovered = runtime.recover_native_context_head(ctx, session_id)?;
                 continue;
             }
             Err(error) => return Err(error),
         };
+        stale_refusals = None;
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
@@ -1922,9 +1950,12 @@ fn plan_request(
         .get()
         .checked_add(i64::try_from(tool_bytes).map_err(|_| StorageError::ScopeDenied)?)
         .ok_or(StorageError::ScopeDenied)?;
+    // The epoch is part of the identity: two epochs whose roots have identical bytes must not
+    // share a request, while a restart within one epoch still replays the same request.
     let mut identity = format!(
-        "{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}:{}",
         session_id.as_str(),
+        binding.context_epoch.get(),
         head.sha256.as_str(),
         route.pin_id.as_str(),
         route.pin_revision.get(),

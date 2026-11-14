@@ -23,7 +23,15 @@
     {"path":"crates/devworks-core/src/services/packages","topics":["addons","sdk-start","sdk-manifest"]},
     {"path":"crates/devworks-core/src/services/browser","topics":["browser","resources"]},
     {"path":"crates/devworks-core/src/services/web","topics":["integrations","settings-Tools"]},
-    {"path":"crates/devworks-core/src/services/diagnostics","topics":["diagnostics","recovery"]}
+    {"path":"crates/devworks-core/src/services/diagnostics","topics":["diagnostics","recovery"]},
+    {"path":"crates/devworks-core/src/services/agents.rs","topics":["agents"]},
+    {"path":"crates/devworks-core/src/services/conventions","topics":["conventions"]},
+    {"path":"crates/devworks-core/src/services/schemas","topics":["databases"]},
+    {"path":"crates/devworks-core/src/services/router/embedding_spaces","topics":["routing-context","settings-connections"]},
+    {"path":"crates/devworks-core/src/services/mcp.rs","topics":["mcp-servers"]},
+    {"path":"crates/devworks-core/src/services/process","topics":["process-tools","watchers"]},
+    {"path":"crates/devworks-core/src/services/containers","topics":["containers","settings-Containers"]},
+    {"path":"crates/devworks-core/src/services/desktop","topics":["desktop-control"]}
   ],
   "extensionOwners": [
     {"path":"crates/devworks-extension-protocol/src/package.rs","topics":["sdk-manifest","sdk-tools","sdk-workflows-events","sdk-context","sdk-native-ui","sdk-semantic"]},

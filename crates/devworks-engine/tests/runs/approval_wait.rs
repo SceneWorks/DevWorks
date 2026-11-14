@@ -2,7 +2,9 @@
 //! turn submits it once, and again only after an admitted command changed state or the turn is
 //! stopped. A call a domain command refuses `ApprovalRequired` is not held: it is answered at once
 //! with an approval staged for the exact refused request, and the person's decision reaches the
-//! agent later as an update of the call's operation. Provider bytes are scripted; no model runs.
+//! agent later as an update of the call's operation. A query refused `ApprovalRequired` is not
+//! held either: no approval can carry a query, so the call is answered at once as not run.
+//! Provider bytes are scripted; no model runs.
 use super::*;
 use devworks_core::ports::desktop::{
     DesktopAvailability, DesktopCapabilities, DesktopFault, DesktopPlatform,
@@ -180,10 +182,10 @@ async fn reached(count: &AtomicUsize, at_least: usize, bound: Duration) -> bool 
 }
 
 /// A runtime whose provider is `wire`, with `adjust` applied to its composition.
-async fn runtime_with(
+pub(super) async fn runtime_with(
     fx: &Fx,
     authority: Arc<dyn AuthorityPort>,
-    wire: Arc<HeldWire>,
+    wire: Arc<dyn StreamingHttp>,
     adjust: impl FnOnce(&mut Composition),
 ) -> Arc<devworks_engine::Runtime> {
     let mut composed = composition_with(
@@ -800,6 +802,119 @@ fn an_approval_whose_grant_expired_before_readmission_reaches_the_agent_as_faile
         assert_eq!(seen.len(), 1, "{seen:?}");
         assert_eq!(seen[0]["state"], "Failed", "{seen:?}");
         assert_eq!(seen[0]["approval"]["decision"], "Approved", "{seen:?}");
+        shut_down(t.app).await;
+    });
+}
+
+/// A query that a domain handler refuses `ApprovalRequired`. No catalog query refuses this way
+/// today, so the fixture handler stands in for one and counts what it is asked.
+struct QueryNeedsApproval(Arc<AtomicUsize>);
+impl devworks_core::ports::QueryHandler for QueryNeedsApproval {
+    fn query(
+        &self,
+        _: &InvocationContext,
+        _: &devworks_core::gateway::AdmittedQuery,
+        _: &dyn devworks_core::ports::storage::ReadSnapshot,
+    ) -> Result<devworks_core::ports::QueryAnswer, devworks_core::protocol::DomainFault> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(Refusal::new(
+            devworks_core::protocol::DomainErrorCode::ApprovalRequired,
+            "fixture_query",
+            None,
+        )
+        .retry(devworks_core::protocol::RetryAdvice::Never)
+        .fault(CorrelationId(id("approval-wait-query-fault"))))
+    }
+}
+
+#[test]
+fn an_approval_required_query_is_answered_at_once_as_not_run() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    in_runtime(async || {
+        let asked = Arc::new(AtomicUsize::new(0));
+        let wire = Arc::new(HeldWire::new("sessions_get_query", "{}", 1));
+        let handler = Arc::new(QueryNeedsApproval(asked.clone()));
+        let app = runtime_with(
+            &fx,
+            Arc::new(Counting {
+                counted: "sessions.get",
+                submissions: Arc::new(AtomicUsize::new(0)),
+                real: None,
+            }),
+            wire.clone(),
+            |composed| {
+                composed
+                    .use_cases
+                    .register("sessions.get", Some(handler), None);
+            },
+        )
+        .await;
+        let (context, primary) = pinned_agent_session(&fx);
+        let offered = offered(&app, &context);
+        assert!(
+            offered.iter().any(|name| name == "sessions_get_query"),
+            "{offered:?}"
+        );
+        let session = context.session_id().unwrap().clone();
+        *wire.call.lock().unwrap() = (
+            "sessions_get_query".into(),
+            json!({"sessionId": session}).to_string(),
+        );
+        let t = Takeover {
+            app,
+            wire,
+            context,
+            primary,
+            arguments: Value::Null,
+        };
+
+        // The turn is not held: the call is answered and the agent's next request finishes it.
+        let end = run_turn(&t).await;
+        assert!(
+            matches!(
+                end,
+                LaunchEnd::Finished {
+                    outcome: ActivationOutcome::Completed,
+                    ..
+                }
+            ),
+            "{end:?}"
+        );
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+
+        // The answer is a definite failure that says approval is required and the query did not
+        // run, with no approval or operation to wait for.
+        let not_run = "domain_ApprovalRequired-query_not_run-a_person_must_run_it";
+        let results = tool_results(&t.wire);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].1.contains("Failed"), "{results:?}");
+        assert!(results[0].1.contains(not_run), "{results:?}");
+        let entries = read(&*fx.store, |s| s.sessions().entries(&session, 0, 500));
+        let outcomes: Vec<_> = entries
+            .into_iter()
+            .filter_map(|entry| {
+                match serde_json::from_value::<TranscriptBody>(entry.body).ok()? {
+                    TranscriptBody::ToolResponseRecorded { outcome, .. } => Some(outcome),
+                    _ => None,
+                }
+            })
+            .collect();
+        assert!(
+            matches!(
+                outcomes.as_slice(),
+                [devworks_core::protocol::provider::ToolOutcome::Failed { code }]
+                    if code.as_str() == not_run
+            ),
+            "{outcomes:?}"
+        );
+        let linked = read(&*fx.store, |s| {
+            s.sessions().linked_operations(&session, 500)
+        });
+        assert!(
+            linked.iter().all(|row| row.operation_id.is_none()),
+            "{linked:?}"
+        );
         shut_down(t.app).await;
     });
 }
