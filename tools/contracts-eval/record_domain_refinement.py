@@ -18,7 +18,7 @@ files=[*sorted((ROOT/'tools/contracts-eval').glob('*.py')),ROOT/'tools/contracts
  *[D/n for n in ['domain-operation-contracts.md','domain-operation-contracts.html','domain-operation-reference.md','domain-operation-reference.html','shared-operation-contracts.md','shared-operation-contracts.html','devworks-architecture.md','devworks-architecture.html','architecture-handoff.md','README.md','implementation-plan.json','implementation-plan.md','implementation-plan.html','implementation-slices.json','contracts/manifest.json','contracts/family-coverage.json']],
  *sorted(E.glob('*-results.json')),E/'reader-checks.json',E/'README.md',
  *[D/'architecture-diagrams'/(stem+suffix) for stem in ['42-domain-operation-admission','43-structured-decision-contract'] for suffix in ['.mmd','.svg']]]
-report={'date':'2026-11-02','status':'Operation wire-candidate coverage complete; production/authority/SDK/provider/target and retained semantic acceptance unqualified',
+report={'date':'2026-11-02','status':'Operation wire-candidate coverage complete; production/authority/SDK/provider/target and retained semantic acceptance unqualified',  # dev-host: allow-path prose naming a target record, not a build folder
  'branch':subprocess.check_output(['git','branch','--show-current'],text=True).strip(),
  'requirements':345,'requirementStatus':plan['counts']['requirementsByStatus'],'requirementsInputSha256':structure['requirementsInputSha256'],
  'operationFamilies':47,'inputCandidates':347,'unboundInputs':0,'qualifiedResultTags':347,'schemaFiles':model['schemaFiles'],'newModeVariants':model['newInputModeVariants'],'hybridOperations':model['hybridOperations'],

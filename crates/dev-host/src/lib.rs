@@ -15,6 +15,8 @@
 //!   ([`cleanup`]).
 //! - `guard`: fails on new hardcoded machine paths and on agent docs that lack the dev-host
 //!   items ([`guard`]).
+//! - `install`: installs a released binary at a pinned version, checksum- and
+//!   version-verified ([`install`]).
 //!
 //! Per-host values come from the environment and the optional `dev-host.conf` under the root
 //! ([`config`]); the source holds no host names or paths.
@@ -23,6 +25,7 @@ pub mod check;
 pub mod cleanup;
 pub mod config;
 pub mod guard;
+pub mod install;
 pub mod plan;
 pub mod shim;
 pub mod slots;

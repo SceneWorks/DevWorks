@@ -24,6 +24,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # dev-host guard --diff needs the merge base with the PR's base branch.
+          fetch-depth: 0
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt
@@ -32,6 +35,15 @@ jobs:
         run: |
           python3 -I tools/ci/test_test_reachability.py
           python3 -I tools/ci/test-reachability.py
+      # DevWorks is dev-host's home, so the guard is built from this PR's own source.
+      - name: dev-host guard (new hardcoded paths, agent docs)
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          cargo build -p dev-host --locked
+          cargo run -q -p dev-host --locked -- guard --diff "origin/$BASE_REF"
+          cargo run -q -p dev-host --locked -- guard --docs
 
   codegen:
     name: generated contracts are current

@@ -1,0 +1,89 @@
+name: dev-host release
+
+# Pushing a dev-host-v<X> tag publishes the dev-host binaries `dev-host install --version X`
+# downloads: dev-host-<X>-<triple>[.exe] plus <asset>.sha256 for each, on a GitHub Release
+# named after the tag. GitHub-hosted runners only; no inference or model execution.
+on:
+  push:
+    tags: ["dev-host-v*"]
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  build:
+    name: build (${{ matrix.triple }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+            exe: ""
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            exe: .exe
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+      - name: Build, check the version and write the checksum
+        shell: bash
+        env:
+          TRIPLE: ${{ matrix.triple }}
+          EXE: ${{ matrix.exe }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#dev-host-v}"
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$TRIPLE"
+          cargo install --path crates/dev-host --locked --root "$RUNNER_TEMP/dev-host"
+          reported="$("$RUNNER_TEMP/dev-host/bin/dev-host$EXE" --version | tr -d '\r')"
+          if [ "$reported" != "dev-host $version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME but the binary reports '$reported'; bump crates/dev-host/Cargo.toml"
+            exit 1
+          fi
+          asset="dev-host-$version-$TRIPLE$EXE"
+          mkdir dist
+          cp "$RUNNER_TEMP/dev-host/bin/dev-host$EXE" "dist/$asset"
+          cd dist
+          if command -v sha256sum >/dev/null; then sha256sum "$asset"; else shasum -a 256 "$asset"; fi \
+            | awk -v name="$asset" '{print $1 "  " name}' > "$asset.sha256"
+          cat "$asset.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dev-host-${{ matrix.triple }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Check the checksums and create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd dist
+          for sum in *.sha256; do sha256sum --check "$sum"; done
+          test "$(ls | wc -l)" -eq 4
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes "dev-host ${GITHUB_REF_NAME#dev-host-v}: install with \`dev-host install --version ${GITHUB_REF_NAME#dev-host-v}\`, or build with \`cargo build -p dev-host\`." \
+            ./*
