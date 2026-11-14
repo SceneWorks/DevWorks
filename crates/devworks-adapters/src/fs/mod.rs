@@ -328,11 +328,19 @@ impl FilesystemResolver for NativeFilesystem {
                     continue;
                 };
                 for e in entries.flatten() {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    if name.starts_with('.') && !text.starts_with('.') {
+                    let name = e.file_name();
+                    let bytes = name.as_encoded_bytes();
+                    if bytes.starts_with(b".") && !text.starts_with('.') {
                         continue;
                     }
-                    if glob(text.as_bytes(), name.as_bytes()) {
+                    if glob(text.as_bytes(), bytes) {
+                        // The reviewed list is text: a match it cannot name exactly refuses the
+                        // expansion rather than silently leaving the file out.
+                        if name.to_str().is_none() {
+                            return Err(ResolveError::Unsupported(
+                                "a matched name is not valid UTF-8".into(),
+                            ));
+                        }
                         next.push(b.join(&name));
                         if next.len() > limit {
                             return Err(ResolveError::TooMany { limit });
@@ -412,16 +420,42 @@ pub(crate) fn windows_unsafe_component(name: &str) -> bool {
 }
 
 /// Glob match of one component: `*`, `?` and `[...]` classes (ranges, `!`/`^` negation).
+/// Iterative: on a mismatch it retries only from the most recent `*`, so the cost is bounded by
+/// pattern length times name length, however many stars the pattern has.
 fn glob(p: &[u8], s: &[u8]) -> bool {
-    match p.first() {
-        None => s.is_empty(),
-        Some(b'*') => (0..=s.len()).any(|i| glob(&p[1..], &s[i..])),
-        Some(b'?') => !s.is_empty() && glob(&p[1..], &s[1..]),
-        Some(b'[') => {
-            let Some(end) = p.iter().skip(2).position(|&c| c == b']').map(|i| i + 2) else {
-                return !s.is_empty() && s[0] == b'[' && glob(&p[1..], &s[1..]);
+    let (mut pi, mut si) = (0, 0);
+    // The pattern position after the latest `*` and the subject position it has absorbed up to.
+    let mut star: Option<(usize, usize)> = None;
+    while si < s.len() {
+        if p.get(pi) == Some(&b'*') {
+            pi += 1;
+            star = Some((pi, si));
+            continue;
+        }
+        if let Some(width) = glob_one(&p[pi..], s[si]) {
+            pi += width;
+            si += 1;
+            continue;
+        }
+        let Some((after, absorbed)) = star else {
+            return false;
+        };
+        pi = after;
+        si = absorbed + 1;
+        star = Some((after, si));
+    }
+    p[pi..].iter().all(|&c| c == b'*')
+}
+
+/// Matches the single-byte token at the start of `p` (never `*`) against `c`, returning the
+/// token's width in the pattern on a match.
+fn glob_one(p: &[u8], c: u8) -> Option<usize> {
+    match *p.first()? {
+        b'?' => Some(1),
+        b'[' => {
+            let Some(end) = p.iter().skip(2).position(|&x| x == b']').map(|i| i + 2) else {
+                return (c == b'[').then_some(1);
             };
-            let Some(&c) = s.first() else { return false };
             let class = &p[1..end];
             let (negated, class) = match class.first() {
                 Some(b'!' | b'^') => (true, &class[1..]),
@@ -438,9 +472,9 @@ fn glob(p: &[u8], s: &[u8]) -> bool {
                     i += 1;
                 }
             }
-            hit != negated && glob(&p[end + 1..], &s[1..])
+            (hit != negated).then_some(end + 1)
         }
-        Some(&c) => s.first() == Some(&c) && glob(&p[1..], &s[1..]),
+        x => (x == c).then_some(1),
     }
 }
 

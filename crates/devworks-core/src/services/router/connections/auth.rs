@@ -217,23 +217,26 @@ pub fn codex_start(
     let user_code = text(&body, "user_code")
         .or_else(|| text(&body, "usercode"))
         .ok_or(AuthFailure::Malformed("device authorization"))?;
-    // The issuer sends the interval as a string; clamp it so a bad value never hammers or
-    // stalls the poll.
+    Ok(DeviceCode {
+        device_auth_id: Secret::new(id),
+        user_code,
+        interval_ms: poll_interval_ms(&body),
+        verification_url: format!("{}/codex/device", issuer(ep)),
+    })
+}
+
+/// The issuer sends the interval as a string; clamp it so a bad value never hammers or stalls
+/// the poll, and saturate so a huge value cannot overflow.
+fn poll_interval_ms(body: &Value) -> i64 {
     let seconds = body["interval"]
         .as_i64()
         .or_else(|| body["interval"].as_str().and_then(|s| s.parse().ok()))
         .unwrap_or(-1);
-    let interval_ms = if seconds < 1 {
+    if seconds < 1 {
         DEFAULT_INTERVAL_MS
     } else {
-        (seconds * 1000).min(MAX_INTERVAL_MS)
-    };
-    Ok(DeviceCode {
-        device_auth_id: Secret::new(id),
-        user_code,
-        interval_ms,
-        verification_url: format!("{}/codex/device", issuer(ep)),
-    })
+        seconds.saturating_mul(1000).min(MAX_INTERVAL_MS)
+    }
 }
 
 /// The approved authorization (code and verifier), or `None` while the code is not entered yet.
@@ -491,6 +494,16 @@ mod tests {
         assert!(claude_pasted_code(&Secret::new("abc#s-999"), &state).is_err());
         assert!(claude_pasted_code(&Secret::new("abc"), &state).is_err());
         assert!(claude_pasted_code(&Secret::new("#s-123"), &state).is_err());
+    }
+
+    #[test]
+    fn a_huge_issuer_interval_is_clamped_without_overflow() {
+        let huge = json!({"interval": i64::MAX});
+        assert_eq!(poll_interval_ms(&huge), MAX_INTERVAL_MS);
+        let text = json!({"interval": i64::MAX.to_string()});
+        assert_eq!(poll_interval_ms(&text), MAX_INTERVAL_MS);
+        assert_eq!(poll_interval_ms(&json!({"interval": "5"})), 5000);
+        assert_eq!(poll_interval_ms(&json!({})), DEFAULT_INTERVAL_MS);
     }
 
     #[test]

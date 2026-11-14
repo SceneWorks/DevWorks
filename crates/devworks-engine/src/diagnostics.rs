@@ -365,6 +365,33 @@ fn collection_check(pass: Option<&CollectionPass>) -> HealthCheck {
     ))
 }
 
+/// The running dispatcher: degraded while its passes keep failing. The message names the latest
+/// failure (a failed pass, or a delivery failure that could not be recorded).
+fn dispatcher_check(m: &crate::dispatch::DispatcherMetrics) -> HealthCheck {
+    let state = if m.failed_passes == 0 {
+        HealthState::Healthy
+    } else {
+        HealthState::Degraded
+    };
+    let message = match (&m.last_failure, m.failed_passes) {
+        (None, _) => "The delivery dispatcher is running.".to_owned(),
+        (Some(last), 0) => format!("The delivery dispatcher is running. Latest failure: {last}"),
+        (Some(last), n) => format!("The delivery dispatcher's last {n} passes failed: {last}"),
+    };
+    HealthCheck::new("queue.dispatcher", state, message)
+        .metric(count("inFlight", m.in_flight))
+        .metric(MetricReading::new(
+            "passes",
+            Some("count"),
+            Metric::Available(m.passes),
+        ))
+        .metric(MetricReading::new(
+            "failedPasses",
+            Some("count"),
+            Metric::Available(m.failed_passes),
+        ))
+}
+
 /// Registers the runtime's health sources on `service`.
 pub fn sources(
     service: &DiagnosticService,
@@ -379,17 +406,7 @@ pub fn sources(
     service.register_source(Arc::new(move |_now: i64| {
         let pass = collections.borrow().clone();
         let queue = match dispatcher.metrics() {
-            Some((in_flight, passes)) => HealthCheck::new(
-                "queue.dispatcher",
-                HealthState::Healthy,
-                "The delivery dispatcher is running.",
-            )
-            .metric(count("inFlight", in_flight))
-            .metric(MetricReading::new(
-                "passes",
-                Some("count"),
-                Metric::Available(passes),
-            )),
+            Some(m) => dispatcher_check(&m),
             None => HealthCheck::new(
                 "queue.dispatcher",
                 HealthState::Unavailable,

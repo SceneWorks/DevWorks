@@ -5444,6 +5444,68 @@ impl ActivationLauncher for Scripted {
     }
 }
 
+/// Refuses the next `refuse` writes (never admitted: reported busy).
+struct RefuseWrites {
+    inner: Arc<dyn ApplicationStore>,
+    refuse: AtomicUsize,
+}
+impl ApplicationStore for RefuseWrites {
+    fn info(&self) -> StoreInfo {
+        self.inner.info()
+    }
+    fn submit_write(&self, o: WriteOptions, job: Box<dyn WriteJob>) -> Result<(), StorageError> {
+        let refused = self
+            .refuse
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if refused {
+            return Err(StorageError::Busy);
+        }
+        self.inner.submit_write(o, job)
+    }
+    fn read(
+        &self,
+        o: &ReadOptions,
+        w: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.inner.read(o, w)
+    }
+}
+
+/// A busy store when a launch ends delays its record; it does not leave the activation running
+/// until its lease expires.
+#[test]
+fn a_busy_store_does_not_lose_a_finished_activations_end() {
+    let _native_case = native_runtime_case();
+    let h = Harness::new();
+    let inner = h.open();
+    seed(&h);
+    let store = Arc::new(RefuseWrites {
+        inner,
+        refuse: AtomicUsize::new(0),
+    });
+    let fx = Fx::over(h, store.clone());
+    let launcher = Arc::new(Gated::default());
+    let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let rt = runtime();
+    let tick = rt.block_on(sup.tick()).unwrap();
+    let activation = tick.launched[0].clone();
+    store.refuse.store(2, Ordering::SeqCst);
+    launcher.release(0);
+    rt.block_on(within("the launch ends", async {
+        while !sup.launched().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }));
+    assert_eq!(store.refuse.load(Ordering::SeqCst), 0);
+    let a = fx.activation(&activation);
+    assert_eq!(
+        (a.phase, a.outcome),
+        (ActivationPhase::Stopped, Some(ActivationOutcome::Cancelled))
+    );
+}
+
 #[test]
 fn late_launcher_installation_claims_ready_work_once() {
     let _native_case = native_runtime_case();

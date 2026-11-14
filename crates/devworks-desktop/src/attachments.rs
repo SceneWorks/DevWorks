@@ -5,8 +5,6 @@
 use crate::backend::{Backend, TaskOutput, resolve_command};
 use crate::ops;
 use eframe::egui::ColorImage;
-use sha2::{Digest, Sha256};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Largest file a preview is decoded from (the artifact service enforces the storage limit).
@@ -49,34 +47,13 @@ pub use crate::files::open_regular;
 
 /// SHA-256 and length of a regular file of at most `max` bytes.
 fn sha256_file(path: &Path, max: u64) -> Result<(String, u64), String> {
-    let (file, len) = open_regular(path).map_err(|e| match e.kind() {
+    crate::files::sha256_regular(path, max).map_err(|e| match e.kind() {
         std::io::ErrorKind::InvalidInput => "only regular files can be attached".to_owned(),
-        _ => format!("could not read the file: {e}"),
-    })?;
-    let too_large = || format!("larger than the attachment limit of {max} bytes");
-    if len > max {
-        return Err(too_large());
-    }
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 64 * 1024];
-    let mut n = 0u64;
-    // One byte past the limit detects a file that grew since it was checked.
-    let mut f = file.take(max.saturating_add(1));
-    loop {
-        let read = f
-            .read(&mut buf)
-            .map_err(|e| format!("could not read the file: {e}"))?;
-        if read == 0 {
-            break;
+        std::io::ErrorKind::FileTooLarge => {
+            format!("larger than the attachment limit of {max} bytes")
         }
-        hasher.update(&buf[..read]);
-        n += read as u64;
-    }
-    if n > max {
-        return Err(too_large());
-    }
-    let digest = hasher.finalize();
-    Ok((digest.iter().map(|b| format!("{b:02x}")).collect(), n))
+        _ => format!("could not read the file: {e}"),
+    })
 }
 
 /// The configured largest artifact file (`storage.artifactMaxFileBytes`), read through
