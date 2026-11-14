@@ -4,9 +4,11 @@ use devworks_core::context::{HostIngress, PrincipalKind};
 use devworks_core::operations::agents as ops;
 use devworks_core::ports::storage::contract::StoreHarness;
 use devworks_core::ports::storage::*;
+use devworks_core::protocol::DomainErrorCode;
 use devworks_core::protocol::records::MessageClass;
 use devworks_core::protocol::support::{BoundedList, BoundedText};
 use devworks_core::protocol::{ActorId, AssignmentId, Counter, Id, ProjectId, Revision, RootId};
+use devworks_core::services::sessions::{Failure, Refusal};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -1039,7 +1041,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     let stale_sender = context("sender", "session-a", "root-a");
     assert!(matches!(
         run_write(&s, WriteOptions::default(), move |tx| {
-            devworks_core::services::agents::post_assignment(
+            Ok(devworks_core::services::agents::post_assignment(
                 tx,
                 &stale_sender,
                 &ops::MessagesInput {
@@ -1048,9 +1050,12 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                     content: BoundedText("Too early".into()),
                     attachments: BoundedList(vec![]),
                 },
-            )
+            ))
         }),
-        Err(StorageError::ScopeDenied)
+        Ok(Err(Failure::Refused(Refusal {
+            code: DomainErrorCode::PermissionDenied,
+            ..
+        })))
     ));
     let boot = s.info().boot_id.clone().unwrap();
     run_write(&s, WriteOptions::default(), move |tx| {
@@ -1089,7 +1094,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         context("sender", "session-a", "root-a").with_activation(id("sender-execution"), 0);
     assert!(matches!(
         run_write(&s, WriteOptions::default(), move |tx| {
-            devworks_core::services::agents::post_assignment(
+            Ok(devworks_core::services::agents::post_assignment(
                 tx,
                 &stale_epoch_sender,
                 &ops::MessagesInput {
@@ -1098,9 +1103,12 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                     content: BoundedText("Old owner".into()),
                     attachments: BoundedList(vec![]),
                 },
-            )
+            ))
         }),
-        Err(StorageError::ScopeDenied)
+        Ok(Err(Failure::Refused(Refusal {
+            code: DomainErrorCode::PermissionDenied,
+            ..
+        })))
     ));
     let sender_context = context("sender", "session-a", "root-a");
     let recipient_context = context("recipient", "session-child", "root-a");
@@ -1118,6 +1126,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         assert_eq!(tx.store().boot_id.as_ref(), Some(&activation.boot_id));
         assert!(activation.lease_until_ms.unwrap() > tx.now_ms());
         devworks_core::services::agents::post_assignment(tx, &sender_context, &input)
+            .map_err(|error| StorageError::InvalidRecord(format!("post refused: {error:?}")))
     })
     .unwrap();
     assert_eq!(posted.to_assignment_id, assignment("recipient"));
@@ -1171,6 +1180,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     };
     let acknowledged = run_write(&s, WriteOptions::default(), move |tx| {
         devworks_core::services::agents::acknowledge_assignment(tx, &recipient_context, &ack)
+            .map_err(|error| StorageError::InvalidRecord(format!("ack refused: {error:?}")))
     })
     .unwrap();
     assert!(acknowledged.acknowledged);
@@ -1229,13 +1239,16 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     };
     assert!(matches!(
         run_write(&s, WriteOptions::default(), move |tx| {
-            devworks_core::services::agents::acknowledge_assignment(
+            Ok(devworks_core::services::agents::acknowledge_assignment(
                 tx,
                 &closed_recipient,
                 &repeated_ack,
-            )
+            ))
         }),
-        Err(StorageError::ScopeDenied)
+        Ok(Err(Failure::Refused(Refusal {
+            code: DomainErrorCode::PermissionDenied,
+            ..
+        })))
     ));
 
     // A root issue without a feature can record a child intent with a brief and no cards.
@@ -1357,7 +1370,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
     let expired_sender = context("sender", "session-a", "root-a");
     assert!(matches!(
         run_write(&s, WriteOptions::default(), move |tx| {
-            devworks_core::services::agents::post_assignment(
+            Ok(devworks_core::services::agents::post_assignment(
                 tx,
                 &expired_sender,
                 &ops::MessagesInput {
@@ -1366,9 +1379,12 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
                     content: BoundedText("Expired lease".into()),
                     attachments: BoundedList(vec![]),
                 },
-            )
+            ))
         }),
-        Err(StorageError::ScopeDenied)
+        Ok(Err(Failure::Refused(Refusal {
+            code: DomainErrorCode::PermissionDenied,
+            ..
+        })))
     ));
 
     let artifacts = Arc::new(devworks_core::services::artifacts::ArtifactService::new(
