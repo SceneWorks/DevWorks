@@ -17,6 +17,7 @@ use devworks_core::ports::storage::{
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
 use devworks_core::services::process::ProcessSupervisor;
+use devworks_core::services::process::executables::PathExecutables;
 use devworks_core::services::process::tools::{
     RegisteredExecutable, RegisteredWorkingRoot, ToolBindings,
 };
@@ -215,6 +216,95 @@ fn a_registered_stdio_mcp_server_is_launched_called_and_reaped() {
     drop(runtime);
 }
 
+/// `mcp.servers` asks for missing runtimes inside its own read. With one read connection, a
+/// lookup that opened a second read would wait for the pool and then report an allowed,
+/// installed runtime as missing; it must use the caller's snapshot instead.
+fn missing_runtime_uses_the_callers_read_on_a_single_connection_pool() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("devworks-mcp-runtime-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&scratch.0);
+    let (data, bin, work_root) = (
+        scratch.0.join("data"),
+        scratch.0.join("bin"),
+        scratch.0.join("root"),
+    );
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(work_root.join("work")).unwrap();
+    // `node` is in the default process executables; here it is this test's own executable.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(std::env::current_exe().unwrap(), bin.join("node")).unwrap();
+    #[cfg(windows)]
+    std::fs::copy(std::env::current_exe().unwrap(), bin.join("node.exe")).unwrap();
+    let clock = Arc::new(FixedClock);
+    let ids = Arc::new(Ids(AtomicU64::new(0)));
+    let mut config = SqliteConfig::new(
+        data,
+        clock.clone(),
+        ids.clone(),
+        ActorId(Id::new("host").unwrap()),
+    );
+    config.read_connections = 1;
+    let store = Arc::new(SqliteStore::open(config).expect("open store"));
+    let supervisor = Arc::new(ProcessSupervisor::new(
+        store.clone(),
+        Arc::new(NativeProcessHost),
+        Arc::new(ResourceService::new(ids.clone(), clock.clone())),
+    ));
+    let search = bin.clone().into_os_string();
+    let executables = Arc::new(PathExecutables::from_settings_on(
+        store.clone(),
+        Arc::new(move || Some(search.clone())),
+    ));
+    let bindings = ToolBindings::new(
+        std::iter::empty::<RegisteredExecutable>(),
+        [RegisteredWorkingRoot {
+            id: Id::new("mcp-root").unwrap(),
+            project: None,
+            path: work_root.canonicalize().unwrap(),
+        }],
+    )
+    .unwrap()
+    .with_path_executables(executables, None);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let clients = NativeMcpClients::new(
+        supervisor,
+        bindings,
+        Arc::new(SessionSecrets::new()),
+        "mcp-runtime-test".into(),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+        Vec::new(),
+        runtime.handle().clone(),
+    );
+    let transport = |executable: &str| {
+        serde_json::from_value(json!({"kind":"Stdio","process":{
+            "executableRef":executable,"args":[],
+            "workingDirectory":{"rootId":"mcp-root","relative":"work"},
+            "environment":[],"profile":"Full","timeoutMs":"60000","outputLimitBytes":"1024"}}))
+        .unwrap()
+    };
+    let started = Instant::now();
+    let (allowed, unlisted) = read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
+        Ok((
+            clients.missing_runtime(&transport("node"), snapshot.configuration()),
+            clients.missing_runtime(&transport("mcp-server"), snapshot.configuration()),
+        ))
+    })
+    .unwrap();
+    assert_eq!(allowed, None, "an allowed, installed runtime is available");
+    assert_eq!(unlisted.as_deref(), Some("mcp-server"));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the lookup waited for a second read connection: {:?}",
+        started.elapsed()
+    );
+    drop(clients);
+    drop(runtime);
+}
+
 fn main() {
     if std::env::var(SERVER_MODE).as_deref() == Ok("1") {
         serve();
@@ -230,4 +320,6 @@ fn main() {
     }
     a_registered_stdio_mcp_server_is_launched_called_and_reaped();
     println!("test a_registered_stdio_mcp_server_is_launched_called_and_reaped ... ok");
+    missing_runtime_uses_the_callers_read_on_a_single_connection_pool();
+    println!("test missing_runtime_uses_the_callers_read_on_a_single_connection_pool ... ok");
 }

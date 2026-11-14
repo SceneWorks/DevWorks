@@ -180,8 +180,13 @@ pub trait McpRemote: Send + Sync {
     /// Drops a connection and stops its app-owned process tree when present.
     fn disconnect(&self, server_id: &Id) -> Result<(), McpRemoteFault>;
     /// The executable a stdio server launches, when this host cannot resolve it. Answered from
-    /// the host's registered executables without starting anything.
-    fn missing_runtime(&self, _transport: &McpTransport) -> Option<String> {
+    /// the host's registered executables without starting anything. `configuration` is the
+    /// caller's read of the settings that name the executables a host may launch.
+    fn missing_runtime(
+        &self,
+        _transport: &McpTransport,
+        _configuration: &dyn crate::ports::storage::ConfigurationRead,
+    ) -> Option<String> {
         None
     }
     /// Drops the connection only when `still_off` answers true. A remote that serializes

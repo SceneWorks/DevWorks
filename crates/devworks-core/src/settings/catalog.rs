@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 9;
+pub const CATALOG_REVISION: i64 = 10;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -131,6 +131,8 @@ pub enum ValueKind {
     Instructions,
     /// Ordered unique model IDs.
     ModelList,
+    /// Unique executable command names (`[A-Za-z0-9_-]`, no paths), each resolved on PATH.
+    ExecutableNames,
     /// Explicit per-capability agent tool overrides. Missing IDs use their origin's default.
     ToolOverrides,
     /// Signed package index sources: at most 16 `{"location", "publicKey"}` objects, the
@@ -272,6 +274,10 @@ impl SettingDescriptor {
             ValueKind::Instructions => json!({"type": "string", "maxLength": 65536}),
             ValueKind::ModelList => json!({
                 "type": "array", "maxItems": 32, "uniqueItems": true,
+                "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+            }),
+            ValueKind::ExecutableNames => json!({
+                "type": "array", "maxItems": 64, "uniqueItems": true,
                 "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
             }),
             ValueKind::ToolOverrides => json!({
@@ -516,6 +522,45 @@ fn build() -> Vec<SettingDescriptor> {
             ValueKind::Bool,
             true,
             NextSafeStep
+        ),
+        setting!(
+            PROCESS_EXECUTABLES_KEY,
+            "Process executables",
+            "Command names that process tools, project dependency installs, container backends and local MCP servers may launch. Each name is looked up on PATH when it is first used and runs from its resolved real file; a program not named here cannot be selected wherever it is installed. The default covers the version control, build, package and container tools DevWorks itself runs. Shells and language runtimes run arbitrary code: access rules, approvals and command checks still decide what runs.",
+            Tools,
+            WORKSPACE,
+            ValueKind::ExecutableNames,
+            [
+                "git",
+                "sh",
+                "bash",
+                "make",
+                "cargo",
+                "rustc",
+                "node",
+                "npm",
+                "npx",
+                "pnpm",
+                "yarn",
+                "deno",
+                "bun",
+                "bunx",
+                "python3",
+                "python",
+                "uv",
+                "uvx",
+                "pipx",
+                "go",
+                "bundle",
+                "composer",
+                "java",
+                "dotnet",
+                "swift",
+                "docker",
+                "podman",
+                "container"
+            ],
+            NextAdmission
         ),
         setting!(
             "safety.accessProfile",
@@ -898,6 +943,8 @@ pub const LOG_MAX_RECORDS_KEY: &str = "diagnostics.logMaxRecords";
 pub const OVERLAY_RECORD_RETENTION_DAYS_KEY: &str = "indexing.overlayRecordRetentionDays";
 /// Ended ref overlays each repository keeps regardless of age.
 pub const OVERLAY_RECORDS_KEPT_KEY: &str = "indexing.overlayRecordsKept";
+/// Command names the host resolves on PATH for process, install, container and MCP launches.
+pub const PROCESS_EXECUTABLES_KEY: &str = "tools.processExecutables";
 /// Whether agents may use the shared web fetch tool.
 pub const WEB_FETCH_TOOLS_KEY: &str = "tools.webFetch";
 /// Explicit shared per-tool choices; missing IDs use origin-specific defaults.

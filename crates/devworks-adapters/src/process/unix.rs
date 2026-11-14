@@ -152,6 +152,9 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
         std::path::PathBuf::from(&spec.program)
     };
     let mut cmd = Command::new(program);
+    if let Some(arg0) = &spec.arg0 {
+        cmd.arg0(arg0);
+    }
     if spec.no_child_processes {
         // SAFETY: the child hook uses only credential/resource kernel calls and initialized
         // stack records; no locks, heap allocation or parent resource limits are changed.

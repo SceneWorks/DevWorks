@@ -7,6 +7,7 @@
 //! not an OS sandbox. The current authority policy requires an exact native exception under
 //! Project scope; its effective execution profile is still `Full`. No confined launcher is
 //! qualified, so `Project` and `Confined` are refused instead of silently upgraded.
+use super::executables::PathExecutables;
 use super::{
     LaunchPolicy, LaunchRefusal, LaunchRequest, OwnedProcess, ProcessSupervisor, StopOutcome,
 };
@@ -75,7 +76,11 @@ pub struct RegisteredCredential {
 
 #[derive(Clone, Debug, Default)]
 pub struct ToolBindings {
+    /// Explicit registrations: the registered path and its canonical file.
     executables: HashMap<String, (PathBuf, PathBuf)>,
+    /// Configured names resolved on PATH when first selected, optionally limited to a fixed
+    /// set (a container backend may select only its own CLI).
+    path_executables: Option<(Arc<PathExecutables>, Option<&'static [&'static str]>)>,
     roots: HashMap<String, RegisteredWorkingRoot>,
     credentials: HashMap<String, RegisteredCredential>,
 }
@@ -206,14 +211,68 @@ impl ToolBindings {
 
     /// A backend selector resolves only a host-registered executable, rechecking its exact
     /// target at dispatch. Missing runtimes remain unavailable; no PATH fallback occurs here.
+    /// Returns the canonical file to launch.
     pub fn resolve_named_executable(&self, name: &str) -> Result<String, BindingRefusal> {
-        let (path, target) = self
-            .executables
-            .get(name)
-            .ok_or(BindingRefusal::UnknownExecutable)?;
-        exact_file(path, target)
-            .map(|path| path.to_string_lossy().into_owned())
-            .ok_or(BindingRefusal::ChangedExecutable)
+        self.resolve_launch(name).map(|(program, _)| program)
+    }
+
+    /// The canonical file `name` selects and the path it was registered at, which the child
+    /// keeps as its argv\[0\], after rechecking that the path still resolves to that file.
+    pub fn resolve_launch(&self, name: &str) -> Result<(String, String), BindingRefusal> {
+        self.launch_of(self.executable(name, None))
+    }
+
+    /// Like [`Self::resolve_named_executable`] for a caller already inside a read: configured
+    /// names come from `configuration` (that caller's snapshot) instead of a second read.
+    pub fn resolve_named_executable_in(
+        &self,
+        name: &str,
+        configuration: &dyn crate::ports::storage::ConfigurationRead,
+    ) -> Result<String, BindingRefusal> {
+        self.launch_of(self.executable(name, Some(configuration)))
+            .map(|(program, _)| program)
+    }
+
+    fn launch_of(
+        &self,
+        executable: Option<(PathBuf, PathBuf)>,
+    ) -> Result<(String, String), BindingRefusal> {
+        let (path, target) = executable.ok_or(BindingRefusal::UnknownExecutable)?;
+        let program = exact_file(&path, &target).ok_or(BindingRefusal::ChangedExecutable)?;
+        Ok((
+            program.to_string_lossy().into_owned(),
+            path.to_string_lossy().into_owned(),
+        ))
+    }
+
+    /// Lets these bindings select the configured names in `registry` (all of them, or only
+    /// those in `only`). An explicit registration of the same name takes precedence.
+    pub fn with_path_executables(
+        mut self,
+        registry: Arc<PathExecutables>,
+        only: Option<&'static [&'static str]>,
+    ) -> Self {
+        self.path_executables = Some((registry, only));
+        self
+    }
+
+    fn executable(
+        &self,
+        name: &str,
+        configuration: Option<&dyn crate::ports::storage::ConfigurationRead>,
+    ) -> Option<(PathBuf, PathBuf)> {
+        if let Some(registered) = self.executables.get(name) {
+            return Some(registered.clone());
+        }
+        let (registry, only) = self.path_executables.as_ref()?;
+        if only.is_some_and(|only| !only.contains(&name)) {
+            return None;
+        }
+        match configuration {
+            Some(read) => registry.lookup_in(name, super::executables::configured_names(read).ok()),
+            None => registry.lookup(name),
+        }
+        .map(|resolved| (resolved.invoked_as, resolved.canonical))
     }
 
     /// Duplicate IDs fail closed; a host must never let registration order select an executable.
@@ -304,10 +363,7 @@ impl ToolBindings {
                 }
             }
         }
-        let executable = self
-            .executables
-            .get(input.executable_ref.as_str())
-            .ok_or(BindingRefusal::UnknownExecutable)?;
+        let (program, arg0) = self.resolve_launch(input.executable_ref.as_str())?;
         let root = self
             .roots
             .get(input.working_directory.root_id.as_str())
@@ -317,14 +373,13 @@ impl ToolBindings {
         {
             return Err(BindingRefusal::OutOfProject);
         }
-        let program =
-            exact_file(&executable.0, &executable.1).ok_or(BindingRefusal::ChangedExecutable)?;
         let root_path = exact_directory(&root.path).ok_or(BindingRefusal::ChangedRoot)?;
         let cwd = exact_directory(&root_path.join(&input.working_directory.relative.0))
             .filter(|p| p.starts_with(&root_path))
             .ok_or(BindingRefusal::ChangedRoot)?;
         Ok(NativeProcessSpec {
-            program: program.to_string_lossy().into_owned(),
+            program,
+            arg0: Some(arg0),
             args: input.args.0.iter().map(|x| x.0.clone()).collect(),
             cwd: Some(cwd),
             env: input
@@ -383,9 +438,34 @@ impl ToolBindings {
     }
 }
 
+/// The canonical file `path` still resolves to, when it is `target`, in the form a launch
+/// passes as the program.
 fn exact_file(path: &Path, target: &Path) -> Option<PathBuf> {
     let actual = path.canonicalize().ok()?;
-    (actual == target && actual.is_file()).then_some(path.to_path_buf())
+    (actual == target && actual.is_file()).then(|| launch_path(actual))
+}
+
+/// Windows canonical paths carry the verbatim `\\?\` prefix, which the child would see in
+/// its command line. A plain drive path short enough for the classic API means the same file,
+/// so it launches without the prefix; any other verbatim path is kept as it is.
+#[cfg(windows)]
+fn launch_path(canonical: PathBuf) -> PathBuf {
+    let text = canonical.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest)
+            if rest.len() < 260
+                && rest.as_bytes().get(1) == Some(&b':')
+                && rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) =>
+        {
+            PathBuf::from(rest)
+        }
+        _ => canonical,
+    }
+}
+
+#[cfg(not(windows))]
+fn launch_path(canonical: PathBuf) -> PathBuf {
+    canonical
 }
 
 fn exact_directory(path: &Path) -> Option<PathBuf> {
@@ -1824,14 +1904,7 @@ impl ProcessToolService {
             return Err(BindingRefusal::ScriptsRequired);
         }
         let command = install_command(&name, &root, &bytes, allow_scripts)?;
-        let program = command.program;
-        let executable = self
-            .bindings
-            .executables
-            .get(program)
-            .ok_or(BindingRefusal::UnknownExecutable)?;
-        let executable =
-            exact_file(&executable.0, &executable.1).ok_or(BindingRefusal::ChangedExecutable)?;
+        let (executable, arg0) = self.bindings.resolve_launch(command.program)?;
         let mut env = vec![
             (
                 "HOME".into(),
@@ -1843,7 +1916,7 @@ impl ProcessToolService {
             ),
             ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
         ];
-        if program == "cargo" {
+        if command.program == "cargo" {
             let rustup_home = std::env::var_os("RUSTUP_HOME")
                 .map(PathBuf::from)
                 .or_else(|| {
@@ -1864,7 +1937,8 @@ impl ProcessToolService {
         }
         Ok(InstallPlan {
             spec: NativeProcessSpec {
-                program: executable.to_string_lossy().into_owned(),
+                program: executable,
+                arg0: Some(arg0),
                 args: command.args,
                 cwd: Some(root),
                 env,
@@ -3459,7 +3533,15 @@ mod tests {
         let resolved = bindings
             .resolve(&spec("Full", false), Some(&project))
             .expect("authorized project root");
-        assert_eq!(resolved.program, executable.to_string_lossy());
+        // The canonical file launches; on Windows without the verbatim prefix.
+        assert_eq!(
+            resolved.program,
+            launch_path(executable.clone()).to_string_lossy()
+        );
+        assert_eq!(
+            resolved.arg0.as_deref(),
+            Some(&*executable.to_string_lossy())
+        );
         assert_eq!(
             resolved.cwd,
             Some(work.canonicalize().expect("canonical work"))

@@ -186,6 +186,18 @@ Shell commands.
 
 Allow agents the authorized process execution tools.
 
+## tools.processExecutables
+
+Process executables.
+
+- Default: `[ "git", "sh", "bash", "make", "cargo", "rustc", "node", "npm", "npx", "pnpm", "yarn", "deno", "bun", "bunx", "python3", "python", "uv", "uvx", "pipx", "go", "bundle", "composer", "java", "dotnet", "swift", "docker", "podman", "container" ]`
+- Scope: Workspace only
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Tools
+
+Command names that process tools, project dependency installs, container backends and local MCP servers may launch. Each name is looked up on PATH when it is first used and runs from its resolved real file; a program not named here cannot be selected wherever it is installed. The default covers the version control, build, package and container tools DevWorks itself runs. Shells and language runtimes run arbitrary code: access rules, approvals and command checks still decide what runs.
+
 ## safety.accessProfile
 
 Agent access.

@@ -107,12 +107,14 @@ pub fn missing_runtime_notice(executable: &str) -> String {
     match runtime_of(executable) {
         Some(runtime) => format!(
             "Runtime not found: `{executable}` ({runtime}) is not available on this computer. \
-             Install {runtime} and make `{executable}` available on PATH, then restart DevWorks \
-             and connect."
+             Install {runtime}, make `{executable}` available on PATH and list it under Process \
+             executables in Agent tools settings, then connect (restart DevWorks if you changed \
+             PATH)."
         ),
         None => format!(
-            "Runtime not found: `{executable}` is not available on this computer. Install it \
-             and make it available on PATH, then restart DevWorks and connect."
+            "Runtime not found: `{executable}` is not available on this computer. Install it, \
+             make it available on PATH and list it under Process executables in Agent tools \
+             settings, then connect (restart DevWorks if you changed PATH)."
         ),
     }
 }
