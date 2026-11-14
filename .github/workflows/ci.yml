@@ -264,9 +264,9 @@ jobs:
         if: runner.environment == 'self-hosted'
         shell: bash
         run: |
-          dir="$HOME/.cache/devworks-ci/$RUNNER_NAME/target-macos" # dev-host: allow-path devworks-mac runners run on Macs outside the dev-host root host set
+          dir="$HOME/.cache/devworks-ci/$RUNNER_NAME/target-macos" # dev-host: allow-path devworks-mac runners build DevWorks only and keep their own build folder (DW-282 decision)
           rm -rf "$dir/tmp"
-          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV" # dev-host: allow-path devworks-mac runners run on Macs outside the dev-host root host set
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV" # dev-host: allow-path devworks-mac runners build DevWorks only and keep their own build folder (DW-282 decision)
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH" # dev-host: allow-path rustup tool folder, not machine state
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
