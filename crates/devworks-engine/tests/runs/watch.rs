@@ -152,7 +152,7 @@ impl StreamingHttp for SharedWire {
 }
 
 /// The primary agent's session context, with a routed pin, as the first-context test builds it.
-fn agent_context(
+pub(super) fn agent_context(
     fx: &Fx,
 ) -> (
     InvocationContext,
@@ -279,7 +279,7 @@ fn route(fx: &Fx, session: &Id) {
     });
 }
 
-fn frame(mode: &str, op: &str, mut body: Value, key: &str) -> Vec<u8> {
+pub(super) fn frame(mode: &str, op: &str, mut body: Value, key: &str) -> Vec<u8> {
     body["kind"] = json!(op);
     let mut envelope = json!({"mode":mode,"protocol":"1.0-draft.1","schemaRevision":8,"body":body});
     if mode == "Command" {

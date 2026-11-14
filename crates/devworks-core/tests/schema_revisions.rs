@@ -832,3 +832,46 @@ fn a_wider_port_bind_is_an_explicit_revision_8_member_bound_into_the_request_dig
         wider.fingerprint.as_str()
     );
 }
+
+fn install_with_scripts(revision: Option<u64>, allow: Option<bool>) -> String {
+    let mut body = json!({"kind": "process.install_project_dependencies",
+        "repositoryId": "repository-a", "expectedRevision": "1",
+        "manifest": {"artifactId": "artifact-a", "versionId": "version-a",
+            "sha256": "a".repeat(64), "byteLength": "8", "mediaType": "application/json"},
+        "profile": "Full"});
+    if let Some(allow) = allow {
+        body["allowScripts"] = json!(allow);
+    }
+    let mut frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": "key-1",
+        "body": body});
+    if let Some(revision) = revision {
+        frame["schemaRevision"] = json!(revision);
+    }
+    frame.to_string()
+}
+
+#[test]
+fn allowing_install_scripts_is_an_explicit_revision_8_member_bound_into_the_request_digest() {
+    let op = "process.install_project_dependencies";
+    let plain = decode(op, Mode::Command, &install_with_scripts(None, None)).expect("revision 1");
+    assert!(!plain.normalized.to_string().contains("allowScripts"));
+    // An earlier revision refuses the member rather than ignoring it.
+    assert!(matches!(
+        decode(
+            op,
+            Mode::Command,
+            &install_with_scripts(Some(1), Some(true))
+        ),
+        Err(AdmissionError::Decode(_))
+    ));
+    let default = decode(op, Mode::Command, &install_with_scripts(Some(8), None)).expect("r8");
+    let allowed = decode(
+        op,
+        Mode::Command,
+        &install_with_scripts(Some(8), Some(true)),
+    )
+    .expect("r8 true");
+    assert_eq!(allowed.normalized["allowScripts"], json!(true));
+    // An approval of the request without scripts cannot cover the one that runs them.
+    assert_ne!(default.fingerprint.as_str(), allowed.fingerprint.as_str());
+}

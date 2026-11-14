@@ -1396,9 +1396,24 @@ fn native_search_cancel_reaches_owned_transport_and_keeps_unknown_custody_after_
     gate.block.store(true, SeqCst);
     h.get_by_role_and_label(Role::Button, "Search conventions")
         .click();
-    step_until(&mut h, "actual query body is in flight", |_| {
-        gate.entered.load(SeqCst)
+    step_until(&mut h, "actual query body is in flight", |s| {
+        gate.entered.load(SeqCst) && s.conventions.state().unwrap().active_search.is_some()
     });
+    // The frame that dispatched the search rendered before its action applied, so the gate can
+    // hold the read while the last accessibility tree still lacks the cancel button. Render one
+    // frame while the gate holds the request, then look for the button.
+    h.step();
+    assert!(
+        gate.block.load(SeqCst)
+            && !gate.cancelled.load(SeqCst)
+            && h.state()
+                .conventions
+                .state()
+                .unwrap()
+                .active_search
+                .is_some(),
+        "the search request is still held in flight"
+    );
     h.get_by_role_and_label(Role::Button, "Cancel search request")
         .scroll_to_me();
     for _ in 0..3 {

@@ -9707,12 +9707,16 @@
         "repository_id": "Id",
         "expected_revision": "Revision",
         "manifest": "ArtifactRef",
-        "profile": "ToolProfile"
+        "profile": "ToolProfile",
+        "allow_scripts": "?bool"
+      },
+      "since": {
+        "allow_scripts": 8
       },
       "result": "ProcessRecord",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Scoped project tooling only; changed lockfiles/manifest bound to operation and exposed as work evidence."
+      "rules": "Scoped project tooling only; changed lockfiles/manifest bound to operation and exposed as work evidence. The install runs with package lifecycle scripts disabled. Schema revision 8: allowScripts true runs them; the field is part of the request digest, and a non-human caller needs an approval of the exact request (or a reviewed native grant under Project scope)."
     },
     "process.request_system_install": {
       "operation": "process.request_system_install",
@@ -11553,6 +11557,10 @@
       8
     ],
     "containers.create": [
+      1,
+      8
+    ],
+    "process.install_project_dependencies": [
       1,
       8
     ],

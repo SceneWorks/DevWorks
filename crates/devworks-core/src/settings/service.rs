@@ -1343,3 +1343,27 @@ pub fn max_subagents(
             StorageError::InvalidRecord("effective subagent allowance is a positive integer".into())
         })
 }
+
+/// The workspace's context compaction threshold: the percentage of the routed model's context
+/// window at which an agent's context is compacted before its next provider request.
+pub fn compaction_threshold_percent(read: &dyn ConfigurationRead) -> Result<i64, StorageError> {
+    let source = effective_entries(
+        read,
+        &ConfigScope::Workspace,
+        &["agents.compactionThresholdPercent"],
+    )
+    .map_err(|error| match error {
+        Failure::Storage(error) => error,
+        _ => StorageError::InvalidRecord("effective compaction threshold".into()),
+    })?
+    .remove(0);
+    source
+        .value
+        .value
+        .0
+        .as_i64()
+        .filter(|n| (1..=100).contains(n))
+        .ok_or_else(|| {
+            StorageError::InvalidRecord("effective compaction threshold is a percentage".into())
+        })
+}
