@@ -4681,8 +4681,9 @@ fn every_schema_table_has_a_purge_record_kind() {
 /// name: they identify records only by `ProjectRecordKind`. A protocol family name that is
 /// also a table name (`"sessions"`), a JSON object member (`"operations":` when written,
 /// `["operations"]` when read), a path component (`.join("packages")`) and the desktop's
-/// persisted screen key (`Self::Instructions => "instructions"` in `ScreenId::key`, which
-/// names pending screen state, not a table) are other vocabularies and are not table names.
+/// persisted screen keys (`Self::Instructions => "instructions"` and the other arms of
+/// `ScreenId::key` in `screen.rs`, which name pending screen state, not a table) are other
+/// vocabularies and are not table names.
 #[test]
 fn purge_record_consumers_in_core_and_desktop_name_no_storage_table() {
     let families = devworks_core::registry::families();
@@ -4717,13 +4718,14 @@ fn purge_record_consumers_in_core_and_desktop_name_no_storage_table() {
                 continue;
             }
             checked += 1;
+            let screens = path.ends_with("devworks-desktop/src/screen.rs");
             for table in &tables {
                 if text.match_indices(table.as_str()).any(|(at, _)| {
                     let (before, after) = (&text[..at], &text[at + table.len()..]);
                     !after.starts_with(':')
                         && !(before.ends_with('[') && after.starts_with(']'))
                         && !before.ends_with(".join(")
-                        && !before.ends_with("Self::Instructions => ")
+                        && !(screens && screen_key_arm(before))
                 }) {
                     found.push(format!("{}: {table}", path.display()));
                 }
@@ -4732,4 +4734,14 @@ fn purge_record_consumers_in_core_and_desktop_name_no_storage_table() {
     }
     assert!(checked > 5, "the purge consumers were not found");
     assert!(found.is_empty(), "storage table names: {found:#?}");
+}
+
+/// Whether `before` ends with a `ScreenId::key` match arm, `Self::Name => `.
+fn screen_key_arm(before: &str) -> bool {
+    before
+        .strip_suffix(" => ")
+        .and_then(|arm| arm.rsplit_once("Self::"))
+        .is_some_and(|(_, name)| {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric())
+        })
 }
