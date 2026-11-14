@@ -896,9 +896,11 @@ pub fn route_context_head(
             | DomainDecision::NoChange {
                 result: OperationResult::RouterRoute { value },
             } => Ok(value),
+            // A recorded refusal replays under this stable request key until the head or pin
+            // changes, so repeating the same turn cannot reach a new routing decision.
             DomainDecision::Refused { fault } => Err(refused(
                 format!("agent route refused: {fault:?}"),
-                fault.retry,
+                RetryAdvice::Never,
             )),
             _ => Err(refused("agent route reply".into(), RetryAdvice::Never)),
         },
