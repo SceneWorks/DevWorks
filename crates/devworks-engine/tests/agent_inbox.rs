@@ -73,6 +73,101 @@ async fn waiting_inbox_cancels_without_a_held_writer() {
     assert_eq!(head, 0);
 }
 
+/// A rule refuses with its own target kind; a stored row the service cannot read is a storage
+/// fault, never the caller's invalid argument.
+#[test]
+fn agent_rules_refuse_with_their_target_and_a_corrupt_message_row_is_a_storage_fault() {
+    let harness = Harness::new();
+    let store = harness.open();
+    seed_root(&harness, "root-a");
+    let user = principal(store.as_ref(), "rules-user", PrincipalKind::Human);
+    let runs = Arc::new(ControlService::with_scope(
+        harness.ids.clone(),
+        Arc::new(ScriptedScope::new()),
+    ));
+    let cases = UseCases::new().with_agents(Arc::new(AgentService::new(harness.ids.clone(), runs)));
+    let authority = HostAuthority {
+        store: store.as_ref(),
+        clock: harness.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        authority: &authority,
+        store: store.as_ref(),
+        ids: harness.ids.as_ref(),
+    };
+    let command = |kind: &str, key: &str, body: serde_json::Value| {
+        let mut body = body.as_object().unwrap().clone();
+        body.insert("kind".into(), json!(kind));
+        let raw = serde_json::to_vec(&json!({
+            "protocol":"1.0-draft.1", "mode":"Command", "schemaRevision":7,
+            "requestKey":key, "body":body
+        }))
+        .unwrap();
+        cases.command(&gateway, &user, kind, &raw).unwrap()
+    };
+    let refusal = |reply: CommandReply<DomainDecision>| match reply {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Refused { fault } => (fault.code, fault.target_kind.map(|kind| kind.0)),
+            other => panic!("unexpected decision: {other:?}"),
+        },
+        other => panic!("unexpected reply: {other:?}"),
+    };
+    assert_eq!(
+        refusal(command(
+            "agents.post",
+            "rules-forged-session",
+            json!({"projectId":"project-a","body":"Hello","toHuman":true,
+                "sessionId":"another-session"}),
+        )),
+        (DomainErrorCode::PermissionDenied, Some("session".into()))
+    );
+    assert_eq!(
+        refusal(command(
+            "agents.receive",
+            "rules-zero-limit",
+            json!({"projectId":"project-a","limit":"101"}),
+        )),
+        (DomainErrorCode::InvalidArgument, Some("limit".into()))
+    );
+    let posted = command(
+        "agents.post",
+        "rules-post",
+        json!({"projectId":"project-a","body":"Kept message","toHuman":true}),
+    );
+    let message_id = match posted {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Applied {
+                result: OperationResult::AgentsPost { value },
+            } => value.message.id,
+            other => panic!("unexpected post decision: {other:?}"),
+        },
+        other => panic!("unexpected post reply: {other:?}"),
+    };
+    // No request the caller can send writes a negative creation time; this row is corrupt.
+    rusqlite::Connection::open(harness.root.join("workspace.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE agent_messages SET created_at=-1 WHERE id=?1",
+            [message_id.as_str()],
+        )
+        .unwrap();
+    let raw = serde_json::to_vec(&json!({
+        "protocol":"1.0-draft.1", "mode":"Query", "schemaRevision":7,
+        "queryId":"rules-history", "body":{"kind":"agents.history","projectId":"project-a"}
+    }))
+    .unwrap();
+    match cases
+        .query(&gateway, &user, "agents.history", &raw)
+        .unwrap()
+    {
+        DomainQueryReply::Rejected { fault, .. } => {
+            assert_eq!(fault.code, DomainErrorCode::StorageUnavailable, "{fault:?}");
+        }
+        other => panic!("unexpected history reply: {other:?}"),
+    }
+}
+
 #[test]
 fn selected_retained_post_uses_the_native_gateway_and_replays_its_receipt() {
     let harness = Harness::new();

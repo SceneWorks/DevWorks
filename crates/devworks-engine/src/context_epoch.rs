@@ -1,4 +1,5 @@
 //! Durable, explicit context changes. The old artifact and transcript remain immutable.
+use crate::turn_error::artifact_read_fault;
 use devworks_core::{
     context::InvocationContext,
     ports::{IdKind, storage::*},
@@ -55,7 +56,7 @@ pub(crate) fn verify_descendant(
 ) -> Result<(), StorageError> {
     let (_, provenance) = artifacts
         .read_exact(store, ctx, reference, 8 * 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?;
+        .map_err(artifact_read_fault)?;
     read_snapshot(store, &ReadOptions::default(), |read| {
         let version = read
             .artifacts()
@@ -144,7 +145,7 @@ pub(crate) fn current_source(
     })?;
     let (bytes, provenance) = artifacts
         .read_exact(store, ctx, source, 8 * 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?;
+        .map_err(artifact_read_fault)?;
     let tracked = matches!(
         provenance["derived"]["kind"].as_str(),
         Some(
@@ -160,7 +161,7 @@ pub(crate) fn current_source(
             crate::tool_turn::append_operation_updates(store, artifacts, ctx, session_id, source)?;
         let (bytes, provenance) = artifacts
             .read_exact(store, ctx, &latest, 8 * 1024 * 1024)
-            .map_err(|_| StorageError::ScopeDenied)?;
+            .map_err(artifact_read_fault)?;
         let derived = &provenance["derived"];
         if derived["binding"] != json!(binding) {
             return Err(StorageError::ScopeDenied);
