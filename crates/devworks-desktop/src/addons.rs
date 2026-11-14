@@ -872,28 +872,16 @@ pub fn describe(outcome: CommandOutcome) -> String {
     }
 }
 
+/// The picked bundle's SHA-256 and length, read through the same regular-file-only open as
+/// attachments: a FIFO, device or link is refused rather than blocked on or followed.
 fn hash_file(path: &std::path::Path) -> Result<(String, u64), String> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
-    let f =
-        std::fs::File::open(path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
-    let mut f = f.take(MAX_BUNDLE_FILE + 1);
-    let mut h = Sha256::new();
-    let mut buf = vec![0u8; 64 * 1024];
-    let mut n = 0u64;
-    loop {
-        let k = f.read(&mut buf).map_err(|e| e.to_string())?;
-        if k == 0 {
-            break;
+    crate::files::sha256_regular(path, MAX_BUNDLE_FILE).map_err(|e| match e.kind() {
+        std::io::ErrorKind::InvalidInput => {
+            format!("{} is not a regular file", path.display())
         }
-        n += k as u64;
-        h.update(&buf[..k]);
-    }
-    if n > MAX_BUNDLE_FILE {
-        return Err("the bundle is larger than 256 MiB".into());
-    }
-    let digest = h.finalize();
-    Ok((digest.iter().map(|b| format!("{b:02x}")).collect(), n))
+        std::io::ErrorKind::FileTooLarge => "the bundle is larger than 256 MiB".into(),
+        _ => format!("cannot read {}: {e}", path.display()),
+    })
 }
 
 /// Prepares the picked bundle's artifact frame without admitting effects. The shell retains
@@ -1147,5 +1135,51 @@ mod tests {
             state.borrow().2.last(),
             Some(AddonsAction::Configure { revision: 3, .. })
         ));
+    }
+
+    #[test]
+    fn a_picked_bundle_is_hashed_only_when_it_is_a_regular_file() {
+        let dir = std::env::temp_dir().join(format!("devworks-bundle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("pack.devworks");
+        std::fs::write(&file, b"abc").unwrap();
+        let (digest, len) = hash_file(&file).unwrap();
+        assert_eq!(len, 3);
+        assert!(digest.starts_with("ba7816bf"));
+        assert!(hash_file(&dir).unwrap_err().contains("regular"));
+        #[cfg(unix)]
+        {
+            // A link is refused, not followed.
+            std::os::unix::fs::symlink(&file, dir.join("link")).unwrap();
+            assert!(
+                hash_file(&dir.join("link"))
+                    .unwrap_err()
+                    .contains("regular")
+            );
+            // A FIFO without a writer would block a plain open forever.
+            let fifo = dir.join("fifo");
+            assert!(
+                std::process::Command::new("mkfifo")
+                    .arg(&fifo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let (tx, rx) = std::sync::mpsc::channel();
+            let f = fifo.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(hash_file(&f));
+            });
+            match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                Ok(r) => assert!(r.unwrap_err().contains("regular")),
+                Err(_) => {
+                    // Release the blocked reader before failing (failure-only bound).
+                    let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+                    panic!("hashing a FIFO blocked");
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
