@@ -8655,3 +8655,5 @@ mod compaction;
 
 #[path = "runs/epoch_request.rs"]
 mod epoch_request;
+#[path = "runs/failure_notifications.rs"]
+mod failure_notifications;
