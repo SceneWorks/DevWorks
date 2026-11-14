@@ -164,45 +164,59 @@ pub fn queue(
             Err(StorageError::ScopeDenied)
         };
     }
-    // The tool must still be a selected, verified contribution of the active version.
-    schemas
-        .tool(
-            ctx,
-            &ToolSchema {
-                capability_id: call.capability_id.clone(),
-                wire_name: "package_tool".into(),
-                input_schema: call.input_schema.clone(),
-            },
-        )
-        .map_err(|_| StorageError::ScopeDenied)?;
     let package_id = capability
         .split('/')
         .next()
         .ok_or(StorageError::ScopeDenied)?
         .to_owned();
-    let (active, fences) = read_snapshot(store, &ReadOptions::default(), |s| {
-        let active = s
-            .packages()
-            .package(&package_id)?
-            .and_then(|p| p.active_digest)
-            .ok_or(StorageError::ScopeDenied)?;
-        let policy = resolve_policy(s.configuration(), ctx.project_id())?;
-        let mut fences = vec![AuthorityFence::Policy {
-            project_id: ctx.project_id().cloned(),
-            digest: policy.digest(),
-        }];
-        if ctx.principal_kind() == PrincipalKind::Agent {
-            let binding = s
-                .authority()
-                .principal(ctx.principal())?
+    // The active version and the authority the tool is qualified under. Qualification runs
+    // between two reads of them; only an unchanged pair is recorded, so the pinned digest and
+    // fences are exactly the ones the tool was verified against.
+    let authority = || {
+        read_snapshot(store, &ReadOptions::default(), |s| {
+            let active = s
+                .packages()
+                .package(&package_id)?
+                .and_then(|p| p.active_digest)
                 .ok_or(StorageError::ScopeDenied)?;
-            fences.push(AuthorityFence::Principal {
-                actor: ctx.principal().clone(),
-                revision: binding.revision,
-            });
+            let policy = resolve_policy(s.configuration(), ctx.project_id())?;
+            let mut fences = vec![AuthorityFence::Policy {
+                project_id: ctx.project_id().cloned(),
+                digest: policy.digest(),
+            }];
+            if ctx.principal_kind() == PrincipalKind::Agent {
+                let binding = s
+                    .authority()
+                    .principal(ctx.principal())?
+                    .ok_or(StorageError::ScopeDenied)?;
+                fences.push(AuthorityFence::Principal {
+                    actor: ctx.principal().clone(),
+                    revision: binding.revision,
+                });
+            }
+            Ok((active, fences))
+        })
+    };
+    let mut verified = None;
+    for _ in 0..3 {
+        let before = authority()?;
+        // The tool must be a selected, verified contribution of the active version.
+        schemas
+            .tool(
+                ctx,
+                &ToolSchema {
+                    capability_id: call.capability_id.clone(),
+                    wire_name: "package_tool".into(),
+                    input_schema: call.input_schema.clone(),
+                },
+            )
+            .map_err(|_| StorageError::ScopeDenied)?;
+        if authority()? == before {
+            verified = Some(before);
+            break;
         }
-        Ok((active, fences))
-    })?;
+    }
+    let (active, fences) = verified.ok_or(StorageError::ScopeDenied)?;
     let request = Request {
         package_id,
         contribution_id: capability,
@@ -239,10 +253,15 @@ fn record(
             Err(StorageError::ScopeDenied)
         };
     }
+    let active = tx
+        .packages()
+        .package(&request.package_id)?
+        .and_then(|p| p.active_digest);
     if tx.store().store_id != *ctx.store_id()
         || tx.store().restore_epoch != ctx.restore_epoch().get()
         || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
         || !devworks_core::authority::fences_hold(tx, &request.fences)?
+        || active.as_deref() != Some(request.digest.as_str())
     {
         return Err(StorageError::ScopeDenied);
     }

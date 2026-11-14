@@ -1816,12 +1816,19 @@ pub(crate) fn dispatch_one(
         && crate::package_tools::is_package_tool(store, call.capability_id.as_str())
     {
         // A package tool runs as its own durable operation; the response records it accepted.
-        let operation_id = crate::package_tools::queue(store, schemas, ctx, session_id, &call)?;
+        // The dispatch marker commits first: once the operation is runnable, a cancellation can
+        // no longer record the call cancelled before dispatch.
         mark_dispatch_started(store, ctx, session_id, key, cancellation)?;
-        accepted(
-            serde_json::to_vec(&json!({"operationId": operation_id})).map_err(invalid)?,
-            operation_id,
-        )
+        match crate::package_tools::queue(store, schemas, ctx, session_id, &call) {
+            Ok(operation_id) => accepted(
+                serde_json::to_vec(&json!({"operationId": operation_id})).map_err(invalid)?,
+                operation_id,
+            ),
+            // Not a selected, verified tool of the active version: nothing was queued.
+            Err(StorageError::ScopeDenied) => failed("package_tool_unavailable"),
+            // Recovery queues the same call again under its stable operation identity.
+            Err(error) => return Err(error),
+        }
     } else {
         let result = match selected_builtin(schemas, &call) {
             Ok((descriptor, mode, revision)) => {
