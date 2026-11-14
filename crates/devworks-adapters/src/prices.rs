@@ -130,6 +130,14 @@ fn decimal(cell: &str) -> Result<Option<String>, PriceFetchError> {
     Ok(Some(value.to_owned()))
 }
 
+/// The page's one definition of OpenAI's short and long context bands.
+fn openai_context_threshold(text: &str) -> Result<i64, PriceFetchError> {
+    if !text.contains("Short context: ≤272K input tokens. Long context: >272K input tokens.") {
+        return Err(changed("missing context threshold"));
+    }
+    Ok(272_000)
+}
+
 type ModelContext = (Vec<String>, Option<i64>, Option<i64>);
 fn anthropic_models(cell: &str) -> Result<ModelContext, PriceFetchError> {
     let text = plain(cell);
@@ -200,6 +208,10 @@ pub fn parse_catalog(
             | "image generation models"
             | "transcription models"
             | "gpt-live sessions"
+            | "audio"
+            | "gpt-live"
+            | "realtime & audio"
+            | "transcription"
             | "specialized models" => "Standard",
             _ => service,
         };
@@ -249,7 +261,7 @@ pub fn parse_catalog(
                 OfficialPriceProvider::Anthropic => anthropic_models(row[model_col])?,
                 OfficialPriceProvider::OpenAi => {
                     let value = plain(row[model_col]);
-                    let model = value.split(" (").next().unwrap_or(&value);
+                    let (model, qualifier) = value.split_once(" (").unwrap_or((&value, ""));
                     if model.is_empty()
                         || !model
                             .bytes()
@@ -257,7 +269,14 @@ pub fn parse_catalog(
                     {
                         return Err(changed("unrecognized OpenAI model identity"));
                     }
-                    (vec![model.to_owned()], None, None)
+                    // A model cell may name the context band its row prices, using the same
+                    // short/long context terms the page defines once.
+                    let (lower, upper) = match qualifier {
+                        "short context)" => (None, Some(openai_context_threshold(text)?)),
+                        "long context)" => (Some(openai_context_threshold(text)?), None),
+                        _ => (None, None),
+                    };
+                    (vec![model.to_owned()], lower, upper)
                 }
             };
             let modality = headers
@@ -270,12 +289,7 @@ pub fn parse_catalog(
             for (col, header) in headers.iter().enumerate() {
                 let h = header.to_ascii_lowercase();
                 let (lower, upper) = if h.starts_with("short context ") {
-                    if !text.contains(
-                        "Short context: ≤272K input tokens. Long context: >272K input tokens.",
-                    ) {
-                        return Err(changed("missing context threshold"));
-                    }
-                    (None, Some(272_000))
+                    (None, Some(openai_context_threshold(text)?))
                 } else if h.starts_with("long context ") {
                     (Some(272_000), None)
                 } else {
@@ -429,6 +443,72 @@ mod tests {
         );
         assert_eq!(parsed.source_digest.len(), 64);
         assert_eq!(parsed.fetched_at_ms, 17);
+    }
+
+    /// The live Specialized models table: one row per context band, named in the model cell.
+    const BANDED_ROWS: &str = "# Pricing\nPrices per 1M tokens.\nShort context: ≤272K input tokens. Long context: >272K input tokens.\n### Grouped Pricing Table data\n| Category | Model | Input | Output | Cached input | 30m write |\n| --- | --- | --- | --- | --- | --- |\n| Cyber | gpt-unit (short context) | $20.00 | $100.00 | $2.00 | $25.00 |\n| Cyber | gpt-unit (long context) | $40.00 | $150.00 | $4.00 | - |\n| Cyber | gpt-unit-preview (short context) | $12.50 | $75.00 | - | - |\n| Cyber | gpt-unit-preview (long context) | - | - | - | - |\n";
+    #[test]
+    fn model_cell_context_bands_are_distinct_tariffs_and_conflicts_in_a_band_are_refused() {
+        let parsed =
+            parse_catalog(OfficialPriceProvider::OpenAi, BANDED_ROWS.as_bytes(), 0).unwrap();
+        let mut rows = parsed
+            .tariffs
+            .iter()
+            .map(|r| {
+                (
+                    r.upstream_model_id.as_str(),
+                    r.context_lower_exclusive,
+                    r.context_upper_inclusive,
+                    r.charge_kind.as_str(),
+                    r.amount_usd.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        rows.sort();
+        let short = Some(272_000);
+        assert_eq!(
+            rows,
+            [
+                ("gpt-unit", None, short, "CacheRead", "2.00"),
+                ("gpt-unit", None, short, "CacheWrite", "25.00"),
+                ("gpt-unit", None, short, "Input", "20.00"),
+                ("gpt-unit", None, short, "Output", "100.00"),
+                ("gpt-unit", short, None, "CacheRead", "4.00"),
+                ("gpt-unit", short, None, "Input", "40.00"),
+                ("gpt-unit", short, None, "Output", "150.00"),
+                ("gpt-unit-preview", None, short, "Input", "12.50"),
+                ("gpt-unit-preview", None, short, "Output", "75.00"),
+            ]
+        );
+        for bad in [
+            // Two different prices for the same model, band and charge.
+            BANDED_ROWS.replace("gpt-unit (long context)", "gpt-unit (short context)"),
+            // A band the page no longer defines.
+            BANDED_ROWS.replace("Short context: ≤272K", "Short context: ≤128K"),
+        ] {
+            assert!(
+                parse_catalog(OfficialPriceProvider::OpenAi, bad.as_bytes(), 0).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn audio_sections_after_a_batch_table_are_standard_rates() {
+        let source = "# Pricing\nPrices per 1M tokens.\n| Model | Input | Output |\n| --- | --- | --- |\n| gpt-test | $1 | $2 |\nBatch\n| Model | Input | Output |\n| --- | --- | --- |\n| gpt-test | $0.50 | $1 |\nAudio\nGPT-Live\n| Model | Price per minute |\n| --- | --- |\n| gpt-live-test | $0.05 |\nRealtime & Audio\n| Model | Modality | Input | Output |\n| --- | --- | --- | --- |\n| gpt-realtime-test | Audio | $32.00 | $64.00 |\nTranscription\n| Model | Use case | Input | Output |\n| --- | --- | --- | --- |\n| gpt-transcribe-test | Transcription | $2.50 | $10.00 |\n";
+        let parsed = parse_catalog(OfficialPriceProvider::OpenAi, source.as_bytes(), 0).unwrap();
+        for model in ["gpt-live-test", "gpt-realtime-test", "gpt-transcribe-test"] {
+            let tiers = parsed
+                .tariffs
+                .iter()
+                .filter(|r| r.upstream_model_id == model)
+                .map(|r| r.service_tier.as_str())
+                .collect::<Vec<_>>();
+            assert!(
+                !tiers.is_empty() && tiers.iter().all(|t| *t == "Standard"),
+                "{model}: {tiers:?}"
+            );
+        }
     }
 
     #[test]
