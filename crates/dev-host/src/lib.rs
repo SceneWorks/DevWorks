@@ -11,12 +11,18 @@
 //!   folder variables for the current worktree.
 //! - `cargo`: a backstop shim that refuses unsafe builds and fills in `CARGO_TARGET_DIR`
 //!   ([`shim`]).
+//! - `cleanup`: deletes idle and over-budget entries under the root, never anything in use
+//!   ([`cleanup`]).
+//! - `guard`: fails on new hardcoded machine paths and on agent docs that lack the dev-host
+//!   items ([`guard`]).
 //!
 //! Per-host values come from the environment and the optional `dev-host.conf` under the root
 //! ([`config`]); the source holds no host names or paths.
 
 pub mod check;
+pub mod cleanup;
 pub mod config;
+pub mod guard;
 pub mod plan;
 pub mod shim;
 pub mod slots;

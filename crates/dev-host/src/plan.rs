@@ -38,6 +38,8 @@ pub struct Request {
     pub target: Option<String>,
     pub session: Option<String>,
     pub slots: Option<u32>,
+    /// Mark this worktree's slot warm (reassigned and evicted last).
+    pub warm: bool,
 }
 
 /// What a build key is made of.
@@ -236,6 +238,7 @@ pub fn target_dir(root: &Path, vars: &Vars, cwd: &Path, req: &Request) -> Result
         &worktree.to_string_lossy(),
         cap,
         now(),
+        req.warm,
         &slots::CargoLockProbe,
     )
 }
