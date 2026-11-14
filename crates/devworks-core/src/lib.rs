@@ -3,13 +3,14 @@
 //!
 //! # Boundary rationale (ARCH-07, ARCH-08)
 //!
-//! * **Dependencies point inward.** Core depends only on serde, serde_json, schemars, sha2 and
-//!   the WHATWG URL parser (`url`, for the web tools' egress decisions; it parses, it never
-//!   connects). It has no UI, database-driver, HTTP or async-runtime dependency; persistence, authority,
-//!   clocks and identifiers are reached through the object-safe `Send + Sync` traits in [`ports`].
-//!   `devworks-adapters::storage::sqlite` implements [`ports::storage`]; [`authority::HostAuthority`]
-//!   is the host authority port over those records; tests replace both with deterministic
-//!   substitutes. There is no global mutable state.
+//! * **Dependencies point inward.** Core depends only on serde, serde_json, schemars, semver,
+//!   sha2, regex, base64, jiff, num-rational and the WHATWG URL parser (`url`, for the web tools'
+//!   egress decisions; it parses, it never connects), plus `libc` on Unix for non-blocking file
+//!   opens. It has no UI, database-driver, HTTP or async-runtime dependency; persistence,
+//!   authority, clocks and identifiers are reached through the object-safe `Send + Sync` traits
+//!   in [`ports`]. `devworks-adapters::storage::sqlite` implements [`ports::storage`];
+//!   [`authority::HostAuthority`] is the host authority port over those records; tests replace
+//!   both with deterministic substitutes. There is no global mutable state.
 //! * **One admission path (ARCH-02).** [`gateway::Gateway`] is the only way to reach a use case:
 //!   handlers receive [`gateway::AdmittedQuery`]/[`gateway::AdmittedCommand`], which only the
 //!   gateway can construct after strict framing, version, selected-operation/mode, typed decode,
@@ -25,7 +26,7 @@
 //! * **Per-family modules.** [`operations`] has one module per catalog family with that family's
 //!   typed inputs; shared domain records live in [`protocol::records`]. Both, the result union
 //!   and the registry are generated from the recorded `domain-spec.json`/`family-coverage.json`
-//!   by `tools/core-codegen/generate.py` so the 353 bindings cannot drift from the register.
+//!   by `tools/core-codegen/generate.py` so the 376 bindings cannot drift from the register.
 //! * **Pure where possible.** [`admission`] is pure; [`framing`], [`jcs`] and [`fingerprint`]
 //!   are deterministic functions. The gateway sequences ports but holds no state.
 //!
