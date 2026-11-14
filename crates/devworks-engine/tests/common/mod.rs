@@ -57,6 +57,12 @@ impl Clock for TestClock {
     }
 }
 pub struct TestIds(AtomicU64);
+impl TestIds {
+    /// Identifiers issued so far; durable work such as each Help topic allocates new ones.
+    pub fn issued(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+}
 impl IdSource for TestIds {
     fn next_id(&self, kind: IdKind) -> Id {
         let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
@@ -199,13 +205,90 @@ pub fn assert_no_growth(path: &str, small: StoreWork, large: StoreWork) {
     );
 }
 
+const HANG_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+
+thread_local! {
+    /// Time this thread has spent in [`DurableWork`] phases: finished total, and the start of
+    /// the running phase.
+    static DURABLE_WORK: std::cell::Cell<(std::time::Duration, Option<std::time::Instant>)> =
+        const { std::cell::Cell::new((std::time::Duration::ZERO, None)) };
+}
+fn durable_work_elapsed() -> std::time::Duration {
+    DURABLE_WORK.with(|cell| {
+        let (finished, running) = cell.get();
+        finished + running.map_or(std::time::Duration::ZERO, |since| since.elapsed())
+    })
+}
+
 /// Failure-only guard for a test body whose regression mode is a hang (it awaits a signal that
 /// only arrives if the code under test works). It never orders anything: a passing run finishes
-/// long before it, and on expiry it fails the test instead of leaving it hung.
+/// long before it, and on expiry it fails the test instead of leaving it hung. Time the body
+/// spends in a [`DurableWork`] phase is not counted: that phase has its own stall guard.
 pub async fn within<F: std::future::Future>(what: &str, body: F) -> F::Output {
-    match tokio::time::timeout(std::time::Duration::from_secs(30), body).await {
-        Ok(output) => output,
-        Err(_) => panic!("{what}: did not finish within 30 s; the awaited signal never arrived"),
+    let started = std::time::Instant::now();
+    let excused = durable_work_elapsed();
+    let mut body = std::pin::pin!(body);
+    loop {
+        let budget = HANG_BUDGET + (durable_work_elapsed() - excused);
+        let left = budget.saturating_sub(started.elapsed());
+        if left.is_zero() {
+            panic!("{what}: did not finish within 30 s; the awaited signal never arrived");
+        }
+        if let Ok(output) = tokio::time::timeout(left, body.as_mut()).await {
+            return output;
+        }
+    }
+}
+
+/// Guards a wait on startup work whose length is a count of durable commits, such as native Help
+/// generation (about 650 SQLite commits and 550 artifact flushes). On macOS each of those is an
+/// `F_FULLFSYNC`, about 4 ms on an idle Apple SSD and slower for every other process flushing the
+/// same drive, so no fixed bound fits. While the phase lives, [`within`] does not count its time;
+/// instead [`DurableWork::check`] fails the test once `progress` (for example
+/// [`TestIds::issued`]) stops advancing for 30 s.
+pub struct DurableWork<F: FnMut() -> u64> {
+    what: &'static str,
+    progress: F,
+    seen: u64,
+    progressed: std::time::Instant,
+}
+impl<F: FnMut() -> u64> DurableWork<F> {
+    pub fn start(what: &'static str, mut progress: F) -> Self {
+        DURABLE_WORK.with(|cell| {
+            let (finished, running) = cell.get();
+            assert!(running.is_none(), "{what}: durable-work phases do not nest");
+            cell.set((finished, Some(std::time::Instant::now())));
+        });
+        Self {
+            what,
+            seen: progress(),
+            progress,
+            progressed: std::time::Instant::now(),
+        }
+    }
+    /// Call on every poll of the wait.
+    pub fn check(&mut self) {
+        let now = (self.progress)();
+        if now != self.seen {
+            self.seen = now;
+            self.progressed = std::time::Instant::now();
+        } else if self.progressed.elapsed() >= HANG_BUDGET {
+            panic!(
+                "{}: no progress for 30 s; the awaited startup work stalled",
+                self.what
+            );
+        }
+    }
+}
+impl<F: FnMut() -> u64> Drop for DurableWork<F> {
+    fn drop(&mut self) {
+        DURABLE_WORK.with(|cell| {
+            let (finished, running) = cell.get();
+            cell.set((
+                finished + running.map_or(std::time::Duration::ZERO, |since| since.elapsed()),
+                None,
+            ));
+        });
     }
 }
 
