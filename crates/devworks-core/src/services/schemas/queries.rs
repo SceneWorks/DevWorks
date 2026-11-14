@@ -10,10 +10,10 @@ use crate::{
         data::{DataScope, ViewSelection},
         records::*,
         results::OperationResult,
-        support::{BoundedList, BoundedText, Page},
+        support::Page,
     },
     services::{
-        cursor::CursorBinding,
+        cursor::{self, CursorBinding},
         sessions::{Failure, Refusal, query_fault, rev},
     },
 };
@@ -45,48 +45,33 @@ fn binding<T: Serialize>(
         revision,
     ))
 }
-fn after(page: &PageRequest, binding: &CursorBinding) -> Result<Option<Id>, StorageError> {
-    page.cursor
-        .as_ref()
-        .map(|c| {
-            binding
-                .decode(&c.0)
-                .and_then(|s| Id::new(s).map_err(|_| StorageError::CursorExpired))
-        })
-        .transpose()
-}
-fn page<T: Serialize>(
-    mut rows: Vec<T>,
-    limit: usize,
+/// One schema metadata page: rows after the cursor through the shared pager, mapped to their
+/// wire form and clipped to the response frame.
+fn page<S, T: Serialize, E: From<StorageError>>(
     binding: &CursorBinding,
+    request: &PageRequest,
+    mut fetch: impl FnMut(Option<&Id>, u16) -> Result<Vec<S>, StorageError>,
+    stored_id: impl Fn(&S) -> &Id,
+    wire: impl FnMut(S) -> Result<T, E>,
     id: impl Fn(&T) -> &Id,
-) -> Result<Page<T>, StorageError> {
-    let mut retained = 0;
-    let mut bytes = 0;
-    for row in rows.iter().take(limit) {
-        let size = serde_json::to_vec(row).map_err(invalid)?.len() + 1;
-        if bytes + size > crate::framing::MAX_FRAME_BYTES - 16_384 {
-            break;
-        }
-        retained += 1;
-        bytes += size;
-    }
-    if !rows.is_empty() && retained == 0 {
-        return Err(invalid("schema metadata row exceeds response bound"));
-    }
-    let more = retained < rows.len();
-    rows.truncate(retained);
-    let cursor = if more {
-        rows.last()
-            .map(|r| BoundedText(binding.encode(id(r).as_str())))
-    } else {
-        None
-    };
-    Ok(Page {
-        items: BoundedList(rows),
-        next_cursor: cursor,
-        has_more: more,
-    })
+) -> Result<Page<T>, E> {
+    let rows = cursor::page(
+        binding,
+        request,
+        |after, n| {
+            let after = after
+                .map(|s| Id::new(s).map_err(|_| StorageError::CursorExpired))
+                .transpose()?;
+            fetch(after.as_ref(), n)
+        },
+        |r| stored_id(r).as_str().to_owned(),
+    )?;
+    Ok(rows
+        .try_map(wire)?
+        .clip_to_frame(binding, crate::framing::MAX_FRAME_BYTES - 16_384, |r| {
+            id(r).as_str().to_owned()
+        })?
+        .into_page())
 }
 fn view(
     read: &dyn ReadSnapshot,
@@ -139,49 +124,20 @@ impl SchemaService {
         let visibility = access::visibility(read, ctx, &input.scope)?;
         let revision = read.schemas().schema_inventory_revision()?;
         let binding = binding(ctx, "schemas.connections", input, revision, "")?;
-        let after = after(&input.page, &binding)?;
-        let n = input.page.limit.get() as u16;
-        // Storage's visibility selection is before LIMIT. Fetch one bounded successor separately
-        // when the legal requested page already occupies all 500 wire rows.
-        let rows = read
-            .schemas()
-            .schema_sources(&visibility, after.as_ref(), n)?;
-        let last = rows.last().map(|r| r.connection.id.clone());
-        let more = if let Some(last) = last.as_ref() {
-            !read
-                .schemas()
-                .schema_sources(&visibility, Some(last), 1)?
-                .is_empty()
-        } else {
-            false
-        };
-        let mut result = page(
-            rows.iter()
-                .map(|r| {
-                    let mut row = access::project(r, &visibility);
-                    row.read_view = super::pins::projection(
-                        read,
-                        ctx,
-                        &input.scope,
-                        r,
-                        prepared,
-                        self.clock.now_ms().get(),
-                    )?;
-                    Ok(row)
-                })
-                .collect::<Result<Vec<_>, Failure>>()?,
-            usize::from(n),
+        let now = self.clock.now_ms().get();
+        let result = page(
             &binding,
+            &input.page,
+            |after, n| read.schemas().schema_sources(&visibility, after, n),
+            |r| &r.connection.id,
+            |r| {
+                let mut row = access::project(&r, &visibility);
+                row.read_view =
+                    super::pins::projection(read, ctx, &input.scope, &r, prepared, now)?;
+                Ok::<_, Failure>(row)
+            },
             |r: &SchemaConnection| &r.id,
         )?;
-        if more && !result.has_more {
-            result.has_more = true;
-            result.next_cursor = result
-                .items
-                .0
-                .last()
-                .map(|r| BoundedText(binding.encode(r.id.as_str())));
-        }
         Ok((
             OperationResult::SchemasConnections { value: result },
             revision,
@@ -284,7 +240,6 @@ impl QueryHandler for SchemaService {
                         source.configuration_revision
                     ),
                 )?;
-                let after = after(&input.page, &binding)?;
                 let filter = SchemaObjectFilter {
                     object_id: input.object_id.clone(),
                     kinds: input
@@ -302,27 +257,14 @@ impl QueryHandler for SchemaService {
                     parent_id: input.parent_id.clone(),
                     text: input.text.as_ref().map(|t| t.0.clone()),
                 };
-                let n = input.page.limit.get() as u16;
-                let rows = read
-                    .schemas()
-                    .schema_objects(&view.id, &filter, after.as_ref(), n)?;
-                let more = if let Some(last) = rows.last() {
-                    !read
-                        .schemas()
-                        .schema_objects(&view.id, &filter, Some(&last.id), 1)?
-                        .is_empty()
-                } else {
-                    false
-                };
-                let mut result = page(rows, usize::from(n), &binding, |r: &SchemaObject| &r.id)?;
-                if more && !result.has_more {
-                    result.has_more = true;
-                    result.next_cursor = result
-                        .items
-                        .0
-                        .last()
-                        .map(|r| BoundedText(binding.encode(r.id.as_str())));
-                }
+                let result = page(
+                    &binding,
+                    &input.page,
+                    |after, n| read.schemas().schema_objects(&view.id, &filter, after, n),
+                    |r: &SchemaObject| &r.id,
+                    Ok::<_, StorageError>,
+                    |r: &SchemaObject| &r.id,
+                )?;
                 Ok((OperationResult::SchemasObjects { value: result }, revision))
             }
             OperationInput::Schemas(ops::Input::Relationships(input)) => {
@@ -341,31 +283,17 @@ impl QueryHandler for SchemaService {
                         source.configuration_revision
                     ),
                 )?;
-                let after = after(&input.page, &binding)?;
-                let n = input.page.limit.get() as u16;
-                let rows = read.schemas().schema_relations(
-                    &view.id,
-                    &input.object_ids.0,
-                    after.as_ref(),
-                    n,
+                let result = page(
+                    &binding,
+                    &input.page,
+                    |after, n| {
+                        read.schemas()
+                            .schema_relations(&view.id, &input.object_ids.0, after, n)
+                    },
+                    |r: &SchemaRelation| &r.id,
+                    Ok::<_, StorageError>,
+                    |r: &SchemaRelation| &r.id,
                 )?;
-                let more = if let Some(last) = rows.last() {
-                    !read
-                        .schemas()
-                        .schema_relations(&view.id, &input.object_ids.0, Some(&last.id), 1)?
-                        .is_empty()
-                } else {
-                    false
-                };
-                let mut result = page(rows, usize::from(n), &binding, |r: &SchemaRelation| &r.id)?;
-                if more && !result.has_more {
-                    result.has_more = true;
-                    result.next_cursor = result
-                        .items
-                        .0
-                        .last()
-                        .map(|r| BoundedText(binding.encode(r.id.as_str())));
-                }
                 Ok((
                     OperationResult::SchemasRelationships { value: result },
                     revision,
