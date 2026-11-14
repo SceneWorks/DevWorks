@@ -35,6 +35,29 @@ jobs:
           IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: bash tools/ci/pick-mac-runners.sh
 
+  # Pull requests run only the test partitions their changed crates can affect
+  # (tools/ci/test-scope.sh); pushes to main run every partition.
+  test_scope:
+    name: test scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+      foundation: ${{ steps.scope.outputs.foundation }}
+      engine: ${{ steps.scope.outputs.engine }}
+      packages: ${{ steps.scope.outputs.packages }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # A pull_request checkout is the PR's merge commit; HEAD^1 is its base.
+          fetch-depth: 2
+      - name: Test the scope rules
+        run: bash tools/ci/test_test_scope.sh
+      - id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: bash tools/ci/test-scope.sh
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
@@ -124,6 +147,8 @@ jobs:
 
   ubuntu_foundation:
     name: test (ubuntu-foundation)
+    needs: test_scope
+    if: ${{ !cancelled() && needs.test_scope.outputs.foundation != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -158,6 +183,8 @@ jobs:
 
   ubuntu_engine:
     name: test (ubuntu-engine)
+    needs: test_scope
+    if: ${{ !cancelled() && needs.test_scope.outputs.engine != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -175,31 +202,38 @@ jobs:
 
   ubuntu_complete:
     name: test (ubuntu-latest)
-    needs: [ubuntu_foundation, ubuntu_desktop, ubuntu_engine]
+    needs: [test_scope, ubuntu_foundation, ubuntu_desktop, ubuntu_engine]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require all three complete ubuntu partitions
+      - name: Require every ubuntu partition the test scope selected
         run: |
           set -eu
-          test "${{ needs.ubuntu_foundation.result }}" = success
+          # A partition passes, or was skipped because the test scope left it out.
+          passed() { [ "$1" = success ] || { [ "$1" = skipped ] && [ "$2" = false ]; }; }
+          test "${{ needs.test_scope.result }}" = success
+          passed "${{ needs.ubuntu_foundation.result }}" "${{ needs.test_scope.outputs.foundation }}"
           test "${{ needs.ubuntu_desktop.result }}" = success
-          test "${{ needs.ubuntu_engine.result }}" = success
+          passed "${{ needs.ubuntu_engine.result }}" "${{ needs.test_scope.outputs.engine }}"
 
   # GitHub runs at most five hosted macOS jobs at a time for the whole organization, so each PR
-  # gets one macOS job: one build, clippy, then every workspace test through cargo-nextest.
+  # gets one macOS job: one build, clippy, then the workspace tests the test scope selected,
+  # through cargo-nextest.
   # Required checks keep their names: this job reports "test (macos-latest)" and the Ubuntu job
   # below reports "clippy (macos-latest)" from this job's clippy step.
   macos:
     name: test (macos-latest)
-    needs: pick_mac_runners
+    needs: [pick_mac_runners, test_scope]
     if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON(needs.pick_mac_runners.outputs.macos || '"macos-latest"') }}
     timeout-minutes: 90
     env:
-      # Several runners share one Mac; more test threads time out Help and startup tests.
-      NEXTEST_TEST_THREADS: "3"
+      # Each self-hosted Mac runner is configured for 4 threads; more test threads than that
+      # time out Help and startup tests.
+      NEXTEST_TEST_THREADS: "4"
+      # The packages the test scope selected; every package when it did not run.
+      PACKAGES: ${{ needs.test_scope.outputs.packages || '--workspace' }}
     outputs:
       clippy: ${{ steps.clippy.outcome }}
     steps:
@@ -248,18 +282,25 @@ jobs:
         env:
           RAMDISK_MIB: "4096"
       - name: Build tests
-        run: cargo nextest run --workspace --locked --no-run
+        shell: bash
+        run: |
+          read -ra packages <<<"$PACKAGES"
+          cargo nextest run "${packages[@]}" --locked --no-run
       - name: Clippy
         id: clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Run workspace tests
         if: ${{ !cancelled() }}
         shell: bash
-        run: TMPDIR="$TEST_TMPDIR" cargo nextest run --workspace --locked --no-fail-fast
+        run: |
+          read -ra packages <<<"$PACKAGES"
+          TMPDIR="$TEST_TMPDIR" cargo nextest run "${packages[@]}" --locked --no-fail-fast
       - name: Run doctests
         if: ${{ !cancelled() }}
         shell: bash
-        run: TMPDIR="$TEST_TMPDIR" cargo test --workspace --doc --locked
+        run: |
+          read -ra packages <<<"$PACKAGES"
+          TMPDIR="$TEST_TMPDIR" cargo test "${packages[@]}" --doc --locked
       - name: Release the RAM disk
         if: ${{ always() }}
         shell: bash
@@ -281,6 +322,8 @@ jobs:
 
   windows_foundation:
     name: test (windows-foundation)
+    needs: test_scope
+    if: ${{ !cancelled() && needs.test_scope.outputs.foundation != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -358,6 +401,8 @@ jobs:
 
   windows_engine:
     name: test (windows-engine)
+    needs: test_scope
+    if: ${{ !cancelled() && needs.test_scope.outputs.engine != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -375,14 +420,16 @@ jobs:
 
   windows_complete:
     name: test (windows-latest)
-    needs: [windows_foundation, windows_desktop, windows_engine]
+    needs: [test_scope, windows_foundation, windows_desktop, windows_engine]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require all three complete windows partitions
+      - name: Require every windows partition the test scope selected
         run: |
           set -eu
-          test "${{ needs.windows_foundation.result }}" = success
+          # A partition passes, or was skipped because the test scope left it out.
+          passed() { [ "$1" = success ] || { [ "$1" = skipped ] && [ "$2" = false ]; }; }
+          passed "${{ needs.windows_foundation.result }}" "${{ needs.test_scope.outputs.foundation }}"
           test "${{ needs.windows_desktop.result }}" = success
-          test "${{ needs.windows_engine.result }}" = success
+          passed "${{ needs.windows_engine.result }}" "${{ needs.test_scope.outputs.engine }}"
