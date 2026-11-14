@@ -161,6 +161,22 @@ impl ToolBindings {
         Ok(values)
     }
 
+    /// The exact directory of a registered root of `project`.
+    pub fn root_directory(
+        &self,
+        root_id: &Id,
+        project: Option<&ProjectId>,
+    ) -> Result<PathBuf, BindingRefusal> {
+        let root = self
+            .roots
+            .get(root_id.as_str())
+            .ok_or(BindingRefusal::UnknownRoot)?;
+        if root.project.as_ref() != project {
+            return Err(BindingRefusal::OutOfProject);
+        }
+        exact_directory(&root.path).ok_or(BindingRefusal::ChangedRoot)
+    }
+
     /// Resolve a project path under its exact registered root, rejecting symlink escapes.
     pub fn resolve_registered_path(
         &self,
@@ -537,6 +553,59 @@ fn is_zero(value: &u32) -> bool {
 struct WatchOrigin {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     requested_tail_bytes: Option<u32>,
+    /// A watcher's regular expression, counted over the output as it streams.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pattern: Option<String>,
+}
+
+/// Counts a regular expression's matches over a stream, line by line (a line split across reads
+/// is counted once complete; the last unterminated line at the end).
+pub(crate) struct MatchCounter {
+    regex: regex::Regex,
+    partial: Vec<u8>,
+    count: i64,
+}
+impl MatchCounter {
+    pub(crate) fn new(pattern: &str) -> Option<Self> {
+        regex::Regex::new(pattern).ok().map(|regex| Self {
+            regex,
+            partial: Vec::new(),
+            count: 0,
+        })
+    }
+    fn count_line(&mut self, line: &[u8]) {
+        let text = String::from_utf8_lossy(line);
+        self.count += self.regex.find_iter(&text).count() as i64;
+    }
+    pub(crate) fn feed(&mut self, chunk: &[u8]) {
+        let mut rest = chunk;
+        while let Some(end) = rest.iter().position(|b| *b == b'\n') {
+            let (line, after) = rest.split_at(end);
+            if self.partial.is_empty() {
+                self.count_line(line);
+            } else {
+                self.partial.extend_from_slice(line);
+                let whole = std::mem::take(&mut self.partial);
+                self.count_line(&whole);
+            }
+            rest = &after[1..];
+        }
+        // A runaway line is counted in pieces rather than held without bound.
+        self.partial.extend_from_slice(rest);
+        if self.partial.len() > 65_536 {
+            let whole = std::mem::take(&mut self.partial);
+            self.count_line(&whole);
+        }
+    }
+    pub(crate) fn finish(&mut self) {
+        if !self.partial.is_empty() {
+            let whole = std::mem::take(&mut self.partial);
+            self.count_line(&whole);
+        }
+    }
+    pub(crate) fn count(&self) -> i64 {
+        self.count
+    }
 }
 
 /// A watched launch's report to the effect caller, made from the monitor thread: `None` once
@@ -575,7 +644,7 @@ impl LaunchReport {
 }
 
 /// Who admitted a process launch, which decides its consumer and its re-authorization.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum ExecuteOrigin {
     /// `process.execute`.
     Tool,
@@ -583,6 +652,8 @@ pub(crate) enum ExecuteOrigin {
     Watch {
         tail_bytes: u32,
         requested: Option<u32>,
+        /// The watcher's regular expression over the output, if it matches one.
+        pattern: Option<String>,
     },
 }
 
@@ -745,6 +816,8 @@ pub struct ProcessToolService {
     protected_roots: ProtectedRoots,
     ids: Arc<dyn IdSource>,
     live_output: Mutex<HashMap<String, Arc<Mutex<BoundedOutput>>>>,
+    /// Match counters of watched runs with a pattern, by process ID: stdout's and stderr's.
+    live_matches: Mutex<HashMap<String, Arc<Mutex<[MatchCounter; 2]>>>>,
     live_tails: Mutex<HashMap<String, LiveTail>>,
     /// Watched processes whose monitor thread has not yet recorded their outcome.
     monitoring: Mutex<HashSet<String>>,
@@ -759,6 +832,11 @@ impl Drop for LiveOutputGuard<'_> {
     fn drop(&mut self) {
         self.service
             .live_output
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(self.id.as_str());
+        self.service
+            .live_matches
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(self.id.as_str());
@@ -799,6 +877,7 @@ impl ProcessToolService {
             protected_roots,
             ids,
             live_output: Mutex::new(HashMap::new()),
+            live_matches: Mutex::new(HashMap::new()),
             live_tails: Mutex::new(HashMap::new()),
             monitoring: Mutex::new(HashSet::new()),
         }
@@ -965,10 +1044,12 @@ impl ProcessToolService {
             ExecuteOrigin::Watch {
                 tail_bytes,
                 requested,
+                pattern,
             } => {
                 job.tail_bytes = tail_bytes;
                 job.watch = Some(WatchOrigin {
                     requested_tail_bytes: requested,
+                    pattern,
                 });
                 WATCH_CONSUMER
             }
@@ -1022,6 +1103,54 @@ impl ProcessToolService {
             protected_branches: &branches,
         };
         self.processes.preflight(spec, &policy)
+    }
+
+    /// Resolves a file a watcher reads: its directory must be a real directory under the
+    /// project's registered root (no symlink escape); the file itself may not exist yet.
+    pub(crate) fn resolve_watched_file(
+        &self,
+        path: &RegisteredPath,
+        ctx: &InvocationContext,
+    ) -> Result<std::path::PathBuf, BindingRefusal> {
+        // The same roots a process watcher may use: static bindings, member repositories and
+        // the caller's own worktrees.
+        let bindings = self.bindings_with_root(&path.root_id, ctx)?;
+        let relative = std::path::Path::new(&path.relative.0);
+        let name = relative
+            .file_name()
+            .filter(|n| *n != "..")
+            .ok_or(BindingRefusal::OutOfProject)?;
+        let parent = relative
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .filter(|p| !p.is_empty());
+        // A file at the root's top level is joined to the root itself; a deeper one to its
+        // directory, resolved under the root like any registered path.
+        let directory = match parent {
+            None => bindings.root_directory(&path.root_id, ctx.project_id())?,
+            Some(parent) => {
+                let directory = RegisteredPath {
+                    root_id: path.root_id.clone(),
+                    relative: serde_json::from_value(json!(parent))
+                        .map_err(|_| BindingRefusal::OutOfProject)?,
+                };
+                bindings.resolve_registered_path(&directory, ctx.project_id())?
+            }
+        };
+        Ok(directory.join(name))
+    }
+
+    /// The matches of a running watched run's pattern counted so far (`None` once it ended or
+    /// without a pattern; its outcome then carries the final count).
+    pub(crate) fn live_match_count(&self, process_id: &Id) -> Option<i64> {
+        let matches = self
+            .live_matches
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(process_id.as_str())
+            .cloned()?;
+        let counters = matches.lock().unwrap_or_else(|p| p.into_inner());
+        Some(counters[0].count() + counters[1].count())
     }
 
     /// Whether a watched run's recorded tree is still alive, asked of the OS by its pid and birth
@@ -1155,11 +1284,22 @@ impl ProcessToolService {
         input: &ProcessSpec,
         ctx: &InvocationContext,
     ) -> Result<NativeProcessSpec, BindingRefusal> {
+        self.bindings_with_root(&input.working_directory.root_id, ctx)?
+            .resolve(input, ctx.project_id())
+    }
+
+    /// The static bindings, plus `root_id` resolved from storage when no static binding names
+    /// it: a project member repository, or a live worktree this caller owns (same owner, root and
+    /// assignment) whose directory is still the recorded one.
+    fn bindings_with_root(
+        &self,
+        root_id: &Id,
+        ctx: &InvocationContext,
+    ) -> Result<ToolBindings, BindingRefusal> {
         let mut bindings = self.bindings.clone();
-        let root_id = input.working_directory.root_id.as_str();
-        if !bindings.roots.contains_key(root_id) {
+        if !bindings.roots.contains_key(root_id.as_str()) {
             let path = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
-                let id = &input.working_directory.root_id;
+                let id = root_id;
                 if let Some(tree) = snapshot.git().git_worktree(id)? {
                     if tree.removed {
                         return Ok(None);
@@ -1209,15 +1349,15 @@ impl ProcessToolService {
             .map_err(|_| BindingRefusal::ChangedRoot)?
             .ok_or(BindingRefusal::UnknownRoot)?;
             bindings.roots.insert(
-                root_id.to_owned(),
+                root_id.as_str().to_owned(),
                 RegisteredWorkingRoot {
-                    id: input.working_directory.root_id.clone(),
+                    id: root_id.clone(),
                     project: ctx.project_id().cloned(),
                     path,
                 },
             );
         }
-        bindings.resolve(input, ctx.project_id())
+        Ok(bindings)
     }
 
     fn install_plan(
@@ -1664,6 +1804,8 @@ impl ProcessToolService {
                     process: Some(job.spec.clone()),
                     probe: None,
                     timer: None,
+                    file: None,
+                    matching: None,
                     max_lifetime_ms: None,
                     tail_bytes: origin
                         .requested_tail_bytes
@@ -1725,6 +1867,7 @@ impl ProcessToolService {
             redactions,
             false,
             launched,
+            job.watch.as_ref().and_then(|w| w.pattern.as_deref()),
         )
     }
 
@@ -1783,6 +1926,7 @@ impl ProcessToolService {
             Vec::new(),
             true,
             None,
+            None,
         )
     }
 
@@ -1798,6 +1942,7 @@ impl ProcessToolService {
         redactions: Vec<String>,
         install: bool,
         launched: Option<&LaunchReport>,
+        pattern: Option<&str>,
     ) -> EffectOutcome {
         if install {
             let Some(root) = spec.cwd.as_ref() else {
@@ -1872,10 +2017,20 @@ impl ProcessToolService {
                 .cancel(&process, Duration::ZERO, Duration::from_secs(5));
             return EffectOutcome::Unknown("owned process output could not be captured".into());
         };
+        let matches = pattern
+            .and_then(|p| Some([MatchCounter::new(p)?, MatchCounter::new(p)?]))
+            .map(|counters| Arc::new(Mutex::new(counters)));
+        if let Some(matches) = &matches {
+            self.live_matches
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(process.id.as_str().to_owned(), matches.clone());
+        }
         let (drained_tx, drained_rx) = std::sync::mpsc::channel();
-        for mut pipe in [stdout, stderr] {
+        for (stream, mut pipe) in [stdout, stderr].into_iter().enumerate() {
             let output = output.clone();
             let tail = tail.clone();
+            let matches = matches.clone();
             let drained_tx = drained_tx.clone();
             std::thread::spawn(move || {
                 use std::io::Read;
@@ -1893,8 +2048,15 @@ impl ProcessToolService {
                                     .unwrap_or_else(|p| p.into_inner())
                                     .append(&chunk[..n]);
                             }
+                            if let Some(matches) = &matches {
+                                matches.lock().unwrap_or_else(|p| p.into_inner())[stream]
+                                    .feed(&chunk[..n]);
+                            }
                         }
                     }
+                }
+                if let Some(matches) = &matches {
+                    matches.lock().unwrap_or_else(|p| p.into_inner())[stream].finish();
                 }
                 let _ = drained_tx.send(());
             });
@@ -1978,6 +2140,11 @@ impl ProcessToolService {
         }
         if let Some(signal) = signal {
             evidence["signal"] = json!(signal);
+        }
+        // Every match in the whole output, counted as it streamed (both streams drained above).
+        if let Some(matches) = &matches {
+            let counters = matches.lock().unwrap_or_else(|p| p.into_inner());
+            evidence["matches"] = json!(counters[0].count() + counters[1].count());
         }
         if let Some(tail) = &tail {
             let tail = tail.lock().unwrap_or_else(|p| p.into_inner());

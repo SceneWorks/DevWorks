@@ -157,6 +157,7 @@ impl NativeProviderSource {
                                 .map(|currency| accounting::ReportedCost {
                                     amount: c.amount.clone(),
                                     currency: currency.clone(),
+                                    raw_lexeme: Some(c.raw_lexeme.clone()),
                                 })
                         }),
                         provider_model_id: self.provider_model.clone(),

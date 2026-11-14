@@ -1,11 +1,13 @@
 //! Help requests use the same five gateway operations as agent documentation tools.
 use super::Shell;
 use crate::{
-    backend::{Reply, Slot},
-    help_ops,
-    help_screen::{HelpAction, HelpScope},
+    backend::{Reply, Unresolved},
+    help_ops::{self, HelpSlot},
+    help_screen::{HelpAction, HelpScope, HelpScreen},
+    memory::RouteMemory,
     ops::Failure,
     route::Route,
+    screen::{Cx, Screen, ScreenContext, ScreenId},
     widgets::Tone,
 };
 use devworks_core::protocol::OperationState;
@@ -14,36 +16,80 @@ use eframe::egui::Ui;
 use std::time::Duration;
 
 impl Shell {
+    /// Opens Help on the topics of `screen` (a screen or settings-category ID).
     pub fn open_help_context(&mut self, screen: &str) {
-        if self.route != Route::Help {
-            self.help.back = Some(self.route);
-        }
-        self.help.scope = HelpScope::Screen(screen.to_owned());
-        self.help.selected = None;
-        self.help.read = None;
-        self.help.read_error = None;
-        self.help.read_generation = self.help.read_generation.wrapping_add(1);
-        self.help.reading = false;
+        let online = self.online();
+        let mut cx = Cx::new(self.client.as_mut(), online, &mut self.status, self.route);
+        self.help.open_context(&mut cx, screen);
+        let effects = cx.into_effects();
         self.route = Route::Help;
-        self.load_help_topics(false);
+        self.run_effects(effects);
     }
-    fn load_help_topics(&mut self, append: bool) {
-        if append && self.help.next_cursor.is_none() {
+}
+
+impl Screen for HelpScreen {
+    type Slot = HelpSlot;
+    const ID: ScreenId = ScreenId::Help;
+    fn load(&mut self, cx: &mut Cx, _route: Route) {
+        if !self.loaded && !self.loading {
+            self.refresh_help(cx);
+        }
+    }
+    fn refresh(&mut self, cx: &mut Cx, _route: Route) {
+        if !self.loading {
+            self.probe_help(cx);
+        }
+    }
+    fn apply(&mut self, cx: &mut Cx, slot: HelpSlot, reply: Reply) {
+        self.apply_reply(cx, slot, reply);
+    }
+    fn ui(&mut self, cx: &mut Cx, _route: Route, ui: &mut Ui) {
+        self.help_screen(cx, ui);
+    }
+    fn restore_in_flight(&mut self, slot: &HelpSlot, _u: &Unresolved) {
+        if *slot == HelpSlot::HelpGenerate {
+            self.generating = true;
+            self.generation_unknown = true;
+        }
+    }
+    fn context(&self, _route: Route, mem: &RouteMemory) -> ScreenContext {
+        ScreenContext {
+            tab: mem.tab,
+            selection: self.selected.as_ref().map(|(_, topic)| topic.clone()),
+        }
+    }
+}
+
+impl HelpScreen {
+    fn open_context(&mut self, cx: &mut Cx, screen: &str) {
+        if cx.route() != Route::Help {
+            self.back = Some(cx.route());
+        }
+        self.scope = HelpScope::Screen(screen.to_owned());
+        self.selected = None;
+        self.read = None;
+        self.read_error = None;
+        self.read_generation = self.read_generation.wrapping_add(1);
+        self.reading = false;
+        self.load_help_topics(cx, false);
+    }
+    fn load_help_topics(&mut self, cx: &mut Cx, append: bool) {
+        if append && self.next_cursor.is_none() {
             return;
         }
-        self.help.list_generation = self.help.list_generation.wrapping_add(1);
-        let generation = self.help.list_generation;
-        let cursor = append.then(|| self.help.next_cursor.clone()).flatten();
-        let scope = self.help.scope.clone();
+        self.list_generation = self.list_generation.wrapping_add(1);
+        let generation = self.list_generation;
+        let cursor = append.then(|| self.next_cursor.clone()).flatten();
+        let scope = self.scope.clone();
         let operation = match scope {
             HelpScope::Search(_) => "help.search",
             HelpScope::Screen(_) => "help.topic_for_screen",
             HelpScope::Package { .. } => "help.package_guides",
         };
-        self.help.error = None;
-        self.help.loading = true;
-        if !self.query(
-            Slot::HelpTopics(generation, append),
+        self.error = None;
+        self.loading = true;
+        if !cx.query(
+            HelpSlot::HelpTopics(generation, append),
             "Loading local Help topics",
             operation,
             move |b| match scope {
@@ -54,50 +100,50 @@ impl Shell {
                 }
             },
         ) {
-            self.help.loading = false;
+            self.loading = false;
         }
     }
-    fn read_help_passage(&mut self) {
-        let Some((topic, version)) = self.help.selected.clone() else {
+    fn read_help_passage(&mut self, cx: &mut Cx) {
+        let Some((topic, version)) = self.selected.clone() else {
             return;
         };
-        let cursor = self.help.read_cursors.last().cloned().flatten();
-        self.help.read_generation = self.help.read_generation.wrapping_add(1);
-        let generation = self.help.read_generation;
-        self.help.reading = true;
-        self.help.read_error = None;
-        if !self.query(
-            Slot::HelpRead(generation),
+        let cursor = self.read_cursors.last().cloned().flatten();
+        self.read_generation = self.read_generation.wrapping_add(1);
+        let generation = self.read_generation;
+        self.reading = true;
+        self.read_error = None;
+        if !cx.query(
+            HelpSlot::HelpRead(generation),
             "Reading local Help passage",
             "help.read",
             move |b| help_ops::read(b, &topic, &version, cursor.as_deref()),
         ) {
-            self.help.reading = false;
+            self.reading = false;
         }
     }
-    fn select_help_topic(&mut self, topic: String, version: String) {
-        self.help.selected = Some((topic, version));
-        self.help.read_cursors = vec![None];
-        self.help.read = None;
-        self.read_help_passage();
+    fn select_help_topic(&mut self, cx: &mut Cx, topic: String, version: String) {
+        self.selected = Some((topic, version));
+        self.read_cursors = vec![None];
+        self.read = None;
+        self.read_help_passage(cx);
     }
-    pub(super) fn refresh_help(&mut self) {
-        if !self.help.loading {
-            self.load_help_topics(false);
+    fn refresh_help(&mut self, cx: &mut Cx) {
+        if !self.loading {
+            self.load_help_topics(cx, false);
         }
     }
-    pub(super) fn probe_help(&mut self) {
-        self.help.list_generation = self.help.list_generation.wrapping_add(1);
-        let generation = self.help.list_generation;
-        let scope = self.help.scope.clone();
+    fn probe_help(&mut self, cx: &mut Cx) {
+        self.list_generation = self.list_generation.wrapping_add(1);
+        let generation = self.list_generation;
+        let scope = self.scope.clone();
         let operation = match scope {
             HelpScope::Search(_) => "help.search",
             HelpScope::Screen(_) => "help.topic_for_screen",
             HelpScope::Package { .. } => "help.package_guides",
         };
-        self.help.loading = true;
-        if !self.query(
-            Slot::HelpProbe(generation),
+        self.loading = true;
+        if !cx.query(
+            HelpSlot::HelpProbe(generation),
             "Checking local Help status",
             operation,
             move |b| match scope {
@@ -106,11 +152,11 @@ impl Shell {
                 HelpScope::Package { id, version } => help_ops::guides(b, &id, &version, None),
             },
         ) {
-            self.help.loading = false;
+            self.loading = false;
         }
     }
     fn help_snapshot(&mut self, snapshot: HelpSnapshot) {
-        if self.help.snapshot.as_ref().is_some_and(|old| {
+        if self.snapshot.as_ref().is_some_and(|old| {
             old.help_revision != snapshot.help_revision
                 || old.registry_revision != snapshot.registry_revision
                 || old.app_version.0 != snapshot.app_version.0
@@ -118,10 +164,10 @@ impl Shell {
             // Passage cursors belong to this catalog snapshot, not merely the topic version.
             // Keep the exact selection, but start its reread with a fresh cursor. A late reply
             // from the previous snapshot cannot overwrite the newly adopted one.
-            self.help.read_cursors = vec![None];
-            self.help.read_generation = self.help.read_generation.wrapping_add(1);
-            self.help.reading = false;
-            self.help.read_error = None;
+            self.read_cursors = vec![None];
+            self.read_generation = self.read_generation.wrapping_add(1);
+            self.reading = false;
+            self.read_error = None;
         }
         if let Some(operation) = &snapshot.generation_operation {
             let complete = matches!(operation.state, OperationState::ObservedComplete);
@@ -135,107 +181,108 @@ impl Shell {
             let id = operation.operation_id.0.as_str();
             // This is the owner's current global status. Keep the original Accepted receipt
             // reference in its separate notice; a different latest ID never proves its outcome.
-            self.help.generation_operation = Some(id.to_owned());
-            if !self.help.generation_unknown {
-                self.help.generating = !terminal;
+            self.generation_operation = Some(id.to_owned());
+            if !self.generation_unknown {
+                self.generating = !terminal;
             }
         }
-        self.help.snapshot = Some(snapshot);
+        self.snapshot = Some(snapshot);
     }
-    pub(super) fn apply_help(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
+    fn apply_reply(&mut self, cx: &mut Cx, slot: HelpSlot, reply: Reply) {
         match (slot, reply) {
-            (Slot::HelpTopics(generation, _) | Slot::HelpProbe(generation), _)
-                if generation != self.help.list_generation => {}
-            (Slot::HelpRead(generation), _) if generation != self.help.read_generation => {}
-            (Slot::HelpTopics(_, append), Reply::Query(outcome)) => {
-                self.help.loading = false;
+            (HelpSlot::HelpTopics(generation, _) | HelpSlot::HelpProbe(generation), _)
+                if generation != self.list_generation => {}
+            (HelpSlot::HelpRead(generation), _) if generation != self.read_generation => {}
+            (HelpSlot::HelpTopics(_, append), Reply::Query(outcome)) => {
+                self.loading = false;
                 match help_ops::topics(outcome) {
                     Ok(page) => {
                         if append
-                            && self.help.snapshot.as_ref().is_some_and(|old| {
+                            && self.snapshot.as_ref().is_some_and(|old| {
                                 old.help_revision != page.snapshot.help_revision
                                     || old.registry_revision != page.snapshot.registry_revision
                                     || old.app_version.0 != page.snapshot.app_version.0
                             })
                         {
-                            self.help.error = Some("Local documentation changed while paging. Refresh Help to load a consistent catalog.".into());
-                            return None;
+                            self.error = Some("Local documentation changed while paging. Refresh Help to load a consistent catalog.".into());
+                            return;
                         }
-                        let changed = self.help.snapshot.as_ref().is_some_and(|old| {
+                        let changed = self.snapshot.as_ref().is_some_and(|old| {
                             old.help_revision != page.snapshot.help_revision
                                 || old.registry_revision != page.snapshot.registry_revision
                                 || old.app_version.0 != page.snapshot.app_version.0
                         });
-                        self.help.notice =
-                            (!matches!(page.availability, HelpAvailability::Available)).then(
-                                || {
-                                    format!(
-                                        "Documentation {:?}: {}",
-                                        page.availability,
-                                        page.reason.as_ref().map_or(
-                                            "No local documentation is available.",
-                                            |reason| reason.0.as_str()
-                                        )
-                                    )
-                                },
-                            );
+                        self.notice = (!matches!(page.availability, HelpAvailability::Available))
+                            .then(|| {
+                                format!(
+                                    "Documentation {:?}: {}",
+                                    page.availability,
+                                    page.reason
+                                        .as_ref()
+                                        .map_or("No local documentation is available.", |reason| {
+                                            reason.0.as_str()
+                                        })
+                                )
+                            });
                         self.help_snapshot(page.snapshot);
                         if append {
-                            self.help.topics.extend(page.items.0);
+                            self.topics.extend(page.items.0);
                         } else {
-                            self.help.topics = page.items.0;
+                            self.topics = page.items.0;
                         }
-                        self.help.next_cursor = page.next_cursor.map(|cursor| cursor.0);
-                        self.help.loaded = true;
-                        if matches!(self.help.scope, HelpScope::Screen(_))
-                            && self.help.selected.is_none()
-                            && let Some(topic) = self.help.topics.first()
+                        self.next_cursor = page.next_cursor.map(|cursor| cursor.0);
+                        self.loaded = true;
+                        if matches!(self.scope, HelpScope::Screen(_))
+                            && self.selected.is_none()
+                            && let Some(topic) = self.topics.first()
                         {
                             self.select_help_topic(
+                                cx,
                                 topic.id.as_str().to_owned(),
                                 topic.version.0.clone(),
                             );
-                        } else if changed && self.help.selected.is_some() && !self.help.reading {
+                        } else if changed && self.selected.is_some() && !self.reading {
                             // Ask the owner about the inspected exact version; never silently
                             // replace it with another installed package/app version.
-                            self.read_help_passage();
+                            self.read_help_passage(cx);
                         }
                     }
-                    Err(error) => self.help.error = Some(error.describe()),
+                    Err(error) => self.error = Some(error.describe()),
                 }
             }
-            (Slot::HelpProbe(_), Reply::Query(outcome)) => {
-                self.help.loading = false;
+            (HelpSlot::HelpProbe(_), Reply::Query(outcome)) => {
+                self.loading = false;
                 match help_ops::topics(outcome) {
                     Ok(page) => {
-                        let changed = self.help.snapshot.as_ref().is_some_and(|old| {
+                        let changed = self.snapshot.as_ref().is_some_and(|old| {
                             old.help_revision != page.snapshot.help_revision
                                 || old.registry_revision != page.snapshot.registry_revision
                                 || old.app_version.0 != page.snapshot.app_version.0
                         });
                         self.help_snapshot(page.snapshot);
-                        self.help.error = None;
+                        self.error = None;
                         // Initial publication can finish after the first empty catalog reply.
                         // Adopt the owner's first results, while preserving any existing page
                         // or inspected version when later generations change the catalog.
-                        let initial = self.help.topics.is_empty() && !page.items.0.is_empty();
+                        let initial = self.topics.is_empty() && !page.items.0.is_empty();
                         if initial {
-                            self.help.notice = None;
-                            self.help.topics = page.items.0;
-                            self.help.next_cursor = page.next_cursor.map(|cursor| cursor.0);
-                            self.help.loaded = true;
-                            if matches!(self.help.scope, HelpScope::Screen(_))
-                                && self.help.selected.is_none()
-                                && let Some(topic) = self.help.topics.first()
+                            self.notice = None;
+                            self.topics = page.items.0;
+                            self.next_cursor = page.next_cursor.map(|cursor| cursor.0);
+                            self.loaded = true;
+                            if matches!(self.scope, HelpScope::Screen(_))
+                                && self.selected.is_none()
+                                && let Some(topic) = self.topics.first()
                             {
                                 self.select_help_topic(
+                                    cx,
                                     topic.id.as_str().to_owned(),
                                     topic.version.0.clone(),
                                 );
                             }
                         }
                         if !matches!(page.availability, HelpAvailability::Available) {
-                            self.help.notice = Some(format!(
+                            self.notice = Some(format!(
                                 "Documentation {:?}: {}",
                                 page.availability,
                                 page.reason.map_or_else(
@@ -244,17 +291,17 @@ impl Shell {
                                 )
                             ));
                         } else if changed && !initial {
-                            self.help.notice = Some("Local documentation changed. Refresh Help for current search results; inspected topics keep their exact version references.".into());
+                            self.notice = Some("Local documentation changed. Refresh Help for current search results; inspected topics keep their exact version references.".into());
                         }
-                        if changed && self.help.selected.is_some() && !self.help.reading {
-                            self.read_help_passage();
+                        if changed && self.selected.is_some() && !self.reading {
+                            self.read_help_passage(cx);
                         }
                     }
-                    Err(error) => self.help.error = Some(error.describe()),
+                    Err(error) => self.error = Some(error.describe()),
                 }
             }
-            (Slot::HelpRead(_), Reply::Query(outcome)) => {
-                self.help.reading = false;
+            (HelpSlot::HelpRead(_), Reply::Query(outcome)) => {
+                self.reading = false;
                 match help_ops::passage(outcome) {
                     Ok(view) => {
                         let snapshot = match &view {
@@ -262,119 +309,113 @@ impl Shell {
                             | HelpReadView::Unavailable { snapshot, .. } => snapshot.clone(),
                         };
                         self.help_snapshot(snapshot);
-                        self.help.read = Some(view);
+                        self.read = Some(view);
                     }
-                    Err(error) => self.help.read_error = Some(error.describe()),
+                    Err(error) => self.read_error = Some(error.describe()),
                 }
             }
-            (Slot::HelpGenerate, Reply::Command(outcome)) => match help_ops::generated(outcome) {
+            (HelpSlot::HelpGenerate, Reply::Command(outcome)) => match help_ops::generated(outcome)
+            {
                 Ok(help_ops::Generated::Accepted(id)) => {
-                    self.help.generation_unknown = false;
-                    self.help.generating = true;
-                    self.help.generation_operation = Some(id.0.as_str().to_owned());
-                    self.help.generation_notice = Some((
+                    self.generation_unknown = false;
+                    self.generating = true;
+                    self.generation_operation = Some(id.0.as_str().to_owned());
+                    self.generation_notice = Some((
                         Tone::Neutral,
                         format!(
                             "Capability documentation generation accepted. Reference {}.",
                             id.0.as_str()
                         ),
                     ));
-                    self.refresh_help();
+                    self.refresh_help(cx);
                 }
                 Ok(help_ops::Generated::Recorded(operation)) => {
-                    self.help.generation_unknown = false;
-                    self.help.generating = !matches!(
+                    self.generation_unknown = false;
+                    self.generating = !matches!(
                         operation.state,
                         OperationState::ObservedComplete
                             | OperationState::Failed
                             | OperationState::NeedsInput
                             | OperationState::CancelledBeforeDispatch
                     );
-                    self.help.generation_operation =
-                        Some(operation.operation_id.0.as_str().to_owned());
-                    self.help.generation_notice = Some((
+                    self.generation_operation = Some(operation.operation_id.0.as_str().to_owned());
+                    self.generation_notice = Some((
                         Tone::Neutral,
                         format!("Capability documentation: {:?}.", operation.state),
                     ));
-                    self.refresh_help();
+                    self.refresh_help(cx);
                 }
                 Err(Failure::Unknown) => {
-                    self.help.generation_unknown = true;
-                    self.help.generating = true;
-                    self.help.generation_notice = Some((Tone::Attention, "Generation outcome not confirmed. Use Confirm outcomes to check the original request; it will not run twice.".into()));
+                    self.generation_unknown = true;
+                    self.generating = true;
+                    self.generation_notice = Some((Tone::Attention, "Generation outcome not confirmed. Use Confirm outcomes to check the original request; it will not run twice.".into()));
                 }
                 Err(error) => {
-                    self.help.generating = false;
-                    self.help.generation_unknown = false;
-                    self.help.generation_notice = Some((Tone::Attention, error.describe()));
-                    self.refresh_help();
+                    self.generating = false;
+                    self.generation_unknown = false;
+                    self.generation_notice = Some((Tone::Attention, error.describe()));
+                    self.refresh_help(cx);
                 }
             },
-            (slot, reply) => return Some((slot, reply)),
+            (slot, reply) => cx.unhandled(&slot, reply),
         }
-        None
     }
-    pub(super) fn help_screen(&mut self, ui: &mut Ui) {
-        let online = self.online();
+    fn help_screen(&mut self, cx: &mut Cx, ui: &mut Ui) {
         let mut actions = Vec::new();
-        self.help.ui(
-            ui,
-            online.as_ref().map(|_| ()).map_err(String::as_str),
-            &mut actions,
-        );
+        HelpScreen::ui(self, ui, cx.online(), &mut actions);
         for action in actions {
             match action {
                 HelpAction::Search => {
-                    self.help.scope = HelpScope::Search(self.help.query.trim().to_owned());
-                    self.load_help_topics(false);
+                    self.scope = HelpScope::Search(self.query.trim().to_owned());
+                    self.load_help_topics(cx, false);
                 }
                 HelpAction::AllTopics => {
-                    self.help.query.clear();
-                    self.help.scope = HelpScope::default();
-                    self.load_help_topics(false);
+                    self.query.clear();
+                    self.scope = HelpScope::default();
+                    self.load_help_topics(cx, false);
                 }
-                HelpAction::MoreTopics => self.load_help_topics(true),
-                HelpAction::Select(topic, version) => self.select_help_topic(topic, version),
+                HelpAction::MoreTopics => self.load_help_topics(cx, true),
+                HelpAction::Select(topic, version) => self.select_help_topic(cx, topic, version),
                 HelpAction::OpenVersion(topic, version) => {
-                    if let HelpScope::Package { id, .. } = self.help.scope.clone() {
-                        self.help.scope = HelpScope::Package {
+                    if let HelpScope::Package { id, .. } = self.scope.clone() {
+                        self.scope = HelpScope::Package {
                             id,
                             version: version.clone(),
                         };
-                        self.load_help_topics(false);
+                        self.load_help_topics(cx, false);
                     }
-                    self.select_help_topic(topic, version);
+                    self.select_help_topic(cx, topic, version);
                 }
                 HelpAction::Guides(id, version) => {
-                    self.help.scope = HelpScope::Package { id, version };
-                    self.load_help_topics(false);
+                    self.scope = HelpScope::Package { id, version };
+                    self.load_help_topics(cx, false);
                 }
                 HelpAction::NextPassage => {
-                    if let Some(HelpReadView::Available { passage, .. }) = &self.help.read
+                    if let Some(HelpReadView::Available { passage, .. }) = &self.read
                         && let Some(cursor) = &passage.next_cursor
                     {
-                        self.help.read_cursors.push(Some(cursor.0.clone()));
-                        self.read_help_passage();
+                        self.read_cursors.push(Some(cursor.0.clone()));
+                        self.read_help_passage(cx);
                     }
                 }
                 HelpAction::PreviousPassage => {
-                    if self.help.read_cursors.len() > 1 {
-                        self.help.read_cursors.pop();
-                        self.read_help_passage();
+                    if self.read_cursors.len() > 1 {
+                        self.read_cursors.pop();
+                        self.read_help_passage(cx);
                     }
                 }
-                HelpAction::ReloadPassage => self.read_help_passage(),
-                HelpAction::Refresh => self.refresh_help(),
+                HelpAction::ReloadPassage => self.read_help_passage(cx),
+                HelpAction::Refresh => self.refresh_help(cx),
                 HelpAction::Back => {
-                    if let Some(route) = self.help.back.take() {
-                        self.navigate(route);
+                    if let Some(route) = self.back.take() {
+                        cx.navigate(route);
                     }
                 }
                 HelpAction::Generate => {
-                    if self.help.generating {
+                    if self.generating {
                         continue;
                     }
-                    let Some(snapshot) = &self.help.snapshot else {
+                    let Some(snapshot) = &self.snapshot else {
                         continue;
                     };
                     if !snapshot.can_generate {
@@ -382,22 +423,22 @@ impl Shell {
                     }
                     let registry = snapshot.registry_revision.get();
                     let help = snapshot.help_revision.get();
-                    self.help.generating = true;
-                    self.help.generation_notice = None;
-                    self.help.generation_operation = None;
-                    if !self.command(
-                        Slot::HelpGenerate,
+                    self.generating = true;
+                    self.generation_notice = None;
+                    self.generation_operation = None;
+                    if !cx.command(
+                        HelpSlot::HelpGenerate,
                         "Generating capability documentation",
                         "help.generate_capability_docs",
                         move |b| help_ops::generate(b, registry, help),
                     ) {
-                        self.help.generating = false;
+                        self.generating = false;
                     }
                 }
             }
         }
         // Only normal hints / the shell's bounded periodic refresh read pending operation facts.
-        if self.help.generating && !self.help.generation_unknown {
+        if self.generating && !self.generation_unknown {
             ui.ctx().request_repaint_after(Duration::from_secs(3));
         }
     }

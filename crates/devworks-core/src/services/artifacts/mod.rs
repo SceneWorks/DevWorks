@@ -136,8 +136,8 @@ use crate::operations::{OperationInput, artifacts as ops};
 use crate::ports::files::{ArtifactFiles, ArtifactSources, FileFault, SourceOrigin, SourceRefusal};
 use crate::ports::storage::{
     ArtifactLink, ArtifactRetention, ArtifactScope, ArtifactState, AttemptBinding, AttemptFence,
-    AuthorityRead, BlobState, ConfigScope, ConfigurationRead, LinkPurpose, ListPosition, NewEvent,
-    NewOperation, ReadSnapshot, StorageError, StoredArtifact, StoredVersion, SubjectKey,
+    AuthorityRead, BlobState, ConfigScope, ConfigurationRead, LinkPurpose, ListPosition, MAX_PAGE,
+    NewEvent, NewOperation, ReadSnapshot, StorageError, StoredArtifact, StoredVersion, SubjectKey,
     Unavailable, WriteTransaction,
 };
 use crate::ports::{
@@ -151,14 +151,16 @@ use crate::protocol::data::{
 use crate::protocol::provider::{ArtifactRef, Digest};
 use crate::protocol::records::{
     ArtifactExport, ArtifactPreview, ArtifactReadContent, ArtifactRecord, MutationSummary,
+    PageRequest,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Page};
+use crate::protocol::support::{BoundedList, BoundedText, Limit, Page};
 use crate::protocol::{
     CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId, OperationState,
     ProjectId, RetryAdvice, Revision, RevisionDimension, RootId,
 };
 use crate::registry::SchemaRevision;
+use crate::services::cursor::{self, CursorBinding};
 use crate::settings::catalog::{ARTIFACT_MAX_FILE_KEY, ARTIFACT_QUOTA_KEY, AgentRole, descriptor};
 use crate::settings::model::{chain, current_chain};
 use lifecycle::{Readers, StreamPurpose, Streams};
@@ -2066,16 +2068,13 @@ fn unsupported() -> Refusal {
 
 /// Binds a list cursor to its scope and tag filter (a changed filter invalidates the cursor). A
 /// workspace listing depends on who lists it, so its cursor binds the principal too.
-fn list_binding(scope: &ListScope<'_>, ctx: &InvocationContext, tags: &[String]) -> String {
-    let mut basis = match scope {
-        ListScope::Project(p) => format!("artifacts.list|{}", p.0.as_str()),
-        ListScope::Workspace => format!("artifacts.list|workspace|{}", ctx.principal().0.as_str()),
+fn list_binding(scope: &ListScope<'_>, ctx: &InvocationContext, tags: &[String]) -> CursorBinding {
+    let scope = match scope {
+        ListScope::Project(p) => p.0.as_str(),
+        ListScope::Workspace => "workspace",
     };
-    for tag in tags {
-        basis.push('|');
-        basis.push_str(&sha256_hex(tag.as_bytes()));
-    }
-    sha256_hex(basis.as_bytes())[..16].to_owned()
+    let tags: Vec<String> = tags.iter().map(|t| sha256_hex(t.as_bytes())).collect();
+    CursorBinding::new(ctx, "artifacts.list", &[scope, &tags.join("|")], 1)
 }
 
 /// The scope an `artifacts.list` page covers.
@@ -2126,33 +2125,44 @@ impl ArtifactService {
             }
         };
         let binding = list_binding(&scope, ctx, tags);
-        let after = match cursor {
-            None => None,
-            Some(c) => {
-                let parsed = c.rsplit_once(':').and_then(|(rest, b)| {
-                    let (t, id) = rest.split_once(':')?;
-                    (b == binding).then_some(())?;
-                    Some(ListPosition {
-                        created_at_ms: t.parse().ok()?,
-                        id: Id::new(id).ok()?,
+        let request = PageRequest {
+            limit: Limit::new(u32::from(limit).clamp(1, u32::from(MAX_PAGE))).expect("page size"),
+            cursor: cursor.map(|c| BoundedText(c.to_owned())),
+        };
+        let viewer = match &scope {
+            ListScope::Project(_) => Some(Viewer::resolve(snapshot.authority(), ctx)?),
+            ListScope::Workspace => None,
+        };
+        let rows = cursor::page(
+            &binding,
+            &request,
+            |after, n| {
+                let after = after
+                    .map(|at| {
+                        let (t, id) = at.split_once(':').ok_or(StorageError::CursorExpired)?;
+                        Ok::<_, StorageError>(ListPosition {
+                            created_at_ms: t.parse().map_err(|_| StorageError::CursorExpired)?,
+                            id: Id::new(id).map_err(|_| StorageError::CursorExpired)?,
+                        })
                     })
-                });
-                Some(parsed.ok_or(Failure::Storage(StorageError::CursorExpired))?)
-            }
-        };
-        let page = limit.saturating_add(1).min(501);
-        let mut rows = match &scope {
-            ListScope::Project(project) => {
-                let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
-                let actor = (!viewer.sees_owned(None)).then_some(ctx.principal());
-                read.list(project, actor, tags, after.as_ref(), page)?
-            }
-            ListScope::Workspace => {
-                read.list_workspace(owner.as_ref(), tags, after.as_ref(), page)?
-            }
-        };
-        let has_more = rows.len() > limit as usize;
-        rows.truncate(limit as usize);
+                    .transpose()?;
+                match &scope {
+                    ListScope::Project(project) => {
+                        let actor = viewer
+                            .as_ref()
+                            .is_some_and(|v| !v.sees_owned(None))
+                            .then_some(ctx.principal());
+                        read.list(project, actor, tags, after.as_ref(), n)
+                    }
+                    ListScope::Workspace => {
+                        read.list_workspace(owner.as_ref(), tags, after.as_ref(), n)
+                    }
+                }
+            },
+            |a| format!("{}:{}", a.created_at_ms, a.id.as_str()),
+        )?;
+        let next_cursor = rows.next_cursor;
+        let rows = rows.items;
         let mut items = Vec::with_capacity(rows.len());
         for a in &rows {
             let Some(vid) = &a.current_version_id else {
@@ -2163,14 +2173,6 @@ impl ArtifactService {
             };
             items.push(record(read, a, &v, revision)?);
         }
-        let next_cursor = match (has_more, rows.last()) {
-            (true, Some(last)) => Some(BoundedText(format!(
-                "{}:{}:{binding}",
-                last.created_at_ms,
-                last.id.as_str()
-            ))),
-            _ => None,
-        };
         Ok(OperationResult::ArtifactsList {
             value: Page {
                 items: BoundedList(items),

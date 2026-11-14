@@ -145,7 +145,7 @@ impl McpClientService {
             ],
             version,
         );
-        let cap_page = page(&caps, &bounded_page, &binding).map_err(|error| self.fault(error))?;
+        let cap_page = page(caps, &bounded_page, &binding).map_err(|error| self.fault(error))?;
         let mut published_bytes = 0usize;
         let mut charge = |content: &Value| -> Result<(), DomainFault> {
             let size = serde_json::to_vec(content)

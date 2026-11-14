@@ -1627,6 +1627,363 @@ fn the_backup_check_reminds_when_a_source_status_cannot_be_established() {
     });
 }
 
+fn watcher_events_of(app: &Runtime, session: &Id, watcher: &str) -> Vec<(Option<i64>, Value)> {
+    read(&**app.store(), |s| {
+        s.watchers().watch_events(
+            session,
+            &[
+                WatchEventState::Pending,
+                WatchEventState::Delivered,
+                WatchEventState::Acknowledged,
+            ],
+            500,
+        )
+    })
+    .into_iter()
+    .filter(|e| e.watcher_id.as_str() == watcher)
+    .map(|e| (e.match_count, e.payload))
+    .collect()
+}
+
+fn create_matching(
+    app: &Runtime,
+    ctx: &InvocationContext,
+    script: &str,
+    matching: Value,
+    key: &str,
+) -> Value {
+    command(
+        app,
+        ctx,
+        "watch.create",
+        json!({"process": {
+            "executableRef":"sh", "args":["-c", script],
+            "workingDirectory":{"rootId":"watch-root","relative":"work"},
+            "environment":[], "profile":"Full",
+            "timeoutMs": "60000", "outputLimitBytes":"4096"
+        }, "matching": matching, "tailBytes": 64}),
+        key,
+    )
+}
+
+/// The first match of a pattern in a launched process's output completes the watcher, while
+/// the process keeps running under its owner.
+#[test]
+fn the_first_output_match_completes_a_process_watcher() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-output-match-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watcher = create_matching(
+            &app,
+            &ctx,
+            "echo starting; sleep 0.2; echo the server is READY; sleep 30",
+            json!({"pattern": "READY", "each": false}),
+            "w-ready",
+        );
+        let id_text = watcher["id"].as_str().unwrap();
+        settle_all(&app, &ctx, &[id_text]).await;
+        let record = inspect(&app, &ctx, id_text);
+        assert_eq!(record["outcome"]["kind"], json!("Succeeded"), "{record}");
+        assert_eq!(
+            record["outcome"]["detail"],
+            json!("the pattern matched"),
+            "{record}"
+        );
+        assert_eq!(counter_at(&record, "/matches"), Some(1), "{record}");
+        let process = watcher["process"]["processId"].as_str().unwrap();
+        let tree = read(&**app.store(), |s| s.resources().process(&id(process))).unwrap();
+        assert_eq!(
+            tree.phase,
+            ProcessPhase::Running,
+            "the process keeps running"
+        );
+        app.shutdown().await;
+    });
+}
+
+/// A pattern over a file: the first match completes one watcher; with each-match, another
+/// reports its matches in events, coalesced to one per minimum interval with their counts.
+#[test]
+fn a_file_match_completes_or_reports_each_coalesced_match() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-file-match-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let session = ctx.session_id().unwrap().clone();
+        let watchers = app.watchers().expect("watchers composed");
+        let file = json!({"path": {"rootId": "watch-root", "relative": "work/app.log"}});
+        let first = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"file": file, "matching": {"pattern": "ERROR", "each": false}}),
+            "w-file-first",
+        );
+        let each = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"file": file, "matching": {"pattern": "ERROR", "each": true, "minIntervalMs": "1000"}}),
+            "w-file-each",
+        );
+        assert_eq!(first["sourceKind"], json!("File"));
+        let log = work.join("work").join("app.log");
+        let append = |text: &str| {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&log).unwrap();
+            f.write_all(text.as_bytes()).unwrap();
+        };
+        watchers.settle().unwrap();
+        append("starting\nfine\n");
+        watchers.settle().unwrap();
+        let first_id = first["id"].as_str().unwrap();
+        let each_id = each["id"].as_str().unwrap();
+        assert_eq!(inspect(&app, &ctx, first_id)["state"], json!("Active"));
+        append("ERROR one\nERROR two\nERROR three\npartial ERR");
+        watchers.settle().unwrap();
+        let record = inspect(&app, &ctx, first_id);
+        assert_eq!(record["outcome"]["kind"], json!("Succeeded"), "{record}");
+        // The each-match watcher reported its first three at once (no earlier event).
+        let events = watcher_events_of(&app, &session, each_id);
+        assert_eq!(events.iter().map(|e| e.0).collect::<Vec<_>>(), vec![Some(3)]);
+        // Completing the line and two more within the interval: held, then reported together.
+        append("OR four\nERROR five\nERROR six\n");
+        watchers.settle().unwrap();
+        assert_eq!(watcher_events_of(&app, &session, each_id).len(), 1, "within the interval");
+        fx.h.advance(1000);
+        watchers.settle().unwrap();
+        let counts: Vec<Option<i64>> = watcher_events_of(&app, &session, each_id)
+            .iter()
+            .map(|e| e.0)
+            .collect();
+        assert_eq!(counts, vec![Some(3), Some(3)], "the next report carries all three");
+        assert_eq!(inspect(&app, &ctx, each_id)["state"], json!("Active"), "still watching");
+        assert_eq!(counter_at(&inspect(&app, &ctx, each_id), "/matches"), Some(6));
+        app.shutdown().await;
+    });
+}
+
+/// A file that matches on every pass still ends its watcher at its maximum lifetime.
+#[test]
+fn a_constantly_matching_file_watcher_still_expires() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-file-expiry-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watchers = app.watchers().expect("watchers composed");
+        let watcher = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"file": {"path": {"rootId": "watch-root", "relative": "work/busy.log"}},
+                "matching": {"pattern": "hit", "each": true, "minIntervalMs": "100"},
+                "maxLifetimeMs": "1000"}),
+            "w-busy",
+        );
+        let id_text = watcher["id"].as_str().unwrap();
+        let log = work.join("work").join("busy.log");
+        for _ in 0..15 {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log)
+                .unwrap();
+            f.write_all(b"hit\n").unwrap();
+            fx.h.advance(100);
+            watchers.settle().unwrap();
+        }
+        let record = inspect(&app, &ctx, id_text);
+        assert_eq!(record["outcome"]["kind"], json!("TimedOut"), "{record}");
+        // The outcome comes after every report, never in the same pass as one.
+        let session = ctx.session_id().unwrap().clone();
+        let events = read(&**app.store(), |s| {
+            s.watchers().watch_events(
+                &session,
+                &[WatchEventState::Pending, WatchEventState::Delivered],
+                500,
+            )
+        });
+        let ours: Vec<_> = events
+            .iter()
+            .filter(|e| e.watcher_id.as_str() == id_text)
+            .collect();
+        let outcome = ours
+            .iter()
+            .find(|e| e.match_count.is_none())
+            .expect("an outcome");
+        assert!(
+            ours.iter()
+                .filter(|e| e.match_count.is_some())
+                .all(|e| e.created_at_ms < outcome.created_at_ms),
+            "{ours:?}"
+        );
+        app.shutdown().await;
+    });
+}
+
+/// A file watcher may read a file in a registered repository the project has as a member, like
+/// a process watcher, with no static working-root binding; a repository outside the project is
+/// refused.
+#[test]
+fn a_file_watcher_reads_a_member_repository_without_a_static_binding() {
+    use devworks_core::ports::storage::StoredRepository;
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-repo-file-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    std::fs::create_dir_all(work.join("member")).unwrap();
+    std::fs::create_dir_all(work.join("outsider")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let register = |name: &str, member: bool| {
+            let location = work.join(name).to_string_lossy().into_owned();
+            let repository = id(&format!("repo-{name}"));
+            fx.tx(move |_, tx| {
+                let now = tx.now_ms();
+                tx.projects().insert_repository(&StoredRepository {
+                    id: repository.clone(),
+                    location,
+                    name: "repository".into(),
+                    remote_url: None,
+                    primary: true,
+                    lifecycle: "Active".into(),
+                    languages: Vec::new(),
+                    revision: 1,
+                    registered_at_ms: now,
+                })?;
+                if member {
+                    let project = ProjectId(id("project-a"));
+                    let mut members = tx.projects().members(&project)?;
+                    members.push(repository);
+                    tx.projects().set_members(&project, &members)?;
+                }
+                Ok(())
+            });
+        };
+        register("member", true);
+        register("outsider", false);
+        let watcher = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"file": {"path": {"rootId": "repo-member", "relative": "app.log"}},
+                "matching": {"pattern": "READY", "each": false}}),
+            "w-member-file",
+        );
+        std::fs::write(work.join("member").join("app.log"), b"server READY\n").unwrap();
+        let id_text = watcher["id"].as_str().unwrap();
+        settle_all(&app, &ctx, &[id_text]).await;
+        assert_eq!(
+            inspect(&app, &ctx, id_text)["outcome"]["kind"],
+            json!("Succeeded")
+        );
+        let refused = decision(
+            &app,
+            &ctx,
+            json!({"file": {"path": {"rootId": "repo-outsider", "relative": "app.log"}},
+                "matching": {"pattern": "READY", "each": false}}),
+            "w-outsider-file",
+        );
+        assert!(
+            matches!(refused, DomainDecision::Refused { .. }),
+            "{refused:?}"
+        );
+        app.shutdown().await;
+    });
+}
+
+/// About a thousand matches a second wake the owner no more often than the minimum interval,
+/// and the reported counts add up to every match.
+#[test]
+fn a_thousand_matches_a_second_wake_no_more_often_than_the_interval() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-match-rate-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let session = ctx.session_id().unwrap().clone();
+        let watchers = app.watchers().expect("watchers composed");
+        // 2,000 matching lines over about two seconds.
+        let script = "i=0; while [ $i -lt 20 ]; do seq 1 100 | sed 's/^/match /'; sleep 0.1; \
+                      i=$((i+1)); done";
+        let watcher = create_matching(
+            &app,
+            &ctx,
+            script,
+            json!({"pattern": "^match", "each": true, "minIntervalMs": "500"}),
+            "w-rate",
+        );
+        let id_text = watcher["id"].as_str().unwrap().to_owned();
+        let started = fx.h.now();
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            watchers.settle().unwrap();
+            if inspect(&app, &ctx, &id_text)["state"] == json!("Settled") {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "never settled");
+            // The store clock follows real time between passes.
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            fx.h.advance(20);
+        }
+        let elapsed = fx.h.now() - started;
+        let events = watcher_events_of(&app, &session, &id_text);
+        let reports: Vec<i64> = events.iter().filter_map(|e| e.0).collect();
+        let at_end = events
+            .iter()
+            .find(|e| e.0.is_none())
+            .and_then(|e| e.1["matchCount"].as_i64())
+            .unwrap_or(0);
+        assert!(
+            reports.len() as i64 <= elapsed / 500 + 1,
+            "{} reports in {elapsed} ms",
+            reports.len()
+        );
+        assert_eq!(
+            reports.iter().sum::<i64>() + at_end,
+            2000,
+            "{reports:?} + {at_end}"
+        );
+        let record = inspect(&app, &ctx, &id_text);
+        assert_eq!(counter_at(&record, "/matches"), Some(2000), "{record}");
+        app.shutdown().await;
+    });
+}
+
 /// A probe whose condition never holds ends TimedOut at its maximum lifetime.
 #[test]
 fn a_polling_watcher_past_its_maximum_lifetime_ends_timed_out() {

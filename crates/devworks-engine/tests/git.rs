@@ -1274,6 +1274,248 @@ fn native_task_lifecycle_transport(
     assert!(processes.owned().is_empty());
 }
 
+/// A task of a feature opens its PR against the feature branch, never the default branch, and
+/// the feature's own branch waits for the separate feature delivery barrier.
+#[test]
+fn feature_task_pr_targets_the_feature_branch_and_the_feature_waits_for_its_barrier() {
+    use devworks_core::protocol::data::{GitOid, ObjectFormat};
+    use devworks_core::protocol::results::DomainDecision;
+    use devworks_core::protocol::{CommandReply, DomainErrorCode, ProjectId, RootId};
+    let h = Harness::new();
+    h.readers.store(1, std::sync::atomic::Ordering::SeqCst);
+    let store = h.open();
+    let head = "1".repeat(40);
+    let location = h.root.join("source").to_string_lossy().into_owned();
+    let tree_head = head.clone();
+    write(&*store, move |tx| {
+        tx.projects().insert_project(&StoredProject {
+            id: ProjectId(id("project")),
+            name: "Project".into(),
+            description: String::new(),
+            lifecycle: ACTIVE.into(),
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            archived_at_ms: None,
+            deleted_at_ms: None,
+            archive_epoch: 0,
+            archive_stop_pending: false,
+        })?;
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("repo"),
+            location,
+            name: "Repo".into(),
+            remote_url: Some("https://github.com/o/r.git".into()),
+            primary: true,
+            lifecycle: ACTIVE.into(),
+            languages: vec![],
+            revision: 1,
+            registered_at_ms: T0,
+        })?;
+        tx.projects()
+            .set_members(&ProjectId(id("project")), &[id("repo")])?;
+        let worker = devworks_core::protocol::ActorId(id("worker"));
+        tx.actors()
+            .register(&worker, PrincipalKind::Agent, "Worker")?;
+        for (work, kind, parent, branch) in [
+            ("feature", FEATURE, None, "refs/heads/feature/login"),
+            ("task", TASK, Some(id("feature")), "refs/heads/task/login-form"),
+        ] {
+            tx.work().insert_work(&StoredWork {
+                id: id(work),
+                project_id: ProjectId(id("project")),
+                kind: kind.into(),
+                parent_feature_id: parent,
+                status_id: None,
+                title: format!("The {work}"),
+                priority: 0,
+                manual_order: 0,
+                revision: 1,
+                scope_revision: 1,
+                created_at_ms: T0,
+                updated_at_ms: T0,
+                created_by: None,
+                updated_by: None,
+                search_key: work.into(),
+                caller_ref: None,
+                completion: None,
+                brief: serde_json::json!({}),
+            })?;
+            tx.work().set_work_repositories(&id(work), &[id("repo")])?;
+            tx.git().insert_git_worktree(&StoredGitWorktree {
+                id: id(&format!("{work}-tree")),
+                repository_id: id("repo"),
+                work_id: id(work),
+                owner: worker.clone(),
+                ownership_revision: 1,
+                owner_root_id: Some(RootId(id("feature"))),
+                owner_assignment_id: None,
+                registered_root_id: id("owned-root"),
+                path: format!("/owned/{work}"),
+                branch: branch.into(),
+                head: GitOid {
+                    format: ObjectFormat::Sha1,
+                    hex: tree_head.clone(),
+                },
+                revision: 1,
+                removed: false,
+                location: None,
+                pending_operation_id: None,
+                last_operation_id: None,
+                last_result: None,
+            })?;
+        }
+        let schema = devworks_core::settings::catalog::descriptor("github.credential")
+            .unwrap()
+            .schema_ref();
+        tx.configuration().append_revision(&ConfigScope::Workspace, "settings", 1, 1,
+            serde_json::json!({"values":{"github.credential":{"schema":schema,"value":{"secretRef":devworks_core::authority::redact::SecretRef::mint(7).as_str()}}}}))?;
+        Ok(())
+    })
+    .unwrap();
+    let filesystem = Arc::new(NativeFilesystem::new());
+    let processes = Arc::new(ProcessSupervisor::new(
+        store.clone(),
+        Arc::new(NativeProcessHost),
+        Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
+    ));
+    let artifacts = Arc::new(ArtifactService::new(
+        Arc::new(NativeArtifactFiles::new(
+            h.root.clone(),
+            h.root.join("cache"),
+        )),
+        Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
+        filesystem.clone(),
+        h.clock(),
+        h.ids.clone(),
+    ));
+    let github = Arc::new(GitHubHttp::default());
+    let service = Arc::new(GitService::new(
+        store.clone(),
+        Arc::new(SupervisedHelpers {
+            supervisor: processes,
+            store: store.clone(),
+            fs: filesystem.clone(),
+        }),
+        artifacts.clone(),
+        h.ids.clone(),
+        h.clock(),
+        GitConfig {
+            filesystem: Some(filesystem),
+            github: Some(Arc::new(
+                devworks_core::services::git::github::GitHubClient {
+                    http: github.clone(),
+                    secrets: Arc::new(GitHubSecrets),
+                },
+            )),
+            ..GitConfig::default()
+        },
+    ));
+    let ctx = principal(&*store, "git-human", PrincipalKind::Human).with_lineage(
+        Some(ProjectId(id("project"))),
+        Some(RootId(id("feature"))),
+        None,
+    );
+    let authority = HostAuthority {
+        store: &*store,
+        clock: &*h.clock,
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        store: &*store,
+        authority: &authority,
+        ids: &*h.ids,
+    };
+    let description = artifacts
+        .publish_evidence(
+            &*store,
+            devworks_core::services::artifacts::evidence::Evidence {
+                scope: ArtifactScope::Project(ProjectId(id("project"))),
+                producer: ctx.principal().clone(),
+                principal_kind: "Host".into(),
+                agent_session: None,
+                root: ctx.root_id().cloned(),
+                assignment: None,
+                title: "PR description".into(),
+                media_type: "text/plain".into(),
+                tags: vec![],
+                source: serde_json::json!({"kind":"TestMessage"}),
+            },
+            b"Login form",
+            |_, _| Ok(()),
+        )
+        .unwrap()
+        .0;
+    let open = |key: &str, head_ref: &str, base_ref: &str| {
+        let frame = serde_json::json!({"protocol":"1.0-draft.1","schemaRevision":2,"requestKey":key,
+            "command":{"kind":"OpenPullRequest","repositoryId":"repo","headRef":head_ref,
+            "baseRef":base_ref,"expectedHead":{"format":"Sha1","hex":head},"description":description}});
+        match gateway
+            .command(
+                &ctx,
+                "git.pull_request",
+                frame.to_string().as_bytes(),
+                service.clone(),
+            )
+            .unwrap()
+        {
+            CommandReply::Recorded { receipt, .. } => receipt.decision,
+            other => panic!("{other:?}"),
+        }
+    };
+    let refusal = |decision: DomainDecision| match decision {
+        DomainDecision::Refused { fault } => fault,
+        other => panic!("not refused: {other:?}"),
+    };
+    // The task's base is its feature's branch: the default branch is refused.
+    let to_main = refusal(open(
+        "task-to-main",
+        "refs/heads/task/login-form",
+        "refs/heads/main",
+    ));
+    assert_eq!(to_main.code, DomainErrorCode::InvalidArgument);
+    assert!(
+        format!("{to_main:?}").contains("github_pr_base"),
+        "{to_main:?}"
+    );
+    let operation = match open(
+        "task-to-feature",
+        "refs/heads/task/login-form",
+        "refs/heads/feature/login",
+    ) {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("task PR to its feature branch: {other:?}"),
+    };
+    let record = read(&*store, |s| s.operations().operation(&operation)).unwrap();
+    let action = serde_json::to_value(&record.payload).unwrap();
+    assert_eq!(
+        action.pointer("/action/PullRequest/base"),
+        Some(&serde_json::json!("feature/login")),
+        "the GitHub write targets the feature branch: {action}"
+    );
+    assert_eq!(
+        action.pointer("/action/PullRequest/head"),
+        Some(&serde_json::json!("task/login-form"))
+    );
+    // The feature's own PR to the default branch belongs to the delivery barrier.
+    let barrier = refusal(open(
+        "feature-to-main",
+        "refs/heads/feature/login",
+        "refs/heads/main",
+    ));
+    assert_eq!(barrier.code, DomainErrorCode::PermissionDenied);
+    assert!(
+        format!("{barrier:?}").contains("feature_delivery_barrier"),
+        "{barrier:?}"
+    );
+    assert_eq!(
+        github.writes.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "no decision wrote to GitHub"
+    );
+}
+
 #[derive(Default)]
 struct GitHubHttp {
     sha: std::sync::Mutex<String>,
@@ -1286,10 +1528,10 @@ impl devworks_core::ports::secrets::SecretResolver for GitHubSecrets {
         &self,
         _: &devworks_core::authority::redact::SecretRef,
     ) -> Result<
-        devworks_core::ports::secrets::SecretValue,
+        devworks_core::ports::secrets::Secret,
         devworks_core::ports::secrets::SecretUnavailable,
     > {
-        Ok(devworks_core::ports::secrets::SecretValue::new(
+        Ok(devworks_core::ports::secrets::Secret::new(
             "test-private-token",
         ))
     }

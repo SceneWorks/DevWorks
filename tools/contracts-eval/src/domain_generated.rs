@@ -4714,6 +4714,12 @@ impl Check for ContainerSpec {
     }
 }
 
+impl Revisioned for ContainerSpec {
+    fn retain_revision(&mut self, revision: u32) {
+        self.ports.retain_revision(revision);
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContainerMount {
@@ -4740,17 +4746,33 @@ pub struct PortMapping {
     pub container_port: Port,
     pub host_port: Port,
     pub protocol: PortProtocol,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 8))]
+    pub expose_beyond_loopback: Option<bool>,
 }
 impl Check for PortMapping {
     fn check(&self) -> Result<(), String> {
         self.container_port.check()?;
         self.host_port.check()?;
         self.protocol.check()?;
+        self.expose_beyond_loopback.check()?;
         super::domain_rules::record(
             "PortMapping",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for PortMapping {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.expose_beyond_loopback = None;
+        }
     }
 }
 
@@ -17823,6 +17845,7 @@ pub enum WatchSourceKind {
     Process,
     Probe,
     Timer,
+    File,
 }
 impl Check for WatchSourceKind {
     fn check(&self) -> Result<(), String> {
@@ -17962,6 +17985,43 @@ impl Check for WatchTimer {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchFile {
+    pub path: RegisteredPath,
+}
+impl Check for WatchFile {
+    fn check(&self) -> Result<(), String> {
+        self.path.check()?;
+        super::domain_rules::record(
+            "WatchFile",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchMatch {
+    pub pattern: Text,
+    pub each: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_interval_ms: Option<Counter>,
+}
+impl Check for WatchMatch {
+    fn check(&self) -> Result<(), String> {
+        self.pattern.check()?;
+        self.each.check()?;
+        self.min_interval_ms.check()?;
+        super::domain_rules::record(
+            "WatchMatch",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WatchProbeStatus {
     pub interval_ms: Counter,
     pub runs: Counter,
@@ -18053,6 +18113,8 @@ pub struct WatcherRecord {
     pub due_at_ms: Option<Counter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matches: Option<Counter>,
     pub session_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
@@ -18081,6 +18143,7 @@ impl Check for WatcherRecord {
         self.probe.check()?;
         self.due_at_ms.check()?;
         self.expires_at_ms.check()?;
+        self.matches.check()?;
         self.session_id.check()?;
         self.project_id.check()?;
         self.created_at_ms.check()?;
@@ -23085,6 +23148,10 @@ pub enum DomainCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timer: Option<WatchTimer>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        file: Option<WatchFile>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        matching: Option<WatchMatch>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         tail_bytes: Option<ByteLimit>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_lifetime_ms: Option<Counter>,
@@ -25219,12 +25286,16 @@ impl Check for DomainCommand {
                 process,
                 probe,
                 timer,
+                file,
+                matching,
                 tail_bytes,
                 max_lifetime_ms,
             } => {
                 process.check()?;
                 probe.check()?;
                 timer.check()?;
+                file.check()?;
+                matching.check()?;
                 tail_bytes.check()?;
                 max_lifetime_ms.check()?;
             }
@@ -25551,6 +25622,9 @@ impl Revisioned for DomainCommand {
             }
             Self::DesktopInput { action, .. } => {
                 action.retain_revision(revision);
+            }
+            Self::ContainersCreate { spec, .. } => {
+                spec.retain_revision(revision);
             }
             Self::RouterPriceOverride { change, .. } => {
                 if revision < 3 {

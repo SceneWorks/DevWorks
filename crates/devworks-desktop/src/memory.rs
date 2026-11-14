@@ -132,10 +132,15 @@ pub struct PendingMemory {
     /// Plan saves still running, one snapshot per feature, finished at the next launch.
     #[serde(default)]
     pub plans: Vec<Value>,
+    /// What each migrated screen keeps (`Screen::pending_memory`), by `ScreenId::key`. A
+    /// screen's key is the one its state had before it migrated, so earlier files still load.
+    #[serde(flatten)]
+    pub screens: BTreeMap<String, Value>,
 }
 impl PendingMemory {
     pub fn is_empty(&self) -> bool {
-        self.commands.is_empty()
+        self.screens.is_empty()
+            && self.commands.is_empty()
             && self.conventions.is_null()
             && self.databases.is_null()
             && self.removed.is_empty()

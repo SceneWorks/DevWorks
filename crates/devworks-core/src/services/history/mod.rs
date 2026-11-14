@@ -85,19 +85,19 @@ use crate::context::{InvocationContext, ReceiptIdentity};
 use crate::gateway::AdmittedQuery;
 use crate::operations::{OperationInput, history as ops};
 use crate::ports::storage::{
-    HistoryScope, LedgerEntry, LineageRow, NewEvent, ReadSnapshot, SequenceKey, StorageError,
-    StoredInvocation, StoredLink, UsageFact, WorkRoot, WriteTransaction,
+    HistoryScope, LedgerEntry, LineageRow, MAX_PAGE, NewEvent, ReadSnapshot, SequenceKey,
+    StorageError, StoredInvocation, StoredLink, UsageFact, WorkRoot, WriteTransaction,
 };
 use crate::ports::{IdKind, IdSource, QueryAnswer, QueryHandler};
 use crate::protocol::data::GitOid;
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
-    AttributedGitLink, EvidenceLink, LineageRecord, OperationRef, ReceiptLookupState,
+    AttributedGitLink, EvidenceLink, LineageRecord, OperationRef, PageRequest, ReceiptLookupState,
     ReceiptObservation, ToolInvocation, ToolInvocationOutcome, UsageItem, UsagePage,
 };
 use crate::protocol::results::OperationResult;
 use crate::protocol::shared::{Event, EventBody, EventRevisionKind, EventSubject, Query};
-use crate::protocol::support::{BoundedList, BoundedText, HistoryPage, Text, Url};
+use crate::protocol::support::{BoundedList, BoundedText, HistoryPage, Limit, Text, Url};
 use crate::protocol::{
     ActorId, CommandId, CorrelationId, DomainErrorCode, DomainFault, EventId, Id, OperationId,
     ProjectId, Protocol, RequestKey, RetryAdvice, RootId,
@@ -105,7 +105,7 @@ use crate::protocol::{
 use crate::registry::SchemaRevision;
 use crate::services::artifacts::Viewer;
 use crate::services::artifacts::replies::{ObservationGap, recorded_observation};
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::{
     Failure, Refusal, content, counter, label, not_found, project_visible, query_fault, rev,
     transcript::reference_resolves, visible_root,
@@ -494,13 +494,21 @@ impl HistoryService {
         let after = cursor
             .map(|c| binding.decode(c).and_then(|p| parse_key(&p)))
             .transpose()?;
-        let rows = fetch(after.as_ref(), limit)?;
-        let next = match rows.last() {
-            Some((last, _)) if rows.len() == limit as usize => {
-                (!fetch(Some(last), 1)?.is_empty()).then(|| binding.encode(&key_position(last)))
-            }
-            _ => None,
+        let request = PageRequest {
+            limit: Limit::new(u32::from(limit.clamp(1, MAX_PAGE))).expect("page size"),
+            cursor: cursor.map(|c| BoundedText(c.to_owned())),
         };
+        let rows = cursor::page(
+            binding,
+            &request,
+            |at, n| {
+                let at = at.map(parse_key).transpose()?;
+                fetch(at.as_ref(), n)
+            },
+            |(k, _)| key_position(k),
+        )?;
+        let next = rows.next_cursor.map(|c| c.0);
+        let rows = rows.items;
         let covered = rows
             .last()
             .map(|(k, _)| k.clone())

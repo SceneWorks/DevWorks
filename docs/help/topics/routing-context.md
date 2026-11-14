@@ -14,4 +14,14 @@ Provider lists refresh hourly while open, manually, and when overdue after reope
 
 Native tool calls/results and required opaque continuation retain exact identity and order. A change of connection/account/profile/model/epoch cannot reuse foreign opaque material. Provider caching is optional and endpoint/model/access-specific. Stable prefixes help reuse but cannot override new instructions, disabled tools, required compaction, or correctness. The compaction threshold preference is 80%; an unavailable compaction runtime is not emulated.
 
+## Embedding spaces
+
+An embedding space is the saved identity of one embedding model on one connection: its account, endpoint, the actual upstream model and the encoder settings. Vectors from different spaces are never mixed. A new space is only a candidate. It is not used for search, and it costs nothing, until you take these steps in [Connections](help:settings-connections):
+
+1. **Create** the space on a connection.
+2. **Qualify** it. DevWorks sends one fixed test sentence through the connection and records what came back. This is a real inference request, so a paid connection records usage and cost. A failed or unknown attempt does not qualify the space.
+3. **Select** a qualified space. Selection is a separate, revisioned choice. **Clear** removes it.
+
+Renaming a model, changing its tariff or refreshing a credential does not change the space. A different account, endpoint, upstream model or encoder setting does, and old vectors are not reused for it. If the connection becomes unavailable, the selection stops applying and the saved facts remain. No paid route is picked automatically, and the first conversation never starts one. `router.embedding_spaces` reports the status of the spaces for a scope.
+
 See [Connections](help:settings-connections), [Usage](help:usage), and [Provider adapter SDK](help:sdk-provider).

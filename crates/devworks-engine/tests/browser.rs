@@ -1048,6 +1048,13 @@ impl BrowserPlatform for FakePlatform {
     ) -> Result<Vec<u8>, BrowserFault> {
         self.native.read_staged(profile, path, max)
     }
+    fn start_egress_proxy(
+        &self,
+        policy: Arc<dyn devworks_core::ports::browser::ConnectPolicy>,
+    ) -> Result<Box<dyn devworks_core::ports::browser::RunningProxy>, BrowserFault> {
+        // The real proxy: a test connects through it as the browser would.
+        self.native.start_egress_proxy(policy)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1514,10 +1521,34 @@ fn composition(
             fs: Arc::new(NativeFilesystem::new()),
             app_data_root: Some(h.root.to_string_lossy().into_owned()),
             config: browser,
+            resolver: Arc::new(FixtureResolver),
         }),
         use_cases: UseCases::new().with_queue(),
         consumers: Vec::new(),
         config,
+    }
+}
+
+/// Every name the fixture resolver was asked for.
+static RESOLVED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Resolves `lan.test` to a private address and every other fixture name to a public one.
+struct FixtureResolver;
+impl devworks_core::ports::web::Resolver for FixtureResolver {
+    fn resolve(
+        &self,
+        host: &str,
+        _: u16,
+        _: Instant,
+        _: &[Cancellation],
+    ) -> Result<Vec<std::net::IpAddr>, devworks_core::ports::web::NetFault> {
+        RESOLVED.lock().unwrap().push(host.to_owned());
+        let ip = if host == "lan.test" {
+            "192.168.1.20"
+        } else {
+            "93.184.216.34"
+        };
+        Ok(vec![ip.parse().unwrap()])
     }
 }
 
@@ -3968,6 +3999,306 @@ fn local_documents_are_never_loaded_or_read_through_an_owned_browser() {
 }
 
 #[test]
+fn the_egress_policy_refuses_metadata_and_private_destinations_on_every_request() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let b = fx.platform.browser(&session);
+    let answered = |rid: &str| {
+        b.lock().unwrap().log.iter().find_map(|m| {
+            (m["params"]["requestId"] == rid).then(|| m["method"].as_str().unwrap_or("").to_owned())
+        })
+    };
+    let pause = |requests: &[(&str, &str, &str)]| {
+        let mut br = b.lock().unwrap();
+        let (s, f) = (br.pages[0].session.clone(), br.pages[0].frame.clone());
+        for (rid, kind, url) in requests {
+            br.emit(
+                Some(&s),
+                "Fetch.requestPaused",
+                json!({"requestId": rid, "request": {"url": url, "method": "GET"}, "frameId": f, "resourceType": kind}),
+            );
+        }
+    };
+    let navigations = requests(&b, "Page.navigate");
+    // A refused page is refused before anything is sent: metadata and link-local always,
+    // private addresses (literal or resolved) while the private-network setting is off.
+    for url in [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://metadata.google.internal/computeMetadata/v1/",
+        "http://[fe80::1]/",
+        "http://192.168.1.1/",
+        "https://lan.test/",
+    ] {
+        match fx.navigate(&user, &session, Some("t1"), url) {
+            OperationCompletion::Failed { fault, .. } => {
+                assert_eq!(fault.code, DomainErrorCode::PermissionDenied, "{url}");
+                assert_eq!(
+                    fault.target_kind.as_ref().unwrap().0,
+                    "browser_destination",
+                    "{url}"
+                );
+            }
+            other => panic!("{url}: {other:?}"),
+        }
+    }
+    assert_eq!(
+        requests(&b, "Page.navigate"),
+        navigations,
+        "nothing was sent"
+    );
+    // Loopback is always allowed: local development servers.
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "http://127.0.0.1:3000/"));
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "http://localhost:5173/"));
+    // Redirect hops and subresources pause at their own URL and pass the same policy.
+    pause(&[
+        (
+            "redirect-1",
+            "Document",
+            "http://169.254.169.254/latest/meta-data/",
+        ),
+        (
+            "sub-1",
+            "XHR",
+            "http://metadata.google.internal/computeMetadata/v1/",
+        ),
+        ("sub-2", "Image", "http://192.168.1.1/x.png"),
+        ("sub-3", "Script", "https://partner.test/a.js"),
+        ("sub-4", "Image", "http://127.0.0.1:3000/logo.png"),
+    ]);
+    fx.svc().tick();
+    for (rid, method) in [
+        ("redirect-1", "Fetch.failRequest"),
+        ("sub-1", "Fetch.failRequest"),
+        ("sub-2", "Fetch.failRequest"),
+        ("sub-3", "Fetch.continueRequest"),
+        ("sub-4", "Fetch.continueRequest"),
+    ] {
+        assert_eq!(answered(rid).as_deref(), Some(method), "{rid}");
+    }
+    // With private networks allowed, private addresses are reachable; metadata still is not.
+    set_workspace(
+        &**fx.app().store(),
+        devworks_core::settings::catalog::WEB_FETCH_PRIVATE_KEY,
+        json!(true),
+    );
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "http://192.168.1.1/"));
+    pause(&[
+        ("sub-5", "Image", "https://lan.test/x.png"),
+        ("redirect-2", "Document", "http://169.254.169.254/"),
+    ]);
+    fx.svc().tick();
+    assert_eq!(answered("sub-5").as_deref(), Some("Fetch.continueRequest"));
+    assert_eq!(answered("redirect-2").as_deref(), Some("Fetch.failRequest"));
+    // A worker's requests are intercepted too.
+    {
+        let mut br = b.lock().unwrap();
+        let s = br.pages[0].session.clone();
+        br.emit(
+            Some(&s),
+            "Target.attachedToTarget",
+            json!({"sessionId": "W1", "targetInfo": {"targetId": "WT1", "type": "worker", "url": "https://app.test/w.js"}, "waitingForDebugger": false}),
+        );
+    }
+    fx.svc().tick();
+    assert!(
+        b.lock()
+            .unwrap()
+            .log
+            .iter()
+            .any(|m| m["method"] == "Fetch.enable" && m["sessionId"] == "W1"),
+        "the worker's requests are intercepted"
+    );
+}
+
+/// The status line the session's egress proxy answers to `CONNECT target`, and the open
+/// tunnel when it was established.
+fn tunnel(proxy: std::net::SocketAddr, target: &str) -> (String, std::net::TcpStream) {
+    use std::io::Read;
+    let mut s = std::net::TcpStream::connect(proxy).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    std::io::Write::write_all(
+        &mut s,
+        format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").as_bytes(),
+    )
+    .unwrap();
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") && s.read(&mut byte).unwrap_or(0) == 1 {
+        head.push(byte[0]);
+    }
+    let text = String::from_utf8_lossy(&head);
+    (text.lines().next().unwrap_or("").to_owned(), s)
+}
+
+#[test]
+fn every_browser_connection_goes_through_its_proxy_which_refuses_websockets_to_refused_addresses() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    // The browser is launched to send every connection (loopback included) through the
+    // session's proxy, with no QUIC, DNS-over-HTTPS or UDP outside it.
+    let args = fx.platform.launched.lock().unwrap().last().unwrap().clone();
+    let proxy: std::net::SocketAddr = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--proxy-server=http://"))
+        .expect("the browser is launched behind the egress proxy")
+        .parse()
+        .unwrap();
+    assert!(proxy.ip().is_loopback());
+    for flag in [
+        "--proxy-bypass-list=<-loopback>",
+        "--disable-quic",
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    ] {
+        assert!(args.iter().any(|a| a == flag), "{flag}: {args:?}");
+    }
+    assert!(
+        args.iter()
+            .any(|a| a.starts_with("--disable-features=") && a.contains("DnsOverHttps")),
+        "{args:?}"
+    );
+    // A WebSocket (ws and wss alike tunnel through CONNECT) to a metadata, link-local or
+    // private address is refused while private networks are not allowed.
+    let refused = [
+        "169.254.169.254:80",
+        "metadata.google.internal:443",
+        "[fd00:ec2::254]:443",
+        "[fe80::1]:443",
+        "192.168.1.1:443",
+        "lan.test:443",
+    ];
+    for target in refused {
+        assert!(
+            tunnel(proxy, target).0.starts_with("HTTP/1.1 403 "),
+            "{target}"
+        );
+    }
+    // A WebSocket to an admitted address (a local development server) is carried end to end.
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let local = server.local_addr().unwrap();
+    let served = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let (mut s, _) = server.accept().unwrap();
+        let mut buf = [0u8; 1024];
+        let n = s.read(&mut buf).unwrap();
+        s.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n")
+            .unwrap();
+        String::from_utf8_lossy(&buf[..n]).into_owned()
+    });
+    let (status, mut ws) = tunnel(proxy, &local.to_string());
+    assert!(status.starts_with("HTTP/1.1 200 "), "{status}");
+    std::io::Write::write_all(
+        &mut ws,
+        b"GET /hmr HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+    )
+    .unwrap();
+    let mut answer = [0u8; 12];
+    std::io::Read::read_exact(&mut ws, &mut answer).unwrap();
+    assert_eq!(&answer, b"HTTP/1.1 101");
+    assert!(served.join().unwrap().contains("Upgrade: websocket"));
+    // Metadata stays refused with private networks allowed.
+    set_workspace(
+        &**fx.app().store(),
+        devworks_core::settings::catalog::WEB_FETCH_PRIVATE_KEY,
+        json!(true),
+    );
+    assert!(
+        tunnel(proxy, "169.254.169.254:80")
+            .0
+            .starts_with("HTTP/1.1 403 ")
+    );
+    // The DevTools gate never resolves a name (it runs on the protocol message loop): the
+    // proxy checks the name when the browser connects.
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let b = fx.platform.browser(&session);
+    {
+        let mut br = b.lock().unwrap();
+        let (s, f) = (br.pages[0].session.clone(), br.pages[0].frame.clone());
+        br.emit(
+            Some(&s),
+            "Fetch.requestPaused",
+            json!({"requestId": "gate-1", "request": {"url": "https://gate-only.test/a.js", "method": "GET"}, "frameId": f, "resourceType": "Script"}),
+        );
+    }
+    fx.svc().tick();
+    assert!(b.lock().unwrap().log.iter().any(|m| m["params"]["requestId"] == "gate-1"
+        && m["method"] == "Fetch.continueRequest"));
+    assert!(
+        !RESOLVED
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|h| h == "gate-only.test"),
+        "the DevTools gate resolved a name"
+    );
+    // The proxy stops with the session.
+    fx.close(&user, &session);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while std::net::TcpStream::connect_timeout(&proxy, Duration::from_millis(200)).is_ok() {
+        assert!(Instant::now() < deadline, "the proxy outlived its session");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn an_attached_worker_worklet_frame_or_popup_runs_only_after_its_requests_are_intercepted() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/oopif"));
+    let b = fx.platform.browser(&session);
+    // Every auto-attachment (browser, page and frame sessions) starts new targets paused.
+    let auto: Vec<Value> = b
+        .lock()
+        .unwrap()
+        .log
+        .iter()
+        .filter(|m| m["method"] == "Target.setAutoAttach")
+        .cloned()
+        .collect();
+    assert!(auto.len() >= 3, "{auto:?}");
+    for m in &auto {
+        assert_eq!(m["params"]["waitForDebuggerOnStart"], true, "{m}");
+    }
+    let popup = {
+        let mut br = b.lock().unwrap();
+        let s = br.pages[0].session.clone();
+        for (session, kind) in [("W1", "worker"), ("K1", "shared_storage_worklet")] {
+            br.emit(
+                Some(&s),
+                "Target.attachedToTarget",
+                json!({"sessionId": session, "targetInfo": {"targetId": format!("{session}T"), "type": kind, "url": "https://app.test/w.js"}, "waitingForDebugger": true}),
+            );
+        }
+        let opener = br.pages[0].target.clone();
+        let i = br.open_page("https://app.test/popup", Some(&opener));
+        br.pages[i].session.clone()
+    };
+    fx.svc().tick();
+    let br = b.lock().unwrap();
+    let child = br.children[0].session.clone();
+    let at = |session: &str, method: &str| {
+        br.log
+            .iter()
+            .position(|m| m["sessionId"] == session && m["method"] == method)
+    };
+    for s in ["W1", "K1", popup.as_str(), child.as_str()] {
+        let enabled = at(s, "Fetch.enable").unwrap_or_else(|| panic!("{s} is not intercepted"));
+        let resumed =
+            at(s, "Runtime.runIfWaitingForDebugger").unwrap_or_else(|| panic!("{s} never runs"));
+        assert!(
+            enabled < resumed,
+            "{s} ran before its requests were intercepted"
+        );
+    }
+}
+
+#[test]
 fn a_browser_whose_main_process_exits_is_settled_while_its_helpers_linger() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();
@@ -4009,14 +4340,19 @@ fn a_browser_whose_main_process_exits_is_settled_while_its_helpers_linger() {
 
 /// Writes the workspace artifact storage limit directly (as a settings save would).
 fn set_quota(store: &dyn ApplicationStore, bytes: i64) {
-    use devworks_core::settings::catalog::{ARTIFACT_QUOTA_KEY, descriptor};
+    use devworks_core::settings::catalog::ARTIFACT_QUOTA_KEY;
+    set_workspace(store, ARTIFACT_QUOTA_KEY, json!(bytes));
+}
+
+/// Writes one workspace setting directly (as a settings save would).
+fn set_workspace(store: &dyn ApplicationStore, key: &'static str, value: Value) {
+    use devworks_core::settings::catalog::descriptor;
     use devworks_core::settings::model;
     write(store, move |tx| {
         let current = model::current_layer(tx.configuration(), &ConfigScope::Workspace)?;
-        let schema =
-            serde_json::to_value(descriptor(ARTIFACT_QUOTA_KEY).unwrap().schema_ref()).unwrap();
+        let schema = serde_json::to_value(descriptor(key).unwrap().schema_ref()).unwrap();
         let a = serde_json::from_value(
-            json!({"key": ARTIFACT_QUOTA_KEY, "value": {"schema": schema, "value": bytes}}),
+            json!({"key": key, "value": {"schema": schema, "value": value}}),
         )
         .unwrap();
         let plan = model::plan(&current, &[a]);

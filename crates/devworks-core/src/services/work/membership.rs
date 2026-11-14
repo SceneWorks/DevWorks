@@ -3,6 +3,7 @@
 //! subtree is fenced immediately; its transcript/checkpoint remains durable throughout.
 use super::{R, allocation};
 use crate::context::InvocationContext;
+use crate::ports::storage::MAX_PAGE;
 use crate::ports::storage::*;
 use crate::protocol::{ActorId, AssignmentId, EventId, Id, ProjectId, RootId};
 use crate::services::runs::{
@@ -11,7 +12,6 @@ use crate::services::runs::{
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
-const PAGE: u16 = 500;
 const MARKER: &str = "membershipHandoff";
 
 fn marker(a: &StoredAssignment) -> bool {
@@ -211,7 +211,7 @@ fn quiesce(
     loop {
         let page = tx
             .resources()
-            .processes(&ProcessFilter::Unsettled, after.as_ref(), PAGE)?;
+            .processes(&ProcessFilter::Unsettled, after.as_ref(), MAX_PAGE)?;
         if page.iter().any(|process| {
             process
                 .assignment_id
@@ -220,7 +220,7 @@ fn quiesce(
         }) {
             return Ok(false);
         }
-        if page.len() < usize::from(PAGE) {
+        if page.len() < usize::from(MAX_PAGE) {
             break;
         }
         after = page.last().map(|p| p.id.clone());
@@ -229,7 +229,7 @@ fn quiesce(
     loop {
         let page = tx
             .runs()
-            .root_deliveries(&a.root_id, after.as_ref(), PAGE)?;
+            .root_deliveries(&a.root_id, after.as_ref(), MAX_PAGE)?;
         for id in &page {
             let Some(entry) = tx.queue().entry(id)? else {
                 continue;
@@ -256,7 +256,7 @@ fn quiesce(
                 tx.queue().cancel(id)?;
             }
         }
-        if page.len() < usize::from(PAGE) {
+        if page.len() < usize::from(MAX_PAGE) {
             break;
         }
         after = page.last().cloned();
@@ -273,8 +273,8 @@ pub fn reconcile_project(
     let mut roots = Vec::new();
     let mut after = None;
     loop {
-        let page = tx.runs().project_roots(project, after.as_ref(), PAGE)?;
-        let more = page.len() == usize::from(PAGE);
+        let page = tx.runs().project_roots(project, after.as_ref(), MAX_PAGE)?;
+        let more = page.len() == usize::from(MAX_PAGE);
         after = page.last().cloned();
         roots.extend(page);
         if !more {
@@ -502,7 +502,7 @@ fn release_destination_capacity_holds(
     let mut changed = 0;
     let mut after = None;
     loop {
-        let page = tx.runs().project_roots(project, after.as_ref(), PAGE)?;
+        let page = tx.runs().project_roots(project, after.as_ref(), MAX_PAGE)?;
         for root in &page {
             let assignments = root_assignments(tx.runs(), root, true)?;
             let mut used = assignments
@@ -589,7 +589,7 @@ fn release_destination_capacity_holds(
                 used += 1;
             }
         }
-        if page.len() < usize::from(PAGE) {
+        if page.len() < usize::from(MAX_PAGE) {
             return Ok(changed);
         }
         after = page.last().cloned();

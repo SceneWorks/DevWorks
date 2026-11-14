@@ -239,6 +239,21 @@ fn stale_settings_content_cannot_approve_a_new_revision() {
     );
 }
 #[test]
+fn list_has_no_more_when_the_rows_equal_the_limit() {
+    let f = Fx::new();
+    f.stage();
+    let OperationResult::ApprovalsList { value } = f.query(
+        "approvals.list",
+        json!({"scope":{"kind":"Workspace"},"page":{"limit":1}}),
+    ) else {
+        panic!("not a list");
+    };
+    assert_eq!(value.items.0.len(), 1);
+    assert!(!value.has_more);
+    assert!(value.next_cursor.is_none());
+}
+
+#[test]
 fn large_typed_plan_inspection_uses_frozen_snapshot_and_list_stays_compact_across_restart() {
     let f = Fx::new();
     let plan = json!({"content":{"artifactId":"artifact","versionId":"version","sha256":"a".repeat(64),"byteLength":"1","mediaType":"text/markdown"},"goals":vec!["x".repeat(30000);20],"requirements":[],"acceptance":[],"acceptanceTests":[],"repositoryIds":[]});

@@ -452,6 +452,7 @@ impl ContainerService {
                 host: port.host_port.get() as u16,
                 container: port.container_port.get() as u16,
                 protocol: &port.protocol,
+                expose_beyond_loopback: port.expose_beyond_loopback.unwrap_or(false),
             })
             .collect();
         let fallback = SessionSecrets::default();

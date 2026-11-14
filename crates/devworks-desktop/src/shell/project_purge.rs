@@ -146,6 +146,9 @@ impl Shell {
                 json!({"languages":f.languages,"packages":f.packages,"excludes":f.excludes,"max":f.max_bytes}),
             );
         }
+        for screen in self.screens() {
+            screen.purge_live(&mut live);
+        }
         fn refs(v: &serde_json::Value, out: &mut Vec<ArtifactRef>) {
             use devworks_core::protocol::support::Check;
             if let Ok(r) = serde_json::from_value::<ArtifactRef>(v.clone())
@@ -307,6 +310,9 @@ impl Shell {
         self.resources = Default::default();
         if self.work.board.as_deref().is_some_and(work) {
             self.work.board = None;
+        }
+        for screen in self.screens_mut() {
+            screen.remove_purged(scope);
         }
         self.saved = None;
     }

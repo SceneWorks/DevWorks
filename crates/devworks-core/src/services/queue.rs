@@ -54,7 +54,6 @@
 //!   source's `false`/404 — never a silent success. The source's `kind` path segment is replaced
 //!   by the opaque delivery identity.
 use crate::context::InvocationContext;
-use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::OperationInput;
 use crate::operations::queue::Input;
@@ -65,12 +64,13 @@ use crate::ports::storage::{
 use crate::ports::{CommandHandler, Decided, HandlerFailure, IdKind, QueryAnswer, QueryHandler};
 use crate::protocol::records::{ConsumerStatus, QueueDelivery, QueueResolution};
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Content, Page};
+use crate::protocol::support::{BoundedText, Content};
 use crate::protocol::{
     CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId, OperationState,
     RetryAdvice, Revision, RevisionDimension,
 };
 use crate::services::artifacts::replies::{REPLY_CONSUMER, unhonourable};
+use crate::services::cursor::{self, CursorBinding};
 use serde_json::json;
 
 /// Fault target kind of a resolution that would abandon a receipt's mandatory reply
@@ -164,56 +164,39 @@ fn operation_state(
 // ---------------------------------------------------------------------------------------------
 // Cursors
 
-const CURSOR_VERSION: &str = "q1";
-
-/// Binds a cursor to its store, restore epoch and filter so a changed predicate or a restore
-/// invalidates it visibly instead of resuming a different listing.
-fn cursor_binding(snapshot: &dyn ReadSnapshot, filter: &DeliveryFilter) -> String {
-    let stamp = snapshot.stamp();
-    let digest = sha256_hex(
-        format!(
-            "{}|{}|{}|{}",
-            stamp.store_id.0.as_str(),
-            stamp.restore_epoch,
+/// A cursor names the last delivery's inspection position and is bound to the caller, store,
+/// restore epoch and filter, so a changed predicate or a restore expires it visibly instead of
+/// resuming a different listing.
+fn cursor_binding(ctx: &InvocationContext, filter: &DeliveryFilter) -> CursorBinding {
+    CursorBinding::new(
+        ctx,
+        "queue.inspect",
+        &[
             filter.consumer.as_deref().unwrap_or(""),
-            filter.operation_id.as_ref().map_or("", |o| o.0.as_str())
-        )
-        .as_bytes(),
-    );
-    digest[..16].to_owned()
+            filter.operation_id.as_ref().map_or("", |o| o.0.as_str()),
+        ],
+        // Queue state is host-scoped; no project scope revision applies.
+        1,
+    )
 }
-fn encode_cursor(key: &DeliveryKey, binding: &str) -> BoundedText<1, 4096> {
-    BoundedText(format!(
-        "{CURSOR_VERSION}.{}.{}.{}.{}.{binding}",
-        key.rank,
-        key.a,
-        key.b,
-        key.id.as_str()
-    ))
+fn key_position(e: &QueueEntry) -> String {
+    e.inspection_key().map_or_else(String::new, |k| {
+        format!("{}.{}.{}.{}", k.rank, k.a, k.b, k.id.as_str())
+    })
 }
-enum CursorError {
-    Malformed,
-    Stale,
-}
-fn decode_cursor(raw: &str, binding: &str) -> Result<DeliveryKey, CursorError> {
-    let parts: Vec<&str> = raw.split('.').collect();
-    let [version, rank, a, b, id, bound] = parts.as_slice() else {
-        return Err(CursorError::Malformed);
+fn parse_key(at: &str) -> Result<DeliveryKey, StorageError> {
+    let parts: Vec<&str> = at.splitn(4, '.').collect();
+    let [rank, a, b, id] = parts.as_slice() else {
+        return Err(StorageError::CursorExpired);
     };
-    if *version != CURSOR_VERSION {
-        return Err(CursorError::Malformed);
-    }
     let key = DeliveryKey {
-        rank: rank.parse().map_err(|_| CursorError::Malformed)?,
-        a: a.parse().map_err(|_| CursorError::Malformed)?,
-        b: b.parse().map_err(|_| CursorError::Malformed)?,
-        id: Id::new(*id).map_err(|_| CursorError::Malformed)?,
+        rank: rank.parse().map_err(|_| StorageError::CursorExpired)?,
+        a: a.parse().map_err(|_| StorageError::CursorExpired)?,
+        b: b.parse().map_err(|_| StorageError::CursorExpired)?,
+        id: Id::new(*id).map_err(|_| StorageError::CursorExpired)?,
     };
     if key.rank > 2 {
-        return Err(CursorError::Malformed);
-    }
-    if *bound != binding {
-        return Err(CursorError::Stale);
+        return Err(StorageError::CursorExpired);
     }
     Ok(key)
 }
@@ -249,39 +232,33 @@ impl QueryHandler for QueueService {
                     consumer: i.consumer_id.as_ref().map(|c| c.as_str().to_owned()),
                     operation_id: i.operation_id.clone(),
                 };
-                let binding = cursor_binding(snapshot, &filter);
-                let after = match &i.page.cursor {
-                    None => None,
-                    Some(c) => Some(decode_cursor(&c.0, &binding).map_err(|e| match e {
-                        CursorError::Malformed => {
-                            fault(DomainErrorCode::InvalidArgument, RetryAdvice::Never)
-                        }
-                        CursorError::Stale => fault(
-                            DomainErrorCode::CursorExpired,
-                            RetryAdvice::RefreshAndNewRequest,
-                        ),
-                    })?),
-                };
-                let limit = u16::try_from(i.page.limit.get())
-                    .unwrap_or(u16::MAX)
-                    .min(500);
-                let page = snapshot
-                    .queue()
-                    .deliveries(&filter, after.as_ref(), limit)
-                    .map_err(storage)?;
-                let mut items = Vec::with_capacity(page.entries.len());
-                for e in &page.entries {
-                    let op = operation_state(op_state, e).map_err(storage)?;
-                    items.push(delivery_record(e, op).map_err(storage)?);
-                }
-                let next_cursor = page.next.as_ref().map(|k| encode_cursor(k, &binding));
-                OperationResult::QueueInspect {
-                    value: Page {
-                        items: BoundedList(items),
-                        has_more: next_cursor.is_some(),
-                        next_cursor,
+                let binding = cursor_binding(ctx, &filter);
+                let paged = cursor::page(
+                    &binding,
+                    &i.page,
+                    |after, n| {
+                        let after = after.map(parse_key).transpose()?;
+                        Ok(snapshot
+                            .queue()
+                            .deliveries(&filter, after.as_ref(), n)?
+                            .entries)
                     },
-                }
+                    key_position,
+                )
+                .map_err(|e| match e {
+                    StorageError::CursorExpired => fault(
+                        DomainErrorCode::CursorExpired,
+                        RetryAdvice::RefreshAndNewRequest,
+                    ),
+                    e => storage(e),
+                })?;
+                let value = paged
+                    .try_into_page(|e| {
+                        let op = operation_state(op_state, &e)?;
+                        delivery_record(&e, op)
+                    })
+                    .map_err(storage)?;
+                OperationResult::QueueInspect { value }
             }
             Input::ConsumerStatus(i) => {
                 let consumer = i.consumer_id.as_str();

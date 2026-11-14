@@ -71,7 +71,7 @@ use crate::protocol::{
     ActorId, CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, ProjectId,
     Protocol, RetryAdvice, Revision, RevisionDimension, RootId,
 };
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use serde_json::json;
 use std::sync::Arc;
 use transcript::{AppendPath, BatchOutcome, BatchRefusal, SESSION_AGGREGATE, SessionBatch};
@@ -853,53 +853,27 @@ impl SessionService {
         };
         let closed_part = format!("{:?}", input.closed);
         let binding = CursorBinding::new(ctx, "sessions.list", &[&scope_part, &closed_part], 1);
-        let after = match &input.page.cursor {
-            None => None,
-            Some(c) => {
-                let position = binding.decode(&c.0)?;
-                let (t, id) = position
-                    .split_once(':')
-                    .ok_or(StorageError::CursorExpired)?;
-                Some(SessionPosition {
-                    created_at_ms: t.parse().map_err(|_| StorageError::CursorExpired)?,
-                    id: Id::new(id).map_err(|_| StorageError::CursorExpired)?,
-                })
-            }
-        };
-        let limit = input.page.limit.get() as u16;
-        let rows = read.sessions(&scope, input.closed, after.as_ref(), limit)?;
-        let has_more = match rows.last() {
-            Some(last) if rows.len() == limit as usize => !read
-                .sessions(
-                    &scope,
-                    input.closed,
-                    Some(&SessionPosition {
-                        created_at_ms: last.created_at_ms,
-                        id: last.id.clone(),
-                    }),
-                    1,
-                )?
-                .is_empty(),
-            _ => false,
-        };
-        let next_cursor = match (has_more, rows.last()) {
-            (true, Some(last)) => Some(BoundedText(binding.encode(&format!(
-                "{}:{}",
-                last.created_at_ms,
-                last.id.as_str()
-            )))),
-            _ => None,
-        };
-        Ok(OperationResult::SessionsList {
-            value: Page {
-                items: BoundedList(
-                    rows.iter()
-                        .map(|s| record_from(read, s))
-                        .collect::<Result<_, _>>()?,
-                ),
-                has_more: next_cursor.is_some(),
-                next_cursor,
+        let rows = cursor::page(
+            &binding,
+            &input.page,
+            |after, n| {
+                let after = after
+                    .map(|position| {
+                        let (t, id) = position
+                            .split_once(':')
+                            .ok_or(StorageError::CursorExpired)?;
+                        Ok::<_, StorageError>(SessionPosition {
+                            created_at_ms: t.parse().map_err(|_| StorageError::CursorExpired)?,
+                            id: Id::new(id).map_err(|_| StorageError::CursorExpired)?,
+                        })
+                    })
+                    .transpose()?;
+                read.sessions(&scope, input.closed, after.as_ref(), n)
             },
+            |s| format!("{}:{}", s.created_at_ms, s.id.as_str()),
+        )?;
+        Ok(OperationResult::SessionsList {
+            value: rows.try_into_page(|s| record_from(read, &s))?,
         })
     }
 
@@ -1222,31 +1196,19 @@ impl SessionService {
         let session = visible_session(read, ctx, &input.session_id)?;
         Self::current_epoch(&session, &input.expected_context_epoch)?;
         let binding = Self::sources_binding(ctx, &session);
-        let after = match &input.page.cursor {
-            None => 0,
-            Some(c) => binding
-                .decode(&c.0)?
-                .parse::<i64>()
-                .map_err(|_| StorageError::CursorExpired)?,
-        };
-        let limit = input.page.limit.get() as u16;
-        let rows = Self::recorded_sources(read, &session, after, limit)?;
-        let has_more = match rows.last() {
-            Some((ordinal, _)) if rows.len() == limit as usize => {
-                !Self::recorded_sources(read, &session, *ordinal, 1)?.is_empty()
-            }
-            _ => false,
-        };
-        let next_cursor = match (has_more, rows.last()) {
-            (true, Some((ordinal, _))) => Some(BoundedText(binding.encode(&ordinal.to_string()))),
-            _ => None,
-        };
-        Ok(OperationResult::SessionsContextSources {
-            value: Page {
-                items: BoundedList(rows.into_iter().map(|(_, s)| s).collect()),
-                has_more: next_cursor.is_some(),
-                next_cursor,
+        let rows = cursor::page(
+            &binding,
+            &input.page,
+            |after, n| {
+                let after = after.map_or(Ok(0), |a| {
+                    a.parse::<i64>().map_err(|_| StorageError::CursorExpired)
+                })?;
+                Self::recorded_sources(read, &session, after, n)
             },
+            |(ordinal, _)| ordinal.to_string(),
+        )?;
+        Ok(OperationResult::SessionsContextSources {
+            value: rows.try_into_page(|(_, s)| Ok::<_, StorageError>(s))?,
         })
     }
 }

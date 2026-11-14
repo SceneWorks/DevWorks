@@ -28,7 +28,7 @@ use crate::protocol::{
     ActorId, AssignmentId, CorrelationId, Counter, DomainErrorCode, DomainFault, Id,
     OperationState, ProjectId, Revision, RevisionDimension,
 };
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::runs::substrate::{Fenced, NewRunAssignment};
 use crate::services::runs::{self, ControlService};
 use crate::services::sessions::{Failure, Refusal, decided, query_fault, rev};
@@ -270,6 +270,13 @@ fn failure(error: StorageError) -> Failure {
         .into(),
         StorageError::InvalidRecord(_) => {
             Refusal::new(DomainErrorCode::InvalidArgument, "agent_message", None).into()
+        }
+        // An inbox cursor from another caller, inbox or format: the caller restarts from a
+        // fresh receive.
+        StorageError::CursorExpired => {
+            Refusal::new(DomainErrorCode::CursorExpired, "agent_inbox_cursor", None)
+                .retry(crate::protocol::RetryAdvice::RefreshAndNewRequest)
+                .into()
         }
         other => other.into(),
     }
@@ -1079,76 +1086,43 @@ impl AgentService {
             ],
             project.scope_revision,
         );
-        let before = input
-            .page
-            .cursor
-            .as_ref()
-            .map(|c| {
-                binding.decode(&c.0).and_then(|s| {
-                    crate::protocol::Id::new(s).map_err(|_| StorageError::CursorExpired)
-                })
-            })
-            .transpose()?;
-        let limit = input.page.limit.get() as u16;
-        let rows = snapshot.runs().agent_assignment_thread(
-            &root.project_id,
-            &assignment.id,
-            direction,
-            input.unacknowledged_only,
-            before.as_ref(),
-            limit,
-        )?;
-        let next = if rows.len() == usize::from(limit) {
-            let last = rows.last().map(|(m, _)| &m.id);
-            if snapshot
-                .runs()
-                .agent_assignment_thread(
+        let rows = cursor::page(
+            &binding,
+            &input.page,
+            |before, n| {
+                let before = before
+                    .map(|s| crate::protocol::Id::new(s).map_err(|_| StorageError::CursorExpired))
+                    .transpose()?;
+                snapshot.runs().agent_assignment_thread(
                     &root.project_id,
                     &assignment.id,
                     direction,
                     input.unacknowledged_only,
-                    last,
-                    1,
-                )?
-                .is_empty()
-            {
-                None
-            } else {
-                last.map(|id| BoundedText(binding.encode(id.as_str())))
-            }
-        } else {
-            None
-        };
-        let items = rows
-            .into_iter()
-            .map(|(m, d)| {
-                let delivery = d.unwrap_or(StoredAgentDelivery {
-                    sequence: 0,
-                    message_id: m.id.clone(),
-                    project_id: m.project_id.clone(),
-                    recipient_assignment_id: Some(assignment.id.clone()),
-                    recipient_session_id: None,
-                    recipient_human: false,
-                    state: "Pending".into(),
-                    revision: 1,
-                    delivered_at_ms: None,
-                    read_at_ms: None,
-                    resolved_at_ms: None,
-                    handed_over: false,
-                    handed_to_session_id: None,
-                });
-                wire(&m, &delivery)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let has_more = next.is_some();
-        Ok((
-            Page {
-                items: BoundedList(items),
-                next_cursor: next,
-                has_more,
+                    before.as_ref(),
+                    n,
+                )
             },
-            project.scope_revision,
-        ))
+            |(m, _)| m.id.as_str().to_owned(),
+        )?;
+        let page = rows.try_into_page(|(m, d)| {
+            let delivery = d.unwrap_or(StoredAgentDelivery {
+                sequence: 0,
+                message_id: m.id.clone(),
+                project_id: m.project_id.clone(),
+                recipient_assignment_id: Some(assignment.id.clone()),
+                recipient_session_id: None,
+                recipient_human: false,
+                state: "Pending".into(),
+                revision: 1,
+                delivered_at_ms: None,
+                read_at_ms: None,
+                resolved_at_ms: None,
+                handed_over: false,
+                handed_to_session_id: None,
+            });
+            wire(&m, &delivery)
+        })?;
+        Ok((page, project.scope_revision))
     }
 }
 
@@ -1522,13 +1496,19 @@ fn post_retained(
     })
 }
 
-fn receive_selection(input: &ops::ReceiveInput) -> Result<(i64, u16, u64), StorageError> {
-    let after = input
-        .cursor
-        .as_ref()
-        .map(|cursor| retained::parse_inbox_cursor(&cursor.0))
-        .transpose()?
-        .unwrap_or(0);
+/// The delivery sequence a receive continues after (0: from the start of the inbox).
+fn receive_after(
+    ctx: &InvocationContext,
+    input: &ops::ReceiveInput,
+    project: &ProjectId,
+    recipient: &retained::Recipient,
+) -> Result<i64, StorageError> {
+    input.cursor.as_ref().map_or(Ok(0), |cursor| {
+        retained::parse_inbox_cursor(&retained::inbox_binding(ctx, project, recipient), &cursor.0)
+    })
+}
+
+fn receive_selection(input: &ops::ReceiveInput) -> Result<(u16, u64), StorageError> {
     let limit = u16::try_from(input.limit.as_ref().map_or(10, Revision::get))
         .map_err(|_| StorageError::InvalidRecord("inbox limit".into()))?;
     if !(1..=100).contains(&limit) {
@@ -1538,7 +1518,7 @@ fn receive_selection(input: &ops::ReceiveInput) -> Result<(i64, u16, u64), Stora
     if !(0..=55).contains(&wait) {
         return Err(StorageError::InvalidRecord("inbox wait_seconds".into()));
     }
-    Ok((after, limit, wait as u64))
+    Ok((limit, wait as u64))
 }
 
 fn receive_retained(
@@ -1549,7 +1529,7 @@ fn receive_retained(
     if input.session_id.is_some() && input.session_id.as_ref() != ctx.session_id() {
         return Err(denied());
     }
-    let (after, limit, _) = receive_selection(input)?;
+    let (limit, _) = receive_selection(input)?;
     let (project, recipient) = if let Some(session_id) = ctx.session_id() {
         let session = tx.sessions().session(session_id)?.ok_or_else(denied)?;
         let project = session.project_id.ok_or_else(denied)?;
@@ -1570,6 +1550,7 @@ fn receive_retained(
             retained::Recipient::Human,
         )
     };
+    let after = receive_after(ctx, input, &project, &recipient)?;
     let page = retained::deliver_inbox(
         tx,
         ctx,
@@ -1603,7 +1584,10 @@ fn receive_retained(
     Ok((
         RetainedInboxResult {
             items: BoundedList(items),
-            next_cursor: BoundedText(retained::inbox_cursor(page.next_sequence)?),
+            next_cursor: BoundedText(retained::inbox_cursor(
+                &retained::inbox_binding(ctx, &project, &recipient),
+                page.next_sequence,
+            )?),
         },
         changed,
     ))
@@ -1646,9 +1630,10 @@ fn ack_retained(
     };
     let selection = match (&input.messages, &input.up_to) {
         (Some(ids), None) => retained::AckSelection::Messages(ids.0.clone()),
-        (None, Some(cursor)) => {
-            retained::AckSelection::Through(retained::parse_inbox_cursor(&cursor.0)?)
-        }
+        (None, Some(cursor)) => retained::AckSelection::Through(retained::parse_inbox_cursor(
+            &retained::inbox_binding(ctx, &project, &recipient),
+            &cursor.0,
+        )?),
         _ => unreachable!("validated one ack selection"),
     };
     let resolution = input.resolution.as_ref().map(|value| match value {
@@ -2123,7 +2108,7 @@ impl CommandHandler for AgentService {
         let OperationInput::Agents(ops::Input::Receive(input)) = command.input() else {
             return Ok(None);
         };
-        let Ok((after, limit, wait)) = receive_selection(input) else {
+        let Ok((limit, wait)) = receive_selection(input) else {
             return Ok(None);
         };
         if wait == 0 {
@@ -2178,6 +2163,7 @@ impl CommandHandler for AgentService {
                 {
                     return Err(denied());
                 }
+                let after = receive_after(ctx, input, &project, &recipient)?;
                 if after > snapshot.runs().agent_delivery_head()? {
                     return Err(StorageError::CursorExpired);
                 }
