@@ -1269,10 +1269,10 @@ impl devworks_core::ports::secrets::SecretResolver for GitHubSecrets {
         &self,
         _: &devworks_core::authority::redact::SecretRef,
     ) -> Result<
-        devworks_core::ports::secrets::SecretValue,
+        devworks_core::ports::secrets::Secret,
         devworks_core::ports::secrets::SecretUnavailable,
     > {
-        Ok(devworks_core::ports::secrets::SecretValue::new(
+        Ok(devworks_core::ports::secrets::Secret::new(
             "test-private-token",
         ))
     }

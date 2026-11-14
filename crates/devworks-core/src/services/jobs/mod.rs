@@ -75,14 +75,14 @@ use crate::protocol::records::{
     PageRequest, RouteIntent, Schedule, UsageItem, UsageReport,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Page};
+use crate::protocol::support::{BoundedList, BoundedText, Limit};
 use crate::protocol::{
     CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId, OperationState,
     ProjectId, Revision, RevisionDimension,
 };
 use crate::registry::{self, Envelope, Mode, SchemaRevision};
 use crate::services::UseCases;
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::{Failure, Refusal, not_found, project_visible, query_fault, rev};
 use occurrence::Plan;
 use serde::de::DeserializeOwned;
@@ -475,27 +475,26 @@ struct RunFacts {
     links: Vec<crate::protocol::RootId>,
     usage: UsageReport,
 }
-/// A page of a run's usage items with totals over all of them.
+/// A page of a run's usage items with totals over all of them. Without a page the report holds
+/// the first [`USAGE_PAGE`] items and no cursor.
 fn usage_report(
     read: &dyn JobRead,
     run: &Id,
-    after: Option<i64>,
-    limit: u16,
-    binding: Option<&CursorBinding>,
+    page: Option<(&CursorBinding, &PageRequest)>,
 ) -> Result<UsageReport, StorageError> {
-    let limit = limit.clamp(1, 500);
-    let rows = read.run_usage(run, after, limit)?;
-    let more = rows.len() == usize::from(limit)
-        && rows
-            .last()
-            .map(|l| read.run_usage(run, Some(l.seq), 1))
-            .transpose()?
-            .is_some_and(|n| !n.is_empty());
-    let totals = read.usage_totals(run)?;
-    let next_cursor = match (more, binding, rows.last()) {
-        (true, Some(b), Some(l)) => Some(BoundedText(b.encode(&l.seq.to_string()))),
-        _ => None,
+    let (rows, next_cursor) = match page {
+        Some((binding, request)) => {
+            let paged = cursor::page(
+                binding,
+                request,
+                |after, n| read.run_usage(run, seq_position(after)?, n),
+                |l| l.seq.to_string(),
+            )?;
+            (paged.items, paged.next_cursor)
+        }
+        None => (read.run_usage(run, None, USAGE_PAGE)?, None),
     };
+    let totals = read.usage_totals(run)?;
     Ok(UsageReport {
         items: BoundedList(rows.iter().map(usage_item).collect::<Result<Vec<_>, _>>()?),
         total_tracked_usd: wire(json!(money(totals.tracked_pico_usd)))?,
@@ -569,7 +568,7 @@ fn build_run(run: &StoredJobRun, facts: RunFacts) -> Result<JobRun, StorageError
 fn run_in_tx(tx: &mut dyn WriteTransaction, run: &StoredJobRun) -> Result<JobRun, StorageError> {
     let state = op_state(tx.operations(), run)?;
     let links = tx.jobs().run_links(&run.id)?;
-    let usage = usage_report(tx.jobs(), &run.id, None, USAGE_PAGE, None)?;
+    let usage = usage_report(tx.jobs(), &run.id, None)?;
     build_run(
         run,
         RunFacts {
@@ -582,16 +581,14 @@ fn run_in_tx(tx: &mut dyn WriteTransaction, run: &StoredJobRun) -> Result<JobRun
 fn run_in_snapshot(
     s: &dyn ReadSnapshot,
     run: &StoredJobRun,
-    usage: Option<(Option<i64>, u16)>,
-    binding: Option<&CursorBinding>,
+    usage: Option<(&CursorBinding, &PageRequest)>,
 ) -> Result<JobRun, StorageError> {
-    let (after, limit) = usage.unwrap_or((None, USAGE_PAGE));
     build_run(
         run,
         RunFacts {
             state: op_state(s.operations(), run)?,
             links: s.jobs().run_links(&run.id)?,
-            usage: usage_report(s.jobs(), &run.id, after, limit, binding)?,
+            usage: usage_report(s.jobs(), &run.id, usage)?,
         },
     )
 }
@@ -1272,41 +1269,12 @@ impl JobService {
             Some(false) => "disabled",
         };
         let binding = CursorBinding::new(ctx, "jobs.list", &[&key, filter], 1);
-        let after: Option<(String, String)> = match &i.page.cursor {
-            None => None,
-            Some(c) => {
-                let at = binding.decode(&c.0)?;
-                let (title, id) = parse_list_position(&at).ok_or(StorageError::CursorExpired)?;
-                Some((title, id))
-            }
-        };
-        let limit = i.page.limit.get() as u16;
-        let rows = s.jobs().jobs(
-            &scope,
-            i.enabled,
-            after.as_ref().map(|(t, id)| (t.as_str(), id.as_str())),
-            limit,
-        )?;
-        let more = rows.len() == usize::from(limit)
-            && rows.last().is_some_and(|l| {
-                s.jobs()
-                    .jobs(&scope, i.enabled, Some((&l.title, l.id.as_str())), 1)
-                    .is_ok_and(|n| !n.is_empty())
-            });
-        let mut items = Vec::new();
-        for j in &rows {
-            items.push(build_job(j, job_facts(s.jobs(), j)?)?);
-        }
-        let next_cursor = match (more, rows.last()) {
-            (true, Some(l)) => Some(BoundedText(binding.encode(&list_position(&l.title, &l.id)))),
-            _ => None,
-        };
+        let rows = job_page(s.jobs(), &scope, i.enabled, &binding, &i.page)?;
         Ok(OperationResult::JobsList {
-            value: Page {
-                items: BoundedList(items),
-                has_more: next_cursor.is_some(),
-                next_cursor,
-            },
+            value: rows.try_into_page(|j| {
+                let facts = job_facts(s.jobs(), &j)?;
+                build_job(&j, facts)
+            })?,
         })
     }
 
@@ -1332,37 +1300,31 @@ impl JobService {
                 1,
             )
         });
-        let usage = match (&i.usage, &usage_binding) {
-            (Some(p), Some(b)) => Some((page_after(p, b)?, p.limit.get() as u16)),
-            _ => None,
-        };
+        let usage_request = i.usage.clone().unwrap_or(PageRequest {
+            limit: Limit::new(u32::from(USAGE_PAGE)).expect("usage page size"),
+            cursor: None,
+        });
         let run = selected
             .as_ref()
-            .map(|r| run_in_snapshot(s, r, usage, usage_binding.as_ref()))
+            .map(|r| run_in_snapshot(s, r, usage_binding.as_ref().map(|b| (b, &usage_request))))
             .transpose()?;
         let (runs, runs_next_cursor) = match &i.history {
             None => (None, None),
             Some(p) => {
                 let binding =
                     CursorBinding::new(ctx, "jobs.inspect.history", &[job.id.as_str()], 1);
-                let before = page_after(p, &binding)?;
-                let limit = p.limit.get() as u16;
-                let rows = s.jobs().job_runs(&job.id, before, limit)?;
-                let more = rows.len() == usize::from(limit)
-                    && rows
-                        .last()
-                        .map(|l| s.jobs().job_runs(&job.id, Some(l.seq), 1))
-                        .transpose()?
-                        .is_some_and(|n| !n.is_empty());
-                let mut items = Vec::new();
-                for r in &rows {
-                    items.push(run_in_snapshot(s, r, None, None)?);
-                }
-                let cursor = match (more, rows.last()) {
-                    (true, Some(l)) => Some(BoundedText(binding.encode(&l.seq.to_string()))),
-                    _ => None,
-                };
-                (Some(BoundedList(items)), cursor)
+                let rows = cursor::page(
+                    &binding,
+                    p,
+                    |before, n| s.jobs().job_runs(&job.id, seq_position(before)?, n),
+                    |l| l.seq.to_string(),
+                )?;
+                let items = rows
+                    .items
+                    .iter()
+                    .map(|r| run_in_snapshot(s, r, None))
+                    .collect::<Result<Vec<_>, _>>()?;
+                (Some(BoundedList(items)), rows.next_cursor)
             }
         };
         Ok(OperationResult::JobsInspect {
@@ -1378,6 +1340,30 @@ impl JobService {
 
 /// The position a job listing continues after: the last job's ID, then its title. An ID never
 /// contains a newline, so the first newline always ends it, whatever the title holds.
+fn job_page(
+    read: &dyn JobRead,
+    scope: &JobScope,
+    enabled: Option<bool>,
+    binding: &CursorBinding,
+    request: &PageRequest,
+) -> Result<cursor::Paged<StoredJob>, StorageError> {
+    cursor::page(
+        binding,
+        request,
+        |after, n| {
+            let after = after
+                .map(|at| parse_list_position(at).ok_or(StorageError::CursorExpired))
+                .transpose()?;
+            read.jobs(
+                scope,
+                enabled,
+                after.as_ref().map(|(t, id)| (t.as_str(), id.as_str())),
+                n,
+            )
+        },
+        |l| list_position(&l.title, &l.id),
+    )
+}
 fn list_position(title: &str, id: &Id) -> String {
     format!("{}\n{title}", id.as_str())
 }
@@ -1388,15 +1374,9 @@ fn parse_list_position(at: &str) -> Option<(String, String)> {
 }
 
 /// The sequence a page continues after (`None`: the first page).
-fn page_after(p: &PageRequest, binding: &CursorBinding) -> Result<Option<i64>, StorageError> {
-    match &p.cursor {
-        None => Ok(None),
-        Some(c) => binding
-            .decode(&c.0)?
-            .parse()
-            .map(Some)
-            .map_err(|_| StorageError::CursorExpired),
-    }
+fn seq_position(at: Option<&str>) -> Result<Option<i64>, StorageError> {
+    at.map(|a| a.parse().map_err(|_| StorageError::CursorExpired))
+        .transpose()
 }
 
 impl QueryHandler for JobService {
@@ -1474,7 +1454,7 @@ pub fn record_of(s: &dyn ReadSnapshot, job: &StoredJob) -> Result<JobRecord, Sto
 }
 /// The record of a run with its first usage page.
 pub fn run_record_of(s: &dyn ReadSnapshot, run: &StoredJobRun) -> Result<JobRun, StorageError> {
-    run_in_snapshot(s, run, None, None)
+    run_in_snapshot(s, run, None)
 }
 /// The operation journal entry a new run records before anything is dispatched.
 pub(crate) fn run_operation(id: OperationId, job: &StoredJob, run_id: &Id) -> NewOperation {
@@ -1957,5 +1937,149 @@ mod tests {
         }
         assert_eq!(parse_list_position("no newline"), None);
         assert_eq!(parse_list_position("bad id\ntitle"), None);
+    }
+
+    /// A job store whose first listing read fills the page and whose every later read fails.
+    struct FailingProbe(std::cell::Cell<u32>);
+    impl JobRead for FailingProbe {
+        fn jobs(
+            &self,
+            _: &JobScope,
+            _: Option<bool>,
+            _: Option<(&str, &str)>,
+            limit: u16,
+        ) -> Result<Vec<StoredJob>, StorageError> {
+            self.0.set(self.0.get() + 1);
+            if self.0.get() > 1 {
+                return Err(StorageError::Busy);
+            }
+            let job = StoredJob {
+                id: Id::new("job-1").unwrap(),
+                revision: 1,
+                project_id: None,
+                title: "Job".into(),
+                kind: "Native".into(),
+                schedule: String::new(),
+                timezone: "UTC".into(),
+                definition: String::new(),
+                enabled: true,
+                authorized: true,
+                authorized_by: None,
+                hold: None,
+                activated_epoch: 0,
+                project_epoch: 0,
+                anchor_at_ms: 0,
+                next_at_ms: None,
+                interrupted_run_id: None,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+                deleted_at_ms: None,
+            };
+            Ok(vec![job; usize::from(limit)])
+        }
+        fn usage_history(
+            &self,
+            _: Option<&crate::ports::storage::UsageJobPosition>,
+            _: u16,
+        ) -> Result<Vec<StoredJobUsage>, StorageError> {
+            unreachable!()
+        }
+        fn job(&self, _: &Id) -> Result<Option<StoredJob>, StorageError> {
+            unreachable!()
+        }
+        fn job_titled(
+            &self,
+            _: Option<&ProjectId>,
+            _: &str,
+        ) -> Result<Option<StoredJob>, StorageError> {
+            unreachable!()
+        }
+        fn due_jobs(&self, _: i64, _: u16) -> Result<Vec<StoredJob>, StorageError> {
+            unreachable!()
+        }
+        fn all_jobs(&self, _: Option<&Id>, _: u16) -> Result<Vec<StoredJob>, StorageError> {
+            unreachable!()
+        }
+        fn job_run(&self, _: &Id) -> Result<Option<StoredJobRun>, StorageError> {
+            unreachable!()
+        }
+        fn job_runs(
+            &self,
+            _: &Id,
+            _: Option<i64>,
+            _: u16,
+        ) -> Result<Vec<StoredJobRun>, StorageError> {
+            unreachable!()
+        }
+        fn active_run(&self, _: &Id) -> Result<Option<StoredJobRun>, StorageError> {
+            unreachable!()
+        }
+        fn runs_where(
+            &self,
+            _: &crate::ports::storage::RunFilter,
+            _: Option<&Id>,
+            _: u16,
+        ) -> Result<Vec<StoredJobRun>, StorageError> {
+            unreachable!()
+        }
+        fn run_links(&self, _: &Id) -> Result<Vec<crate::protocol::RootId>, StorageError> {
+            unreachable!()
+        }
+        fn checkpoint(
+            &self,
+            _: &Id,
+            _: &str,
+        ) -> Result<Option<crate::ports::storage::StoredJobCheckpoint>, StorageError> {
+            unreachable!()
+        }
+        fn action(
+            &self,
+            _: &Id,
+            _: &str,
+        ) -> Result<Option<crate::ports::storage::StoredJobAction>, StorageError> {
+            unreachable!()
+        }
+        fn unsettled_actions(
+            &self,
+            _: &Id,
+        ) -> Result<Vec<crate::ports::storage::StoredJobAction>, StorageError> {
+            unreachable!()
+        }
+        fn run_usage(
+            &self,
+            _: &Id,
+            _: Option<i64>,
+            _: u16,
+        ) -> Result<Vec<StoredJobUsage>, StorageError> {
+            unreachable!()
+        }
+        fn usage_totals(
+            &self,
+            _: &Id,
+        ) -> Result<crate::ports::storage::JobUsageTotals, StorageError> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn a_jobs_list_probe_error_is_returned_not_taken_as_the_end() {
+        let ctx = InvocationContext::new(
+            crate::protocol::ActorId(Id::new("user").unwrap()),
+            PrincipalKind::Human,
+            Id::new("invocation-1").unwrap(),
+            Id::new("native-ui").unwrap(),
+            crate::protocol::StoreId(Id::new("store-1").unwrap()),
+            Counter::new(0).unwrap(),
+            Revision::new(1).unwrap(),
+        );
+        let binding = CursorBinding::new(&ctx, "jobs.list", &["workspace", "any"], 1);
+        let request = PageRequest {
+            limit: Limit::new(500).unwrap(),
+            cursor: None,
+        };
+        let read = FailingProbe(std::cell::Cell::new(0));
+        let listed = job_page(&read, &JobScope::App, None, &binding, &request);
+        assert!(matches!(listed, Err(StorageError::Busy)), "{listed:?}");
+        assert_eq!(read.0.get(), 2, "the page read and then the probe");
     }
 }

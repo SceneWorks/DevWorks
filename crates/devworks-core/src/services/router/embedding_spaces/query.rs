@@ -9,9 +9,9 @@ use crate::protocol::records::{
     EmbeddingSpaceStatus, OperationRef,
 };
 use crate::protocol::results::OperationResult;
-use crate::protocol::support::{BoundedList, BoundedText, PositiveCounter};
+use crate::protocol::support::{BoundedText, PositiveCounter};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, OperationState};
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::{Failure, Refusal, counter, query_fault, rev};
 
 fn invalid(why: &str) -> StorageError {
@@ -210,41 +210,24 @@ impl EmbeddingSpaceService {
             &[source.source_digest(), &boot, native],
             inventory,
         );
-        let after = input
-            .page
-            .cursor
-            .as_ref()
-            .map(|c| binding.decode(&c.0))
-            .transpose()?
-            .map(Id::new)
-            .transpose()
-            .map_err(|_| StorageError::CursorExpired)?;
-        let rows = read
-            .router()
-            .embedding_candidates(after.as_ref(), input.page.limit.get() as u16)?;
-        let more = match rows.last() {
-            Some(last) if rows.len() == input.page.limit.get() as usize => !read
-                .router()
-                .embedding_candidates(Some(&last.id), 1)?
-                .is_empty(),
-            _ => false,
-        };
-        let next_cursor = if more {
-            rows.last()
-                .map(|last| BoundedText(binding.encode(last.id.as_str())))
-        } else {
-            None
-        };
-        let items = rows
-            .into_iter()
-            .map(|c| self.record(read, ctx, c))
-            .collect::<Result<Vec<_>, _>>()?;
+        let rows = cursor::page(
+            &binding,
+            &input.page,
+            |after, n| {
+                let after = after
+                    .map(|a| Id::new(a).map_err(|_| StorageError::CursorExpired))
+                    .transpose()?;
+                read.router().embedding_candidates(after.as_ref(), n)
+            },
+            |c| c.id.as_str().to_owned(),
+        )?;
+        let page = rows.try_into_page(|c| self.record(read, ctx, c))?;
         let available = self.qualification_available();
         Ok(OperationResult::RouterEmbeddingSpaces {
             value: EmbeddingSpacePage {
-                items: BoundedList(items),
-                next_cursor,
-                has_more: more,
+                items: page.items,
+                next_cursor: page.next_cursor,
+                has_more: page.has_more,
                 selection_revision: rev(selected.revision),
                 selected_candidate_id: selected.candidate_id,
                 selected_space_id: selected.space_id,
