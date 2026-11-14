@@ -4679,8 +4679,10 @@ fn every_schema_table_has_a_purge_record_kind() {
 
 /// No source file of core or the desktop that handles purge records spells a storage table
 /// name: they identify records only by `ProjectRecordKind`. A protocol family name that is
-/// also a table name (`"sessions"`), a JSON object member (`"operations":`) and a path
-/// component (`.join("packages")`) are other vocabularies and are not table names.
+/// also a table name (`"sessions"`), a JSON object member (`"operations":` when written,
+/// `["operations"]` when read), a path component (`.join("packages")`) and the desktop's
+/// persisted screen key (`Self::Instructions => "instructions"` in `ScreenId::key`, which
+/// names pending screen state, not a table) are other vocabularies and are not table names.
 #[test]
 fn purge_record_consumers_in_core_and_desktop_name_no_storage_table() {
     let families = devworks_core::registry::families();
@@ -4717,7 +4719,11 @@ fn purge_record_consumers_in_core_and_desktop_name_no_storage_table() {
             checked += 1;
             for table in &tables {
                 if text.match_indices(table.as_str()).any(|(at, _)| {
-                    !text[at + table.len()..].starts_with(':') && !text[..at].ends_with(".join(")
+                    let (before, after) = (&text[..at], &text[at + table.len()..]);
+                    !after.starts_with(':')
+                        && !(before.ends_with('[') && after.starts_with(']'))
+                        && !before.ends_with(".join(")
+                        && !before.ends_with("Self::Instructions => ")
                 }) {
                     found.push(format!("{}: {table}", path.display()));
                 }
