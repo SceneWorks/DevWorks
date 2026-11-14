@@ -1057,9 +1057,16 @@ fn layouts_keep_the_conversation_and_essential_controls_at_every_width_and_text_
 fn completion_cards_float_below_the_toolbar_without_moving_content_or_taking_focus() {
     let root = Root::new("cards");
     let engine = start(&root);
-    // Synthetic presentation cards must not be replaced by unrelated background inbox hints.
-    // Keep the real online backend and original focus/layout/ack assertions.
+    // Synthetic presentation cards must not be replaced by unrelated background inbox hints,
+    // nor by the shell's periodic completion-feed re-query, which replaces the cards with the
+    // real (empty) feed once 10 seconds pass without a refresh. That wall-clock bound is easy
+    // to cross: opening Settings probes the host's container runtimes, and a `docker` on PATH
+    // whose daemon does not answer holds that probe for its 10-second timeout. The test plays
+    // the feed itself (`reconcile` below), so the real feed is refused. Keep the real online
+    // backend and original focus/layout/ack assertions.
     let backend = Gate::new("notifications.list")
+        .with_frame_field("/body/completionOnly")
+        .refusing_queries()
         .missing_hints()
         .over(engine.backend());
     let mut h = harness(
@@ -1556,8 +1563,14 @@ fn the_add_ons_catalog_follows_every_page() {
 fn prepare_offered_pack(root: &Root, backend: &dyn Backend) -> String {
     use devworks_core::ports::packages::PackageInspector;
     use ed25519_dalek::SigningKey;
-    // A local signed index offering one real bundle.
-    let dir = root.0.join("offer-index");
+    // A local signed index offering one real bundle. Its location is long on every host (a
+    // deep target directory makes it longer still), so the offer row must keep its install
+    // button inside the window however long the folder path is.
+    let dir = root
+        .0
+        .join("a-publisher-index-folder-whose-path-is-wider-than-the-add-ons-detail-pane")
+        .join("nested-inside-another-long-folder-name-so-the-offer-label-overflows-one-row")
+        .join("offer-index");
     // Declared for this platform, so the screen offers it (its helper never starts).
     let host = devworks_adapters::packages::host_target_triple();
     let bundle = foreign_bundle_for(&dir, None, &host);
