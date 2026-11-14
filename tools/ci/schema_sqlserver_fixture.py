@@ -74,9 +74,10 @@ with tempfile.TemporaryDirectory(prefix='devworks-schema-sqlserver-') as folder:
         ready()
         for file in ('ca.pem', 'server.pem', 'server.key'):
             run('docker', 'cp', str(f/file), f'{name}:/tmp/devworks-metadata-{file}')
-        # 2017 images run SQL Server as root and have no mssql user.
+        # 2017 images run SQL Server as root with no mssql user; 2019 has the user but no
+        # mssql group, so change only the owner.
         run('docker', 'exec', '-u', 'root', name, 'sh', '-c',
-            'if id mssql >/dev/null 2>&1; then chown mssql:mssql /tmp/devworks-metadata-server.key; fi')
+            'if id mssql >/dev/null 2>&1; then chown mssql /tmp/devworks-metadata-server.key; fi')
         run('docker', 'exec', '-u', 'root', name, 'chmod', '600', '/tmp/devworks-metadata-server.key')
         for key, value in [('network.tlscert', '/tmp/devworks-metadata-server.pem'),
                            ('network.tlskey', '/tmp/devworks-metadata-server.key'),
