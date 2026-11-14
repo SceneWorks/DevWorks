@@ -92,7 +92,7 @@ impl HeldWire {
         }
     }
 }
-struct Body(Option<Vec<u8>>);
+pub(super) struct Body(pub(super) Option<Vec<u8>>);
 struct Close;
 impl StreamCloser for Close {
     fn close(&self) -> Result<(), TransportError> {
@@ -180,10 +180,10 @@ async fn reached(count: &AtomicUsize, at_least: usize, bound: Duration) -> bool 
 }
 
 /// A runtime whose provider is `wire`, with `adjust` applied to its composition.
-async fn runtime_with(
+pub(super) async fn runtime_with(
     fx: &Fx,
     authority: Arc<dyn AuthorityPort>,
-    wire: Arc<HeldWire>,
+    wire: Arc<dyn StreamingHttp>,
     adjust: impl FnOnce(&mut Composition),
 ) -> Arc<devworks_engine::Runtime> {
     let mut composed = composition_with(
@@ -221,7 +221,7 @@ async fn runtime_with(
 
 /// A coordinator agent session pinned to a tool-capable model: the agent's invocation context
 /// and its record.
-fn pinned_agent_session(fx: &Fx) -> (InvocationContext, AgentRecord) {
+pub(super) fn pinned_agent_session(fx: &Fx) -> (InvocationContext, AgentRecord) {
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let activation = fx.launch("approval-wait-owner");
     let host = principal(&*fx.store, "approval-wait-host", PrincipalKind::Host);
