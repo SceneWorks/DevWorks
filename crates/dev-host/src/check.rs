@@ -93,7 +93,6 @@ impl VolumeProbe for SystemVolumeProbe {
 }
 
 /// The drive letter of a Windows path (`E:\x`, `\\?\E:\x`), if any.
-#[cfg_attr(not(windows), allow(dead_code))]
 fn drive_letter(path: &Path) -> Option<char> {
     match path.components().next()? {
         Component::Prefix(prefix) => match prefix.kind() {
@@ -107,18 +106,21 @@ fn drive_letter(path: &Path) -> Option<char> {
 }
 
 /// The volume a root should live on, when its path names one: `/Volumes/<name>` on macOS, the
-/// drive on Windows.
+/// drive on Windows (`E:`, also for a `\\?\E:\` path).
 pub fn volume_of(root: &Path) -> Option<String> {
     let mut parts = root.components();
     if let Some(Component::Prefix(prefix)) = parts.clone().next() {
-        return Some(prefix.as_os_str().to_string_lossy().into_owned());
+        return Some(match drive_letter(root) {
+            Some(drive) => format!("{drive}:"),
+            None => prefix.as_os_str().to_string_lossy().into_owned(),
+        });
     }
     match (parts.next(), parts.next(), parts.next()) {
         (
             Some(Component::RootDir),
             Some(Component::Normal(first)),
             Some(Component::Normal(name)),
-        ) if first == "Volumes" => Some(Path::new("/Volumes").join(name).display().to_string()),
+        ) if first == "Volumes" => Some(format!("/Volumes/{}", name.to_string_lossy())),
         _ => None,
     }
 }
@@ -128,6 +130,48 @@ pub fn missing_mount(root: &Path) -> String {
     match volume_of(root) {
         Some(volume) => format!("volume {volume} is not mounted"),
         None => format!("no dev volume is mounted at {} or above it", root.display()),
+    }
+}
+
+/// Whether the volume that should hold `root` is mounted: the nearest folder at or above `root`
+/// exists and, on Unix, sits on a different device than `/`. Touches the file system, so it
+/// runs only inside [`check`], never on the timeout path.
+fn volume_mounted(root: &Path) -> bool {
+    let Some(existing) = root.ancestors().find(|p| p.exists()) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (std::fs::metadata(existing), std::fs::metadata("/")) {
+            (Ok(found), Ok(system)) => found.dev() != system.dev(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // A drive letter or share that resolves at all is mounted.
+        let _ = existing;
+        true
+    }
+}
+
+/// The hint for a root that does not exist: its volume is missing, or the folder is.
+fn unavailable_hint(root: &Path) -> String {
+    if volume_mounted(root) {
+        "its volume is mounted, so the folder itself is missing".to_owned()
+    } else {
+        missing_mount(root)
+    }
+}
+
+/// The hint for a root the probe rejects: its volume is missing, or the variable names the
+/// wrong volume.
+fn wrong_volume_hint(root: &Path) -> String {
+    if volume_mounted(root) {
+        format!("set {ROOT_VAR} to a folder on the dev volume")
+    } else {
+        missing_mount(root)
     }
 }
 
@@ -143,21 +187,25 @@ pub fn check(vars: &Vars, probe: &dyn VolumeProbe) -> Result<PathBuf, String> {
     if !root.is_absolute() {
         return Err(format!("{ROOT_VAR}={raw} is not an absolute path"));
     }
-    let mount = missing_mount(&root);
     match std::fs::metadata(&root) {
         Ok(meta) if meta.is_dir() => {}
         Ok(_) => return Err(format!("{ROOT_VAR}={raw} is not a folder")),
         Err(e) => {
-            return Err(format!("{ROOT_VAR}={raw} is unavailable ({e}): {mount}"));
+            let hint = unavailable_hint(&root);
+            return Err(format!("{ROOT_VAR}={raw} is unavailable ({e}): {hint}"));
         }
     }
     probe
         .verify(&root)
-        .map_err(|reason| format!("{ROOT_VAR}={raw}: {reason}: {mount}"))?;
+        .map_err(|reason| format!("{ROOT_VAR}={raw}: {reason}; {}", wrong_volume_hint(&root)))?;
     if !root.join(MARKER).is_file() {
+        let why = if volume_mounted(&root) {
+            "it was never set up".to_owned()
+        } else {
+            format!("either it was never set up or {}", missing_mount(&root))
+        };
         return Err(format!(
-            "{ROOT_VAR}={raw} has no {MARKER} marker; it is not a set-up dev-host root \
-             (either it was never set up or {mount})"
+            "{ROOT_VAR}={raw} has no {MARKER} marker; it is not a set-up dev-host root ({why})"
         ));
     }
     Ok(root)
@@ -246,9 +294,13 @@ mod tests {
         let root = marked_root(&scratch);
         let err = check(&vars_for(&root), &Fake(false)).unwrap_err();
         assert!(err.contains("simulated system volume"), "{err}");
-        // The wording depends on where the scratch folder lives (e.g. TMPDIR under /Volumes),
-        // so compare with what `missing_mount` says for this root.
-        assert!(err.contains(&missing_mount(&root)), "{err}");
+        // The wording depends on where the scratch folder lives (TMPDIR under /Volumes, a
+        // tmpfs, a Windows drive), so compare with the hint for this root.
+        assert!(err.ends_with(&wrong_volume_hint(&root)), "{err}");
+        if cfg!(windows) {
+            // The scratch drive exists, so the message must not claim it is unmounted.
+            assert!(!err.contains("not mounted"), "{err}");
+        }
     }
 
     #[test]
@@ -266,7 +318,10 @@ mod tests {
         let scratch = Scratch::new("missing");
         let root = scratch.path().join("absent");
         let err = check(&vars_for(&root), &Fake(true)).unwrap_err();
-        assert!(err.contains(&missing_mount(&root)), "{err}");
+        assert!(err.ends_with(&unavailable_hint(&root)), "{err}");
+        if cfg!(windows) {
+            assert!(err.ends_with("the folder itself is missing"), "{err}");
+        }
         assert!(!root.exists());
     }
 
@@ -293,6 +348,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn volume_mounted_reads_the_nearest_existing_folder() {
+        let scratch = Scratch::new("mounted");
+        let missing = scratch.path().join("absent/deeper");
+        // Whatever holds the scratch folder holds its missing children too.
+        assert_eq!(volume_mounted(&missing), volume_mounted(scratch.path()));
+        #[cfg(unix)]
+        assert!(!volume_mounted(Path::new("/dev-host-no-such-folder/x")));
+        #[cfg(windows)]
+        {
+            let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+            let absent = Path::new(&format!("{system}\\")).join("dev-host-no-such-folder");
+            assert!(volume_mounted(&absent));
+            assert!(volume_mounted(&PathBuf::from(format!(r"\\?\{system}\x"))));
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn real_probe_rejects_the_system_root() {
@@ -315,5 +387,18 @@ mod tests {
         assert_eq!(drive_letter(Path::new(r"e:\dev-host")), Some('E'));
         assert_eq!(drive_letter(Path::new(r"\\?\E:\dev-host")), Some('E'));
         assert_eq!(drive_letter(Path::new(r"\\server\share\x")), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn missing_mount_names_the_drive_without_the_verbatim_prefix() {
+        assert_eq!(
+            missing_mount(Path::new(r"\\?\e:\dev-host")),
+            "volume E: is not mounted"
+        );
+        assert_eq!(
+            missing_mount(Path::new(r"E:\dev-host")),
+            "volume E: is not mounted"
+        );
     }
 }
