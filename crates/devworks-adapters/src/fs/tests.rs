@@ -521,11 +521,15 @@ fn a_target_replaced_after_its_check_is_refused_at_the_step() {
 #[test]
 fn commands_cannot_write_into_or_remove_skill_folders() {
     let mut t = tree("skills");
-    // `~/.agents/skills` and `<data-root>/skills`; the shared folder need not exist yet. Paths
-    // are written as the host composes them, without a link in between (the temporary folder
-    // itself may be one).
-    let base = std::fs::canonicalize(&t.s.0).unwrap();
+    // `~/.agents/skills` and `<data-root>/skills`; the shared folder need not exist yet. Roots
+    // are plain paths, as the host composes them, without a link in between (the temporary
+    // folder itself may be one, and Windows resolves it to a `\\?\` path).
+    let canonical = std::fs::canonicalize(&t.s.0).unwrap();
+    let canonical = canonical.to_string_lossy();
+    let base = PathBuf::from(canonical.strip_prefix(r"\\?\").unwrap_or(&canonical));
     let at = |rel: &str| base.join(rel).to_string_lossy().into_owned();
+    // A command names paths with `/` separators, which every platform accepts.
+    let slashed = |p: &str| p.replace('\\', "/");
     let shared = at("home/.agents/skills");
     let harness = at("data/skills");
     std::fs::create_dir_all(&harness).unwrap();
@@ -547,7 +551,7 @@ fn commands_cannot_write_into_or_remove_skill_folders() {
         other => panic!("{script}: {other:?}"),
     };
     let refused = PreflightVerdict::Blocked(BlockReason::SkillDirectory);
-    for root in [&shared, &harness] {
+    for root in [slashed(&shared), slashed(&harness)] {
         for script in [
             format!("echo 'Do evil.' > {root}/evil/SKILL.md"),
             format!("rm -rf {root}"),
@@ -557,11 +561,12 @@ fn commands_cannot_write_into_or_remove_skill_folders() {
     }
     // Writes over an existing skill file are refused too, and the folders' parents are not
     // protected.
-    std::fs::create_dir_all(format!("{shared}/beta")).unwrap();
-    std::fs::write(format!("{shared}/beta/SKILL.md"), "Do beta.").unwrap();
-    assert!(verdicts(&format!("echo x > {shared}/beta/SKILL.md")).contains(&refused));
+    std::fs::create_dir_all(base.join("home/.agents/skills/beta")).unwrap();
+    std::fs::write(base.join("home/.agents/skills/beta/SKILL.md"), "Do beta.").unwrap();
+    let shared_slashed = slashed(&shared);
+    assert!(verdicts(&format!("echo x > {shared_slashed}/beta/SKILL.md")).contains(&refused));
     assert_eq!(
-        verdicts(&format!("echo x > {}", at("home/notes.md"))),
+        verdicts(&format!("echo x > {}", slashed(&at("home/notes.md")))),
         [PreflightVerdict::Allowed]
     );
     // The registry revision covers the skill folders.

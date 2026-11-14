@@ -421,7 +421,8 @@ impl InstructionService {
             // The directory exists in the workspace: the item is no longer one project's draft.
             item.confined_project = None;
             // What is on disk; the last write of a harness directory stays as it was, so the
-            // pending change is never mistaken for an interrupted write and replaced.
+            // pending change is never mistaken for an interrupted write and replaced. A later
+            // activation decides over it (`supersede_disk`).
             item.observed_digest = Some(revision.content_digest.clone());
             item.present = true;
             item.root_path = Some(root_path);

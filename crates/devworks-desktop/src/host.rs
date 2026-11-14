@@ -1422,7 +1422,11 @@ mod skill_root_protection_tests {
             std::env::temp_dir().join(format!("devworks-skill-roots-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&scratch);
         std::fs::create_dir_all(scratch.join("home")).unwrap();
-        let scratch = std::fs::canonicalize(&scratch).unwrap();
+        // A plain path without links (Windows resolves to a `\\?\` path; the host's paths
+        // are plain).
+        let canonical = std::fs::canonicalize(&scratch).unwrap();
+        let canonical = canonical.to_string_lossy();
+        let scratch = PathBuf::from(canonical.strip_prefix(r"\\?\").unwrap_or(&canonical));
         std::fs::create_dir_all(scratch.join("data/skills")).unwrap();
         let mut config = DesktopConfig::new(scratch.join("data"));
         // `~/.agents/skills` before the person ever created it.
@@ -1432,7 +1436,9 @@ mod skill_root_protection_tests {
             scratch.join("home/.agents/skills"),
             scratch.join("data/skills"),
         ] {
-            let script = format!("echo 'Do evil.' > {}/evil/SKILL.md", root.display());
+            // A command names paths with `/` separators, which every platform accepts.
+            let root = root.display().to_string().replace('\\', "/");
+            let script = format!("echo 'Do evil.' > {root}/evil/SKILL.md");
             let ShellAssessment::Destructive { plans, .. } = assess_command(
                 &["sh".to_owned(), "-c".to_owned(), script.clone()],
                 Some(&scratch.display().to_string()),

@@ -14,6 +14,7 @@ use devworks_adapters::process::NativeProcessHost;
 use devworks_core::authority::HostAuthority;
 use devworks_core::authority::service::bind_principal;
 use devworks_core::context::{InvocationContext, PrincipalKind};
+use devworks_core::ports::skill_files::{SkillFile, SkillFileFault, SkillFiles};
 use devworks_core::ports::storage::*;
 use devworks_core::ports::{
     AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization, Clock, IdKind, IdSource,
@@ -50,6 +51,30 @@ impl AuthorityPort for NativeAuthority {
             protected_branches: &[],
         }
         .authorize(ctx, request)
+    }
+}
+
+/// The native harness folder, with writes that fail while `fail` is set.
+struct FlakyFiles {
+    native: NativeSkillFiles,
+    fail: std::sync::atomic::AtomicBool,
+}
+impl SkillFiles for FlakyFiles {
+    fn root(&self) -> Result<PathBuf, SkillFileFault> {
+        self.native.root()
+    }
+    fn materialize(&self, name: &str, files: &[SkillFile]) -> Result<(), SkillFileFault> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(SkillFileFault::Io("injected".into()));
+        }
+        self.native.materialize(name, files)
+    }
+    fn uncaptured_collision(
+        &self,
+        name: &str,
+        paths: &[String],
+    ) -> Result<Option<String>, SkillFileFault> {
+        self.native.uncaptured_collision(name, paths)
     }
 }
 
@@ -120,12 +145,15 @@ impl Fx {
         }
     }
     fn composition(&self) -> Composition {
+        self.composition_with(Arc::new(NativeSkillFiles::new(&self.harness)))
+    }
+    fn composition_with(&self, files: Arc<dyn SkillFiles>) -> Composition {
         let h = &self.h;
         let mut config = RuntimeConfig::new(id("skills-dispatcher"));
         config.approval_resume_interval = Duration::from_secs(3600);
         config.instructions = Some(InstructionComposition {
             source: Arc::new(NativeSourceTree::new()),
-            files: Arc::new(NativeSkillFiles::new(&self.harness)),
+            files,
             roots: SkillRoots {
                 shared: Some(self.shared.clone()),
                 harness: self.harness.clone(),
@@ -908,6 +936,56 @@ fn an_on_disk_skill_change_stays_pending_until_a_person_confirms_it() {
         let activations: Vec<_> = events.events.iter().filter(|e| e.kind == "InstructionActivated").collect();
         assert_eq!(activations.len(), 2);
         assert!(activations.iter().all(|e| e.actor.0.as_str() == "user" && e.payload["confirmedObservation"] == true));
+        app.shutdown().await;
+    });
+}
+
+/// A save over a pending on-disk edit whose write fails is written by the next sync; an edit
+/// made on disk after that save is never replaced.
+#[test]
+fn a_failed_write_after_a_save_over_a_pending_edit_is_repaired_by_the_next_sync() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let fx = Fx::new();
+    write_skill(&fx.harness, "gamma", &[("SKILL.md", "Do gamma.")]);
+    let files = Arc::new(FlakyFiles {
+        native: NativeSkillFiles::new(&fx.harness),
+        fail: false.into(),
+    });
+    runtime().block_on(async {
+        let (user, _, _) = fx.principals();
+        let app = boot(fx.composition_with(files.clone())).await.unwrap();
+        confirm_observed(&fx, &app, &user);
+        let skill = fx.harness.join("gamma/SKILL.md");
+        let gamma = find(&discover(&fx, &app, &user), "gamma", "harness").clone();
+        // The save's write fails; the folder recovers only when `fail` is cleared.
+        let save = |text: &str, expected: &str| {
+            files.fail.store(true, SeqCst);
+            applied(fx.command(&app, &user, "skills.draft", json!({"scope":{"kind":"Workspace"},"instructionId":gamma["id"],"expectedRevision":expected,"name":"gamma","content":fx.upload(&user, text)})))
+        };
+        let effective = |app: &Runtime| app.effective_skills().unwrap().skills[0].revision;
+        // A pending edit, then a person's save over it whose write fails.
+        std::fs::write(&skill, "Edited on disk.").unwrap();
+        discover(&fx, &app, &user);
+        save("Saved by the person.", "2");
+        assert_eq!(effective(&app), 3);
+        assert_eq!(std::fs::read(&skill).unwrap(), b"Edited on disk.");
+        // Once the folder recovers, the next sync writes the approved revision.
+        files.fail.store(false, SeqCst);
+        app.instructions().unwrap().sync().unwrap();
+        assert_eq!(std::fs::read(&skill).unwrap(), b"Saved by the person.");
+        // Another save whose write fails, then an unconfirmed edit before the next sync: the
+        // edit is recorded as pending and stays on disk.
+        save("Saved again.", "3");
+        assert_eq!(effective(&app), 4);
+        std::fs::write(&skill, "Edited after the save.").unwrap();
+        files.fail.store(false, SeqCst);
+        app.instructions().unwrap().sync().unwrap();
+        app.instructions().unwrap().sync().unwrap();
+        assert_eq!(std::fs::read(&skill).unwrap(), b"Edited after the save.");
+        assert_eq!(effective(&app), 4);
+        let pending = newest(&fx, &app, &user, &gamma["id"]);
+        assert_eq!(pending["revision"], "5");
+        assert!(labels(&pending).contains(&"awaiting-confirmation".into()), "{pending}");
         app.shutdown().await;
     });
 }

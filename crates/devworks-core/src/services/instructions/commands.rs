@@ -466,6 +466,7 @@ impl InstructionService {
         if human {
             item.active_revision = Some(revision.revision);
             item.confined_project = None;
+            supersede_disk(&mut item);
         }
         item.version += 1;
         item.updated_at_ms = now;
@@ -856,6 +857,7 @@ impl InstructionService {
         }
         item.active_revision = Some(target.revision);
         item.confined_project = None;
+        supersede_disk(&mut item);
         item.version += 1;
         item.updated_at_ms = tx.now_ms();
         tx.instructions().update_instruction_item(&item)?;
@@ -1171,6 +1173,20 @@ fn harness_named(
         if done {
             return Ok(None);
         }
+    }
+}
+
+/// An activation of a harness skill decides what its directory holds: what is on disk now,
+/// confirmed or not, becomes replaceable by the new active revision, so a write that fails after
+/// the commit is repaired by the next sync. A change made on disk after the decision is
+/// observed with a new digest and is not replaceable.
+fn supersede_disk(item: &mut StoredInstructionItem) {
+    if item.kind == InstructionKind::Skill
+        && item.origin == InstructionOrigin::Harness
+        && item.present
+        && item.observed_digest.is_some()
+    {
+        item.materialized_digest = item.observed_digest.clone();
     }
 }
 

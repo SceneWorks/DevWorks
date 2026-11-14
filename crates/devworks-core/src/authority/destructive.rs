@@ -488,20 +488,26 @@ fn repository(fs: &dyn FilesystemResolver, r: &RegisteredRepository) -> Result<R
     })
 }
 
+/// A Windows path folded for comparison: lowercase, without the verbatim prefix a resolved
+/// (canonical) path carries, so `\\?\C:\x` and a plain `C:\x` written by a command compare equal.
+fn folded(p: &Path) -> PathBuf {
+    let text = p.to_string_lossy().to_lowercase();
+    let plain = match text.strip_prefix(r"\\?\unc\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned(),
+    };
+    PathBuf::from(plain)
+}
 fn same_path(a: &Path, b: &Path) -> bool {
     if cfg!(windows) {
-        a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        folded(a) == folded(b)
     } else {
         a == b
     }
 }
 fn path_within(inner: &Path, outer: &Path) -> bool {
     if cfg!(windows) {
-        let (i, o) = (
-            PathBuf::from(inner.to_string_lossy().to_lowercase()),
-            PathBuf::from(outer.to_string_lossy().to_lowercase()),
-        );
-        i.starts_with(o)
+        folded(inner).starts_with(folded(outer))
     } else {
         inner.starts_with(outer)
     }
