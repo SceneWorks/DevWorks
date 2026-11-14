@@ -31,7 +31,7 @@ fn object(field: &str, v: &Value) -> Result<(), StorageError> {
     }
 }
 fn digest(field: &str, d: &str) -> Result<(), StorageError> {
-    if d.len() == 64 && d.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if devworks_core::fingerprint::is_sha256_hex(d) {
         Ok(())
     } else {
         Err(invalid(format!("{field} must be a SHA-256 digest")))

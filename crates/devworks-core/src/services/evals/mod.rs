@@ -440,13 +440,10 @@ fn build_report(
     stopped: impl Fn() -> bool,
     abort_on_cancel: bool,
 ) -> Result<EvalReport, StorageError> {
-    let measurement = sha256_hex(
-        crate::jcs::canonicalize(
-            &serde_json::json!({"evaluator":"recorded-eval-v1","suite":suite}),
-        )
-        .map_err(|_| invalid("suite canonicalization"))?
-        .as_bytes(),
-    );
+    let measurement = crate::fingerprint::canonical_digest(
+        &serde_json::json!({"evaluator":"recorded-eval-v1","suite":suite}),
+    )
+    .map_err(|_| invalid("suite canonicalization"))?;
     let evidence = snapshot_evidence_digest(snapshot, session, suite, &stopped)?;
     let identity = sha256_hex(
         format!(

@@ -2,7 +2,6 @@
 use super::{
     ConventionService, access,
     indexing::commands::{EFFECT_CONSUMER, IndexJob, IndexTarget, JOB_KIND},
-    model,
 };
 use crate::{
     context::{InvocationContext, PrincipalKind},
@@ -107,7 +106,9 @@ impl ConventionService {
             .ok_or_else(|| missing(id))?;
         let job = job(&operation)?;
         let scoped = access::scope(read, ctx, scope, false)?;
-        if !private(ctx, &job) || !scoped.sees(&model::scope_storage(&job.scope)) {
+        if !private(ctx, &job)
+            || !scoped.sees(&crate::ports::storage::KnowledgeScope::from(&job.scope))
+        {
             return Err(missing(id));
         }
         let entry = read
@@ -133,10 +134,16 @@ impl ConventionService {
         let operation = tx.operations().operation(id)?.ok_or_else(|| missing(id))?;
         let job = job(&operation)?;
         let scoped = access::scope_in(tx, ctx, scope, false)?;
-        if !private(ctx, &job) || !scoped.sees(&model::scope_storage(&job.scope)) {
+        if !private(ctx, &job)
+            || !scoped.sees(&crate::ports::storage::KnowledgeScope::from(&job.scope))
+        {
             return Err(missing(id));
         }
-        access::writable(tx, ctx, &model::scope_storage(&job.scope))?;
+        access::writable(
+            tx,
+            ctx,
+            &crate::ports::storage::KnowledgeScope::from(&job.scope),
+        )?;
         if expected.get() != operation.revision {
             return Err(StorageError::conflict(
                 crate::protocol::RevisionDimension::Source,

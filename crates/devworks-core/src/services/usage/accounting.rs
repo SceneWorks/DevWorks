@@ -241,9 +241,7 @@ fn intent(request: &AttemptRequest, route: &StoredRouteRequest) -> Result<String
     let value = json!({"requestId":request.request_id,"actorId":request.actor_id,"workId":request.work_id,"jobRunId":request.job_run_id,"role":request.role,
         "modelId":route.model_id,"connectionId":route.connection_id,"sessionId":route.session_id,"purpose":route.purpose,
         "selection":request.selection,"inputTokens":request.input_tokens,"outputHeadroom":request.output_headroom,"unitHeadroom":request.unit_headroom,"dispatch":request.dispatch});
-    crate::jcs::canonicalize(&value)
-        .map(|value| crate::fingerprint::sha256_hex(value.as_bytes()))
-        .map_err(|_| invalid("invalid accounting intent"))
+    crate::fingerprint::canonical_digest(&value).map_err(|_| invalid("invalid accounting intent"))
 }
 
 fn prior_work_owner_unclosed(
@@ -1027,8 +1025,7 @@ pub fn observe(
     let (bounded, reported_usd) = bound_reported_cost(observation)?;
     let observation = &bounded;
     let payload = encoded(observation)?;
-    let digest = crate::jcs::canonicalize(&payload)
-        .map(|v| crate::fingerprint::sha256_hex(v.as_bytes()))
+    let digest = crate::fingerprint::canonical_digest(&payload)
         .map_err(|_| invalid("invalid usage observation"))?;
     if let Some(before) = tx.usage().usage_observation(id, &observation.key)? {
         if before.digest != digest {

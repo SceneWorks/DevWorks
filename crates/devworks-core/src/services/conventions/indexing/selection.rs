@@ -11,10 +11,7 @@ use crate::{
     protocol::{
         ActorId, EventId, Id, OperationId, OperationState, ProjectId, StoreId, data::DataScope,
     },
-    services::{
-        approvals,
-        conventions::{access, model},
-    },
+    services::{approvals, conventions::access},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -110,7 +107,8 @@ fn narrow(
             }
         }
     } else {
-        if model::scope_storage(&bound_scope(ctx)) != model::scope_storage(scope)
+        if crate::ports::storage::KnowledgeScope::from(&bound_scope(ctx))
+            != crate::ports::storage::KnowledgeScope::from(scope)
             && !matches!(scope, DataScope::Workspace)
         {
             return Err(StorageError::ScopeDenied);

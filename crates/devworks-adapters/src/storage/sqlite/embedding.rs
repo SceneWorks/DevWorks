@@ -144,10 +144,7 @@ fn selection(conn: &Connection) -> Result<StoredEmbeddingSelection, StorageError
     })
 }
 fn digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    devworks_core::fingerprint::is_sha256_hex(value)
 }
 fn validate(c: &StoredEmbeddingCandidate) -> Result<(), StorageError> {
     if c.name.is_empty()
@@ -170,18 +167,18 @@ fn validate(c: &StoredEmbeddingCandidate) -> Result<(), StorageError> {
         return Err(invalid("invalid embedding candidate identity"));
     }
     let model_identity = serde_json::json!({"version":1,"connectionId":c.connection_id,"endpointProfile":"Embedding","endpoint":c.endpoint,"accountRevision":c.account_revision.to_string(),"accountDigest":c.account_digest,"upstreamModelId":c.upstream_model_id});
-    let model = devworks_core::jcs::canonicalize(&model_identity)
+    let model = devworks_core::fingerprint::canonical_digest(&model_identity)
         .map_err(|_| invalid("embedding model identity"))?;
     let expected_encoder = serde_json::json!({"version":1,"modelDigest":c.model_digest,"dimensions":c.dimensions,"dimensionMode":c.dimension_mode,"metric":c.metric,"elementType":c.element_type,"encodingFormat":"float"});
-    if devworks_core::fingerprint::sha256_hex(model.as_bytes()) != c.model_digest
+    if model != c.model_digest
         || c.encoder_config != expected_encoder
         || c.space_id.as_str() != format!("embspace-{}", c.configuration_digest)
     {
         return Err(invalid("embedding semantic identity mismatch"));
     }
-    let canonical = devworks_core::jcs::canonicalize(&c.encoder_config)
+    let configuration = devworks_core::fingerprint::canonical_digest(&c.encoder_config)
         .map_err(|_| invalid("embedding encoder configuration"))?;
-    if devworks_core::fingerprint::sha256_hex(canonical.as_bytes()) != c.configuration_digest {
+    if configuration != c.configuration_digest {
         return Err(invalid("embedding configuration digest mismatch"));
     }
     if devworks_core::fingerprint::sha256_hex(c.endpoint.as_bytes()) != c.endpoint_digest {

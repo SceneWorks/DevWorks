@@ -114,12 +114,7 @@ impl EvalRepository for Unit<'_> {
                 "eval revisions, sequence, time and watermark must be nonnegative",
             ));
         }
-        if run.measurement_digest.len() != 64
-            || !run
-                .measurement_digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
+        if !devworks_core::fingerprint::is_sha256_hex(&run.measurement_digest) {
             return Err(invalid("eval measurement digest must be lowercase SHA-256"));
         }
         let report = serde_json::to_string(&run.report)
