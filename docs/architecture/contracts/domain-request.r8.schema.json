@@ -5714,6 +5714,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "allowScripts": {
+              "type": "boolean",
+              "x-since": 8
+            },
             "expectedRevision": {
               "$ref": "#/$defs/Revision"
             },
