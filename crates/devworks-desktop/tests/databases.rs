@@ -44,6 +44,11 @@ fn native_databases_create_sync_page_inspect_and_remove_only_indexed_metadata() 
     h.state_mut().navigate(Route::Databases);
     settle(&mut h);
     click(&mut h, Role::Button, "New database source");
+    // Data access switches are shown, but no data tool reads them yet.
+    assert!(has_text(
+        &h,
+        devworks_desktop::databases_screen::DATA_ACCESS_INACTIVE
+    ));
     replace(&mut h, "Database source name", "Native metadata fixture");
     click(&mut h, Role::Button, "Choose database file");
     click(&mut h, Role::Button, "Save database source");

@@ -299,8 +299,10 @@ pub struct RuntimeConfig {
     pub jobs: JobConfig,
     /// Time between scheduler ticks (commands that change jobs request one at once).
     pub scheduler_interval: Duration,
-    /// Already authorized immutable suites supplied by the host (DW-72 owns activation).
-    /// Empty by default: no automatic grading or transcript scans. Agents cannot activate suites.
+    /// Already authorized immutable suites supplied by the host. Empty by default: no automatic
+    /// grading or transcript scans. Agents cannot activate suites. Automatic grading (EVAL-02) is
+    /// not yet active in the app: no host supplies suites until suite versioning and user-approved
+    /// activation exist (DW-72); Help says so.
     pub automatic_eval_suites: Vec<EvalSuiteSnapshot>,
     /// Maximum delay before a lost terminal-state wakeup is repaired by a durable sweep.
     pub eval_interval: Duration,

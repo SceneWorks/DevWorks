@@ -517,3 +517,90 @@ pub fn post_message(
         item_versions,
     })
 }
+
+/// Host-authored notice to one session's retained inbox, written in the caller's transaction so
+/// it commits with the fact it reports. It is never an agent or human command: the sender is the
+/// store's host actor and no gateway admission is involved. A closed or missing session receives
+/// nothing (`Ok(None)`).
+pub fn post_host_notice(
+    tx: &mut dyn WriteTransaction,
+    session_id: &Id,
+    feature: Option<&RootId>,
+    body: &str,
+) -> Result<Option<Id>, StorageError> {
+    let body = body.trim();
+    if body.is_empty() || body.chars().count() > 8000 || body.contains('\0') {
+        return Err(StorageError::InvalidRecord(
+            "message body must be 1 to 8000 characters".into(),
+        ));
+    }
+    let Some(session) = tx.sessions().session(session_id)? else {
+        return Ok(None);
+    };
+    if session.closed() {
+        return Ok(None);
+    }
+    let Some(project) = session_project(tx, &session)? else {
+        return Ok(None);
+    };
+    let host = tx.store().host_actor.clone();
+    let now = tx.now_ms();
+    let message = StoredAgentMessage {
+        id: tx.new_id(IdKind::Event),
+        project_id: project.clone(),
+        root_id: None,
+        channel: "Session".into(),
+        from_assignment_id: None,
+        to_assignment_id: None,
+        message_class: MessageKind::Info.name().into(),
+        body: body.into(),
+        attachments: serde_json::json!([]),
+        in_reply_to_id: None,
+        state: None,
+        blocking: false,
+        idempotency_key: None,
+        revision: 1,
+        created_at_ms: now,
+        resolved_at_ms: None,
+        from_actor_id: host.clone(),
+        target_item_id: None,
+        target_feature_id: feature.cloned(),
+        resource_name: None,
+        target_session_id: Some(session_id.clone()),
+        to_human: false,
+        sender_session_id: None,
+        resolved_by_actor_id: None,
+        resolved_by_session_id: None,
+    };
+    tx.runs().insert_agent_message(&message)?;
+    let sequence = tx.runs().agent_delivery_head()? + 1;
+    tx.runs().insert_agent_delivery(&StoredAgentDelivery {
+        sequence,
+        message_id: message.id.clone(),
+        project_id: project.clone(),
+        recipient_assignment_id: None,
+        recipient_session_id: Some(session_id.clone()),
+        recipient_human: false,
+        state: "Pending".into(),
+        revision: 1,
+        delivered_at_ms: None,
+        read_at_ms: None,
+        resolved_at_ms: None,
+        handed_over: false,
+        handed_to_session_id: None,
+    })?;
+    let sequence = tx.runs().agent_event_head()? + 1;
+    tx.runs()
+        .insert_agent_message_event(&StoredAgentMessageEvent {
+            sequence,
+            project_id: project,
+            message_id: message.id.clone(),
+            kind: "Posted".into(),
+            actor_id: host,
+            recipient_assignment_id: None,
+            recipient_session_id: None,
+            recipient_human: false,
+            created_at_ms: now,
+        })?;
+    Ok(Some(message.id))
+}

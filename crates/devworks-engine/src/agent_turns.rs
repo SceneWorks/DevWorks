@@ -2155,6 +2155,7 @@ fn plan_request(
         pin_id: Some(route.pin_id.clone()),
         args_digest: sha256_hex(canonical.as_bytes()),
     };
+    let category = ReportCategory::for_agent_role(&owner.role);
     let attempt = AttemptRequest {
         admission_key: request_id.clone(),
         request_id,
@@ -2193,7 +2194,7 @@ fn plan_request(
         instruction_targets: Some(instruction_targets),
         context: ctx.clone(),
         logical,
-        category: ReportCategory::Assistant,
+        category,
         attempt,
         request: inference,
         nested: None,

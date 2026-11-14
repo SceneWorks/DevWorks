@@ -1,6 +1,6 @@
 # Databases and schema capabilities
 
-The Databases destination groups database connections and schema exploration. DevWorks reads database metadata only. No registered operation runs SQL you or an agent supplies, and none writes to a source database. Operations named `database.read`, `database.execute_write` and the other row or write operations have no handler, so row browsing, queries and migrations are not available.
+The Databases destination groups database connections and schema exploration. DevWorks reads database metadata only. No registered operation runs SQL you or an agent supplies, and none writes to a source database. Operations named `database.read`, `database.execute_write` and the other row or write operations have no handler, so row browsing, queries and migrations are not available. The data access switches on a source (data read access, data write access, separately authorized writes, and the ReadOnly and ReadWrite tool exposures) are saved but change nothing yet, and the form marks them not yet active.
 
 ## Schema sources
 

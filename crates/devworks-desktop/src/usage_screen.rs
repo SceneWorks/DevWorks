@@ -20,6 +20,9 @@ pub const REPORTS: [(&str, &str); 6] = [
     ("RepositoryAnalysisUsage", "Repository analysis usage"),
     ("Filters", "Filter discovery"),
 ];
+/// No native repository analysis makes inference requests yet (the model-assisted analysis
+/// stages are owned by DW-29), so this report can only hold imported or unattributed usage.
+pub const REPOSITORY_ANALYSIS_INACTIVE: &str = "Not yet active: no DevWorks repository analysis makes model requests yet, so this report shows only imported or unattributed usage.";
 pub const TABS: [&str; 3] = ["Reports", "Attempts", "Prices"];
 #[derive(Clone, Debug, Default)]
 pub struct Filters {
@@ -320,6 +323,9 @@ impl UsageScreen {
                                     });
                                 if old != s.report {
                                     actions.push(Action::Apply);
+                                }
+                                if REPORTS[s.report].0 == "RepositoryAnalysisUsage" {
+                                    widgets::caption(ui, REPOSITORY_ANALYSIS_INACTIVE);
                                 }
                             }
                             s.filters_ui(ui, projects, actions);

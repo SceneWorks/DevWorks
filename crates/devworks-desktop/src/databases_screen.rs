@@ -187,6 +187,9 @@ fn lines(ui: &mut Ui, label: &str, config: &mut Value, key: &str) {
         config[key] = json!(value.lines().filter(|l| !l.is_empty()).collect::<Vec<_>>());
     }
 }
+/// DB-04/DB-05 data tools are not built yet (DW-37 owns them): these switches are saved and
+/// validated, but nothing reads or writes table data, so the form says so beside them.
+pub const DATA_ACCESS_INACTIVE: &str = "Not yet active: DevWorks has no database data tools yet. Data read access, data write access, separately authorized writes and the ReadOnly and ReadWrite tool exposures are saved but change nothing; agents can read indexed schema metadata only.";
 fn toggle(ui: &mut Ui, label: &str, config: &mut Value, key: &str) {
     let mut b = config[key].as_bool().unwrap_or(false);
     if ui.checkbox(&mut b, label).changed() {
@@ -227,8 +230,18 @@ fn project_access(ui: &mut Ui, config: &mut Value, projects: &[(String, String)]
                 ui.horizontal_wrapped(|ui| {
                     ui.label(title);
                     toggle(ui, "Metadata access", &mut row, "metadataEnabled");
-                    toggle(ui, "Data read access", &mut row, "dataReadEnabled");
-                    toggle(ui, "Data write access", &mut row, "dataWriteEnabled");
+                    toggle(
+                        ui,
+                        "Data read access (not yet active)",
+                        &mut row,
+                        "dataReadEnabled",
+                    );
+                    toggle(
+                        ui,
+                        "Data write access (not yet active)",
+                        &mut row,
+                        "dataWriteEnabled",
+                    );
                 });
             },
         );
@@ -377,8 +390,9 @@ impl DatabasesScreen {
                 lines(ui,"Database catalogs (one per line)",&mut draft.config,"catalogs");lines(ui,"Database schemas (one per line)",&mut draft.config,"schemas");
                 lines(ui,"Included metadata patterns (one per line)",&mut draft.config,"includePatterns");lines(ui,"Excluded metadata patterns (one per line)",&mut draft.config,"excludePatterns");
                 toggle(ui,"Enable database source",&mut draft.config,"enabled");toggle(ui,"Expose source in workspace",&mut draft.config,"workspaceExposed");choice(ui,"Database tool exposure",&mut draft.config,"exposureMode",&["Hidden","SchemaOnly","ReadOnly","ReadWrite"]);
-                toggle(ui,"Enable separately authorized data writes",&mut draft.config,"writesEnabled");
+                toggle(ui,"Enable separately authorized data writes (not yet active)",&mut draft.config,"writesEnabled");
                 ui.label("Metadata indexing always uses read-only source access. Data operations require their own permissions.");
+                crate::widgets::caption(ui, DATA_ACCESS_INACTIVE);
                 project_access(ui,&mut draft.config,projects);
             });
             ui.horizontal(|ui| {
@@ -493,6 +507,7 @@ impl DatabasesScreen {
                     "Separately authorized writes: {}",
                     config.writes_enabled
                 ));
+                crate::widgets::caption(ui, DATA_ACCESS_INACTIVE);
                 for access in config
                     .project_access
                     .as_ref()

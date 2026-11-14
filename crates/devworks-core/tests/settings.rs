@@ -6,7 +6,8 @@ use devworks_core::protocol::records::{SettingEntry, ValidationReport};
 use devworks_core::protocol::{Id, ProjectId};
 use devworks_core::registry::{self, Mode};
 use devworks_core::settings::catalog::{
-    AgentRole, Category, ScopeKind, ValueKind, catalog, descriptor,
+    AgentRole, Category, NOT_YET_ACTIVE, NOT_YET_ACTIVE_PREFIX, ScopeKind, ValueKind, WritePolicy,
+    catalog, descriptor,
 };
 use devworks_core::settings::service::OPERATIONS;
 use devworks_core::settings::validate::{
@@ -92,6 +93,40 @@ fn the_catalog_is_typed_unique_and_self_consistent() {
         ]
     );
     assert!(descriptor("nope.unknown").is_none());
+}
+
+#[test]
+fn settings_nothing_reads_are_marked_not_yet_active() {
+    for key in [
+        "github.pollForChanges",
+        "delivery.autoMerge",
+        "github.importOpenIssues",
+        "github.syncLinkedIssueFields",
+        "github.issueTriageIntervalSeconds",
+        "delivery.maxReviewFixCycles",
+        "reviews.automationWaitSeconds",
+        "knowledge.visionExtraction",
+    ] {
+        assert!(descriptor(key).unwrap().not_yet_active(), "{key}");
+    }
+    // The list and the visible description agree in both directions, and a harness policy is
+    // never listed: it is shown as an enforced protection, not as a value awaiting a reader.
+    for d in catalog() {
+        assert_eq!(
+            d.not_yet_active(),
+            d.description.starts_with(NOT_YET_ACTIVE_PREFIX),
+            "{}",
+            d.key
+        );
+        assert!(!(d.not_yet_active() && d.policy == WritePolicy::HarnessEnforced));
+    }
+    assert!(NOT_YET_ACTIVE.iter().all(|key| descriptor(key).is_some()));
+    assert!(!descriptor("web.timeoutMs").unwrap().not_yet_active());
+    assert!(
+        !descriptor("agents.compactionThresholdPercent")
+            .unwrap()
+            .not_yet_active()
+    );
 }
 
 #[test]
