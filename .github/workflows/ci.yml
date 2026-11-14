@@ -38,6 +38,37 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: contracts-eval
+          workspaces: tools/contracts-eval -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The contracts-eval pipeline from tools/contracts-eval/README.md, in its order, so the
+      # emitted schemas, fixtures and register below come from the current domain-spec.json.
+      - name: Regenerate contracts-eval domain DTOs
+        run: python3 tools/contracts-eval/build_domain_contracts.py
+      - name: Build and test contracts-eval
+        run: cargo test --locked --no-fail-fast --manifest-path tools/contracts-eval/Cargo.toml
+      - name: Emit contract schemas
+        run: cargo run --locked --manifest-path tools/contracts-eval/Cargo.toml -- emit docs/architecture/contracts
+      - name: Regenerate contract fixtures and register
+        shell: bash
+        run: |
+          python3 tools/contracts-eval/make_domain_fixtures.py
+          # Keep the recorded date: the register is current when only the run date differs.
+          date="$(python3 -c 'import json; print(json.load(open("docs/architecture/contracts/family-coverage.json"))["date"])')"
+          python3 tools/contracts-eval/build_register.py --date "$date"
+      - name: Check fixtures and scenarios against the contracts-eval decoders
+        shell: bash
+        run: |
+          probe=tools/contracts-eval/target/debug/devworks-contract-probe
+          for set in fixtures provider-package-fixtures data-delivery-fixtures domain-fixtures; do
+            if ! "$probe" check "docs/architecture/contracts/$set.json" > "$RUNNER_TEMP/$set.json"; then
+              python3 -c 'import json, sys; [print(json.dumps(c)) for c in json.load(open(sys.argv[1]))["cases"] if not c["passed"]]' "$RUNNER_TEMP/$set.json" || true
+              exit 1
+            fi
+          done
+          "$probe" scenario-check docs/architecture/contracts/provider-package-scenarios.json
       - name: Check the generator's schema-revision rules
         run: python3 -m unittest discover -s tools/core-codegen -p 'test_*.py'
       - name: Regenerate core records, operations and registry

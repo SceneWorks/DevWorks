@@ -1240,6 +1240,7 @@ name = "devworks-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "devworks-extension-protocol",
  "jiff",
  "libc",
  "num-rational",
