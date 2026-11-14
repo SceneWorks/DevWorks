@@ -248,6 +248,7 @@ fn catalog(provider: OfficialPriceProvider, now: i64, amount: &str) -> FetchedPr
         verified_at_ms: now,
         effective_date: None,
         tariffs: vec![input, output],
+        modifiers: Default::default(),
     }
 }
 // Receipt files have a separate gate from the public price source. This makes their
@@ -1535,7 +1536,10 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
     gate.started.notified().await;
     // Settle the real independent boot producers before controlling receipt publication.
     // Blocking every artifact at boot also blocks Help, so that would test its shutdown tail.
+    // Help startup is about 1,200 full disk flushes, so this wait is bounded by its progress.
     phase.phase = "startup_owners";
+    let ids = fx.h.ids.clone();
+    let mut durable = DurableWork::start("price shutdown startup_owners", || ids.issued());
     let accounting = app.accounting().watch();
     let help_registered = app
         .jobs()
@@ -1572,8 +1576,10 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
         if ready && accounted {
             break;
         }
+        durable.check();
         tokio::task::yield_now().await;
     }
+    drop(durable);
     phase.phase = "capture_setup_receipts";
     let existing = read(&*fx.store, |s| {
         Ok(s.queue()

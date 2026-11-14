@@ -430,7 +430,7 @@ mod tests {
         let client = client(path.clone());
         let mut scope = scope();
         scope.record_ids.insert(
-            "messages".into(),
+            devworks_core::ports::storage::ProjectRecordKind::Notifications,
             (0..200_000)
                 .map(|i| Id::new(format!("record-{i:08}-{}", "x".repeat(80))).unwrap())
                 .collect(),
