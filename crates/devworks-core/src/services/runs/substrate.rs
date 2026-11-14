@@ -274,6 +274,31 @@ impl ControlService {
                 cleared.push(root_id);
             }
         }
+        // Credential repair triggers reevaluation automatically (AD17), like capacity release.
+        for b in active_blockers(
+            tx.runs(),
+            &BlockerFilter::RootLevelCause(HoldCause::Credentials),
+        )? {
+            let Some(root_id) = b.root_id.clone() else {
+                continue;
+            };
+            if !super::credentials_repaired(tx, &b)? {
+                continue;
+            }
+            let Some(root) = work_root(tx, &root_id)? else {
+                continue;
+            };
+            clear_blocker(
+                tx,
+                &actor,
+                &root,
+                &b,
+                json!({"connectionId": b.clearance.get("connectionId"), "observedAtMs": now}),
+            )?;
+            if !cleared.contains(&root_id) {
+                cleared.push(root_id);
+            }
+        }
         Ok(cleared)
     }
 
@@ -625,6 +650,23 @@ impl ControlService {
                 tx.runs().update_assignment(&waiting, child.revision)?;
             }
         }
+        // A credentials hold already explains the failure and clears itself once the credential
+        // is repaired: wait for it instead of retrying against it or escalating it again.
+        if active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.id.clone()))?
+            .iter()
+            .any(|b| b.cause == HoldCause::Credentials)
+        {
+            let detail = format!("{failure:?}");
+            let p = requeue(a, now, detail.clone(), a.attempts);
+            return self.update(
+                tx,
+                root,
+                a,
+                p,
+                "ActivationWaiting",
+                json!({"category": "Credentials", "detail": detail}),
+            );
+        }
         match failure {
             ActivationFailure::Transient(detail) if a.attempts + 1 < self.config.max_attempts => {
                 let attempt = a.attempts + 1;
@@ -685,7 +727,7 @@ impl ControlService {
         detail: &str,
     ) -> Result<StoredActivation, StorageError> {
         let actor = host(tx);
-        raise_blocker(
+        let hold = raise_blocker(
             tx,
             &actor,
             root,
@@ -696,6 +738,7 @@ impl ControlService {
             &format!("Escalated: {detail}"),
             json!({"kind": "Escalation", "executionId": a.id.as_str()}),
         )?;
+        crate::services::notifications::work_failed(tx, root, &hold.id, detail)?;
         self.stop_activation(tx, root, a, ActivationOutcome::Failed, Some(detail))
     }
 
@@ -1023,6 +1066,9 @@ impl ControlService {
             "AssignmentStateChanged",
             json!({"from": a.state.as_str(), "to": state.as_str()}),
         )?;
+        if state == AssignmentState::Failed {
+            crate::services::notifications::assignment_failed(tx, &root, &after)?;
+        }
         Ok(Ok(after))
     }
 

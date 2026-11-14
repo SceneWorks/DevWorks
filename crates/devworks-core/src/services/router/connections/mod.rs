@@ -375,10 +375,13 @@ fn next_account_revision(current: i64) -> Result<i64, StorageError> {
 
 /// Host-observed access rejection, committed by the native output owner in its fenced unit.
 /// A late response cannot mark a replacement credential, account, endpoint or profile unusable.
+/// The first rejection of a credential notifies the user; a rejected run root's dispatch
+/// (`root`) is held until the connection is repaired.
 pub fn record_inference_rejection(
     tx: &mut dyn WriteTransaction,
     basis: &crate::providers::ProviderAccessBasis,
     status: u16,
+    root: Option<&crate::protocol::RootId>,
 ) -> Result<bool, StorageError> {
     if !matches!(status, 401 | 403) {
         return Ok(false);
@@ -394,6 +397,9 @@ pub fn record_inference_rejection(
         return Ok(false);
     }
     if current.lifecycle == "ReauthenticationRequired" {
+        if let Some(root) = root {
+            crate::services::runs::hold_for_credentials(tx, root, &current)?;
+        }
         return Ok(false);
     }
     let expected = current.revision;
@@ -412,6 +418,10 @@ pub fn record_inference_rejection(
         "InferenceAccessRejected",
         connection_payload(&saved),
     )?;
+    crate::services::notifications::credentials_rejected(tx, &saved)?;
+    if let Some(root) = root {
+        crate::services::runs::hold_for_credentials(tx, root, &saved)?;
+    }
     Ok(true)
 }
 
@@ -1375,7 +1385,11 @@ impl ConnectionService {
                 (CONNECTION_AGGREGATE, &saved.id, saved.revision),
                 "ConnectionStateChanged",
                 connection_payload(&saved),
-            )
+            )?;
+            if saved.lifecycle == "ReauthenticationRequired" {
+                crate::services::notifications::credentials_rejected(tx, &saved)?;
+            }
+            Ok(())
         });
     }
 

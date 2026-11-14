@@ -217,8 +217,14 @@ impl ConnectionService {
                             .into(),
                     );
                     changed.updated_at_ms = tx.now_ms();
-                    tx.router()
+                    let saved = tx
+                        .router()
                         .put_connection(&changed, Some(current.revision))?;
+                    // Recovery can run again for the same unrepaired credential: announce only
+                    // the transition into reauthentication.
+                    if current.lifecycle != "ReauthenticationRequired" {
+                        crate::services::notifications::credentials_rejected(tx, &saved)?;
+                    }
                 }
                 let op = tx
                     .operations()
@@ -297,13 +303,17 @@ impl ConnectionService {
                         == owned.endpoint_digest
                 {
                     let expected = current.revision;
+                    let transition = current.lifecycle != "ReauthenticationRequired";
                     current.lifecycle = "ReauthenticationRequired".into();
                     current.state_reason = Some(
                         "An interrupted token refresh has an unknown outcome; sign in again."
                             .into(),
                     );
                     current.updated_at_ms = tx.now_ms();
-                    tx.router().put_connection(&current, Some(expected))?;
+                    let saved = tx.router().put_connection(&current, Some(expected))?;
+                    if transition {
+                        crate::services::notifications::credentials_rejected(tx, &saved)?;
+                    }
                 }
                 Ok(true)
             })?;

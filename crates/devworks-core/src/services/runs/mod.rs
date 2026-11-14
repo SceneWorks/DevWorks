@@ -60,9 +60,9 @@ use crate::ports::storage::{
     ActivationFilter, ActivationOutcome, ActivationPhase, ActivationPurpose, BlockerFilter,
     BlockerState, ContainerFilter, DesiredExecution, GrantRecord, HoldCause, InstructionStage,
     NewEvent, NewOperation, ProcessFilter, QueueState, ReadSnapshot, RunRead, SessionRead,
-    StopCause, StorageError, StoredActivation, StoredAssignment, StoredBlocker, StoredInstruction,
-    StoredRootControl, StoredStopCoverage, WorkRoot, WriteTransaction, cancellation_applies,
-    is_terminal, possibly_dispatched,
+    StopCause, StorageError, StoredActivation, StoredAssignment, StoredBlocker, StoredConnection,
+    StoredInstruction, StoredRootControl, StoredStopCoverage, WorkRoot, WriteTransaction,
+    cancellation_applies, is_terminal, possibly_dispatched,
 };
 use crate::ports::{
     CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
@@ -552,6 +552,62 @@ pub fn raise_blocker(
         }),
     )?;
     Ok(b)
+}
+
+/// The provider refused the access a run root's dispatch used: hold the root (missing
+/// credentials, AD17) until the connection is repaired. The hold names the connection and the
+/// credential and account revisions that were refused, so a repeated rejection of the same
+/// credential keeps one hold; the supervisor's sweep clears it once the connection changes.
+pub fn hold_for_credentials(
+    tx: &mut dyn WriteTransaction,
+    root: &RootId,
+    connection: &StoredConnection,
+) -> Result<(), StorageError> {
+    let Some(root) = tx.sessions().work_root(root)? else {
+        return Ok(());
+    };
+    let actor = tx.store().host_actor.clone();
+    raise_blocker(
+        tx,
+        &actor,
+        &root,
+        HoldSubject::default(),
+        HoldCause::Credentials,
+        connection.id.as_str(),
+        connection.credential_revision,
+        &format!(
+            "The provider rejected connection {}; sign in again or replace its credential.",
+            connection.name
+        ),
+        json!({
+            "kind": "Credentials",
+            "connectionId": connection.id.as_str(),
+            "credentialRevision": connection.credential_revision,
+            "accountRevision": connection.account_revision,
+        }),
+    )?;
+    Ok(())
+}
+
+/// Whether a credentials hold's connection has been repaired (or removed) since it was raised.
+pub(crate) fn credentials_repaired(
+    tx: &mut dyn WriteTransaction,
+    hold: &StoredBlocker,
+) -> Result<bool, StorageError> {
+    let Some(connection) = hold
+        .clearance
+        .get("connectionId")
+        .and_then(Value::as_str)
+        .and_then(|c| Id::new(c).ok())
+    else {
+        return Ok(true);
+    };
+    let revision = |key: &str| hold.clearance.get(key).and_then(Value::as_i64);
+    Ok(tx.router().connection(&connection)?.is_none_or(|c| {
+        c.lifecycle != "ReauthenticationRequired"
+            || Some(c.credential_revision) != revision("credentialRevision")
+            || Some(c.account_revision) != revision("accountRevision")
+    }))
 }
 
 /// Clears an active blocker with its evidence (the owning service's clearance, or an authorized
