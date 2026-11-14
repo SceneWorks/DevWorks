@@ -226,8 +226,9 @@ jobs:
           shared-key: macos
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # The SQLite store requests F_FULLFSYNC on macOS, which costs tens of milliseconds per
-      # commit on the runner's virtual disk. Test temp files go to a RAM disk instead; the
-      # store's durability settings are unchanged.
+      # commit. Test temp files go to a RAM disk instead; the store's durability settings are
+      # unchanged. The engine and desktop test helpers write under CARGO_TARGET_TMPDIR
+      # (<target>/tmp, fixed at compile time), so that folder links to the RAM disk too.
       - name: Put test temp files on a RAM disk
         shell: bash
         run: |
@@ -237,11 +238,15 @@ jobs:
           if [ -d "/Volumes/$volume" ]; then hdiutil detach -force "/Volumes/$volume"; fi
           device="$(hdiutil attach -nomount "ram://$((RAMDISK_MIB * 2048))" | awk '{print $1}')"
           diskutil erasevolume APFS "$volume" "$device"
-          mkdir -p "/Volumes/$volume/tmp"
+          mkdir -p "/Volumes/$volume/tmp" "/Volumes/$volume/target-tmp"
+          target="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/target}"
+          mkdir -p "$target"
+          rm -rf "$target/tmp"
+          ln -s "/Volumes/$volume/target-tmp" "$target/tmp"
           echo "TEST_VOLUME=/Volumes/$volume" >> "$GITHUB_ENV"
           echo "TEST_TMPDIR=/Volumes/$volume/tmp" >> "$GITHUB_ENV"
         env:
-          RAMDISK_MIB: "2048"
+          RAMDISK_MIB: "4096"
       - name: Build tests
         run: cargo nextest run --workspace --locked --no-run
       - name: Clippy

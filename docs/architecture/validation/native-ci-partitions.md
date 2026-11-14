@@ -50,7 +50,8 @@ named `test (macos-latest)`: one build, clippy, then every workspace test throug
 `.config/nextest.toml` keeps the limits that test binaries otherwise set with in-process
 mutexes. An Ubuntu job named `clippy (macos-latest)` passes only when that job's clippy
 step passed, so both required check names still report. Test temp files go to a RAM disk,
-because the SQLite store requests F_FULLFSYNC on macOS. On a dev Mac the adapters unit
+because the SQLite store requests F_FULLFSYNC on macOS. That covers both `TMPDIR` and
+`<target>/tmp`, which is `CARGO_TARGET_TMPDIR` for the engine and desktop test helpers. On a dev Mac the adapters unit
 tests took 376 s under `cargo test`, 287 s under nextest and 119 s under nextest with the
 RAM disk; CI took 513 s for them under `cargo test` (run 43554082293). Ubuntu and Windows
 keep the groups above. The `pick macOS runners` job sends this one job to an idle
