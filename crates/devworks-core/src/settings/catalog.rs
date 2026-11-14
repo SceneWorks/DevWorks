@@ -229,9 +229,9 @@ pub const NOT_YET_ACTIVE: &[&str] = &[
     "delivery.autoMerge",
     "delivery.maxReviewFixCycles",
     "reviews.automationWaitSeconds",
-    // Automatic context compaction: no owner item yet (reported with DW-226).
+    // Automatic context compaction: DW-287.
     "agents.compactionThresholdPercent",
-    // Vision extraction of scanned documents: no owner item yet (reported with DW-226).
+    // Vision extraction of scanned documents: DW-288.
     "knowledge.visionExtraction",
 ];
 /// How the description of every [`NOT_YET_ACTIVE`] setting begins.

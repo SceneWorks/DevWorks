@@ -2022,7 +2022,7 @@ impl PackageActivity for PackageHost {
     }
 }
 
-/// Refusal of every `broker.call`. Not yet active (tracked by DW-TBD-BROKER): the host has no
+/// Refusal of every `broker.call`. Not yet active (tracked by DW-286): the host has no
 /// per-invocation grant of callable operations, no package connection-handle registry for HTTP
 /// endpoints, no inference attribution for package requests, no artifact read/write path for
 /// packages, and no executor for the `package.broker.*` intents `broker.commit_event` records.
