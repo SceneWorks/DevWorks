@@ -218,13 +218,15 @@ pub trait UsageRead {
         limit: u16,
     ) -> Result<Vec<StoredInferenceAttempt>, StorageError>;
     /// Attempts created at or after `filter.end_ms` whose logical request was created in
-    /// `[filter.start_ms, filter.end_ms)`, in exclusive ID order.
+    /// `[filter.start_ms, filter.end_ms)`, each with its request's creation time, in exclusive
+    /// `(request created_at_ms, request_id, attempt_id)` order. That order follows the request
+    /// time index, so each page starts after the last request it visited.
     fn late_inference_attempts(
         &self,
         filter: &UsageAttemptFilter,
-        after: Option<&Id>,
+        after: Option<&(i64, Id, Id)>,
         limit: u16,
-    ) -> Result<Vec<StoredInferenceAttempt>, StorageError>;
+    ) -> Result<Vec<(i64, StoredInferenceAttempt)>, StorageError>;
     /// Origins recorded in `[filter.start_ms, filter.end_ms)` (both required), in exclusive
     /// `(recorded_at_ms, source_kind, source_id)` order, through a time index.
     fn usage_origins_between(

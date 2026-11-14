@@ -757,8 +757,8 @@ fn attempts(
                 .usage()
                 .late_inference_attempts(&filter, after.as_ref(), 500)?;
             let full = rows.len() == 500;
-            for a in rows {
-                after = Some(a.attempt_id.clone());
+            for (requested_at, a) in rows {
+                after = Some((requested_at, a.request_id.clone(), a.attempt_id.clone()));
                 visit(a)?;
             }
             if !full {

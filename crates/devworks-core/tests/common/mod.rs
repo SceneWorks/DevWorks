@@ -3510,9 +3510,9 @@ impl UsageRead for Unsupported {
     fn late_inference_attempts(
         &self,
         _filter: &UsageAttemptFilter,
-        _after: Option<&Id>,
+        _after: Option<&(i64, Id, Id)>,
         _limit: u16,
-    ) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
+    ) -> Result<Vec<(i64, StoredInferenceAttempt)>, StorageError> {
         nope()
     }
     fn usage_origins_between(

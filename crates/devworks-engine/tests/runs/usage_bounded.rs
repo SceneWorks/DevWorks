@@ -278,3 +278,124 @@ fn a_usage_report_page_costs_the_same_behind_tenfold_history_outside_its_range()
     assert_no_growth("usage report Attempts page", small.0, large.0);
     assert_no_growth("usage report AssistantUsage page", small.1, large.1);
 }
+
+/// Late attempts (made after the range, for requests made in it) page in request-time order:
+/// collecting 10,000 costs about ten times 1,000, not a hundred, because no page revisits
+/// requests an earlier page returned.
+#[test]
+fn late_attempts_of_a_usage_report_page_linearly() {
+    use devworks_core::operations::router::UsageInput;
+    use devworks_core::services::usage::reports;
+    const DAY: i64 = 86_400_000;
+    let _native_case = native_runtime_case();
+    let h = Harness::new();
+    let counted = h.open_counted();
+    seed(&h);
+    let f = Fx::over(h, counted.store.clone());
+    let host = AttemptHost::new(f.store.clone(), f.service.clone(), router(&f));
+    let start = f.h.now();
+    f.h.advance(2 * DAY);
+    // One real late attempt, copied row for row; each copy's request is dated in the range.
+    let (context, logical, request) = host_attempt(&f, 1);
+    let Admission::Admitted { attempt, .. } = host
+        .admit(context, logical, ReportCategory::Other, request)
+        .unwrap()
+    else {
+        panic!("not admitted")
+    };
+    let db = rusqlite::Connection::open(f.h.root.join("workspace.sqlite")).unwrap();
+    let copy = |from: i64, to: i64| {
+        let tables: [(&str, &str, &[&str]); 5] = [
+            ("operations", "id", &["id"]),
+            (
+                "operation_attempts",
+                "operation_id",
+                &["id", "operation_id"],
+            ),
+            (
+                "router_requests",
+                "request_id",
+                &["request_id", "operation_id"],
+            ),
+            (
+                "usage_attempts",
+                "attempt_id",
+                &["attempt_id", "request_id", "operation_id"],
+            ),
+            ("usage_attempt_balances", "attempt_id", &["attempt_id"]),
+        ];
+        let key = |table: &str| -> String {
+            match table {
+                "operations" | "operation_attempts" => attempt.operation_id.0.as_str().into(),
+                "router_requests" => attempt.request_id.as_str().into(),
+                _ => attempt.attempt_id.as_str().into(),
+            }
+        };
+        for (table, key_column, renamed) in tables {
+            let columns = db
+                .prepare(&format!(
+                    "SELECT name FROM pragma_table_info('{table}') ORDER BY cid"
+                ))
+                .unwrap()
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            let values = columns
+                .iter()
+                .map(|c| {
+                    if renamed.contains(&c.as_str()) {
+                        format!("{c}||'-copy-'||n.i")
+                    } else if table == "router_requests" && c == "created_at" {
+                        start.to_string()
+                    } else {
+                        c.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            db.execute(
+                &format!(
+                    "WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i+1 FROM n WHERE i<?2) \
+                     INSERT INTO {table}({}) SELECT {values} FROM {table}, n WHERE {key_column}=?3",
+                    columns.join(",")
+                ),
+                rusqlite::params![from, to, key(table)],
+            )
+            .unwrap();
+        }
+    };
+    let info = f.store.info();
+    let ctx = devworks_core::context::HostIngress::new(f.store.as_ref()).context(
+        info.host_actor,
+        PrincipalKind::Host,
+        id("usage-report"),
+        id("native-report"),
+        devworks_core::protocol::Counter::new(info.restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    let page = || {
+        let input: UsageInput = serde_json::from_value(json!({"page": {"limit": 50},
+            "reportKind": "AssistantUsage", "startMs": start.to_string(),
+            "endMs": (start + DAY).to_string()}))
+        .unwrap();
+        counted
+            .count(|| {
+                read(f.store.as_ref(), |s| {
+                    reports::query(s, &ctx, &input, f.h.now())
+                        .map(|_| ())
+                        .map_err(|_| StorageError::InvalidRecord("usage report".into()))
+                })
+            })
+            .1
+    };
+    copy(1, 1_000);
+    let small = page();
+    copy(1_001, 10_000);
+    let large = page();
+    eprintln!("late attempts: 1,000 {small:?}, 10,000 {large:?}");
+    assert!(
+        large.read_steps <= small.read_steps * 12,
+        "late attempts cost more than linearly: {small:?} -> {large:?}"
+    );
+}

@@ -767,23 +767,31 @@ fn attempts_between(
         decode_attempt,
     )
 }
+fn decode_late(v: &Value) -> Result<(i64, StoredInferenceAttempt), StorageError> {
+    Ok((field(v, "request_created_at")?, decode_attempt(v)?))
+}
 fn late_attempts(
     c: &Connection,
     f: &UsageAttemptFilter,
-    after: Option<&Id>,
+    after: Option<&(i64, Id, Id)>,
     limit: u16,
-) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
+) -> Result<Vec<(i64, StoredInferenceAttempt)>, StorageError> {
     let (start, end) = time_range(f.start_ms, f.end_ms)?;
-    // Driven from the requests created in the range; CROSS JOIN keeps that order.
+    let (at, request, attempt) = after.map_or((start, "", ""), |(at, request, attempt)| {
+        (*at, request.as_str(), attempt.as_str())
+    });
+    // Driven from the requests created in the range, in their time index order (CROSS JOIN
+    // keeps it), and within a request in attempt order: a page resumes after the last
+    // (request time, request, attempt) it returned, so no page revisits earlier requests.
     rows(
         c,
         &format!(
-            "SELECT {} FROM router_requests r CROSS JOIN usage_attempts a ON a.request_id=r.request_id WHERE r.created_at>=?1 AND r.created_at<?9 AND a.created_at>=?9 AND a.attempt_id>?2 AND {ATTEMPT_FILTER} ORDER BY a.attempt_id LIMIT ?14",
+            "SELECT r.created_at AS request_created_at,{} FROM router_requests r CROSS JOIN usage_attempts a ON a.request_id=r.request_id WHERE (r.created_at,r.request_id)>=(?1,?15) AND ((r.created_at,r.request_id)>(?1,?15) OR a.attempt_id>?2) AND r.created_at<?9 AND a.created_at>=?9 AND {ATTEMPT_FILTER} ORDER BY r.created_at,r.request_id,a.attempt_id LIMIT ?14",
             attempt_columns()
         ),
         params![
-            start,
-            after.map_or("", Id::as_str),
+            at,
+            attempt,
             f.project_id.as_ref().map(|v| v.0.as_str()),
             f.feature_id.as_ref().map(Id::as_str),
             f.work_id.as_ref().map(Id::as_str),
@@ -795,9 +803,10 @@ fn late_attempts(
             f.model_id.as_ref().map(Id::as_str),
             f.connection_id.as_ref().map(Id::as_str),
             f.purpose,
-            page(limit)?
+            page(limit)?,
+            request
         ],
-        decode_attempt,
+        decode_late,
     )
 }
 fn origins_between(
@@ -830,7 +839,7 @@ fn origins_between(
 }
 macro_rules! usage_reads{($t:ty)=>{impl UsageRead for $t{
  fn inference_attempts_between(&self,f:&UsageAttemptFilter,after:Option<&(i64,Id)>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{attempts_between(self.conn,f,after,limit)}
- fn late_inference_attempts(&self,f:&UsageAttemptFilter,after:Option<&Id>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{late_attempts(self.conn,f,after,limit)}
+ fn late_inference_attempts(&self,f:&UsageAttemptFilter,after:Option<&(i64,Id,Id)>,limit:u16)->Result<Vec<(i64,StoredInferenceAttempt)>,StorageError>{late_attempts(self.conn,f,after,limit)}
  fn usage_origins_between(&self,f:&UsageOriginFilter,after:Option<&(i64,String,String)>,limit:u16)->Result<Vec<StoredUsageOrigin>,StorageError>{origins_between(self.conn,f,after,limit)}
  fn inference_attempt(&self,id:&Id)->Result<Option<StoredInferenceAttempt>,StorageError>{attempt(self.conn,id)}
  fn inference_attempts(&self,f:&UsageAttemptFilter,after:Option<&Id>,limit:u16)->Result<Vec<StoredInferenceAttempt>,StorageError>{range(f.start_ms,f.end_ms)?;rows(self.conn,&format!("SELECT {ATTEMPT_COLS} FROM usage_attempts WHERE attempt_id>?1 AND (?2 IS NULL OR project_id=?2) AND (?3 IS NULL OR feature_id=?3) AND (?4 IS NULL OR work_id=?4) AND (?5 IS NULL OR assignment_id=?5) AND (?6 IS NULL OR session_id=?6) AND (?7 IS NULL OR job_run_id=?7) AND (?8 IS NULL OR created_at>=?8) AND (?9 IS NULL OR created_at<?9) AND (?10 IS NULL OR actor_id=?10) AND (?11 IS NULL OR catalog_model_id=?11) AND (?12 IS NULL OR connection_id=?12) AND (?13 IS NULL OR purpose=?13) ORDER BY attempt_id LIMIT ?14"),params![after.map_or("",Id::as_str),f.project_id.as_ref().map(|v|v.0.as_str()),f.feature_id.as_ref().map(Id::as_str),f.work_id.as_ref().map(Id::as_str),f.assignment_id.as_ref().map(|v|v.0.as_str()),f.session_id.as_ref().map(Id::as_str),f.job_run_id.as_ref().map(Id::as_str),f.start_ms,f.end_ms,f.actor_id.as_ref().map(|v|v.0.as_str()),f.model_id.as_ref().map(Id::as_str),f.connection_id.as_ref().map(Id::as_str),f.purpose,page(limit)?],decode_attempt)}

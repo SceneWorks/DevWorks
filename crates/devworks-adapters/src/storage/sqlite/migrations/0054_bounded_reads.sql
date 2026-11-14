@@ -68,10 +68,11 @@ CREATE TRIGGER knowledge_challenges_tally_update AFTER UPDATE OF state, claim_id
 END;
 
 -- A usage report reads the attempts and origins of its date range, and the late attempts of the
--- requests made in it, through time indexes instead of paging all usage history.
+-- requests made in it, through time indexes instead of paging all usage history. Late attempts
+-- page in (request time, request, attempt) order, which these indexes serve without a sort.
 CREATE INDEX usage_attempts_created ON usage_attempts(created_at,attempt_id);
 CREATE INDEX usage_attempts_project_created ON usage_attempts(project_id,created_at,attempt_id);
-CREATE INDEX usage_attempts_request ON usage_attempts(request_id);
+CREATE INDEX usage_attempts_request ON usage_attempts(request_id,attempt_id);
 CREATE INDEX router_requests_created ON router_requests(created_at,request_id);
 CREATE INDEX usage_origins_recorded ON usage_origins(recorded_at,source_kind,source_id);
 CREATE INDEX usage_origins_project_recorded

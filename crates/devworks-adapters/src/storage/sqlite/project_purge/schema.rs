@@ -33,7 +33,7 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// scope. It adds no table or ownership edge: the tallies are columns of their claim, and the
 /// catalogs are configuration rows of the scope that already owns the server.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "b479120eced9f3a0aaec2cf14b65b6bcb6863b3fc3317ed966029dfc0cf482a5";
+    "fc2a7fc0d88b558309af7da78e6710dc92c592b51a930f0c71c09aec65bae549";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

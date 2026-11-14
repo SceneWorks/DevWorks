@@ -632,7 +632,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 54,
         minimum_writer: 54,
         sql: include_str!("migrations/0054_bounded_reads.sql"),
-        expected_sha256: "ad1a1a6be077446bd6f7a3f1bc9ed1ffec0ce745a82fbfc4d46153ce314101cc",
+        expected_sha256: "0368b2a55b935d1720e26269a5b7805a37df20d81a0f4e210611cd2c6eb452c2",
         rebuilds_tables: false,
     },
 ];
