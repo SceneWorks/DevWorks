@@ -186,15 +186,15 @@ fn published_reply(
     }
     let mut keys = vec![
         (
-            "receipt_replies".into(),
+            devworks_core::ports::storage::ProjectRecordKind::ReceiptReplies,
             super::guard::key_digest(&serde_json::to_string(&identity).expect("reply key"))?,
         ),
         (
-            "artifacts".into(),
+            devworks_core::ports::storage::ProjectRecordKind::Artifacts,
             super::guard::key_digest(&serde_json::to_string(&[&artifact]).expect("artifact key"))?,
         ),
         (
-            "artifact_versions".into(),
+            devworks_core::ports::storage::ProjectRecordKind::ArtifactVersions,
             super::guard::key_digest(&serde_json::to_string(&[&version]).expect("version key"))?,
         ),
     ];
@@ -212,7 +212,7 @@ fn published_reply(
             return Ok(vec![]);
         };
         keys.push((
-            "blobs".into(),
+            devworks_core::ports::storage::ProjectRecordKind::Blobs,
             super::guard::key_digest(&serde_json::to_string(&[blob]).expect("control blob key"))?,
         ));
     }
@@ -299,7 +299,7 @@ pub(super) fn partition(
     let candidates = snapshot
         .rows
         .iter()
-        .map(|r| ((r.table.clone(), r.key_digest.clone()), r))
+        .map(|r| ((r.table, r.key_digest.clone()), r))
         .collect::<BTreeMap<_, _>>();
     let sql = selection.sql(
         "command_receipts",
@@ -322,7 +322,10 @@ pub(super) fn partition(
             &serde_json::to_string(&[&actor, &scope, &key]).expect("receipt key"),
         )?;
         let Some(candidate) = candidates
-            .get(&("command_receipts".into(), key_digest))
+            .get(&(
+                devworks_core::ports::storage::ProjectRecordKind::CommandReceipts,
+                key_digest,
+            ))
             .copied()
         else {
             continue;
@@ -462,7 +465,10 @@ pub(super) fn partition(
                     let queue_key = super::guard::key_digest(
                         &serde_json::to_string(&[queue_id]).expect("queue key"),
                     )?;
-                    if let Some(candidate) = candidates.get(&("queue_entries".into(), queue_key)) {
+                    if let Some(candidate) = candidates.get(&(
+                        devworks_core::ports::storage::ProjectRecordKind::QueueEntries,
+                        queue_key,
+                    )) {
                         assign(
                             candidate,
                             Action::Keep,

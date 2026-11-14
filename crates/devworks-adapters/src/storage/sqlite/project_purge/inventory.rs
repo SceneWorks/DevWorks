@@ -227,7 +227,7 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
         ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         ids.dedup();
         if !ids.is_empty() {
-            client.record_ids.insert(table.into(), ids);
+            client.record_ids.insert(super::record_kind(table)?, ids);
         }
     }
     for (table, destination) in [

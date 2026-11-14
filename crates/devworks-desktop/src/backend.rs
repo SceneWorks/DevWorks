@@ -439,6 +439,8 @@ pub enum Slot {
     Projects(crate::projects_ops::ProjectsSlot),
     #[serde(untagged)]
     Indexing(crate::indexing_ops::IndexingSlot),
+    #[serde(untagged)]
+    Watch(crate::watch_ops::WatchSlot),
 }
 impl Slot {
     /// The screen whose replies this slot waits for.
@@ -456,6 +458,7 @@ impl Slot {
             Self::Browser(_) => ScreenId::Browser,
             Self::Projects(_) => ScreenId::Projects,
             Self::Indexing(_) => ScreenId::Indexing,
+            Self::Watch(_) => ScreenId::Watchers,
             _ => ScreenId::Legacy,
         }
     }
