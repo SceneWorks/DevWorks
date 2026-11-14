@@ -1552,12 +1552,6 @@ pub(crate) fn frame(
     arguments: Value,
 ) -> Result<Vec<u8>, &'static str> {
     call.validate()?;
-    if !descriptor.supports(revision) || descriptor.binding(mode).is_none() {
-        return Err("unsupported selected tool binding");
-    }
-    let Value::Object(mut arguments) = arguments else {
-        return Err("tool arguments must be an object");
-    };
     let identity = format!(
         "tool-{}",
         sha256_hex(
@@ -1571,6 +1565,24 @@ pub(crate) fn frame(
             .as_bytes()
         )
     );
+    frame_as(identity, descriptor, mode, revision, arguments)
+}
+
+/// Build the gateway frame of `arguments` under the host-chosen request `identity` (a stable
+/// identity makes a retried command find its original receipt).
+pub(crate) fn frame_as(
+    identity: String,
+    descriptor: &'static OperationDescriptor,
+    mode: Mode,
+    revision: SchemaRevision,
+    arguments: Value,
+) -> Result<Vec<u8>, &'static str> {
+    if !descriptor.supports(revision) || descriptor.binding(mode).is_none() {
+        return Err("unsupported selected tool binding");
+    }
+    let Value::Object(mut arguments) = arguments else {
+        return Err("tool arguments must be an object");
+    };
     let key = mode.key_member();
     let value = match descriptor.envelope {
         Envelope::Domain => {
@@ -1800,6 +1812,16 @@ pub(crate) fn dispatch_one(
             Err(StorageError::InvalidRecord(_)) => failed("tool_invalid_arguments"),
             Err(error) => return Err(error),
         }
+    } else if runtime.packages().is_some()
+        && crate::package_tools::is_package_tool(store, call.capability_id.as_str())
+    {
+        // A package tool runs as its own durable operation; the response records it accepted.
+        let operation_id = crate::package_tools::queue(store, schemas, ctx, session_id, &call)?;
+        mark_dispatch_started(store, ctx, session_id, key, cancellation)?;
+        accepted(
+            serde_json::to_vec(&json!({"operationId": operation_id})).map_err(invalid)?,
+            operation_id,
+        )
     } else {
         let result = match selected_builtin(schemas, &call) {
             Ok((descriptor, mode, revision)) => {
@@ -2179,8 +2201,10 @@ fn record_observed_operation_update(
             .operations()
             .operation(operation_id)?
             .ok_or(StorageError::ScopeDenied)?;
-        let remote_content = (operation.capability == "mcp.tool"
-            && operation.state == OperationState::ObservedComplete)
+        let remote_content = (matches!(
+            operation.capability.as_str(),
+            "mcp.tool" | crate::package_tools::CAPABILITY
+        ) && operation.state == OperationState::ObservedComplete)
             .then(|| {
                 operation
                     .latest_attempt()?
