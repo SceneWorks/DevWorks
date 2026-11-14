@@ -283,6 +283,8 @@ async fn run_native_loop(
     let mut recovered = runtime.recover_native_context_head(ctx, session_id)?;
     let mut window = 0;
     let mut completed_windows = 0;
+    // The digest of the last context this turn compacted to.
+    let mut compacted: Option<String> = None;
     loop {
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
@@ -449,6 +451,38 @@ async fn run_native_loop(
             .ok_or(StorageError::ScopeDenied)?
             .1;
         acknowledge_native_instructions(runtime, ctx, agent).await?;
+        if compaction_due(runtime, ctx, &route, &head, window)? {
+            if compacted.as_deref() == Some(head.sha256.as_str()) {
+                // The compacted context alone reaches the threshold: fail visibly instead of
+                // compacting again on every request.
+                return Err(StorageError::InvalidRecord(
+                    "agent context still reaches the compaction threshold after compaction".into(),
+                ));
+            }
+            match compact(
+                runtime,
+                ctx,
+                &route,
+                &binding,
+                &head,
+                cancellation,
+                retry_at_ms,
+            )
+            .await
+            {
+                Ok(root) => compacted = Some(root.sha256.as_str().to_owned()),
+                Err(StorageError::ScopeDenied)
+                    if crate::tool_turn::native_head_became_stale(
+                        runtime.store().as_ref(),
+                        ctx,
+                        session_id,
+                        &head,
+                    )? => {}
+                Err(error) => return Err(error),
+            }
+            recovered = runtime.recover_native_context_head(ctx, session_id)?;
+            continue;
+        }
         let invocation = plan_generation_window(runtime, ctx, &route, &binding, &head, window)?;
         changes.borrow_and_update();
         let dispatched = tokio::time::Instant::now();
@@ -770,6 +804,127 @@ fn tool_window<T>(all: &[T], index: usize) -> Result<&[T], StorageError> {
 
 fn tool_window_count(total: usize) -> usize {
     total.div_ceil(MAX_ALIASES_PER_TURN).max(1)
+}
+
+/// Estimated input tokens of the next request from `head` with tool window `window`: the context
+/// and the offered tool schemas, by the attributed estimate of four bytes per token.
+pub fn context_tokens(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    head: &ArtifactRef,
+    window: usize,
+) -> Result<i64, StorageError> {
+    let selected = runtime
+        .providers()
+        .ok_or(StorageError::ScopeDenied)?
+        .schemas()
+        .selected_agent_tools(ctx)?;
+    let tool_bytes = serde_json::to_vec(tool_window(&selected, window)?)
+        .map_err(|error| StorageError::InvalidRecord(format!("tool schemas: {error}")))?
+        .len();
+    let bytes = head
+        .byte_length
+        .get()
+        .checked_add(i64::try_from(tool_bytes).map_err(|_| StorageError::ScopeDenied)?)
+        .ok_or(StorageError::ScopeDenied)?;
+    Ok(devworks_core::services::sessions::token_estimate(bytes))
+}
+
+/// The next request reaches `agents.compactionThresholdPercent` of the routed model's context
+/// window. A model without a known window is never compacted.
+fn compaction_due(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    head: &ArtifactRef,
+    window: usize,
+) -> Result<bool, StorageError> {
+    let (limit, percent) =
+        read_snapshot(runtime.store().as_ref(), &ReadOptions::default(), |read| {
+            let model = read
+                .router()
+                .route_model(&route.model_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            Ok((
+                model.context_tokens,
+                devworks_core::settings::service::compaction_threshold_percent(
+                    read.configuration(),
+                )?,
+            ))
+        })?;
+    let Some(limit) = limit else {
+        return Ok(false);
+    };
+    let tokens = context_tokens(runtime, ctx, head, window)?;
+    Ok(tokens.saturating_mul(100) >= limit.saturating_mul(percent))
+}
+
+/// Summarize `head` through the agent's own pinned route and publish the summary as the root of
+/// the next context epoch.
+async fn compact(
+    runtime: &Arc<Runtime>,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    binding: &NativeBinding,
+    head: &ArtifactRef,
+    cancellation: &Cancellation,
+    retry_at_ms: &mut Option<i64>,
+) -> Result<ArtifactRef, StorageError> {
+    let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let store = runtime.store().as_ref();
+    let source = crate::context_epoch::current_source(
+        store,
+        runtime.artifacts(),
+        ctx,
+        session_id,
+        head,
+        binding,
+    )?;
+    let input = crate::compaction::publish_input(
+        store,
+        runtime.artifacts(),
+        ctx,
+        session_id,
+        binding,
+        &source,
+    )?;
+    let invocation = plan_compaction(runtime, ctx, route, binding, &input)?;
+    let providers = Arc::clone(runtime.providers().ok_or(StorageError::ScopeDenied)?);
+    let stopped = cancellation.clone();
+    let handle = tokio::runtime::Handle::current();
+    let produced = tokio::task::spawn_blocking(move || {
+        handle.block_on(providers.produce_cancellable(invocation, Some(stopped)))
+    })
+    .await
+    .map_err(|error| StorageError::InvalidRecord(format!("agent compaction worker: {error}")))??;
+    let result = produced.result;
+    let summary = match (result.outcome, result.result_artifact) {
+        (Some(AttemptEnd::Completed), Some(summary)) => summary,
+        (Some(AttemptEnd::Cancelled), _) => return Err(StorageError::Cancelled),
+        (outcome, _) => {
+            *retry_at_ms = result.retry_at_ms;
+            return Err(StorageError::InvalidRecord(format!(
+                "agent context compaction did not complete: {outcome:?}; faults: {:?}",
+                result.faults
+            )));
+        }
+    };
+    let bytes = runtime
+        .artifacts()
+        .read_exact(store, ctx, &summary, 8 * 1024 * 1024)
+        .map_err(|_| StorageError::ScopeDenied)?
+        .0;
+    let summary = String::from_utf8(bytes)
+        .map_err(|_| StorageError::InvalidRecord("compaction summary is not text".into()))?;
+    crate::compaction::publish_compacted(
+        store,
+        runtime.artifacts(),
+        ctx,
+        session_id,
+        binding,
+        source,
+        &summary,
+    )
 }
 
 fn output_headroom(context_tokens: Option<i64>) -> i64 {
@@ -1627,6 +1782,30 @@ pub fn plan_generation_window(
     head: &ArtifactRef,
     window: usize,
 ) -> Result<NativeInvocation, StorageError> {
+    plan_request(runtime, ctx, route, binding, head, Some(window))
+}
+
+/// A compaction request for the agent's own pinned route: the exact `input` context, no tools,
+/// router purpose `Compaction`, and usage attributed like the agent's other requests.
+pub(crate) fn plan_compaction(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    binding: &NativeBinding,
+    input: &ArtifactRef,
+) -> Result<NativeInvocation, StorageError> {
+    plan_request(runtime, ctx, route, binding, input, None)
+}
+
+/// `window` selects the offered tools of a generation request; `None` plans a compaction.
+fn plan_request(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    binding: &NativeBinding,
+    head: &ArtifactRef,
+    window: Option<usize>,
+) -> Result<NativeInvocation, StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     let root_id = ctx.root_id().ok_or(StorageError::ScopeDenied)?;
     let project_id = ctx.project_id().ok_or(StorageError::ScopeDenied)?;
@@ -1634,8 +1813,14 @@ pub fn plan_generation_window(
         return Err(StorageError::ScopeDenied);
     }
     let providers = runtime.providers().ok_or(StorageError::ScopeDenied)?;
-    let selected = providers.schemas().selected_agent_tools(ctx)?;
-    let tools = tool_window(&selected, window)?.to_vec();
+    let tools = match window {
+        Some(window) => {
+            let selected = providers.schemas().selected_agent_tools(ctx)?;
+            tool_window(&selected, window)?.to_vec()
+        }
+        None => Vec::new(),
+    };
+    let compaction = window.is_none();
     let tool_bytes = serde_json::to_vec(&tools)
         .map_err(|error| StorageError::InvalidRecord(format!("tool schemas: {error}")))?
         .len();
@@ -1657,14 +1842,16 @@ pub fn plan_generation_window(
         .checked_add(i64::try_from(tool_bytes).map_err(|_| StorageError::ScopeDenied)?)
         .ok_or(StorageError::ScopeDenied)?;
     let request_id = Id::new(format!(
-        "agent-request-{}",
+        "agent-{}-{}",
+        if compaction { "compaction" } else { "request" },
         sha256_hex(
             format!(
-                "{}:{}:{}:{}:{window}",
+                "{}:{}:{}:{}:{}",
                 session_id.as_str(),
                 head.sha256.as_str(),
                 route.pin_id.as_str(),
-                route.pin_revision.get()
+                route.pin_revision.get(),
+                window.unwrap_or(0)
             )
             .as_bytes()
         )
@@ -1796,7 +1983,9 @@ pub fn plan_generation_window(
         )?,
         protocol: Protocol::Draft1,
         request_id: request_id.clone(),
-        purpose: if owner
+        purpose: if compaction {
+            InferencePurpose::Compaction
+        } else if owner
             .dispatch
             .as_ref()
             .is_some_and(|dispatch| dispatch.implementation)
@@ -1837,7 +2026,11 @@ pub fn plan_generation_window(
     .map_err(|error| StorageError::InvalidRecord(format!("agent inference JSON: {error}")))?;
     let logical = RequestAdmission {
         request_id: request_id.clone(),
-        purpose: Purpose::Conversation,
+        purpose: if compaction {
+            Purpose::Compaction
+        } else {
+            Purpose::Conversation
+        },
         session_id: Some(session_id.clone()),
         project_id: Some(project_id.clone()),
         root_id: Some(root_id.clone()),

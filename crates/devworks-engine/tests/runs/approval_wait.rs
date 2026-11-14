@@ -92,7 +92,7 @@ impl HeldWire {
         }
     }
 }
-struct Body(Option<Vec<u8>>);
+pub(super) struct Body(pub(super) Option<Vec<u8>>);
 struct Close;
 impl StreamCloser for Close {
     fn close(&self) -> Result<(), TransportError> {
@@ -160,7 +160,7 @@ impl StreamingHttp for HeldWire {
     }
 }
 
-struct Entropy;
+pub(super) struct Entropy;
 impl devworks_core::ports::http::Entropy for Entropy {
     fn fill(&self, bytes: &mut [u8]) {
         bytes.fill(7);
@@ -221,7 +221,7 @@ async fn runtime_with(
 
 /// A coordinator agent session pinned to a tool-capable model: the agent's invocation context
 /// and its record.
-fn pinned_agent_session(fx: &Fx) -> (InvocationContext, AgentRecord) {
+pub(super) fn pinned_agent_session(fx: &Fx) -> (InvocationContext, AgentRecord) {
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let activation = fx.launch("approval-wait-owner");
     let host = principal(&*fx.store, "approval-wait-host", PrincipalKind::Host);
