@@ -7,6 +7,11 @@
 # runners cannot be listed uses macos-latest. Only put MAC_RUNNER_LABEL on runners
 # this repository may use.
 #
+# The fork check is routing, not isolation: a pull_request run uses the PR's own copy of
+# this script and of ci.yml, so a fork can rewrite either and target the self-hosted Macs.
+# Keeping fork code off those Macs depends on the repository setting that requires
+# maintainer approval before workflows run for all outside contributors.
+#
 # Inputs (environment): GH_TOKEN (may be empty), OWNER, REPO (owner/name),
 # IS_FORK (true/false), MAC_RUNNER_LABEL (default devworks-mac).
 # Output: one line per job, job=<runs-on JSON>, appended to GITHUB_OUTPUT (stdout locally).
