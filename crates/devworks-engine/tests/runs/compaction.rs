@@ -9,7 +9,7 @@ use devworks_core::protocol::provider::{ContextChangeReason, TranscriptBody};
 /// Text of the host's compaction request, as the scripted provider recognizes it.
 const COMPACTION_REQUEST: &str = "will be compacted";
 const SUMMARY: &str = "SUMMARY-OF-THE-WORK-SO-FAR";
-/// Each generation answers with this marker padded to about 16,000 estimated tokens.
+/// Each generation answers with this marker padded to about 64,000 estimated tokens.
 const LONG_ANSWER: &str = "LONG-ANSWER";
 
 /// Answers a compaction request with [`SUMMARY`] and every other request with a long answer.
@@ -29,7 +29,7 @@ impl StreamingHttp for CompactionWire {
         let text = if body.contains(COMPACTION_REQUEST) {
             SUMMARY.to_owned()
         } else {
-            format!("{LONG_ANSWER} {}", "x".repeat(64 * 1024))
+            format!("{LONG_ANSWER} {}", "x".repeat(256 * 1024))
         };
         self.bodies.lock().unwrap().push(body);
         let delta =
@@ -221,7 +221,15 @@ fn a_context_over_the_threshold_is_compacted_before_the_next_request() {
     // The first turn's request, a compaction request, the second turn's request (its long
     // answer brings the context back to 60%), a compaction request in the compacted epoch, then
     // the third turn's request.
-    assert_eq!(turn.bodies.len(), 5, "{:?}", turn.epochs);
+    assert_eq!(
+        turn.bodies.len(),
+        5,
+        "{:?} before {} window {} compacted {:?}",
+        turn.epochs,
+        turn.tokens_before,
+        turn.window,
+        turn.compacted_tokens
+    );
     let compaction = &turn.bodies[1];
     assert!(compaction.contains(COMPACTION_REQUEST));
     assert!(

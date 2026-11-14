@@ -6,13 +6,14 @@ use devworks_core::{
     context::InvocationContext,
     ports::storage::*,
     protocol::{
-        Counter, Id,
+        Counter, Id, OperationState,
         provider::{ArtifactRef, ContextChangeReason, NativeBinding},
     },
     providers::context::{ContentBlock, Message, MessageRole, ProviderContext},
     services::artifacts::{ArtifactService, host::HostArtifactPublication, version_ref},
 };
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 /// Provenance kind of the exact context sent with a compaction request.
@@ -120,23 +121,14 @@ pub(crate) fn publish_compacted(
     summary: &str,
 ) -> Result<ArtifactRef, StorageError> {
     let previous_epoch = binding.context_epoch.get();
-    let next = NativeBinding {
-        context_epoch: Counter::new(
-            previous_epoch
-                .checked_add(1)
-                .ok_or_else(|| StorageError::InvalidRecord("context epoch overflow".into()))?,
-        )
-        .map_err(|error| StorageError::InvalidRecord(error.into()))?,
-        ..binding.clone()
-    };
-    // Opaque provider blocks of the replaced messages cannot cross the boundary; record them
-    // as omitted sources of the new epoch.
-    let (_, omitted) = source
-        .context
-        .clone()
-        .converted_for_new_epoch(binding, &next)
-        .map_err(|error| StorageError::InvalidRecord(format!("compaction: {error:?}")))?;
-    let compacted = compacted_context(&source.context, next.context_epoch.get(), summary);
+    let (next, omitted) = omitted_native(&source.context, binding)?;
+    let outstanding = outstanding_calls(store, ctx, session_id)?;
+    let compacted = compacted_context(
+        &source.context,
+        next.context_epoch.get(),
+        summary,
+        &outstanding,
+    );
     let (context, _) = compacted
         .converted_for_new_epoch(binding, &next)
         .map_err(|error| StorageError::InvalidRecord(format!("compaction: {error:?}")))?;
@@ -158,7 +150,73 @@ pub(crate) fn publish_compacted(
     )
 }
 
-fn compacted_context(source: &ProviderContext, epoch: i64, summary: &str) -> ProviderContext {
+/// The next epoch's binding and the opaque provider blocks of `context` that cannot cross into
+/// it, which the epoch records as omitted sources. Refused before any summary is requested when
+/// the epoch could not record them all.
+pub(crate) fn omitted_native(
+    context: &ProviderContext,
+    binding: &NativeBinding,
+) -> Result<(NativeBinding, Vec<ArtifactRef>), StorageError> {
+    let next = NativeBinding {
+        context_epoch: Counter::new(
+            binding
+                .context_epoch
+                .get()
+                .checked_add(1)
+                .ok_or_else(|| StorageError::InvalidRecord("context epoch overflow".into()))?,
+        )
+        .map_err(|error| StorageError::InvalidRecord(error.into()))?,
+        ..binding.clone()
+    };
+    let (_, omitted) = context
+        .clone()
+        .converted_for_new_epoch(binding, &next)
+        .map_err(|error| StorageError::InvalidRecord(format!("compaction: {error:?}")))?;
+    if omitted.len() > crate::context_epoch::MAX_OMITTED_NATIVE {
+        return Err(StorageError::InvalidRecord(
+            "context has too many native blocks to compact".into(),
+        ));
+    }
+    Ok((next, omitted))
+}
+
+/// Calls whose linked operation can still change: a later update is appended to their tool
+/// result, so a compacted context keeps the call and its result.
+fn outstanding_calls(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    session_id: &Id,
+) -> Result<BTreeSet<String>, StorageError> {
+    let linked = crate::tool_turn::linked_operations(store, ctx, session_id)?;
+    read_snapshot(store, &ReadOptions::default(), |read| {
+        let mut outstanding = BTreeSet::new();
+        for call in &linked {
+            let Some(operation_id) = &call.operation_id else {
+                continue;
+            };
+            let operation = read
+                .operations()
+                .operation(operation_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if !matches!(
+                operation.state,
+                OperationState::ObservedComplete
+                    | OperationState::Failed
+                    | OperationState::CancelledBeforeDispatch
+            ) {
+                outstanding.insert(call.native_call_id.clone());
+            }
+        }
+        Ok(outstanding)
+    })
+}
+
+fn compacted_context(
+    source: &ProviderContext,
+    epoch: i64,
+    summary: &str,
+    outstanding: &BTreeSet<String>,
+) -> ProviderContext {
     let mut content: Vec<ContentBlock> = source
         .messages
         .first()
@@ -183,11 +241,31 @@ fn compacted_context(source: &ProviderContext, epoch: i64, summary: &str) -> Pro
         ),
         cache: None,
     });
+    let mut messages = vec![Message {
+        role: MessageRole::User,
+        content,
+    }];
+    // Exchanges whose operation can still report keep their call and result, in order.
+    for message in source.messages.iter().skip(1) {
+        let kept: Vec<ContentBlock> = message
+            .content
+            .iter()
+            .filter(|block| match block {
+                ContentBlock::ToolCall { call_id, .. }
+                | ContentBlock::ToolResult { call_id, .. } => outstanding.contains(call_id),
+                _ => false,
+            })
+            .cloned()
+            .collect();
+        if !kept.is_empty() {
+            messages.push(Message {
+                role: message.role.clone(),
+                content: kept,
+            });
+        }
+    }
     ProviderContext {
-        messages: vec![Message {
-            role: MessageRole::User,
-            content,
-        }],
+        messages,
         ..source.clone()
     }
 }
@@ -226,7 +304,7 @@ mod tests {
             ],
             parameters: GenerationParameters::default(),
         };
-        let compacted = compacted_context(&source, 2, " new summary ");
+        let compacted = compacted_context(&source, 2, " new summary ", &BTreeSet::new());
         compacted.validate().unwrap();
         let texts: Vec<_> = compacted.messages[0]
             .content
@@ -244,5 +322,56 @@ mod tests {
                 &format!("{SUMMARY_PREFIX} into context epoch 2. Summary:\nnew summary")
             ]
         );
+    }
+
+    #[test]
+    fn a_compacted_context_keeps_exchanges_whose_operation_can_still_report() {
+        let arguments: ArtifactRef = serde_json::from_value(json!({
+            "artifactId": "arguments", "versionId": "arguments-1", "sha256": "a".repeat(64),
+            "byteLength": "2", "mediaType": "application/json"}))
+        .unwrap();
+        let call = |id: &str| ContentBlock::ToolCall {
+            call_id: id.into(),
+            wire_name: "tool".into(),
+            arguments: arguments.clone(),
+        };
+        let result = |id: &str| ContentBlock::ToolResult {
+            call_id: id.into(),
+            operation_id: None,
+            content: vec![],
+            is_error: false,
+            cache: None,
+        };
+        let mut asked = text(MessageRole::Assistant, "calling");
+        asked.content.extend([call("held"), call("done")]);
+        let source = ProviderContext {
+            version: 1,
+            instructions: vec![],
+            instruction_stamps: vec![],
+            skill_stamp: None,
+            messages: vec![
+                text(MessageRole::User, "Assignment brief"),
+                asked,
+                Message {
+                    role: MessageRole::User,
+                    content: vec![result("held"), result("done")],
+                },
+                text(MessageRole::Assistant, "long answer"),
+            ],
+            parameters: GenerationParameters::default(),
+        };
+        let compacted =
+            compacted_context(&source, 1, "summary", &BTreeSet::from(["held".to_owned()]));
+        compacted.validate().unwrap();
+        let ids: Vec<_> = compacted.messages[1..]
+            .iter()
+            .flat_map(|message| &message.content)
+            .map(|block| match block {
+                ContentBlock::ToolCall { call_id, .. } => format!("call {call_id}"),
+                ContentBlock::ToolResult { call_id, .. } => format!("result {call_id}"),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(ids, ["call held", "result held"]);
     }
 }

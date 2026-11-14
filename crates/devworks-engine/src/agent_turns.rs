@@ -451,14 +451,11 @@ async fn run_native_loop(
             .ok_or(StorageError::ScopeDenied)?
             .1;
         acknowledge_native_instructions(runtime, ctx, agent).await?;
-        if compaction_due(runtime, ctx, &route, &head, window)? {
-            if compacted.as_deref() == Some(head.sha256.as_str()) {
-                // The compacted context alone reaches the threshold: fail visibly instead of
-                // compacting again on every request.
-                return Err(StorageError::InvalidRecord(
-                    "agent context still reaches the compaction threshold after compaction".into(),
-                ));
-            }
+        // A context this turn just compacted is sent as it is, even if it still reaches the
+        // threshold: compacting it again could not shrink it.
+        if compacted.as_deref() != Some(head.sha256.as_str())
+            && compaction_due(runtime, ctx, &route, &head, window)?
+        {
             match compact(
                 runtime,
                 ctx,
@@ -807,33 +804,59 @@ fn tool_window_count(total: usize) -> usize {
 }
 
 /// Estimated input tokens of the next request from `head` with tool window `window`: the context
-/// and the offered tool schemas, by the attributed estimate of four bytes per token. Tool-call
-/// arguments and native blocks the context only references count at their artifact size, since
-/// the request carries their content.
+/// and the offered tool definitions, by the attributed estimate of four bytes per token. Tool-call
+/// arguments and native blocks the context only references count at their artifact size, and
+/// tools at their resolved definition, since the request carries their content.
 pub fn context_tokens(
     runtime: &Runtime,
     ctx: &InvocationContext,
     head: &ArtifactRef,
     window: usize,
 ) -> Result<i64, StorageError> {
-    let selected = runtime
+    measure(runtime, ctx, head, window).map(|size| size.tokens)
+}
+
+struct RequestSize {
+    /// Estimated input tokens of the whole request.
+    tokens: i64,
+    /// Estimated tokens compaction keeps: instructions, the first message and tool definitions.
+    fixed_tokens: i64,
+    /// Native blocks in the context.
+    natives: usize,
+}
+
+fn measure(
+    runtime: &Runtime,
+    ctx: &InvocationContext,
+    head: &ArtifactRef,
+    window: usize,
+) -> Result<RequestSize, StorageError> {
+    use devworks_core::providers::materialize::SchemaDocuments;
+    let schemas = runtime
         .providers()
         .ok_or(StorageError::ScopeDenied)?
-        .schemas()
-        .selected_agent_tools(ctx)?;
-    let tool_bytes = serde_json::to_vec(tool_window(&selected, window)?)
-        .map_err(|error| StorageError::InvalidRecord(format!("tool schemas: {error}")))?
-        .len();
+        .schemas();
+    let selected = schemas.selected_agent_tools(ctx)?;
+    let mut tool_bytes = 0usize;
+    for alias in tool_window(&selected, window)? {
+        // The encoder sends the resolved definition; an unresolvable one is refused there.
+        let bytes = match schemas.tool(ctx, alias) {
+            Ok(tool) => serde_json::to_vec(&(&tool.schema, &tool.description, &tool.wire_name)),
+            Err(_) => serde_json::to_vec(alias),
+        }
+        .map_err(|error| StorageError::InvalidRecord(format!("tool schemas: {error}")))?;
+        tool_bytes = tool_bytes
+            .checked_add(bytes.len())
+            .ok_or(StorageError::ScopeDenied)?;
+    }
     let (context_bytes, _) = runtime
         .artifacts()
         .read_exact(runtime.store().as_ref(), ctx, head, 32 * 1024 * 1024)
         .map_err(|_| StorageError::ScopeDenied)?;
     let context: ProviderContext = serde_json::from_slice(&context_bytes)
         .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?;
-    let referenced = context
-        .messages
-        .iter()
-        .flat_map(|message| &message.content)
+    let blocks = || context.messages.iter().flat_map(|message| &message.content);
+    let referenced = blocks()
         .filter_map(|block| match block {
             ContentBlock::ToolCall { arguments, .. } => Some(arguments.byte_length.get()),
             ContentBlock::Native { artifact, .. } => Some(artifact.byte_length.get()),
@@ -841,17 +864,38 @@ pub fn context_tokens(
         })
         .try_fold(0i64, i64::checked_add)
         .ok_or(StorageError::ScopeDenied)?;
+    let natives = blocks()
+        .filter(|block| matches!(block, ContentBlock::Native { .. }))
+        .count();
+    let tool_bytes = i64::try_from(tool_bytes).map_err(|_| StorageError::ScopeDenied)?;
     let bytes = head
         .byte_length
         .get()
-        .checked_add(i64::try_from(tool_bytes).map_err(|_| StorageError::ScopeDenied)?)
+        .checked_add(tool_bytes)
         .and_then(|bytes| bytes.checked_add(referenced))
         .ok_or(StorageError::ScopeDenied)?;
-    Ok(devworks_core::services::sessions::token_estimate(bytes))
+    let fixed = ProviderContext {
+        messages: context.messages.iter().take(1).cloned().collect(),
+        ..context.clone()
+    };
+    let fixed_bytes = serde_json::to_vec(&fixed)
+        .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?
+        .len();
+    let fixed_bytes = i64::try_from(fixed_bytes)
+        .ok()
+        .and_then(|bytes| bytes.checked_add(tool_bytes))
+        .ok_or(StorageError::ScopeDenied)?;
+    Ok(RequestSize {
+        tokens: devworks_core::services::sessions::token_estimate(bytes),
+        fixed_tokens: devworks_core::services::sessions::token_estimate(fixed_bytes),
+        natives,
+    })
 }
 
 /// The next request reaches `agents.compactionThresholdPercent` of the routed model's context
-/// window. A model without a known window is never compacted.
+/// window while the part compaction keeps stays under it, or its context holds as many native
+/// blocks as one epoch change can record as omitted. When the kept part alone reaches the
+/// threshold, compacting cannot help and the request is sent as before.
 fn compaction_due(
     runtime: &Runtime,
     ctx: &InvocationContext,
@@ -872,11 +916,12 @@ fn compaction_due(
                 )?,
             ))
         })?;
-    let Some(limit) = limit else {
-        return Ok(false);
+    let size = measure(runtime, ctx, head, window)?;
+    let reaches = |tokens: i64| {
+        limit.is_some_and(|limit| tokens.saturating_mul(100) >= limit.saturating_mul(percent))
     };
-    let tokens = context_tokens(runtime, ctx, head, window)?;
-    Ok(tokens.saturating_mul(100) >= limit.saturating_mul(percent))
+    Ok(size.natives >= crate::context_epoch::MAX_OMITTED_NATIVE
+        || (reaches(size.tokens) && !reaches(size.fixed_tokens)))
 }
 
 /// Summarize `head` through the agent's own pinned route and publish the summary as the root of
@@ -900,6 +945,8 @@ async fn compact(
         head,
         binding,
     )?;
+    // Refuse a context the new epoch could not record before paying for its summary.
+    crate::compaction::omitted_native(&source.context, binding)?;
     let input = crate::compaction::publish_input(
         store,
         runtime.artifacts(),

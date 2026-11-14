@@ -99,6 +99,9 @@ pub(crate) fn verify_descendant(
     })
 }
 
+/// The most opaque provider blocks one epoch change records as omitted sources.
+pub(crate) const MAX_OMITTED_NATIVE: usize = 127;
+
 pub(crate) struct EpochChange {
     pub previous_epoch: i64,
     pub binding: NativeBinding,
@@ -281,7 +284,7 @@ pub(crate) fn publish(
         ContextChangeReason::InstructionAdoption => "InstructionAdoption",
         ContextChangeReason::Compaction => "Compaction",
     };
-    if omitted.len() > 127 {
+    if omitted.len() > MAX_OMITTED_NATIVE {
         return Err(StorageError::InvalidRecord(
             "too many omitted native blocks".into(),
         ));
