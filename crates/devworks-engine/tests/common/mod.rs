@@ -3,7 +3,7 @@
 //! used as synchronization.
 #![allow(dead_code, clippy::result_large_err)]
 use devworks_adapters::storage::sqlite::{
-    DATABASE_FILE, SqliteConfig, SqliteStore, seed_migrated_store,
+    DATABASE_FILE, SqliteConfig, SqliteStore, WorkProbe, seed_migrated_store,
 };
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::ports::storage::*;
@@ -96,6 +96,17 @@ impl Harness {
         Arc::new(self.open_sqlite())
     }
     pub fn open_sqlite(&self) -> SqliteStore {
+        self.open_sqlite_with(None)
+    }
+    /// Opens the store with a probe that counts the SQLite work of every read and write.
+    pub fn open_counted(&self) -> CountingStore {
+        let probe = Arc::new(WorkProbe::default());
+        CountingStore {
+            store: Arc::new(self.open_sqlite_with(Some(probe.clone()))),
+            probe,
+        }
+    }
+    fn open_sqlite_with(&self, probe: Option<Arc<WorkProbe>>) -> SqliteStore {
         let mut config = SqliteConfig::new(
             self.root.clone(),
             self.clock.clone(),
@@ -116,6 +127,7 @@ impl Harness {
         if readers > 0 {
             config.read_connections = readers;
         }
+        config.work_probe = probe;
         SqliteStore::open(config).expect("open store")
     }
     pub fn now(&self) -> i64 {
@@ -132,6 +144,59 @@ impl Drop for Harness {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
     }
+}
+
+/// The SQLite store with a probe that counts its work: read snapshots, SQLite virtual-machine
+/// steps on the read and on the write connections, and database pages the reads fetched.
+pub struct CountingStore {
+    pub store: Arc<dyn ApplicationStore>,
+    pub probe: Arc<WorkProbe>,
+}
+/// Store work one request performed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoreWork {
+    pub snapshots: u64,
+    pub read_steps: u64,
+    pub write_steps: u64,
+    pub read_pages: u64,
+}
+impl CountingStore {
+    /// The store work `request` performs; nothing else may use the store meanwhile.
+    pub fn count<T>(&self, request: impl FnOnce() -> T) -> (T, StoreWork) {
+        let p = &self.probe;
+        let (snapshots, read, write, pages) = (
+            p.snapshots(),
+            p.read_steps(),
+            p.write_steps(),
+            p.read_pages(),
+        );
+        let value = request();
+        (
+            value,
+            StoreWork {
+                snapshots: p.snapshots() - snapshots,
+                read_steps: p.read_steps() - read,
+                write_steps: p.write_steps() - write,
+                read_pages: p.read_pages() - pages,
+            },
+        )
+    }
+}
+
+/// Asserts that the store work of one request did not grow when unrelated history grew: no
+/// more read snapshots, and at most 2% more SQLite steps on either connection. The allowance
+/// covers B-tree bookkeeping a larger table can add to the same insert or seek; work that
+/// visits history grows with it, far past 2%. Pages read are reported but not compared here:
+/// an indexed seek fetches one more page once its B-tree gains a level.
+pub fn assert_no_growth(path: &str, small: StoreWork, large: StoreWork) {
+    eprintln!("{path}: before {small:?}, after tenfold history {large:?}");
+    let within = |small: u64, large: u64| large <= small + small / 50;
+    assert!(
+        large.snapshots <= small.snapshots
+            && within(small.read_steps, large.read_steps)
+            && within(small.write_steps, large.write_steps),
+        "{path}: store work grew with unrelated history: {small:?} -> {large:?}"
+    );
 }
 
 /// Failure-only guard for a test body whose regression mode is a hang (it awaits a signal that

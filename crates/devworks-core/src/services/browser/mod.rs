@@ -201,8 +201,17 @@ pub enum EffectOutcome {
 
 /// Launch flags of every owned browser (headless, empty profile, the private DevTools pipe and
 /// no DevTools port, no first-run, sync, background networking, extensions, keychain or prompts).
-pub fn launch_args(profile: &Profile) -> Vec<String> {
+///
+/// Every connection goes through the session's egress proxy at `proxy`: loopback is not
+/// bypassed (`<-loopback>`), QUIC (which a proxy cannot carry) and DNS-over-HTTPS are off, and
+/// WebRTC may not send UDP outside the proxy. The browser then never resolves a name it
+/// connects to: the proxy resolves and checks it.
+pub fn launch_args(profile: &Profile, proxy: std::net::SocketAddr) -> Vec<String> {
     vec![
+        format!("--proxy-server=http://{proxy}"),
+        "--proxy-bypass-list=<-loopback>".into(),
+        "--disable-quic".into(),
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp".into(),
         "--headless=new".into(),
         "--remote-debugging-pipe".into(),
         format!("--user-data-dir={}", profile.user_data.display()),
@@ -215,7 +224,7 @@ pub fn launch_args(profile: &Profile) -> Vec<String> {
         "--disable-breakpad".into(),
         "--disable-default-apps".into(),
         "--disable-extensions".into(),
-        "--disable-features=Translate,MediaRouter,OptimizationHints".into(),
+        "--disable-features=Translate,MediaRouter,OptimizationHints,DnsOverHttps".into(),
         "--metrics-recording-only".into(),
         "--password-store=basic".into(),
         "--use-mock-keychain".into(),
@@ -955,9 +964,21 @@ impl BrowserService {
                 return failed(DomainErrorCode::ExternalFailure, "browser_profile", &why);
             }
         };
+        // No browser starts without its egress proxy.
+        let proxy = match self.platform.start_egress_proxy(self.egress.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                let why = format!("the browser's egress proxy could not be started: {e}");
+                let _ = self.platform.remove_profile(id);
+                self.fail_session(id, &why, BrowserPhase::Failed);
+                drop(guard);
+                self.forget(id);
+                return failed(DomainErrorCode::ExternalFailure, ASSET, &why);
+            }
+        };
         let spec = self
             .platform
-            .command(&asset, &profile, &launch_args(&profile));
+            .command(&asset, &profile, &launch_args(&profile, proxy.address()));
         let ctx = self.host_context(&s, &op.id);
         let roots = match ProtectedRoots::read(&*self.store, vec![], self.app_data_root.clone()) {
             Ok(r) => r,
@@ -1048,6 +1069,7 @@ impl BrowserService {
             process.clone(),
             cdp::Cdp::new(transport).with_gate(self.egress.clone()),
         );
+        live.egress_proxy = Some(proxy);
         if let Err(e) = live.setup(&self.config.bounds(), self.config.launch_timeout) {
             let why = format!("the browser session could not be configured: {e}");
             self.note_launch_failure(&s.asset_id, &why);

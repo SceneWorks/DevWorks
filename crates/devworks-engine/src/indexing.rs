@@ -197,12 +197,18 @@ impl IndexSupervisor {
         }
     }
 
-    /// Stops claiming, signals every executing run and waits for them until `deadline` (the
-    /// runtime's one shutdown deadline); runs still executing then are abandoned to recovery.
-    pub async fn stop(&self, deadline: tokio::time::Instant) -> usize {
+    /// Stops claiming, ends the supervision loop and signals every executing run, without
+    /// waiting for them.
+    pub fn signal_stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         self.worker.stop_all();
         self.wake.notify_one();
+    }
+
+    /// Stops claiming, signals every executing run and waits for them until `deadline` (the
+    /// runtime's one shutdown deadline); runs still executing then are abandoned to recovery.
+    pub async fn stop(&self, deadline: tokio::time::Instant) -> usize {
+        self.signal_stop();
         let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner()));
         let mut abandoned = 0;
         for mut t in tasks {

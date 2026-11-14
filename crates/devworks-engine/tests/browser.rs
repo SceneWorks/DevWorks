@@ -1048,6 +1048,13 @@ impl BrowserPlatform for FakePlatform {
     ) -> Result<Vec<u8>, BrowserFault> {
         self.native.read_staged(profile, path, max)
     }
+    fn start_egress_proxy(
+        &self,
+        policy: Arc<dyn devworks_core::ports::browser::ConnectPolicy>,
+    ) -> Result<Box<dyn devworks_core::ports::browser::RunningProxy>, BrowserFault> {
+        // The real proxy: a test connects through it as the browser would.
+        self.native.start_egress_proxy(policy)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1522,6 +1529,9 @@ fn composition(
     }
 }
 
+/// Every name the fixture resolver was asked for.
+static RESOLVED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 /// Resolves `lan.test` to a private address and every other fixture name to a public one.
 struct FixtureResolver;
 impl devworks_core::ports::web::Resolver for FixtureResolver {
@@ -1532,6 +1542,7 @@ impl devworks_core::ports::web::Resolver for FixtureResolver {
         _: Instant,
         _: &[Cancellation],
     ) -> Result<Vec<std::net::IpAddr>, devworks_core::ports::web::NetFault> {
+        RESOLVED.lock().unwrap().push(host.to_owned());
         let ip = if host == "lan.test" {
             "192.168.1.20"
         } else {
@@ -4100,6 +4111,191 @@ fn the_egress_policy_refuses_metadata_and_private_destinations_on_every_request(
             .any(|m| m["method"] == "Fetch.enable" && m["sessionId"] == "W1"),
         "the worker's requests are intercepted"
     );
+}
+
+/// The status line the session's egress proxy answers to `CONNECT target`, and the open
+/// tunnel when it was established.
+fn tunnel(proxy: std::net::SocketAddr, target: &str) -> (String, std::net::TcpStream) {
+    use std::io::Read;
+    let mut s = std::net::TcpStream::connect(proxy).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    std::io::Write::write_all(
+        &mut s,
+        format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").as_bytes(),
+    )
+    .unwrap();
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") && s.read(&mut byte).unwrap_or(0) == 1 {
+        head.push(byte[0]);
+    }
+    let text = String::from_utf8_lossy(&head);
+    (text.lines().next().unwrap_or("").to_owned(), s)
+}
+
+#[test]
+fn every_browser_connection_goes_through_its_proxy_which_refuses_websockets_to_refused_addresses() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    // The browser is launched to send every connection (loopback included) through the
+    // session's proxy, with no QUIC, DNS-over-HTTPS or UDP outside it.
+    let args = fx.platform.launched.lock().unwrap().last().unwrap().clone();
+    let proxy: std::net::SocketAddr = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--proxy-server=http://"))
+        .expect("the browser is launched behind the egress proxy")
+        .parse()
+        .unwrap();
+    assert!(proxy.ip().is_loopback());
+    for flag in [
+        "--proxy-bypass-list=<-loopback>",
+        "--disable-quic",
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    ] {
+        assert!(args.iter().any(|a| a == flag), "{flag}: {args:?}");
+    }
+    assert!(
+        args.iter()
+            .any(|a| a.starts_with("--disable-features=") && a.contains("DnsOverHttps")),
+        "{args:?}"
+    );
+    // A WebSocket (ws and wss alike tunnel through CONNECT) to a metadata, link-local or
+    // private address is refused while private networks are not allowed.
+    let refused = [
+        "169.254.169.254:80",
+        "metadata.google.internal:443",
+        "[fd00:ec2::254]:443",
+        "[fe80::1]:443",
+        "192.168.1.1:443",
+        "lan.test:443",
+    ];
+    for target in refused {
+        assert!(
+            tunnel(proxy, target).0.starts_with("HTTP/1.1 403 "),
+            "{target}"
+        );
+    }
+    // A WebSocket to an admitted address (a local development server) is carried end to end.
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let local = server.local_addr().unwrap();
+    let served = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let (mut s, _) = server.accept().unwrap();
+        let mut buf = [0u8; 1024];
+        let n = s.read(&mut buf).unwrap();
+        s.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n")
+            .unwrap();
+        String::from_utf8_lossy(&buf[..n]).into_owned()
+    });
+    let (status, mut ws) = tunnel(proxy, &local.to_string());
+    assert!(status.starts_with("HTTP/1.1 200 "), "{status}");
+    std::io::Write::write_all(
+        &mut ws,
+        b"GET /hmr HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+    )
+    .unwrap();
+    let mut answer = [0u8; 12];
+    std::io::Read::read_exact(&mut ws, &mut answer).unwrap();
+    assert_eq!(&answer, b"HTTP/1.1 101");
+    assert!(served.join().unwrap().contains("Upgrade: websocket"));
+    // Metadata stays refused with private networks allowed.
+    set_workspace(
+        &**fx.app().store(),
+        devworks_core::settings::catalog::WEB_FETCH_PRIVATE_KEY,
+        json!(true),
+    );
+    assert!(
+        tunnel(proxy, "169.254.169.254:80")
+            .0
+            .starts_with("HTTP/1.1 403 ")
+    );
+    // The DevTools gate never resolves a name (it runs on the protocol message loop): the
+    // proxy checks the name when the browser connects.
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let b = fx.platform.browser(&session);
+    {
+        let mut br = b.lock().unwrap();
+        let (s, f) = (br.pages[0].session.clone(), br.pages[0].frame.clone());
+        br.emit(
+            Some(&s),
+            "Fetch.requestPaused",
+            json!({"requestId": "gate-1", "request": {"url": "https://gate-only.test/a.js", "method": "GET"}, "frameId": f, "resourceType": "Script"}),
+        );
+    }
+    fx.svc().tick();
+    assert!(b.lock().unwrap().log.iter().any(|m| m["params"]["requestId"] == "gate-1"
+        && m["method"] == "Fetch.continueRequest"));
+    assert!(
+        !RESOLVED
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|h| h == "gate-only.test"),
+        "the DevTools gate resolved a name"
+    );
+    // The proxy stops with the session.
+    fx.close(&user, &session);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while std::net::TcpStream::connect_timeout(&proxy, Duration::from_millis(200)).is_ok() {
+        assert!(Instant::now() < deadline, "the proxy outlived its session");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn an_attached_worker_worklet_frame_or_popup_runs_only_after_its_requests_are_intercepted() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/oopif"));
+    let b = fx.platform.browser(&session);
+    // Every auto-attachment (browser, page and frame sessions) starts new targets paused.
+    let auto: Vec<Value> = b
+        .lock()
+        .unwrap()
+        .log
+        .iter()
+        .filter(|m| m["method"] == "Target.setAutoAttach")
+        .cloned()
+        .collect();
+    assert!(auto.len() >= 3, "{auto:?}");
+    for m in &auto {
+        assert_eq!(m["params"]["waitForDebuggerOnStart"], true, "{m}");
+    }
+    let popup = {
+        let mut br = b.lock().unwrap();
+        let s = br.pages[0].session.clone();
+        for (session, kind) in [("W1", "worker"), ("K1", "shared_storage_worklet")] {
+            br.emit(
+                Some(&s),
+                "Target.attachedToTarget",
+                json!({"sessionId": session, "targetInfo": {"targetId": format!("{session}T"), "type": kind, "url": "https://app.test/w.js"}, "waitingForDebugger": true}),
+            );
+        }
+        let opener = br.pages[0].target.clone();
+        let i = br.open_page("https://app.test/popup", Some(&opener));
+        br.pages[i].session.clone()
+    };
+    fx.svc().tick();
+    let br = b.lock().unwrap();
+    let child = br.children[0].session.clone();
+    let at = |session: &str, method: &str| {
+        br.log
+            .iter()
+            .position(|m| m["sessionId"] == session && m["method"] == method)
+    };
+    for s in ["W1", "K1", popup.as_str(), child.as_str()] {
+        let enabled = at(s, "Fetch.enable").unwrap_or_else(|| panic!("{s} is not intercepted"));
+        let resumed =
+            at(s, "Runtime.runIfWaitingForDebugger").unwrap_or_else(|| panic!("{s} never runs"));
+        assert!(
+            enabled < resumed,
+            "{s} ran before its requests were intercepted"
+        );
+    }
 }
 
 #[test]

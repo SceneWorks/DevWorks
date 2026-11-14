@@ -30,6 +30,9 @@ impl Fx {
     fn new() -> Self {
         let h = Harness::new();
         let store = h.open();
+        Self::over(h, store)
+    }
+    fn over(h: Harness, store: Arc<dyn ApplicationStore>) -> Self {
         rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap().execute_batch("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project','P','Active',1,1,0);").unwrap();
         let user = principal(&*store, "user", PrincipalKind::Human);
         let scope = Arc::new(ScriptedScope::new());
@@ -1061,3 +1064,47 @@ fn a_blocking_question_holds_the_work_it_names_and_not_independent_work() {
 
 #[path = "allocations/handoff.rs"]
 mod handoff;
+
+/// A next_work claim reads the live claims and actionable work: it costs the same behind 10 or
+/// 100 completed issues, each with a released claim.
+#[test]
+fn a_next_work_claim_costs_the_same_behind_tenfold_completed_history() {
+    let h = Harness::new();
+    let counted = h.open_counted();
+    let f = Fx::over(h, counted.store.clone());
+    let target = f.issue("target", 1);
+    let db = rusqlite::Connection::open(f.h.root.join("workspace.sqlite")).unwrap();
+    let mut done = 0;
+    let mut complete = |to: usize| {
+        for n in done..to {
+            let name = format!("done-{n:04}");
+            f.seed(&name, None, TASK, 10);
+            db.execute(
+                "UPDATE work_items SET status_id='project-done' WHERE id=?1",
+                [&name],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO allocation_claims(id,project_id,root_id,work_id,kind,queue_key,owner_id,ingress_namespace,invocation_id,fence,expires_at,state,revision,work_revision,root_control_revision,queue_revision,created_at) VALUES(?1,'project',?2,?2,'task','project','user','history',?1,1,0,'Released',2,1,1,1,0)",
+                [format!("released-{n:04}"), name],
+            )
+            .unwrap();
+        }
+        done = to;
+    };
+    let measure = || {
+        let (reply, work) = counted.count(|| f.claim());
+        let claimed = claim(reply);
+        assert_eq!(claimed["workId"], json!(target));
+        applied(f.command(
+            "next_work.release_claim",
+            json!({"claimId": claimed["id"], "expectedFence": claimed["fence"]}),
+        ));
+        work
+    };
+    complete(10);
+    let small = measure();
+    complete(100);
+    let large = measure();
+    assert_no_growth("next_work claim", small, large);
+}

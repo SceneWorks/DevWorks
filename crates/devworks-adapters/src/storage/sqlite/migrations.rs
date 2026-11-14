@@ -624,12 +624,23 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "98b89612ce3caecfafb3533de350b23c0cf6f883e6834944ec8a71a7901a9677",
         rebuilds_tables: true,
     },
-    // Two partial indexes only: prior builds read and write the store unchanged.
+    // Indexes, maintained Knowledge tallies and per-server MCP catalogs for bounded reads. A
+    // prior build would read a server's catalog from its scope's configuration, where it no
+    // longer is, so neither a prior reader nor a prior writer may open the store.
     Migration {
         version: 54,
-        minimum_reader: 53,
-        minimum_writer: 53,
-        sql: include_str!("migrations/0054_root_activity_indexes.sql"),
+        minimum_reader: 54,
+        minimum_writer: 54,
+        sql: include_str!("migrations/0054_bounded_reads.sql"),
+        expected_sha256: "0368b2a55b935d1720e26269a5b7805a37df20d81a0f4e210611cd2c6eb452c2",
+        rebuilds_tables: false,
+    },
+    // Two partial indexes only: prior builds read and write the store unchanged.
+    Migration {
+        version: 55,
+        minimum_reader: 54,
+        minimum_writer: 54,
+        sql: include_str!("migrations/0055_root_activity_indexes.sql"),
         expected_sha256: "5aac48f5b8bb5d074caf82c25eb26595cc6cfce2f04831854edff3eb1e3c5e0e",
         rebuilds_tables: false,
     },

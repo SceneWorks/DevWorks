@@ -99,19 +99,13 @@ fn owned(c: &StoredAllocationClaim, ctx: &InvocationContext) -> bool {
         && c.session_id.as_ref() == ctx.session_id()
         && (c.session_id.is_some() || c.ingress_namespace == *ctx.ingress_namespace())
 }
+/// The project's live claims (Active, Transferred, Yielding): the only ones any allocation,
+/// start or reconciliation acts on. Released and expired history is never read.
 pub fn claims(
     read: &dyn WorkRead,
     project: &ProjectId,
 ) -> Result<Vec<StoredAllocationClaim>, StorageError> {
-    let mut out: Vec<StoredAllocationClaim> = Vec::new();
-    loop {
-        let page = read.allocation_claims(project, out.last().map(|c| &c.id), MAX_PAGE)?;
-        let more = page.len() == usize::from(MAX_PAGE);
-        out.extend(page);
-        if !more {
-            return Ok(out);
-        }
-    }
+    read.live_allocation_claims(project)
 }
 fn change(
     tx: &mut dyn WriteTransaction,
@@ -662,7 +656,8 @@ impl WorkService {
                 },
             });
         }
-        let (_, mut candidates) = super::queue::queue(tx.work(), project, feature.map(|f| &f.id))?;
+        let (_, mut candidates) =
+            super::queue::actionable(tx.work(), project, feature.map(|f| &f.id))?;
         // Retained Next behavior: recover interrupted in-progress work before new Ready work.
         candidates.sort_by_key(|c| c.semantic != super::workflow::IN_PROGRESS);
         // Why each skipped candidate was skipped, reported when nothing is eligible (WORK-10).
@@ -737,13 +732,8 @@ impl WorkService {
                     change(tx, old, state, ctx.principal())?;
                 }
             }
-            let fence = claims(tx.work(), project)?
-                .iter()
-                .filter(|c| c.work_id == w.id)
-                .map(|c| c.fence)
-                .max()
-                .unwrap_or(0)
-                + 1;
+            let previous = tx.work().latest_allocation_claim(&w.id)?;
+            let fence = previous.as_ref().map_or(0, |c| c.fence) + 1;
             let root_id = RootId(feature.map_or_else(|| w.id.clone(), |f| f.id.clone()));
             let claim = StoredAllocationClaim {
                 id: tx.new_id(IdKind::Link),
@@ -795,7 +785,7 @@ impl WorkService {
             let value = selection(
                 tx,
                 &claim,
-                &all,
+                previous.as_slice(),
                 false,
                 c.semantic == super::workflow::IN_PROGRESS,
             )?;
