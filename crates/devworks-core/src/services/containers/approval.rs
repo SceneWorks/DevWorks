@@ -159,6 +159,30 @@ fn summary(spec: &ContainerSpec) -> String {
     )
 }
 
+/// Readmission of an approved create: the project and every mount repository must still be the
+/// ones the person reviewed. An unreviewed request (no approved binding) is unaffected.
+pub(crate) fn recheck_reviewed(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    command: &crate::gateway::AdmittedCommand,
+    spec: &ContainerSpec,
+) -> Result<(), Failure> {
+    let Some(approved) =
+        crate::services::approvals::owner_preview::approved_binding(tx, ctx, command)?
+    else {
+        return Ok(());
+    };
+    let (_, current) = binding(tx.projects(), ctx, spec)?;
+    if current != approved {
+        return Err(refuse(
+            DomainErrorCode::SourceChanged,
+            "container_approval",
+            Some(spec.project_id.0.clone()),
+        ));
+    }
+    Ok(())
+}
+
 impl ContainerService {
     /// Resolves each mount the way dispatch will. A source dispatch would refuse (a dot-directory,
     /// a path outside a member primary checkout) is refused here, before anyone is asked.

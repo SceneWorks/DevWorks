@@ -173,6 +173,9 @@ impl CommandHandler for ContainerService {
                         .into()),
                     );
                 }
+                if let Err(failure) = super::approval::recheck_reviewed(tx, ctx, admitted, spec) {
+                    return decided(tx, Err(failure));
+                }
                 let backend =
                     match requested_backend(tx, ctx, &spec.engine_id, Some(&spec.project_id))? {
                         Ok(backend) => backend,
