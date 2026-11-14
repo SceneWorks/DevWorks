@@ -162,7 +162,7 @@ pub fn bootstrap_page(
             for fact in rows {
                 state.session_after = Some(fact.key().clone());
                 // Every inference observation is already a usage origin: it is recorded as one
-                // when its batch commits, and migration 54 copied the older ones.
+                // when its batch commits, and migration 55 copied the older ones.
                 if let UsageFact::Tool { invocation, .. } = fact {
                     tool_invocation(tx, &invocation)?;
                 }
@@ -172,7 +172,7 @@ pub fn bootstrap_page(
             }
             count
         }
-        // Job usage items are recorded only as usage origins (migration 54 copied the older
+        // Job usage items are recorded only as usage origins (migration 55 copied the older
         // ones), so this phase has nothing to visit.
         "Jobs" => {
             state.phase = "RouterRequests".into();

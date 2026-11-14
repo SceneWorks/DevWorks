@@ -1,4 +1,4 @@
-//! Migration 54: session and job usage items live only in their usage origins. A store seeded
+//! Migration 55: session and job usage items live only in their usage origins. A store seeded
 //! the old way (source rows in session_usage and job_run_usage, some already ingested and some
 //! not) upgrades to the same origins the ingestion code writes, and the session and job usage
 //! reads return what the dropped tables returned.
@@ -119,7 +119,7 @@ fn job_usage(row: &(i64, Option<&str>, &str, &str, bool)) -> StoredJobUsage {
 }
 
 /// Sessions `s1` (project, feature root) and `s2` (workspace), batches b1..b4 and one job run,
-/// written through repositories none of which touches a table migration 54 changes. Returns
+/// written through repositories none of which touches a table migration 55 changes. Returns
 /// each batch's committed sequence.
 fn seed(s: &SqliteStore) -> Vec<(String, i64)> {
     let actor = s.info().host_actor;
@@ -304,7 +304,7 @@ fn origins(s: &SqliteStore) -> Vec<StoredUsageOrigin> {
     .unwrap()
 }
 
-/// The pre-migration-54 read of a root's session usage (the `session_usage` statement).
+/// The pre-migration-55 read of a root's session usage (the `session_usage` statement).
 fn old_session_usage(c: &Connection, root: Option<&str>) -> Vec<(SequenceKey, StoredUsage)> {
     let mut st = c
         .prepare(
@@ -338,7 +338,7 @@ fn old_session_usage(c: &Connection, root: Option<&str>) -> Vec<(SequenceKey, St
     .unwrap()
 }
 
-/// The pre-migration-54 run usage page and totals (the `job_run_usage` statements).
+/// The pre-migration-55 run usage page and totals (the `job_run_usage` statements).
 fn old_job_usage(c: &Connection) -> (Vec<StoredJobUsage>, JobUsageTotals) {
     let mut st = c
         .prepare(
@@ -426,7 +426,7 @@ fn upgrade_moves_session_and_job_usage_into_origins_with_the_same_reads_and_tota
     // The same store as the old build left it: every item in its source table, and only the
     // items written after migration 28 also in usage_origins.
     let h = Harness::new();
-    let old = SqliteStore::open_with(h.config(), &through(53)).unwrap();
+    let old = SqliteStore::open_with(h.config(), &through(54)).unwrap();
     assert_eq!(seed(&old), batches);
     drop(old);
     let c = h.raw();

@@ -624,15 +624,26 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "98b89612ce3caecfafb3533de350b23c0cf6f883e6834944ec8a71a7901a9677",
         rebuilds_tables: true,
     },
-    // Prior builds read and write session_usage and job_run_usage, so neither a prior reader
-    // nor a prior writer may open the store. Source rows without a usage origin are copied
-    // into usage_origins first; no table another table references is rebuilt.
+    // Indexes, maintained Knowledge tallies and per-server MCP catalogs for bounded reads. A
+    // prior build would read a server's catalog from its scope's configuration, where it no
+    // longer is, so neither a prior reader nor a prior writer may open the store.
     Migration {
         version: 54,
         minimum_reader: 54,
         minimum_writer: 54,
-        sql: include_str!("migrations/0054_drop_usage_copies.sql"),
-        expected_sha256: "f5327da27bcca734d353f1d232e89e025191dc19e79290e8759d86fec1a9c5c1",
+        sql: include_str!("migrations/0054_bounded_reads.sql"),
+        expected_sha256: "0368b2a55b935d1720e26269a5b7805a37df20d81a0f4e210611cd2c6eb452c2",
+        rebuilds_tables: false,
+    },
+    // Prior builds read and write session_usage and job_run_usage, so neither a prior reader
+    // nor a prior writer may open the store. Source rows without a usage origin are copied
+    // into usage_origins first; no table another table references is rebuilt.
+    Migration {
+        version: 55,
+        minimum_reader: 55,
+        minimum_writer: 55,
+        sql: include_str!("migrations/0055_drop_usage_copies.sql"),
+        expected_sha256: "bc4b4453bc4f1b35027b1655b588e221013752dbfd3ffe79db0ef0e0844a3885",
         rebuilds_tables: false,
     },
 ];

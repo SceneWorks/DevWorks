@@ -15,8 +15,8 @@ UPDATE usage_origins SET committed_seq=(
 
 -- Whole micro-USD of each canonical decimal amount, rounded half up (raw_amount in
 -- services/usage/ingest.rs); an amount it cannot price stays unpriced.
-CREATE TEMP TABLE migration_54_amounts (amount TEXT PRIMARY KEY, micro INTEGER) STRICT;
-INSERT INTO migration_54_amounts(amount,micro)
+CREATE TEMP TABLE migration_55_amounts (amount TEXT PRIMARY KEY, micro INTEGER) STRICT;
+INSERT INTO migration_55_amounts(amount,micro)
  SELECT amount,CASE WHEN length(amount)<=64 AND length(w)>0 AND w NOT GLOB '*[^0-9]*'
    AND length(ltrim(w,'0'))<=12
    AND (NOT dotted OR (length(f) BETWEEN 1 AND 12 AND f NOT GLOB '*[^0-9]*'))
@@ -36,7 +36,7 @@ INSERT INTO usage_origins(source_kind,source_id,attempt_id,request_id,project_id
   json_extract(u.item_json,'$.requestId'),u.project_id,
   (SELECT w.id FROM work_items w WHERE w.id=u.root_id AND w.kind='feature'),
   u.root_id,u.session_id,NULL,json_object('version',1,'item',json(u.item_json)),b.accepted_at,
-  (SELECT a.micro FROM migration_54_amounts a WHERE a.amount=json_extract(u.item_json,'$.amountUsd')),
+  (SELECT a.micro FROM migration_55_amounts a WHERE a.amount=json_extract(u.item_json,'$.amountUsd')),
   CASE json_extract(u.item_json,'$.priceKind')
    WHEN 'Reported' THEN 'ReportedCharge'
    WHEN 'Estimated' THEN CASE json_extract(u.item_json,'$.priceOrigin')
@@ -60,7 +60,7 @@ INSERT INTO usage_origins(source_kind,source_id,attempt_id,request_id,project_id
    'cacheWriteTokens',u.cache_write_tokens,'amountUsd',u.amount_usd,'priceKind',u.price_kind,
    'priceOrigin',u.price_origin,'priceRevision',u.price_revision,
    'incomplete',json(CASE u.incomplete WHEN 1 THEN 'true' ELSE 'false' END)),
-  u.recorded_at,(SELECT a.micro FROM migration_54_amounts a WHERE a.amount=u.amount_usd),
+  u.recorded_at,(SELECT a.micro FROM migration_55_amounts a WHERE a.amount=u.amount_usd),
   CASE u.price_kind
    WHEN 'Reported' THEN 'ReportedCharge'
    WHEN 'Estimated' THEN CASE u.price_origin
@@ -71,7 +71,7 @@ INSERT INTO usage_origins(source_kind,source_id,attempt_id,request_id,project_id
  FROM job_run_usage u JOIN job_runs r ON r.id=u.run_id
  WHERE NOT EXISTS(SELECT 1 FROM usage_origins o WHERE o.source_kind='JobUsage'
   AND o.source_id=json_array(u.run_id,u.seq));
-DROP TABLE migration_54_amounts;
+DROP TABLE migration_55_amounts;
 
 DROP TABLE session_usage;
 DROP TABLE job_run_usage;

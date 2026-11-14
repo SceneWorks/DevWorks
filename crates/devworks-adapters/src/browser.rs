@@ -22,9 +22,14 @@
 //! on Windows, as Chromium's `AdoptPipes` reads them), and messages are NUL-terminated JSON.
 //! No socket, port or name exists, so no other local process can attach. The channel closes
 //! when the browser exits.
+//!
+//! **Egress.** Each session's browser sends every connection through its own loopback proxy
+//! ([`egress_proxy`]), which connects only to addresses the core egress policy checked.
+pub mod egress_proxy;
+
 use devworks_core::ports::browser::{
-    BrowserAsset, BrowserFault, BrowserPlatform, CdpTransport, Profile, Qualification,
-    STAGED_NAME_MAX_BYTES, user_data_of,
+    BrowserAsset, BrowserFault, BrowserPlatform, CdpTransport, ConnectPolicy, Profile,
+    Qualification, RunningProxy, STAGED_NAME_MAX_BYTES, user_data_of,
 };
 use devworks_core::ports::process::{ControlChannel, ControlPipe, ProcessSpec};
 use devworks_core::protocol::Id;
@@ -471,6 +476,13 @@ impl BrowserPlatform for NativeBrowserPlatform {
             ));
         }
         Ok(out)
+    }
+
+    fn start_egress_proxy(
+        &self,
+        policy: Arc<dyn ConnectPolicy>,
+    ) -> Result<Box<dyn RunningProxy>, BrowserFault> {
+        Ok(Box::new(egress_proxy::EgressProxy::start(policy)?))
     }
 
     fn remove_staged(&self, profile: &Profile, batch: &str) -> Result<(), BrowserFault> {

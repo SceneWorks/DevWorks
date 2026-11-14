@@ -211,6 +211,40 @@ pub trait UsageRead {
         after: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<StoredInferenceAttempt>, StorageError>;
+    /// Attempts created in `[filter.start_ms, filter.end_ms)` (both required), in exclusive
+    /// `(created_at_ms, attempt_id)` order, through a time index: attempts outside the range
+    /// are never visited.
+    fn inference_attempts_between(
+        &self,
+        filter: &UsageAttemptFilter,
+        after: Option<&(i64, Id)>,
+        limit: u16,
+    ) -> Result<Vec<StoredInferenceAttempt>, StorageError>;
+    /// Attempts created at or after `filter.end_ms` whose logical request was created in
+    /// `[filter.start_ms, filter.end_ms)`, each with its request's creation time, in exclusive
+    /// `(request created_at_ms, request_id, attempt_id)` order. That order follows the request
+    /// time index, so each page starts after the last request it visited.
+    fn late_inference_attempts(
+        &self,
+        filter: &UsageAttemptFilter,
+        after: Option<&(i64, Id, Id)>,
+        limit: u16,
+    ) -> Result<Vec<(i64, StoredInferenceAttempt)>, StorageError>;
+    /// Origins recorded in `[filter.start_ms, filter.end_ms)` (both required), in exclusive
+    /// `(recorded_at_ms, source_kind, source_id)` order, through a time index.
+    fn usage_origins_between(
+        &self,
+        filter: &UsageOriginFilter,
+        after: Option<&(i64, String, String)>,
+        limit: u16,
+    ) -> Result<Vec<StoredUsageOrigin>, StorageError>;
+    /// Attempts whose balance is not yet locally quiescent, in exclusive ID order. Settled
+    /// attempts are never visited, so the cost follows open custody rather than history.
+    fn unquiesced_attempts(
+        &self,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredInferenceAttempt>, StorageError>;
     fn usage_observation(
         &self,
         attempt: &Id,

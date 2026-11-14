@@ -776,6 +776,112 @@ fn upgraded_store_drops_unwritten_tables_keeps_rebuilt_rows_and_indexes_capabili
     );
 }
 
+/// Migration 54 on a store with history: Knowledge tallies count the existing deliveries,
+/// lesson events and open challenges, and each MCP server's catalog moves out of its scope's
+/// configuration into its own namespace, leaving the configuration without catalogs.
+#[test]
+fn upgrade_counts_knowledge_tallies_and_moves_each_mcp_catalog_apart() {
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(53)).unwrap());
+    let catalog = |name: &str| {
+        json!({"capabilities": [{"id": format!("mcp-{name}"), "kind": "tool"}],
+            "schemas": {format!("schema-{name}"): {"type": "object"}},
+            "resource_uris": {}})
+    };
+    let server = |name: &str| {
+        let mut server = json!({"public": {"id": name, "name": name},
+            "transport": {"kind": "Http"}});
+        for (key, value) in catalog(name).as_object().unwrap() {
+            server[key] = value.clone();
+        }
+        server
+    };
+    let blob = json!({"servers": [server("srv-a"), server("srv-b")]}).to_string();
+    h.raw()
+        .execute_batch(&format!(
+            "INSERT INTO actors VALUES('human-a','human','Human');
+             INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
+             INSERT INTO work_items(id,project_id,kind,title,priority,manual_order,revision,scope_revision,created_at,brief_json)
+               VALUES('feature-a','project-a','feature','F',1,0,1,1,1,'{{}}');
+             INSERT INTO conversations VALUES('conv-a','feature-a',0);
+             INSERT INTO conversations VALUES('conv-b','feature-a',0);
+             INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
+               VALUES('session-a','conv-a','human-a','feature-a',0,1,'project-a',1);
+             INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
+               VALUES('session-b','conv-b','human-a','feature-a',0,1,'project-a',1);
+             INSERT INTO knowledge_entities(id,scope_key,revision,label,entity_type,aliases_json,canonical_key,author_id,created_at,updated_at)
+               VALUES('entity-a','workspace',1,'Habits','topic','[]','topic|habits','human-a',1,1);
+             INSERT INTO knowledge_claims(id,scope_key,revision,kind,entry_kind,lifecycle,subject_id,predicate,author_id,created_at,updated_at,body_json)
+               VALUES('claim-a','workspace',1,'Fact','Fact','Active','entity-a','states','human-a',1,1,'{{}}');
+             INSERT INTO knowledge_deliveries VALUES('session-a','claim-a',1,5),('session-a','claim-a',2,9),('session-b','claim-a',1,7);
+             INSERT INTO knowledge_lesson_events(claim_id,event_key,source,actor_id,at,write_id)
+               VALUES('claim-a','Prompt|1','Prompt','human-a',1,'w1'),('claim-a','Prompt|2','Prompt','human-a',2,'w2');
+             INSERT INTO knowledge_challenges(id,claim_id,state,reason,evidence_json,author_id,opened_at,resolved_at,resolved_by,resolution)
+               VALUES('ch-1','claim-a','Open','r','[]','human-a',1,NULL,NULL,NULL),
+                     ('ch-2','claim-a','Retired','r','[]','human-a',1,2,'human-a','done');
+             INSERT INTO configuration_revisions VALUES('workspace','outgoing_mcp',2,1,'{blob}');
+             INSERT INTO effective_configuration VALUES('workspace','outgoing_mcp',2);"
+        ))
+        .unwrap();
+    let s = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+    let id = |s: &str| Id::new(s).unwrap();
+    let tally = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.knowledge().knowledge_claim_tally(&id("claim-a"))
+    })
+    .unwrap();
+    assert_eq!(tally.lesson_events, 2);
+    assert_eq!(tally.open_challenges, 1);
+    assert_eq!(
+        (tally.deliveries.sessions, tally.deliveries.last_at_ms),
+        (2, Some(9))
+    );
+    // The triggers keep the tallies current for later writes.
+    write(&s, move |tx| {
+        tx.knowledge()
+            .record_knowledge_delivery(&id("session-b"), &id("claim-a"), 2, 11)?;
+        let mut challenge = tx.knowledge().knowledge_challenge(&id("ch-1"))?.unwrap();
+        challenge.state = "Upheld".into();
+        challenge.resolved_at_ms = Some(12);
+        challenge.resolved_by = Some(ActorId(id("human-a")));
+        challenge.resolution = Some("kept".into());
+        tx.knowledge().put_knowledge_challenge(&challenge)
+    })
+    .unwrap();
+    let tally = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.knowledge().knowledge_claim_tally(&id("claim-a"))
+    })
+    .unwrap();
+    assert_eq!(tally.open_challenges, 0);
+    assert_eq!(
+        (tally.deliveries.sessions, tally.deliveries.last_at_ms),
+        (2, Some(11))
+    );
+    let configuration = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.configuration()
+            .current(&ConfigScope::Workspace, "outgoing_mcp")
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(configuration.revision, 3);
+    assert_eq!(
+        configuration.body,
+        json!({"servers": [
+            {"public": {"id": "srv-a", "name": "srv-a"}, "transport": {"kind": "Http"}},
+            {"public": {"id": "srv-b", "name": "srv-b"}, "transport": {"kind": "Http"}}]})
+    );
+    for name in ["srv-a", "srv-b"] {
+        let moved = read_snapshot(&s, &ReadOptions::default(), |r| {
+            r.configuration()
+                .current(&ConfigScope::Workspace, &format!("outgoing_mcp/{name}"))
+        })
+        .unwrap()
+        .unwrap();
+        let mut expected = catalog(name);
+        expected["retired"] = json!({});
+        assert_eq!((moved.revision, moved.body), (2, expected));
+    }
+}
+
 #[test]
 fn upgrade_refuses_to_drop_a_table_that_holds_a_row() {
     let h = Harness::new();

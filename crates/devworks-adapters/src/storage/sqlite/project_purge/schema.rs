@@ -24,13 +24,20 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// `PRAGMA optimize` that clean shutdown runs) hold no project rows and are not part of the digest.
 /// Migration 53 rebuilds watchers (match and file columns) and watcher_events (several events per
 /// watcher, match_count); both keep their project owner and add no table or ownership edge, and a
-/// project's purge still removes all of their rows. Migration 54 drops session_usage and
-/// job_run_usage, with their policy rows, after copying their items into usage_origins; adds
-/// usage_origins.committed_seq, four usage_origins indexes and the recreated update trigger.
-/// usage_origins keeps its project owner (`project_id`), so a project's purge removes the copied
-/// rows with it, and adds no table or ownership edge.
+/// project's purge still removes all of their rows. Migration 54 adds read indexes (usage
+/// attempts, origins and router requests by time, open attempt balances, live allocation
+/// claims, work items by status); four tally columns on knowledge_claims with the triggers that
+/// keep them current from knowledge_deliveries, knowledge_lesson_events and
+/// knowledge_challenges, which only update the claim those rows already belong to; and moves
+/// each outgoing MCP server's catalog into its own configuration_revisions namespace in the same
+/// scope. It adds no table or ownership edge: the tallies are columns of their claim, and the
+/// catalogs are configuration rows of the scope that already owns the server. Migration 55 drops
+/// session_usage and job_run_usage, with their policy rows, after copying their items into
+/// usage_origins; adds usage_origins.committed_seq, four usage_origins indexes and the recreated
+/// update trigger. usage_origins keeps its project owner (`project_id`), so a project's purge
+/// removes the copied rows with it, and adds no table or ownership edge.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "7222b640f0431113d3c8401957018204ae497d230394dcf02e41dbf44cfa35ab";
+    "2b58b536e0880b6c5a0f1a0ae34deb4ad63df8f67c0b12259c91a2a5050a4d81";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(
