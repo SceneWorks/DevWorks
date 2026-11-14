@@ -206,6 +206,7 @@ pub mod agent_supervisor;
 pub mod agent_turns;
 pub mod approvals;
 pub mod browser;
+mod compaction;
 mod context_epoch;
 pub mod conventions;
 pub mod desktop;

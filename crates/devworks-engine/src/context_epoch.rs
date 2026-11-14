@@ -39,6 +39,7 @@ pub(crate) fn epoch_root(
 
 /// Only the immutable first version of a host-published continuation can carry an epoch
 /// witness. User-created copies, later edited versions and foreign bindings are not descendants.
+/// A host-published compaction input is a descendant only for a compaction request.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn verify_descendant(
     store: &dyn ApplicationStore,
@@ -51,6 +52,7 @@ pub(crate) fn verify_descendant(
     connection_id: &Id,
     model_id: &Id,
     profile: &str,
+    compaction: bool,
 ) -> Result<(), StorageError> {
     let (_, provenance) = artifacts
         .read_exact(store, ctx, reference, 8 * 1024 * 1024)
@@ -74,10 +76,11 @@ pub(crate) fn verify_descendant(
             || version.source["producedBy"] != host.as_str()
             || provenance["principalKind"] != "Host"
             || provenance["producedBy"] != host.as_str()
-            || !matches!(
-                derived["kind"].as_str(),
-                Some("ProviderTurnContinuation" | "ProviderOperationUpdateContext")
-            )
+            || !match derived["kind"].as_str() {
+                Some("ProviderTurnContinuation" | "ProviderOperationUpdateContext") => true,
+                Some(crate::compaction::INPUT_KIND) => compaction,
+                _ => false,
+            }
             || derived["sessionId"] != session_id.as_str()
             || derived["epochRoot"] != json!(root)
             || !derived["observedSequence"]
@@ -96,6 +99,9 @@ pub(crate) fn verify_descendant(
         Ok(())
     })
 }
+
+/// The most opaque provider blocks one epoch change records as omitted sources.
+pub(crate) const MAX_OMITTED_NATIVE: usize = 127;
 
 pub(crate) struct EpochChange {
     pub previous_epoch: i64,
@@ -279,7 +285,7 @@ pub(crate) fn publish(
         ContextChangeReason::InstructionAdoption => "InstructionAdoption",
         ContextChangeReason::Compaction => "Compaction",
     };
-    if omitted.len() > 127 {
+    if omitted.len() > MAX_OMITTED_NATIVE {
         return Err(StorageError::InvalidRecord(
             "too many omitted native blocks".into(),
         ));
