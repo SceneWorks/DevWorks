@@ -588,6 +588,11 @@ macro_rules! resource_reads {
                         &format!("{UNSETTLED} AND id>?1 ORDER BY id LIMIT ?2"),
                         params![after, n],
                     ),
+                    ProcessFilter::UnsettledRoot(root) => processes(
+                        self.conn,
+                        &format!("{UNSETTLED} AND root_id=?1 AND id>?2 ORDER BY id LIMIT ?3"),
+                        params![root.0.as_str(), after, n],
+                    ),
                 }
             }
             fn container(&self, id: &Id) -> Result<Option<StoredContainer>, StorageError> {
@@ -606,6 +611,9 @@ macro_rules! resource_reads {
                     ContainerFilter::AgentWorkMayRun => containers(self.conn,
                         "owner_kind='Agent' AND state IN ('Creating','Starting','Running','Stopping','Uncertain') AND id>?1 ORDER BY id LIMIT ?2",
                         params![after, n]),
+                    ContainerFilter::AgentWorkMayRunForRoot(root) => containers(self.conn,
+                        "owner_kind='Agent' AND state IN ('Creating','Starting','Running','Stopping','Uncertain') AND root_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
+                        params![root.0.as_str(), after, n]),
                     ContainerFilter::Project(project) => containers(self.conn,
                         "project_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
                         params![project.0.as_str(), after, n]),

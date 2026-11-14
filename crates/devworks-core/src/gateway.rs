@@ -817,7 +817,7 @@ impl Gateway<'_> {
                 "operation": operation,
                 "reason": reason.as_str(),
                 "rationale": reason.rationale(),
-                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "principalKind": ctx.principal_kind().as_str().to_string(),
                 "projectId": ctx.project_id().map(|p| p.0.as_str()),
                 "rootId": ctx.root_id().map(|r| r.0.as_str()),
                 "authoritySources": sources,

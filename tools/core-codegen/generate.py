@@ -2,7 +2,8 @@
 """Generate devworks-core domain records, per-family operation inputs and the operation registry.
 
 Sources (edit these, never the generated Rust):
-  tools/contracts-eval/domain-spec.json             domain records, operation fields, result types, schema revisions
+  tools/contracts-eval/domain-spec.json             domain records, operation fields, result types, schema revisions,
+                                                    per-operation authority attributes (operationAuthority)
   docs/architecture/contracts/family-coverage.json  family, owner, modes, envelopes, selectors, policies
 
 Outputs (deterministic, rustfmt-formatted, checked for drift in CI):
@@ -34,6 +35,14 @@ DOMAIN_OPS = SPEC['operations']
 LEGACY_RESULTS = SPEC['earlierInputResults']
 # Operations that negotiate more than the initial schema revision, with every revision they accept.
 REVISIONS = SPEC.get('schemaRevisions', {})
+# Per-operation authority attributes. Every registered operation states each one explicitly, so a
+# new or renamed operation cannot inherit a rule by omission from a hand-written name list.
+OPERATION_AUTHORITY = SPEC['operationAuthority']
+AUTHORITY_FLAGS = {'nativeExecution': 'native_execution', 'approvalRequired': 'approval_required',
+                   'humanOnly': 'human_only'}
+ASSIGNMENT_SCOPES = {'project': 'Project', 'root': 'Root', 'coordinator': 'Coordinator',
+                     'assignment': 'Assignment', 'rootDenied': 'RootDenied',
+                     'assignmentDenied': 'AssignmentDenied', 'administration': 'Administration'}
 
 # Hand-maintained protocol modules and the names generated code may reference from them.
 SHARED = set('Id Revision Counter HoldRef Protocol CommandRequest QueryRequest RootControl Activation Blockers '
@@ -361,9 +370,33 @@ def operations():
         fail('register and domain-spec operation sets differ')
     if set(REVISIONS) - names:
         fail('schema revisions declared for unknown operations: ' + ', '.join(sorted(set(REVISIONS) - names)))
+    check_authority(out)
     if len(out) != REGISTER['operationCount'] or len(REGISTER['families']) != REGISTER['familyCount']:
         fail('register counts disagree with its families')
     return out
+
+
+def check_authority(ops):
+    """Every registered operation, and nothing else, states every authority attribute."""
+    names = {o['operation'] for _, o in ops}
+    missing = sorted(names - set(OPERATION_AUTHORITY))
+    if missing:
+        fail('operations without authority attributes: ' + ', '.join(missing))
+    unknown = sorted(set(OPERATION_AUTHORITY) - names)
+    if unknown:
+        fail('authority attributes for unknown operations: ' + ', '.join(unknown))
+    commands = {o['operation'] for _, o in ops if 'Command' in o['requestModes']}
+    for n, a in OPERATION_AUTHORITY.items():
+        if set(a) != {'assignmentScope', *AUTHORITY_FLAGS}:
+            fail(f'{n}: authority attributes must be exactly assignmentScope, ' + ', '.join(AUTHORITY_FLAGS))
+        if a['assignmentScope'] not in ASSIGNMENT_SCOPES:
+            fail(f'{n}: unknown assignment scope {a["assignmentScope"]!r}')
+        if any(not isinstance(a[k], bool) for k in AUTHORITY_FLAGS):
+            fail(f'{n}: authority flags must be booleans')
+        # These rules apply only to commands; on a query-only operation they would never hold.
+        if n not in commands and (a['nativeExecution'] or a['approvalRequired']
+                                  or a['assignmentScope'] == 'administration'):
+            fail(f'{n}: native execution, approval and administration apply only to commands')
 
 
 def revision_doc(base, name, revision):
@@ -686,8 +719,8 @@ def gen_catalog(ops):
     out = [HEADER, '//! The complete operation catalog: one descriptor per registered operation with its family,',
            '//! owner, envelope, selector, per-mode policy, input decoder, result binding and the schema revisions it negotiates.',
            '#![allow(clippy::large_const_arrays)]',
-           *imports(used), 'use super::{AuthorityClass, Decoded, EffectClass, Envelope, ModeBinding, OperationDescriptor, '
-           'SchemaRevision, Selector, decode_domain_body, decode_specialized, schema_of};',
+           *imports(used), 'use super::{AssignmentScope, AuthorityClass, Decoded, EffectClass, Envelope, ModeBinding, '
+           'OperationDescriptor, SchemaRevision, Selector, decode_domain_body, decode_specialized, schema_of};',
            'use crate::admission::AdmissionError;', 'use crate::operations::{self as ops, OperationInput};',
            'use crate::registry::Mode;', 'use serde_json::Value;', '',
            f'pub(super) const FAMILIES: [&str; {len(REGISTER["families"])}] = [',
@@ -725,7 +758,10 @@ def gen_catalog(ops):
                    f'envelope: {envelope}, selector: {selector}, modes: &[{", ".join(modes)}], '
                    f'result_type: "{o["resultValueType"]}", result_schema: schema_of::<{rust(o["resultValueType"])}>, '
                    f'completion: {"true" if o.get("completionSchema") else "false"}, '
-                   f'revisions: &[{", ".join(f"SchemaRevision({r})" for r in REVISIONS.get(n, [1]))}] }},')
+                   f'revisions: &[{", ".join(f"SchemaRevision({r})" for r in REVISIONS.get(n, [1]))}], '
+                   + ''.join(f'{field}: {"true" if OPERATION_AUTHORITY[n][key] else "false"}, '
+                             for key, field in AUTHORITY_FLAGS.items())
+                   + f'assignment_scope: AssignmentScope::{ASSIGNMENT_SCOPES[OPERATION_AUTHORITY[n]["assignmentScope"]]} }},')
         index.append(f'        "{n}" => Some({i}),')
     out += ['];', '', 'pub(super) fn index_of(name: &str) -> Option<usize> {', '    match name {', *index,
             '        _ => None,', '    }', '}', '', *fns]

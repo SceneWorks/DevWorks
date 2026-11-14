@@ -310,7 +310,7 @@ pub fn record_link(
         payload: json!({"kind": new.kind.as_str(), "targetKind": target_kind, "targetId": target_id,
             "supersedes": new.supersedes.as_ref().map(Id::as_str),
             "repositoryId": repository_id.as_ref().map(Id::as_str), "revision": revision,
-            "principalKind": format!("{:?}", ctx.principal_kind()),
+            "principalKind": ctx.principal_kind().as_str().to_string(),
             "sessionId": ctx.session_id().map(Id::as_str)}),
     })?;
     let link = StoredLink {

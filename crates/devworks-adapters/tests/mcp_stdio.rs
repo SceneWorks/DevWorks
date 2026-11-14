@@ -220,6 +220,14 @@ fn main() {
         serve();
         return;
     }
+    // cargo-nextest lists a binary's tests before running them; answer in libtest's terse format.
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--list") {
+        if !args.iter().any(|a| a == "--ignored") {
+            println!("a_registered_stdio_mcp_server_is_launched_called_and_reaped: test");
+        }
+        return;
+    }
     a_registered_stdio_mcp_server_is_launched_called_and_reaped();
     println!("test a_registered_stdio_mcp_server_is_launched_called_and_reaped ... ok");
 }

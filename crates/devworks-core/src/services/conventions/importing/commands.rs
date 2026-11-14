@@ -101,7 +101,7 @@ impl ImportService {
         let job = Job {
             kind: KIND.into(),
             actor: ctx.principal().clone(),
-            actor_kind: format!("{:?}", ctx.principal_kind()),
+            actor_kind: ctx.principal_kind().as_str().to_string(),
             source_context: approvals::save_source_context(ctx),
             fences: command.authorization().fences().to_vec(),
             delivery: delivery.clone(),
@@ -230,13 +230,5 @@ pub(super) fn validate(
 }
 
 pub(super) fn principal_kind(value: &str) -> Result<PrincipalKind, StorageError> {
-    Ok(match value {
-        "Human" => PrincipalKind::Human,
-        "Host" => PrincipalKind::Host,
-        "Agent" => PrincipalKind::Agent,
-        "Package" => PrincipalKind::Package,
-        "McpClient" => PrincipalKind::McpClient,
-        "Schedule" => PrincipalKind::Schedule,
-        _ => return Err(StorageError::ScopeDenied),
-    })
+    PrincipalKind::parse(value).ok_or(StorageError::ScopeDenied)
 }

@@ -110,7 +110,7 @@ pub fn ownership(
         ctx.principal_kind(),
         PrincipalKind::Human | PrincipalKind::Host
     ) {
-        format!("{:?}", ctx.principal_kind())
+        ctx.principal_kind().as_str().to_string()
     } else {
         let principal = read
             .authority()
