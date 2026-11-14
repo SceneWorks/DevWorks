@@ -8,11 +8,7 @@ use crate::services::approvals::{
 use std::collections::BTreeMap;
 
 fn digest(value: &Value) -> Result<String, Failure> {
-    Ok(crate::fingerprint::sha256_hex(
-        crate::jcs::canonicalize(value)
-            .unwrap_or_else(|_| value.to_string())
-            .as_bytes(),
-    ))
+    Ok(crate::fingerprint::canonical_digest_or_text(value))
 }
 fn pointer(parent: &str, key: &str) -> String {
     format!("{}/{}", parent, key.replace('~', "~0").replace('/', "~1"))

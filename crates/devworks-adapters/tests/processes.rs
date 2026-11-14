@@ -3474,11 +3474,13 @@ fn launch_preflight_resolves_targets_in_the_childs_environment() {
         protected_branches: &[],
     };
     let a = fx.agent("agent-a", "project-a", "s-a");
+    // Each `$` reference is quoted: the temporary folder may have a space in its name (the macOS
+    // CI runner's does), and an unquoted expansion of it splits into other targets.
     for (script, var) in [
         ("rm -rf ~/repo", "HOME"),
         ("rm -rf \"$HOME/repo\"", "HOME"),
         ("rm -rf \"$TARGET_ROOT\"/repo", "TARGET_ROOT"),
-        ("rm -rf ${TARGET_ROOT}/repo", "TARGET_ROOT"),
+        ("rm -rf \"${TARGET_ROOT}\"/repo", "TARGET_ROOT"),
     ] {
         for approved in [false, true] {
             let mut spec = shell(script);

@@ -349,7 +349,7 @@ impl InstructionService {
         // A workspace instruction's draft would be readable from every project before any
         // approval, so a project-confined agent's draft (and any item it creates) is confined to
         // its project until a person approves it.
-        input.confined = draft_confinement(tx, ctx, &scope)?;
+        input.confined = draft_confinement(tx.authority(), ctx, &scope)?;
         let confined = input.confined.clone();
         let name = input.name.0.trim().to_owned();
         let now = tx.now_ms();

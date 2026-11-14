@@ -378,7 +378,7 @@ impl SettingsView {
             return None;
         }
         Some(SaveRevisionInput {
-            scope: super::model::data_scope(&self.scope),
+            scope: crate::protocol::data::DataScope::from(&self.scope),
             expected_revision: Revision::new(self.revision).ok()?,
             entries: BoundedList(entries),
         })

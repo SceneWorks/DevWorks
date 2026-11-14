@@ -18,6 +18,8 @@ IMAGES = {
     '2025': 'mcr.microsoft.com/mssql/server:2025-latest@sha256:05644dad1266ca3d445d1e8f6d2ebb9a6a03df9a39376e0f7b48917356dca9d9',
 }
 PASSWORD = 'Devworks_Metadata_Fixture_2026!'
+# Files copied into the database container live under this prefix inside it.
+IN_CONTAINER = '/tmp/devworks-metadata'  # dev-host: allow-path a path inside the database container, not on the host
 p = argparse.ArgumentParser()
 p.add_argument('--allow-emulation', action='store_true', help='Functional fixture development only; never native-x86 acceptance')
 p.add_argument('--version', choices=sorted(IMAGES), default='2022')
@@ -73,21 +75,21 @@ with tempfile.TemporaryDirectory(prefix='devworks-schema-sqlserver-') as folder:
         started = True
         ready()
         for file in ('ca.pem', 'server.pem', 'server.key'):
-            run('docker', 'cp', str(f/file), f'{name}:/tmp/devworks-metadata-{file}')
+            run('docker', 'cp', str(f/file), f'{name}:{IN_CONTAINER}-{file}')
         # 2017 images run SQL Server as root with no mssql user; 2019 has the user but no
         # mssql group, so change only the owner.
         run('docker', 'exec', '-u', 'root', name, 'sh', '-c',
-            'if id mssql >/dev/null 2>&1; then chown mssql /tmp/devworks-metadata-server.key; fi')
-        run('docker', 'exec', '-u', 'root', name, 'chmod', '600', '/tmp/devworks-metadata-server.key')
-        for key, value in [('network.tlscert', '/tmp/devworks-metadata-server.pem'),
-                           ('network.tlskey', '/tmp/devworks-metadata-server.key'),
+            f'if id mssql >/dev/null 2>&1; then chown mssql {IN_CONTAINER}-server.key; fi')
+        run('docker', 'exec', '-u', 'root', name, 'chmod', '600', f'{IN_CONTAINER}-server.key')
+        for key, value in [('network.tlscert', f'{IN_CONTAINER}-server.pem'),
+                           ('network.tlskey', f'{IN_CONTAINER}-server.key'),
                            ('network.forceencryption', '0')]:
             run('docker', 'exec', '-u', 'root', name, '/opt/mssql/bin/mssql-conf', 'set', key, value)
         run('docker', 'restart', name)
         ready()
         run('docker', 'cp', str(ROOT/'docs/architecture/validation/schema-sources/sqlserver-functional-fixture.sql'),
-            f'{name}:/tmp/devworks-metadata-fixture.sql')
-        sql('-i', '/tmp/devworks-metadata-fixture.sql')
+            f'{name}:{IN_CONTAINER}-fixture.sql')
+        sql('-i', f'{IN_CONTAINER}-fixture.sql')
         endpoint = run('docker', 'port', name, '1433/tcp').stdout.strip()
         env = os.environ.copy()
         env.update(DEVWORKS_METADATA_SQLSERVER=f'sqlserver://{endpoint}/metadata_fixture',

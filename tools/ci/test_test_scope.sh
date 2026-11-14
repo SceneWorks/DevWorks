@@ -56,6 +56,26 @@ if ! grep -qx 'packages=-p devworks-engine -p devworks-desktop' "$work/out"; the
   failures=$((failures + 1))
 fi
 
+# Every file whose code names a later crate's src/ or tests/ path is listed in
+# tools/ci/cross-crate-tests.sh, which runs those tests when the foundation partition is skipped.
+root=$(cd "$(dirname "$0")/../.." && pwd)
+later_reads() {
+  local readers=$1 later=$2
+  # shellcheck disable=SC2086 # readers is a list of directories
+  (cd "$root" && grep -rlE "\"(\.\./)*(crates/)?devworks-($later)/(src|tests)" $readers --include='*.rs' || true)
+}
+listed="$root/tools/ci/cross-crate-tests.sh"
+while IFS= read -r file; do
+  [[ -z "$file" ]] && continue
+  if ! grep -qxF "# reads: $file" "$listed"; then
+    echo "FAIL (cross-crate read): $file reads a later crate but is not listed in tools/ci/cross-crate-tests.sh"
+    failures=$((failures + 1))
+  fi
+done < <(
+  later_reads "crates/devworks-core crates/devworks-extension-protocol crates/dev-host crates/devworks-adapters" "engine|desktop"
+  later_reads "crates/devworks-engine" "desktop"
+)
+
 if ((failures)); then
   echo "$failures test-scope case(s) failed"
   exit 1

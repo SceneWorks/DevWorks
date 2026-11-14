@@ -66,7 +66,10 @@ jobs:
           sudo podman pull docker.io/library/alpine:latest
       - name: Qualify Podman ownership, resources and shutdown
         run: |
-          sudo env HOME="$HOME" PATH="$PATH" RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" \
+          # Hand the runner user's own toolchain homes to sudo; ask the tools where they are.
+          rustup_home="$(rustup show home)"
+          cargo_home="$(dirname "$(dirname "$(command -v cargo)")")"
+          sudo env HOME="$HOME" PATH="$PATH" RUSTUP_HOME="$rustup_home" CARGO_HOME="$cargo_home" \
             DW_NATIVE_PODMAN=/usr/bin/podman \
             cargo test -p devworks-adapters --test processes \
             native_podman_container_effects_commit_owned_create_start_and_stop \

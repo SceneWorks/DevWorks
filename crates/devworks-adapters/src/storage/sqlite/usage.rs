@@ -101,10 +101,7 @@ fn object(v: &Value) -> Result<(), StorageError> {
     }
 }
 fn digest(s: &str) -> Result<(), StorageError> {
-    if s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-    {
+    if devworks_core::fingerprint::is_sha256_hex(s) {
         Ok(())
     } else {
         Err(invalid("usage digest must be lowercase SHA256"))

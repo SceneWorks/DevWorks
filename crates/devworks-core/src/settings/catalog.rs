@@ -9,8 +9,6 @@
 //!
 //! Defaults marked "engineering default" in descriptions are technical starting values, not
 //! user-confirmed product decisions.
-use crate::fingerprint::sha256_hex;
-use crate::jcs;
 use crate::protocol::Revision;
 use crate::protocol::provider::{Digest, QualifiedId, SchemaRef};
 use serde_json::{Value, json};
@@ -18,7 +16,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 9;
+pub const CATALOG_REVISION: i64 = 10;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -131,6 +129,8 @@ pub enum ValueKind {
     Instructions,
     /// Ordered unique model IDs.
     ModelList,
+    /// Unique executable command names (`[A-Za-z0-9_-]`, no paths), each resolved on PATH.
+    ExecutableNames,
     /// Explicit per-capability agent tool overrides. Missing IDs use their origin's default.
     ToolOverrides,
     /// Signed package index sources: at most 16 `{"location", "publicKey"}` objects, the
@@ -216,6 +216,25 @@ impl AgentRole {
     }
 }
 
+/// Settings that Settings shows but no behaviour reads yet. Each description starts with
+/// [`NOT_YET_ACTIVE_PREFIX`] and says what is missing; Settings marks the row not yet active.
+/// Remove a key here, and the prefix from its description, in the change that makes it work.
+pub const NOT_YET_ACTIVE: &[&str] = &[
+    // GitHub change polling, issue import, issue synchronization and triage: DW-40.
+    "github.pollForChanges",
+    "github.importOpenIssues",
+    "github.syncLinkedIssueFields",
+    "github.issueTriageIntervalSeconds",
+    // Exact-head review resolution, the review/fix cycle and merge: DW-41.
+    "delivery.autoMerge",
+    "delivery.maxReviewFixCycles",
+    "reviews.automationWaitSeconds",
+    // Vision extraction of scanned documents: DW-288.
+    "knowledge.visionExtraction",
+];
+/// How the description of every [`NOT_YET_ACTIVE`] setting begins.
+pub const NOT_YET_ACTIVE_PREFIX: &str = "Not yet active:";
+
 /// One setting.
 #[derive(Clone, Copy, Debug)]
 pub struct SettingDescriptor {
@@ -235,6 +254,10 @@ impl SettingDescriptor {
     }
     pub fn locked(&self) -> bool {
         self.policy == WritePolicy::HarnessEnforced
+    }
+    /// Shown in Settings, but nothing reads it yet (see [`NOT_YET_ACTIVE`]).
+    pub fn not_yet_active(&self) -> bool {
+        NOT_YET_ACTIVE.contains(&self.key)
     }
     pub fn help_id(&self) -> &'static str {
         self.category.help_id()
@@ -274,6 +297,10 @@ impl SettingDescriptor {
                 "type": "array", "maxItems": 32, "uniqueItems": true,
                 "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
             }),
+            ValueKind::ExecutableNames => json!({
+                "type": "array", "maxItems": 64, "uniqueItems": true,
+                "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+            }),
             ValueKind::ToolOverrides => json!({
                 "type": "object", "maxProperties": 4096,
                 "patternProperties": {"^[A-Za-z0-9_.-]{1,128}(/[A-Za-z0-9_.-]{1,128}){1,3}$": {"type": "boolean"}},
@@ -295,11 +322,12 @@ impl SettingDescriptor {
         json!({"$id": self.schema_id(), "revision": SCHEMA_REVISION, "value": body})
     }
     pub fn schema_ref(&self) -> SchemaRef {
-        let canonical = jcs::canonicalize(&self.schema_document()).expect("static schema");
+        let digest =
+            crate::fingerprint::canonical_digest(&self.schema_document()).expect("static schema");
         SchemaRef {
             schema_id: QualifiedId(self.schema_id()),
             revision: Revision::new(SCHEMA_REVISION).expect("positive"),
-            sha256: Digest(sha256_hex(canonical.as_bytes())),
+            sha256: Digest(digest),
         }
     }
 }
@@ -518,6 +546,45 @@ fn build() -> Vec<SettingDescriptor> {
             NextSafeStep
         ),
         setting!(
+            PROCESS_EXECUTABLES_KEY,
+            "Process executables",
+            "Command names that process tools, project dependency installs, container backends and local MCP servers may launch. Each name is looked up on PATH when it is first used and runs from its resolved real file; a program not named here cannot be selected wherever it is installed. The default covers the version control, build, package and container tools DevWorks itself runs. Shells and language runtimes run arbitrary code: access rules, approvals and command checks still decide what runs.",
+            Tools,
+            WORKSPACE,
+            ValueKind::ExecutableNames,
+            [
+                "git",
+                "sh",
+                "bash",
+                "make",
+                "cargo",
+                "rustc",
+                "node",
+                "npm",
+                "npx",
+                "pnpm",
+                "yarn",
+                "deno",
+                "bun",
+                "bunx",
+                "python3",
+                "python",
+                "uv",
+                "uvx",
+                "pipx",
+                "go",
+                "bundle",
+                "composer",
+                "java",
+                "dotnet",
+                "swift",
+                "docker",
+                "podman",
+                "container"
+            ],
+            NextAdmission
+        ),
+        setting!(
             "safety.accessProfile",
             "Agent access",
             "Full access, the initial default, lets agents use their selected tools with your ordinary user rights; it is not an OS sandbox. Project scope keeps brokered work inside registered repositories and task worktrees and refuses native shell, package and MCP execution unless you grant a bounded exception, because no confined launcher is qualified. Reviewer restrictions, approvals, main-branch protection and the destructive-operation guard apply in both.",
@@ -573,7 +640,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.pollForChanges",
             "Poll GitHub for changes",
-            "Pushes, merges, reviews and checks notify agents through authenticated polling.",
+            "Not yet active: DevWorks does not poll GitHub yet, so this switch changes nothing. Once polling is built, pushes, merges, reviews and checks notify agents through authenticated polling.",
             GitHub,
             INHERITED,
             ValueKind::Bool,
@@ -583,7 +650,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.importOpenIssues",
             "Import open issues",
-            "Import existing open issues when a repository is connected and newly reported ones thereafter.",
+            "Not yet active: GitHub issue import is not built yet, so this switch changes nothing. Once it is, existing open issues are imported when a repository is connected, and newly reported ones thereafter.",
             GitHub,
             INHERITED,
             ValueKind::Bool,
@@ -593,7 +660,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.syncLinkedIssueFields",
             "Receive linked issue updates",
-            "Reflect remote issue updates locally. Keep intermediate execution details local; publish a resolution only after completed work is verified.",
+            "Not yet active: GitHub issue synchronization is not built yet, so this switch changes nothing. Once it is, remote issue updates are reflected locally; intermediate execution details stay local and a resolution is published only after completed work is verified.",
             GitHub,
             INHERITED,
             ValueKind::Bool,
@@ -603,7 +670,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.issueTriageIntervalSeconds",
             "Issue triage interval (seconds)",
-            "App-wide minimum interval between automatic issue triage admissions.",
+            "Not yet active: automatic issue triage is not built yet, so this value changes nothing. Once it is, this is the app-wide minimum interval between automatic issue triage admissions.",
             GitHub,
             WORKSPACE,
             POSITIVE,
@@ -613,7 +680,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "delivery.autoMerge",
             "Auto-Merge",
-            "Commit, push, address review feedback and merge when all required checks pass.",
+            "Not yet active: DevWorks does not merge pull requests yet, so this switch changes nothing. Once merging is built, work is committed, pushed, review feedback addressed and the pull request merged when all required checks pass.",
             Delivery,
             INHERITED,
             ValueKind::Bool,
@@ -634,7 +701,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "delivery.maxReviewFixCycles",
             "Review fix cycles",
-            "Maximum review/fix cycles before asking for help. Engineering default.",
+            "Not yet active: the review/fix cycle is not built yet, so this value changes nothing. Once it is, this is the maximum number of review/fix cycles before asking for help. Engineering default.",
             Delivery,
             INHERITED,
             ValueKind::Integer { min: 1, max: 20 },
@@ -680,7 +747,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "reviews.automationWaitSeconds",
             "Automated review wait (seconds)",
-            "Finite wait for a registered review source before the review gate escalates. Engineering default.",
+            "Not yet active: the review gate is not built yet, so this value changes nothing. Once it is, this is the finite wait for a registered review source before the gate escalates. Engineering default.",
             Delivery,
             INHERITED,
             POSITIVE,
@@ -747,7 +814,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "knowledge.visionExtraction",
             "Vision extraction fallback",
-            "Extract existing text first; use a vision-capable routed model for scanned pages.",
+            "Not yet active: document extraction does not use a vision model yet, so this switch changes nothing. Once it does, existing text is extracted first and a vision-capable routed model reads scanned pages.",
             Knowledge,
             WORKSPACE,
             ValueKind::Bool,
@@ -898,6 +965,8 @@ pub const LOG_MAX_RECORDS_KEY: &str = "diagnostics.logMaxRecords";
 pub const OVERLAY_RECORD_RETENTION_DAYS_KEY: &str = "indexing.overlayRecordRetentionDays";
 /// Ended ref overlays each repository keeps regardless of age.
 pub const OVERLAY_RECORDS_KEPT_KEY: &str = "indexing.overlayRecordsKept";
+/// Command names the host resolves on PATH for process, install, container and MCP launches.
+pub const PROCESS_EXECUTABLES_KEY: &str = "tools.processExecutables";
 /// Whether agents may use the shared web fetch tool.
 pub const WEB_FETCH_TOOLS_KEY: &str = "tools.webFetch";
 /// Explicit shared per-tool choices; missing IDs use origin-specific defaults.

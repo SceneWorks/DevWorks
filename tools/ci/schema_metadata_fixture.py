@@ -15,6 +15,8 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = ROOT / 'docs/architecture/validation/schema-sources'
 OWNER_PASSWORD = 'devworks_metadata_fixture'
+# Files copied into the database container live under this prefix inside it.
+IN_CONTAINER = '/tmp/devworks-metadata'  # dev-host: allow-path a path inside the database container, not on the host
 # Each image is pinned by digest; the tag names the qualified release line.
 IMAGES = {
     'postgres': {
@@ -119,14 +121,14 @@ def start(tls):
 def postgres_tls(tls):
     # PostgreSQL refuses a group/world-readable key, so copy and own it inside the container.
     for file in ('server.pem', 'server.key'):
-        run('docker', 'cp', str(tls/file), f'{name}:/tmp/devworks-metadata-{file}')
+        run('docker', 'cp', str(tls/file), f'{name}:{IN_CONTAINER}-{file}')
     run('docker', 'exec', '-u', 'root', name, 'chown', 'postgres:postgres',
-        '/tmp/devworks-metadata-server.pem', '/tmp/devworks-metadata-server.key')
-    run('docker', 'exec', '-u', 'root', name, 'chmod', '600', '/tmp/devworks-metadata-server.key')
+        f'{IN_CONTAINER}-server.pem', f'{IN_CONTAINER}-server.key')
+    run('docker', 'exec', '-u', 'root', name, 'chmod', '600', f'{IN_CONTAINER}-server.key')
     # ALTER SYSTEM cannot run inside a transaction block, so each statement is its own -c.
     run(*client(),
-        '-c', "ALTER SYSTEM SET ssl_cert_file='/tmp/devworks-metadata-server.pem'",
-        '-c', "ALTER SYSTEM SET ssl_key_file='/tmp/devworks-metadata-server.key'",
+        '-c', f"ALTER SYSTEM SET ssl_cert_file='{IN_CONTAINER}-server.pem'",
+        '-c', f"ALTER SYSTEM SET ssl_key_file='{IN_CONTAINER}-server.key'",
         '-c', 'ALTER SYSTEM SET ssl=on', '-c', 'SELECT pg_reload_conf()')
     end = time.monotonic() + 30
     while True:

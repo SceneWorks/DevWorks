@@ -86,7 +86,7 @@ impl ContainerRunner {
         let policy = LaunchPolicy {
             fs: &*self.filesystem,
             roots: &self.protected_roots,
-            protected_branches: &["main".into(), "master".into()],
+            protected_branches: &[],
         };
         let process = self
             .processes

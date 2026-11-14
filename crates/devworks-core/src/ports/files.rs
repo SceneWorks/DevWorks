@@ -139,21 +139,25 @@ pub trait ArtifactFiles: Send + Sync {
     fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault>;
     /// Stores a derived, rebuildable payload (previews) in the disposable cache class.
     fn write_derived(&self, key: &str, bytes: &[u8]) -> Result<(), FileFault>;
-    /// Project previews cannot create private cache bytes after a reviewed purge.
-    /// Unsupported adapters leave the preview uncached.
-    fn write_project_derived(
-        &self,
-        _project: &ProjectId,
-        _key: &str,
-        _bytes: &[u8],
-    ) -> Result<(), FileFault> {
+    /// Identity of the derived-cache directory, created if missing. Project previews are
+    /// cached only under the custody of `services::projects::managed_files`; an adapter
+    /// without that directory refuses, leaving project previews uncached.
+    fn derived_root(&self) -> Result<crate::authority::destructive::FileIdentity, FileFault> {
         Err(FileFault::Unsupported(
             "project cache custody unavailable".into(),
         ))
     }
-    /// Normal cache-owner recovery, never a purge-triggered global cache sweep.
-    fn recover_project_derived(&self) -> Result<(), FileFault> {
-        Ok(())
+    /// Remove what an interrupted derived write of `key` left (the payload and its
+    /// temporaries) while the derived-cache directory is still `root`. A missing directory
+    /// leaves nothing to remove.
+    fn remove_derived_remnants(
+        &self,
+        _key: &str,
+        _root: crate::authority::destructive::FileIdentity,
+    ) -> Result<(), FileFault> {
+        Err(FileFault::Unsupported(
+            "project cache custody unavailable".into(),
+        ))
     }
 
     /// A derived payload of at most `max` bytes, if still cached.

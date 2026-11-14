@@ -63,7 +63,7 @@ mod writes;
 
 pub use graph::NO_MEMORIES;
 
-use crate::context::{InvocationContext, PrincipalKind};
+use crate::context::InvocationContext;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, knowledge as ops};
 use crate::ports::files::ArtifactFiles;
@@ -212,28 +212,14 @@ pub struct KnowledgeService {
 // ---------------------------------------------------------------------------------------------
 // Scope and authority
 
-/// The principal's authorized reach: the user, the host and unconfined principals act
-/// workspace-wide; a confined principal only in its bound project. A non-human principal
-/// without an active host binding has none (fails closed).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Reach {
-    Workspace,
-    Project(ProjectId),
-}
+pub(crate) use crate::authority::reach::Reach;
+/// [`crate::authority::reach::reach`], refusing a principal that has no reach.
 pub(crate) fn reach(
     authority: &dyn AuthorityRead,
     ctx: &InvocationContext,
 ) -> Result<Reach, Failure> {
-    if matches!(
-        ctx.principal_kind(),
-        PrincipalKind::Human | PrincipalKind::Host
-    ) {
-        return Ok(Reach::Workspace);
-    }
-    match authority.principal(ctx.principal())? {
-        Some(b) if b.active => Ok(b.project_id.map_or(Reach::Workspace, Reach::Project)),
-        _ => Err(Refusal::new(DomainErrorCode::PermissionDenied, "principal", None).into()),
-    }
+    crate::authority::reach::reach(authority, ctx)?
+        .ok_or_else(|| Refusal::new(DomainErrorCode::PermissionDenied, "principal", None).into())
 }
 
 /// The scope a request names, and every scope it may read.
@@ -320,14 +306,6 @@ pub(crate) fn writable(reach: &Reach, scope: &KnowledgeScope) -> bool {
     }
 }
 
-pub(crate) fn data_scope(scope: &KnowledgeScope) -> DataScope {
-    match scope {
-        KnowledgeScope::Workspace => DataScope::Workspace,
-        KnowledgeScope::Project(p) => DataScope::Project {
-            project_id: p.clone(),
-        },
-    }
-}
 /// Whether a record of `inner` may be referenced from a record of `outer` without exposing it
 /// beyond its scope: the same scope, or general Knowledge from a project.
 pub(crate) fn nests(inner: &KnowledgeScope, outer: &KnowledgeScope) -> bool {
@@ -342,10 +320,7 @@ pub(crate) fn thresholds(
     let d = descriptor(THRESHOLD_KEY).expect("catalog setting");
     let mut out = BTreeMap::new();
     for s in scopes {
-        let config_scope = match s {
-            KnowledgeScope::Workspace => ConfigScope::Workspace,
-            KnowledgeScope::Project(p) => ConfigScope::Project(p.clone()),
-        };
+        let config_scope = ConfigScope::from(s);
         let layers = current_chain(config, &config_scope)?;
         let entries = chain(d, &layers).map_err(|m| {
             StorageError::InvalidRecord(format!("{} stored under another schema", m.key))
@@ -380,7 +355,7 @@ pub(crate) fn entity_wire(e: &StoredEntity) -> KnowledgeEntity {
         label: label(&e.label, "-"),
         entity_type: label(&e.entity_type, "-"),
         aliases: labels(&e.aliases),
-        scope: data_scope(&e.scope),
+        scope: DataScope::from(&e.scope),
         canonical_name: e.canonical_name.as_deref().map(|s| label(s, "-")),
         external_id: e.external_id.as_deref().map(text_of),
         source: e.source.as_deref().map(|s| label(s, "-")),
@@ -532,7 +507,7 @@ pub(crate) fn claim_wire(
         state,
         evidence_ids: id_list(&c.body.evidence_ids),
         tags: labels(&c.tags),
-        scope: data_scope(&c.scope),
+        scope: DataScope::from(&c.scope),
         value_json: c.body.value_json.clone().map(DynamicJson),
         normalized_text: c.body.normalized_text.as_deref().map(content),
         effective_at_ms: c.body.effective_at_ms.map(counter),
@@ -1770,10 +1745,7 @@ impl CommandHandler for KnowledgeService {
         // that is a long read, which never runs inside the write transaction. It is used only
         // at the same scope revision, after the unit of work authorizes the request.
         if let OperationInput::Knowledge(ops::Input::DeleteBySource(i)) = command.input() {
-            let scope = match &i.scope {
-                DataScope::Workspace => KnowledgeScope::Workspace,
-                DataScope::Project { project_id } => KnowledgeScope::Project(project_id.clone()),
-            };
+            let scope = KnowledgeScope::from(&i.scope);
             let Some(source) = cleanup_source(i.source_id.as_ref(), i.source_label.as_ref())
                 .ok()
                 .flatten()
@@ -1829,6 +1801,7 @@ impl CommandHandler for KnowledgeService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::PrincipalKind;
     use crate::protocol::{ActorId, Counter, Revision, StoreId};
 
     fn ctx(kind: PrincipalKind, project: Option<&str>) -> InvocationContext {
