@@ -58,3 +58,21 @@ keep the groups above. The `pick macOS runners` job sends this one job to an idl
 self-hosted `devworks-mac` runner, or to `macos-latest` when none is idle. Several of those
 runners share one Mac, so the job caps nextest at three test threads and names its RAM disk
 after the runner.
+
+## DW-342: run only the partitions a PR can affect
+
+The workspace crates form one chain, core → adapters → engine → desktop, and no crate's tests
+read another crate's files outside that chain (only `docs/` and `tools/`). The `test scope` job
+(`tools/ci/test-scope.sh`, tested by `tools/ci/test_test_scope.sh`) reads the PR's changed files:
+
+| Changed paths | Partitions that run | macOS packages |
+|---|---|---|
+| only `crates/devworks-desktop/` | desktop | `-p devworks-desktop` |
+| `crates/devworks-engine/`, maybe desktop | engine, desktop | engine, desktop |
+| `crates/devworks-adapters/`, maybe later crates | all | adapters, engine, desktop |
+| anything else, an empty or failed diff, or a push | all | `--workspace` |
+
+The Ubuntu and Windows aggregate checks accept a skipped partition only when the scope left it
+out, and the Ubuntu one also requires the scope job, so broken scope rules fail a required check.
+If the scope job fails, every partition runs. Over the 60 PRs merged before this change, 15%
+touched only desktop and 17% only engine and desktop.
