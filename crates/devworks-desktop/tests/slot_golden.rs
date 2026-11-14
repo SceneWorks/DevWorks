@@ -11,6 +11,7 @@ use devworks_desktop::graph_ops::GraphSlot;
 use devworks_desktop::help_ops::HelpSlot;
 use devworks_desktop::instructions_ops::InstructionsSlot;
 use devworks_desktop::memory::Memory;
+use devworks_desktop::projects_ops::ProjectsSlot;
 use devworks_desktop::screen::ScreenId;
 use devworks_desktop::usage_ops::UsageSlot;
 use serde::de::DeserializeOwned;
@@ -108,17 +109,17 @@ fn samples() -> Vec<Slot> {
         Slot::McpCommand,
         Slot::McpRelease,
         Slot::ProjectsList,
-        Slot::DeletedProjects,
+        Slot::Projects(ProjectsSlot::DeletedProjects),
         Slot::RepositoriesList,
         Slot::ProjectRepositories("s".into()),
-        Slot::ProjectCreate,
-        Slot::ProjectCommand("s".into()),
-        Slot::ProjectSettings("s".into()),
-        Slot::ProjectSettingsHealth("s".into()),
-        Slot::ProjectSettingsSave("s".into()),
-        Slot::RepositoryText("s".into(), true),
-        Slot::RepositoryContent("s".into(), true),
-        Slot::RemoveIndex("s".into()),
+        Slot::Projects(ProjectsSlot::ProjectCreate),
+        Slot::Projects(ProjectsSlot::ProjectCommand("s".into())),
+        Slot::Projects(ProjectsSlot::ProjectSettings("s".into())),
+        Slot::Projects(ProjectsSlot::ProjectSettingsHealth("s".into())),
+        Slot::Projects(ProjectsSlot::ProjectSettingsSave("s".into())),
+        Slot::Projects(ProjectsSlot::RepositoryText("s".into(), true)),
+        Slot::Projects(ProjectsSlot::RepositoryContent("s".into(), true)),
+        Slot::Projects(ProjectsSlot::RemoveIndex("s".into())),
         Slot::IndexStatus("s".into()),
         Slot::IndexRuns("s".into()),
         Slot::IndexCommand("s".into()),
@@ -177,9 +178,9 @@ fn samples() -> Vec<Slot> {
         Slot::WorkDetail("s".into()),
         Slot::WorkGit("s".into()),
         Slot::WorkGitInspect("s".into(), "s".into()),
-        Slot::GitInspect("s".into()),
-        Slot::GitDiff("s".into()),
-        Slot::GitDiffContent("s".into()),
+        Slot::Projects(ProjectsSlot::GitInspect("s".into())),
+        Slot::Projects(ProjectsSlot::GitDiff("s".into())),
+        Slot::Projects(ProjectsSlot::GitDiffContent("s".into())),
         Slot::WorkCommand("s".into()),
         Slot::WorkCreate("s".into()),
         Slot::WorkOrder("s".into()),
@@ -235,6 +236,7 @@ fn screen_variants() -> Vec<(ScreenId, Vec<String>)> {
         (ScreenId::Artifacts, variant_names::<ArtifactsSlot>()),
         (ScreenId::Resources, variant_names::<ResourcesSlot>()),
         (ScreenId::Browser, variant_names::<BrowserSlot>()),
+        (ScreenId::Projects, variant_names::<ProjectsSlot>()),
     ]
 }
 
@@ -264,6 +266,7 @@ fn reported(slot: &Slot) -> String {
         ScreenId::Artifacts => format!("{:?}", ArtifactsSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Resources => format!("{:?}", ResourcesSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Browser => format!("{:?}", BrowserSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Projects => format!("{:?}", ProjectsSlot::try_from(slot.clone()).unwrap()),
     }
 }
 

@@ -9,6 +9,7 @@ use crate::mcp_panel::McpAction;
 use crate::memory::{Memory, RouteMemory};
 use crate::notifications::{CardAction, Completions};
 use crate::ops::{self, Failure};
+use crate::projects_screen::ProjectLists;
 use crate::route::{NAV_ORDER, NavGroup, Route};
 use crate::screen::{Cx, DynScreen, Effect, ScreenId};
 use crate::settings_screen::{KEEP_AWAKE, SettingsAction, SettingsScreen};
@@ -17,7 +18,7 @@ use crate::virtual_list::{self, Scrolls};
 use crate::web_panel::WebAction;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::{ConnectionLifecycle, ItemState};
+use devworks_core::protocol::records::{ConnectionLifecycle, ItemState, LifeState, ProjectRecord};
 use devworks_core::protocol::{DomainErrorCode, Id};
 use devworks_core::settings::validate::codes;
 use devworks_core::settings::view::Health;
@@ -197,8 +198,9 @@ pub struct Shell {
     pub resources: crate::artifacts_screen::ResourcesScreen,
     pub browser: crate::artifacts_screen::BrowserScreen,
     pub addons: crate::addons::AddonsScreen,
-    /// All projects, the project selector and Repositories (DW-11).
-    pub projects: projects::ProjectsUi,
+    /// The project lists of the navigation's project selector, All projects and Repositories
+    /// (DW-11), and Indexing.
+    pub projects: crate::projects_screen::ProjectsUi,
     pub purge: project_purge::PurgeUi,
     pub jobs: jobs::JobsUi,
     /// Features, the board, Issues and Overview of the selected project (DW-12).
@@ -279,8 +281,16 @@ macro_rules! screens {
                     scrolls: &mut self.scrolls,
                     dialogs: &mut *self.dialogs,
                     selected_project: self.selected_project.clone(),
-                    projects: &self.projects,
+                    projects: ProjectLists {
+                        list: &self.projects.list,
+                        repositories: &self.projects.repositories,
+                        members: &self.projects.members,
+                        members_of: self.projects.members_of.as_deref(),
+                        indexing: &self.projects.indexing,
+                    },
                     catalog: &self.chat.routing.catalog,
+                    job_status: &self.jobs.project_status,
+                    archive_counts: &self.work.archive_counts,
                     effects: Vec::new(),
                 };
                 match id {
@@ -301,6 +311,7 @@ screens!(
     Artifacts => artifacts,
     Resources => resources,
     Browser => browser,
+    Projects => projects.screen,
 );
 
 impl Shell {
@@ -412,7 +423,7 @@ impl Shell {
             resources: Default::default(),
             browser: Default::default(),
             addons: Default::default(),
-            projects: projects::ProjectsUi::default(),
+            projects: Default::default(),
             purge: Default::default(),
             jobs: jobs::JobsUi::default(),
             work: work::WorkUi::default(),
@@ -540,10 +551,34 @@ impl Shell {
                     self.navigate(Route::Chat);
                 }
                 Effect::LoadProjects => self.load_projects(),
-                Effect::LoadRouterCatalog => self.load_router_catalog(),
-                Effect::IndexStatus(repository) => {
-                    self.index_act(vec![indexing::IndexAction::Status(repository)])
+                Effect::LoadRepositories => self.load_repositories(),
+                Effect::ProjectChanged(p) => {
+                    self.projects.mutations += 1;
+                    let id = p.id.0.as_str();
+                    if matches!(p.lifecycle, LifeState::Deleted)
+                        && self.selected_project.as_deref() == Some(id)
+                    {
+                        self.select_project(None);
+                    }
+                    // Its lifecycle changed: the work screens re-read it (archived work is
+                    // closed to change), and an archive count is taken afresh next time.
+                    self.work.archive_counts.remove(id);
+                    if self.work.of.as_deref() == Some(id) {
+                        self.load_work();
+                    }
                 }
+                Effect::SelectProject(p) => self.select_project(p),
+                Effect::OpenJobs(p) => {
+                    self.jobs.set_scope(Some(p));
+                    self.navigate(Route::Jobs);
+                }
+                Effect::LoadProjectJobs(p) => self.load_project_jobs(&p),
+                Effect::CountArchiveWork(p) => self.count_archive_work(&p),
+                Effect::ForgetArchiveCount(p) => self.work.forget_archive_count(&p),
+                Effect::ReviewPurge(p) => self.start_purge_review(p),
+                Effect::OpenGraph(id, name) => self.open_repository_graph(&id, &name),
+                Effect::LoadRouterCatalog => self.load_router_catalog(),
+                Effect::Index(action) => self.index_act(vec![action]),
                 Effect::ConfirmOutcomes => self.confirm_outcomes(),
                 Effect::OpenEmbeddingSetup => self.open_embedding_setup(),
             }
@@ -709,25 +744,6 @@ impl Shell {
                     );
                 }
             }
-            Route::Portfolio => {
-                self.load_projects();
-                self.load_deleted_projects();
-                self.load_repositories();
-                if let Some(p) = self
-                    .routes
-                    .get(&Route::Portfolio)
-                    .and_then(|m| m.selection.clone())
-                {
-                    self.load_project_jobs(&p);
-                }
-            }
-            Route::Repositories => {
-                self.load_projects();
-                self.load_repositories();
-                if self.projects.indexing.sources.is_none() {
-                    self.load_index_sources();
-                }
-            }
             Route::Indexing => {
                 if self.projects.indexing.sources.is_none() {
                     self.load_index_sources();
@@ -780,6 +796,123 @@ impl Shell {
 
     fn pending(&self, slot: &Slot) -> bool {
         self.client.as_ref().is_some_and(|c| c.is_pending(slot))
+    }
+    /// Whether a command of `slot` is running or its outcome is still not confirmed.
+    fn waiting(&self, slot: &Slot) -> bool {
+        self.pending(slot)
+            || self
+                .client
+                .as_ref()
+                .is_some_and(|c| c.unresolved().iter().any(|u| &u.slot == slot))
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Projects: the lists every screen reads and the navigation's project selection
+
+    pub fn load_projects(&mut self) {
+        self.projects.list_at = self.projects.mutations;
+        self.query(
+            Slot::ProjectsList,
+            "Loading projects",
+            "projects.list",
+            |b| ops::projects_list(b, None),
+        );
+    }
+    pub fn load_repositories(&mut self) {
+        self.query(
+            Slot::RepositoriesList,
+            "Loading repositories",
+            "repositories.list",
+            |b| ops::repositories_list(b, None),
+        );
+        if let Some(p) = self.selected_project.clone() {
+            self.query(
+                Slot::ProjectRepositories(p.clone()),
+                "Loading the project's repositories",
+                "repositories.list",
+                move |b| ops::repositories_list(b, Some(&p)),
+            );
+        }
+    }
+    /// The project the navigation selected, if it is still listed.
+    pub fn selected_project_record(&self) -> Option<&ProjectRecord> {
+        let id = self.selected_project.as_deref()?;
+        self.projects
+            .list
+            .items
+            .iter()
+            .find(|p| p.id.0.as_str() == id)
+    }
+    pub fn selected_project(&self) -> Option<&str> {
+        self.selected_project.as_deref()
+    }
+    /// Selects `project` in the navigation (its screens follow it); `None` clears it.
+    pub fn select_project(&mut self, project: Option<String>) {
+        if self.selected_project == project {
+            return;
+        }
+        self.selected_project = project;
+        self.graph.opened = false;
+        self.graph.sequence = self.graph.sequence.wrapping_add(1);
+        self.graph.loading = false;
+        self.projects.members = ListState::default();
+        self.projects.members_of = None;
+        if self.route == Route::Repositories {
+            self.load_repositories();
+        }
+        if self.route == Route::Browser {
+            self.with_screen(ScreenId::Browser, |s, cx| s.load(cx, Route::Browser));
+        }
+        if matches!(
+            self.route,
+            Route::Overview | Route::Features | Route::Issues
+        ) {
+            self.load_work();
+        }
+    }
+
+    /// The project selector of the left navigation.
+    fn project_selector(&mut self, ui: &mut Ui) {
+        let label = self
+            .selected_project_record()
+            .map(|p| p.name.0.clone())
+            .unwrap_or_else(|| "No project selected".into());
+        let mut pick: Option<Option<String>> = None;
+        let r =
+            egui::ComboBox::from_id_salt("project-selector")
+                .selected_text(label)
+                .width(ui.available_width())
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(self.selected_project.is_none(), "No project selected")
+                        .clicked()
+                    {
+                        pick = Some(None);
+                    }
+                    for p in
+                        self.projects.list.items.iter().filter(|p| {
+                            matches!(p.lifecycle, LifeState::Active | LifeState::Archived)
+                        })
+                    {
+                        let id = p.id.0.as_str();
+                        let text = match p.lifecycle {
+                            LifeState::Archived => format!("{} (archived)", p.name.0),
+                            _ => p.name.0.clone(),
+                        };
+                        if ui
+                            .selectable_label(self.selected_project.as_deref() == Some(id), text)
+                            .clicked()
+                        {
+                            pick = Some(Some(id.to_owned()));
+                        }
+                    }
+                });
+        r.response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Selected project")
+        });
+        if let Some(p) = pick {
+            self.select_project(p);
+        }
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1862,9 +1995,6 @@ impl Shell {
         let Some((slot, reply)) = self.apply_purge(slot, reply) else {
             return;
         };
-        let Some((slot, reply)) = self.apply_projects(slot, reply) else {
-            return;
-        };
         let Some((slot, reply)) = self.apply_indexing(slot, reply) else {
             return;
         };
@@ -1878,6 +2008,66 @@ impl Shell {
             return;
         };
         match (slot, reply) {
+            (Slot::ProjectsList, Reply::Query(_))
+                if self.projects.list_at != self.projects.mutations =>
+            {
+                self.load_projects();
+            }
+            (Slot::ProjectsList, Reply::Query(q)) => match ops::projects(q) {
+                Ok((items, more)) => {
+                    self.projects.list = ListState {
+                        items,
+                        loaded: true,
+                        error: None,
+                        more,
+                    };
+                    // A selection that no longer exists (deleted elsewhere) is dropped.
+                    if let Some(s) = self.selected_project.clone()
+                        && !self.projects.list.more
+                        && !self
+                            .projects
+                            .list
+                            .items
+                            .iter()
+                            .any(|p| p.id.0.as_str() == s)
+                    {
+                        self.select_project(None);
+                    }
+                    // Without a selection the browser sessions of every listed project show.
+                    if self.route == Route::Browser && self.selected_project.is_none() {
+                        self.with_screen(ScreenId::Browser, |s, cx| s.load(cx, Route::Browser));
+                    }
+                }
+                Err(e) => self.projects.list.error = Some(e.describe()),
+            },
+            (Slot::RepositoriesList, Reply::Query(q)) => match ops::repositories(q) {
+                Ok((items, more)) => {
+                    self.projects.repositories = ListState {
+                        items,
+                        loaded: true,
+                        error: None,
+                        more,
+                    };
+                }
+                Err(e) => self.projects.repositories.error = Some(e.describe()),
+            },
+            (Slot::ProjectRepositories(p), Reply::Query(q)) => {
+                // A reply for a project no longer selected is stale.
+                if self.selected_project.as_deref() == Some(p.as_str()) {
+                    match ops::repositories(q) {
+                        Ok((items, more)) => {
+                            self.projects.members = ListState {
+                                items,
+                                loaded: true,
+                                error: None,
+                                more,
+                            };
+                            self.projects.members_of = Some(p);
+                        }
+                        Err(e) => self.projects.members.error = Some(e.describe()),
+                    }
+                }
+            }
             // Started before a session mutation was applied: it may lack that change.
             (Slot::SessionsList, Reply::Query(_))
                 if self.sessions_list_at != self.session_mutations =>
@@ -3115,11 +3305,6 @@ impl Shell {
             return;
         }
         match self.route {
-            Route::Portfolio | Route::Repositories
-                if !self.pending(&Slot::ProjectsList) && !self.pending(&Slot::RepositoriesList) =>
-            {
-                self.load_route();
-            }
             // Only an unpaged listing is re-read in place: a re-read of a list the user paged
             // through would drop the pages they loaded.
             Route::Knowledge
@@ -4028,9 +4213,6 @@ impl Shell {
                     self.settings.saving = true;
                     self.settings.unconfirmed = true;
                 }
-                Slot::ProjectSettingsSave(p) => {
-                    self.projects.base.entry(p.clone()).or_default().saving = true;
-                }
                 Slot::RouteFirst(id) => {
                     self.chat.routing.first_in_flight.insert(id.clone());
                 }
@@ -4822,8 +5004,6 @@ impl Shell {
                 );
                 self.addons_actions(actions);
             }
-            Route::Portfolio => self.portfolio_screen(ui),
-            Route::Repositories => self.repositories_screen(ui),
             Route::Knowledge => {
                 let online = self.online();
                 let mut actions = Vec::new();

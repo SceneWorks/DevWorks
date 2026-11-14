@@ -2817,23 +2817,6 @@ impl Shell {
             None => {}
         }
     }
-
-    /// The archive confirmation's line about the work it stops (WORK-16).
-    pub(super) fn archive_work_line(&mut self, project: &str) -> String {
-        match self.work.archive_counts.get(project) {
-            Some((roots, running)) if *running > 0 => format!(
-                " {running} of its {roots} features and issues have agents working on them now; \
-                 archiving stops them at once."
-            ),
-            Some((roots, _)) => {
-                format!(" Its {roots} features and issues have no agent working now.")
-            }
-            None => {
-                self.count_archive_work(project);
-                " Counting the work that is running…".into()
-            }
-        }
-    }
 }
 
 /// The desktop user's actor (the host binds it), for "You" in Activity.

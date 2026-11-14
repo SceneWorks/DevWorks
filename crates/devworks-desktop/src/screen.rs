@@ -5,12 +5,13 @@
 use crate::backend::{Backend, Client, Reply, Slot, Unresolved};
 use crate::memory::RouteMemory;
 use crate::project_purge::Live;
+use crate::projects_screen::ProjectLists;
 use crate::route::Route;
 use crate::shell::Dialogs;
-use crate::shell::projects::ProjectsUi;
+use crate::shell::indexing::IndexAction;
 use crate::virtual_list::Scrolls;
 use devworks_core::ports::storage::ProjectPurgeClientScope;
-use devworks_core::protocol::records::RouteCatalogModel;
+use devworks_core::protocol::records::{ProjectRecord, RouteCatalogModel};
 use eframe::egui::Ui;
 use serde_json::Value;
 use std::any::Any;
@@ -32,6 +33,8 @@ pub enum ScreenId {
     Artifacts,
     Resources,
     Browser,
+    /// All projects and Repositories.
+    Projects,
 }
 impl ScreenId {
     /// The screen's key in persisted pending state (`PendingMemory::screens`).
@@ -47,6 +50,7 @@ impl ScreenId {
             Self::Artifacts => "artifacts",
             Self::Resources => "resources",
             Self::Browser => "browser",
+            Self::Projects => "projects",
         }
     }
 }
@@ -60,9 +64,27 @@ pub enum Effect {
     /// Shows a conversation (its session ID) on Home.
     OpenSession(String),
     LoadProjects,
+    LoadRepositories,
+    /// A project command succeeded with this record: the project lists, the navigation's
+    /// selection and the work screens follow it.
+    ProjectChanged(ProjectRecord),
+    /// Selects a project in the navigation (`None` clears it).
+    SelectProject(Option<String>),
+    /// Opens Scheduled jobs scoped to a project (its ID).
+    OpenJobs(String),
+    /// Reads the run status of a project's scheduled jobs (its ID).
+    LoadProjectJobs(String),
+    /// Counts the running work an archive of a project stops (its ID).
+    CountArchiveWork(String),
+    /// Forgets a project's archive count (its ID): the next confirmation counts afresh.
+    ForgetArchiveCount(String),
+    /// Opens the permanent purge review of a deleted project.
+    ReviewPurge(ProjectRecord),
+    /// Opens a repository's graph (its ID and name).
+    OpenGraph(String, String),
     LoadRouterCatalog,
-    /// Reads a repository's index status (its ID).
-    IndexStatus(String),
+    /// Work for the Indexing screen.
+    Index(IndexAction),
     ConfirmOutcomes,
     /// Opens Settings on the embedding setup.
     OpenEmbeddingSetup,
@@ -88,9 +110,13 @@ pub struct Cx<'a> {
     /// The project the navigation selected.
     pub(crate) selected_project: Option<String>,
     /// Projects and repositories as the shell last read them.
-    pub(crate) projects: &'a ProjectsUi,
+    pub(crate) projects: ProjectLists<'a>,
     /// The router catalog as the shell last read it.
     pub(crate) catalog: &'a [RouteCatalogModel],
+    /// The run status line of each project's scheduled jobs, by project.
+    pub(crate) job_status: &'a BTreeMap<String, String>,
+    /// Each counted project's features and issues, and how many have agents working now.
+    pub(crate) archive_counts: &'a BTreeMap<String, (usize, usize)>,
     pub(crate) effects: Vec<Effect>,
 }
 impl Cx<'_> {
@@ -109,6 +135,13 @@ impl Cx<'_> {
         let slot = slot.clone().into();
         self.client.as_ref().is_some_and(|c| c.is_pending(&slot))
     }
+    /// Whether a command of `slot` is running or its outcome is still not confirmed.
+    pub fn waiting<S: Clone + Into<Slot>>(&self, slot: &S) -> bool {
+        let slot = slot.clone().into();
+        self.client
+            .as_ref()
+            .is_some_and(|c| c.is_pending(&slot) || c.unresolved().iter().any(|u| u.slot == slot))
+    }
     pub fn announce(&mut self, text: impl Into<String>) {
         *self.status = Some(text.into());
     }
@@ -125,7 +158,13 @@ impl Cx<'_> {
         self.effects.push(Effect::OpenSession(id));
     }
     pub fn index_status(&mut self, repository: String) {
-        self.effects.push(Effect::IndexStatus(repository));
+        self.index(IndexAction::Status(repository));
+    }
+    pub fn index(&mut self, action: IndexAction) {
+        self.effects.push(Effect::Index(action));
+    }
+    pub fn load_repositories(&mut self) {
+        self.effects.push(Effect::LoadRepositories);
     }
     pub fn confirm_outcomes(&mut self) {
         self.effects.push(Effect::ConfirmOutcomes);
