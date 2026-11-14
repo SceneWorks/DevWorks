@@ -1,6 +1,6 @@
 //! Watcher frames (`watch.list`, `watch.cancel`) and the requests the watcher views wait for.
 use crate::{
-    backend::{Backend, Slot},
+    backend::{Backend, screen_slot},
     ops::{self, Failure},
 };
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
@@ -24,7 +24,7 @@ pub enum WatchView {
     Feature,
 }
 
-/// The watcher requests the views wait for. The names are persisted (see [`Slot`]).
+/// The watcher requests the views wait for. The names are persisted (see [`crate::backend::Slot`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum WatchSlot {
     /// A page of one view (list generation, appended to the shown page).
@@ -32,20 +32,7 @@ pub enum WatchSlot {
     /// `watch.cancel` of one watcher (its ID).
     WatcherCancel(String),
 }
-impl From<WatchSlot> for Slot {
-    fn from(slot: WatchSlot) -> Self {
-        Slot::Watch(slot)
-    }
-}
-impl TryFrom<Slot> for WatchSlot {
-    type Error = Slot;
-    fn try_from(slot: Slot) -> Result<Self, Slot> {
-        match slot {
-            Slot::Watch(slot) => Ok(slot),
-            other => Err(other),
-        }
-    }
-}
+screen_slot!(WatchSlot, Watch);
 
 /// What a list shows: every watcher, one session's or one feature's sessions'.
 #[derive(Clone, Debug, PartialEq, Eq)]

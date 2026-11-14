@@ -10,23 +10,23 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "c515967038575693f979b65cccdb37e86a7f00115adec842c1184b61fbc51949",
+    "implementation-slices.json": "8b3d18d5b86fa2904b3ddb55ac117cfdcc93973ee2bc96bde9e32d982b14a8a4",
     "devworks-capability-catalog.json": "2391f8849a5385a0a3f995473402068e9e610ff5d4984fe51b4d8b9aefad0f81",
-    "devworks-requirements-traceability.json": "fdf6d27d17f61c1a41ea87d686314d315b9ed0099e185b2f095f61df9e0aa660",
+    "devworks-requirements-traceability.json": "24555c0cb565ec79ffec089f598fbdf9e1b3eeb291f2222a58c458dd1cc8a4d6",
     "codegraph-capability-inventory.json": "54da948de48de4a7d00353ae14d7464feac80cca9bdab6d2a6bb2679caae2c09",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
     "contracts/family-coverage.json": "51141d003054fdbbe4fd3e8524bc67bf95295e9052b492259111e29ef82178da",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
-    "codegraph-work-map.json": "7adfb3650fbc6bde7d6a580464ba32015b47edc121a52dfab88ac052b3e46949"
+    "codegraph-work-map.json": "93c551768cd75091f954a0db1757b585b3b6fbaf21b6f6fb8dbab7527c127e25"
   },
   "counts": {
     "slices": 80,
     "operationFamilies": 50,
     "operations": 376,
-    "requirements": 378,
+    "requirements": 390,
     "requirementsByStatus": {
-      "Confirmed": 231,
+      "Confirmed": 243,
       "Proposed": 147
     },
     "inputSchemaCandidates": 376,
@@ -1148,7 +1148,7 @@
         "G01",
         "G11"
       ],
-      "status": "Native implementation in progress; acceptance tracked by DW-13",
+      "status": "Implemented in native services (`workflows.*` and `next_work.*` have registered handlers); acceptance recorded in the tracker item DW-13",
       "readinessAcceptance": "Automatic allocation skips incomplete/unapproved plans and wholly blocked roots without eligible independent work. An otherwise eligible approved feature with missing/stale assessment can activate its coordinator to assess readiness, but cannot dispatch implementation until cleared. Locally blocked roots may allocate assessed independent tasks. Activation/dispatch rechecks changed readiness and finding revisions; keep-working and schedules preserve the shared gate and independent holds.",
       "dependsOn": [
         "DW-012",
@@ -1231,7 +1231,7 @@
         "G04",
         "G10"
       ],
-      "status": "Native implementation in progress; acceptance tracked by DW-14",
+      "status": "Implemented in native services (`approvals.*` and `notifications.*` have registered handlers); acceptance recorded in the tracker item DW-14",
       "readinessAcceptance": "Generic plan approval or notification acknowledgment cannot close readiness findings. Finding-specific human risk acceptance binds the finding/scope/revision and rationale, preserves history and still requires actual prerequisites, enforced permissions and required verification; stale decisions cannot clear changed findings or make incomplete work complete.",
       "dependsOn": [
         "DW-005",
@@ -1828,7 +1828,7 @@
         "G03",
         "G12"
       ],
-      "status": "Native implementation in progress; acceptance tracked by DW-21",
+      "status": "Implemented in native services (`router.usage` and the price operations have registered handlers); acceptance recorded in the tracker item DW-21",
       "integratesOperations": [
         "features.create",
         "features.edit",
@@ -3973,7 +3973,10 @@
         "TOOL-06",
         "TOOL-07",
         "TOOL-08",
-        "TOOL-09"
+        "TOOL-09",
+        "WATCH-01",
+        "WATCH-05",
+        "WATCH-10"
       ],
       "capabilityCases": [
         "CAP-RESOURCES"
@@ -5562,7 +5565,7 @@
         "G04",
         "G10"
       ],
-      "status": "Planned; implementation in progress (DW-94)",
+      "status": "Implemented in native services (`watch.create`, `watch.list`, `watch.inspect` and `watch.cancel` have registered handlers); acceptance recorded in the tracker item DW-94. WATCH-09 (visibility in workspaces) and WATCH-11 (external processes) are not built yet; GitHub and delegated-agent sources are not built in the code on main",
       "dependsOn": [
         "DW-049"
       ],
@@ -5572,7 +5575,20 @@
         "watch.inspect",
         "watch.cancel"
       ],
-      "primaryRequirements": [],
+      "primaryRequirements": [
+        "WATCH-01",
+        "WATCH-02",
+        "WATCH-03",
+        "WATCH-04",
+        "WATCH-05",
+        "WATCH-06",
+        "WATCH-07",
+        "WATCH-08",
+        "WATCH-09",
+        "WATCH-10",
+        "WATCH-11",
+        "WATCH-12"
+      ],
       "supportingRequirements": [],
       "capabilityCases": [],
       "sourceEntryIds": [],
@@ -12045,6 +12061,192 @@
       "supportingSlices": [
         "files"
       ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-01",
+      "requirementStatus": "Confirmed",
+      "statement": "Sources: a watcher can observe (a) a background process DevWorks launches through the ProcessSupervisor (exit code, signal, output tail); (b) a regex condition on an owned process's output stream or on a file, first match or each match; (c) a GitHub Actions workflow run or a pull request's checks; (d) a probe command run on an interval until its exit status or output meets the condition (covers deploys, HTTP health, remote queues); (e) a timer at an absolute time or after a delay; (f) a delegated agent assignment finishing; (g) a process DevWorks did not launch, attached by pid plus birth token (see WATCH-11).",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-01",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [
+        "process_tools"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-02",
+      "requirementStatus": "Confirmed",
+      "statement": "Tools: agents have watch.create (returns the watcher id immediately; can launch the watched process in the same call), watch.list, watch.inspect (state, source, elapsed, last poll, redacted output tail) and watch.cancel (optionally stopping the owned process it launched). These are registered operations through the shared admission gateway. No agent polling is required to learn an outcome.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-02",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-03",
+      "requirementStatus": "Confirmed",
+      "statement": "Wake delivery: a watcher event is recorded as a durable event in the same transaction as the watcher's state change and delivered to the owning session's input. An idle owner gets a new turn carrying watcher id, source, outcome, exit code or conclusion, duration, a redacted output tail and links. An owner mid-turn receives it at the next tool-result boundary, not only at turn end; several events arriving together are all delivered, in order. An event is acknowledged only when a turn that carried it completes; the host records the acknowledgement, the agent does not call a tool for it. Until acknowledged an event may be redelivered, always with the same event id, so a turn sees an event at most once after it is acknowledged and an event is never lost. Watcher messages are a host-only message class: no agent or package can create or forge one.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-03",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-04",
+      "requirementStatus": "Confirmed",
+      "statement": "Observed outcomes only: outcomes are Succeeded, Failed (with exit code, signal or conclusion), Cancelled, TimedOut, Interrupted (app shutdown), Lost and Uncertain, matching the ProcessSupervisor's settlement. A watcher never reports an outcome it did not observe; completing a launch or a poll is not success.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-04",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-05",
+      "requirementStatus": "Confirmed",
+      "statement": "Noise control: by default only the terminal outcome wakes the owner. Intermediate events (each output match, each probe change) are opt-in per watcher, coalesced, and limited by a minimum interval between wakes; coalesced events carry their count so none is silently lost.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-05",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [
+        "process_tools"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-06",
+      "requirementStatus": "Confirmed",
+      "statement": "Bounds: every watcher has a maximum lifetime (default 24 hours for polling sources, configurable per watcher and in Settings) and ends TimedOut when it expires. Probe and GitHub polling back off, GitHub uses conditional requests within a shared rate-limit budget, and watchers on the same GitHub run share one poller. There is no global watcher-count cap, consistent with UIQA-04.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-06",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-07",
+      "requirementStatus": "Confirmed",
+      "statement": "Owner lifecycle: ending or archiving the owning session cancels its watchers (and stops processes they launched under the existing process rules). While the owner is paused, watchers keep observing and their deliveries queue; nothing starts a turn until Continue, when queued events are delivered in order.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-07",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-08",
+      "requirementStatus": "Confirmed",
+      "statement": "App close and restart: there is no background mode. At shutdown, watchers on owned processes end Interrupted after the bounded shutdown protocol. On reopen, GitHub, timer, probe, delegated-agent and attached-process watchers resume automatically and deliver if the target finished while the app was closed; a timer that came due while closed fires once. Agents paused by app closure still require manual Continue (JOB-04); their deliveries queue under WATCH-07.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-08",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-09",
+      "requirementStatus": "Confirmed",
+      "statement": "Visibility and control: watchers are listed in the session and feature workspaces and in a global list, attributed to project, feature, assignment and agent, with source, state, elapsed time, last poll and output tail. The user can cancel any watcher. Watcher events appear in the owning transcript.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-09",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-10",
+      "requirementStatus": "Confirmed",
+      "statement": "Permissions: probe and launch commands pass the existing SEC-04/05 shell preflight and effective tool permissions. Read-only reviewer roles may create only observing watchers (GitHub, timer, delegated agent, output of existing processes, attached processes) and cannot launch or stop processes through a watcher.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-10",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [
+        "process_tools"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-11",
+      "requirementStatus": "Confirmed",
+      "statement": "External processes: a watcher can attach to a process DevWorks did not launch by pid plus birth token, using the native exit notification on each platform (kqueue on macOS, pidfd on Linux, process handle on Windows). When the exit status cannot be obtained for a non-child process, the outcome is Exited with status unknown, shown as a limitation, never as success. A reused pid with a different birth token is never mistaken for the watched process.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-11",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "WATCH-12",
+      "requirementStatus": "Confirmed",
+      "statement": "Backup reconciliation: a backup pass runs on an interval (default 15 minutes, set in Settings, minimum 1 minute, can be turned off) only while some owner has an unacknowledged watcher (still running, or finished but not acknowledged under WATCH-03), and stops for an owner once all its watchers are finished and acknowledged. Paused owners are skipped (WATCH-07). Each pass re-checks every such watcher's source by a path independent of the watcher itself (pid plus birth-token probe, a direct GitHub API read, a probe run). A finished source whose outcome was never acknowledged is delivered as the normal watcher message with the same event id, marked as a backup delivery, and the agent acts on it as on any watcher event. The agent is woken with a reminder to check the task itself only when the host cannot establish the source's status or the watcher looks stalled (no poll within twice its expected interval); a source that is merely still running wakes no one. Every backup catch is recorded in history and diagnostics as a missed primary delivery.",
+      "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
+      "architectureSection": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "validationGate": "G10",
+      "plannedCase": "AT-WATCH-12",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "watchers",
+      "supportingSlices": [],
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
     },
     {

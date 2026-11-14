@@ -93,7 +93,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use writer::{WriterConfig, WriterHandle};
@@ -120,7 +120,60 @@ pub struct SqliteConfig {
     pub read_wait: Duration,
     /// Bounded SQLite busy handling per connection.
     pub busy_timeout: Duration,
+    /// Diagnostics only: counts the SQLite work every connection of this store performs.
+    /// Absent in production, where reads keep their coarse cancellation check.
+    pub work_probe: Option<Arc<WorkProbe>>,
 }
+
+/// Store work counted by [`SqliteConfig::work_probe`]: read snapshots, SQLite virtual-machine
+/// steps on the read and on the write connections (one progress callback per step, so a scan
+/// costs steps in proportion to the rows it visits) and database pages the reads fetched.
+#[derive(Debug, Default)]
+pub struct WorkProbe {
+    snapshots: AtomicU64,
+    read_steps: AtomicU64,
+    write_steps: AtomicU64,
+    read_pages: AtomicU64,
+}
+/// Database pages the connection has fetched (page cache hits and misses): a large value read
+/// costs a page per overflow page, which virtual-machine steps do not show.
+fn page_fetches(conn: &Connection) -> u64 {
+    let mut total = 0u64;
+    for status in [
+        rusqlite::ffi::SQLITE_DBSTATUS_CACHE_HIT,
+        rusqlite::ffi::SQLITE_DBSTATUS_CACHE_MISS,
+    ] {
+        let (mut current, mut highwater) = (0, 0);
+        // SAFETY: `conn.handle()` is this open connection's handle while `conn` is borrowed,
+        // and sqlite3_db_status only writes the two counters passed to it.
+        let rc = unsafe {
+            rusqlite::ffi::sqlite3_db_status(conn.handle(), status, &mut current, &mut highwater, 0)
+        };
+        if rc == rusqlite::ffi::SQLITE_OK {
+            total += u64::try_from(current).unwrap_or(0);
+        }
+    }
+    total
+}
+impl WorkProbe {
+    /// Database pages the read connections fetched so far.
+    pub fn read_pages(&self) -> u64 {
+        self.read_pages.load(Ordering::SeqCst)
+    }
+    /// Read snapshots opened so far.
+    pub fn snapshots(&self) -> u64 {
+        self.snapshots.load(Ordering::SeqCst)
+    }
+    /// Virtual-machine steps on the read connections so far.
+    pub fn read_steps(&self) -> u64 {
+        self.read_steps.load(Ordering::SeqCst)
+    }
+    /// Virtual-machine steps on the write connection so far.
+    pub fn write_steps(&self) -> u64 {
+        self.write_steps.load(Ordering::SeqCst)
+    }
+}
+
 impl SqliteConfig {
     pub fn new(
         data_root: impl Into<PathBuf>,
@@ -139,6 +192,7 @@ impl SqliteConfig {
             bulk_share: 4,
             read_wait: Duration::from_secs(5),
             busy_timeout: Duration::from_secs(5),
+            work_probe: None,
         }
     }
 }
@@ -228,6 +282,7 @@ pub struct SqliteStore {
     build_schema_version: i64,
     path: PathBuf,
     previous_shutdown: Option<String>,
+    work_probe: Option<Arc<WorkProbe>>,
     _lock: File,
 }
 
@@ -312,6 +367,16 @@ impl SqliteStore {
         for _ in 0..config.read_connections.max(1) {
             idle.push(conn::open(&path, Role::Reader, config.busy_timeout)?);
         }
+        let mut writer_conn = writer_conn;
+        if let (Some(conn), Some(probe)) = (writer_conn.as_mut(), config.work_probe.clone()) {
+            db(conn.progress_handler(
+                1,
+                Some(move || {
+                    probe.write_steps.fetch_add(1, Ordering::Relaxed);
+                    false
+                }),
+            ))?;
+        }
         let writer = match writer_conn {
             Some(writer_conn) => Some(WriterHandle::start(
                 writer_conn,
@@ -338,6 +403,7 @@ impl SqliteStore {
             build_schema_version: migrations.last().map_or(0, |m| m.version),
             path,
             previous_shutdown,
+            work_probe: config.work_probe,
             _lock: lock,
         })
     }
@@ -519,9 +585,22 @@ impl ApplicationStore for SqliteStore {
         let cancel = options.cancellation.clone();
         let clock = self.clock.clone();
         let deadline = options.deadline_ms;
+        if let Some(probe) = &self.work_probe {
+            probe.snapshots.fetch_add(1, Ordering::SeqCst);
+        }
+        let probe = self.work_probe.clone();
+        let mut until_check = 0u32;
         db(lease.conn.as_mut().expect("leased").progress_handler(
-            1000,
+            if probe.is_some() { 1 } else { 1000 },
             Some(move || {
+                if let Some(probe) = &probe {
+                    probe.read_steps.fetch_add(1, Ordering::Relaxed);
+                    until_check += 1;
+                    if until_check < 1000 {
+                        return false;
+                    }
+                    until_check = 0;
+                }
                 let stop = cancel.as_ref().is_some_and(Cancellation::is_cancelled)
                     || monotonic.is_some_and(|until| Instant::now() >= until)
                     || deadline.is_some_and(|until| clock.now_ms().get() >= until);
@@ -542,7 +621,13 @@ impl ApplicationStore for SqliteStore {
                 stamp,
                 host_actor: &self.info.host_actor,
             };
+            let pages = self.work_probe.as_ref().map(|_| page_fetches(conn));
             work(&snapshot)?;
+            if let (Some(probe), Some(before)) = (&self.work_probe, pages) {
+                probe
+                    .read_pages
+                    .fetch_add(page_fetches(conn).saturating_sub(before), Ordering::SeqCst);
+            }
             if expired() {
                 return Err(StorageError::Cancelled);
             }

@@ -36,6 +36,7 @@ pub const OPERATIONS: [&str; 5] = [
 ];
 pub const COMPLETION: &str = "Completion";
 pub const APPROVAL: &str = "Approval";
+pub const BUDGET: &str = "Budget";
 
 /// A source owns this content. Repeating a stable source never rewrites content, read state or
 /// dismissal; a new authoritative occurrence needs a new source identity.
@@ -140,6 +141,37 @@ pub fn notify_approval(
                 url: None,
                 artifact: None,
                 project_id: project.cloned(),
+            }],
+            requires_input: true,
+            priority: 1,
+        },
+    )
+}
+/// A feature's tracked spending reached its limit and paused its work until someone selects
+/// Continue (NOTIFY-03). One card per budget revision that reached the limit.
+pub fn budget_paused(
+    tx: &mut dyn WriteTransaction,
+    feature: &StoredWork,
+    budget_revision: i64,
+) -> Result<(), StorageError> {
+    publish(
+        tx,
+        &NotificationDraft {
+            source: format!("budget-paused-{}-{budget_revision}", feature.id.as_str()),
+            category: BUDGET.into(),
+            decision_id: None,
+            project_id: Some(feature.project_id.clone()),
+            root_id: Some(RootId(feature.id.clone())),
+            title: format!("Budget reached: {}", feature.title),
+            body: "Tracked spending reached this feature's limit, so its work is paused. Adjust \
+                   the limit if needed and select Continue."
+                .into(),
+            links: vec![NotificationLink {
+                kind: BoundedText("Feature".into()),
+                target_id: Some(feature.id.clone()),
+                url: None,
+                artifact: None,
+                project_id: Some(feature.project_id.clone()),
             }],
             requires_input: true,
             priority: 1,

@@ -1,7 +1,6 @@
 //! Watcher views drawn inside other screens (the chat sidebar, the feature detail) run their
 //! actions through the Watchers screen, which owns their requests.
 use super::Shell;
-use crate::screen::Cx;
 use crate::watchers_screen::WatchAction;
 
 impl Shell {
@@ -20,10 +19,6 @@ impl Shell {
         if actions.is_empty() {
             return;
         }
-        let online = self.online();
-        let mut cx = Cx::new(self.client.as_mut(), online, &mut self.status, self.route);
-        self.watchers.act(&mut cx, actions);
-        let effects = cx.into_effects();
-        self.run_effects(effects);
+        self.with_typed(|s: &mut crate::watchers_screen::WatchersScreen, cx| s.act(cx, actions));
     }
 }

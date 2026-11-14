@@ -144,6 +144,17 @@
     ],
     "settingsSections": [],
     "relatedCapabilityIds": [
+      "agents.inspect",
+      "agents.delegate",
+      "agents.messages",
+      "agents.inbox",
+      "agents.acknowledge",
+      "agents.post",
+      "agents.receive",
+      "agents.ack",
+      "agents.history",
+      "agents.events",
+      "agents.checkpoint",
       "runs.inspect",
       "sessions.list",
       "history.work_lineage"
@@ -208,7 +219,15 @@
       "databases"
     ],
     "settingsSections": [],
-    "relatedCapabilityIds": []
+    "relatedCapabilityIds": [
+      "schemas.connections",
+      "schemas.objects",
+      "schemas.relationships",
+      "schemas.index",
+      "schemas.refresh",
+      "schemas.remove_index",
+      "schemas.configure"
+    ]
   },
   {
     "id": "jobs",
@@ -376,7 +395,8 @@
       "router.availability",
       "router.route",
       "router.pin",
-      "router.connections"
+      "router.connections",
+      "router.embedding_spaces"
     ]
   },
   {
@@ -824,6 +844,72 @@
       "watch.list",
       "watch.inspect",
       "watch.cancel"
+    ]
+  },
+  {
+    "id": "desktop-control",
+    "title": "Desktop control and screen capture",
+    "file": "topics/desktop-control.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "desktop.inspect",
+      "desktop.capture",
+      "desktop.request_control",
+      "desktop.input",
+      "desktop.release_control"
+    ]
+  },
+  {
+    "id": "process-tools",
+    "title": "Process tools: running commands",
+    "file": "topics/process-tools.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "process.execute",
+      "process.output",
+      "process.cancel",
+      "process.install_project_dependencies",
+      "process.request_system_install"
+    ]
+  },
+  {
+    "id": "containers",
+    "title": "Containers: build, run and stop",
+    "file": "topics/containers.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "containers.capabilities",
+      "containers.build",
+      "containers.pull",
+      "containers.create",
+      "containers.start",
+      "containers.exec",
+      "containers.inspect",
+      "containers.logs",
+      "containers.stop"
+    ]
+  },
+  {
+    "id": "mcp-servers",
+    "title": "MCP servers: connect outside tools",
+    "file": "topics/mcp-servers.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "mcp.servers",
+      "mcp.configure",
+      "mcp.connect",
+      "mcp.disable",
+      "mcp.remove",
+      "mcp.discover",
+      "mcp.select_tools",
+      "mcp.classify_tool",
+      "mcp.capabilities",
+      "mcp.resources",
+      "mcp.prompts"
     ]
   }
 ]

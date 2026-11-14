@@ -218,7 +218,7 @@ pub static SCREENS: [Screen; 21] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Artifacts,
     },
     Screen {
         route: Route::Knowledge,
@@ -260,7 +260,7 @@ pub static SCREENS: [Screen; 21] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Databases,
     },
     Screen {
         route: Route::Jobs,
@@ -302,7 +302,7 @@ pub static SCREENS: [Screen; 21] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Usage,
     },
     Screen {
         route: Route::Help,
@@ -344,7 +344,7 @@ pub static SCREENS: [Screen; 21] = [
         summary_strip: &[],
         pending: None,
         link: Some(("Browser sessions", Route::Browser)),
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Resources,
     },
     Screen {
         route: Route::Browser,
@@ -358,7 +358,7 @@ pub static SCREENS: [Screen; 21] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Browser,
     },
     Screen {
         route: Route::Indexing,

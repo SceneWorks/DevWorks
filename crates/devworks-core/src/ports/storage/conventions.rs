@@ -313,6 +313,16 @@ pub trait ConventionIndexRead {
         &self,
         convention: &Id,
     ) -> Result<Option<StoredConventionIndex>, StorageError>;
+    /// The first `limit` conventions matching `query`, in its order, whose published index
+    /// cannot serve a search: `Unindexed` (no head), `IndexNotCurrent` (a head that is not a
+    /// valid, published Ready or LexicalOnly index of the current source) or, with `space`,
+    /// `MissingCompatibleVectors`. The store stops at `limit`.
+    fn convention_index_gaps(
+        &self,
+        query: &ConventionQuery,
+        space: Option<&str>,
+        limit: u16,
+    ) -> Result<Vec<(Id, String)>, StorageError>;
     fn convention_index_generation(
         &self,
         generation: &Id,

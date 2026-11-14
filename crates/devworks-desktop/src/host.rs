@@ -245,6 +245,21 @@ impl DesktopConfig {
     }
 }
 
+/// What every command launch is checked against: the application data folder and both skill
+/// folders, so an agent's command can never write a skill change that sync would observe.
+pub(crate) fn protected_roots(config: &DesktopConfig) -> ProtectedRoots {
+    ProtectedRoots::new(
+        Vec::new(),
+        Vec::new(),
+        Some(config.data_root.display().to_string()),
+    )
+    .with_skill_roots(
+        std::iter::once(config.data_root.join("skills"))
+            .chain(config.shared_skills.clone())
+            .map(|p| p.display().to_string()),
+    )
+}
+
 fn container_bindings(
     config: &DesktopConfig,
     executables: Vec<devworks_core::services::process::tools::RegisteredExecutable>,
@@ -540,11 +555,7 @@ async fn compose(
         runtime_config.containers = Some(devworks_engine::runtime::ContainerComposition {
             bindings,
             filesystem: Arc::new(NativeFilesystem::new()),
-            protected_roots: ProtectedRoots::new(
-                Vec::new(),
-                Vec::new(),
-                Some(config.data_root.display().to_string()),
-            ),
+            protected_roots: protected_roots(config),
             secrets: secrets.clone(),
             registry_auth: container_private_files.clone(),
             workload_environment: container_private_files,
@@ -565,17 +576,13 @@ async fn compose(
         runtime_config.process_tools = Some(devworks_engine::runtime::ProcessToolComposition {
             bindings: mcp_bindings.clone(),
             filesystem: Arc::new(NativeFilesystem::new()),
-            protected_roots: ProtectedRoots::new(
-                Vec::new(),
-                Vec::new(),
-                Some(config.data_root.display().to_string()),
-            ),
+            protected_roots: protected_roots(config),
             secrets: secrets.clone(),
         });
     }
     let mcp_secrets = secrets.clone();
     let mcp_namespace = store.info().store_id.0.as_str().to_owned();
-    let mcp_data_root = config.data_root.display().to_string();
+    let mcp_roots = protected_roots(config);
     let mcp_clients: Arc<std::sync::OnceLock<Arc<NativeMcpClients>>> = Arc::default();
     let installed_mcp = mcp_clients.clone();
     runtime_config.mcp = Some(devworks_engine::runtime::McpComposition {
@@ -587,7 +594,7 @@ async fn compose(
                 mcp_secrets.clone(),
                 mcp_namespace.clone(),
                 Arc::new(NativeFilesystem::new()),
-                ProtectedRoots::new(Vec::new(), Vec::new(), Some(mcp_data_root.clone())),
+                mcp_roots.clone(),
                 Vec::new(),
                 handle,
             ));
@@ -675,11 +682,7 @@ async fn compose(
             service: packages,
             launch: LaunchPorts {
                 fs: Arc::new(NativeFilesystem::new()),
-                roots: ProtectedRoots::new(
-                    Vec::new(),
-                    Vec::new(),
-                    Some(config.data_root.display().to_string()),
-                ),
+                roots: protected_roots(config),
                 protected_branches: Vec::new(),
             },
             config: HostConfig::default(),
@@ -1426,5 +1429,50 @@ mod container_credential_boundary_tests {
             bindings.resolve_container_credential(&grant.id, None, &secrets, "store-1"),
             Ok("private-token".into())
         );
+    }
+}
+
+#[cfg(test)]
+mod skill_root_protection_tests {
+    use super::*;
+    use devworks_core::authority::destructive::{BlockReason, PreflightVerdict, preflight};
+    use devworks_core::authority::shell::{ShellAssessment, assess_command};
+
+    #[test]
+    fn agent_commands_cannot_write_either_skill_folder() {
+        let scratch =
+            std::env::temp_dir().join(format!("devworks-skill-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("home")).unwrap();
+        // A plain path without links (Windows resolves to a `\\?\` path; the host's paths
+        // are plain).
+        let canonical = std::fs::canonicalize(&scratch).unwrap();
+        let canonical = canonical.to_string_lossy();
+        let scratch = PathBuf::from(canonical.strip_prefix(r"\\?\").unwrap_or(&canonical));
+        std::fs::create_dir_all(scratch.join("data/skills")).unwrap();
+        let mut config = DesktopConfig::new(scratch.join("data"));
+        // `~/.agents/skills` before the person ever created it.
+        config.shared_skills = Some(scratch.join("home/.agents/skills"));
+        let roots = protected_roots(&config);
+        for root in [
+            scratch.join("home/.agents/skills"),
+            scratch.join("data/skills"),
+        ] {
+            // A command names paths with `/` separators, which every platform accepts.
+            let root = root.display().to_string().replace('\\', "/");
+            let script = format!("echo 'Do evil.' > {root}/evil/SKILL.md");
+            let ShellAssessment::Destructive { plans, .. } = assess_command(
+                &["sh".to_owned(), "-c".to_owned(), script.clone()],
+                Some(&scratch.display().to_string()),
+            ) else {
+                panic!("{script}: the write is assessed");
+            };
+            assert_eq!(
+                preflight(&NativeFilesystem::new(), &roots, &plans[0]).verdict,
+                PreflightVerdict::Blocked(BlockReason::SkillDirectory),
+                "{script}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 }
