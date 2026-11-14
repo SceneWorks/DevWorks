@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::refuse_link;
+
 pub const REGISTRY_FILE: &str = "slots.json";
 pub const REGISTRY_LOCK: &str = "slots.lock";
 /// Touched in the slot on every assignment; its mtime is the slot's last use.
@@ -75,6 +77,9 @@ pub fn slot_dir(key_dir: &Path, slot: u32) -> PathBuf {
 }
 
 /// Assigns `worktree` its slot under `key_dir` (created if needed) and returns the slot folder.
+///
+/// The caller confines `key_dir` to the root ([`crate::confine`]); this refuses a symlinked
+/// slot folder, registry, lock or stamp inside it.
 pub fn assign(
     key_dir: &Path,
     worktree: &str,
@@ -85,6 +90,7 @@ pub fn assign(
     let io = |what: &str, path: &Path, e: std::io::Error| format!("{what} {}: {e}", path.display());
     std::fs::create_dir_all(key_dir).map_err(|e| io("cannot create", key_dir, e))?;
     let lock_path = key_dir.join(REGISTRY_LOCK);
+    refuse_link(&lock_path)?;
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -94,6 +100,7 @@ pub fn assign(
     lock.lock().map_err(|e| io("cannot lock", &lock_path, e))?;
 
     let registry_path = key_dir.join(REGISTRY_FILE);
+    refuse_link(&registry_path)?;
     let mut registry: Registry = match std::fs::read_to_string(&registry_path) {
         Ok(text) => serde_json::from_str(&text).map_err(|e| {
             format!(
@@ -108,13 +115,16 @@ pub fn assign(
     let slot = choose(&mut registry, key_dir, worktree, cap, now, busy)?;
 
     let tmp = key_dir.join(format!("{REGISTRY_FILE}.tmp"));
+    refuse_link(&tmp)?;
     let text = serde_json::to_string_pretty(&registry).map_err(|e| e.to_string())?;
     std::fs::write(&tmp, text).map_err(|e| io("cannot write", &tmp, e))?;
     std::fs::rename(&tmp, &registry_path).map_err(|e| io("cannot replace", &registry_path, e))?;
 
     let dir = slot_dir(key_dir, slot);
+    refuse_link(&dir)?;
     std::fs::create_dir_all(&dir).map_err(|e| io("cannot create", &dir, e))?;
     let stamp = dir.join(STAMP_FILE);
+    refuse_link(&stamp)?;
     std::fs::write(&stamp, format!("{worktree}\n{now}\n"))
         .map_err(|e| io("cannot write", &stamp, e))?;
     drop(lock);
@@ -259,5 +269,21 @@ mod tests {
         std::fs::write(key.join(REGISTRY_FILE), "not json").unwrap();
         let err = assign(&key, "/w/a", 2, 1, &Busy(vec![])).unwrap_err();
         assert!(err.contains("not a valid slot registry"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_slot_or_registry_is_refused() {
+        for name in ["slot-0", REGISTRY_FILE, REGISTRY_LOCK] {
+            let scratch = Scratch::new("slot-link");
+            let key = scratch.path().join("key");
+            let outside = scratch.path().join("outside");
+            std::fs::create_dir_all(&key).unwrap();
+            std::fs::create_dir_all(&outside).unwrap();
+            std::os::unix::fs::symlink(outside.join("x"), key.join(name)).unwrap();
+            let err = assign(&key, "/w/a", 2, 1, &Busy(vec![])).unwrap_err();
+            assert!(err.contains("is a symlink"), "{name}: {err}");
+            assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "{name}");
+        }
     }
 }

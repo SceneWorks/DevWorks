@@ -114,6 +114,61 @@ pub fn is_under(path: &Path, root: &Path, cwd: &Path) -> bool {
     resolve(path, cwd).starts_with(resolve(root, cwd))
 }
 
+/// Whether `path` itself is a symlink (on Windows also a junction). dev-host never creates,
+/// writes or deletes through a link under the root, since a link can lead off the root.
+pub fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// Refuses `path` when it is a symlink or junction, naming why.
+pub fn refuse_link(path: &Path) -> Result<(), String> {
+    if is_link(path) {
+        Err(format!(
+            "refusing {}: it is a symlink, and dev-host does not write through links under \
+             {ROOT_VAR}; replace it with a real folder or file on the root's volume",
+            path.display()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Checks a path dev-host builds under `root` before anything is created or written there:
+/// no existing level from `root` (exclusive) down to `path` may be a symlink or junction, and
+/// `path` must resolve inside the resolved root. Returns the resolved path.
+pub fn confine(path: &Path, root: &Path, cwd: &Path) -> Result<PathBuf, String> {
+    let abs = |p: &Path| {
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            cwd.join(p)
+        }
+    };
+    let (path, root) = (abs(path), abs(root));
+    let outside = || {
+        format!(
+            "refusing {}: it resolves outside {ROOT_VAR}={}",
+            path.display(),
+            root.display()
+        )
+    };
+    let rel = path.strip_prefix(&root).map_err(|_| outside())?;
+    let mut level = root.clone();
+    for part in rel.components() {
+        let Component::Normal(name) = part else {
+            return Err(outside());
+        };
+        level.push(name);
+        refuse_link(&level)?;
+    }
+    let resolved = resolve(&path, cwd);
+    if resolved.starts_with(resolve(&root, cwd)) {
+        Ok(resolved)
+    } else {
+        Err(outside())
+    }
+}
+
 /// Lower-case hex SHA-256 of the parts, each terminated by a NUL so boundaries can't shift.
 pub fn digest(parts: &[&str]) -> String {
     let mut hasher = Sha256::new();

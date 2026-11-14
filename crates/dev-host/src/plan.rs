@@ -221,10 +221,12 @@ pub fn target_dir(root: &Path, vars: &Vars, cwd: &Path, req: &Request) -> Result
         .unwrap_or_else(|| format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS));
     let inputs = KeyInputs::new(toolchain, target, vars);
     let key_dir = root.join("build").join(project).join(inputs.key());
+    // A symlinked `build/` (or level below it) would put the build off the root's volume.
+    crate::confine(&key_dir, root, cwd)?;
     std::fs::create_dir_all(&key_dir)
         .map_err(|e| format!("cannot create {}: {e}", key_dir.display()))?;
     let key_file = key_dir.join("key.txt");
-    if !key_file.exists() {
+    if !key_file.exists() && !crate::is_link(&key_file) {
         // Informational only (for people and cleanup reports); a failed write doesn't matter.
         let _ = std::fs::write(&key_file, inputs.describe());
     }
@@ -275,6 +277,7 @@ pub fn tmp_dir(
     session: Option<&str>,
 ) -> Result<PathBuf, String> {
     let t = root.join("t");
+    crate::confine(&t, root, cwd)?;
     if session.is_none()
         && let Some(current) = vars.get(TMP_VAR)
         && is_under(Path::new(current), &t, cwd)
@@ -286,6 +289,7 @@ pub fn tmp_dir(
         return Ok(dir);
     }
     let dir = t.join(tmp_id(vars, session));
+    crate::confine(&dir, root, cwd)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     #[cfg(unix)]
     {
@@ -479,6 +483,54 @@ mod tests {
             .collect();
         let err = target_dir(&root, &vars, scratch.path(), &Request::default()).unwrap_err();
         assert!(err.contains("outside DEV_HOST_ROOT"), "{err}");
+    }
+
+    /// A root whose `level` (relative to it) is a symlink to a folder outside the root.
+    #[cfg(unix)]
+    fn root_with_link(scratch: &Scratch, level: &str) -> (PathBuf, PathBuf) {
+        let root = root(scratch);
+        let outside = scratch.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let link = root.join(level);
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        (root, outside)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generated_target_dir_refuses_symlinked_levels_under_the_root() {
+        for level in ["build", "build/demo"] {
+            let scratch = Scratch::new("plan-link");
+            let (root, outside) = root_with_link(&scratch, level);
+            let req = Request {
+                project: Some("demo".into()),
+                worktree: Some(scratch.path().to_path_buf()),
+                target: Some("aarch64-apple-darwin".into()),
+                ..Request::default()
+            };
+            let err = target_dir(&root, &Vars::default(), scratch.path(), &req).unwrap_err();
+            assert!(err.contains("is a symlink"), "{level}: {err}");
+            assert!(
+                err.contains(&root.join(level).display().to_string()),
+                "{err}"
+            );
+            assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "{level}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tmp_dir_refuses_a_symlinked_t() {
+        let scratch = Scratch::new("plan-tlink");
+        let (root, outside) = root_with_link(&scratch, "t");
+        let err = tmp_dir(&root, &Vars::default(), scratch.path(), Some("s")).unwrap_err();
+        assert!(err.contains("is a symlink"), "{err}");
+        let inherited: Vars = [(TMP_VAR, root.join("t/abc").display().to_string())]
+            .into_iter()
+            .collect();
+        assert!(tmp_dir(&root, &inherited, scratch.path(), None).is_err());
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
     }
 
     #[test]

@@ -247,6 +247,29 @@ mod tests {
         assert!(err.contains("outside DEV_HOST_ROOT"), "{err}");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_symlinked_build_folder() {
+        let scratch = Scratch::new("shim-link");
+        let (root, shim_dir, real_dir) = setup(&scratch);
+        let outside = scratch.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("build")).unwrap();
+        let wt = scratch.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let v = vars(&root, &shim_dir, &real_dir, &[]);
+        let err = prepare(
+            &v,
+            &wt,
+            &shim_dir.join(CARGO_EXE),
+            &[],
+            probe_check(&OnOwnVolume),
+        )
+        .unwrap_err();
+        assert!(err.contains("is a symlink"), "{err}");
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+    }
+
     #[test]
     fn refuses_target_dir_argument_outside_root() {
         let scratch = Scratch::new("shim-arg");
