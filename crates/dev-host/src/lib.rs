@@ -22,7 +22,6 @@ pub mod shim;
 pub mod slots;
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -70,16 +69,35 @@ impl<K: Into<String>, V: Into<String>> FromIterator<(K, V)> for Vars {
     }
 }
 
-/// Makes `path` absolute against `cwd`, removes `.` and `..` lexically, and resolves symlinks
-/// in its longest existing ancestor, so two spellings of one location compare equal.
+/// Makes `path` absolute against `cwd` and resolves it the way the operating system would
+/// open it: the longest existing prefix (with its `.` and `..` still in place) is
+/// canonicalized, so a `..` after a symlink leaves the symlink's target rather than the link,
+/// and only the missing tail is normalized lexically. Two spellings of one location compare
+/// equal.
 pub fn resolve(path: &Path, cwd: &Path) -> PathBuf {
     let joined = if path.is_absolute() {
         path.to_path_buf()
     } else {
         cwd.join(path)
     };
+    let parts: Vec<Component> = joined.components().collect();
+    for split in (1..=parts.len()).rev() {
+        let prefix: PathBuf = parts[..split].iter().collect();
+        if let Ok(mut out) = prefix.canonicalize() {
+            for part in &parts[split..] {
+                match part {
+                    Component::CurDir => {}
+                    Component::ParentDir => {
+                        out.pop();
+                    }
+                    other => out.push(other),
+                }
+            }
+            return out;
+        }
+    }
     let mut normal = PathBuf::new();
-    for component in joined.components() {
+    for component in parts {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
@@ -88,24 +106,7 @@ pub fn resolve(path: &Path, cwd: &Path) -> PathBuf {
             other => normal.push(other),
         }
     }
-    let mut existing = normal.clone();
-    let mut rest: Vec<OsString> = Vec::new();
-    loop {
-        if let Ok(mut out) = existing.canonicalize() {
-            out.extend(rest.iter().rev());
-            return out;
-        }
-        match (
-            existing.file_name().map(|n| n.to_os_string()),
-            existing.parent(),
-        ) {
-            (Some(name), Some(parent)) => {
-                rest.push(name);
-                existing = parent.to_path_buf();
-            }
-            _ => return normal,
-        }
-    }
+    normal
 }
 
 /// Reports whether `path` lies at or below `root` once both are resolved.
@@ -183,6 +184,25 @@ mod tests {
         assert!(is_under(Path::new("root/a"), &root, scratch.path()));
         assert!(!is_under(&root.join("../elsewhere"), &root, scratch.path()));
         assert!(!is_under(scratch.path(), &root, scratch.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_leaves_a_symlink_target_on_dot_dot() {
+        let scratch = Scratch::new("dotdot");
+        let root = scratch.path().join("root");
+        let outside = scratch.path().join("outside/deep");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        // The OS opens `root/link/..` as `outside`, not `root`.
+        let escaped = root.join("link/../victim");
+        assert_eq!(
+            resolve(&escaped, scratch.path()),
+            scratch.path().join("outside/victim")
+        );
+        assert!(!is_under(&escaped, &root, scratch.path()));
+        assert!(!is_under(&root.join("link/../x/y"), &root, scratch.path()));
     }
 
     #[test]

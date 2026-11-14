@@ -129,6 +129,9 @@ fn choose(
     now: u64,
     busy: &dyn BusyProbe,
 ) -> Result<u32, String> {
+    // A lowered cap applies to existing assignments too: slots at or above it are dropped from
+    // the registry, so they are neither kept nor handed out. Their folders age out in cleanup.
+    registry.slots.retain(|e| e.slot < cap);
     if let Some(entry) = registry.slots.iter_mut().find(|e| e.worktree == worktree) {
         entry.last_used = now;
         return Ok(entry.slot);
@@ -202,6 +205,25 @@ mod tests {
         // a lost its slot and gets a reassigned one next time.
         let a_again = assign(&key, "/w/a", 2, 60, &Busy(vec![])).unwrap();
         assert_eq!(a_again, c);
+    }
+
+    #[test]
+    fn lowered_cap_applies_to_existing_assignments() {
+        let scratch = Scratch::new("lowered");
+        let key = scratch.path().join("key");
+        for (n, wt) in ["/w/0", "/w/1", "/w/2", "/w/3"].iter().enumerate() {
+            let dir = assign(&key, wt, 4, 10 + n as u64, &Busy(vec![])).unwrap();
+            assert_eq!(dir, slot_dir(&key, n as u32));
+        }
+        // With the cap lowered to 2, the worktree holding slot-3 moves into range: slot-3 is
+        // neither kept sticky nor counted for reassignment, so the oldest idle slot-0 is taken.
+        let moved = assign(&key, "/w/3", 2, 20, &Busy(vec![])).unwrap();
+        assert_eq!(moved, slot_dir(&key, 0));
+        // slot-2 and slot-3 are no longer handed out, even as the least recently used.
+        let next = assign(&key, "/w/4", 2, 30, &Busy(vec![])).unwrap();
+        assert_eq!(next, slot_dir(&key, 1));
+        let again = assign(&key, "/w/2", 2, 40, &Busy(vec![])).unwrap();
+        assert_eq!(again, slot_dir(&key, 0));
     }
 
     #[test]

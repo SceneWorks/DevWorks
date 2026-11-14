@@ -140,7 +140,7 @@ fn run_shim(vars: &Vars, args: &[OsString]) -> ExitCode {
     let launch = std::env::current_exe()
         .map_err(|e| format!("cannot locate this program: {e}"))
         .and_then(|exe| current_dir().map(|cwd| (exe, cwd)))
-        .and_then(|(exe, cwd)| shim::prepare(vars, &cwd, &exe, shim::host_check));
+        .and_then(|(exe, cwd)| shim::prepare(vars, &cwd, &exe, args, shim::host_check));
     let launch = match launch {
         Ok(launch) => launch,
         Err(e) => return fail(&format!("dev-host cargo shim: refusing to run cargo: {e}")),

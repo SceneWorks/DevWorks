@@ -27,7 +27,10 @@ pub trait VolumeProbe: Send + Sync {
 ///
 /// - Unix: the root's device ID must differ from that of `/`. On macOS `/` and the Data
 ///   volume report the same device, so a folder anywhere on the internal disk fails.
-/// - Windows: the root's drive must be a mounted fixed volume other than the system drive.
+/// - Windows: the drive of the resolved root (after junctions, directory symlinks and SUBST)
+///   must be a mounted fixed volume other than the system drive.
+///
+/// Both follow symlinks: Unix `metadata` reports the device of the link's target.
 pub struct SystemVolumeProbe;
 
 #[cfg(unix)]
@@ -63,19 +66,28 @@ impl VolumeProbe for SystemVolumeProbe {
         // winbase.h: DRIVE_FIXED.
         const DRIVE_FIXED: u32 = 3;
 
-        let Some(drive) = drive_letter(root) else {
-            return Err(format!(
-                "{} is not on a drive letter (expected a fixed volume such as E:)",
-                root.display()
-            ));
-        };
         let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
-        if system.eq_ignore_ascii_case(&format!("{drive}:")) {
-            return Err(format!(
-                "{} is on the system drive {system}",
-                root.display()
-            ));
-        }
+        let drive_of = |path: &Path, shown: &str| -> Result<char, String> {
+            let Some(drive) = drive_letter(path) else {
+                return Err(format!(
+                    "{shown} is not on a drive letter (expected a fixed volume such as E:)"
+                ));
+            };
+            if system.eq_ignore_ascii_case(&format!("{drive}:")) {
+                return Err(format!("{shown} is on the system drive {system}"));
+            }
+            Ok(drive)
+        };
+        drive_of(root, &root.display().to_string())?;
+        // Junctions, directory symlinks and SUBST drives can send `E:\dev-host` to another
+        // drive, so the drive that counts is the one the resolved folder is on.
+        let resolved = root
+            .canonicalize()
+            .map_err(|e| format!("cannot resolve {}: {e}", root.display()))?;
+        let drive = drive_of(
+            &resolved,
+            &format!("{} (resolved to {})", root.display(), resolved.display()),
+        )?;
         let wide: Vec<u16> = std::ffi::OsStr::new(&format!("{drive}:\\"))
             .encode_wide()
             .chain(std::iter::once(0))
@@ -379,6 +391,34 @@ mod tests {
             .verify(&Path::new(&format!("{system}\\")).join("dev-host"))
             .unwrap_err();
         assert!(err.contains("system drive"), "{err}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn real_probe_follows_a_junction_to_the_system_drive() {
+        // A junction on any drive pointing at the system drive must be rejected, even when the
+        // junction itself sits on another fixed drive.
+        let scratch = Scratch::new("junction");
+        let link = scratch.path().join("link");
+        let target = PathBuf::from(std::env::var("SystemRoot").unwrap_or(r"C:\Windows".into()));
+        let made = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        let err = SystemVolumeProbe.verify(&link).unwrap_err();
+        // Remove the junction itself before the scratch folder is dropped.
+        std::fs::remove_dir(&link).unwrap();
+        assert!(err.contains("system drive"), "{err}");
+        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+        if drive_letter(scratch.path()).map(|d| format!("{d}:")) != Some(system.to_uppercase()) {
+            // The junction sits on another drive, so only its target can be the reason.
+            assert!(err.contains("resolved to"), "{err}");
+        }
     }
 
     #[cfg(windows)]
