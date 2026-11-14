@@ -2,7 +2,7 @@
 # Assign each macOS CI job to an idle self-hosted Mac or to GitHub-hosted macos-latest.
 #
 # Counts online, idle self-hosted runners carrying MAC_RUNNER_LABEL in the owner's
-# organization and in the repository, then gives that many jobs (longest first) to
+# organization and in the repository, then gives that many jobs, in list order, to
 # the self-hosted pool. Every other job, every fork PR, and every run where the
 # runners cannot be listed uses macos-latest. Only put MAC_RUNNER_LABEL on runners
 # this repository may use.
@@ -18,7 +18,7 @@
 set -uo pipefail
 
 label=${MAC_RUNNER_LABEL:-devworks-mac}
-jobs=(foundation engine desktop clippy) # longest first
+jobs=(macos)
 hosted='"macos-latest"'
 self_hosted="[\"self-hosted\",\"$label\"]"
 output=${GITHUB_OUTPUT:-/dev/stdout}
