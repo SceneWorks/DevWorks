@@ -41,7 +41,9 @@
 //!   committed package registry, provides the quiescence barrier the package service publishes
 //!   behind, and brokers package requests: an event-handler invocation changes state and admits
 //!   effects only through `broker.commit_event` (never `broker.state` compare-and-set or an
-//!   effectful `broker.call`). See the module documentation and core
+//!   effectful `broker.call`), and `broker.call` reaches only what the invocation's grants
+//!   allow, as its invoking principal. An agent's package tool call runs as a durable
+//!   `package.invoke` operation ([`package_tools`]). See the module documentation and core
 //!   `services::packages` (trust model: a helper is a separate process, not an OS sandbox).
 //! * **Receipt replies.** [`replies::reply_consumer`] registers core's receipt reply publisher
 //!   as an asynchronous consumer: every recorded receipt's durable typed reply is published
@@ -221,6 +223,7 @@ pub mod mcp_sampling;
 pub mod notifications;
 pub mod package;
 pub mod package_host;
+pub mod package_tools;
 pub mod replies;
 pub mod resources;
 pub mod runs;
