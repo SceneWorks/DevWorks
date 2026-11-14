@@ -1,47 +1,5 @@
 use super::*;
 
-fn base64(value: &str) -> Option<Vec<u8>> {
-    if !value.len().is_multiple_of(4) {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(value.len() / 4 * 3);
-    let sextet = |c: u8| match c {
-        b'A'..=b'Z' => Some(c - b'A'),
-        b'a'..=b'z' => Some(c - b'a' + 26),
-        b'0'..=b'9' => Some(c - b'0' + 52),
-        b'+' => Some(62),
-        b'/' => Some(63),
-        _ => None,
-    };
-    let n = value.len() / 4;
-    for (i, c) in value.as_bytes().as_chunks::<4>().0.iter().enumerate() {
-        let a = sextet(c[0])?;
-        let b = sextet(c[1])?;
-        let padding = if c[2] == b'=' {
-            2
-        } else if c[3] == b'=' {
-            1
-        } else {
-            0
-        };
-        if padding > 0 && i + 1 != n || padding == 2 && c[3] != b'=' {
-            return None;
-        }
-        let d = if padding == 2 { 0 } else { sextet(c[2])? };
-        let e = if padding > 0 { 0 } else { sextet(c[3])? };
-        if padding == 2 && b & 15 != 0 || padding == 1 && d & 3 != 0 {
-            return None;
-        }
-        bytes.push(a << 2 | b >> 4);
-        if padding < 2 {
-            bytes.push(b << 4 | d >> 2);
-        }
-        if padding == 0 {
-            bytes.push(d << 6 | e);
-        }
-    }
-    Some(bytes)
-}
 impl Decoder {
     pub(super) fn embedding(&mut self, v: &Value, raw: &str, out: &mut Vec<DecodedFrame>) {
         self.usage(raw, &["usage"], out);
@@ -96,7 +54,10 @@ impl Decoder {
                 Some(Value::String(text))
                     if text.len() <= self.limits.embedding_dimensions.saturating_mul(8) =>
                 {
-                    base64(text)
+                    use base64::Engine as _;
+                    base64::engine::general_purpose::STANDARD
+                        .decode(text)
+                        .ok()
                         .filter(|b| b.len().is_multiple_of(4))
                         .map(|b| {
                             b.as_chunks::<4>()

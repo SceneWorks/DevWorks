@@ -128,7 +128,13 @@ impl ConventionService {
             if path.len() >= model::MAX_DEPTH || !seen.insert(id.clone()) {
                 return Err(changed());
             }
-            let row = access::owner(read, ctx, &id, None, Some(&model::scope(&owner.scope)))?;
+            let row = access::owner(
+                read,
+                ctx,
+                &id,
+                None,
+                Some(&crate::protocol::data::DataScope::from(&owner.scope)),
+            )?;
             parent = row.parent_id;
             path.push(row.slug);
         }

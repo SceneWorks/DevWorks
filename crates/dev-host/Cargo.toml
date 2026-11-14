@@ -1,7 +1,8 @@
 [package]
 name = "dev-host"
 description = "Verifies a host's dev-host storage root and places Rust builds and temp files under it"
-version.workspace = true
+# Released on its own: a dev-host-v<X> tag publishes this version (.github/workflows/dev-host-release.yml).
+version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true

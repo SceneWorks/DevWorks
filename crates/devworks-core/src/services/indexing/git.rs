@@ -1147,6 +1147,27 @@ impl Git<'_> {
         }
         Ok(None)
     }
+    /// The repository's default branch (`refs/heads/...`): the branch the `origin` remote's
+    /// HEAD names, as the clone records it in `refs/remotes/origin/HEAD`. `None` when the clone
+    /// records no remote HEAD.
+    pub fn default_branch(&self, dir: &Path) -> Result<Option<String>, GitFault> {
+        Ok(self
+            .line(
+                dir,
+                &[
+                    "rev-parse",
+                    "-q",
+                    "--verify",
+                    "--symbolic-full-name",
+                    "refs/remotes/origin/HEAD",
+                ],
+            )?
+            .and_then(|r| {
+                r.strip_prefix("refs/remotes/origin/")
+                    .filter(|b| !b.is_empty() && *b != "HEAD")
+                    .map(|b| format!("refs/heads/{b}"))
+            }))
+    }
     /// The configured `origin` remote URL.
     pub fn origin(&self, dir: &Path) -> Result<Option<String>, GitFault> {
         self.line(dir, &["config", "--get", "remote.origin.url"])
@@ -1481,9 +1502,7 @@ impl Git<'_> {
 }
 
 pub fn oid_ok(s: &str) -> bool {
-    matches!(s.len(), 40 | 64)
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    crate::fingerprint::is_lower_hex(s, 40) || crate::fingerprint::is_sha256_hex(s)
 }
 
 fn path_of(raw: &[u8]) -> Option<String> {

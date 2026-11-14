@@ -240,15 +240,55 @@ impl Memory {
             .filter(|m| m.version == VERSION)
             .unwrap_or_default()
     }
-    /// Writes atomically (temporary file, then rename).
+    /// The one atomic save: a new temporary file (never one that already exists), synced,
+    /// renamed over `path`, then the directory synced. A write that fails removes its own
+    /// temporary file, so one failure cannot block every later save.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        use std::io::Write;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
-        std::fs::rename(&tmp, path)
+        let bytes = serde_json::to_vec_pretty(self)?;
+        if bytes.len() as u64 > MAX_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                "saved UI state exceeds its read bound",
+            ));
+        }
+        let tmp = temporary(path);
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp)?;
+        let written = file
+            .write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .and_then(|()| {
+                drop(file);
+                std::fs::rename(&tmp, path)
+            });
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
     }
+}
+
+/// The temporary file [`Memory::save`] writes before renaming it over `path`.
+pub fn temporary(path: &Path) -> std::path::PathBuf {
+    path.with_extension("json.tmp")
+}
+
+/// Temporary files an earlier process left when it stopped mid-save (this build's, and the
+/// purge checkpoint's from earlier builds). The saved file itself is intact, since only a
+/// rename replaces it.
+pub fn interrupted_saves(path: &Path) -> [std::path::PathBuf; 2] {
+    [temporary(path), path.with_extension("purge.tmp")]
 }
 
 #[cfg(test)]

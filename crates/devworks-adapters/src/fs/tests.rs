@@ -35,6 +35,13 @@ impl Drop for Scratch {
     }
 }
 
+/// `path` as one word of a POSIX `sh` script: inside single quotes, each embedded `'` written as
+/// `'\''`. A temporary folder may have a space in its name (the macOS CI runner's does), and an
+/// unquoted one would split into separate targets.
+fn sh_quote(path: &str) -> String {
+    format!("'{}'", path.replace('\'', r"'\''"))
+}
+
 fn id(s: &str) -> Id {
     Id::new(s).unwrap()
 }
@@ -350,6 +357,63 @@ fn glob_expansion_is_bounded_and_explicit() {
 }
 
 #[test]
+fn glob_matching_keeps_shell_semantics() {
+    for (pattern, name, hit) in [
+        ("*.tmp", "a.tmp", true),
+        ("*.tmp", "a.tmpx", false),
+        ("a*b*c", "aXbYc", true),
+        ("a*b*c", "abcb", false),
+        ("*", "", true),
+        ("?", "", false),
+        ("f?.log", "f1.log", true),
+        ("o[0-1].log", "o1.log", true),
+        ("o[0-1].log", "o2.log", false),
+        ("o[!0-1].log", "o2.log", true),
+        ("o[^a]", "oa", false),
+        ("[x", "[x", true),
+        ("**a", "bba", true),
+        ("a**", "a", true),
+    ] {
+        assert_eq!(
+            super::glob(pattern.as_bytes(), name.as_bytes()),
+            hit,
+            "{pattern} vs {name}"
+        );
+    }
+}
+
+#[test]
+fn a_pattern_with_many_stars_matches_in_bounded_time() {
+    // A backtracking matcher takes exponential time in the number of stars on this input.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let pattern = format!("{}b", "a*".repeat(40));
+        let name = "a".repeat(200);
+        let _ = tx.send(super::glob(pattern.as_bytes(), name.as_bytes()));
+    });
+    let hit = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the match finishes promptly");
+    assert!(!hit);
+}
+
+/// A name the reviewed list cannot spell refuses the expansion instead of vanishing from it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_glob_matching_a_non_utf8_name_is_refused_not_dropped() {
+    use std::os::unix::ffi::OsStrExt;
+    let s = Scratch::new("glob-bytes");
+    std::fs::write(s.0.join("plain.tmp"), b"").unwrap();
+    std::fs::write(s.0.join(std::ffi::OsStr::from_bytes(b"bad\xff.tmp")), b"").unwrap();
+    let fs = NativeFilesystem::new();
+    assert!(matches!(
+        fs.expand(&s.p("*.tmp"), None, 10),
+        Err(devworks_core::authority::destructive::ResolveError::Unsupported(_))
+    ));
+    assert_eq!(fs.expand(&s.p("pl*.tmp"), None, 10).unwrap().len(), 1);
+}
+
+#[test]
 fn owned_worktree_cleanup_is_bounded_to_the_exact_stopped_worktree() {
     let t = tree("worktree");
     let cleanup = |id_: &str| IntendedScope::OwnedWorktreeCleanup {
@@ -551,7 +615,8 @@ fn commands_cannot_write_into_or_remove_skill_folders() {
         other => panic!("{script}: {other:?}"),
     };
     let refused = PreflightVerdict::Blocked(BlockReason::SkillDirectory);
-    for root in [slashed(&shared), slashed(&harness)] {
+    for root in [&shared, &harness] {
+        let root = sh_quote(&slashed(root));
         for script in [
             format!("echo 'Do evil.' > {root}/evil/SKILL.md"),
             format!("rm -rf {root}"),
@@ -563,14 +628,80 @@ fn commands_cannot_write_into_or_remove_skill_folders() {
     // protected.
     std::fs::create_dir_all(base.join("home/.agents/skills/beta")).unwrap();
     std::fs::write(base.join("home/.agents/skills/beta/SKILL.md"), "Do beta.").unwrap();
-    let shared_slashed = slashed(&shared);
+    let shared_slashed = sh_quote(&slashed(&shared));
     assert!(verdicts(&format!("echo x > {shared_slashed}/beta/SKILL.md")).contains(&refused));
     assert_eq!(
-        verdicts(&format!("echo x > {}", slashed(&at("home/notes.md")))),
+        verdicts(&format!(
+            "echo x > {}",
+            sh_quote(&slashed(&at("home/notes.md")))
+        )),
         [PreflightVerdict::Allowed]
     );
     // The registry revision covers the skill folders.
     assert_ne!(t.roots.revision, plain.revision);
+}
+
+/// Protected roots reached through a linked folder (macOS `/var -> /private/var`, a linked home
+/// or data directory): a new path whose parents do not exist yet still resolves through the
+/// link, so a write there is refused, while the same write outside the roots stays allowed.
+/// Unix only: creating a symlink on Windows needs a privilege CI does not have.
+#[cfg(unix)]
+#[test]
+fn writes_with_missing_parents_under_a_linked_protected_root_are_refused() {
+    let s = Scratch::new("linked-roots");
+    let real = s.0.join("real");
+    std::fs::create_dir_all(real.join("data/skills")).unwrap();
+    std::fs::create_dir_all(real.join("home")).unwrap();
+    std::fs::create_dir_all(real.join("work")).unwrap();
+    let link = s.0.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let at = |rel: &str| link.join(rel).to_string_lossy().into_owned();
+    // Every root is written through the link, as a host with a linked data directory composes it.
+    let roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some(at("data")))
+        .with_skill_roots([at("home/.agents/skills"), at("data/skills")]);
+    let fs = NativeFilesystem::new();
+    let cwd = at("work");
+    let verdicts = |script: &str| match assess_command(
+        &["bash".to_owned(), "-c".to_owned(), script.to_owned()],
+        Some(&cwd),
+    ) {
+        ShellAssessment::Destructive { plans, .. } => plans
+            .iter()
+            .map(|p| preflight(&fs, &roots, p).verdict)
+            .collect::<Vec<_>>(),
+        other => panic!("{script}: {other:?}"),
+    };
+    let skill = PreflightVerdict::Blocked(BlockReason::SkillDirectory);
+    let data = PreflightVerdict::Blocked(BlockReason::ApplicationData);
+    for (root, refused) in [
+        (at("data/skills"), &skill),
+        (at("home/.agents/skills"), &skill),
+        (at("data"), &data),
+    ] {
+        let root = sh_quote(&root);
+        for script in [
+            format!("echo 'Do evil.' > {root}/new/dir/SKILL.md"),
+            format!("mkdir -p {root}/new/dir"),
+            // A `..` inside the missing part folds back under the root.
+            format!("mkdir -p {root}/new/../dir"),
+        ] {
+            assert_eq!(verdicts(&script), std::slice::from_ref(refused), "{script}");
+        }
+    }
+    // The same root named through the real path is refused too.
+    let real_skills = sh_quote(&real.join("data/skills").to_string_lossy());
+    assert_eq!(
+        verdicts(&format!("mkdir -p {real_skills}/new/dir")),
+        [skill]
+    );
+    // Missing parents under the same link but outside every root: allowed.
+    for script in [
+        format!("echo x > {}/new/dir/notes.md", sh_quote(&at("work"))),
+        format!("mkdir -p {}/new/dir", sh_quote(&at("home"))),
+        format!("mkdir -p {}/new/../dir", sh_quote(&at("work"))),
+    ] {
+        assert_eq!(verdicts(&script), [PreflightVerdict::Allowed], "{script}");
+    }
 }
 
 #[test]
@@ -1040,14 +1171,14 @@ mod probe {
     const POSIX: &[&str] = &[
         "rm -rf {R}",
         "rm -rf \"$(printf {R})\"",
-        "bash -c \"bash -c 'rm -rf {R}'\"",
+        "bash -c \"bash -c 'rm -rf \\\"{r}\\\"'\"",
         "env -i rm -rf {R}",
         "command -p rm -rf {R}",
         "\\rm -rf {R}",
         "/bin/rm -rf {R}",
         "busybox rm -rf {R}",
-        "perl -e 'use File::Path; rmtree(\"{R}\")'",
-        "python3 -c 'import shutil; shutil.rmtree(\"{R}\")'",
+        "perl -e 'use File::Path; rmtree(\"{r}\")'",
+        "python3 -c 'import shutil; shutil.rmtree(\"{r}\")'",
         "git -C {R} clean -fdx",
         "git --git-dir={R}/.git gc --prune=now",
         "rm -rf -- {R}",
@@ -1079,30 +1210,30 @@ mod probe {
         "exec -a x rm -rf {R}",
         "timeout -k 5 10 rm -rf {R}",
         "nice -n5 rm -rf {R}",
-        "echo {R} | xargs rm -rf",
-        "rm -rf $'{R}'",
+        "echo \"'{r}'\" | xargs rm -rf",
+        "rm -rf $'{r}'",
         "cd {B} && rm -rf repo",
         "rm -rf {B}/{repo,x}",
-        "echo rm -rf {R} | sh",
-        "bash -c -- 'rm -rf {R}'",
-        "bash -c -e 'rm -rf {R}'",
-        "bash -O extglob -c 'rm -rf {R}'",
+        "echo \"rm -rf '{r}'\" | sh",
+        "bash -c -- 'rm -rf \"{r}\"'",
+        "bash -c -e 'rm -rf \"{r}\"'",
+        "bash -O extglob -c 'rm -rf \"{r}\"'",
         "time -p rm -rf {R}",
         "sudo -iu root rm -rf {R}",
         "sudo -Eu root rm -rf {R}",
         "env -iu FOO rm -rf {R}",
         "doas -nu root rm -rf {R}",
-        "trap 'rm -rf {R}' EXIT",
-        "bash <<< 'rm -rf {R}'",
-        "bash <(echo rm -rf {R})",
+        "trap 'rm -rf \"{r}\"' EXIT",
+        "bash <<< 'rm -rf \"{r}\"'",
+        "bash <(echo \"rm -rf '{r}'\")",
         "/bin/r? -rf {R}",
         "/bin/r[m] -rf {R}",
         "rm -rf ~michael",
         "rm -rf ~+/x",
-        "zsh -c 'rm -rf {B}/re(po|zz)'",
-        "fish --command 'rm -rf {R}'",
-        "csh -c 'rm -rf {R}'",
-        "tcsh -c 'rm -rf {R}'",
+        "zsh -c 'rm -rf \"{b}\"/re(po|zz)'",
+        "fish --command 'rm -rf \"{r}\"'",
+        "csh -c 'rm -rf \"{r}\"'",
+        "tcsh -c 'rm -rf \"{r}\"'",
         "mv -ft {B}/gone {R}",
         "GIT_WORK_TREE={R} git clean -fdx",
         "git --work-tree={R} clean -fdx",
@@ -1113,7 +1244,7 @@ mod probe {
         "git push origin +HEAD:Main",
         "git push origin :refs/heads/MAIN",
         "git -c alias.p='push -f' p origin main",
-        "git -c alias.x='!rm -rf {R}' x",
+        "git -c alias.x='!rm -rf \"{r}\"' x",
         "cp /dev/null {R}/.git/HEAD",
         "echo x | tee {R}/.git/HEAD",
         "truncate -s 0 {R}/.git/HEAD",
@@ -1123,9 +1254,9 @@ mod probe {
         "git -C {R} rm -rf .",
         "git -C {R} update-ref -d refs/heads/main",
         "git -C {R} branch -D main",
-        "alias x='rm -rf {R}'; x",
-        "node -e 'require(\"fs\").rmSync(\"{R}\", {recursive: true})'",
-        "ruby -e 'require \"fileutils\"; FileUtils.rm_rf(\"{R}\")'",
+        "alias x='rm -rf \"{r}\"'; x",
+        "node -e 'require(\"fs\").rmSync(\"{r}\", {recursive: true})'",
+        "ruby -e 'require \"fileutils\"; FileUtils.rm_rf(\"{r}\")'",
     ];
     const POWERSHELL: &[&str] = &[
         "Remove-Item {R} -Recurse -Force",
@@ -1138,22 +1269,22 @@ mod probe {
         "Remove-Item -Path {R} -Recurse",
         "Remove-Item -LiteralPath {R} -Recurse",
         "Remove-Item -Path:{R} -Recurse",
-        "[IO.Directory]::Delete('{R}', $true)",
-        "[System.IO.Directory]::Delete(\"{R}\", $true)",
-        "[IO.File]::WriteAllText('{R}/.git/HEAD', 'x')",
+        "[IO.Directory]::Delete('{r}', $true)",
+        "[System.IO.Directory]::Delete(\"{r}\", $true)",
+        "[IO.File]::WriteAllText('{r}/.git/HEAD', 'x')",
         "Get-Item {R} | Remove-Item -Recurse",
         "if (1) { Remove-Item {R} -Recurse }",
         "& { Remove-Item {R} -Recurse }",
         "try { Remove-Item {R} -Recurse } catch {}",
         "1 | ForEach-Object { Remove-Item {R} -Recurse }",
         "foreach ($i in 1) { Remove-Item {R} -Recurse }",
-        "Remove-Item {R},{B}/x -Recurse",
+        "Remove-Item {R},'{b}/x' -Recurse",
         "Rename-Item {R} gone",
-        "Move-Item {R} {B}/gone",
-        "Clear-Content {R}/.git/HEAD",
-        "Set-Content {R}/.git/HEAD x",
-        "'x' | Out-File {R}/.git/HEAD",
-        "Copy-Item {B}/work/x {R}/.git/HEAD",
+        "Move-Item {R} '{b}/gone'",
+        "Clear-Content '{r}/.git/HEAD'",
+        "Set-Content '{r}/.git/HEAD' x",
+        "'x' | Out-File '{r}/.git/HEAD'",
+        "Copy-Item '{b}/work/x' '{r}/.git/HEAD'",
     ];
     const CMD: &[&str] = &[
         "del /s /q {R}",
@@ -1165,9 +1296,9 @@ mod probe {
         "if 1==1 rd /s /q {R}",
         "(rd /s /q {R})",
         "for %d in ({R}) do rd /s /q %d",
-        "move {R} {B}/gone",
+        "move {R} \"{b}/gone\"",
         "ren {R} gone",
-        "copy nul {R}/.git/HEAD",
+        "copy nul \"{r}/.git/HEAD\"",
     ];
 
     #[test]
@@ -1175,7 +1306,19 @@ mod probe {
         let f = fixture();
         let b = f.s.p("");
         let b = b.trim_end_matches('/');
-        let sub = |s: &str| s.replace("{R}", &f.repo).replace("{B}", b);
+        // `{R}` and `{B}` become the repository and its parent folder as one quoted word, so a
+        // temporary folder whose name has a space (as on the macOS CI runner) stays one
+        // argument. `{r}` and `{b}` are the bare paths, for a case that quotes them itself
+        // (inside an inner script, a string literal, or with a suffix in PowerShell or cmd).
+        let sub_with = |s: &str, quote: fn(&str) -> String| {
+            s.replace("{R}", &quote(&f.repo))
+                .replace("{B}", &quote(b))
+                .replace("{r}", &f.repo)
+                .replace("{b}", b)
+        };
+        let sub = |s: &str| sub_with(s, sh_quote);
+        let ps_quote = |p: &str| format!("'{}'", p.replace('\'', "''"));
+        let cmd_quote = |p: &str| format!("\"{p}\"");
         let mut leaks = Vec::new();
         for case in POSIX {
             let s = sub(case);
@@ -1184,7 +1327,7 @@ mod probe {
             }
         }
         for case in POWERSHELL {
-            let s = sub(case);
+            let s = sub_with(case, ps_quote);
             for shell in ["pwsh", "powershell"] {
                 for flag in ["-Command", "-CommandWithArgs"] {
                     if let Some(v) = allowed(&f, &argv(&[shell, flag, &s]), &f.work) {
@@ -1194,14 +1337,13 @@ mod probe {
             }
         }
         for case in CMD {
-            let s = sub(case);
             let mut a = argv(&["cmd", "/c"]);
-            a.extend(s.split(' ').map(str::to_owned));
+            a.extend(case.split(' ').map(|word| sub_with(word, cmd_quote)));
             if let Some(v) = allowed(&f, &a, &f.work) {
                 leaks.push(format!("cmd /c {case}: {v}"));
             }
         }
-        let joined = argv(&["cmd", "/crd", "/s", "/q", &f.repo]);
+        let joined = argv(&["cmd", "/crd", "/s", "/q", &cmd_quote(&f.repo)]);
         if let Some(v) = allowed(&f, &joined, &f.work) {
             leaks.push(format!("cmd /crd: {v}"));
         }
@@ -1451,10 +1593,15 @@ mod precedence {
         let t = tree("mangled");
         let cwd = t.s.p("outside");
         // Under `sh` the backslashes are escapes: `C:\Users\x\repo` becomes `C:Usersxrepo`,
-        // which names nothing that was meant. It must be held, on every platform.
+        // which names nothing that was meant. It must be held, on every platform. A space in the
+        // temporary folder's name is escaped as `\ ` so the mangled path stays one word; every
+        // other backslash is still an escape that mangles it.
         for script in [
             r"rm -rf C:\Users\runner\repo".to_owned(),
-            format!("rm -rf {}", t.s.p("repo").replace('/', "\\")),
+            format!(
+                "rm -rf {}",
+                t.s.p("repo").replace('/', "\\").replace(' ', "\\ ")
+            ),
             "rm -rf C:repo".to_owned(),
             r"rm -rf \\server\share\repo".to_owned(),
         ] {

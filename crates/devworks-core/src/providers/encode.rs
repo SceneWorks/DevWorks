@@ -512,7 +512,11 @@ impl Encoder<'_> {
         if bytes.len() as u64 != raw {
             return Err(ProviderError::InvalidInput("artifact_length"));
         }
-        Ok((r.media_type.clone(), base64(&bytes)))
+        use base64::Engine as _;
+        Ok((
+            r.media_type.clone(),
+            base64::engine::general_purpose::STANDARD.encode(&bytes),
+        ))
     }
 
     fn native(
@@ -1078,42 +1082,22 @@ fn cache(mut v: Value, b: Option<&CacheBreakpoint>) -> Value {
     }
     v
 }
-fn base64(bytes: &[u8]) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for b in bytes.chunks(3) {
-        let n = (u32::from(b[0]) << 16)
-            | (u32::from(*b.get(1).unwrap_or(&0)) << 8)
-            | u32::from(*b.get(2).unwrap_or(&0));
-        out.push(A[((n >> 18) & 63) as usize] as char);
-        out.push(A[((n >> 12) & 63) as usize] as char);
-        out.push(if b.len() > 1 {
-            A[((n >> 6) & 63) as usize] as char
-        } else {
-            '='
-        });
-        out.push(if b.len() > 2 {
-            A[(n & 63) as usize] as char
-        } else {
-            '='
-        });
-    }
-    out
-}
-
+/// The tool output text. An error carries only the joined text and the flag: the host's
+/// internal result record (artifact ids and digests) never reaches the provider.
 fn result_text(content: &[ResultBlock], is_error: bool) -> Result<String, ProviderError> {
-    if is_error {
-        return serde_json::to_string(&json!({"is_error":true,"content":content}))
-            .map_err(|_| ProviderError::InvalidInput("tool_result_json"));
-    }
-    Ok(content
+    let text = content
         .iter()
         .filter_map(|v| match v {
             ResultBlock::Text { text } => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
-        .join("\n"))
+        .join("\n");
+    if is_error {
+        return serde_json::to_string(&json!({"is_error":true,"content":text}))
+            .map_err(|_| ProviderError::InvalidInput("tool_result_json"));
+    }
+    Ok(text)
 }
 fn flush_result_images(images: &mut Vec<Value>, out: &mut Vec<Value>) {
     if !images.is_empty() {

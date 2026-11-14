@@ -41,7 +41,7 @@ fn resolve(
     owner: &StoredConvention,
     path: &ConventionIndexedPath,
 ) -> Result<Path, Failure> {
-    let owner_scope = super::model::scope(&owner.scope);
+    let owner_scope = crate::protocol::data::DataScope::from(&owner.scope);
     if access::owner(
         read,
         ctx,

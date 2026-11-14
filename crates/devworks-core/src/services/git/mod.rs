@@ -17,7 +17,7 @@ use crate::protocol::records::GitInspection;
 use crate::protocol::results::OperationResult;
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, OperationState};
 use crate::services::artifacts::evidence::{Evidence, EvidenceFailure};
-use crate::services::artifacts::{ArtifactService, AuthorizedScope, authorized_scope};
+use crate::services::artifacts::{ArtifactService, AuthorizedScope};
 use crate::services::indexing::git::{Git, GitFault};
 use crate::services::indexing::helper::{HelperFault, HelperRunner};
 use crate::services::sessions::{Failure, Refusal, query_fault, rev};
@@ -199,7 +199,7 @@ impl GitService {
             .repository(repository)?
             .ok_or_else(|| refuse(DomainErrorCode::NotFound, "repository", repository))?;
         let projects = snapshot.projects().repository_projects(repository)?;
-        let bound = authorized_scope(snapshot.authority(), ctx)?;
+        let bound = crate::services::knowledge::reach(snapshot.authority(), ctx)?;
         if ctx.project_id().is_some_and(|p| !projects.contains(p))
             || matches!(&bound,AuthorizedScope::Project(p) if !projects.contains(p))
         {

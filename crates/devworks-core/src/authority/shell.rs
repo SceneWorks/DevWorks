@@ -10,8 +10,9 @@
 //!    command lists, pipelines, `!`, `if`/`while`/`until`/`for` bodies, `( … )`/`{ …; }` groups,
 //!    `$( … )`/backtick bodies; the option grammar of `env`, `sudo`, `doas`, `timeout`, `nice`,
 //!    `nohup`, `command`, `exec`, `time`, `xargs` (combined short options included); `rm`,
-//!    `rmdir`, `unlink`, `shred`, `dd of=`, `mv`, `rsync`, `find`, a set of `git` subcommands,
-//!    cmd `rd`/`rmdir`/`del`/`erase` (joined switches such as `/s/q` included), PowerShell
+//!    `rmdir`, `unlink`, `shred`, `dd of=`, `mv`, `rsync`, `find`, `mkdir` (a write of each new
+//!    folder), a set of `git` subcommands, cmd `rd`/`rmdir`/`del`/`erase` (joined switches such
+//!    as `/s/q` included), cmd `mkdir`/`md`, PowerShell
 //!    `Remove-Item`/`Move-Item` and their aliases, `[IO.Directory]::Delete('…')` with a literal
 //!    path, and `>` redirections. A command counts as **fully modeled** only when every one of
 //!    its words was understood: every option is known to that program's model, no word is
@@ -1520,6 +1521,8 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
         "rm" | "rmdir" | "unlink" | "shred" if dialect == Dialect::Posix => {
             posix_removal(&name, args, c)
         }
+        "mkdir" if dialect == Dialect::Posix => posix_mkdir(args, c),
+        "mkdir" | "md" if dialect == Dialect::Cmd => cmd_mkdir(args, c),
         "rd" | "rmdir" | "del" | "erase" if dialect != Dialect::PowerShell => {
             cmd_removal(&name, args, c)
         }
@@ -2306,6 +2309,42 @@ fn posix_removal(name: &str, args: &[Word], c: &mut Collector) -> bool {
         _ => DestructiveKind::Unlink,
     };
     c.push(kind, operands)
+}
+
+/// `mkdir` writes a new entry at each operand (and its missing parents): planned as a write so a
+/// new folder inside a protected root is refused like a new file there. An option it does not
+/// know holds the command (`mkdir` is not a consequential token, so the hold is explicit here).
+fn posix_mkdir(args: &[Word], c: &mut Collector) -> bool {
+    let mut seen = Vec::new();
+    match parse_options(
+        args,
+        0,
+        &Options {
+            value_letters: "m",
+            flag_letters: "pv",
+            long_values: &["--mode"],
+            long_flags: &["--parents", "--verbose"],
+            stop: &["--help", "--version"],
+        },
+        &mut seen,
+    ) {
+        Parsed::Operand(k) => {
+            c.push(DestructiveKind::Truncate, &args[k..]);
+        }
+        Parsed::NoExecution => {}
+        Parsed::Unknown => c.unmodeled(),
+    }
+    true
+}
+
+/// cmd `mkdir`/`md`, which takes no switches and creates missing parents.
+fn cmd_mkdir(args: &[Word], c: &mut Collector) -> bool {
+    if args.iter().any(|a| a.text.starts_with('/')) {
+        c.unmodeled();
+    } else {
+        c.push(DestructiveKind::Truncate, args);
+    }
+    true
 }
 
 /// cmd `rd`/`rmdir`/`del`/`erase`, switches separate (`/s /q`) or joined (`/s/q`, `/f/s/q`).

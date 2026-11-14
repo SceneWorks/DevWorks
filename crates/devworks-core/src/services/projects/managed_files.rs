@@ -292,12 +292,7 @@ impl ManagedFileCustody {
         key: &str,
         bytes: &[u8],
     ) -> Result<(), FileFault> {
-        if !key.starts_with("pv-")
-            || key.len() != 43
-            || !key[3..]
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-        {
+        if !key.starts_with("pv-") || !crate::fingerprint::is_lower_hex(&key[3..], 40) {
             return Err(FileFault::Unsupported(
                 "invalid project preview identity".into(),
             ));

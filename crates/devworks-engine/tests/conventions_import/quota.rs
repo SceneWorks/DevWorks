@@ -223,7 +223,7 @@ fn retained(f: &Fx, source: &ProjectId, destination: &ProjectId) -> RetainedStat
 }
 fn move_body(owner: &StoredConvention, destination: &ProjectId) -> serde_json::Value {
     json!({"kind":"conventions.move","conventionId":owner.id,"expectedRevision":owner.revision.to_string(),
-        "scope":devworks_core::services::conventions::model::scope(&owner.scope),
+        "scope":devworks_core::protocol::data::DataScope::from(&owner.scope),
         "destination":{"kind":"Project","projectId":destination}})
 }
 

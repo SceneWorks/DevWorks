@@ -210,54 +210,22 @@ pub trait Entropy: Send + Sync {
 
 /// Unpadded base64url (RFC 4648 section 5), for PKCE and JWT segments.
 pub fn base64url(bytes: &[u8]) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        let chars = chunk.len() + 1;
-        for i in 0..chars {
-            out.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char);
-        }
-    }
-    out
+    use base64::Engine as _;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// Decodes base64url with or without padding (`None` on any invalid character).
+/// Decodes base64url (the URL-safe alphabet only) with or without padding (`None` on any
+/// invalid character or non-canonical trailing bits).
 pub fn base64url_decode(s: &str) -> Option<Vec<u8>> {
-    fn val(c: u8) -> Option<u32> {
-        Some(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'-' | b'+' => 62,
-            b'_' | b'/' => 63,
-            _ => return None,
-        } as u32)
-    }
-    let s = s.trim_end_matches('=').as_bytes();
-    if s.len() % 4 == 1 {
-        return None;
-    }
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    for chunk in s.chunks(4) {
-        let mut n = 0u32;
-        for (i, c) in chunk.iter().enumerate() {
-            n |= val(*c)? << (18 - 6 * i);
-        }
-        out.push((n >> 16) as u8);
-        if chunk.len() > 2 {
-            out.push((n >> 8) as u8);
-        }
-        if chunk.len() > 3 {
-            out.push(n as u8);
-        }
-    }
-    Some(out)
+    use base64::Engine as _;
+    use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
+    const URL_SAFE_EITHER: GeneralPurpose = GeneralPurpose::new(
+        &base64::alphabet::URL_SAFE,
+        GeneralPurposeConfig::new()
+            .with_encode_padding(false)
+            .with_decode_padding_mode(DecodePaddingMode::Indifferent),
+    );
+    URL_SAFE_EITHER.decode(s).ok()
 }
 
 /// `application/x-www-form-urlencoded` encoding of `pairs`.
@@ -293,6 +261,10 @@ mod tests {
             let bytes: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
             assert_eq!(base64url_decode(&base64url(&bytes)).unwrap(), bytes);
         }
+        // Padding is optional; the standard alphabet is not base64url.
+        assert_eq!(base64url_decode("Zm8=").unwrap(), b"fo");
+        assert_eq!(base64url_decode("-_8").unwrap(), [251, 255]);
+        assert_eq!(base64url_decode("+/8"), None);
         // RFC 7636 appendix B: verifier bytes and the S256 challenge of its encoding.
         let verifier_bytes = [
             116u8, 24, 223, 180, 151, 153, 224, 37, 79, 250, 96, 125, 216, 173, 187, 186, 22, 212,

@@ -771,13 +771,17 @@ impl McpRemote for NativeMcpClients {
         })
     }
 
-    fn missing_runtime(&self, transport: &McpTransport) -> Option<String> {
+    fn missing_runtime(
+        &self,
+        transport: &McpTransport,
+        configuration: &dyn devworks_core::ports::storage::ConfigurationRead,
+    ) -> Option<String> {
         let McpTransport::Stdio { process } = transport else {
             return None;
         };
         let executable = process.executable_ref.as_str();
         self.bindings
-            .resolve_named_executable(executable)
+            .resolve_named_executable_in(executable, configuration)
             .is_err()
             .then(|| executable.to_owned())
     }
