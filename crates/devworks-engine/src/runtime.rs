@@ -595,6 +595,15 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))?;
         consumers.push(crate::mcp::consumer(service));
     }
+    // Agents' package tool calls run as durable operations of their own consumer; the host it
+    // invokes is created after the dispatcher (set below, before deliveries start).
+    let package_tools: Arc<OnceLock<std::sync::Weak<PackageHost>>> = Arc::default();
+    if packages.is_some() {
+        consumers.push(crate::package_tools::consumer(
+            store.clone(),
+            package_tools.clone(),
+        ));
+    }
     let process_tools = config.process_tools.as_ref().map(|composition| {
         Arc::new(
             devworks_core::services::process::tools::ProcessToolService::new(
@@ -1163,6 +1172,14 @@ async fn build(composition: Composition) -> Result<Engine, BootError> {
             p.index,
         );
         p.service.set_activity(host.clone());
+        let _ = package_tools.set(Arc::downgrade(&host));
+        // Brokered application calls of packages run through this command path, as the
+        // principal that invoked the package.
+        let gateway: Arc<dyn crate::package_host::broker::GatewayCalls> = admitter.clone();
+        host.attach_broker(crate::package_host::broker::BrokerPorts {
+            gateway: Arc::downgrade(&gateway),
+            artifacts: artifacts.clone(),
+        });
         package_guard.0 = Some(host);
     }
     Ok(Engine {
@@ -3577,6 +3594,20 @@ impl Admitter {
             );
         }
         outcome
+    }
+}
+impl crate::package_host::broker::GatewayCalls for Admitter {
+    fn query(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> QueryOutcome {
+        self.use_cases.query_with(
+            &self.gateway(),
+            ctx,
+            operation,
+            raw,
+            devworks_core::ports::storage::ReadOptions::default(),
+        )
+    }
+    fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
+        self.command_with(ctx, operation, raw, WriteOptions::default())
     }
 }
 impl NativeJobDispatch for Admitter {

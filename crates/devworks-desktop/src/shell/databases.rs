@@ -1,12 +1,15 @@
 //! Native database ingress: exact shared frames, purpose-bound password intake and paging.
-use super::Shell;
 use crate::{
-    backend::{Reply, Slot, TaskOutput},
-    databases_screen::{Action, Draft, ReadIntent},
+    backend::{Reply, TaskOutput, Unresolved},
+    databases_ops::{DatabasesSlot, command, query},
+    databases_screen::{Action, DatabasesScreen, Draft, ReadIntent},
+    memory::RouteMemory,
     ops::{self, Failure},
+    route::Route,
+    screen::{Cx, Screen, ScreenContext, ScreenId, controller},
 };
 use devworks_core::{
-    ports::secrets::Secret,
+    ports::{secrets::Secret, storage::ProjectPurgeClientScope},
     protocol::{
         CommandReply,
         results::{DomainDecision, OperationResult},
@@ -14,14 +17,101 @@ use devworks_core::{
 };
 use eframe::egui::Ui;
 use serde_json::{Value, json};
-fn query(b: &dyn crate::backend::Backend, op: &str, body: Value) -> Vec<u8> {
-    ops::at_revision(ops::query_frame(b, op, body), 5)
+
+controller!(DatabasesCtl, databases: DatabasesScreen);
+
+impl Screen for DatabasesScreen {
+    type Slot = DatabasesSlot;
+    const ID: ScreenId = ScreenId::Databases;
+    fn load(&mut self, cx: &mut Cx, _route: Route) {
+        DatabasesCtl {
+            databases: self,
+            cx,
+        }
+        .load_databases(false);
+    }
+    fn refresh(&mut self, cx: &mut Cx, _route: Route) {
+        if !self.loading && !self.batch_scanning && self.connections.len() <= 100 {
+            DatabasesCtl {
+                databases: self,
+                cx,
+            }
+            .load_databases(false);
+        }
+    }
+    fn apply(&mut self, cx: &mut Cx, slot: DatabasesSlot, reply: Reply) {
+        let unhandled = DatabasesCtl {
+            databases: self,
+            cx,
+        }
+        .apply_databases(slot, reply);
+        if let Some((slot, reply)) = unhandled {
+            cx.unhandled(&slot, reply);
+        }
+    }
+    fn ui(&mut self, cx: &mut Cx, _route: Route, ui: &mut Ui) {
+        DatabasesCtl {
+            databases: self,
+            cx,
+        }
+        .databases_screen(ui);
+    }
+    fn pending_memory(&self, _unresolved: &[&Unresolved]) -> Option<Value> {
+        Some(DatabasesScreen::pending_memory(self)).filter(|v| !v.is_null())
+    }
+    fn restore_pending(&mut self, saved: &Value) {
+        DatabasesScreen::restore_pending(self, saved);
+    }
+    fn restore_in_flight(&mut self, slot: &DatabasesSlot, _u: &Unresolved) {
+        if matches!(
+            slot,
+            DatabasesSlot::DatabaseCa | DatabasesSlot::DatabaseCommand(_)
+        ) {
+            self.busy = true;
+        }
+    }
+    fn restored(&mut self, cx: &mut Cx) {
+        DatabasesCtl {
+            databases: self,
+            cx,
+        }
+        .resume_database_batch();
+    }
+    fn remove_purged(&mut self, scope: &ProjectPurgeClientScope) {
+        let p = scope.project_id.0.as_str();
+        if self.project.as_deref() == Some(p) {
+            self.project = None;
+            self.clear_explorer();
+            self.loaded = false;
+        }
+        if let Some(d) = &mut self.draft {
+            if let Some(a) = d
+                .config
+                .get_mut("projectAccess")
+                .and_then(|v| v.as_array_mut())
+            {
+                a.retain(|v| v.get("projectId").and_then(|v| v.as_str()) != Some(p));
+            }
+            if d.scope.as_deref() == Some(p) {
+                d.scope = None;
+            }
+        }
+    }
+    /// The open tab, and the inspected schema object or else the selected source.
+    fn context(&self, _route: Route, _mem: &RouteMemory) -> ScreenContext {
+        ScreenContext {
+            tab: self.tab,
+            selection: self
+                .selected_object
+                .as_ref()
+                .map(|object| object.id.as_str().to_owned())
+                .or(self.selected.clone()),
+        }
+    }
 }
-fn command(b: &dyn crate::backend::Backend, op: &str, body: Value) -> Vec<u8> {
-    ops::at_revision(ops::command_frame(b, op, body), 5)
-}
-impl Shell {
-    pub(super) fn load_databases(&mut self, append: bool) {
+
+impl DatabasesCtl<'_, '_> {
+    fn load_databases(&mut self, append: bool) {
         if self.databases.loading {
             return;
         }
@@ -39,7 +129,7 @@ impl Shell {
             let draft = self.databases.draft.take();
             let sequence = self.databases.sequence.wrapping_add(1);
             let read_sequence = self.databases.read_sequence.wrapping_add(1);
-            self.databases = Default::default();
+            *self.databases = Default::default();
             self.databases.sequence = sequence;
             self.databases.read_sequence = read_sequence;
             self.databases.draft = draft;
@@ -54,7 +144,7 @@ impl Shell {
         }
         self.databases.loading = true;
         if !self.query(
-            Slot::DatabaseList(n, append),
+            DatabasesSlot::DatabaseList(n, append),
             "Loading database sources",
             "schemas.connections",
             move |b| query(b, "schemas.connections", body),
@@ -130,7 +220,7 @@ impl Shell {
         }
         self.databases.read_loading = true;
         if !self.query(
-            Slot::DatabaseObjects(n, append),
+            DatabasesSlot::DatabaseObjects(n, append),
             "Reading schema objects",
             "schemas.objects",
             move |b| query(b, "schemas.objects", body),
@@ -197,7 +287,7 @@ impl Shell {
         }
         self.databases.read_loading = true;
         if !self.query(
-            Slot::DatabaseRelations(n, append),
+            DatabasesSlot::DatabaseRelations(n, append),
             "Reading schema relationships",
             "schemas.relationships",
             move |b| query(b, "schemas.relationships", body),
@@ -208,7 +298,7 @@ impl Shell {
     fn database_command(&mut self, operation: &'static str, body: Value) {
         self.databases.busy = true;
         if !self.command(
-            Slot::DatabaseCommand(operation.into()),
+            DatabasesSlot::DatabaseCommand(operation.into()),
             "Updating database source",
             operation,
             move |b| command(b, operation, body),
@@ -224,7 +314,7 @@ impl Shell {
             self.databases.busy = true;
             let submitted = self.client.as_mut().is_some_and(|client| {
                 client.task(
-                    Slot::DatabaseCaPrepare,
+                    DatabasesSlot::DatabaseCaPrepare.into(),
                     "Preparing database certificate",
                     move |b| {
                         let (_, bytes) = crate::files::open_regular(&path)
@@ -260,7 +350,7 @@ impl Shell {
         self.databases.busy = true;
         let submitted = self.client.as_mut().is_some_and(|client| {
             client.task(
-                Slot::DatabasePrepare,
+                DatabasesSlot::DatabasePrepare.into(),
                 "Preparing database source",
                 move |b| {
                     if !password.is_empty() {
@@ -277,7 +367,7 @@ impl Shell {
             self.databases.busy = false;
         }
     }
-    pub(super) fn databases_screen(&mut self, ui: &mut Ui) {
+    fn databases_screen(&mut self, ui: &mut Ui) {
         if self.databases.project != self.selected_project
             || (!self.databases.loaded && !self.databases.loading)
         {
@@ -294,13 +384,8 @@ impl Shell {
             .map(|p| (p.id.0.as_str().into(), p.name.0.clone()))
             .collect::<Vec<_>>();
         let mut actions = Vec::new();
-        let availability = self.online();
-        self.databases.ui(
-            ui,
-            availability.as_ref().map(|_| ()).map_err(String::as_str),
-            &projects,
-            &mut actions,
-        );
+        self.databases
+            .ui(ui, self.cx.online(), &projects, &mut actions);
         for action in actions {
             self.database_action(action);
         }
@@ -441,10 +526,14 @@ impl Shell {
             Action::ConfirmOutcome => self.confirm_outcomes(),
         }
     }
-    pub(super) fn apply_databases(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
+    fn apply_databases(
+        &mut self,
+        slot: DatabasesSlot,
+        reply: Reply,
+    ) -> Option<(DatabasesSlot, Reply)> {
         match (slot, reply) {
-            (Slot::DatabaseList(n, _), _) if n != self.databases.sequence => {}
-            (Slot::DatabaseList(_, append), Reply::Query(result)) => {
+            (DatabasesSlot::DatabaseList(n, _), _) if n != self.databases.sequence => {}
+            (DatabasesSlot::DatabaseList(_, append), Reply::Query(result)) => {
                 self.databases.loading = false;
                 match ops::query_result(result) {
                     Ok((OperationResult::SchemasConnections { value }, _)) => {
@@ -483,9 +572,9 @@ impl Shell {
                     }
                 }
             }
-            (Slot::DatabaseObjects(n, _) | Slot::DatabaseRelations(n, _), _)
+            (DatabasesSlot::DatabaseObjects(n, _) | DatabasesSlot::DatabaseRelations(n, _), _)
                 if n != self.databases.read_sequence => {}
-            (Slot::DatabaseObjects(_, append), Reply::Query(result)) => {
+            (DatabasesSlot::DatabaseObjects(_, append), Reply::Query(result)) => {
                 self.databases.read_loading = false;
                 match ops::query_result(result) {
                     Ok((OperationResult::SchemasObjects { value }, _)) => {
@@ -507,7 +596,7 @@ impl Shell {
                     Err(e) => self.databases.error = Some(e.describe()),
                 }
             }
-            (Slot::DatabaseRelations(_, append), Reply::Query(result)) => {
+            (DatabasesSlot::DatabaseRelations(_, append), Reply::Query(result)) => {
                 self.databases.read_loading = false;
                 match ops::query_result(result) {
                     Ok((OperationResult::SchemasRelationships { value }, _)) => {
@@ -525,7 +614,7 @@ impl Shell {
                     Err(e) => self.databases.error = Some(e.describe()),
                 }
             }
-            (Slot::DatabasePrepare, Reply::Task(result)) => match result {
+            (DatabasesSlot::DatabasePrepare, Reply::Task(result)) => match result {
                 Ok(TaskOutput::Prepared { frame }) => {
                     // Keep the host-staged reference for corrected retries; plaintext was
                     // consumed during preparation and never returns to persisted form state.
@@ -538,7 +627,7 @@ impl Shell {
                         draft.config["credentialRef"] = json!(handle);
                     }
                     if !self.command(
-                        Slot::DatabaseCommand("schemas.configure".into()),
+                        DatabasesSlot::DatabaseCommand("schemas.configure".into()),
                         "Saving database source",
                         "schemas.configure",
                         move |_| frame,
@@ -555,10 +644,10 @@ impl Shell {
                     self.databases.error = Some(error);
                 }
             },
-            (Slot::DatabaseCaPrepare, Reply::Task(result)) => match result {
+            (DatabasesSlot::DatabaseCaPrepare, Reply::Task(result)) => match result {
                 Ok(TaskOutput::Prepared { frame }) => {
                     if !self.command(
-                        Slot::DatabaseCa,
+                        DatabasesSlot::DatabaseCa,
                         "Saving database certificate",
                         "artifacts.save",
                         move |_| frame,
@@ -575,27 +664,30 @@ impl Shell {
                     self.databases.error = Some(error);
                 }
             },
-            (Slot::DatabaseCa, Reply::Command(outcome)) => match ops::saved_artifact(outcome) {
-                Ok(artifact) => {
-                    if let Some(draft) = self.databases.draft.as_mut() {
-                        draft.config["caCertificate"] = json!(artifact.artifact);
-                        self.save_database();
-                    } else {
+            (DatabasesSlot::DatabaseCa, Reply::Command(outcome)) => {
+                match ops::saved_artifact(outcome) {
+                    Ok(artifact) => {
+                        if let Some(draft) = self.databases.draft.as_mut() {
+                            draft.config["caCertificate"] = json!(artifact.artifact);
+                            self.save_database();
+                        } else {
+                            self.databases.busy = false;
+                            self.databases.notice = Some(
+                                "Certificate saved. Open the source editor to attach it.".into(),
+                            );
+                        }
+                    }
+                    Err(Failure::Unknown) => {
+                        self.databases.busy = true;
+                        self.databases.error=Some("Certificate outcome is unconfirmed. Confirm the original outcome before saving.".into());
+                    }
+                    Err(e) => {
                         self.databases.busy = false;
-                        self.databases.notice =
-                            Some("Certificate saved. Open the source editor to attach it.".into());
+                        self.databases.error = Some(e.describe());
                     }
                 }
-                Err(Failure::Unknown) => {
-                    self.databases.busy = true;
-                    self.databases.error=Some("Certificate outcome is unconfirmed. Confirm the original outcome before saving.".into());
-                }
-                Err(e) => {
-                    self.databases.busy = false;
-                    self.databases.error = Some(e.describe());
-                }
-            },
-            (Slot::DatabaseCommand(_), Reply::Command(outcome)) => {
+            }
+            (DatabasesSlot::DatabaseCommand(_), Reply::Command(outcome)) => {
                 self.databases.busy = false;
                 match outcome {
                     Ok(CommandReply::Recorded { receipt, .. }) => match receipt.decision {
@@ -663,7 +755,7 @@ impl Shell {
         None
     }
 }
-impl Shell {
+impl DatabasesCtl<'_, '_> {
     fn begin_database_sync_all(&mut self) {
         self.databases.batch_remaining.clear();
         self.databases.batch_scanning = true;
@@ -700,7 +792,7 @@ impl Shell {
             self.next_database_batch();
         }
     }
-    pub(super) fn next_database_batch(&mut self) {
+    fn next_database_batch(&mut self) {
         if let Some((id, revision)) = self.databases.batch_remaining.pop_front() {
             self.databases.batch_submitted += 1;
             let body = json!({"connectionId":id,"expectedRevision":revision.to_string(),"scope":crate::databases_screen::scope(self.databases.batch_scope.as_deref())});
@@ -717,8 +809,8 @@ impl Shell {
     }
 }
 
-impl Shell {
-    pub(super) fn resume_database_batch(&mut self) {
+impl DatabasesCtl<'_, '_> {
+    fn resume_database_batch(&mut self) {
         if self.databases.batch_scanning {
             self.databases.batch_remaining.clear();
             self.databases.next = None;

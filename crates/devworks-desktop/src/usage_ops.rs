@@ -1,8 +1,21 @@
 //! Typed usage and tariff gateway frames; no price, coverage or budget decisions live here.
 use crate::{
-    backend::Backend,
+    backend::{Backend, screen_slot},
     ops::{self, Failure},
 };
+
+/// The Usage requests the screen waits for. The names are persisted (see [`crate::backend::Slot`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum UsageSlot {
+    Usage(u64, bool),
+    UsageOptions(u64),
+    Prices(u64, bool),
+    PriceProbe(u64),
+    PriceOverride,
+    PriceRefresh,
+    PriceOperation,
+}
+screen_slot!(UsageSlot, Usage);
 use devworks_core::{
     gateway::{CommandOutcome, QueryOutcome},
     protocol::{

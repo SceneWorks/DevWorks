@@ -1,21 +1,76 @@
 //! Native repository navigation retains the owner's pin through every drill-down.
 use super::Shell;
 use crate::{
-    backend::{Reply, Slot},
-    graph_ops,
-    graph_screen::{self, Action, Read},
+    backend::{Reply, Slot, Unresolved},
+    graph_ops::{self, GraphSlot},
+    graph_screen::{self, Action, GraphScreen, Read},
+    memory::RouteMemory,
     ops::{self, Failure},
     route::Route,
+    screen::{Cx, Screen, ScreenContext, ScreenId, controller},
     widgets::Tone,
 };
+use devworks_core::ports::storage::ProjectPurgeClientScope;
 use devworks_core::protocol::data::GraphResult;
 use eframe::egui::Ui;
 use serde_json::json;
 
 impl Shell {
     pub fn open_repository_graph(&mut self, repository: &str, name: &str) {
+        self.route = Route::Repositories;
+        self.index_act(vec![super::indexing::IndexAction::Status(
+            repository.into(),
+        )]);
+        self.with_typed(|graph: &mut GraphScreen, cx| {
+            GraphCtl { graph, cx }.open(repository, name)
+        });
+    }
+}
+
+controller!(GraphCtl, graph: GraphScreen);
+
+/// The repository graph is drawn inside Repositories while it is open.
+impl Screen for GraphScreen {
+    type Slot = GraphSlot;
+    const ID: ScreenId = ScreenId::Graph;
+    fn load(&mut self, _cx: &mut Cx, _route: Route) {}
+    fn refresh(&mut self, _cx: &mut Cx, _route: Route) {}
+    fn apply(&mut self, cx: &mut Cx, slot: GraphSlot, reply: Reply) {
+        if let Some((slot, reply)) = (GraphCtl { graph: self, cx }).apply_graph(slot, reply) {
+            cx.unhandled(&slot, reply);
+        }
+    }
+    fn ui(&mut self, cx: &mut Cx, _route: Route, ui: &mut Ui) {
+        GraphCtl { graph: self, cx }.graph_screen(ui);
+    }
+    fn hosted(&self, route: Route, _mem: &RouteMemory) -> bool {
+        route == Route::Repositories && self.opened
+    }
+    fn restore_in_flight(&mut self, _slot: &GraphSlot, _u: &Unresolved) {
+        // Only a trust change is a command.
+        self.trust_busy = true;
+        self.trust_unknown = true;
+    }
+    fn remove_purged(&mut self, scope: &ProjectPurgeClientScope) {
+        if self.project.as_deref() == Some(scope.project_id.0.as_str()) {
+            *self = Default::default();
+        }
+    }
+    fn context(&self, _route: Route, mem: &RouteMemory) -> ScreenContext {
+        ScreenContext {
+            tab: mem.tab,
+            selection: self
+                .selected
+                .as_ref()
+                .map(|v| v.node_id.as_str().to_owned()),
+        }
+    }
+}
+
+impl GraphCtl<'_, '_> {
+    fn open(&mut self, repository: &str, name: &str) {
         let sequence = self.graph.sequence.wrapping_add(1);
-        self.graph = graph_screen::GraphScreen {
+        *self.graph = graph_screen::GraphScreen {
             opened: true,
             repository: repository.into(),
             name: name.into(),
@@ -32,10 +87,6 @@ impl Shell {
             line_end: "200".into(),
             ..Default::default()
         };
-        self.route = Route::Repositories;
-        self.index_act(vec![super::indexing::IndexAction::Status(
-            repository.into(),
-        )]);
         self.open_graph_read(
             Read::new(
                 "code.overview",
@@ -80,7 +131,7 @@ impl Shell {
         self.graph.loading = true;
         self.graph.error = None;
         if !self.query(
-            Slot::GraphRead(generation),
+            GraphSlot::GraphRead(generation),
             "Reading repository graph",
             read.operation,
             move |b| {
@@ -97,10 +148,10 @@ impl Shell {
             );
         }
     }
-    pub(super) fn apply_graph(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
+    fn apply_graph(&mut self, slot: GraphSlot, reply: Reply) -> Option<(GraphSlot, Reply)> {
         match (slot, reply) {
-            (Slot::GraphRead(generation), _) if generation != self.graph.sequence => {}
-            (Slot::GraphRead(_), Reply::Query(outcome)) => {
+            (GraphSlot::GraphRead(generation), _) if generation != self.graph.sequence => {}
+            (GraphSlot::GraphRead(_), Reply::Query(outcome)) => {
                 self.graph.loading = false;
                 match graph_ops::page(outcome) {
                     Ok(page) => {
@@ -198,7 +249,7 @@ impl Shell {
                     Err(error) => self.graph.error = Some(error.describe()),
                 }
             }
-            (Slot::GraphTrust(id), Reply::Command(outcome)) => {
+            (GraphSlot::GraphTrust(id), Reply::Command(outcome)) => {
                 self.graph.trust_busy = false;
                 match &outcome {
                     Ok(devworks_core::protocol::CommandReply::ReceiptPurged {
@@ -255,7 +306,7 @@ impl Shell {
         }
         None
     }
-    pub(super) fn graph_screen(&mut self, ui: &mut Ui) {
+    fn graph_screen(&mut self, ui: &mut Ui) {
         if let Some(super::indexing::StatusState::Ready(status)) =
             self.projects.indexing.status.get(&self.graph.repository)
         {
@@ -315,7 +366,7 @@ impl Shell {
             client
                 .unresolved()
                 .iter()
-                .any(|pending| matches!(pending.slot, Slot::GraphTrust(_)))
+                .any(|pending| matches!(pending.slot, Slot::Graph(GraphSlot::GraphTrust(_))))
         }) || self.client.as_ref().is_some_and(|client| {
             client
                 .activities()
@@ -446,7 +497,7 @@ impl Shell {
                         .as_ref()
                         .map(|pin| pin.pin_id.as_str().to_owned());
                     if self.command(
-                        Slot::GraphTrust(id),
+                        GraphSlot::GraphTrust(id),
                         "Changing node trust",
                         "code.set_trust",
                         move |b| graph_ops::trust(b, &node, scope, pin, trusted),

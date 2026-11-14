@@ -2146,3 +2146,42 @@ fn an_immediately_exiting_watched_process_keeps_its_exit_status() {
         app.shutdown().await;
     });
 }
+
+/// A stored process effect whose principal kind is not a known name is refused; it is never run
+/// as the host.
+#[test]
+fn a_process_effect_with_an_unrecognised_principal_kind_is_refused() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-kind-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let watcher = create(&app, &ctx, "exit 0", 10_000, "kind-check");
+        let process = watcher["process"]["processId"].as_str().unwrap().to_owned();
+        let mut record = read(&**app.store(), |s| {
+            s.operations().operation(&OperationId(id(&process)))
+        })
+        .expect("the process operation");
+        assert_eq!(
+            record.payload["kind"],
+            json!("Agent"),
+            "the stored kind is the wire name"
+        );
+        record.payload["kind"] = json!("Robot");
+        record.payload["watch"] = Value::Null;
+        let service = app.process_tools().expect("process tools composed");
+        match service.execute(&record) {
+            devworks_core::services::process::tools::EffectOutcome::Failed(reason) => {
+                assert!(reason.contains("principal kind"), "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
+        app.shutdown().await;
+    });
+}

@@ -63,7 +63,7 @@ pub const MANIFEST_DIRECTORIES: [(&str, &[&str]); 3] = [
     ("Carthage", &["Cartfile", "Cartfile.resolved"]),
 ];
 /// Bump when extraction output changes for unchanged input: every unit is re-extracted.
-pub const EXTRACTOR_VERSION: i64 = 1;
+pub const EXTRACTOR_VERSION: i64 = 2;
 
 /// One parsed exclusion.
 #[derive(Clone, Debug, PartialEq, Eq)]
