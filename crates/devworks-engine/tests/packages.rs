@@ -58,7 +58,7 @@ use devworks_extension_protocol::package::{InvocationOutcome, InvocationScope};
 use devworks_extension_protocol::scalars as wire;
 use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -2853,6 +2853,53 @@ fn a_helper_that_stops_reading_is_restarted_through_its_budget_and_then_recorded
     // Restarted through its budget (2 instances), then never again.
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(helper_ready_events(&*a.store, "deaf-pack"), 2);
+}
+
+/// A reconciliation pass that no longer sees a current instance must also see its failure:
+/// otherwise it starts a replacement on the old count, and a spent budget gets one more instance.
+#[test]
+fn an_instance_is_seen_failed_only_once_its_failure_is_counted() {
+    let _s = serial();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    // Every failure is counted and none resets the count, so it never falls behind the failed
+    // instances still listed.
+    a.restart_limit = Some(1000);
+    a.healthy_after = Some(Duration::MAX);
+    a.boot();
+    package(a.install(&a.user, &Spec::new("counted-pack", "1.0.0")));
+    let host = a.app().packages().unwrap().clone();
+    let done = Arc::new(AtomicBool::new(false));
+    let watcher = {
+        let (host, done) = (host.clone(), done.clone());
+        std::thread::spawn(move || {
+            let mut seen = 0u64;
+            while !done.load(Ordering::SeqCst) {
+                let failed = host
+                    .instance_status("counted-pack")
+                    .iter()
+                    .filter(|(_, s)| matches!(s, InstanceStatus::Failed(_)))
+                    .count();
+                if failed > host.failures("counted-pack") as usize {
+                    seen += 1;
+                }
+            }
+            seen
+        })
+    };
+    // Each ignored cancellation fails the instance from this thread while the watcher looks.
+    for _ in 0..5 {
+        a.ready("counted-pack");
+        let h = a
+            .invoke("counted-pack", "stubborn", InvocationKind::Ordinary)
+            .unwrap();
+        assert!(matches!(h.cancel(), InvokeOutcome::Unknown(_)));
+    }
+    done.store(true, Ordering::SeqCst);
+    let seen = watcher.join().unwrap();
+    assert_eq!(
+        seen, 0,
+        "failed instances seen before their failure was counted"
+    );
 }
 
 #[test]
