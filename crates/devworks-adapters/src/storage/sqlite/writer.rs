@@ -173,17 +173,18 @@ impl<'c> TxGuard<'c> {
         db(conn.execute_batch("BEGIN IMMEDIATE"))?;
         Ok(Self { conn, open: true })
     }
-    /// Commits. Any failure here is ambiguous to the caller and reported as `CommitUnknown`.
+    /// Commits. A failed `COMMIT` that leaves the transaction open (a deferred constraint, a
+    /// busy database) is a definite failure: it rolls back and returns the database error. Only
+    /// a failure that ends the transaction itself is ambiguous and reported as `CommitUnknown`.
     pub fn commit(mut self) -> Result<(), StorageError> {
         self.open = false;
         match self.conn.execute_batch("COMMIT") {
             Ok(()) => Ok(()),
-            Err(_) => {
-                if !self.conn.is_autocommit() {
-                    let _ = self.conn.execute_batch("ROLLBACK");
-                }
-                Err(StorageError::CommitUnknown)
+            Err(e) if !self.conn.is_autocommit() => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                db(Err(e))
             }
+            Err(_) => Err(StorageError::CommitUnknown),
         }
     }
     pub fn rollback(mut self) {
@@ -350,4 +351,36 @@ impl Worker {
 /// Reports an outcome; a panicking responder cannot take the write owner down with it.
 fn finish(job: Box<dyn WriteJob>, outcome: Result<(), StorageError>) {
     let _ = catch_unwind(AssertUnwindSafe(move || job.finish(outcome)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TxGuard;
+    use devworks_core::ports::storage::StorageError;
+    use rusqlite::Connection;
+
+    #[test]
+    fn a_deferred_constraint_failure_at_commit_is_a_definite_failure() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE parent (id INTEGER PRIMARY KEY);
+             CREATE TABLE child (parent INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);",
+        )
+        .unwrap();
+        let tx = TxGuard::begin(&conn).unwrap();
+        conn.execute_batch("INSERT INTO child (parent) VALUES (7)")
+            .unwrap();
+        let err = tx.commit().expect_err("the foreign key is violated");
+        assert!(
+            matches!(&err, StorageError::InvalidRecord(m) if m.contains("FOREIGN KEY")),
+            "{err:?}"
+        );
+        // Rolled back: nothing was written and the connection is usable again.
+        assert!(conn.is_autocommit());
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM child", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0);
+    }
 }

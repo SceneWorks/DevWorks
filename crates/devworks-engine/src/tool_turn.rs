@@ -1,5 +1,6 @@
 //! Host-owned framing of provider tool arguments. A provider chooses arguments only; the
 //! selected operation, mode, request identity and contract envelope come from the host.
+use crate::turn_error::artifact_read_fault;
 use crate::{providers::schemas::RegisteredSchemas, runtime::Runtime};
 use devworks_core::{
     admission::{self, Selection},
@@ -387,7 +388,7 @@ pub(crate) fn recover_context_head(
     let artifact: ArtifactRef = serde_json::from_value(artifact_json).map_err(invalid)?;
     let (bytes, provenance) = artifacts
         .read_exact(store, ctx, &artifact, 8 * 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?;
+        .map_err(artifact_read_fault)?;
     let context: ProviderContext = serde_json::from_slice(&bytes).map_err(invalid)?;
     context
         .validate()
@@ -627,7 +628,7 @@ fn continuation_context_at_epoch(
     };
     let base = artifacts
         .read_exact(store, ctx, previous, 8 * 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?
+        .map_err(artifact_read_fault)?
         .0;
     let mut context: ProviderContext = serde_json::from_slice(&base).map_err(invalid)?;
     context.validate().map_err(|e| invalid(format!("{e:?}")))?;
@@ -773,7 +774,7 @@ fn continuation_context_at_epoch(
             TranscriptBody::ToolCallRecorded { tool_call } => {
                 let bytes = artifacts
                     .read_exact(store, ctx, &tool_call.native_item, 1024 * 1024)
-                    .map_err(|_| StorageError::ScopeDenied)?
+                    .map_err(artifact_read_fault)?
                     .0;
                 let native: Value = serde_json::from_slice(&bytes).map_err(invalid)?;
                 let wire_name = native
@@ -819,7 +820,7 @@ fn continuation_context_at_epoch(
                     {
                         let bytes = artifacts
                             .read_exact(store, ctx, &reference, 8 * 1024 * 1024)
-                            .map_err(|_| StorageError::ScopeDenied)?
+                            .map_err(artifact_read_fault)?
                             .0;
                         blocks.push(ResultBlock::Text {
                             text: String::from_utf8(bytes).map_err(invalid)?,
@@ -903,7 +904,7 @@ fn continuation_context_at_epoch(
                 text: String::from_utf8(
                     artifacts
                         .read_exact(store, ctx, &artifact, 8_000)
-                        .map_err(|_| StorageError::ScopeDenied)?
+                        .map_err(artifact_read_fault)?
                         .0,
                 )
                 .map_err(invalid)?,
@@ -1100,7 +1101,7 @@ fn operation_update_text(
     }
     let (bytes, provenance) = artifacts
         .read_exact(store, ctx, artifact, 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?;
+        .map_err(artifact_read_fault)?;
     if provenance["principalKind"] != "Host"
         || provenance["derived"]["kind"] != "ToolOperationUpdate"
         || provenance["derived"]["sessionId"] != session_id.as_str()
@@ -1234,7 +1235,7 @@ pub(crate) fn append_context_fact(
             text: String::from_utf8(
                 artifacts
                     .read_exact(store, ctx, &artifact, 8_000)
-                    .map_err(|_| StorageError::ScopeDenied)?
+                    .map_err(artifact_read_fault)?
                     .0,
             )
             .map_err(invalid)?,
@@ -1260,7 +1261,7 @@ pub(crate) fn append_operation_updates(
 ) -> Result<ArtifactRef, StorageError> {
     let (bytes, provenance) = artifacts
         .read_exact(store, ctx, source, 8 * 1024 * 1024)
-        .map_err(|_| StorageError::ScopeDenied)?;
+        .map_err(artifact_read_fault)?;
     let derived = &provenance["derived"];
     if provenance["principalKind"] != "Host"
         || provenance["producedBy"] != store.info().host_actor.0.as_str()
@@ -1417,7 +1418,7 @@ pub(crate) fn append_operation_updates(
                 text: String::from_utf8(
                     artifacts
                         .read_exact(store, ctx, &artifact, 8_000)
-                        .map_err(|_| StorageError::ScopeDenied)?
+                        .map_err(artifact_read_fault)?
                         .0,
                 )
                 .map_err(invalid)?,

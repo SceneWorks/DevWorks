@@ -1850,6 +1850,56 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
                 .session_turn(&session.id))
             .is_none()
         );
+        // A context blob the store cannot read now is an I/O fault. The turn that reads it ends
+        // retryable, so the activation backs off instead of raising a Deterministic blocker, and
+        // nothing reaches the provider.
+        let (unreadable_head, _, _) = app
+            .recover_native_context_head(&context, &session.id)
+            .unwrap()
+            .unwrap();
+        let digest = unreadable_head.sha256.as_str().to_owned();
+        let blob_dir = fx
+            .h
+            .root
+            .join("artifacts")
+            .join("sha256")
+            .join(&digest[..2]);
+        let held: Vec<_> = std::fs::read_dir(&blob_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(&format!("{digest}.")))
+            })
+            .map(|path| {
+                let aside = path.with_file_name(format!(
+                    "held-{}",
+                    path.file_name().unwrap().to_str().unwrap()
+                ));
+                std::fs::rename(&path, &aside).unwrap();
+                (path, aside)
+            })
+            .collect();
+        assert!(!held.is_empty(), "context head blob in {blob_dir:?}");
+        let (_stop_tx, stop) = tokio::sync::watch::channel(false);
+        let end = NativeAgentTurnExecutor::new(&app)
+            .run(context.clone(), primary.clone(), stop)
+            .await;
+        assert!(
+            matches!(&end, LaunchEnd::Failed(ActivationFailure::Transient(_))),
+            "{end:?}"
+        );
+        assert_eq!(wire_calls.load(Ordering::SeqCst), 2);
+        for (path, aside) in held {
+            std::fs::rename(aside, path).unwrap();
+        }
+        assert!(
+            read(&*fx.store, |snapshot| snapshot
+                .runs()
+                .session_turn(&session.id))
+            .is_none()
+        );
         assert!(
             devworks_engine::agent_turns::publish_first_context(&app, &context, &primary, &route)
                 .is_err()
@@ -5684,6 +5734,68 @@ impl ActivationLauncher for Scripted {
             }
         })
     }
+}
+
+/// Refuses the next `refuse` writes (never admitted: reported busy).
+struct RefuseWrites {
+    inner: Arc<dyn ApplicationStore>,
+    refuse: AtomicUsize,
+}
+impl ApplicationStore for RefuseWrites {
+    fn info(&self) -> StoreInfo {
+        self.inner.info()
+    }
+    fn submit_write(&self, o: WriteOptions, job: Box<dyn WriteJob>) -> Result<(), StorageError> {
+        let refused = self
+            .refuse
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if refused {
+            return Err(StorageError::Busy);
+        }
+        self.inner.submit_write(o, job)
+    }
+    fn read(
+        &self,
+        o: &ReadOptions,
+        w: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.inner.read(o, w)
+    }
+}
+
+/// A busy store when a launch ends delays its record; it does not leave the activation running
+/// until its lease expires.
+#[test]
+fn a_busy_store_does_not_lose_a_finished_activations_end() {
+    let _native_case = native_runtime_case();
+    let h = Harness::new();
+    let inner = h.open();
+    seed(&h);
+    let store = Arc::new(RefuseWrites {
+        inner,
+        refuse: AtomicUsize::new(0),
+    });
+    let fx = Fx::over(h, store.clone());
+    let launcher = Arc::new(Gated::default());
+    let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let rt = runtime();
+    let tick = rt.block_on(sup.tick()).unwrap();
+    let activation = tick.launched[0].clone();
+    store.refuse.store(2, Ordering::SeqCst);
+    launcher.release(0);
+    rt.block_on(within("the launch ends", async {
+        while !sup.launched().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }));
+    assert_eq!(store.refuse.load(Ordering::SeqCst), 0);
+    let a = fx.activation(&activation);
+    assert_eq!(
+        (a.phase, a.outcome),
+        (ActivationPhase::Stopped, Some(ActivationOutcome::Cancelled))
+    );
 }
 
 #[test]

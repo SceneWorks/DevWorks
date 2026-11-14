@@ -114,28 +114,27 @@ pub(crate) fn capture_managed_file(
     })
 }
 
+use devworks_core::ports::managed_files::PurgeFileRecords;
 use devworks_core::ports::project_purge::{
     ProjectPurgeFiles, PurgeFileSelection, PurgeFileSnapshot,
 };
-use devworks_core::ports::storage::{ApplicationStore, ReadOptions, read_snapshot};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Exact managed roots of the native application; no caller filesystem path is accepted.
+/// Registrations and the current store binding come from the caller's `PurgeFileRecords`.
 pub struct NativeProjectPurgeFiles {
     data_root: PathBuf,
     cache_root: PathBuf,
     paste_root: Option<PathBuf>,
-    store: Arc<dyn ApplicationStore>,
     read_fence: Option<Arc<dyn devworks_core::ports::project_purge::ProjectPurgeReadFence>>,
 }
 impl NativeProjectPurgeFiles {
-    pub fn new(data_root: PathBuf, cache_root: PathBuf, store: Arc<dyn ApplicationStore>) -> Self {
+    pub fn new(data_root: PathBuf, cache_root: PathBuf) -> Self {
         Self {
             data_root,
             cache_root,
             paste_root: None,
-            store,
             read_fence: None,
         }
     }
@@ -149,41 +148,6 @@ impl NativeProjectPurgeFiles {
     pub fn with_paste_root(mut self, root: PathBuf) -> Self {
         self.paste_root = Some(root);
         self
-    }
-    fn binding(&self, project_id: devworks_core::protocol::ProjectId) -> PurgeFileSelection {
-        let info = self.store.info();
-        PurgeFileSelection {
-            project_id,
-            store_id: info.store_id,
-            restore_epoch: info.restore_epoch,
-            owners: Vec::new(),
-        }
-    }
-    fn registered(
-        &self,
-        owner: &PurgeFileOwner,
-        binding: &PurgeFileSelection,
-    ) -> Result<Option<PurgeFileWitness>, PurgeFileFault> {
-        let file_id = match owner {
-            PurgeFileOwner::DiagnosticExport { file_id }
-            | PurgeFileOwner::ClientPaste { file_id }
-            | PurgeFileOwner::ClientStaging { file_id } => file_id,
-            _ => return Ok(None),
-        };
-        let file = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |r| {
-            r.projects()
-                .project_managed_file(&binding.project_id, file_id)
-        })
-        .map_err(|_| PurgeFileFault::Io)?
-        .ok_or(PurgeFileFault::Unattributed)?;
-        if file.witness.owner != *owner
-            || file.witness.project_id != binding.project_id
-            || file.witness.store_id != binding.store_id
-            || file.witness.restore_epoch != binding.restore_epoch
-        {
-            return Err(PurgeFileFault::Unattributed);
-        }
-        Ok(Some(file.witness))
     }
     fn root(&self, owner: &PurgeFileOwner) -> Result<Option<PathBuf>, PurgeFileFault> {
         let (base, parts): (PathBuf, Vec<String>) = match owner {
@@ -230,6 +194,7 @@ impl NativeProjectPurgeFiles {
         &self,
         owner: &PurgeFileOwner,
         binding: &PurgeFileSelection,
+        records: &dyn PurgeFileRecords,
         root: &Path,
     ) -> Result<Vec<String>, PurgeFileFault> {
         let exact = match owner {
@@ -243,7 +208,8 @@ impl NativeProjectPurgeFiles {
             | PurgeFileOwner::ClientStaging { file_id } => {
                 let _ = file_id;
                 Some(
-                    self.registered(owner, binding)?
+                    records
+                        .registered(owner, binding)?
                         .ok_or(PurgeFileFault::Unattributed)?
                         .relative_entry,
                 )
@@ -300,7 +266,7 @@ impl NativeProjectPurgeFiles {
         binding: &PurgeFileSelection,
         relative: &str,
         owner: &PurgeFileOwner,
-        verify_registration: bool,
+        verify_registration: Option<&dyn PurgeFileRecords>,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<Option<PurgeFileWitness>, PurgeFileFault> {
         use devworks_core::authority::destructive::{EntryKind, FilesystemResolver};
@@ -318,8 +284,8 @@ impl NativeProjectPurgeFiles {
         };
         if metadata.is_file() && !super::reparse(&metadata) {
             let witness = capture_managed_file(root, binding, relative, owner.clone(), stopped)?;
-            if verify_registration
-                && self
+            if let Some(records) = verify_registration
+                && records
                     .registered(owner, binding)?
                     .is_some_and(|published| published != witness)
             {
@@ -496,6 +462,7 @@ impl ProjectPurgeFiles for NativeProjectPurgeFiles {
     fn client_keepers(
         &self,
         selection: &PurgeFileSelection,
+        records: &dyn PurgeFileRecords,
         paths: &[PathBuf],
     ) -> Result<Vec<PurgeFileOwner>, PurgeFileFault> {
         if paths.is_empty() {
@@ -511,7 +478,7 @@ impl ProjectPurgeFiles for NativeProjectPurgeFiles {
                 continue;
             };
             let root = std::fs::canonicalize(&root).map_err(|_| PurgeFileFault::Io)?;
-            for relative in self.candidates(owner, selection, &root)? {
+            for relative in self.candidates(owner, selection, records, &root)? {
                 let candidate = joined_relative(&root, &relative)?;
                 if paths
                     .iter()
@@ -528,9 +495,10 @@ impl ProjectPurgeFiles for NativeProjectPurgeFiles {
     fn inventory(
         &self,
         selection: &PurgeFileSelection,
+        records: &dyn PurgeFileRecords,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<PurgeFileSnapshot, PurgeFileFault> {
-        let expected = self.binding(selection.project_id.clone());
+        let expected = records.binding(selection.project_id.clone());
         if expected.store_id != selection.store_id
             || expected.restore_epoch != selection.restore_epoch
         {
@@ -554,10 +522,10 @@ impl ProjectPurgeFiles for NativeProjectPurgeFiles {
             let Some(root) = self.root(owner)? else {
                 continue;
             };
-            let mut pending = self.candidates(owner, selection, &root)?;
+            let mut pending = self.candidates(owner, selection, records, &root)?;
             while let Some(relative) = pending.pop() {
                 let Some(witness) =
-                    self.capture_entry(&root, selection, &relative, owner, true, stopped)?
+                    self.capture_entry(&root, selection, &relative, owner, Some(records), stopped)?
                 else {
                     continue;
                 };
@@ -597,7 +565,7 @@ impl ProjectPurgeFiles for NativeProjectPurgeFiles {
                     selection,
                     &witness.relative_entry,
                     &witness.owner,
-                    true,
+                    Some(records),
                     stopped,
                 )?
                 .as_ref()
@@ -616,9 +584,10 @@ impl ProjectPurgeFiles for NativeProjectPurgeFiles {
     fn remove_reviewed(
         &self,
         witness: &PurgeFileWitness,
+        records: &dyn PurgeFileRecords,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<(), PurgeFileFault> {
-        let mut work = || self.remove_bound(witness, stopped);
+        let mut work = || self.remove_bound(witness, records, stopped);
         if matches!(
             witness.owner,
             PurgeFileOwner::Blob { .. } | PurgeFileOwner::Quarantine { .. }
@@ -637,12 +606,13 @@ impl NativeProjectPurgeFiles {
     fn remove_bound(
         &self,
         witness: &PurgeFileWitness,
+        records: &dyn PurgeFileRecords,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<(), PurgeFileFault> {
         if !owner_relative(&witness.owner, &witness.relative_entry) {
             return Err(PurgeFileFault::Unattributed);
         }
-        let binding = self.binding(witness.project_id.clone());
+        let binding = records.binding(witness.project_id.clone());
         if binding.store_id != witness.store_id || binding.restore_epoch != witness.restore_epoch {
             return Err(PurgeFileFault::Changed);
         }
@@ -658,10 +628,7 @@ impl NativeProjectPurgeFiles {
                 | PurgeFileOwner::ClientPaste { .. }
                 | PurgeFileOwner::ClientStaging { .. }
         ) {
-            read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
-                read.projects().purge_file_effect_reviewed(witness)
-            })
-            .map_err(|_| PurgeFileFault::Io)?
+            records.effect_reviewed(witness)?
         } else {
             false
         };
@@ -670,7 +637,7 @@ impl NativeProjectPurgeFiles {
             &binding,
             &witness.relative_entry,
             &witness.owner,
-            !reviewed,
+            (!reviewed).then_some(records),
             stopped,
         )? {
             // The reviewed children are intentionally removed first. Directory identity
