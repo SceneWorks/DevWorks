@@ -8499,5 +8499,8 @@ mod mcp_agent_tool;
 #[path = "runs/approval_wait.rs"]
 mod approval_wait;
 
+#[path = "runs/compaction.rs"]
+mod compaction;
+
 #[path = "runs/epoch_request.rs"]
 mod epoch_request;
