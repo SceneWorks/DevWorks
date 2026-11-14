@@ -80,6 +80,13 @@ pub struct InstallProjectDependenciesInput {
     pub expected_revision: Revision,
     pub manifest: ArtifactRef,
     pub profile: ToolProfile,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 8))]
+    pub allow_scripts: Option<bool>,
 }
 impl Check for InstallProjectDependenciesInput {
     fn check(&self) -> Result<(), String> {
@@ -87,11 +94,16 @@ impl Check for InstallProjectDependenciesInput {
         self.expected_revision.check()?;
         self.manifest.check()?;
         self.profile.check()?;
+        self.allow_scripts.check()?;
         Ok(())
     }
 }
 impl Revisioned for InstallProjectDependenciesInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 8 {
+            self.allow_scripts = None;
+        }
+    }
 }
 
 /// `process.request_system_install` Command input.

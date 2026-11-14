@@ -18,12 +18,8 @@ use std::time::Duration;
 impl Shell {
     /// Opens Help on the topics of `screen` (a screen or settings-category ID).
     pub fn open_help_context(&mut self, screen: &str) {
-        let online = self.online();
-        let mut cx = Cx::new(self.client.as_mut(), online, &mut self.status, self.route);
-        self.help.open_context(&mut cx, screen);
-        let effects = cx.into_effects();
+        self.with_typed(|help: &mut HelpScreen, cx| help.open_context(cx, screen));
         self.route = Route::Help;
-        self.run_effects(effects);
     }
 }
 

@@ -30,6 +30,9 @@ impl Fx {
     fn new() -> Self {
         let h = Harness::new();
         let store = h.open();
+        Self::over(h, store)
+    }
+    fn over(h: Harness, store: Arc<dyn ApplicationStore>) -> Self {
         rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap().execute_batch("INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) VALUES('project','P','Active',1,1,0);").unwrap();
         let user = principal(&*store, "user", PrincipalKind::Human);
         let scope = Arc::new(ScriptedScope::new());
@@ -756,7 +759,7 @@ fn source_filters_secondary_keys_and_typed_no_work_are_durable_without_allocatin
         f.next3(json!({"another":true,"label":"absent","idempotencyKey":"empty-selection"})),
     );
     assert_eq!(none["kind"], "NoEligible");
-    assert_eq!(none["reason"], "no_ready_work");
+    assert_eq!(none["reason"], "filter");
     assert_eq!(none["reused"], false);
     let replay = outcome(
         f.next3(json!({"another":true,"label":"absent","idempotencyKey":"empty-selection"})),
@@ -952,5 +955,156 @@ fn locally_blocked_features_allocate_independent_tasks_and_dispatch_rechecks_new
     ));
 }
 
+impl Fx {
+    fn label(&self, work: &Id, revision: i64) {
+        applied(self.command3("issues.edit",json!({"workId":work,"expectedRevision":revision.to_string(),"changes":{"labels":["Urgent"]}})));
+    }
+    fn pause(&self, work: &Id) {
+        let c = read(&*self.store, |s| {
+            control_of(s.runs(), &RootId(work.clone()))
+        });
+        applied(self.command(
+            "runs.pause",
+            json!({"rootId":work,"expectedControlRevision":c.revision.to_string()}),
+        ));
+    }
+    /// An open blocking question to the project's human about `work`.
+    fn ask(&self, work: &str) {
+        rusqlite::Connection::open(self.h.root.join("workspace.sqlite"))
+            .unwrap()
+            .execute(
+                "INSERT INTO agent_messages(id,project_id,channel,message_class,body,attachments_json,\
+                 state,blocking,revision,created_at,from_actor_id,target_item_id,to_human) \
+                 VALUES(?1,'project','Human','Question','Which way?','[]','Open',1,1,0,?2,?3,1)",
+                rusqlite::params![
+                    format!("question-{work}"),
+                    self.user.principal().0.as_str(),
+                    work
+                ],
+            )
+            .unwrap();
+    }
+    fn next_task(&self, feature: &str) -> Value {
+        outcome(self.command3("next_work.claim_feature_task",json!({"rootId":feature,"expectedTaskSetRevision":self.queue(Some(feature)).to_string(),"leaseMs":"1000"})))
+    }
+}
+
+#[test]
+fn no_eligible_work_reports_each_cause_that_held_ready_work_back() {
+    let f = Fx::new();
+    let paused = f.issue("paused", 9);
+    f.label(&paused, 1);
+    f.pause(&paused);
+    let prerequisite = f.issue("prerequisite", 1);
+    applied(f.command("tasks.move",json!({"taskId":prerequisite,"expectedRevision":"1","statusId":"project-backlog","expectedWorkflowRevision":"1"})));
+    let dependent = f.issue("dependent", 8);
+    applied(f.command("tasks.dependency_links",json!({"taskId":dependent,"expectedRevision":"1","replacement":{"edges":[{"predecessor":prerequisite,"successor":dependent}]}})));
+    let revision = read(&*f.store, |s| s.work().work(&dependent))
+        .unwrap()
+        .revision;
+    f.label(&dependent, revision);
+    let unlabelled = f.issue("unlabelled", 7);
+    for (feature, priority) in [("unplanned", 6), ("unready", 5)] {
+        f.seed(feature, None, "feature", priority);
+        write(&*f.store, move |tx| {
+            let mut w = tx.work().work(&id(feature))?.unwrap();
+            w.brief = json!({"labels":["Urgent"]});
+            w.revision += 1;
+            tx.work().update_work(&w, 1)
+        })
+        .unwrap();
+    }
+    let unready = RootId(id("unready"));
+    f.scope.approve(&unready, 1, &[]);
+    f.scope.set_readiness(
+        &unready,
+        None,
+        devworks_core::services::runs::scope::Readiness::Blocked {
+            finding: "needs-answer".into(),
+        },
+    );
+    let none = outcome(f.next3(json!({"label":"urgent"})));
+    assert_eq!(none["kind"], "NoEligible");
+    assert_eq!(none["reason"], "pause,prerequisite,plan,readiness,filter");
+    let questioned = f.issue("questioned", 4);
+    f.label(&questioned, 1);
+    f.ask(questioned.as_str());
+    let none = outcome(f.next3(json!({"label":"urgent"})));
+    assert_eq!(
+        none["reason"],
+        "pause,prerequisite,plan,readiness,question,filter"
+    );
+    let any = outcome(f.next3(json!({})));
+    assert_eq!(any["claim"]["workId"], json!(unlabelled));
+}
+
+#[test]
+fn a_blocking_question_holds_the_work_it_names_and_not_independent_work() {
+    let f = Fx::new();
+    f.seed("feature", None, "feature", 1);
+    f.seed("asked", Some("feature"), "task", 10);
+    f.seed("independent", Some("feature"), "task", 1);
+    let root = RootId(id("feature"));
+    f.scope.approve(&root, 1, &[]);
+    f.ask("asked");
+    assert_eq!(claim(f.claim())["workId"], "feature");
+    f.start(&root.0);
+    let _ = f.session(&root.0);
+    let first = f.next_task("feature");
+    assert_eq!(first["claim"]["workId"], "independent");
+    applied(f.command(
+        "next_work.release_claim",
+        json!({"claimId":first["claim"]["id"],"expectedFence":first["claim"]["fence"]}),
+    ));
+    f.ask("feature");
+    let none = f.next_task("feature");
+    assert_eq!(none["kind"], "NoEligible");
+    assert_eq!(none["reason"], "question");
+}
+
 #[path = "allocations/handoff.rs"]
 mod handoff;
+
+/// A next_work claim reads the live claims and actionable work: it costs the same behind 10 or
+/// 100 completed issues, each with a released claim.
+#[test]
+fn a_next_work_claim_costs_the_same_behind_tenfold_completed_history() {
+    let h = Harness::new();
+    let counted = h.open_counted();
+    let f = Fx::over(h, counted.store.clone());
+    let target = f.issue("target", 1);
+    let db = rusqlite::Connection::open(f.h.root.join("workspace.sqlite")).unwrap();
+    let mut done = 0;
+    let mut complete = |to: usize| {
+        for n in done..to {
+            let name = format!("done-{n:04}");
+            f.seed(&name, None, TASK, 10);
+            db.execute(
+                "UPDATE work_items SET status_id='project-done' WHERE id=?1",
+                [&name],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO allocation_claims(id,project_id,root_id,work_id,kind,queue_key,owner_id,ingress_namespace,invocation_id,fence,expires_at,state,revision,work_revision,root_control_revision,queue_revision,created_at) VALUES(?1,'project',?2,?2,'task','project','user','history',?1,1,0,'Released',2,1,1,1,0)",
+                [format!("released-{n:04}"), name],
+            )
+            .unwrap();
+        }
+        done = to;
+    };
+    let measure = || {
+        let (reply, work) = counted.count(|| f.claim());
+        let claimed = claim(reply);
+        assert_eq!(claimed["workId"], json!(target));
+        applied(f.command(
+            "next_work.release_claim",
+            json!({"claimId": claimed["id"], "expectedFence": claimed["fence"]}),
+        ));
+        work
+    };
+    complete(10);
+    let small = measure();
+    complete(100);
+    let large = measure();
+    assert_no_growth("next_work claim", small, large);
+}

@@ -298,17 +298,21 @@ impl AttemptHost {
         if failure.is_some() {
             outcome = source.start_failure_outcome();
         }
+        // Custody is checked once, before the first frame. While the stream runs the owner's
+        // registry polls `cancellation_required` and cancels this handle, so a streamed frame
+        // costs no store read.
+        if failure.is_none() {
+            match self.interrupted(&attempt) {
+                Err(error) => {
+                    failure = Some(error);
+                    cancellation.cancel();
+                }
+                Ok(true) => cancellation.cancel(),
+                Ok(false) => {}
+            }
+        }
         if failure.is_none() {
             loop {
-                match self.interrupted(&attempt) {
-                    Err(error) => {
-                        failure = Some(error);
-                        cancellation.cancel();
-                        break;
-                    }
-                    Ok(true) => cancellation.cancel(),
-                    Ok(false) => {}
-                }
                 if cancellation.is_cancelled() {
                     break;
                 }
@@ -543,9 +547,11 @@ pub fn recovery_candidates(
     after: Option<&Id>,
     limit: u16,
 ) -> Result<RecoveryCandidates, StorageError> {
+    // Only attempts still holding local custody can need recovery; settled history is skipped
+    // by the store's index instead of being paged and discarded here.
     let rows = read
         .usage()
-        .inference_attempts(&UsageAttemptFilter::default(), after, limit)?
+        .unquiesced_attempts(after, limit)?
         .into_iter()
         .map(|a| {
             let balance = read.usage().attempt_balance(&a.attempt_id)?;

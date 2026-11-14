@@ -1,4 +1,4 @@
-name: Native SQLServer metadata
+name: Native schema metadata
 on:
   pull_request:
     paths:
@@ -9,6 +9,7 @@ on:
       - 'crates/devworks-core/src/services/schemas/**'
       - 'crates/devworks-core/src/ports/database.rs'
       - 'tools/ci/schema_sqlserver_fixture.py'
+      - 'tools/ci/schema_metadata_fixture.py'
       - 'docs/architecture/validation/schema-sources/**'
       - 'Cargo.lock'
       - '.github/workflows/schema-metadata.yml'
@@ -23,10 +24,16 @@ concurrency:
   group: schema-metadata-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  # One job per qualified server version. Each version list must match the reader's
+  # accepted set in crates/devworks-adapters/src/database/network/.
   sqlserver:
-    name: SQLServer16 native x86 metadata and TLS
+    name: SQLServer ${{ matrix.version }} native x86 metadata and TLS
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['2017', '2019', '2022', '2025']
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install pinned Rust toolchain
@@ -40,4 +47,35 @@ jobs:
       - name: Qualify actual isolated SQLServer without learned inference
         env:
           CARGO_BUILD_JOBS: '2'
-        run: python3 tools/ci/schema_sqlserver_fixture.py
+        run: python3 tools/ci/schema_sqlserver_fixture.py --version '${{ matrix.version }}'
+  network:
+    name: ${{ matrix.label }} native metadata and TLS
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {engine: postgres, version: '14', label: PostgreSQL 14}
+          - {engine: postgres, version: '15', label: PostgreSQL 15}
+          - {engine: postgres, version: '16', label: PostgreSQL 16}
+          - {engine: postgres, version: '17', label: PostgreSQL 17}
+          - {engine: postgres, version: '18', label: PostgreSQL 18}
+          - {engine: mysql, version: '8.4', label: MySQL 8.4}
+          - {engine: mysql, version: '9.7', label: MySQL 9.7}
+          - {engine: mariadb, version: '10.11', label: MariaDB 10.11}
+          - {engine: mariadb, version: '11.4', label: MariaDB 11.4}
+          - {engine: mariadb, version: '11.8', label: MariaDB 11.8}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+        with:
+          shared-key: test-foundation
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Qualify actual isolated server without learned inference
+        env:
+          CARGO_BUILD_JOBS: '2'
+        run: python3 tools/ci/schema_metadata_fixture.py '${{ matrix.engine }}' '${{ matrix.version }}'

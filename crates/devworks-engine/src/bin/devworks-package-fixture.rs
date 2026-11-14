@@ -28,8 +28,11 @@
 //! `config` (reports the configuration `host.activate` delivered as progress `config:<json>`,
 //! or `config:none`), `late-state` (reads its state, answers the invocation, then tries a
 //! compare-and-set under the finished invocation's token and writes the answer's class to
-//! `devworks-fixture-<package>-late-state` in the temporary directory) and `crash` (exits 5
-//! mid-invocation).
+//! `devworks-fixture-<package>-late-state` in the temporary directory), `crash` (exits 5
+//! mid-invocation) and `call` (makes each `broker.call` of `calls` in
+//! `devworks-fixture-<package>-call.json` in the temporary directory, `"$input"` naming its input
+//! and `"$last"` the previous result, reports `call:<actionKey>:<class>` as progress and completes
+//! with the results, plus a forged artifact when `forge` and its input when `returnInput`).
 use devworks_extension_protocol::frame::{MAX_FRAME_BYTES, read_frame, write_frame};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -298,6 +301,48 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
                 &id,
                 &inv,
                 json!({"kind": "Completed", "artifacts": []}),
+            );
+        }
+        "call" => {
+            let path = std::env::temp_dir().join(format!("devworks-fixture-{package}-call.json"));
+            let script: Value = std::fs::read(&path)
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or(json!({}));
+            let mut produced = Vec::new();
+            let calls = script["calls"].as_array().cloned().unwrap_or_default();
+            for (n, step) in calls.iter().enumerate() {
+                let mut call = step["call"].clone();
+                // `"$input"` names this invocation's input; `"$last"` the previous result.
+                for (k, v) in call.as_object().cloned().unwrap_or_default() {
+                    if v == json!("$input") {
+                        call[&k] = inv["input"].clone();
+                    } else if v == json!("$last") {
+                        call[&k] = produced.last().cloned().unwrap_or(Value::Null);
+                    }
+                }
+                let params = json!({"processSessionId": inv["processSessionId"],
+                    "invocationId": inv["invocationId"], "invocationToken": inv["invocationToken"],
+                    "actionKey": step["actionKey"], "call": call});
+                let r = st.call("broker.call", params);
+                let key = step["actionKey"].as_str().unwrap_or("-");
+                st.progress(&inv, n as u64 + 1, &format!("call:{key}:{}", class(&r)));
+                if let Some(a) = r["result"].get("artifact") {
+                    produced.push(a.clone());
+                }
+            }
+            if script["forge"] == json!(true) {
+                produced.push(json!({"artifactId": "forged", "versionId": "forged",
+                    "sha256": "f".repeat(64), "byteLength": "1", "mediaType": "application/json"}));
+            }
+            if script["returnInput"] == json!(true) {
+                produced.push(inv["input"].clone());
+            }
+            finished(
+                &st,
+                &id,
+                &inv,
+                json!({"kind": "Completed", "artifacts": produced}),
             );
         }
         _ => finished(

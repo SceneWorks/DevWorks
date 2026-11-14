@@ -3,9 +3,32 @@
 //! read through `artifacts.read` and stored through `artifacts.save`. Nothing here decides
 //! anything the instruction service decides.
 use crate::{
-    backend::{Backend, TaskOutput},
+    backend::{Backend, TaskOutput, screen_slot},
     ops::{self, Failure},
 };
+
+/// The Roles and skills requests the panel waits for. The names are persisted (see
+/// [`crate::backend::Slot`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum InstructionsSlot {
+    /// Settings → Roles and skills: a discovery page (load generation).
+    InstructionSkills(u64),
+    /// The active record of one role (role item ID).
+    InstructionRole(String),
+    /// A history page of the selected item (detail generation).
+    InstructionHistory(u64),
+    /// The text of the shown revision (detail generation).
+    InstructionText(u64),
+    /// A resources page of the selected skill (detail generation).
+    InstructionResources(u64),
+    /// Staging a draft's text (change token).
+    InstructionPrepare(u64),
+    /// The draft text's `artifacts.save` (change token).
+    InstructionArtifact(u64),
+    /// The `*.draft` / `*.rollback` command (change token).
+    InstructionCommand(u64),
+}
+screen_slot!(InstructionsSlot, Instructions);
 use devworks_core::{
     gateway::{CommandOutcome, QueryOutcome},
     protocol::{

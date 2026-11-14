@@ -218,7 +218,7 @@ impl SchemaService {
             test_only,
             source_context: approvals::save_source_context(ctx),
             actor: ctx.principal().clone(),
-            actor_kind: format!("{:?}", ctx.principal_kind()),
+            actor_kind: ctx.principal_kind().as_str().to_string(),
             store_id: ctx.store_id().clone(),
             restore_epoch: ctx.restore_epoch().get(),
             fences: command.authorization().fences().to_vec(),
@@ -586,7 +586,7 @@ fn current(
         .actors()
         .actor_kind(&job.actor)?
         .ok_or(StorageError::ScopeDenied)?;
-    if format!("{kind:?}") != job.actor_kind {
+    if kind.as_str() != job.actor_kind {
         return Err(StorageError::ScopeDenied);
     }
     let ctx = approvals::restore_source_context(tx.store(), &job.actor, kind, &job.source_context)?;

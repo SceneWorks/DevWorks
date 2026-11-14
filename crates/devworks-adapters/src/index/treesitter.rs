@@ -4,25 +4,23 @@
 //! Terraform/HCL, Ansible/YAML, ColdFusion). Each extractor reports what it supports in its
 //! [`LanguageInfo::capabilities`]; nothing here claims compiler semantics.
 //!
-//! The `LanguageSpecs` languages run the retained generic walk ([`spec`], with the Swift call-site
-//! reader in [`swift`]): retained labels, qualified names (without the `{repository}:{path}`
-//! prefix), properties, call receivers and confidences, argument labels, ABI, Swift inheritance
-//! and the Swift tree-sitter fallback marking. C#, JavaScript and TypeScript (retained by other
-//! CodeGraph extractors, not by `LanguageSpecs`) keep the structural walk below: a `File` node
-//! (index 0), definitions with 1-based spans and qualified names (`Outer.Inner.member`),
-//! `DEFINES`/`DEFINES_METHOD` containment, `IMPORTS` to the imported module name, `CALLS` from the
-//! enclosing callable, and inheritance (`INHERITS`/`IMPLEMENTS`). A relationship whose target is
-//! a unique definition of the same file is `Inferred` locally; any other is a symbol for the
-//! indexer to link or leave `Unresolved`.
+//! Every grammar language runs the one table-driven walk ([`spec`], with the Swift call-site
+//! reader in [`swift`]): a `File` node (index 0), definitions with 1-based spans and retained
+//! qualified names (without the `{repository}:{path}` prefix), properties, `DEFINES`/
+//! `DEFINES_METHOD` containment, `IMPORTS`, `CALLS` from the enclosing callable with receivers
+//! and confidences, argument labels, ABI, inheritance and the Swift tree-sitter fallback
+//! marking. C#, JavaScript and TypeScript (retained by other CodeGraph extractors, not by
+//! `LanguageSpecs`) are `native` specs: the same walk without the baseline-extension markers.
+//! A relationship whose target is a unique definition of the same file is `Inferred` locally;
+//! any other is a symbol for the indexer to link or leave `Unresolved`.
 //!
 //! Parsing polls the run's stop signal and a per-file budget through Tree-sitter's progress
 //! callback, so a cancelled run stops within one callback interval. Walks are iterative
 //! (no recursion on deep trees) and bounded in nodes and edges.
 use devworks_core::ports::indexing::{
-    EdgeTarget, ExtractFault, ExtractedEdge, ExtractedNode, FileExtract, LanguageInfo,
-    LanguageMode, Resolution, Span, StructuralParser,
+    ExtractFault, ExtractedNode, FileExtract, LanguageInfo, LanguageMode, StructuralParser,
 };
-use serde_json::{Map, Value, json};
+use serde_json::json;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
@@ -32,12 +30,12 @@ mod spec;
 mod swift;
 
 /// Most nodes and edges kept per file (beyond them the file is recorded partial).
-const MAX_NODES: usize = 10_000;
-const MAX_EDGES: usize = 40_000;
+pub(super) const MAX_NODES: usize = 10_000;
+pub(super) const MAX_EDGES: usize = 40_000;
 /// Deepest syntax nesting walked.
 const MAX_DEPTH: usize = 2_000;
 
-/// The structural walk of C#, JavaScript and TypeScript.
+/// What the C#, JavaScript and TypeScript specs read.
 const FULL_INHERIT: &[&str] = &[
     "definitions",
     "spans",
@@ -513,29 +511,30 @@ impl StructuralParser for TreeSitterParser {
             });
         };
         let root = tree.root_node();
-        let mut w = Walk::new(path, source, root, language);
+        let mut x = file_extract(path, root, language);
         match grammar_id {
-            "sql" => {
-                super::domain::run(&mut w.out, stop, |o| super::domain::sql::extract(source, o))?
-            }
-            "terraform" => super::domain::run(&mut w.out, stop, |o| {
+            "sql" => super::domain::run(&mut x, stop, |o| super::domain::sql::extract(source, o))?,
+            "terraform" => super::domain::run(&mut x, stop, |o| {
                 super::domain::hcl::extract(path, source, o)
             })?,
-            "yaml" => super::domain::run(&mut w.out, stop, |o| {
+            "yaml" => super::domain::run(&mut x, stop, |o| {
                 super::domain::ansible::extract(path, source, root, repository, o)
             })?,
-            "coldfusion" | "cfscript" => super::domain::run(&mut w.out, stop, |o| {
+            "coldfusion" | "cfscript" => super::domain::run(&mut x, stop, |o| {
                 super::domain::cfml::extract(path, source, o)
             })?,
             _ => match spec::spec(grammar_id) {
-                Some(s) => spec::extract(s, source, path, root, &mut w.out, stop, deadline)?,
-                None => w.walk(root, grammar_id, stop, deadline)?,
+                Some(s) => spec::extract(s, source, path, root, &mut x, stop, deadline)?,
+                None => {
+                    return Err(ExtractFault::Failed(format!(
+                        "no extractor for {grammar_id}"
+                    )));
+                }
             },
         }
         if stop() {
             return Err(ExtractFault::Cancelled);
         }
-        let mut x = w.finish();
         if matches!(grammar_id, "rust" | "go") {
             let e = super::endpoints::extract(root, source, path, grammar_id == "rust");
             let base = x.nodes.len();
@@ -576,540 +575,21 @@ fn cfscript(source: &[u8]) -> bool {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The generic walk
+// The file node
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Receiver {
-    None,
-    SelfRef,
-    Other,
-}
-
-struct Call {
-    caller: usize,
-    class: Option<usize>,
-    name: String,
-    receiver: Receiver,
-}
-
-#[derive(Clone)]
-struct Ctx {
-    container: usize,
-    class: Option<usize>,
-    function: Option<usize>,
-    prefix: String,
-    depth: usize,
-}
-
-struct Walk<'s> {
-    src: &'s [u8],
-    out: FileExtract,
-    calls: Vec<Call>,
-    full: bool,
-}
-
-fn span(n: Node<'_>) -> Span {
-    let s = n.start_position();
-    let e = n.end_position();
-    Span {
-        start_line: s.row as u32 + 1,
-        start_column: s.column as u32 + 1,
-        end_line: e.row as u32 + 1,
-        end_column: e.column as u32 + 1,
-        start_byte: n.start_byte() as u32,
-        end_byte: n.end_byte() as u32,
-    }
-}
-fn props(pairs: &[(&str, Value)]) -> Map<String, Value> {
-    pairs
-        .iter()
-        .map(|(k, v)| ((*k).to_owned(), v.clone()))
-        .collect()
-}
-
-impl<'s> Walk<'s> {
-    fn new(path: &str, src: &'s [u8], root: Node<'_>, language: &str) -> Self {
-        let name = path.rsplit('/').next().unwrap_or(path).to_owned();
-        let mut out = FileExtract::default();
-        out.nodes.push(ExtractedNode {
-            kind: "File".into(),
-            name,
-            qualified_name: path.to_owned(),
-            span: span(root),
-            parent: None,
-            properties: props(&[("language", json!(language))]),
-        });
-        out.parse_errors = count_errors(root);
-        Self {
-            src,
-            out,
-            calls: Vec::new(),
-            full: false,
-        }
-    }
-    fn text(&self, n: Node<'_>) -> String {
-        String::from_utf8_lossy(&self.src[n.start_byte()..n.end_byte().min(self.src.len())])
-            .into_owned()
-    }
-    fn short(&self, n: Node<'_>) -> String {
-        let t = self.text(n);
-        let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
-        t.chars().take(256).collect()
-    }
-    fn node(
-        &mut self,
-        kind: &str,
-        name: &str,
-        qualified: &str,
-        n: Node<'_>,
-        parent: usize,
-        properties: Map<String, Value>,
-    ) -> Option<usize> {
-        if self.out.nodes.len() >= MAX_NODES {
-            self.full = true;
-            return None;
-        }
-        self.out.nodes.push(ExtractedNode {
-            kind: kind.into(),
-            name: name.chars().take(512).collect(),
-            qualified_name: qualified.chars().take(2048).collect(),
-            span: span(n),
-            parent: Some(parent),
-            properties,
-        });
-        Some(self.out.nodes.len() - 1)
-    }
-    fn edge(
-        &mut self,
-        kind: &str,
-        source: usize,
-        target: EdgeTarget,
-        resolution: Resolution,
-        confidence: f32,
-        properties: Map<String, Value>,
-    ) {
-        if self.out.edges.len() >= MAX_EDGES {
-            self.full = true;
-            return;
-        }
-        self.out.edges.push(ExtractedEdge {
-            kind: kind.into(),
-            source,
-            target,
-            resolution,
-            confidence,
-            properties,
-        });
-    }
-    fn contain(&mut self, from: usize, to: usize, method: bool) {
-        self.edge(
-            if method { "DEFINES_METHOD" } else { "DEFINES" },
-            from,
-            EdgeTarget::Local(to),
-            Resolution::Resolved,
-            1.0,
-            Map::new(),
-        );
-    }
-    fn symbol(
-        &mut self,
-        kind: &str,
-        from: usize,
-        name: &str,
-        confidence: f32,
-        properties: Map<String, Value>,
-    ) {
-        let name = name.trim();
-        if name.is_empty() {
-            return;
-        }
-        self.edge(
-            kind,
-            from,
-            EdgeTarget::Symbol(name.to_owned()),
-            Resolution::Unresolved,
-            confidence,
-            properties,
-        );
-    }
-    fn local_named(&self, name: &str, kinds: &[&str]) -> Vec<usize> {
-        self.out
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| n.name == name && kinds.contains(&n.kind.as_str()))
-            .map(|(i, _)| i)
-            .collect()
-    }
-    /// Resolves recorded calls against this file's definitions.
-    fn finish(mut self) -> FileExtract {
-        let calls = std::mem::take(&mut self.calls);
-        for c in calls {
-            let methods = ["Function", "Method", "Constructor"];
-            let local: Vec<usize> = match (c.receiver, c.class) {
-                (Receiver::SelfRef, Some(class)) => self
-                    .local_named(&c.name, &methods)
-                    .into_iter()
-                    .filter(|i| self.out.nodes[*i].parent == Some(class))
-                    .collect(),
-                (Receiver::None, _) => self
-                    .local_named(&c.name, &methods)
-                    .into_iter()
-                    .filter(|i| {
-                        // A bare call names a free function or a member of the same class.
-                        let p = self.out.nodes[*i].parent;
-                        p == Some(0)
-                            || p == c.class
-                            || self.out.nodes[p.unwrap_or(0)].kind == "Function"
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
-            let confidence = match c.receiver {
-                Receiver::None => 0.7,
-                Receiver::SelfRef => 0.65,
-                Receiver::Other => 0.45,
-            };
-            let receiver = match c.receiver {
-                Receiver::None => "none",
-                Receiver::SelfRef => "self",
-                Receiver::Other => "other",
-            };
-            if local.len() == 1 {
-                self.edge(
-                    "CALLS",
-                    c.caller,
-                    EdgeTarget::Local(local[0]),
-                    Resolution::Inferred,
-                    confidence,
-                    props(&[("receiver", json!(receiver))]),
-                );
-            } else {
-                let target = c.name;
-                let mut p = props(&[("receiver", json!(receiver))]);
-                if local.len() > 1 {
-                    p.insert("candidates".into(), json!(local.len()));
-                }
-                self.symbol("CALLS", c.caller, &target, confidence, p);
-            }
-        }
-        if self.full {
-            self.out.parse_errors += 1;
-            self.out.nodes[0]
-                .properties
-                .insert("truncated".into(), json!(true));
-        }
-        self.out
-    }
-
-    fn walk(
-        &mut self,
-        root: Node<'_>,
-        lang: &str,
-        stop: &(dyn Fn() -> bool + Sync),
-        deadline: Instant,
-    ) -> Result<(), ExtractFault> {
-        let mut stack: Vec<(Node<'_>, Ctx)> = vec![(
-            root,
-            Ctx {
-                container: 0,
-                class: None,
-                function: None,
-                prefix: String::new(),
-                depth: 0,
-            },
-        )];
-        let mut visited = 0usize;
-        while let Some((n, ctx)) = stack.pop() {
-            visited += 1;
-            if visited.is_multiple_of(4096) {
-                if stop() {
-                    return Err(ExtractFault::Cancelled);
-                }
-                if Instant::now() >= deadline {
-                    return Err(ExtractFault::TimedOut);
-                }
-            }
-            let child_ctx = self.visit(n, lang, &ctx).unwrap_or_else(|| ctx.clone());
-            if child_ctx.depth >= MAX_DEPTH || self.full {
-                self.full = true;
-                continue;
-            }
-            let mut cursor = n.walk();
-            let children: Vec<Node<'_>> = n.named_children(&mut cursor).collect();
-            for c in children.into_iter().rev() {
-                stack.push((
-                    c,
-                    Ctx {
-                        depth: child_ctx.depth + 1,
-                        ..child_ctx.clone()
-                    },
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// Records what `n` defines or references; returns the context of its children when it
-    /// opens a new container.
-    fn visit(&mut self, n: Node<'_>, lang: &str, ctx: &Ctx) -> Option<Ctx> {
-        let kind = n.kind();
-        if let Some((label, name)) = self.class_like(n, lang) {
-            let qualified = format!("{}{name}", ctx.prefix);
-            let idx = self.node(label, &name, &qualified, n, ctx.container, Map::new())?;
-            self.contain(ctx.container, idx, false);
-            self.bases(n, lang, idx, label);
-            return Some(Ctx {
-                container: idx,
-                class: if label == "Namespace" {
-                    ctx.class
-                } else {
-                    Some(idx)
-                },
-                function: None,
-                prefix: format!("{qualified}."),
-                depth: ctx.depth,
-            });
-        }
-        if let Some(name) = self.function_like(n, lang) {
-            let in_class = ctx.class.is_some();
-            let label = if kind == "constructor_declaration" {
-                "Constructor"
-            } else if kind == "property_declaration" {
-                "Property"
-            } else if in_class {
-                "Method"
-            } else {
-                "Function"
-            };
-            let qualified = format!("{}{name}", ctx.prefix);
-            let mut properties = Map::new();
-            for (field, key) in [
-                ("return_type", "return_type"),
-                ("type", "return_type"),
-                ("returns", "return_type"),
-                ("parameters", "parameters"),
-            ] {
-                if let Some(c) = n.child_by_field_name(field)
-                    && !properties.contains_key(key)
-                {
-                    properties.insert(key.into(), json!(self.short(c)));
-                }
-            }
-            let idx = self.node(label, &name, &qualified, n, ctx.container, properties)?;
-            self.contain(ctx.container, idx, in_class);
-            return Some(Ctx {
-                container: idx,
-                class: ctx.class,
-                function: Some(idx),
-                prefix: format!("{qualified}."),
-                depth: ctx.depth,
-            });
-        }
-        for module in self.imports(n, lang) {
-            self.symbol("IMPORTS", 0, &module, 1.0, Map::new());
-        }
-        if let Some((name, receiver)) = self.call(n, lang) {
-            if lang != "csharp" && name == "require" && receiver == Receiver::None {
-                if let Some(arg) = first_string(self, n) {
-                    self.symbol("IMPORTS", 0, &arg, 1.0, Map::new());
-                }
-                return None;
-            }
-            self.calls.push(Call {
-                caller: ctx.function.unwrap_or(ctx.container),
-                class: ctx.class,
-                name,
-                receiver,
-            });
-        }
-        None
-    }
-
-    fn class_like(&self, n: Node<'_>, lang: &str) -> Option<(&'static str, String)> {
-        let label = match (lang, n.kind()) {
-            ("csharp", "class_declaration") => "Class",
-            ("csharp", "interface_declaration") => "Interface",
-            ("csharp", "struct_declaration") => "Struct",
-            ("csharp", "enum_declaration") => "Enum",
-            ("csharp", "record_declaration") => "Record",
-            ("csharp", "namespace_declaration" | "file_scoped_namespace_declaration") => {
-                "Namespace"
-            }
-            (
-                "javascript" | "typescript" | "tsx",
-                "class_declaration" | "class" | "abstract_class_declaration",
-            ) => "Class",
-            ("typescript" | "tsx", "interface_declaration") => "Interface",
-            ("typescript" | "tsx", "enum_declaration") => "Enum",
-            ("typescript" | "tsx", "internal_module" | "module") => "Namespace",
-            _ => return None,
-        };
-        let name = n.child_by_field_name("name")?;
-        Some((label, self.text(name)))
-    }
-
-    fn function_like(&self, n: Node<'_>, lang: &str) -> Option<String> {
-        match (lang, n.kind()) {
-            (
-                "csharp",
-                "method_declaration"
-                | "constructor_declaration"
-                | "local_function_statement"
-                | "property_declaration",
-            )
-            | (
-                "javascript" | "typescript" | "tsx",
-                "function_declaration"
-                | "generator_function_declaration"
-                | "method_definition"
-                | "method_signature"
-                | "abstract_method_signature"
-                | "function_signature",
-            ) => Some(self.text(n.child_by_field_name("name")?)),
-            ("javascript" | "typescript" | "tsx", "variable_declarator") => {
-                let v = n.child_by_field_name("value")?;
-                if !matches!(
-                    v.kind(),
-                    "arrow_function" | "function_expression" | "function" | "generator_function"
-                ) {
-                    return None;
-                }
-                let name = n.child_by_field_name("name")?;
-                if name.kind() != "identifier" {
-                    return None;
-                }
-                Some(self.text(name))
-            }
-            _ => None,
-        }
-    }
-
-    fn bases(&mut self, n: Node<'_>, lang: &str, idx: usize, label: &str) {
-        let mut out: Vec<(String, &'static str, bool)> = Vec::new();
-        match lang {
-            "csharp" => {
-                // C# syntax does not say which base is the class: the first is INHERITS when the
-                // name does not follow the interface convention, others IMPLEMENTS (inferred).
-                if let Some(b) = child_of_kind(n, "base_list") {
-                    let mut c = b.walk();
-                    for (i, t) in b.named_children(&mut c).enumerate() {
-                        let name = self.text(t);
-                        let interface_like = name.len() > 1
-                            && name.starts_with('I')
-                            && name.chars().nth(1).is_some_and(char::is_uppercase);
-                        let edge = if label == "Interface" || interface_like || i > 0 {
-                            "IMPLEMENTS"
-                        } else {
-                            "INHERITS"
-                        };
-                        out.push((name, edge, true));
-                    }
-                }
-            }
-            "javascript" | "typescript" | "tsx" => {
-                if let Some(h) = child_of_kind(n, "class_heritage") {
-                    match child_of_kind(h, "extends_clause") {
-                        Some(e) => {
-                            if let Some(v) = e.child_by_field_name("value") {
-                                out.push((self.text(v), "INHERITS", false));
-                            }
-                        }
-                        // JavaScript: `class A extends B` puts the expression directly.
-                        None => {
-                            let mut c = h.walk();
-                            if let Some(v) = h
-                                .named_children(&mut c)
-                                .find(|x| x.kind() != "implements_clause")
-                            {
-                                out.push((self.text(v), "INHERITS", false));
-                            }
-                        }
-                    }
-                    if let Some(i) = child_of_kind(h, "implements_clause") {
-                        for t in descendants_of(i, &["type_identifier"]) {
-                            out.push((self.text(t), "IMPLEMENTS", false));
-                        }
-                    }
-                }
-                if let Some(e) = child_of_kind(n, "extends_type_clause") {
-                    for t in descendants_of(e, &["type_identifier"]) {
-                        out.push((self.text(t), "INHERITS", false));
-                    }
-                }
-            }
-            _ => {}
-        }
-        for (name, edge, inferred) in out {
-            let mut p = Map::new();
-            if inferred {
-                p.insert("inheritance_inferred".into(), json!(true));
-            }
-            self.symbol(edge, idx, &name, if inferred { 0.6 } else { 0.9 }, p);
-        }
-    }
-
-    fn imports(&self, n: Node<'_>, lang: &str) -> Vec<String> {
-        let strip = |s: String| s.trim_matches(['"', '\'', '`', '<', '>']).to_owned();
-        match (lang, n.kind()) {
-            ("csharp", "using_directive") => {
-                let mut c = n.walk();
-                n.named_children(&mut c)
-                    .filter(|x| matches!(x.kind(), "qualified_name" | "identifier"))
-                    .last()
-                    .map(|x| vec![self.text(x)])
-                    .unwrap_or_default()
-            }
-            ("javascript" | "typescript" | "tsx", "import_statement" | "export_statement") => n
-                .child_by_field_name("source")
-                .map(|s| vec![strip(self.text(s))])
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        }
-    }
-
-    fn call(&self, n: Node<'_>, lang: &str) -> Option<(String, Receiver)> {
-        let receiver_of = |obj: Option<Node<'_>>| match obj.map(|o| o.kind()) {
-            None => Receiver::None,
-            Some("this" | "this_expression") => Receiver::SelfRef,
-            Some(_) => {
-                if obj.map(|o| self.text(o)).as_deref() == Some("this") {
-                    Receiver::SelfRef
-                } else {
-                    Receiver::Other
-                }
-            }
-        };
-        match (lang, n.kind()) {
-            ("javascript" | "typescript" | "tsx", "call_expression") => {
-                let f = n.child_by_field_name("function")?;
-                match f.kind() {
-                    "identifier" => Some((self.text(f), Receiver::None)),
-                    "member_expression" => {
-                        let p = f.child_by_field_name("property")?;
-                        Some((self.text(p), receiver_of(f.child_by_field_name("object"))))
-                    }
-                    _ => None,
-                }
-            }
-            ("csharp", "invocation_expression") => {
-                let f = n.child_by_field_name("function")?;
-                match f.kind() {
-                    "identifier" => Some((self.text(f), Receiver::None)),
-                    "member_access_expression" => {
-                        let name = f.child_by_field_name("name")?;
-                        Some((
-                            self.text(name),
-                            receiver_of(f.child_by_field_name("expression")),
-                        ))
-                    }
-                    "generic_name" => Some((self.text(f.named_child(0)?), Receiver::None)),
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    }
+/// The extraction of `path` so far: the file node (index 0) and the parse error count.
+fn file_extract(path: &str, root: Node<'_>, language: &str) -> FileExtract {
+    let mut out = FileExtract::default();
+    out.nodes.push(ExtractedNode {
+        kind: "File".into(),
+        name: path.rsplit('/').next().unwrap_or(path).to_owned(),
+        qualified_name: path.to_owned(),
+        span: spec::span(root),
+        parent: None,
+        properties: super::domain::props(&[("language", json!(language))]),
+    });
+    out.parse_errors = count_errors(root);
+    out
 }
 
 fn count_errors(root: Node<'_>) -> u32 {
@@ -1133,10 +613,6 @@ fn count_errors(root: Node<'_>) -> u32 {
     }
     n.max(1)
 }
-fn child_of_kind<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
-    let mut c = n.walk();
-    n.named_children(&mut c).find(|x| x.kind() == kind)
-}
 fn descendants_of<'t>(n: Node<'t>, kinds: &[&str]) -> Vec<Node<'t>> {
     let mut out = Vec::new();
     let mut stack = vec![n];
@@ -1153,12 +629,6 @@ fn descendants_of<'t>(n: Node<'t>, kinds: &[&str]) -> Vec<Node<'t>> {
         }
     }
     out
-}
-fn first_string(w: &Walk<'_>, n: Node<'_>) -> Option<String> {
-    let args = n.child_by_field_name("arguments")?;
-    descendants_of(args, &["string_fragment", "string_content"])
-        .first()
-        .map(|s| w.text(*s))
 }
 
 // ---------------------------------------------------------------------------------------------

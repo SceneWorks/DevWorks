@@ -10,6 +10,7 @@ use crate::backend::Slot;
 use crate::memory::RouteMemory;
 use crate::ops::{self, Failure};
 use crate::route::Route;
+use crate::screen::ScreenId;
 use crate::theme;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use devworks_core::ports::storage::ConfigScope;
@@ -300,7 +301,7 @@ impl Shell {
             self.load_repositories();
         }
         if self.route == Route::Browser {
-            self.load_browser();
+            self.with_screen(ScreenId::Browser, |s, cx| s.load(cx, Route::Browser));
         }
         if matches!(
             self.route,
@@ -512,7 +513,7 @@ impl Shell {
                     }
                     // Without a selection the browser sessions of every listed project show.
                     if self.route == Route::Browser && self.selected_project.is_none() {
-                        self.load_browser();
+                        self.with_screen(ScreenId::Browser, |s, cx| s.load(cx, Route::Browser));
                     }
                 }
                 Err(e) => self.projects.list.error = Some(e.describe()),
@@ -1248,10 +1249,6 @@ impl Shell {
     // Repositories
 
     pub(super) fn repositories_screen(&mut self, ui: &mut Ui) {
-        if self.graph.opened {
-            self.graph_screen(ui);
-            return;
-        }
         let screen = Route::Repositories.screen();
         let online = self.online();
         let mut actions: Vec<Action> = Vec::new();
