@@ -47,6 +47,7 @@
 //! (CodeGraph's `Accepted(run)`). The run identity, idempotency key reuse and status polling of
 //! `StartRun`/`GetRun` map to the receipt replay of `runs.start` and to `runs.inspect`; chats,
 //! transcripts, events and streams are the session and history operations (DW-008).
+pub mod activity;
 pub mod inspect;
 pub mod recovery;
 pub mod scope;
@@ -58,11 +59,11 @@ use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, runs as ops};
 use crate::ports::storage::{
     ActivationFilter, ActivationOutcome, ActivationPhase, ActivationPurpose, BlockerFilter,
-    BlockerState, ContainerFilter, DesiredExecution, GrantRecord, HoldCause, InstructionStage,
-    NewEvent, NewOperation, ProcessFilter, QueueState, ReadSnapshot, RunRead, SessionRead,
-    StopCause, StorageError, StoredActivation, StoredAssignment, StoredBlocker, StoredInstruction,
-    StoredRootControl, StoredStopCoverage, WorkRoot, WriteTransaction, cancellation_applies,
-    is_terminal, possibly_dispatched,
+    BlockerState, DesiredExecution, GrantRecord, HoldCause, InstructionStage, NewEvent,
+    NewOperation, QueueState, ReadSnapshot, RunRead, SessionRead, StopCause, StorageError,
+    StoredActivation, StoredAssignment, StoredBlocker, StoredInstruction, StoredRootControl,
+    StoredStopCoverage, WorkRoot, WriteTransaction, cancellation_applies, is_terminal,
+    possibly_dispatched,
 };
 use crate::ports::{
     CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
@@ -237,7 +238,7 @@ pub(crate) fn controlled_root_tx(
 /// Whether this card retains controls or unsettled root-owned work. Both initial Stop
 /// coverage and late-link extension use this predicate; controls may still be implicit.
 fn has_run_state(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
-    Ok(tx.runs().root_control(root)?.is_some() || ControlService::root_has_work(tx, root)?)
+    Ok(tx.runs().root_control(root)?.is_some() || activity::RootActivity::of(tx, root)?.has_work())
 }
 /// The cards linked to `feature` that keep run controls of their own: a retained activation (an
 /// issue linked while its agent ran), its root-scoped deliveries and its process trees. The
@@ -615,6 +616,40 @@ pub struct Condition {
     pub cause: HoldCause,
     pub reason: String,
     pub stored: bool,
+    pub gate: Gate,
+}
+
+/// The gate a condition comes from. Allocation reports it as the reason queued work is not
+/// eligible, and admits readiness that an assessment can establish.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gate {
+    /// The project is archived or deleted.
+    Archived,
+    /// The root (or its feature) is paused, or a human pause hold is active.
+    Pause,
+    /// Another stored hold, or a held operation it depends on.
+    Hold,
+    /// A prerequisite is not complete with verified acceptance.
+    Prerequisite,
+    /// An open blocking question awaits the project's human.
+    Question,
+    /// No active approved plan covers the work, or its repositories are outside that plan.
+    Plan,
+    /// The readiness of an approved scope unit is not current: `assessable` when an assessment
+    /// can make it current (missing or stale), not when a finding gates it.
+    Readiness { assessable: bool },
+    /// The assignment is missing, ended, moved, superseded or awaits a redirect acknowledgment.
+    Assignment,
+}
+impl Gate {
+    fn readiness(r: &scope::Readiness) -> Self {
+        Self::Readiness {
+            assessable: matches!(
+                r,
+                scope::Readiness::Missing | scope::Readiness::Stale { .. }
+            ),
+        }
+    }
 }
 
 /// The current eligibility of a target for a purpose, with the revisions it was read at.
@@ -647,6 +682,11 @@ fn stored(b: &StoredBlocker) -> Condition {
         cause: b.cause,
         reason: b.reason.clone(),
         stored: true,
+        gate: if b.cause == HoldCause::HumanPause {
+            Gate::Pause
+        } else {
+            Gate::Hold
+        },
     }
 }
 /// A card's repository references must remain within its feature's active approved scope.
@@ -672,6 +712,7 @@ fn repository_gate(
     {
         conditions.push(derived(
             "repository-scope",
+            Gate::Plan,
             subject,
             plan.plan_revision,
             HoldCause::Policy,
@@ -696,6 +737,7 @@ fn prerequisite_gate(
     if let Some(p) = open.first() {
         c.push(derived(
             &format!("prerequisites-{}", work.0.as_str()),
+            Gate::Prerequisite,
             subject,
             open.len() as i64,
             HoldCause::Dependency,
@@ -723,6 +765,7 @@ fn inherited_scope_gate(
             );
             conditions.push(derived(
                 &format!("inherited-{}", requirement.as_str()),
+                unit.map_or(Gate::Plan, |u| Gate::readiness(&u.readiness)),
                 subject.clone(),
                 unit.and_then(|u| u.readiness.revision())
                     .or(plan.approved_revision())
@@ -736,6 +779,7 @@ fn inherited_scope_gate(
 }
 fn derived(
     kind: &str,
+    gate: Gate,
     subject: Subject,
     revision: i64,
     cause: HoldCause,
@@ -750,6 +794,7 @@ fn derived(
         cause,
         reason: reason.to_owned(),
         stored: false,
+        gate,
     }
 }
 
@@ -774,6 +819,7 @@ impl ControlService {
         {
             c.push(derived(
                 "archived",
+                Gate::Archived,
                 root_subject.clone(),
                 1,
                 HoldCause::Policy,
@@ -786,6 +832,7 @@ impl ControlService {
         {
             c.push(derived(
                 "paused",
+                Gate::Pause,
                 root_subject.clone(),
                 control.revision,
                 HoldCause::HumanPause,
@@ -805,6 +852,7 @@ impl ControlService {
             {
                 c.push(derived(
                     "feature-paused",
+                    Gate::Pause,
                     Subject::Root(f.clone()),
                     feature_control.revision,
                     HoldCause::HumanPause,
@@ -812,10 +860,20 @@ impl ControlService {
                 ));
             }
             c.extend(feature_level.iter().map(stored));
-            // Its implementation is the feature's: the feature's prerequisites, approved plan,
-            // readiness and the findings that gate this card hold it as they hold the feature's
-            // own assignments.
+            // Its implementation is the feature's: the feature's prerequisites, open blocking
+            // question, approved plan, readiness and the findings that gate this card hold it as
+            // they hold the feature's own assignments.
             if purpose == ActivationPurpose::Implementation {
+                if runs.open_blocking_question(f)? {
+                    c.push(derived(
+                        "human-question",
+                        Gate::Question,
+                        Subject::Root(f.clone()),
+                        feature_control.revision,
+                        HoldCause::Dependency,
+                        "an open blocking question on its feature awaits the project's human",
+                    ));
+                }
                 let feature = WorkRoot {
                     id: f.clone(),
                     project_id: root.project_id.clone(),
@@ -839,6 +897,7 @@ impl ControlService {
                     PlanState::Approved { feature: unit, .. } if unit.readiness.is_current() => {}
                     PlanState::Approved { feature: unit, revision, .. } => c.push(derived(
                         "feature-readiness",
+                        Gate::readiness(&unit.readiness),
                         Subject::Root(f.clone()),
                         unit.readiness.revision().unwrap_or(revision),
                         HoldCause::Policy,
@@ -846,6 +905,7 @@ impl ControlService {
                     )),
                     other => c.push(derived(
                         "feature-plan",
+                        Gate::Plan,
                         Subject::Root(f.clone()),
                         other.pending_revision().unwrap_or(1),
                         HoldCause::Approval,
@@ -858,6 +918,7 @@ impl ControlService {
                 {
                     c.push(derived(
                         "finding-gate",
+                        Gate::Readiness { assessable: false },
                         root_subject.clone(),
                         control.revision,
                         HoldCause::Policy,
@@ -874,6 +935,7 @@ impl ControlService {
             if runs.open_blocking_question(&root.id)? {
                 c.push(derived(
                     "human-question",
+                    Gate::Question,
                     root_subject.clone(),
                     control.revision,
                     HoldCause::Dependency,
@@ -900,6 +962,7 @@ impl ControlService {
                 _ => {
                     c.push(derived(
                         "assignment-missing",
+                        Gate::Assignment,
                         Subject::Assignment(id.clone()),
                         1,
                         HoldCause::Policy,
@@ -914,6 +977,7 @@ impl ControlService {
             if !a.state.is_live() {
                 c.push(derived(
                     "assignment-ended",
+                    Gate::Assignment,
                     subject.clone(),
                     a.revision,
                     HoldCause::Policy,
@@ -963,6 +1027,7 @@ impl ControlService {
                 {
                     c.push(derived(
                         "membership",
+                        Gate::Assignment,
                         work_subject.clone(),
                         a.revision,
                         HoldCause::Policy,
@@ -978,6 +1043,7 @@ impl ControlService {
                 {
                     c.push(derived(
                         "finding-gate",
+                        Gate::Readiness { assessable: false },
                         work_subject.clone(),
                         a.revision,
                         HoldCause::Policy,
@@ -988,6 +1054,7 @@ impl ControlService {
                     if runs.open_blocking_question(&work_id)? {
                         c.push(derived(
                             "human-question",
+                            Gate::Question,
                             work_subject.clone(),
                             a.revision,
                             HoldCause::Dependency,
@@ -1002,6 +1069,7 @@ impl ControlService {
                     if let Some(p) = open.first() {
                         c.push(derived(
                             "prerequisites",
+                            Gate::Prerequisite,
                             work_subject.clone(),
                             open.len() as i64,
                             HoldCause::Dependency,
@@ -1016,6 +1084,7 @@ impl ControlService {
             if a.parent_id.is_none() && a.instruction_revision < control.instruction_revision {
                 c.push(derived(
                     "redirect",
+                    Gate::Assignment,
                     subject.clone(),
                     control.instruction_revision,
                     HoldCause::Policy,
@@ -1039,6 +1108,7 @@ impl ControlService {
                 if !held.is_empty() {
                     c.push(derived(
                         "dependency",
+                        Gate::Hold,
                         Subject::Operation(operation.clone()),
                         1,
                         HoldCause::Dependency,
@@ -1052,6 +1122,7 @@ impl ControlService {
                 PlanState::NotRequired => {}
                 PlanState::Unapproved { pending_revision } => c.push(derived(
                     "plan",
+                    Gate::Plan,
                     root_subject.clone(),
                     pending_revision.unwrap_or(1),
                     HoldCause::Approval,
@@ -1066,6 +1137,7 @@ impl ControlService {
                     match plan.unit(key) {
                         None => c.push(derived(
                             "scope",
+                            Gate::Plan,
                             subject,
                             *revision,
                             HoldCause::Policy,
@@ -1077,6 +1149,7 @@ impl ControlService {
                             {
                                 c.push(derived(
                                     "scope-changed",
+                                    Gate::Assignment,
                                     subject.clone(),
                                     *revision,
                                     HoldCause::Policy,
@@ -1087,6 +1160,7 @@ impl ControlService {
                             if !unit.readiness.is_current() {
                                 c.push(derived(
                                     "readiness",
+                                    Gate::readiness(&unit.readiness),
                                     subject,
                                     unit.readiness.revision().unwrap_or(*revision),
                                     HoldCause::Policy,
@@ -2061,7 +2135,8 @@ impl ControlService {
                 && !control.reactivate
                 && paused_by_hold;
             let live = tx.runs().live_activation(&root.id)?;
-            let mut nothing_live = live.is_none() && !Self::root_has_work(tx, &root.id)?;
+            let mut nothing_live =
+                live.is_none() && !activity::RootActivity::of(tx, &root.id)?.has_work();
             // A linked card counts only with what the stop covered: once it moved past that
             // (a newer generation, or a Continue since), its newer work is not this stop's.
             for card in stop_linked_roots(tx, op)? {
@@ -2069,7 +2144,7 @@ impl ControlService {
                 nothing_live &= if card.superseded(&control_of(tx.runs(), &card.root)?) {
                     !live.is_some_and(|a| a.generation <= card.generation)
                 } else {
-                    live.is_none() && !Self::root_has_work(tx, &card.root)?
+                    live.is_none() && !activity::RootActivity::of(tx, &card.root)?.has_work()
                 };
             }
             // Terminal coverage describes an earlier decision. A new Stop must also inspect
@@ -2077,7 +2152,7 @@ impl ControlService {
             if is_terminal(rec.state) {
                 for card in linked_roots(tx, &root)? {
                     nothing_live &= tx.runs().live_activation(&card.id)?.is_none()
-                        && !Self::root_has_work(tx, &card.id)?;
+                        && !activity::RootActivity::of(tx, &card.id)?.has_work();
                 }
             }
             if intent && (!is_terminal(rec.state) || nothing_live) {
@@ -2123,42 +2198,6 @@ impl ControlService {
             },
             operation_id: Some(op),
         })
-    }
-
-    /// Whether anything of the root may still be running: an unsettled delivery,
-    /// owned process, or agent-owned external container.
-    fn root_has_work(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
-        if !tx.runs().root_deliveries(root, None, 1)?.is_empty() {
-            return Ok(true);
-        }
-        let mut after: Option<Id> = None;
-        loop {
-            let page =
-                tx.resources()
-                    .processes(&ProcessFilter::Unsettled, after.as_ref(), MAX_PAGE)?;
-            if page.iter().any(|p| p.root_id.as_ref() == Some(root)) {
-                return Ok(true);
-            }
-            if page.len() < usize::from(MAX_PAGE) {
-                break;
-            }
-            after = page.last().map(|p| p.id.clone());
-        }
-        let mut after: Option<Id> = None;
-        loop {
-            let page = tx.resources().containers(
-                &ContainerFilter::AgentWorkMayRun,
-                after.as_ref(),
-                MAX_PAGE,
-            )?;
-            if page.iter().any(|row| row.root_id.as_ref() == Some(root)) {
-                return Ok(true);
-            }
-            if page.len() < usize::from(MAX_PAGE) {
-                return Ok(false);
-            }
-            after = page.last().map(|row| row.id.clone());
-        }
     }
 
     /// Stops the root: pause (stop epoch advanced), request the activation to stop, cancel its
@@ -2234,7 +2273,7 @@ impl ControlService {
         for card in &linked {
             cancelled.extend(self.cancel_root_deliveries(tx, &card.id)?);
             linked_work |= tx.runs().live_activation(&card.id)?.is_some()
-                || Self::root_has_work(tx, &card.id)?;
+                || activity::RootActivity::of(tx, &card.id)?.has_work();
             covered.push(LinkedStop::of(&control_of(tx.runs(), &card.id)?).value());
         }
         let op = OperationId(tx.new_id(IdKind::Operation));
@@ -2265,7 +2304,8 @@ impl ControlService {
         let before = after.clone();
         after.stop_operation_id = Some(op.clone());
         save_control(tx, &before, &mut after)?;
-        let nothing_live = live.is_none() && !linked_work && !Self::root_has_work(tx, &root.id)?;
+        let nothing_live =
+            live.is_none() && !linked_work && !activity::RootActivity::of(tx, &root.id)?.has_work();
         if nothing_live {
             recovery::complete_stop_operation(tx, &op, &[], "nothing of the root was running")?;
         }

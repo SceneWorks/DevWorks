@@ -33,7 +33,7 @@ use devworks_core::protocol::{
     ActorId, CommandReply, Counter, DomainErrorCode, DomainFault, Id, OperationState, ProjectId,
     Rejection, RetryAdvice, Revision, RootId,
 };
-use devworks_core::registry::Mode;
+use devworks_core::registry::{AssignmentScope, Mode};
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::lifecycle::{
     ExportRefusal, RecoveryReport, StreamRefusal, VersionResolution, pin_for_backup, release_backup,
@@ -1054,6 +1054,52 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
             "scope":{"kind":"Project","projectId":"project-a"},
             "importSource":sibling.clone(),"importSchema":{"schemaId":"core/object",
             "revision":"1","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}),
+    );
+    // An operation whose assignment scope needs its target checked, but whose input the check
+    // does not recognise, is outside every assignment: the default is deny.
+    let project_read = admission::decode(
+        Selection {
+            operation: "repositories.list",
+            mode: Mode::Query,
+        },
+        json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"project-repositories",
+            "body":{"kind":"repositories.list","scope":{"kind":"Project","projectId":"project-a"},
+            "page":{"limit":10}}})
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let decide = |descriptor: &'static devworks_core::registry::OperationDescriptor| {
+        fx.authority().decide(
+            &worker,
+            &AuthorityRequest {
+                descriptor,
+                binding: project_read.binding,
+                effect: project_read.effect,
+                action: project_read.action,
+                input: &project_read.input,
+                fingerprint: &project_read.fingerprint,
+            },
+        )
+    };
+    assert_eq!(
+        project_read.descriptor.assignment_scope,
+        AssignmentScope::Project
+    );
+    let allowed = decide(project_read.descriptor);
+    assert!(allowed.is_ok(), "{allowed:?}");
+    let mut unlisted = project_read.descriptor.clone();
+    unlisted.assignment_scope = AssignmentScope::Root;
+    let refused = decide(Box::leak(Box::new(unlisted)));
+    assert!(
+        matches!(
+            &refused,
+            Err(auth::Denied {
+                reason: devworks_core::authority::DenialReason::OutOfAssignmentScope,
+                ..
+            })
+        ),
+        "{refused:?}"
     );
     let sessions = UseCases::new().with_sessions(Arc::new(
         devworks_core::services::sessions::SessionService::new(fx.h.ids.clone(), fx.store.clone()),
