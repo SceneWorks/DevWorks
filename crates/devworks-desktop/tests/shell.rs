@@ -1787,6 +1787,7 @@ struct Counted {
     operation: &'static str,
     queries: std::sync::Mutex<Vec<Instant>>,
     publications: std::sync::atomic::AtomicUsize,
+    checkpoints: std::sync::atomic::AtomicUsize,
 }
 impl Counted {
     fn queries(&self) -> Vec<Instant> {
@@ -1794,6 +1795,14 @@ impl Counted {
     }
     fn publications(&self) -> usize {
         self.publications.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    /// Publications that also save the checkpoint (the autosave, a purge review starting).
+    fn checkpoints(&self) -> usize {
+        self.checkpoints.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    /// Publications of the frame loop, which save nothing.
+    fn snapshots(&self) -> usize {
+        self.publications() - self.checkpoints()
     }
 }
 impl Backend for Counted {
@@ -1814,6 +1823,10 @@ impl Backend for Counted {
     ) -> Result<Option<Vec<devworks_core::ports::storage::ProjectPurgeClientScope>>, String> {
         self.publications
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if save {
+            self.checkpoints
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         self.inner.purge_client_publish(memory, live, save)
     }
     fn purge_client_acknowledge(
@@ -1873,6 +1886,7 @@ fn counted(
         operation,
         queries: Default::default(),
         publications: Default::default(),
+        checkpoints: Default::default(),
     });
     (backend, send)
 }
@@ -1926,24 +1940,61 @@ fn a_hint_burst_reloads_the_visible_list_at_most_once_a_second_and_once_after_it
     h.state_mut().on_exit();
 }
 
+/// Steps `frames` frames without input and returns how many of them drained a reply (a hint's
+/// refresh, the periodic refresh). Only those frames may publish the frame's snapshot. The
+/// autosave checkpoints (`save`) state that changed since the last save, so each checkpoint
+/// follows either a reply or the state the window started with.
+fn idle_frames(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    backend: &Counted,
+    frames: usize,
+) -> usize {
+    let mut replied = 0;
+    let checkpoints = backend.checkpoints();
+    for frame in 0..frames {
+        // Every request has its reply queued, so the next frame drains exactly these.
+        assert!(h.state().wait_idle());
+        let reply = h
+            .state()
+            .client()
+            .is_some_and(|c| !c.activities().is_empty());
+        let before = backend.snapshots();
+        h.step();
+        if reply {
+            replied += 1;
+        } else {
+            assert_eq!(
+                backend.snapshots(),
+                before,
+                "idle frame {frame} drained no reply but published a snapshot"
+            );
+        }
+    }
+    let saved = backend.checkpoints() - checkpoints;
+    assert!(
+        saved <= 1 + replied,
+        "{saved} checkpoints in an idle window with {replied} replies"
+    );
+    replied
+}
+
 #[test]
 fn an_idle_shell_publishes_no_purge_snapshot_until_an_editor_changes_or_a_review_opens() {
     let root = Root::new("idle-snapshot");
     let engine = start(&root);
-    let (backend, _hints) = counted(&engine, "artifacts.list");
+    let (backend, hints) = counted(&engine, "artifacts.list");
     let mut h = harness(
         shell_with(Ok(backend.clone()), &root, Script::default(), None),
         1440.0,
         900.0,
     );
+    // One pass per frame, so each frame drains the waiting replies once.
+    h.ctx.options_mut(|o| o.max_passes = 1.try_into().unwrap());
     settle(&mut h);
 
     // Idle frames read no editor and publish nothing.
     let idle = backend.publications();
-    for _ in 0..30 {
-        h.step();
-    }
-    assert_eq!(backend.publications(), idle);
+    idle_frames(&mut h, &backend, 30);
 
     // Typing changes the composer's draft: the snapshot follows it.
     type_into(&mut h, COMPOSER_LABEL, "a draft the purge review must see");
@@ -1951,18 +2002,23 @@ fn an_idle_shell_publishes_no_purge_snapshot_until_an_editor_changes_or_a_review
     for _ in 0..3 {
         h.step();
     }
-    let typed = backend.publications();
-    for _ in 0..30 {
-        h.step();
-    }
-    assert_eq!(backend.publications(), typed);
+
+    // A background reply may change an editor: the frame that drains it publishes, and the
+    // frames after it publish nothing.
+    std::thread::sleep(devworks_desktop::shell::HINT_REFRESH_INTERVAL);
+    hints.send_modify(|n| *n += 1);
+    assert!(
+        idle_frames(&mut h, &backend, 30) > 0,
+        "the hint's refresh replied inside the idle window"
+    );
 
     // While a purge review is open, every frame publishes the current editors.
+    let before = backend.publications();
     h.state_mut().purge.frozen = true;
     for _ in 0..5 {
         h.step();
     }
-    assert!(backend.publications() >= typed + 5);
+    assert!(backend.publications() >= before + 5);
     h.state_mut().purge.frozen = false;
     h.state_mut().on_exit();
 }
