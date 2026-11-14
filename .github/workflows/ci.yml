@@ -117,7 +117,8 @@ jobs:
       - name: Check fixtures and scenarios against the contracts-eval decoders
         shell: bash
         run: |
-          probe=tools/contracts-eval/target/debug/devworks-contract-probe
+          target_dir="$(cargo metadata --manifest-path tools/contracts-eval/Cargo.toml --format-version 1 --no-deps --locked | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+          probe="$target_dir/debug/devworks-contract-probe"
           for set in fixtures provider-package-fixtures data-delivery-fixtures domain-fixtures; do
             if ! "$probe" check "docs/architecture/contracts/$set.json" > "$RUNNER_TEMP/$set.json"; then
               python3 -c 'import json, sys; [print(json.dumps(c)) for c in json.load(open(sys.argv[1]))["cases"] if not c["passed"]]' "$RUNNER_TEMP/$set.json" || true
@@ -263,10 +264,10 @@ jobs:
         if: runner.environment == 'self-hosted'
         shell: bash
         run: |
-          dir="$HOME/.cache/devworks-ci/$RUNNER_NAME/target-macos"
+          dir="$HOME/.cache/devworks-ci/$RUNNER_NAME/target-macos" # dev-host: allow-path devworks-mac runners build DevWorks only and keep their own build folder (DW-282 decision)
           rm -rf "$dir/tmp"
-          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV" # dev-host: allow-path devworks-mac runners build DevWorks only and keep their own build folder (DW-282 decision)
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH" # dev-host: allow-path rustup tool folder, not machine state
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
@@ -290,16 +291,16 @@ jobs:
           # names contain spaces ("GitHub Actions 123"), and tests that build shell
           # commands from temp paths split on them, so keep only [A-Za-z0-9_-].
           volume="devworks-tmp-${RUNNER_NAME//[^A-Za-z0-9_-]/-}"
-          if [ -d "/Volumes/$volume" ]; then hdiutil detach -force "/Volumes/$volume"; fi
+          if [ -d "/Volumes/$volume" ]; then hdiutil detach -force "/Volumes/$volume"; fi # dev-host: allow-path mount point of the RAM disk this step creates
           device="$(hdiutil attach -nomount "ram://$((RAMDISK_MIB * 2048))" | awk '{print $1}')"
           diskutil erasevolume APFS "$volume" "$device"
-          mkdir -p "/Volumes/$volume/tmp" "/Volumes/$volume/target-tmp"
-          target="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/target}"
+          mkdir -p "/Volumes/$volume/tmp" "/Volumes/$volume/target-tmp" # dev-host: allow-path RAM disk this step creates
+          target="$(cargo metadata --format-version 1 --no-deps --locked | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
           mkdir -p "$target"
           rm -rf "$target/tmp"
-          ln -s "/Volumes/$volume/target-tmp" "$target/tmp"
-          echo "TEST_VOLUME=/Volumes/$volume" >> "$GITHUB_ENV"
-          echo "TEST_TMPDIR=/Volumes/$volume/tmp" >> "$GITHUB_ENV"
+          ln -s "/Volumes/$volume/target-tmp" "$target/tmp" # dev-host: allow-path RAM disk this step creates
+          echo "TEST_VOLUME=/Volumes/$volume" >> "$GITHUB_ENV" # dev-host: allow-path RAM disk this step creates
+          echo "TEST_TMPDIR=/Volumes/$volume/tmp" >> "$GITHUB_ENV" # dev-host: allow-path RAM disk this step creates
         env:
           RAMDISK_MIB: "4096"
       - name: Build tests
