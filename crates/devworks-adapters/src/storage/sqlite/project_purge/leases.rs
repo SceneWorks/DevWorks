@@ -106,7 +106,7 @@ pub(super) fn partition(
         for candidate in snapshot
             .rows
             .iter()
-            .filter(|r| selected.contains(&(r.table.clone(), r.key_digest.clone())))
+            .filter(|r| selected.contains(&(r.table.as_str().to_owned(), r.key_digest.clone())))
         {
             assign(
                 candidate,
