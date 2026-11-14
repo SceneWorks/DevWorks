@@ -28,6 +28,10 @@ jobs:
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt
       - run: cargo fmt --all --check
+      - name: Every test source is compiled by a test target
+        run: |
+          python3 -I tools/ci/test_test_reachability.py
+          python3 -I tools/ci/test-reachability.py
 
   codegen:
     name: generated contracts are current
