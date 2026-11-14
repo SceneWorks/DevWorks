@@ -484,12 +484,12 @@ async fn run_native_loop(
                 if let Some((count, (request_id, version_id))) = &stale_refusals
                     && *count >= STALE_HEAD_ATTEMPTS
                 {
-                    return Err(StorageError::InvalidRecord(format!(
+                    return Err(TurnError::Store(StorageError::InvalidRecord(format!(
                         "agent turn made no progress: request {} against context version {} \
                          was refused {count} times",
                         request_id.as_str(),
                         version_id.as_str()
-                    )));
+                    ))));
                 }
                 recovered = runtime.recover_native_context_head(ctx, session_id)?;
                 continue;
