@@ -399,7 +399,9 @@ impl AddonsScreen {
             ui.label(RichText::new("Available").strong());
             let installed = r.installed == Some(true);
             for o in &offers.0 {
-                ui.horizontal(|ui| {
+                // Wrapped: a long index location (a local folder path) must not push the
+                // install button past the window's right edge.
+                ui.horizontal_wrapped(|ui| {
                     ui.label(format!(
                         "{} from {} (publisher {}){}",
                         o.version.0,

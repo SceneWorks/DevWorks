@@ -162,7 +162,7 @@ impl StreamingHttp for HeldWire {
     }
 }
 
-struct Entropy;
+pub(super) struct Entropy;
 impl devworks_core::ports::http::Entropy for Entropy {
     fn fill(&self, bytes: &mut [u8]) {
         bytes.fill(7);
