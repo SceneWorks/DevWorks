@@ -36,18 +36,7 @@ fn sync_dir(dir: &Path) -> io::Result<()> {
 /// Renames, retrying briefly on Windows, where another process (an indexer or scanner) can
 /// hold a just-written file open and make a directory rename fail with a sharing violation.
 fn rename(from: &Path, to: &Path) -> io::Result<()> {
-    let mut attempt = 0;
-    loop {
-        match fs::rename(from, to) {
-            Err(e)
-                if cfg!(windows) && e.kind() == io::ErrorKind::PermissionDenied && attempt < 20 =>
-            {
-                attempt += 1;
-                std::thread::sleep(std::time::Duration::from_millis(25 * attempt));
-            }
-            other => return other,
-        }
-    }
+    super::retry_denied(|| fs::rename(from, to))
 }
 /// Removes a tree this adapter wrote (staging or a retired tree). Windows refuses to delete a
 /// read-only file, and carried-over user files may be read-only, so their attribute is cleared
