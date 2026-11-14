@@ -8256,3 +8256,6 @@ mod mcp_agent_tool;
 
 #[path = "runs/approval_wait.rs"]
 mod approval_wait;
+
+#[path = "runs/failure_notifications.rs"]
+mod failure_notifications;

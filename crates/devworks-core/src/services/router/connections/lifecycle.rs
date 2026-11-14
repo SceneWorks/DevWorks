@@ -217,8 +217,10 @@ impl ConnectionService {
                             .into(),
                     );
                     changed.updated_at_ms = tx.now_ms();
-                    tx.router()
+                    let saved = tx
+                        .router()
                         .put_connection(&changed, Some(current.revision))?;
+                    crate::services::notifications::credentials_rejected(tx, &saved)?;
                 }
                 let op = tx
                     .operations()
@@ -303,7 +305,8 @@ impl ConnectionService {
                             .into(),
                     );
                     current.updated_at_ms = tx.now_ms();
-                    tx.router().put_connection(&current, Some(expected))?;
+                    let saved = tx.router().put_connection(&current, Some(expected))?;
+                    crate::services::notifications::credentials_rejected(tx, &saved)?;
                 }
                 Ok(true)
             })?;

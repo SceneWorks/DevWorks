@@ -199,6 +199,120 @@ pub fn verified_transition(
         },
     )
 }
+pub const FAILURE: &str = "Failure";
+pub const CREDENTIALS: &str = "Credentials";
+fn work_link(kind: &str, id: &Id, project: &ProjectId) -> NotificationLink {
+    let kind = match kind {
+        "feature" => "Feature",
+        "issue" => "Issue",
+        _ => "Task",
+    };
+    NotificationLink {
+        kind: BoundedText(kind.into()),
+        target_id: Some(id.clone()),
+        url: None,
+        artifact: None,
+        project_id: Some(project.clone()),
+    }
+}
+/// A provider rejected a connection's access, so it needs a new sign-in or credential
+/// (NOTIFY-03). One card per transition into reauthentication (the connection revision that
+/// recorded it); further rejections while it waits for repair add nothing.
+pub fn credentials_rejected(
+    tx: &mut dyn WriteTransaction,
+    connection: &StoredConnection,
+) -> Result<(), StorageError> {
+    publish(
+        tx,
+        &NotificationDraft {
+            source: format!(
+                "credentials-{}-{}",
+                connection.id.as_str(),
+                connection.revision
+            ),
+            category: CREDENTIALS.into(),
+            decision_id: None,
+            project_id: None,
+            root_id: None,
+            title: format!("Sign in again: {}", connection.name),
+            body: connection
+                .state_reason
+                .clone()
+                .unwrap_or_else(|| "The provider rejected this connection's credential.".into()),
+            links: vec![NotificationLink {
+                kind: BoundedText("Connection".into()),
+                target_id: Some(connection.id.clone()),
+                url: None,
+                artifact: None,
+                project_id: None,
+            }],
+            requires_input: true,
+            priority: 1,
+        },
+    )
+}
+/// A root's activation failed in a way retrying cannot fix and is held for a person
+/// (NOTIFY-03). One card per escalation hold, however often the same failure is reported.
+pub fn work_failed(
+    tx: &mut dyn WriteTransaction,
+    root: &WorkRoot,
+    hold: &Id,
+    detail: &str,
+) -> Result<(), StorageError> {
+    publish(
+        tx,
+        &NotificationDraft {
+            source: format!("work-failed-{}-{}", root.id.0.as_str(), hold.as_str()),
+            category: FAILURE.into(),
+            decision_id: None,
+            project_id: Some(root.project_id.clone()),
+            root_id: Some(root.id.clone()),
+            title: format!("Work failed: {}", root.title),
+            body: format!("{detail}\n\nThe work is held until the failure is resolved."),
+            links: vec![work_link(&root.kind, &root.id.0, &root.project_id)],
+            requires_input: true,
+            priority: 1,
+        },
+    )
+}
+/// An agent assignment ended `Failed` (NOTIFY-03); its root's coordinator decides what follows,
+/// so the card informs and needs no input. An assignment fails once.
+pub fn assignment_failed(
+    tx: &mut dyn WriteTransaction,
+    root: &WorkRoot,
+    assignment: &StoredAssignment,
+) -> Result<(), StorageError> {
+    let work = tx.sessions().work_root(&assignment.work_id)?;
+    let (kind, title) = work
+        .as_ref()
+        .map_or((root.kind.as_str(), root.title.as_str()), |w| {
+            (w.kind.as_str(), w.title.as_str())
+        });
+    publish(
+        tx,
+        &NotificationDraft {
+            source: format!("assignment-failed-{}", assignment.id.0.as_str()),
+            category: FAILURE.into(),
+            decision_id: None,
+            project_id: Some(root.project_id.clone()),
+            root_id: Some(root.id.clone()),
+            title: format!("Agent assignment failed: {title}"),
+            body: "An agent working on this item stopped with a failure.".into(),
+            links: vec![
+                work_link(kind, &assignment.work_id.0, &root.project_id),
+                NotificationLink {
+                    kind: BoundedText("Session".into()),
+                    target_id: Some(assignment.session_id.clone()),
+                    url: None,
+                    artifact: None,
+                    project_id: Some(root.project_id.clone()),
+                },
+            ],
+            requires_input: false,
+            priority: 0,
+        },
+    )
+}
 fn namespace(user: &ActorId) -> String {
     let plain = format!("notifications:{}", user.0.as_str());
     if plain.len() <= 128 {

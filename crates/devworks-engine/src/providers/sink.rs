@@ -767,7 +767,10 @@ impl ProviderSink {
             fence.write(store.as_ref(), move |tx| {
                 validate(tx, &context, &current)?;
                 devworks_core::services::router::connections::record_inference_rejection(
-                    tx, &access, status,
+                    tx,
+                    &access,
+                    status,
+                    current.execution_root_id.as_ref(),
                 )
                 .map(|_| ())
             })?;
