@@ -10,7 +10,7 @@ use crate::services::cursor::CursorBinding;
 use std::collections::HashSet;
 
 mod post;
-pub use post::{MessageKind, PostSpec, PostedMessage, post_message};
+pub use post::{MessageKind, PostSpec, PostedMessage, post_host_notice, post_message};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Recipient {

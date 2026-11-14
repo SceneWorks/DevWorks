@@ -166,6 +166,8 @@ jobs:
 
   ubuntu_desktop:
     name: test (ubuntu-desktop)
+    needs: test_scope
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -180,6 +182,11 @@ jobs:
       - name: Run complete desktop partition
         shell: bash
         run: bash tools/ci/native-tests.sh desktop
+      # Tests in skipped partitions that read a later crate's source still run.
+      - name: Run cross-crate tests the test scope skipped
+        if: ${{ needs.test_scope.outputs.foundation == 'false' }}
+        shell: bash
+        run: bash tools/ci/cross-crate-tests.sh
 
   ubuntu_engine:
     name: test (ubuntu-engine)
