@@ -366,23 +366,47 @@ const CARGO_OUTPUT_DIRS: &[&str] = &[
     "criterion",
 ];
 
-/// Prose such as "operation/target/stage" or "source/target": a token made only of
-/// letter-only words joined by `/`, where the word after `target` (if any) is not a cargo
-/// output folder. A path holding a `.`, `$`, `_`, `-`, number or backslash is never prose.
-fn prose_slash_list(token: &str) -> bool {
-    let words: Vec<&str> = token.split('/').collect();
-    words.len() > 1
+/// Words a quoted string needs before a slash list inside it counts as prose.
+const PROSE_WORDS: usize = 5;
+
+/// Prose such as "operation/target/stage approval" inside a sentence-long string, where a
+/// `<repo>/target` path is unlikely. All of these must hold for the token around `i`:
+/// - it is letter-only words joined by `/`, `target` is not the last word, and the word after
+///   `target` is not a cargo output folder (so `target/release` and `x/target` still fail);
+/// - whitespace sits on both sides of it (so `"harness/target"` and `Path("a/target/b")`, a
+///   whole quoted path or call argument, still fail);
+/// - it lies inside a quoted string of at least [`PROSE_WORDS`] words (so an unquoted shell
+///   argument such as `cp target/foo out` still fails).
+fn prose_slash_list(line: &str, i: usize) -> bool {
+    let start = token_start(line, i);
+    let tok = token(line, i);
+    let end = start + tok.len();
+    let words: Vec<&str> = tok.split('/').collect();
+    let plain = words.len() > 1
         && words
             .iter()
             .all(|w| !w.is_empty() && w.bytes().all(|b| b.is_ascii_alphabetic()))
+        && words.last() != Some(&"target")
         && words
             .windows(2)
-            .all(|pair| pair[0] != "target" || !CARGO_OUTPUT_DIRS.contains(&pair[1]))
+            .all(|pair| pair[0] != "target" || !CARGO_OUTPUT_DIRS.contains(&pair[1]));
+    let spaced = prev_char(line, start).is_some_and(char::is_whitespace)
+        && next_char(line, end).is_none_or(|c| c.is_whitespace() || ",;".contains(c));
+    if !(plain && spaced) {
+        return false;
+    }
+    let Some(open) = line[..start].rfind(['"', '\'']) else {
+        return false;
+    };
+    let quote = &line[open..open + 1];
+    line[end..]
+        .find(quote)
+        .is_some_and(|close| line[open + 1..end + close].split_whitespace().count() >= PROSE_WORDS)
 }
 
 fn repo_target(line: &str) -> bool {
     line.match_indices("target").any(|(i, _)| {
-        if prose_slash_list(token(line, i)) {
+        if prose_slash_list(line, i) {
             return false;
         }
         let prev = prev_char(line, i);
@@ -849,6 +873,14 @@ mod tests {
             "cp target/debug/app out/app",
             "du -sh target/doc",
             "exe=root/'target/release'/f'eval-{engine}'",
+            r#"build_dir = Path("harness/target")"#,
+            r#"out = "foo/target""#,
+            r#"p = Path("a/target/b")"#,
+            "rm -rf out/target",
+            "cp target/foo out",
+            r#"echo "a b c d out/target e""#,
+            r#""Compare selected source/target records in a sentence""#,
+            r#"x = "one two three target/release four five""#,
         ] {
             fails(line, R_REPO_TARGET);
         }
@@ -860,11 +892,9 @@ mod tests {
             "echo ${{ matrix.target }}",
             "retarget/stuff",
             "ls targets/",
-            "Exact target/digest approval where required.",
-            "names target/revision and creates",
-            "Compare selected source/target records",
-            "production/authority/SDK/provider/target and retained",
-            "the record also carries operation/target/stage,",
+            r#""rules": "Exact target/digest approval where required and more.""#,
+            r#"'Replacement names target/revision and creates immutable retained version'"#,
+            r#""Schema revision 2: the record also carries operation/target/stage, too""#,
         ] {
             assert_ne!(reason(line), Some(R_REPO_TARGET), "line: {line}");
         }
