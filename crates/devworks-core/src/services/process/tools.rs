@@ -440,7 +440,8 @@ struct InstallCommand {
 ///   regardless of scripts). Yarn 2+ (told apart by its lockfile) does not accept
 ///   `--ignore-scripts`; it gets `--mode=skip-build` (no build script runs at all) and
 ///   `YARN_ENABLE_SCRIPTS=false`, which overrides its rc files. A Yarn release or plugin the
-///   repository configures is refused separately (see [`yarn_loads_repository_code`]).
+///   repository configures is refused separately (see [`install_runs_repository_code`], which
+///   also covers Cargo configuration and toolchain files).
 /// - uv: `--no-build` (no source distribution is built, so no build backend runs) and
 ///   `--no-install-workspace` (the project and its workspace members are not built either).
 /// - pip: `--only-binary :all:`, and only for a requirements file in which nothing could
@@ -652,35 +653,64 @@ fn binary_only_requirements(manifest: &[u8]) -> bool {
         }
         let requirement = requirement.join(" ");
         let requirement = requirement.split(';').next().unwrap_or_default().trim();
-        let lower = requirement.to_ascii_lowercase();
-        requirement
-            .chars()
+        // The project name ends where its extras, version specifier or a space start; pip
+        // strips extras before it recognizes a local archive.
+        let name = requirement
+            .split(['[', '<', '>', '=', '!', '~', ' ', '('])
+            .next()
+            .unwrap_or_default();
+        let lower = name.to_ascii_lowercase();
+        name.chars()
             .next()
             .is_some_and(|c| c.is_ascii_alphanumeric())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
             && !requirement.contains(['@', '/', '\\', ':'])
             && !ARCHIVES.iter().any(|archive| lower.ends_with(archive))
             && allowed_options(options, PER_REQUIREMENT)
     })
 }
 
-/// Whether Yarn would run JavaScript the repository controls before it installs anything:
-/// a `yarnPath` (Yarn 2+) or `yarn-path` (Yarn 1) release, or Yarn 2+ plugins, set in an rc
-/// file in the repository root or in the home directory an install runs with (which is inside
-/// the repository). No install option stops these, so such an install needs `allowScripts`.
-fn yarn_loads_repository_code(root: &Path) -> bool {
-    [root.to_path_buf(), root.join(".devworks-home")]
-        .iter()
-        .flat_map(|directory| [directory.join(".yarnrc.yml"), directory.join(".yarnrc")])
-        .any(|rc| match std::fs::read(&rc) {
-            Ok(text) => {
-                let text = String::from_utf8_lossy(&text);
-                ["yarnPath", "yarn-path", "plugins"]
-                    .iter()
-                    .any(|key| text.contains(key))
-            }
-            // A directory or unreadable entry under that name cannot be ruled out.
-            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
-        })
+/// Whether the manager would run a program the repository configures before (or instead of)
+/// the install itself, which no install option stops; such an install needs `allowScripts`.
+///
+/// - Yarn: any rc file in the repository root or in the install's home (inside the
+///   repository). An rc file can name a Yarn release (`yarnPath`, `yarn-path`) or plugins, and
+///   YAML can spell those keys in ways a text search misses, so any rc file counts.
+/// - Cargo: a Cargo configuration in the repository root or in the install's `CARGO_HOME`
+///   (inside the repository), which can name the compiler, wrappers or credential providers
+///   that even `cargo fetch` runs; and a toolchain file naming a toolchain by path (a TOML key
+///   spelled with an escape needs `\`, so a file with `path`, `/` or `\` counts).
+fn install_runs_repository_code(name: &str, root: &Path) -> bool {
+    let present = |path: PathBuf| match std::fs::symlink_metadata(&path) {
+        Ok(_) => true,
+        // An entry that cannot be inspected cannot be ruled out.
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    };
+    match name {
+        "yarn.lock" => [root.to_path_buf(), root.join(".devworks-home")]
+            .iter()
+            .flat_map(|directory| [directory.join(".yarnrc.yml"), directory.join(".yarnrc")])
+            .any(present),
+        "Cargo.toml" | "Cargo.lock" => {
+            let configured = [root.join(".cargo"), root.join(".devworks-cache/cargo")]
+                .iter()
+                .flat_map(|directory| [directory.join("config"), directory.join("config.toml")])
+                .any(present);
+            let toolchain_path = ["rust-toolchain", "rust-toolchain.toml"]
+                .iter()
+                .any(|file| match std::fs::read(root.join(file)) {
+                    Ok(text) => {
+                        let text = String::from_utf8_lossy(&text);
+                        text.contains("path") || text.contains(['/', '\\'])
+                    }
+                    Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+                });
+            configured || toolchain_path
+        }
+        _ => false,
+    }
 }
 
 /// Whether every token of a requirements-file line's options is one of `allowed`, each taking
@@ -1789,7 +1819,7 @@ impl ProcessToolService {
         }
         let (name, bytes) = selected.ok_or(BindingRefusal::ChangedManifest)?;
         let allow_scripts = input.allow_scripts == Some(true);
-        if name == "yarn.lock" && !allow_scripts && yarn_loads_repository_code(&root) {
+        if !allow_scripts && install_runs_repository_code(&name, &root) {
             return Err(BindingRefusal::ScriptsRequired);
         }
         let command = install_command(&name, &root, &bytes, allow_scripts)?;
@@ -1823,6 +1853,14 @@ impl ProcessToolService {
             }
         }
         env.extend(command.env);
+        if !allow_scripts {
+            // HOME is inside the repository, so its Git configuration (an `sshCommand`, a
+            // credential helper) is repository-controlled; a manager fetching a Git dependency
+            // reads no global or system Git configuration.
+            let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+            env.push(("GIT_CONFIG_GLOBAL".into(), null.into()));
+            env.push(("GIT_CONFIG_NOSYSTEM".into(), "1".into()));
+        }
         Ok(InstallPlan {
             spec: NativeProcessSpec {
                 program: executable.to_string_lossy().into_owned(),
@@ -3689,6 +3727,8 @@ mod tests {
             "git+https://example.invalid/repo.git#egg=pkg\n",
             "pkg-1.0.tar.gz\n",
             "pkg.tlz\n",
+            "pkg.zip[extra]\n",
+            "pkg.tar.gz [extra] ==1.0\n",
             "pkg-1.0.tar.lzma\n",
             "pkg-1.0.TAR.LZ\n",
             "pkg --config-settings=key=value\n",
@@ -3713,25 +3753,62 @@ mod tests {
     }
 
     #[test]
-    fn a_yarn_release_or_plugin_the_repository_configures_needs_install_scripts() {
-        let root = std::env::temp_dir().join(format!("devworks-yarn-rc-{}", std::process::id()));
+    fn a_manager_program_the_repository_configures_needs_install_scripts() {
+        let root = std::env::temp_dir().join(format!("devworks-tool-rc-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join(".devworks-home")).expect("test root");
-        assert!(!yarn_loads_repository_code(&root));
-        std::fs::write(root.join(".yarnrc.yml"), "nodeLinker: node-modules\n").expect("rc");
-        assert!(!yarn_loads_repository_code(&root));
-        for (file, text) in [
-            (".yarnrc.yml", "yarnPath: .yarn/releases/yarn-4.cjs\n"),
+        for directory in [".devworks-home", ".cargo", ".devworks-cache/cargo"] {
+            std::fs::create_dir_all(root.join(directory)).expect("test root");
+        }
+        for name in ["yarn.lock", "Cargo.toml", "Cargo.lock", "package.json"] {
+            assert!(!install_runs_repository_code(name, &root), "{name}");
+        }
+        // A toolchain file without a path is fine.
+        std::fs::write(
+            root.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.95\"\n",
+        )
+        .expect("toolchain");
+        assert!(!install_runs_repository_code("Cargo.toml", &root));
+        for (name, file, text) in [
+            ("yarn.lock", ".yarnrc.yml", "nodeLinker: node-modules\n"),
             (
+                "yarn.lock",
                 ".yarnrc.yml",
-                "plugins:\n  - path: .yarn/plugins/local.cjs\n",
+                "\"yarn\\u0050ath\": ./local.cjs\n",
             ),
-            (".yarnrc", "yarn-path \"./tools/yarn.js\"\n"),
-            (".devworks-home/.yarnrc.yml", "yarnPath: ../evil.cjs\n"),
+            ("yarn.lock", ".yarnrc", "yarn-path \"./tools/yarn.js\"\n"),
+            ("yarn.lock", ".devworks-home/.yarnrc.yml", "yarnPath: x\n"),
+            (
+                "Cargo.toml",
+                ".cargo/config.toml",
+                "[build]\nrustc = \"./hook\"\n",
+            ),
+            (
+                "Cargo.lock",
+                ".cargo/config",
+                "[build]\nrustc-wrapper = \"x\"\n",
+            ),
+            ("Cargo.toml", ".devworks-cache/cargo/config.toml", "[net]\n"),
+            (
+                "Cargo.toml",
+                "rust-toolchain.toml",
+                "[toolchain]\npath = \"./t\"\n",
+            ),
+            (
+                "Cargo.toml",
+                "rust-toolchain.toml",
+                "[toolchain]\n\"\\u0070ath\" = \"t\"\n",
+            ),
+            ("Cargo.lock", "rust-toolchain", "./custom-toolchain\n"),
         ] {
-            std::fs::write(root.join(file), text).expect("rc");
-            assert!(yarn_loads_repository_code(&root), "{file}: {text}");
-            std::fs::remove_file(root.join(file)).expect("remove rc");
+            let before = std::fs::read(root.join(file)).ok();
+            std::fs::write(root.join(file), text).expect("config");
+            assert!(install_runs_repository_code(name, &root), "{file}: {text}");
+            assert!(!install_runs_repository_code("package.json", &root));
+            match before {
+                Some(bytes) => std::fs::write(root.join(file), bytes).expect("restore"),
+                None => std::fs::remove_file(root.join(file)).expect("remove config"),
+            }
         }
         std::fs::remove_dir_all(root).expect("remove test root");
     }

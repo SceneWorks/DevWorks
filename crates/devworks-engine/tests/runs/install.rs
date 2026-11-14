@@ -17,6 +17,7 @@ const MANIFEST: &[u8] =
     br#"{"name":"fixture","scripts":{"postinstall":"touch lifecycle-script-ran"}}"#;
 const FAKE_NPM: &str = "#!/bin/sh\n\
 pwd > .install-ran\n\
+printf %s \"$GIT_CONFIG_GLOBAL\" > .git-config-global\n\
 for argument in \"$@\"; do\n\
   [ \"$argument\" = --ignore-scripts ] && exit 0\n\
 done\n\
@@ -221,6 +222,11 @@ fn a_dependency_install_runs_no_lifecycle_script_unless_approved_and_shares_the_
         assert_eq!(state, OperationState::ObservedComplete);
         assert!(ran(&primary));
         assert!(!scripted(&primary), "an install ran a lifecycle script");
+        // Git reads no global configuration from the home inside the repository.
+        assert_eq!(
+            std::fs::read_to_string(primary.join(".git-config-global")).unwrap(),
+            "/dev/null"
+        );
 
         // An agent asking to run the scripts is held for a person's approval of that request.
         let held = decide(
