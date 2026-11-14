@@ -22,10 +22,8 @@ tempfile = "=3.27.0"
 # their manifests. ed25519-dalek is the RustCrypto/dalek pure-Rust implementation.
 devworks-extension-protocol = { path = "../devworks-extension-protocol" }
 ed25519-dalek = "=2.2.0"
-# Package index fetching over https (rustls with the bundled Mozilla roots; no native TLS or
-# async runtime) and JSON Schema validation of package configuration values (no remote or
-# file schema resolution).
-package_ureq = { package = "ureq", version = "=2.12.1", default-features = false, features = ["tls"] }
+# JSON Schema validation of package configuration values (no remote or file schema
+# resolution). Package index and bundle downloads go through the web transport below.
 jsonschema = { version = "=0.28.3", default-features = false }
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache", "hooks", "functions"] }
 semver.workspace = true
@@ -33,7 +31,13 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlite-vec = "=0.1.7"
-# Native target metadata readers; SQLite target files reuse the bundled rusqlite above.
+# TLS trust roots of all outbound connections (one policy): MCP HTTPS and PostgreSQL TLS trust
+# the operating system certificate store (native-tls); every other outbound HTTP client (provider
+# sign-in, discovery and streaming, web fetch and search, package indexes and bundles) and the
+# MySQL and SQL Server drivers trust the bundled Mozilla roots (webpki-roots).
+#
+# Native target metadata readers; SQLite target files reuse the bundled rusqlite above. MySQL and
+# SQL Server use rustls with the bundled roots; PostgreSQL uses native-tls (the OS store).
 sqlx = { version = "=0.9.0", default-features = false, features = ["mysql-rsa", "runtime-tokio", "tls-rustls-ring-webpki"] }
 tiberius = { version = "=0.13.0", default-features = false, features = ["tds73", "rustls-webpki-roots"] }
 futures-util = { version = "=0.3.32", default-features = false, features = ["std", "async-await", "sink"] }
@@ -41,11 +45,11 @@ tokio-util = { version = "=0.7.20", default-features = false, features = ["compa
 tokio-postgres = "=0.7.18"
 postgres-native-tls = "=0.5.3"
 native-tls = "=0.2.18"
-# Native web fetching and search (DW-51): HTTP/1.1 written over rustls with the ring provider
-# (no aws-lc build tooling on Windows), Mozilla's root set bundled (an explicit trust policy, not
-# the OS store), httparse for response heads. The transport connects only to the address the
-# core egress policy checked, never resolves, never follows redirects and never sends cookies or
-# credentials.
+# Native web fetching and search (DW-51) and package index and bundle downloads: HTTP/1.1
+# written over rustls with the ring provider (no aws-lc build tooling on Windows), Mozilla's root
+# set bundled (webpki-roots), httparse for response heads. The transport connects only to the
+# address the core egress policy checked, never resolves, never follows redirects and never
+# sends cookies or credentials; callers check every redirect hop against that policy.
 httparse = "=1.10.1"
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "=1.0.11"
@@ -56,15 +60,18 @@ tokio = { version = "=1.54.1", default-features = false, features = ["sync", "rt
 # Outgoing MCP protocol, pagination and Streamable HTTP framing. The SDK's child-process
 # transport is deliberately disabled: stdio servers are launched by ProcessSupervisor.
 rmcp = { version = "=3.9.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client-reqwest"] }
-# rmcp uses reqwest 0.13; enable HTTPS on that exact dependency line. The provider client below
-# is reqwest 0.12 and its TLS feature does not apply to MCP.
-mcp_reqwest = { package = "reqwest", version = "=0.13.5", default-features = false, features = ["native-tls"] }
-# Provider streaming owns its async runtime, uses asynchronous DNS, bundled rustls roots and
-# the user's proxy environment. No cookies, compression, automatic retries or redirects.
-reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls", "hickory-dns", "stream"] }
-# Pin the parser whose allocation bound we document; inspect typed TooLarge errors without
-# formatting potentially credential-bearing client error chains. Its public TooLarge classifier
-# is feature-gated on `server` even for client parse errors; this adapter opens no server.
+# One reqwest (the version rmcp uses) serves MCP Streamable HTTP and provider streaming. MCP:
+# rmcp's client on reqwest's default backend, which is native-tls (the OS store) whenever the
+# `native-tls` feature is on. Provider streaming: a preconfigured rustls config with the ring
+# provider and the bundled roots (`rustls-no-provider` adds no crypto provider), the system
+# resolver and the user's proxy environment; no cookies, compression, automatic retries or
+# redirects. hickory-dns is not enabled: reqwest 0.13 needs a hickory release this lockfile
+# does not carry, and every other client here resolves through the system as well.
+reqwest = { version = "=0.13.5", default-features = false, features = ["native-tls", "rustls-no-provider", "stream"] }
+# The hyper that reqwest already links (not a separate client): pin the parser whose allocation
+# bound we document; inspect typed TooLarge errors without formatting potentially
+# credential-bearing client error chains. Its public TooLarge classifier is feature-gated on
+# `server` even for client parse errors; this adapter opens no server.
 hyper = { version = "=1.12.0", default-features = false, features = ["client", "http1", "server"] }
 # Structural indexing (DW-23, CODE-01/02): the tree-sitter runtime and one grammar crate per
 # language the retained CodeGraph LanguageSpecs and frozen adapter surface cover. Every grammar

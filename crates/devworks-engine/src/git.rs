@@ -64,12 +64,12 @@ pub fn consumer(service: Arc<GitService>) -> Consumer {
 }
 /// Cancel-before-dispatch is already proved by the shared journal; release those local
 /// reservations without repeating a Git command or deleting anything from the filesystem.
-pub async fn run(service: Arc<GitService>, wake: Arc<tokio::sync::Notify>) {
-    while !service.is_stopped() {
+pub(crate) async fn run(service: Arc<GitService>, mut stopped: crate::workers::Stopped) {
+    while !service.is_stopped() && !stopped.is_set() {
         let current = service.clone();
         let _ = tokio::task::spawn_blocking(move || current.reconcile_cancelled()).await;
-        // Waits out the interval, or ends at once when the runtime stops (the permit is kept if
-        // the stop arrives while a pass is running).
-        let _ = tokio::time::timeout(Duration::from_secs(1), wake.notified()).await;
+        // Waits out the interval, or ends at once when the runtime stops (a stop sent while a
+        // pass is running ends the wait as soon as it begins).
+        stopped.wait(Duration::from_secs(1)).await;
     }
 }
