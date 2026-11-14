@@ -9,6 +9,11 @@ Conditional compilation: a declaration under a cfg that is false on every platfo
 `false`, and `all`/`any`/`not` combinations of those) does not count. Any other cfg, such as
 `windows` or `feature = "x"`, counts as reachable.
 
+Path overrides: `#[cfg_attr(pred, path = "...")]` sets the path when `pred` is true. `test` and
+`any(...)` containing it are true, since tests/ files compile only in test targets; a false predicate
+(`not(test)`) sets nothing. A predicate it cannot evaluate (`windows`, `feature = "x"`) keeps both the
+path and the default file open: the check follows each one that exists, and fails only when none does.
+
 Macros: `macro_rules!` bodies are skipped, since they compile only when expanded. When a macro
 that declares modules is invoked, or an invocation's tokens declare modules, the check fails and
 says the declaration is unsupported, instead of guessing what the expansion compiles.
@@ -90,13 +95,16 @@ def closing(tokens, i):
     return len(tokens) - 1
 
 
-def predicate(tokens, i):
-    """Evaluate the cfg predicate at tokens[i]; return (True, False or None if unknown, next index)."""
+def predicate(tokens, i, true_names=()):
+    """Evaluate the cfg predicate at tokens[i]; return (True, False or None if unknown, next index).
+
+    Bare names in `true_names` evaluate to True; every other name except `true` and `false` is unknown.
+    """
     name = tokens[i] if i < len(tokens) else ")"
     if name in ("any", "all", "not") and i + 1 < len(tokens) and tokens[i + 1] == "(":
         values, j = [], i + 2
         while j < len(tokens) and tokens[j] != ")":
-            value, j = predicate(tokens, j)
+            value, j = predicate(tokens, j, true_names)
             values.append(value)
             if j < len(tokens) and tokens[j] == ",":
                 j += 1
@@ -112,6 +120,8 @@ def predicate(tokens, i):
         j += 2
     elif j < len(tokens) and tokens[j] == "(":
         j = closing(tokens, j) + 1
+    elif name in true_names:
+        return True, j
     return {"true": True, "false": False}.get(name), j
 
 
@@ -120,11 +130,45 @@ def never_compiled(attribute):
     return len(attribute) > 2 and attribute[0] == "cfg" and attribute[1] == "(" and predicate(attribute, 2)[0] is False
 
 
-def path_attribute(attributes, strings):
+def path_overrides(attribute, strings, definite):
+    """Yield (path, certain) for each `path = "..."` the attribute sets, in source order.
+
+    `certain` is False when the path applies only if an unevaluable cfg_attr predicate holds. A
+    cfg_attr whose predicate is false yields nothing. `test` counts as true: the files under tests/
+    are compiled only as part of test targets.
+    """
+    if len(attribute) == 3 and attribute[0] == "path" and attribute[1] == "=":
+        yield strings[int(attribute[2].strip('"'))], definite
+    elif len(attribute) > 3 and attribute[0] == "cfg_attr" and attribute[1] == "(":
+        value, j = predicate(attribute, 2, ("test",))
+        if value is False:
+            return
+        group, depth = [], 0
+        for token in attribute[j + 1:-1]:  # skip the comma after the predicate and the final ")"
+            if token == ",":
+                if depth == 0:
+                    yield from path_overrides(group, strings, definite and value is True)
+                    group = []
+                    continue
+            depth += (token in "([{") - (token in ")]}")
+            group.append(token)
+        yield from path_overrides(group, strings, definite and value is True)
+
+
+def path_candidates(attributes, strings):
+    """Return (paths, default possible): the #[path] values that may apply and whether the default file may.
+
+    rustc uses the first #[path] that is in effect. A predicate this checker cannot evaluate (for
+    example `windows`) keeps both outcomes open, so the checker follows every candidate that exists
+    instead of rejecting code that may be valid; it can then miss an orphan hidden behind such a cfg.
+    """
+    paths = []
     for attribute in attributes:
-        if len(attribute) == 3 and attribute[0] == "path" and attribute[1] == "=":
-            return strings[int(attribute[2].strip('"'))]
-    return None
+        for path, certain in path_overrides(attribute, strings, True):
+            paths.append(path)
+            if certain:
+                return paths, False
+    return paths, True
 
 
 class Unsupported(Exception):
@@ -143,7 +187,7 @@ def declares_module(tokens):
 
 
 def mod_declarations(source):
-    """Yield (enclosing inline modules, #[path] value or None, name) for each live `mod name;`.
+    """Yield (enclosing inline modules, #[path] candidates, default file possible, name) per live `mod name;`.
 
     Each enclosing inline module is a (name, #[path] value or None) pair. Macro bodies are not
     compiled unless expanded, so `macro_rules!` bodies are skipped; a macro that declares modules
@@ -191,12 +235,12 @@ def mod_declarations(source):
         if token == "mod" and i + 2 < len(tokens) and IDENT.fullmatch(tokens[i + 1]) and tokens[i + 2] in (";", "{"):
             name = tokens[i + 1].removeprefix("r#")
             compiled = not any(never_compiled(a) for a in attributes)
-            path = path_attribute(attributes, strings)
+            paths, default = path_candidates(attributes, strings)
             if tokens[i + 2] == ";":
                 if compiled and all(live for _, _, live in frames):
-                    yield [(n, p) for n, p, _ in frames if n is not None], path, name
+                    yield [(n, p) for n, p, _ in frames if n is not None], paths, default, name
             else:
-                frames.append((name, path, compiled))
+                frames.append((name, paths[0] if paths else None, compiled))
             attributes, i = [], i + 3
             continue
         if token == "{":
@@ -220,7 +264,7 @@ def child_files(file, owns_directory, source):
     directory) pairs.
     """
     children = []
-    for inline, path, name in mod_declarations(source):
+    for inline, paths, default, name in mod_declarations(source):
         base = file.parent if owns_directory else file.parent / file.stem
         directory = None  # None: no enclosing inline module
         for module, module_path in inline:
@@ -228,8 +272,14 @@ def child_files(file, owns_directory, source):
                 directory = (file.parent if directory is None else directory) / module_path
             else:
                 directory = (base if directory is None else directory) / module
-        if path is not None:
-            children.append((((file.parent if directory is None else directory) / path).resolve(), True))
+        found = False
+        for path in paths:
+            target = ((file.parent if directory is None else directory) / path).resolve()
+            if default and not target.is_file():
+                continue  # an unevaluable cfg_attr path may not apply; the default file can still
+            children.append((target, True))
+            found = True
+        if not default:
             continue
         base = base if directory is None else directory
         flat, nested = base / f"{name}.rs", base / name / "mod.rs"
@@ -237,7 +287,7 @@ def child_files(file, owns_directory, source):
             children.append((flat.resolve(), False))
         elif nested.is_file():
             children.append((nested.resolve(), True))
-        else:
+        elif not found:
             raise FileNotFoundError(f"{file}: `mod {name};` matches neither {flat} nor {nested}")
     return children
 
