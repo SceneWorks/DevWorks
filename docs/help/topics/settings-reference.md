@@ -268,7 +268,7 @@ Poll GitHub for changes.
 - Policy: Configurable
 - Section: GitHub
 
-Pushes, merges, reviews and checks notify agents through authenticated polling.
+Not yet active: DevWorks does not poll GitHub yet, so this switch changes nothing. Once polling is built, pushes, merges, reviews and checks notify agents through authenticated polling.
 
 ## github.importOpenIssues
 
@@ -280,7 +280,7 @@ Import open issues.
 - Policy: Configurable
 - Section: GitHub
 
-Import existing open issues when a repository is connected and newly reported ones thereafter.
+Not yet active: GitHub issue import is not built yet, so this switch changes nothing. Once it is, existing open issues are imported when a repository is connected, and newly reported ones thereafter.
 
 ## github.syncLinkedIssueFields
 
@@ -292,7 +292,7 @@ Receive linked issue updates.
 - Policy: Configurable
 - Section: GitHub
 
-Reflect remote issue updates locally. Keep intermediate execution details local; publish a resolution only after completed work is verified.
+Not yet active: GitHub issue synchronization is not built yet, so this switch changes nothing. Once it is, remote issue updates are reflected locally; intermediate execution details stay local and a resolution is published only after completed work is verified.
 
 ## github.issueTriageIntervalSeconds
 
@@ -304,7 +304,7 @@ Issue triage interval (seconds).
 - Policy: Configurable
 - Section: GitHub
 
-App-wide minimum interval between automatic issue triage admissions.
+Not yet active: automatic issue triage is not built yet, so this value changes nothing. Once it is, this is the app-wide minimum interval between automatic issue triage admissions.
 
 ## delivery.autoMerge
 
@@ -316,7 +316,7 @@ Auto-Merge.
 - Policy: Configurable
 - Section: Delivery
 
-Commit, push, address review feedback and merge when all required checks pass.
+Not yet active: DevWorks does not merge pull requests yet, so this switch changes nothing. Once merging is built, work is committed, pushed, review feedback addressed and the pull request merged when all required checks pass.
 
 ## delivery.mandatoryReview
 
@@ -340,7 +340,7 @@ Review fix cycles.
 - Policy: Configurable
 - Section: Delivery
 
-Maximum review/fix cycles before asking for help. Engineering default.
+Not yet active: the review/fix cycle is not built yet, so this value changes nothing. Once it is, this is the maximum number of review/fix cycles before asking for help. Engineering default.
 
 ## watch.backupEnabled
 
@@ -388,7 +388,7 @@ Automated review wait (seconds).
 - Policy: Configurable
 - Section: Delivery
 
-Finite wait for a registered review source before the review gate escalates. Engineering default.
+Not yet active: the review gate is not built yet, so this value changes nothing. Once it is, this is the finite wait for a registered review source before the gate escalates. Engineering default.
 
 ## agents.maxSubagents
 
@@ -436,7 +436,7 @@ Vision extraction fallback.
 - Policy: Configurable
 - Section: Knowledge
 
-Extract existing text first; use a vision-capable routed model for scanned pages.
+Not yet active: document extraction does not use a vision model yet, so this switch changes nothing. Once it does, existing text is extracted first and a vision-capable routed model reads scanned pages.
 
 ## knowledge.lessonRecurrenceThreshold
 

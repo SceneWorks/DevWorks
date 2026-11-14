@@ -2,7 +2,7 @@
 //! latch are independent: neither a larger cap nor a negative correction clears a pause.
 use crate::ports::storage::*;
 use crate::protocol::records::{FeatureBudgetInput, FeatureBudgetView};
-use crate::protocol::{ActorId, EventId, Id, RootId};
+use crate::protocol::{ActorId, AssignmentId, EventId, Id, RootId};
 use crate::services::runs::{ControlService, HoldSubject, active_blockers, raise_blocker};
 use crate::services::sessions::{counter, rev};
 use serde_json::json;
@@ -229,6 +229,7 @@ fn reconcile_latch(
             "FeatureBudgetWarning",
             json!({"spentMicroUsd":totals.spent_micro_usd,"limitMicroUsd":limit,"reservedMicroUsd":totals.reserved_micro_usd,"monetaryIncompleteAttempts":totals.monetary_incomplete_attempts,"legacyUsageFacts":totals.legacy_usage_facts,"thresholdPercent":75}),
         )?;
+        warn_coordinator(tx, feature, &totals, limit)?;
     }
     if totals.spent_micro_usd >= limit {
         let root = tx
@@ -267,4 +268,82 @@ fn reconcile_latch(
         }
     }
     Ok(totals.spent_micro_usd >= limit)
+}
+
+/// Whole dollars and micro-dollars, for text an agent reads.
+fn usd(micro: i64) -> String {
+    let sign = if micro < 0 { "-" } else { "" };
+    let micro = micro.unsigned_abs();
+    format!("{sign}${}.{:06}", micro / 1_000_000, micro % 1_000_000)
+}
+
+/// The session of the feature's coordinator: the primary assignment of the feature root itself
+/// (no parent). A live one is preferred; otherwise the most recently created one, so a paused
+/// coordinator still finds the warning when it resumes in the same session.
+fn coordinator_session(
+    tx: &mut dyn WriteTransaction,
+    root: &RootId,
+) -> Result<Option<Id>, StorageError> {
+    let mut after: Option<AssignmentId> = None;
+    let mut best: Option<StoredAssignment> = None;
+    loop {
+        let page = tx.runs().assignments(root, false, after.as_ref(), 500)?;
+        let len = page.len();
+        after = page.last().map(|a| a.id.clone());
+        for a in page {
+            if a.parent_id.is_some()
+                || a.purpose != AssignmentPurpose::Primary
+                || a.work_id != *root
+            {
+                continue;
+            }
+            let better = match &best {
+                None => true,
+                Some(b) => {
+                    (a.state.is_live(), a.created_at_ms) > (b.state.is_live(), b.created_at_ms)
+                }
+            };
+            if better {
+                best = Some(a);
+            }
+        }
+        if len < 500 {
+            break;
+        }
+    }
+    Ok(best.map(|a| a.session_id))
+}
+
+/// ROUTE-11: at 75% of a configured feature limit the coordinator receives the warning and the
+/// remaining allowance in its retained inbox, in the same write that latches the warning. A
+/// feature with no coordinator yet keeps the warning in its budget view and history only.
+fn warn_coordinator(
+    tx: &mut dyn WriteTransaction,
+    feature: &StoredWork,
+    totals: &StoredFeatureUsageTotals,
+    limit: i64,
+) -> Result<(), StorageError> {
+    let root = RootId(feature.id.clone());
+    let Some(session) = coordinator_session(tx, &root)? else {
+        return Ok(());
+    };
+    let remaining = limit.saturating_sub(totals.spent_micro_usd).max(0);
+    let uncommitted = remaining.saturating_sub(totals.reserved_micro_usd).max(0);
+    let body = format!(
+        "Feature budget warning: tracked spending on feature \"{title}\" ({id}) reached 75% of \
+         its limit. Spent {spent} of {limit}; {remaining} remains ({reserved} is reserved by \
+         requests in flight, leaving {uncommitted} uncommitted). Plan to wrap up within the \
+         remaining allowance; work pauses when the limit is reached. Budget pressure does not \
+         waive acceptance criteria, required verification or review, and incomplete work must \
+         not be reported as complete.",
+        title = feature.title.chars().take(200).collect::<String>(),
+        id = feature.id.as_str(),
+        spent = usd(totals.spent_micro_usd),
+        limit = usd(limit),
+        remaining = usd(remaining),
+        reserved = usd(totals.reserved_micro_usd),
+        uncommitted = usd(uncommitted),
+    );
+    crate::services::agents::retained::post_host_notice(tx, &session, Some(&root), &body)?;
+    Ok(())
 }
