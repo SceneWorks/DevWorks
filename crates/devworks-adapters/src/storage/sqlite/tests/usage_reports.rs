@@ -152,6 +152,7 @@ fn origin(
         monetary_complete: false,
         incomplete: false,
         unknown_tail: false,
+        committed_sequence: (kind == "SessionUsage").then_some(1),
     };
     run_write(s, WriteOptions::default(), move |tx| {
         tx.usage().insert_usage_origin(&o)

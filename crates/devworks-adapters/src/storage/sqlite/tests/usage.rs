@@ -163,6 +163,7 @@ fn origin(name: &str, kind: &str, amount: Option<i64>) -> StoredUsageOrigin {
         monetary_complete: amount.is_some(),
         incomplete: false,
         unknown_tail: false,
+        committed_sequence: (kind == "SessionUsage").then_some(1),
     }
 }
 fn totals(s: &SqliteStore) -> StoredFeatureUsageTotals {
@@ -761,15 +762,21 @@ fn usage28_global_session_bootstrap_reads_project_and_workspace_facts_even_after
                 committed_sequence: sequence,
                 accepted_at_ms: T0,
             })?;
-            tx.sessions().insert_usage(&StoredUsage {
-                session_id: id(name),
-                batch_id: batch,
-                ordinal: 1,
-                project_id: project,
-                root_id: None,
-                committed_sequence: sequence,
-                item: json!({"requestId":format!("request-{name}")}),
-            })?;
+            devworks_core::services::usage::ingest::session_usage(
+                tx,
+                &StoredUsage {
+                    session_id: id(name),
+                    batch_id: batch,
+                    ordinal: 1,
+                    project_id: project,
+                    root_id: None,
+                    committed_sequence: sequence,
+                    item: json!({"requestId": format!("request-{name}"), "purpose": "Conversation",
+                    "modelId": "sol", "inputTokens": "1", "outputTokens": "1",
+                    "cacheReadTokens": "0", "cacheWriteTokens": "0", "priceKind": "Untracked",
+                    "priceOrigin": "Untracked", "incomplete": false}),
+                },
+            )?;
         }
         Ok(())
     })
@@ -797,12 +804,16 @@ fn usage28_global_session_bootstrap_reads_project_and_workspace_facts_even_after
     })
     .unwrap();
     let raw = h.raw();
-    for (table, index) in [
-        ("session_usage", "session_usage_global"),
-        ("tool_invocations", "tool_invocation_global"),
+    for (table, filter, index) in [
+        (
+            "usage_origins",
+            "source_kind='SessionUsage' AND ",
+            "usage_origins_session_global",
+        ),
+        ("tool_invocations", "", "tool_invocation_global"),
     ] {
         let sql = format!(
-            "EXPLAIN QUERY PLAN SELECT * FROM {table} WHERE committed_seq>=?1 ORDER BY committed_seq LIMIT 1"
+            "EXPLAIN QUERY PLAN SELECT * FROM {table} WHERE {filter}committed_seq>=?1 ORDER BY committed_seq LIMIT 1"
         );
         let detail: String = raw.query_row(&sql, [0], |r| r.get(3)).unwrap();
         assert!(detail.contains(index), "{detail}");
@@ -861,7 +872,7 @@ fn usage28_canonical_identity_requires_actual_matching_journal_and_request_witho
     .unwrap();
 }
 #[test]
-fn usage28_global_job_facts_page_by_run_and_sequence_without_current_scope_inference() {
+fn usage28_job_usage_pages_by_run_and_sequence_without_current_scope_inference() {
     let h = Harness::new();
     let s = seeded(&h);
     run_write(&s, WriteOptions::default(), |tx| {
@@ -930,7 +941,7 @@ fn usage28_global_job_facts_page_by_run_and_sequence_without_current_scope_infer
             };
             tx.jobs().insert_run(&run)?;
             for n in 1..=2 {
-                tx.jobs().record_usage(&StoredJobUsage {
+                let usage = tx.jobs().prepare_usage(&StoredJobUsage {
                     run_id: run.id.clone(),
                     seq: n,
                     request_id: id(&format!("request-{name}-{n}")),
@@ -947,34 +958,27 @@ fn usage28_global_job_facts_page_by_run_and_sequence_without_current_scope_infer
                     incomplete: true,
                     recorded_at_ms: T0,
                 })?;
+                assert_eq!(usage.seq, n);
+                devworks_core::services::usage::ingest::job_usage(tx, &usage)?;
             }
         }
         Ok(())
     })
     .unwrap();
     read_snapshot(&s, &ReadOptions::default(), |r| {
-        let first = r.jobs().usage_history(None, 1)?;
+        let a = id("run-job-a");
+        let first = r.jobs().run_usage(&a, None, 1)?;
         assert_eq!((first[0].run_id.as_str(), first[0].seq), ("run-job-a", 1));
-        let second = r.jobs().usage_history(
-            Some(&UsageJobPosition {
-                run_id: first[0].run_id.clone(),
-                seq: first[0].seq,
-            }),
-            2,
-        )?;
+        let second = r.jobs().run_usage(&a, Some(1), 2)?;
+        assert_eq!(second.len(), 1);
         assert_eq!((second[0].run_id.as_str(), second[0].seq), ("run-job-a", 2));
-        assert_eq!((second[1].run_id.as_str(), second[1].seq), ("run-job-b", 1));
-        assert!(r.jobs().usage_history(None, 501).is_err());
-        assert!(
-            r.jobs()
-                .usage_history(
-                    Some(&UsageJobPosition {
-                        run_id: id("run-job-a"),
-                        seq: -1
-                    }),
-                    1
-                )
-                .is_err()
+        let b = r.jobs().run_usage(&id("run-job-b"), None, 500)?;
+        assert_eq!(b.iter().map(|u| u.seq).collect::<Vec<_>>(), [1, 2]);
+        assert!(r.jobs().run_usage(&a, None, 501).is_err());
+        let totals = r.jobs().usage_totals(&a)?;
+        assert_eq!(
+            (totals.items, totals.untracked, totals.incomplete),
+            (2, 2, 2)
         );
         Ok(())
     })

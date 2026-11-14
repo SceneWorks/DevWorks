@@ -1,5 +1,6 @@
 //! SQLite schedules and runs (migrations 1 and 19): `schedules`, `job_runs`, `job_run_links`,
-//! `job_checkpoints`, `job_actions` and `job_run_usage`.
+//! `job_checkpoints` and `job_actions`; a run's usage items are read from its `JobUsage` usage
+//! origins.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use devworks_core::ports::storage::*;
@@ -461,7 +462,15 @@ fn validate_action(a: &StoredJobAction) -> Result<(), StorageError> {
     }
     Ok(())
 }
-const USAGE_COLUMNS: &str = "run_id,seq,request_id,purpose,model_id,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,amount_usd,price_kind,price_origin,price_revision,incomplete,recorded_at";
+/// A run usage item read from its `JobUsage` usage origin (the source ID is `[run, seq]`).
+const USAGE_COLUMNS: &str = "job_run_id,json_extract(source_id,'$[1]'),request_id,
+ json_extract(payload_json,'$.purpose'),json_extract(payload_json,'$.modelId'),
+ json_extract(payload_json,'$.inputTokens'),json_extract(payload_json,'$.outputTokens'),
+ json_extract(payload_json,'$.cacheReadTokens'),json_extract(payload_json,'$.cacheWriteTokens'),
+ json_extract(payload_json,'$.amountUsd'),json_extract(payload_json,'$.priceKind'),
+ json_extract(payload_json,'$.priceOrigin'),json_extract(payload_json,'$.priceRevision'),
+ json_extract(payload_json,'$.incomplete'),recorded_at";
+const USAGE_SEQ: &str = "json_extract(source_id,'$[1]')";
 fn usage_rows(
     conn: &Connection,
     run: &Id,
@@ -471,7 +480,8 @@ fn usage_rows(
     usage_query(
         conn,
         &format!(
-            "SELECT {USAGE_COLUMNS} FROM job_run_usage WHERE run_id=?1 AND seq>?2 ORDER BY seq LIMIT ?3"
+            "SELECT {USAGE_COLUMNS} FROM usage_origins WHERE source_kind='JobUsage' AND job_run_id=?1
+             AND {USAGE_SEQ}>?2 ORDER BY {USAGE_SEQ} LIMIT ?3"
         ),
         &[&run.as_str(), &after, &limit],
     )
@@ -564,12 +574,14 @@ pub(crate) fn pico(amount: &str) -> Option<i128> {
 }
 fn usage_totals(conn: &Connection, run: &Id) -> Result<JobUsageTotals, StorageError> {
     let (items, untracked, incomplete): (i64, i64, i64) = db(conn.query_row(
-        "SELECT count(*), ifnull(sum(price_kind='Untracked'),0), ifnull(sum(incomplete),0) FROM job_run_usage WHERE run_id=?1",
+        "SELECT count(*), ifnull(sum(json_extract(payload_json,'$.priceKind')='Untracked'),0),
+         ifnull(sum(incomplete),0) FROM usage_origins WHERE source_kind='JobUsage' AND job_run_id=?1",
         params![run.as_str()],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     ))?;
     let mut st = db(conn.prepare_cached(
-        "SELECT amount_usd FROM job_run_usage WHERE run_id=?1 AND amount_usd IS NOT NULL",
+        "SELECT json_extract(payload_json,'$.amountUsd') FROM usage_origins
+         WHERE source_kind='JobUsage' AND job_run_id=?1 AND json_extract(payload_json,'$.amountUsd') IS NOT NULL",
     ))?;
     let amounts = db(st
         .query_map(params![run.as_str()], |r| r.get::<_, String>(0))
@@ -591,13 +603,6 @@ fn usage_totals(conn: &Connection, run: &Id) -> Result<JobUsageTotals, StorageEr
 macro_rules! job_reads {
     ($t:ty) => {
         impl JobRead for $t {
-            fn usage_history(&self,after:Option<&UsageJobPosition>,limit:u16)->Result<Vec<StoredJobUsage>,StorageError>{
-                let limit=limit_ok(limit)?;
-                let run=after.map_or("",|p|p.run_id.as_str());let sequence=after.map_or(0,|p|p.seq);
-                if sequence<0{return Err(invalid("negative job usage cursor"));}
-                usage_query(self.conn,&format!("SELECT {USAGE_COLUMNS} FROM job_run_usage WHERE (run_id,seq)>(?1,?2) ORDER BY run_id,seq LIMIT ?3"),&[&run,&sequence,&limit])
-            }
-
             fn job(&self, id: &Id) -> Result<Option<StoredJob>, StorageError> {
                 job(self.conn, id)
             }
@@ -992,12 +997,28 @@ impl JobRepository for Unit<'_> {
         action(self.conn, &a.job_id, &a.key)?
             .ok_or_else(|| corrupt("action vanished inside its transaction"))
     }
-    fn record_usage(&mut self, u: &StoredJobUsage) -> Result<StoredJobUsage, StorageError> {
+    fn prepare_usage(&self, u: &StoredJobUsage) -> Result<StoredJobUsage, StorageError> {
         if run(self.conn, &u.run_id)?.is_none() {
             return Err(StorageError::NotFound {
                 kind: "job_run",
                 id: u.run_id.as_str().to_owned(),
             });
+        }
+        // The checks the dropped job_run_usage table held.
+        if u.purpose.is_empty()
+            || u.purpose.len() > 256
+            || u.price_origin.is_empty()
+            || !["Reported", "Estimated", "Free", "Untracked"].contains(&u.price_kind.as_str())
+            || [
+                u.input_tokens,
+                u.output_tokens,
+                u.cache_read_tokens,
+                u.cache_write_tokens,
+            ]
+            .iter()
+            .any(|t| *t < 0)
+        {
+            return Err(invalid("invalid job usage item"));
         }
         if (u.price_kind == "Untracked") != u.amount_usd.is_none() {
             return Err(invalid(
@@ -1008,7 +1029,8 @@ impl JobRepository for Unit<'_> {
             return Err(invalid("usage amount must be a canonical decimal"));
         }
         let taken: bool = db(self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM job_run_usage WHERE run_id=?1 AND request_id=?2)",
+            "SELECT EXISTS(SELECT 1 FROM usage_origins WHERE source_kind='JobUsage' AND job_run_id=?1
+             AND request_id=?2)",
             params![u.run_id.as_str(), u.request_id.as_str()],
             |r| r.get(0),
         ))?;
@@ -1016,32 +1038,10 @@ impl JobRepository for Unit<'_> {
             return Err(duplicate("job_usage", u.request_id.as_str()));
         }
         let seq: i64 = db(self.conn.query_row(
-            "SELECT ifnull(max(seq),0)+1 FROM job_run_usage WHERE run_id=?1",
+            &format!("SELECT ifnull(max({USAGE_SEQ}),0)+1 FROM usage_origins WHERE source_kind='JobUsage' AND job_run_id=?1"),
             params![u.run_id.as_str()],
             |r| r.get(0),
         ))?;
-        db(self.conn.execute(
-            &format!("INSERT INTO job_run_usage({USAGE_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)"),
-            params![
-                u.run_id.as_str(),
-                seq,
-                u.request_id.as_str(),
-                u.purpose,
-                u.model_id.as_str(),
-                u.input_tokens,
-                u.output_tokens,
-                u.cache_read_tokens,
-                u.cache_write_tokens,
-                u.amount_usd,
-                u.price_kind,
-                u.price_origin,
-                u.price_revision,
-                u.incomplete,
-                u.recorded_at_ms,
-            ],
-        ))?;
-        usage_rows(self.conn, &u.run_id, seq - 1, 1)?
-            .pop()
-            .ok_or_else(|| corrupt("usage vanished inside its transaction"))
+        Ok(StoredJobUsage { seq, ..u.clone() })
     }
 }

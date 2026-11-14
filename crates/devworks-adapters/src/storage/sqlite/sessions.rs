@@ -1,7 +1,8 @@
 //! SQLite session, transcript and lineage records: `sessions`/`conversations` and
 //! `transcript_chunks` (migration 1, extended by migration 7), and the migration 7 tables
 //! `transcript_batches`, `session_tool_calls`, `session_context_epochs`,
-//! `session_context_sources`, `session_checkpoints`, `session_usage` and `history_links`.
+//! `session_context_sources`, `session_checkpoints` and `history_links`; session usage is read
+//! from its usage origins.
 use super::conn::db;
 use super::repos::{EVENT_COLUMNS, Snapshot, Unit, event_of, event_row};
 use devworks_core::ports::storage::*;
@@ -517,6 +518,12 @@ fn latest_checkpoint(
     .transpose()
 }
 
+/// A session usage item's batch, ordinal, session, project, root, committed sequence and item,
+/// read from its `SessionUsage` usage origin (the source ID is `[session, batch, ordinal]`).
+const SESSION_USAGE_COLUMNS: &str = "json_extract(source_id,'$[1]'),json_extract(source_id,'$[2]'),
+ session_id,project_id,work_id,committed_seq,json_extract(payload_json,'$.item')";
+const ORDINAL: &str = "json_extract(source_id,'$[2]')";
+
 fn usage(
     conn: &Connection,
     root: &RootId,
@@ -536,11 +543,12 @@ fn usage(
         i64,
         String,
     );
-    let mut stmt = db(conn.prepare_cached(
-        "SELECT batch_id,ordinal,session_id,project_id,root_id,committed_seq,item_json FROM session_usage
-         WHERE root_id=?1 AND (committed_seq>?2 OR (committed_seq=?2 AND printf('%06d',ordinal)>?3))
-         ORDER BY committed_seq,ordinal LIMIT ?4",
-    ))?;
+    let mut stmt = db(conn.prepare_cached(&format!(
+        "SELECT {SESSION_USAGE_COLUMNS} FROM usage_origins
+         WHERE source_kind='SessionUsage' AND work_id=?1
+         AND (committed_seq>?2 OR (committed_seq=?2 AND printf('%06d',{ORDINAL})>?3))
+         ORDER BY committed_seq,{ORDINAL} LIMIT ?4"
+    )))?;
     let rows = db(stmt.query_map(params![root.0.as_str(), seq, id, n], |r| {
         Ok((
             r.get(0)?,
@@ -930,11 +938,17 @@ fn usage_facts(
         i64,
         String,
     );
+    // Usage origins name a session's root `work_id`.
+    let column = if column == "root_id" {
+        "work_id"
+    } else {
+        column
+    };
     let mut usage = db(conn.prepare_cached(&format!(
-        "SELECT batch_id,ordinal,session_id,project_id,root_id,committed_seq,item_json
-         FROM session_usage WHERE {column} IS ?1 AND {}
-         ORDER BY committed_seq,ordinal LIMIT ?5",
-        after_key("committed_seq", 3, "printf('%06d',ordinal)")
+        "SELECT {SESSION_USAGE_COLUMNS} FROM usage_origins
+         WHERE source_kind='SessionUsage' AND {column} IS ?1 AND {}
+         ORDER BY committed_seq,{ORDINAL} LIMIT ?5",
+        after_key("committed_seq", 3, &format!("printf('%06d',{ORDINAL})"))
     )))?;
     let rows = db(usage.query_map(keyed, |r| {
         Ok((
@@ -1648,25 +1662,6 @@ impl SessionRepository for Unit<'_> {
             c.batch_id.as_str(),
             json_text(&c.artifact),
             c.created_at_ms
-        ]))?;
-        Ok(())
-    }
-
-    fn insert_usage(&mut self, u: &StoredUsage) -> Result<(), StorageError> {
-        if !u.item.is_object() {
-            return Err(invalid("usage item must be a JSON object"));
-        }
-        db(db(self.conn.prepare_cached(
-            "INSERT INTO session_usage(batch_id,ordinal,session_id,project_id,root_id,committed_seq,item_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-        ))?
-        .execute(params![
-            u.batch_id.as_str(),
-            u.ordinal,
-            u.session_id.as_str(),
-            u.project_id.as_ref().map(|p| p.0.as_str()),
-            u.root_id.as_ref().map(|r| r.0.as_str()),
-            u.committed_sequence,
-            json_text(&u.item)
         ]))?;
         Ok(())
     }

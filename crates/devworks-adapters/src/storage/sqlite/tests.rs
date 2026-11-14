@@ -151,6 +151,7 @@ mod schemas;
 mod sessions;
 mod settings;
 mod usage;
+mod usage_copies;
 mod usage_reports;
 mod web;
 mod work;

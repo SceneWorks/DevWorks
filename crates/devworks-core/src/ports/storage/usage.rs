@@ -110,6 +110,9 @@ pub struct StoredUsageOrigin {
     pub monetary_complete: bool,
     pub incomplete: bool,
     pub unknown_tail: bool,
+    /// Committed sequence of the transcript batch that recorded a `SessionUsage` item (the
+    /// order session usage is paged in); `None` for every other kind.
+    pub committed_sequence: Option<i64>,
 }
 impl StoredUsageOrigin {
     /// Opaque tuple key for exclusive source-kind/source-ID pagination.

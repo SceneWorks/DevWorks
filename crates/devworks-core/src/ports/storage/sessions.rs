@@ -512,7 +512,6 @@ pub trait SessionRepository: SessionRead {
     ) -> Result<(), StorageError>;
     fn insert_context_source(&mut self, source: &StoredContextSource) -> Result<(), StorageError>;
     fn insert_checkpoint(&mut self, checkpoint: &StoredCheckpoint) -> Result<(), StorageError>;
-    fn insert_usage(&mut self, usage: &StoredUsage) -> Result<(), StorageError>;
     /// Records a completed invocation; `(session, response sequence)` is unique.
     fn insert_invocation(&mut self, invocation: &StoredInvocation) -> Result<(), StorageError>;
     /// Adds a link; its ID is unique and a superseded or parent link must exist.

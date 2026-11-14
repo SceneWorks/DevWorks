@@ -1619,9 +1619,6 @@ impl SessionRepository for Unsupported {
     fn insert_checkpoint(&mut self, _: &StoredCheckpoint) -> Result<(), StorageError> {
         nope()
     }
-    fn insert_usage(&mut self, _: &StoredUsage) -> Result<(), StorageError> {
-        nope()
-    }
     fn insert_invocation(&mut self, _: &StoredInvocation) -> Result<(), StorageError> {
         nope()
     }
@@ -1696,13 +1693,6 @@ impl ResourceRead for Unsupported {
     }
 }
 impl JobRead for Unsupported {
-    fn usage_history(
-        &self,
-        _: Option<&UsageJobPosition>,
-        _: u16,
-    ) -> Result<Vec<StoredJobUsage>, StorageError> {
-        nope()
-    }
     fn job(&self, _: &Id) -> Result<Option<StoredJob>, StorageError> {
         nope()
     }
@@ -1814,7 +1804,7 @@ impl JobRepository for Unsupported {
     ) -> Result<StoredJobAction, StorageError> {
         nope()
     }
-    fn record_usage(&mut self, _: &StoredJobUsage) -> Result<StoredJobUsage, StorageError> {
+    fn prepare_usage(&self, _: &StoredJobUsage) -> Result<StoredJobUsage, StorageError> {
         nope()
     }
 }

@@ -35,9 +35,13 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// two partial indexes, owned_process_root_unsettled and owned_containers_root_agent_work; it
 /// adds no table, column or ownership edge, and both tables keep their purge policy. Migration 56
 /// adds the nullable default_ref column to repository_sources; the row keeps its owner, and the
-/// migration adds no table or ownership edge.
+/// migration adds no table or ownership edge. Migration 57 drops session_usage and
+/// job_run_usage, with their policy rows, after copying their items into usage_origins; adds
+/// usage_origins.committed_seq, four usage_origins indexes and the recreated update trigger.
+/// usage_origins keeps its project owner (`project_id`), so a project's purge removes the copied
+/// rows with it, and adds no table or ownership edge.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "0dd9682cb2bfca3ff6c513704ff5da29243840140f8ea4a85ae85c877141c416";
+    "742cb9e72c67fa0d852a15c656d83e589ae6c0db89e708fbde54edbf74e2cbc0";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

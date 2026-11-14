@@ -3,7 +3,7 @@
   "schemaVersion": 35,
   "schemaDigest": "2ffa753cd5eb787d9d3d2c9dc2c5b0f32da8094876acc298388c9b1452cfa53b",
   "verifiedSourceCommit": "5071ef86827b182e4180f124901c8e9c521264de",
-  "coverage": 205,
+  "coverage": 203,
   "policies": [
     {
       "table": "actors",
@@ -501,12 +501,6 @@
       "table": "job_run_links",
       "class": "schedule_lineage",
       "selector": "run_id in ownedJobRuns or root_id in ownedWork",
-      "disposition": "owned_lineage"
-    },
-    {
-      "table": "job_run_usage",
-      "class": "schedule_lineage",
-      "selector": "run_id in ownedJobRuns",
       "disposition": "owned_lineage"
     },
     {
@@ -1066,12 +1060,6 @@
       "class": "session_lineage",
       "selector": "session_id in ownedSessions",
       "disposition": "owned_lineage"
-    },
-    {
-      "table": "session_usage",
-      "class": "project_owned_rows",
-      "selector": "project_id=P; current scoped/shared keepers override removal",
-      "disposition": "project_owner"
     },
     {
       "table": "sessions",
