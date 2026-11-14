@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::config::Budgets;
-use crate::resolve;
 use crate::slots::{self, BusyProbe};
+use crate::{is_link, resolve};
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -332,11 +332,6 @@ fn children(dir: &Path) -> Vec<PathBuf> {
 
 fn is_real_dir(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir())
-}
-
-/// Whether `path` is a symlink (on Windows also a junction), which cleanup never follows.
-fn is_link(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
 }
 
 /// Whether `path` itself lies strictly inside `root` (canonical): its parent, with every link
