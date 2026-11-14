@@ -357,7 +357,7 @@ pub static SCREENS: [Screen; 20] = [
         // Runs, their diagnostics and the indexing sources (DW-23).
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Indexing,
     },
     Screen {
         route: Route::AddOns,

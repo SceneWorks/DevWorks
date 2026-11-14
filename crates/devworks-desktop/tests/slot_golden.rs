@@ -9,6 +9,7 @@ use devworks_desktop::conventions_ops::ConventionsSlot;
 use devworks_desktop::databases_ops::DatabasesSlot;
 use devworks_desktop::graph_ops::GraphSlot;
 use devworks_desktop::help_ops::HelpSlot;
+use devworks_desktop::indexing_ops::IndexingSlot;
 use devworks_desktop::instructions_ops::InstructionsSlot;
 use devworks_desktop::memory::Memory;
 use devworks_desktop::projects_ops::ProjectsSlot;
@@ -120,13 +121,13 @@ fn samples() -> Vec<Slot> {
         Slot::Projects(ProjectsSlot::RepositoryText("s".into(), true)),
         Slot::Projects(ProjectsSlot::RepositoryContent("s".into(), true)),
         Slot::Projects(ProjectsSlot::RemoveIndex("s".into())),
-        Slot::IndexStatus("s".into()),
-        Slot::IndexRuns("s".into()),
-        Slot::IndexCommand("s".into()),
-        Slot::IndexCancel("s".into()),
-        Slot::IndexRetire("s".into()),
-        Slot::IndexSourcesSave,
-        Slot::IndexDiscover,
+        Slot::Indexing(IndexingSlot::IndexStatus("s".into())),
+        Slot::Indexing(IndexingSlot::IndexRuns("s".into())),
+        Slot::Indexing(IndexingSlot::IndexCommand("s".into())),
+        Slot::Indexing(IndexingSlot::IndexCancel("s".into())),
+        Slot::Indexing(IndexingSlot::IndexRetire("s".into())),
+        Slot::Indexing(IndexingSlot::IndexSourcesSave),
+        Slot::Indexing(IndexingSlot::IndexDiscover),
         Slot::Conventions(ConventionsSlot::ConventionsList("s".into(), 7, true, true)),
         Slot::Conventions(ConventionsSlot::ConventionRead("s".into(), 7)),
         Slot::Conventions(ConventionsSlot::ConventionEditor("s".into(), "s".into(), 7)),
@@ -237,6 +238,7 @@ fn screen_variants() -> Vec<(ScreenId, Vec<String>)> {
         (ScreenId::Resources, variant_names::<ResourcesSlot>()),
         (ScreenId::Browser, variant_names::<BrowserSlot>()),
         (ScreenId::Projects, variant_names::<ProjectsSlot>()),
+        (ScreenId::Indexing, variant_names::<IndexingSlot>()),
     ]
 }
 
@@ -267,6 +269,7 @@ fn reported(slot: &Slot) -> String {
         ScreenId::Resources => format!("{:?}", ResourcesSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Browser => format!("{:?}", BrowserSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Projects => format!("{:?}", ProjectsSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Indexing => format!("{:?}", IndexingSlot::try_from(slot.clone()).unwrap()),
     }
 }
 
