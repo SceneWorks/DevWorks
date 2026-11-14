@@ -297,6 +297,8 @@ pub struct Gate {
     /// Forward the runtime's change hints (off: every hint is missed, so only the shell's own
     /// bookkeeping can repair a stale reply).
     hints: bool,
+    /// Refuse every matching query (the shell keeps what it had; nothing replaces it).
+    refuse: bool,
     fail_query: Arc<std::sync::atomic::AtomicBool>,
     waiters: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -308,6 +310,7 @@ impl Gate {
             open: Arc::new((Mutex::new(true), std::sync::Condvar::new())),
             after: false,
             hints: true,
+            refuse: false,
             fail_query: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             waiters: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
@@ -333,6 +336,14 @@ impl Gate {
             ..self
         }
     }
+    /// The same gate refusing every matching query (as [`Self::fail_next_query`], each time),
+    /// while the real backend serves everything else.
+    pub fn refusing_queries(self) -> Self {
+        Self {
+            refuse: true,
+            ..self
+        }
+    }
     /// Refuse the next matching query while preserving the real backend for other work.
     pub fn fail_next_query(&self) {
         self.fail_query.store(true, Ordering::SeqCst);
@@ -353,12 +364,15 @@ impl Gate {
             gate: self.clone(),
         })
     }
+    fn matches(&self, operation: &str, frame: &[u8]) -> bool {
+        operation == self.operation
+            && self.frame_field.is_none_or(|pointer| {
+                serde_json::from_slice::<serde_json::Value>(frame)
+                    .is_ok_and(|v| v.pointer(pointer).is_some())
+            })
+    }
     fn wait(&self, operation: &str, frame: &[u8]) {
-        let matches_frame = self.frame_field.is_none_or(|pointer| {
-            serde_json::from_slice::<serde_json::Value>(frame)
-                .is_ok_and(|v| v.pointer(pointer).is_some())
-        });
-        if operation == self.operation && matches_frame {
+        if self.matches(operation, frame) {
             let mut open = self.open.0.lock().unwrap();
             self.waiters.fetch_add(1, Ordering::SeqCst);
             while !*open {
@@ -375,7 +389,10 @@ struct Gated {
 }
 impl Backend for Gated {
     fn query(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
-        if operation == self.gate.operation && self.gate.fail_query.swap(false, Ordering::SeqCst) {
+        if (self.gate.refuse && self.gate.matches(operation, frame))
+            || (operation == self.gate.operation
+                && self.gate.fail_query.swap(false, Ordering::SeqCst))
+        {
             return Err(devworks_core::gateway::GatewayFailure::NoUseCase(
                 "controlled query fault".into(),
             ));

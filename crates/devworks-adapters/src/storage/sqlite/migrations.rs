@@ -624,6 +624,17 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "98b89612ce3caecfafb3533de350b23c0cf6f883e6834944ec8a71a7901a9677",
         rebuilds_tables: true,
     },
+    // Indexes, maintained Knowledge tallies and per-server MCP catalogs for bounded reads. A
+    // prior build would read a server's catalog from its scope's configuration, where it no
+    // longer is, so neither a prior reader nor a prior writer may open the store.
+    Migration {
+        version: 54,
+        minimum_reader: 54,
+        minimum_writer: 54,
+        sql: include_str!("migrations/0054_bounded_reads.sql"),
+        expected_sha256: "0368b2a55b935d1720e26269a5b7805a37df20d81a0f4e210611cd2c6eb452c2",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

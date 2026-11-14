@@ -74,9 +74,8 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
         h.state()
             .client()
             .unwrap()
-            .is_pending(&devworks_desktop::backend::Slot::Prices(
-                before_generation,
-                true
+            .is_pending(&devworks_desktop::backend::Slot::Usage(
+                devworks_desktop::usage_ops::UsageSlot::Prices(before_generation, true)
             )),
         "the single pointer gesture must submit its cursor append"
     );

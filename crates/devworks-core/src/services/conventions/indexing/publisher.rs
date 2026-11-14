@@ -88,7 +88,7 @@ fn current(
         .actors()
         .actor_kind(&job.actor)?
         .ok_or(StorageError::ScopeDenied)?;
-    if format!("{kind:?}") != job.actor_kind {
+    if kind.as_str() != job.actor_kind {
         return Err(StorageError::ScopeDenied);
     }
     let context =

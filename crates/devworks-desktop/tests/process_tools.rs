@@ -371,62 +371,80 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
         ),
     ))
     .expect("saved manifest");
-    let installed = backend
-        .command(
+    // Runs one install to a successful exit and returns its process ID.
+    let install = |allow_scripts: Option<bool>| {
+        let mut body = json!({
+            "repositoryId":"process-repository", "expectedRevision":"1",
+            "manifest":saved.artifact, "profile":"Full"
+        });
+        let mut frame: serde_json::Value = serde_json::from_slice(&ops::command_frame(
+            &*backend,
             "process.install_project_dependencies",
-            &ops::command_frame(
-                &*backend,
-                "process.install_project_dependencies",
-                json!({
-                    "repositoryId":"process-repository", "expectedRevision":"1",
-                    "manifest":saved.artifact, "profile":"Full"
-                }),
-            ),
-        )
-        .expect("install receipt");
-    let install_id = match installed {
-        CommandReply::Recorded { receipt, .. } => match receipt.decision {
-            DomainDecision::Accepted { operation_id } => operation_id,
-            other => panic!("project install refused: {other:?}"),
-        },
-        other => panic!("expected install receipt: {other:?}"),
-    };
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        match backend
-            .process_completion(&install_id)
-            .expect("install completion")
-        {
-            Some(OperationCompletion::Succeeded {
-                result: OperationResult::ProcessInstallProjectDependencies { value },
-                ..
-            }) => {
-                assert_eq!(value.id, install_id.0);
-                if value.exit_code != Some(0) {
-                    let output = ops::query_result(backend.query(
-                        "process.output",
-                        &ops::query_frame(
-                            &*backend,
-                            "process.output",
-                            json!({"processId":install_id.0,"afterBytes":"0","maxBytes":8192}),
-                        ),
-                    ))
-                    .expect("failed install output")
-                    .0;
-                    panic!("project install exited {:?}: {output:?}", value.exit_code);
-                }
-                break;
-            }
-            Some(other) => panic!("project install failed: {other:?}"),
-            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            None => panic!("project install timed out"),
+            body.clone(),
+        ))
+        .expect("frame");
+        if let Some(allow) = allow_scripts {
+            body["allowScripts"] = json!(allow);
+            body["kind"] = json!("process.install_project_dependencies");
+            frame["body"] = body;
+            frame["schemaRevision"] = json!(8);
         }
-    }
+        let installed = backend
+            .command(
+                "process.install_project_dependencies",
+                frame.to_string().as_bytes(),
+            )
+            .expect("install receipt");
+        let install_id = match installed {
+            CommandReply::Recorded { receipt, .. } => match receipt.decision {
+                DomainDecision::Accepted { operation_id } => operation_id,
+                other => panic!("project install refused: {other:?}"),
+            },
+            other => panic!("expected install receipt: {other:?}"),
+        };
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match backend
+                .process_completion(&install_id)
+                .expect("install completion")
+            {
+                Some(OperationCompletion::Succeeded {
+                    result: OperationResult::ProcessInstallProjectDependencies { value },
+                    ..
+                }) => {
+                    assert_eq!(value.id, install_id.0);
+                    if value.exit_code != Some(0) {
+                        let output = ops::query_result(backend.query(
+                            "process.output",
+                            &ops::query_frame(
+                                &*backend,
+                                "process.output",
+                                json!({"processId":install_id.0,"afterBytes":"0","maxBytes":8192}),
+                            ),
+                        ))
+                        .expect("failed install output")
+                        .0;
+                        panic!("project install exited {:?}: {output:?}", value.exit_code);
+                    }
+                    break;
+                }
+                Some(other) => panic!("project install failed: {other:?}"),
+                None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+                None => panic!("project install timed out"),
+            }
+        }
+        install_id
+    };
+    // Without allowScripts Cargo only fetches: nothing is compiled, so no build script runs.
+    install(None);
+    let rlib = repository.join("target/debug/libdw_process_tool_fixture.rlib");
     assert!(
-        repository
-            .join("target/debug/libdw_process_tool_fixture.rlib")
-            .exists()
+        !rlib.exists(),
+        "an install without scripts compiled the crate"
     );
+    // The user's own request may run them: Cargo builds the crate.
+    let install_id = install(Some(true));
+    assert!(rlib.exists());
     let output = ops::query_result(backend.query(
         "process.output",
         &ops::query_frame(

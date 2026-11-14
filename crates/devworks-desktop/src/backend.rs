@@ -253,22 +253,6 @@ pub enum Slot {
     PurgePage,
     PurgeConfirm,
     PurgeStatus,
-    DatabaseList(u64, bool),
-    DatabaseObjects(u64, bool),
-    DatabaseRelations(u64, bool),
-    DatabasePrepare,
-    DatabaseCaPrepare,
-    DatabaseCa,
-    DatabaseCommand(String),
-    GraphRead(u64),
-    GraphTrust(String),
-    Usage(u64, bool),
-    UsageOptions(u64),
-    Prices(u64, bool),
-    PriceProbe(u64),
-    PriceOverride,
-    PriceRefresh,
-    PriceOperation,
     ApprovalsList,
     ApprovalInspect(String),
     ApprovalRefresh(String),
@@ -301,14 +285,6 @@ pub enum Slot {
     Preview(String, u64),
     /// Deleting an attachment removed from its draft (artifact ID).
     DeleteAttachment(String),
-    ArtifactsList,
-    ResourcesList,
-    /// The workspace's browser sessions.
-    BrowserSessions,
-    /// The browser sessions of one project (its ID).
-    ProjectBrowserSessions(String),
-    /// Closing a browser session (its ID).
-    BrowserClose(String),
     /// The Add-ons catalog.
     AddonsList,
     /// One package's logs.
@@ -382,18 +358,6 @@ pub enum Slot {
     IndexSourcesSave,
     /// A discovery scan.
     IndexDiscover,
-    /// A Knowledge listing page (its request generation).
-    ConventionsList(String, u64, bool, bool),
-    ConventionRead(String, u64),
-    ConventionEditor(String, String, u64),
-    ConventionVersions(String, u64, bool),
-    ConventionResources(String, u64, bool),
-    ConventionParents(String, String, u64, bool),
-    ConventionCommand(String, String),
-    ConventionOperation(String, String),
-    ConventionPrepare(String, String),
-    ConventionArtifact(String, String),
-    ConventionTransfer(String, String),
     KnowledgeList(u64),
     /// One Knowledge entry with its evidence and history (claim ID).
     KnowledgeRead(String),
@@ -481,36 +445,67 @@ pub enum Slot {
     EmbeddingSpaces(u64),
     /// One `router.configure` submission from the connections panel (its sequence number).
     Configure(u64),
-    /// Settings → Roles and skills: a discovery page (load generation).
-    InstructionSkills(u64),
-    /// The active record of one role (role item ID).
-    InstructionRole(String),
-    /// A history page of the selected item (detail generation).
-    InstructionHistory(u64),
-    /// The text of the shown revision (detail generation).
-    InstructionText(u64),
-    /// A resources page of the selected skill (detail generation).
-    InstructionResources(u64),
-    /// Staging a draft's text (change token).
-    InstructionPrepare(u64),
-    /// The draft text's `artifacts.save` (change token).
-    InstructionArtifact(u64),
-    /// The `*.draft` / `*.rollback` command (change token).
-    InstructionCommand(u64),
     // Migrated screens' slots, after every tagged variant: each serializes as its inner value
     // alone, so persisted commands keep the JSON they had in the single enum.
     #[serde(untagged)]
     Help(crate::help_ops::HelpSlot),
+    #[serde(untagged)]
+    Usage(crate::usage_ops::UsageSlot),
+    #[serde(untagged)]
+    Graph(crate::graph_ops::GraphSlot),
+    #[serde(untagged)]
+    Databases(crate::databases_ops::DatabasesSlot),
+    #[serde(untagged)]
+    Instructions(crate::instructions_ops::InstructionsSlot),
+    #[serde(untagged)]
+    Conventions(crate::conventions_ops::ConventionsSlot),
+    #[serde(untagged)]
+    Artifacts(crate::artifacts_screen::ArtifactsSlot),
+    #[serde(untagged)]
+    Resources(crate::artifacts_screen::ResourcesSlot),
+    #[serde(untagged)]
+    Browser(crate::artifacts_screen::BrowserSlot),
 }
 impl Slot {
     /// The screen whose replies this slot waits for.
     pub fn screen(&self) -> crate::screen::ScreenId {
+        use crate::screen::ScreenId;
         match self {
-            Self::Help(_) => crate::screen::ScreenId::Help,
-            _ => crate::screen::ScreenId::Legacy,
+            Self::Help(_) => ScreenId::Help,
+            Self::Usage(_) => ScreenId::Usage,
+            Self::Graph(_) => ScreenId::Graph,
+            Self::Databases(_) => ScreenId::Databases,
+            Self::Instructions(_) => ScreenId::Instructions,
+            Self::Conventions(_) => ScreenId::Conventions,
+            Self::Artifacts(_) => ScreenId::Artifacts,
+            Self::Resources(_) => ScreenId::Resources,
+            Self::Browser(_) => ScreenId::Browser,
+            _ => ScreenId::Legacy,
         }
     }
 }
+
+/// `From<$slot> for Slot` and `TryFrom<Slot> for $slot` for a screen's slot type held by the
+/// `Slot::$variant` variant.
+macro_rules! screen_slot {
+    ($slot:ty, $variant:ident) => {
+        impl From<$slot> for $crate::backend::Slot {
+            fn from(slot: $slot) -> Self {
+                $crate::backend::Slot::$variant(slot)
+            }
+        }
+        impl TryFrom<$crate::backend::Slot> for $slot {
+            type Error = $crate::backend::Slot;
+            fn try_from(slot: $crate::backend::Slot) -> Result<Self, $crate::backend::Slot> {
+                match slot {
+                    $crate::backend::Slot::$variant(slot) => Ok(slot),
+                    other => Err(other),
+                }
+            }
+        }
+    };
+}
+pub(crate) use screen_slot;
 
 /// A finished request.
 pub enum Reply {
