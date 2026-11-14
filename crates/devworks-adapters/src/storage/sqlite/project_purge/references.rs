@@ -120,10 +120,10 @@ fn collect(
     while let Some(row) = db(rows.next())? {
         result.push(ProjectPurgeReference {
             kind: spec.kind,
-            from_table: spec.from_table.clone(),
+            from_table: super::record_kind(&spec.from_table)?,
             from_key_digest: key_hash(row, 0, source_projection.len())?,
             from_columns: spec.from_columns.clone(),
-            to_table: spec.target.clone(),
+            to_table: super::record_kind(&spec.target)?,
             to_key_digest: key_hash(row, source_projection.len(), target_projection.len())?,
             to_columns: spec.to_columns.clone(),
         });

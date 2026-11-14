@@ -25,6 +25,7 @@ use devworks_core::protocol::{
 };
 use devworks_core::registry::Mode;
 use devworks_core::services::UseCases;
+use devworks_core::services::projects::managed_files::ManagedFileCustody;
 use devworks_core::services::projects::{ProjectService, RepositoryService};
 use devworks_core::services::runs::{ControlService, Target};
 use devworks_core::settings::catalog::AgentRole;
@@ -94,6 +95,7 @@ impl devworks_core::ports::project_purge::ProjectPurgeFiles for PurgeOwners {
     fn inventory(
         &self,
         selection: &devworks_core::ports::project_purge::PurgeFileSelection,
+        _: &dyn devworks_core::ports::managed_files::PurgeFileRecords,
         _: &mut dyn FnMut() -> bool,
     ) -> Result<
         devworks_core::ports::project_purge::PurgeFileSnapshot,
@@ -112,6 +114,7 @@ impl devworks_core::ports::project_purge::ProjectPurgeFiles for PurgeOwners {
     fn remove_reviewed(
         &self,
         _: &devworks_core::ports::project_purge::PurgeFileWitness,
+        _: &dyn devworks_core::ports::managed_files::PurgeFileRecords,
         _: &mut dyn FnMut() -> bool,
     ) -> Result<(), devworks_core::ports::project_purge::PurgeFileFault> {
         panic!("preparation and authorization cannot unlink")
@@ -146,6 +149,7 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
     }).unwrap();
     let owners = Arc::new(PurgeOwners(std::sync::Mutex::new(("a".repeat(64), false))));
     let service = Arc::new(PurgeCoordinator::new(
+        fx.store.clone(),
         fx.h.ids.clone(),
         owners.clone(),
         owners.clone(),
@@ -174,7 +178,7 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
     use devworks_core::ports::files::ArtifactSources;
     let sources =
         crate::fs::sources::HostArtifactSources::new(fx.h.clock.clone(), fx.h.ids.clone())
-            .with_store(fx.store.clone());
+            .with_project_fence(Arc::new(ManagedFileCustody::new(fx.store.clone())));
     let picked = fx.h.root.0.join("independent-picked-input.txt");
     std::fs::write(&picked, b"user input stays byte exact").unwrap();
     let owner_context = user
@@ -2288,7 +2292,7 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
         work_ids: vec![],
         operation_ids: vec![],
         deleted_artifact_ids: vec![],
-        record_ids: [("sessions".into(), vec![id("owned-session")])].into(),
+        record_ids: [(ProjectRecordKind::Sessions, vec![id("owned-session")])].into(),
     };
     let owner_digest = devworks_core::fingerprint::sha256_hex(&serde_json::to_vec(&scope).unwrap());
     let intent = PurgeEffectIntent::Client {
@@ -2296,7 +2300,7 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_clien
         digest: "a".repeat(64),
     };
     prepared.rows.push(ProjectPurgeRowWitness {
-        table: "sessions".into(),
+        table: ProjectRecordKind::Sessions,
         key_digest: devworks_core::fingerprint::sha256_hex(br#"["owned-session"]"#),
         row_digest: "f".repeat(64),
         action: ProjectPurgeRowAction::Delete,
@@ -2542,14 +2546,14 @@ fn purge_row_witnesses_survive_restart_bind_the_review_and_refuse_duplicates_ato
     let private_key = "private source locator that must never be copied to audit";
     prepared.rows = vec![
         ProjectPurgeRowWitness {
-            table: "work_items".into(),
+            table: ProjectRecordKind::WorkItems,
             key_digest: devworks_core::fingerprint::sha256_hex(private_key.as_bytes()),
             row_digest: "e".repeat(64),
             action: ProjectPurgeRowAction::Delete,
             reason: ProjectPurgeRowReason::OwnedProjectRecords,
         },
         ProjectPurgeRowWitness {
-            table: "projects".into(),
+            table: ProjectRecordKind::Projects,
             key_digest: "f".repeat(64),
             row_digest: "d".repeat(64),
             action: ProjectPurgeRowAction::Scrub,
@@ -3293,7 +3297,6 @@ fn managed_reservation(store: &SqliteStore, name: &str) -> ProjectManagedFileRes
 
 #[test]
 fn client_paste_custody_uses_stored_session_scope_and_preserves_independent_files() {
-    use crate::fs::client_staging::NativeClientStagingFiles;
     let fx = Fx::new();
     let p = fx.create("paste project", &[]);
     let project_id = p.id.clone();
@@ -3322,7 +3325,7 @@ fn client_paste_custody_uses_stored_session_scope_and_preserves_independent_file
         Ok(())
     });
     let root = fx.h.root.0.join("staging-ui");
-    let files = NativeClientStagingFiles::new(root.clone(), fx.store.clone());
+    let files = Staging::new(root.clone(), fx.store.clone());
     let path = files
         .write(
             Some(&id("project-paste-session")),
@@ -3400,7 +3403,6 @@ fn client_paste_custody_uses_stored_session_scope_and_preserves_independent_file
 
 #[test]
 fn client_paste_refuses_ambiguous_legacy_session_scope_before_creating_bytes() {
-    use crate::fs::client_staging::NativeClientStagingFiles;
     let fx = Fx::new();
     let p = fx.create("legacy paste project", &[]);
     fx.seed_roots(&p.id, &["legacy-paste-root"]);
@@ -3423,7 +3425,7 @@ fn client_paste_refuses_ambiguous_legacy_session_scope_before_creating_bytes() {
         })
     });
     let root = fx.h.root.0.join("staging-ui");
-    let files = NativeClientStagingFiles::new(root.clone(), fx.store.clone());
+    let files = Staging::new(root.clone(), fx.store.clone());
     assert!(
         files
             .write(
@@ -3445,7 +3447,6 @@ fn client_paste_refuses_ambiguous_legacy_session_scope_before_creating_bytes() {
 
 #[test]
 fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
-    use crate::fs::client_staging::NativeClientStagingFiles;
     use std::io::Write;
     let h = Harness::new();
     let store = Arc::new(h.store());
@@ -3478,7 +3479,7 @@ fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
     file.write_all(b"interrupted private PNG").unwrap();
     file.sync_all().unwrap();
     drop(file);
-    let files = NativeClientStagingFiles::new(root.clone(), store.clone());
+    let files = Staging::new(root.clone(), store.clone());
     let independent = files
         .write(None, &id("workspace-paste"), b"workspace PNG")
         .unwrap();
@@ -3490,7 +3491,7 @@ fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
     drop(files);
     drop(store);
     let store = Arc::new(h.store());
-    let files = NativeClientStagingFiles::new(root, store.clone());
+    let files = Staging::new(root, store.clone());
     files.recover_abandoned().unwrap();
     assert!(!path.exists());
     assert_eq!(std::fs::read(independent).unwrap(), b"workspace PNG");
@@ -3506,7 +3507,6 @@ fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
 
 #[test]
 fn client_paste_recovery_holds_a_replaced_file_without_deleting_either_identity() {
-    use crate::fs::client_staging::NativeClientStagingFiles;
     let h = Harness::new();
     let store = Arc::new(h.store());
     purge_storage_fixture(store.as_ref());
@@ -3536,7 +3536,7 @@ fn client_paste_recovery_holds_a_replaced_file_without_deleting_either_identity(
     std::fs::write(&path, b"independent replacement").unwrap();
     drop(store);
     let store = Arc::new(h.store());
-    let files = NativeClientStagingFiles::new(root, store.clone());
+    let files = Staging::new(root, store.clone());
     assert!(files.recover_abandoned().is_err());
     assert_eq!(std::fs::read(path).unwrap(), b"independent replacement");
     assert_eq!(std::fs::read(moved).unwrap(), b"original private bytes");
@@ -3551,14 +3551,12 @@ fn client_paste_recovery_holds_a_replaced_file_without_deleting_either_identity(
 
 #[test]
 fn client_staging_custody_covers_plan_and_convention_sources_without_claiming_workspace_inputs() {
-    use crate::fs::{client_staging::NativeClientStagingFiles, purge::NativeProjectPurgeFiles};
-    use devworks_core::ports::project_purge::{
-        ProjectPurgeFiles, PurgeFileOwner, PurgeFileSelection,
-    };
+    use crate::fs::purge::NativeProjectPurgeFiles;
+    use devworks_core::ports::project_purge::{PurgeFileOwner, PurgeFileSelection};
     let fx = Fx::new();
     let p = fx.create("text staging project", &[]);
     let root = fx.h.root.0.join("staging-ui");
-    let files = NativeClientStagingFiles::new(root.clone(), fx.store.clone());
+    let files = Staging::new(root.clone(), fx.store.clone());
     let mut owners = Vec::new();
     let mut paths = Vec::new();
     for extension in ["md", "txt", "json"] {
@@ -3582,12 +3580,11 @@ fn client_staging_custody_covers_plan_and_convention_sources_without_claiming_wo
         restore_epoch: info.restore_epoch,
         owners,
     };
-    let physical = NativeProjectPurgeFiles::new(
-        fx.h.root.0.clone(),
-        fx.h.root.0.join("cache"),
+    let physical = Recorded::new(
         fx.store.clone(),
-    )
-    .with_paste_root(root);
+        NativeProjectPurgeFiles::new(fx.h.root.0.clone(), fx.h.root.0.join("cache"))
+            .with_paste_root(root),
+    );
     let snapshot = physical.inventory(&selection, &mut || false).unwrap();
     assert_eq!(snapshot.files.len(), 3);
     assert!(
@@ -3784,11 +3781,11 @@ fn project_preview_writes_refuse_a_logically_purged_project_and_leave_workspace_
     let store = Arc::new(h.store());
     let prepared = purge_storage_fixture(store.as_ref());
     let files =
-        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"))
-            .with_store(store.clone());
+        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"));
+    let custody = ManagedFileCustody::new(store.clone());
     let key = devworks_core::services::artifacts::preview::preview_id("before-purge");
-    files
-        .write_project_derived(&project("purge-a"), &key, b"private preview")
+    custody
+        .write_project_preview(&files, &project("purge-a"), &key, b"private preview")
         .unwrap();
     assert_eq!(
         files.read_derived(&key, 100).unwrap().unwrap(),
@@ -3824,8 +3821,8 @@ fn project_preview_writes_refuse_a_logically_purged_project_and_leave_workspace_
     h.raw().execute("UPDATE project_purge_manifests SET phase='RemovingBytes',revision=2,operation_id='purge-preview-fence',body_json=?1 WHERE id='purge-manifest'",[serde_json::to_string(&manifest).unwrap()]).unwrap();
     let late = devworks_core::services::artifacts::preview::preview_id("late-purge");
     assert!(
-        files
-            .write_project_derived(&project("purge-a"), &late, b"late private bytes")
+        custody
+            .write_project_preview(&files, &project("purge-a"), &late, b"late private bytes")
             .is_err()
     );
     assert!(files.read_derived(&late, 100).unwrap().is_none());
@@ -3844,8 +3841,7 @@ fn project_preview_recovery_discards_only_the_interrupted_native_key_after_resta
     let store = Arc::new(h.store());
     let _ = purge_storage_fixture(store.as_ref());
     let files =
-        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"))
-            .with_store(store.clone());
+        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"));
     let workspace = devworks_core::services::artifacts::preview::preview_id("workspace-kept");
     files.write_derived(&workspace, b"workspace cache").unwrap();
     let key = devworks_core::services::artifacts::preview::preview_id("interrupted-key");
@@ -3870,9 +3866,10 @@ fn project_preview_recovery_discards_only_the_interrupted_native_key_after_resta
         .unwrap()
     );
     let files =
-        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"))
-            .with_store(store.clone());
-    files.recover_project_derived().unwrap();
+        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"));
+    ManagedFileCustody::new(store.clone())
+        .recover_project_previews(&files)
+        .unwrap();
     assert!(!temp.exists());
     assert!(
         !read_snapshot(store.as_ref(), &ReadOptions::default(), |r| r
@@ -3923,9 +3920,7 @@ fn native_managed_file(
 
 #[test]
 fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_generations() {
-    use devworks_core::ports::project_purge::{
-        ProjectPurgeFiles, PurgeFileOwner as O, PurgeFileSelection,
-    };
+    use devworks_core::ports::project_purge::{PurgeFileOwner as O, PurgeFileSelection};
     let h = Harness::new();
     let store = Arc::new(h.store());
     let _ = purge_storage_fixture(store.as_ref());
@@ -4034,11 +4029,14 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let files = crate::fs::purge::NativeProjectPurgeFiles::new(data.clone(), cache, store)
-        .with_paste_root(paste)
-        .with_read_fence(Arc::new(
-            devworks_core::services::artifacts::lifecycle::Readers::default(),
-        ));
+    let files = Recorded::new(
+        store,
+        crate::fs::purge::NativeProjectPurgeFiles::new(data.clone(), cache)
+            .with_paste_root(paste)
+            .with_read_fence(Arc::new(
+                devworks_core::services::artifacts::lifecycle::Readers::default(),
+            )),
+    );
     let mut snapshot = files.inventory(&selection, &mut || false).unwrap();
     for owner in &selection.owners {
         assert!(
@@ -4088,7 +4086,7 @@ fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_gen
 #[test]
 fn native_purge_files_refuse_replacements_new_entries_wrong_bindings_and_forged_names() {
     use devworks_core::ports::project_purge::{
-        ProjectPurgeFiles, PurgeFileFault, PurgeFileOwner as O, PurgeFileSelection,
+        PurgeFileFault, PurgeFileOwner as O, PurgeFileSelection,
     };
     let h = Harness::new();
     let store = Arc::new(h.store());
@@ -4105,10 +4103,9 @@ fn native_purge_files_refuse_replacements_new_entries_wrong_bindings_and_forged_
             session_id: id("purge-session"),
         }],
     };
-    let files = crate::fs::purge::NativeProjectPurgeFiles::new(
-        h.root.0.clone(),
-        h.root.0.join("cache"),
+    let files = Recorded::new(
         store,
+        crate::fs::purge::NativeProjectPurgeFiles::new(h.root.0.clone(), h.root.0.join("cache")),
     );
     let snapshot = files.inventory(&selection, &mut || false).unwrap();
     let profile = snapshot.files.iter().find(|w| !w.directory).unwrap();
@@ -4159,7 +4156,7 @@ fn native_purge_files_refuse_replacements_new_entries_wrong_bindings_and_forged_
 #[test]
 fn native_purge_files_require_the_published_transient_file_identity_and_content() {
     use devworks_core::ports::project_purge::{
-        ProjectPurgeFiles, PurgeFileFault, PurgeFileOwner as O, PurgeFileSelection,
+        PurgeFileFault, PurgeFileOwner as O, PurgeFileSelection,
     };
     let h = Harness::new();
     let store = Arc::new(h.store());
@@ -4182,10 +4179,9 @@ fn native_purge_files_require_the_published_transient_file_identity_and_content(
         selection.owners[0].clone(),
         &selection,
     );
-    let files = crate::fs::purge::NativeProjectPurgeFiles::new(
-        h.root.0.clone(),
-        h.root.0.join("cache"),
+    let files = Recorded::new(
         store,
+        crate::fs::purge::NativeProjectPurgeFiles::new(h.root.0.clone(), h.root.0.join("cache")),
     );
     let snapshot = files.inventory(&selection, &mut || false).unwrap();
     let original = &snapshot.files[0];
@@ -4585,4 +4581,149 @@ fn purge_planning_legacy_project_root_without_session_scope_refuses_ownership_in
             .unwrap(),
         "ambiguous private session"
     );
+}
+
+/// Native staging files under core custody, composed as the desktop host composes them.
+struct Staging {
+    custody: ManagedFileCustody,
+    directory: crate::fs::client_staging::NativeClientStagingFiles,
+}
+impl Staging {
+    fn new(root: std::path::PathBuf, store: Arc<SqliteStore>) -> Self {
+        Self {
+            custody: ManagedFileCustody::new(store),
+            directory: crate::fs::client_staging::NativeClientStagingFiles::new(root),
+        }
+    }
+    fn write(
+        &self,
+        session: Option<&Id>,
+        id: &Id,
+        bytes: &[u8],
+    ) -> Result<std::path::PathBuf, String> {
+        self.custody
+            .stage_paste(&self.directory, session, id, bytes)
+    }
+    fn write_project(
+        &self,
+        project: Option<&ProjectId>,
+        id: &Id,
+        extension: &str,
+        bytes: &[u8],
+    ) -> Result<std::path::PathBuf, String> {
+        self.custody
+            .stage_project_text(&self.directory, project, id, extension, bytes)
+    }
+    fn recover_abandoned(&self) -> Result<(), String> {
+        self.custody.recover_client_staging(&self.directory)
+    }
+}
+
+/// Native purge files with the store records the core purge services pass them.
+struct Recorded {
+    records: ManagedFileCustody,
+    files: crate::fs::purge::NativeProjectPurgeFiles,
+}
+impl Recorded {
+    fn new(store: Arc<SqliteStore>, files: crate::fs::purge::NativeProjectPurgeFiles) -> Self {
+        Self {
+            records: ManagedFileCustody::new(store),
+            files,
+        }
+    }
+    fn inventory(
+        &self,
+        selection: &devworks_core::ports::project_purge::PurgeFileSelection,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<
+        devworks_core::ports::project_purge::PurgeFileSnapshot,
+        devworks_core::ports::project_purge::PurgeFileFault,
+    > {
+        use devworks_core::ports::project_purge::ProjectPurgeFiles;
+        self.files.inventory(selection, &self.records, stopped)
+    }
+    fn remove_reviewed(
+        &self,
+        witness: &devworks_core::ports::project_purge::PurgeFileWitness,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<(), devworks_core::ports::project_purge::PurgeFileFault> {
+        use devworks_core::ports::project_purge::ProjectPurgeFiles;
+        self.files.remove_reviewed(witness, &self.records, stopped)
+    }
+}
+
+/// Every table of the migrated schema has the record kind core names it by, so a purge row
+/// of any table crosses the port, and its wire name is the table's name.
+#[test]
+fn every_schema_table_has_a_purge_record_kind() {
+    let h = Harness::new();
+    drop(h.store());
+    let raw = h.raw();
+    let mut statement = raw
+        .prepare(
+            "SELECT name FROM main.sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        )
+        .unwrap();
+    let tables = statement
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+    assert!(tables.len() > 100);
+    for table in &tables {
+        let kind = ProjectRecordKind::from_wire(table)
+            .unwrap_or_else(|| panic!("{table} has no ProjectRecordKind"));
+        assert_eq!(kind.as_str(), table);
+    }
+}
+
+/// No source file of core or the desktop that handles purge records spells a storage table
+/// name: they identify records only by `ProjectRecordKind`. A protocol family name that is
+/// also a table name (`"sessions"`), a JSON object member (`"operations":`) and a path
+/// component (`.join("packages")`) are other vocabularies and are not table names.
+#[test]
+fn purge_record_consumers_in_core_and_desktop_name_no_storage_table() {
+    let families = devworks_core::registry::families();
+    let tables = ProjectRecordKind::ALL
+        .iter()
+        .filter(|kind| !families.contains(&kind.as_str()))
+        .map(|kind| format!("\"{}\"", kind.as_str()))
+        .collect::<Vec<_>>();
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut checked = 0;
+    let mut found = Vec::new();
+    for source in ["devworks-core/src", "devworks-desktop/src"] {
+        let mut pending = vec![crates.join(source)];
+        while let Some(path) = pending.pop() {
+            if path.is_dir() {
+                pending.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            if ![
+                "ProjectPurge",
+                "ProjectRecordKind",
+                "PurgeFile",
+                "record_ids",
+            ]
+            .iter()
+            .any(|marker| text.contains(marker))
+            {
+                continue;
+            }
+            checked += 1;
+            for table in &tables {
+                if text.match_indices(table.as_str()).any(|(at, _)| {
+                    !text[at + table.len()..].starts_with(':') && !text[..at].ends_with(".join(")
+                }) {
+                    found.push(format!("{}: {table}", path.display()));
+                }
+            }
+        }
+    }
+    assert!(checked > 5, "the purge consumers were not found");
+    assert!(found.is_empty(), "storage table names: {found:#?}");
 }

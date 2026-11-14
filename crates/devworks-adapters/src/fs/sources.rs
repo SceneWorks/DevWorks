@@ -78,7 +78,7 @@ pub struct HostArtifactSources {
     ids: Arc<dyn IdSource>,
     /// One map per kind: an ID registered as one kind never resolves as another.
     handles: Mutex<HashMap<Kind, HashMap<String, Handle>>>,
-    store: Option<Arc<dyn devworks_core::ports::storage::ApplicationStore>>,
+    fence: Option<Arc<dyn devworks_core::ports::managed_files::ProjectFileFence>>,
 }
 
 /// A read root bound to the directory identity observed at registration.
@@ -100,26 +100,22 @@ impl HostArtifactSources {
             clock,
             ids,
             handles: Mutex::new(HashMap::new()),
-            store: None,
+            fence: None,
         }
     }
-    pub fn with_store(
+    /// Refuse new handles for a project a purge has fenced.
+    pub fn with_project_fence(
         mut self,
-        store: Arc<dyn devworks_core::ports::storage::ApplicationStore>,
+        fence: Arc<dyn devworks_core::ports::managed_files::ProjectFileFence>,
     ) -> Self {
-        self.store = Some(store);
+        self.fence = Some(fence);
         self
     }
     fn project_open(&self, project: Option<&ProjectId>) -> bool {
-        let (Some(project), Some(store)) = (project, self.store.as_ref()) else {
+        let (Some(project), Some(fence)) = (project, self.fence.as_ref()) else {
             return true;
         };
-        devworks_core::ports::storage::read_snapshot(
-            &**store,
-            &devworks_core::ports::storage::ReadOptions::default(),
-            |read| read.projects().purge_fenced(project),
-        )
-        .is_ok_and(|fenced| !fenced)
+        fence.open(project)
     }
     /// Revokes handles only. Uploaded inputs and Git work-output files are never removed.
     pub fn revoke_project(&self, project: &ProjectId) {

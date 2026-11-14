@@ -27,6 +27,15 @@ use devworks_core::protocol::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
+/// The record kind core names this table by. Kinds share the table's name; a table without
+/// a kind cannot be identified to core and is an invalid record.
+pub(super) fn record_kind(
+    table: &str,
+) -> Result<devworks_core::ports::storage::ProjectRecordKind, StorageError> {
+    devworks_core::ports::storage::ProjectRecordKind::from_wire(table)
+        .ok_or_else(|| invalid("purge record table has no record kind"))
+}
+
 fn invalid(message: &str) -> StorageError {
     StorageError::InvalidRecord(message.into())
 }
@@ -87,7 +96,7 @@ pub(super) fn insert_manifest(
     for row in &stored.rows {
         let known: bool = db(conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name=?1 AND type='table')",
-            [&row.table],
+            [row.table.as_str()],
             |r| r.get(0),
         ))?;
         if !known
@@ -107,7 +116,7 @@ pub(super) fn insert_manifest(
     for row in &stored.rows {
         let action = serde_json::to_value(&row.action).map_err(|_| invalid("purge row action"))?;
         let reason = serde_json::to_value(&row.reason).map_err(|_| invalid("purge row reason"))?;
-        db(conn.execute("INSERT INTO project_purge_rows(manifest_id,table_name,key_digest,row_digest,action,reason) VALUES(?1,?2,?3,?4,?5,?6)",params![m.id.as_str(),row.table,row.key_digest,row.row_digest,action.as_str().ok_or_else(||invalid("purge row action"))?,reason.as_str().ok_or_else(||invalid("purge row reason"))?]))?;
+        db(conn.execute("INSERT INTO project_purge_rows(manifest_id,table_name,key_digest,row_digest,action,reason) VALUES(?1,?2,?3,?4,?5,?6)",params![m.id.as_str(),row.table.as_str(),row.key_digest,row.row_digest,action.as_str().ok_or_else(||invalid("purge row action"))?,reason.as_str().ok_or_else(||invalid("purge row reason"))?]))?;
     }
     Ok(())
 }
@@ -210,7 +219,7 @@ fn row_witnesses(
             return Err(invalid("stored purge row digest"));
         }
         Ok(devworks_core::ports::storage::ProjectPurgeRowWitness {
-            table,
+            table: record_kind(&table)?,
             key_digest,
             row_digest,
             action: serde_json::from_value(serde_json::Value::String(action))

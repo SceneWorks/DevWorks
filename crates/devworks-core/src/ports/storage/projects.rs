@@ -10,7 +10,7 @@
 //! cross-scope references (history, receipts, artifacts) keep resolving to an honest record.
 //! Registered repositories are app records of a source location; nothing here touches the
 //! source itself. Removing an index removes only the published index views and their texts.
-use super::StorageError;
+use super::{ProjectRecordKind, StorageError};
 use crate::protocol::{Id, ProjectId};
 
 /// The stored lifecycle names (`LifeState` wire names).
@@ -165,7 +165,7 @@ pub enum ProjectPurgeRowReason {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProjectPurgeRowWitness {
-    pub table: String,
+    pub table: ProjectRecordKind,
     pub key_digest: String,
     pub row_digest: String,
     pub action: ProjectPurgeRowAction,
@@ -175,7 +175,7 @@ pub struct ProjectPurgeRowWitness {
 /// A scoped planning candidate, deliberately without a deletion action or permit.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ProjectPurgeCandidate {
-    pub table: String,
+    pub table: ProjectRecordKind,
     pub key_digest: String,
     pub row_digest: String,
 }
@@ -204,10 +204,10 @@ pub enum ProjectPurgeReferenceKind {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct ProjectPurgeReference {
     pub kind: ProjectPurgeReferenceKind,
-    pub from_table: String,
+    pub from_table: ProjectRecordKind,
     pub from_key_digest: String,
     pub from_columns: Vec<String>,
-    pub to_table: String,
+    pub to_table: ProjectRecordKind,
     pub to_key_digest: String,
     pub to_columns: Vec<String>,
 }
@@ -228,7 +228,7 @@ pub enum ProjectPurgeUnresolvedReason {
 }
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ProjectPurgeUnresolved {
-    pub table: String,
+    pub table: ProjectRecordKind,
     pub key_digest: String,
     pub reason: ProjectPurgeUnresolvedReason,
 }
@@ -261,7 +261,7 @@ pub struct ProjectPurgeClientScope {
     /// Single-ID targets for the remaining native panes. Membership-only global
     /// records and independently retained publications do not become owned editors.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub record_ids: std::collections::BTreeMap<String, Vec<Id>>,
+    pub record_ids: std::collections::BTreeMap<ProjectRecordKind, Vec<Id>>,
 }
 
 /// Read-only materialization from the same verified ownership assessment. These owner
