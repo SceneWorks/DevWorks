@@ -44,6 +44,7 @@ mod project_purge;
 pub mod projects;
 mod settings_secrets;
 pub mod usage;
+mod watchers;
 pub mod work;
 
 /// Native file and folder choosers (rfd); replaced by scripted choices in tests.
@@ -208,6 +209,8 @@ pub struct Shell {
     pub usage: crate::usage_screen::UsageScreen,
     pub graph: crate::graph_screen::GraphScreen,
     pub databases: crate::databases_screen::DatabasesScreen,
+    /// Watchers: the global list, the selected conversation's and the selected feature's.
+    pub watchers: crate::watchers_screen::WatchersScreen,
     /// The project the navigation selected; its screens follow it.
     selected_project: Option<String>,
     pub completions: Completions,
@@ -312,6 +315,7 @@ screens!(
     Resources => resources,
     Browser => browser,
     Projects => projects.screen,
+    Watchers => watchers,
 );
 
 impl Shell {
@@ -430,6 +434,7 @@ impl Shell {
             usage: crate::usage_screen::UsageScreen::default(),
             graph: crate::graph_screen::GraphScreen::default(),
             databases: Default::default(),
+            watchers: Default::default(),
             selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
             decisions: decisions::DecisionsUi::default(),
@@ -2259,22 +2264,42 @@ impl Shell {
                             .entry(id.clone())
                             .or_default()
                             .apply(page);
-                        let latest_notice=self.chat.transcripts.get(&id).and_then(|transcript|
-                        transcript.entries.iter().rev().find_map(|entry|match &entry.body {
-                            devworks_core::protocol::provider::TranscriptBody::HostNotice{artifact,..}=>Some(artifact.clone()),
-                            _=>None,
-                        }));
-                        if let Some(artifact) = latest_notice
-                            && !self
-                                .chat
-                                .notice_texts
-                                .contains_key(artifact.version_id.as_str())
-                            && let Some(backend) = self.backend()
-                            && let Ok(text) = backend.read_coordinator_notice(&artifact)
-                        {
-                            self.chat
-                                .notice_texts
-                                .insert(artifact.version_id.as_str().into(), text);
+                        // The texts shown: every watcher notice's and the latest other one's.
+                        let notices: Vec<_> = self
+                            .chat
+                            .transcripts
+                            .get(&id)
+                            .map(|transcript| {
+                                let mut latest_other = false;
+                                transcript
+                                    .entries
+                                    .iter()
+                                    .rev()
+                                    .filter_map(|entry| match &entry.body {
+                                        body @ devworks_core::protocol::provider::TranscriptBody::HostNotice {
+                                            artifact,
+                                            ..
+                                        } if chat::watcher_notice(body)
+                                            || !std::mem::replace(&mut latest_other, true) =>
+                                        {
+                                            Some(artifact.clone())
+                                        }
+                                        _ => None,
+                                    })
+                                    .filter(|a| {
+                                        !self.chat.notice_texts.contains_key(a.version_id.as_str())
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if let Some(backend) = self.backend() {
+                            for artifact in notices {
+                                if let Ok(text) = backend.read_coordinator_notice(&artifact) {
+                                    self.chat
+                                        .notice_texts
+                                        .insert(artifact.version_id.as_str().into(), text);
+                                }
+                            }
                         }
                         self.chat.reconcile_text_preview();
                         if more {
@@ -4949,6 +4974,7 @@ impl Shell {
 
     fn content(&mut self, ui: &mut Ui) {
         let route = self.route;
+        self.sync_watch_projects();
         if self.with_screen(self.shown_screen(), |s, cx| s.ui(cx, route, ui)) {
             return;
         }
@@ -5053,6 +5079,17 @@ impl Shell {
                 },
             );
         };
+        let watch = &self.watchers;
+        let mut watch_actions = Vec::new();
+        let mut watchers = |ui: &mut Ui, session: &str| {
+            watch.section(
+                ui,
+                crate::watch_ops::WatchView::Session,
+                crate::watch_ops::WatchScope::Session(session.to_owned()),
+                online_ref,
+                &mut watch_actions,
+            );
+        };
         let mut st = (&mut self.chat, &mut actions);
         if narrow {
             let label = if st.0.narrow_sidebar_open {
@@ -5080,7 +5117,7 @@ impl Shell {
                             .show(ui, |ui| {
                                 ui.set_width(width - 28.0);
                                 ui.set_height(rect.height() - 24.0);
-                                chat::sidebar(ui, st.0, online_ref, st.1);
+                                chat::sidebar(ui, st.0, online_ref, st.1, &mut watchers);
                             });
                     });
             }
@@ -5098,13 +5135,14 @@ impl Shell {
                         .inner_margin(theme::margin(14, 12))
                         .show(ui, |ui| {
                             ui.set_min_size(ui.available_size());
-                            chat::sidebar(ui, st.0, online_ref, st.1);
+                            chat::sidebar(ui, st.0, online_ref, st.1, &mut watchers);
                         });
                 },
             );
         }
         let ctx = ui.ctx().clone();
         self.chat_actions(&ctx, actions);
+        self.watch_act(watch_actions);
     }
 
     /// A screen whose content belongs to a later item: the full shell, integrated header,

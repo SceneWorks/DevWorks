@@ -248,6 +248,7 @@ fn catalog(provider: OfficialPriceProvider, now: i64, amount: &str) -> FetchedPr
         verified_at_ms: now,
         effective_date: None,
         tariffs: vec![input, output],
+        modifiers: Default::default(),
     }
 }
 // Receipt files have a separate gate from the public price source. This makes their

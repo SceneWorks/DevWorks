@@ -243,7 +243,7 @@ pub(in crate::storage::sqlite) fn apply(
         .iter()
         .filter(|t| t.row.action != Action::Keep)
         .map(|t| guard::Permit {
-            table: t.row.table.clone(),
+            table: t.row.table.as_str().to_owned(),
             key_digest: t.row.key_digest.clone(),
             action: if t.row.action == Action::Delete {
                 "Delete"
@@ -259,7 +259,7 @@ pub(in crate::storage::sqlite) fn apply(
             if db(conn.execute(
                 &format!(
                     "DELETE FROM {} WHERE {}",
-                    candidates::quote(&target.row.table),
+                    candidates::quote(target.row.table.as_str()),
                     target.predicate
                 ),
                 params_from_iter(target.keys.iter()),
@@ -317,7 +317,7 @@ pub(in crate::storage::sqlite) fn apply(
                 )?,
             }
             if target.row.reason == Reason::MinimalDeletedIdentity {
-                db(conn.execute("INSERT INTO project_purged_subjects(table_name,key_digest,project_id,manifest_id,identity_json) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(table_name,key_digest) DO NOTHING",params![target.row.table,target.row.key_digest,project.0.as_str(),manifest.id.as_str(),serde_json::json!({"label":"Deleted","table":target.row.table,"keyDigest":target.row.key_digest}).to_string()]))?;
+                db(conn.execute("INSERT INTO project_purged_subjects(table_name,key_digest,project_id,manifest_id,identity_json) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(table_name,key_digest) DO NOTHING",params![target.row.table.as_str(),target.row.key_digest,project.0.as_str(),manifest.id.as_str(),serde_json::json!({"label":"Deleted","table":target.row.table,"keyDigest":target.row.key_digest}).to_string()]))?;
             }
         }
         Ok(())

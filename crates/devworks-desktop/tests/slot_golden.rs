@@ -14,6 +14,7 @@ use devworks_desktop::memory::Memory;
 use devworks_desktop::projects_ops::ProjectsSlot;
 use devworks_desktop::screen::ScreenId;
 use devworks_desktop::usage_ops::UsageSlot;
+use devworks_desktop::watch_ops::WatchSlot;
 use serde::de::DeserializeOwned;
 
 const SLOTS: &str = include_str!("fixtures/slots-main.jsonl");
@@ -237,6 +238,7 @@ fn screen_variants() -> Vec<(ScreenId, Vec<String>)> {
         (ScreenId::Resources, variant_names::<ResourcesSlot>()),
         (ScreenId::Browser, variant_names::<BrowserSlot>()),
         (ScreenId::Projects, variant_names::<ProjectsSlot>()),
+        (ScreenId::Watchers, variant_names::<WatchSlot>()),
     ]
 }
 
@@ -267,6 +269,7 @@ fn reported(slot: &Slot) -> String {
         ScreenId::Resources => format!("{:?}", ResourcesSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Browser => format!("{:?}", BrowserSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Projects => format!("{:?}", ProjectsSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Watchers => format!("{:?}", WatchSlot::try_from(slot.clone()).unwrap()),
     }
 }
 

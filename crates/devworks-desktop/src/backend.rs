@@ -451,6 +451,8 @@ pub enum Slot {
     Browser(crate::artifacts_screen::BrowserSlot),
     #[serde(untagged)]
     Projects(crate::projects_ops::ProjectsSlot),
+    #[serde(untagged)]
+    Watch(crate::watch_ops::WatchSlot),
 }
 impl Slot {
     /// The screen whose replies this slot waits for.
@@ -467,6 +469,7 @@ impl Slot {
             Self::Resources(_) => ScreenId::Resources,
             Self::Browser(_) => ScreenId::Browser,
             Self::Projects(_) => ScreenId::Projects,
+            Self::Watch(_) => ScreenId::Watchers,
             _ => ScreenId::Legacy,
         }
     }

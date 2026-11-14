@@ -84,7 +84,7 @@ fn document_digests() -> BTreeMap<&'static str, String> {
         })
         .collect()
 }
-pub(super) type Key = (String, String);
+pub(super) type Key = (devworks_core::ports::storage::ProjectRecordKind, String);
 fn invalid() -> StorageError {
     StorageError::IncompatibleSchema("unmapped project purge ownership policy".into())
 }
@@ -278,10 +278,11 @@ fn unresolved_keys(
         ];
         let digest =
             super::guard::key_digest(&serde_json::to_string(&key).map_err(|_| invalid())?)?;
+        let table = super::record_kind(table)?;
         output.insert(
-            (table.into(), digest.clone()),
+            (table, digest.clone()),
             ProjectPurgeUnresolved {
-                table: table.into(),
+                table,
                 key_digest: digest,
                 reason: reason.clone(),
             },
@@ -297,7 +298,7 @@ pub(super) fn assign(
     rows: &mut BTreeMap<Key, ProjectPurgeRowWitness>,
     unresolved: &mut BTreeMap<Key, ProjectPurgeUnresolved>,
 ) -> bool {
-    let key = (candidate.table.clone(), candidate.key_digest.clone());
+    let key = (candidate.table, candidate.key_digest.clone());
     if rows.get(&key).is_some_and(|row| {
         row.action == action && row.reason == reason && row.row_digest == candidate.row_digest
     }) && !unresolved.contains_key(&key)
@@ -308,7 +309,7 @@ pub(super) fn assign(
     rows.insert(
         key,
         ProjectPurgeRowWitness {
-            table: candidate.table.clone(),
+            table: candidate.table,
             key_digest: candidate.key_digest.clone(),
             row_digest: candidate.row_digest.clone(),
             action,
@@ -395,7 +396,7 @@ fn propagate_content(
     let candidates = snapshot
         .rows
         .iter()
-        .map(|row| ((row.table.clone(), row.key_digest.clone()), row))
+        .map(|row| ((row.table, row.key_digest.clone()), row))
         .collect::<BTreeMap<_, _>>();
     loop {
         let mut changed = false;
@@ -405,7 +406,7 @@ fn propagate_content(
             .filter(|edge| content_lineage(edge))
         {
             let Some(parent) = rows
-                .get(&(edge.to_table.clone(), edge.to_key_digest.clone()))
+                .get(&(edge.to_table, edge.to_key_digest.clone()))
                 .cloned()
             else {
                 continue;
@@ -416,7 +417,7 @@ fn propagate_content(
                 Action::Scrub => continue,
             };
             let Some(child) = candidates
-                .get(&(edge.from_table.clone(), edge.from_key_digest.clone()))
+                .get(&(edge.from_table, edge.from_key_digest.clone()))
                 .copied()
             else {
                 continue;
@@ -448,14 +449,14 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
     let mut rows = BTreeMap::<Key, ProjectPurgeRowWitness>::new();
     let mut unresolved = BTreeMap::<Key, ProjectPurgeUnresolved>::new();
     for row in &snapshot.rows {
-        let key = (row.table.clone(), row.key_digest.clone());
-        let (class, disposition) = known.get(&row.table).ok_or_else(invalid)?;
+        let key = (row.table, row.key_digest.clone());
+        let (class, disposition) = known.get(row.table.as_str()).ok_or_else(invalid)?;
         match initial(row, class, disposition) {
             Ok((action, reason)) => {
                 rows.insert(
                     key,
                     ProjectPurgeRowWitness {
-                        table: row.table.clone(),
+                        table: row.table,
                         key_digest: row.key_digest.clone(),
                         row_digest: row.row_digest.clone(),
                         action,
@@ -467,7 +468,7 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
                 unresolved.insert(
                     key,
                     ProjectPurgeUnresolved {
-                        table: row.table.clone(),
+                        table: row.table,
                         key_digest: row.key_digest.clone(),
                         reason,
                     },
@@ -507,12 +508,15 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
         if !matches!(state.as_str(), "Stopped" | "Failed") {
             let digest =
                 super::guard::key_digest(&serde_json::to_string(&[id]).map_err(|_| invalid())?)?;
-            let key = ("owned_containers".into(), digest.clone());
+            let key = (
+                devworks_core::ports::storage::ProjectRecordKind::OwnedContainers,
+                digest.clone(),
+            );
             rows.remove(&key);
             unresolved.insert(
                 key,
                 ProjectPurgeUnresolved {
-                    table: "owned_containers".into(),
+                    table: devworks_core::ports::storage::ProjectRecordKind::OwnedContainers,
                     key_digest: digest,
                     reason: Unresolved::ActiveContainer,
                 },
@@ -525,8 +529,8 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
     loop {
         let mut changed = false;
         for edge in &snapshot.references {
-            let source = (edge.from_table.clone(), edge.from_key_digest.clone());
-            let target = (edge.to_table.clone(), edge.to_key_digest.clone());
+            let source = (edge.from_table, edge.from_key_digest.clone());
+            let target = (edge.to_table, edge.to_key_digest.clone());
             if unresolved.contains_key(&source) {
                 continue;
             }
@@ -545,7 +549,7 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
                     Some(true)
                 }
                 Some(_) if edge.kind == ProjectPurgeReferenceKind::ForeignKey => {
-                    scrub_reference(&edge.from_table, &edge.from_columns)
+                    scrub_reference(edge.from_table.as_str(), &edge.from_columns)
                 }
                 Some(_) => None,
             };
@@ -557,7 +561,7 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
                     unresolved.insert(
                         source,
                         ProjectPurgeUnresolved {
-                            table: edge.from_table.clone(),
+                            table: edge.from_table,
                             key_digest: edge.from_key_digest.clone(),
                             reason: Unresolved::ScrubReference,
                         },
@@ -572,7 +576,7 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
             if row.action != Action::Delete {
                 continue;
             }
-            if minimal_identity(&row.table) {
+            if minimal_identity(row.table.as_str()) {
                 row.action = Action::Scrub;
                 row.reason = Reason::MinimalDeletedIdentity;
             } else {

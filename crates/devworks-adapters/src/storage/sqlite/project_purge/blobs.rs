@@ -58,7 +58,10 @@ pub(super) fn partition(
         }
         let mut keeper = false;
         let mut control_only = rows
-            .get(&("blobs".into(), key_digest.clone()))
+            .get(&(
+                devworks_core::ports::storage::ProjectRecordKind::Blobs,
+                key_digest.clone(),
+            ))
             .is_some_and(|r| r.reason == Reason::PurgeControlAudit);
         let mut versions = db(conn.prepare(
             "SELECT id FROM artifact_versions WHERE blob_digest=?1 AND deleted_at IS NULL",
@@ -67,7 +70,7 @@ pub(super) fn partition(
         while let Some(version) = db(versions.next())? {
             let id = db(version.get::<_, String>(0))?;
             let key = (
-                "artifact_versions".into(),
+                devworks_core::ports::storage::ProjectRecordKind::ArtifactVersions,
                 super::guard::key_digest(&serde_json::to_string(&[id]).expect("version key"))?,
             );
             keeper |= rows.get(&key).is_none_or(|r| r.action != Action::Delete)
@@ -81,10 +84,7 @@ pub(super) fn partition(
                 && edge.to_key_digest == key_digest
                 && edge.from_table != "artifact_versions"
         }) {
-            let key = (
-                reference.from_table.clone(),
-                reference.from_key_digest.clone(),
-            );
+            let key = (reference.from_table, reference.from_key_digest.clone());
             keeper |= rows.get(&key).is_none_or(|r| r.action != Action::Delete)
                 || unresolved.contains_key(&key);
             control_only &= reference.from_table == "artifact_blob_pins"
