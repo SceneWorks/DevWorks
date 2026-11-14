@@ -13,20 +13,26 @@
 //!   the workspace's private-network setting of `web.fetch`. See
 //!   [`AddressClass::browser_allowed`].
 //!
-//! The browser resolves names itself when it connects, so a name whose answer changes between
-//! this check and that connection (DNS rebinding) is not caught here.
+//! Two places apply the policy. The DevTools request gate ([`RequestGate`]) checks every
+//! intercepted request's scheme, literal address and name class without resolving anything, so
+//! the DevTools message loop never waits on a lookup. The session's egress proxy
+//! ([`ConnectPolicy`]) checks every connection the browser opens (HTTP, HTTPS and WebSocket
+//! alike, from pages, frames and workers, intercepted or not): it resolves the name once, checks
+//! every answer and connects only to a checked address, so an answer that changes after the
+//! check (DNS rebinding) is never reached.
 use super::cdp::RequestGate;
+use crate::ports::browser::ConnectPolicy;
 use crate::ports::storage::{ApplicationStore, ReadOptions, read_snapshot};
 use crate::ports::web::Resolver;
 use crate::services::web::egress::{self, AddressClass, Destination};
 use crate::services::web::read_policy;
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use url::Url;
 
-/// Longest one resolution may take (the protocol connection waits meanwhile).
+/// Longest one resolution may take (the navigation or connection being checked waits meanwhile).
 pub const RESOLVE_BOUND: Duration = Duration::from_secs(5);
 /// How long a resolved answer is reused for the same name.
 pub const ANSWER_TTL: Duration = Duration::from_secs(10);
@@ -53,11 +59,12 @@ fn refused(class: Option<AddressClass>, detail: impl Into<String>) -> Refused {
 }
 
 /// Decides one request URL. `allow_private` reads the private-network setting (only when a
-/// private address is met); `resolve` answers a domain's addresses.
+/// private address is met); `resolve` answers a domain's addresses. Without `resolve`, a domain
+/// of no known class is left to the connection check ([`addresses`]).
 pub fn decide(
     url: &str,
     allow_private: &dyn Fn() -> bool,
-    resolve: &mut ResolveFn<'_>,
+    resolve: Option<&mut ResolveFn<'_>>,
 ) -> Result<(), Refused> {
     let scheme = url
         .split_once(':')
@@ -77,6 +84,48 @@ pub fn decide(
     if parsed.host().is_none() {
         return Err(refused(None, "the URL has no host"));
     }
+    host_addresses(&parsed, egress::port(&parsed), allow_private, resolve).map(drop)
+}
+
+/// The addresses a connection to `host` (a domain or an IP literal, IPv6 in brackets) at `port`
+/// may use, every one admitted. A literal is checked as it is; a `localhost` name is loopback
+/// (never resolved); a metadata name is refused; any other name is resolved once and every
+/// answer must pass.
+pub fn addresses(
+    host: &str,
+    port: u16,
+    allow_private: &dyn Fn() -> bool,
+    resolve: &mut ResolveFn<'_>,
+) -> Result<Vec<IpAddr>, Refused> {
+    // Only a bare host: no port, user information, path or other URL syntax.
+    let bracketed = host.starts_with('[') && host.ends_with(']');
+    if host.is_empty()
+        || host
+            .chars()
+            .any(|c| matches!(c, '/' | '\\' | '@' | '?' | '#' | '%') || c.is_whitespace())
+        || (host.contains(':') && !bracketed)
+    {
+        return Err(refused(None, "the host is not valid"));
+    }
+    let parsed = Url::parse(&format!("http://{host}/"))
+        .ok()
+        .filter(|u| u.host().is_some() && u.port().is_none())
+        .ok_or_else(|| refused(None, "the host is not valid"))?;
+    let addrs = host_addresses(&parsed, port, allow_private, Some(resolve))?;
+    if addrs.is_empty() {
+        return Err(refused(None, "the host has no admitted address"));
+    }
+    Ok(addrs)
+}
+
+/// The admitted addresses of `parsed`'s host at `port`. A domain of no known class is resolved
+/// through `resolve`; without it nothing is resolved and no address is returned.
+fn host_addresses(
+    parsed: &Url,
+    port: u16,
+    allow_private: &dyn Fn() -> bool,
+    resolve: Option<&mut ResolveFn<'_>>,
+) -> Result<Vec<IpAddr>, Refused> {
     // The setting is read at most once, and only when a private address is met.
     let setting = std::cell::OnceCell::new();
     let check = |class: AddressClass, shown: &str| -> Result<(), Refused> {
@@ -91,13 +140,23 @@ pub fn decide(
             ))
         }
     };
-    let addrs = match egress::destination(&parsed) {
+    let addrs = match egress::destination(parsed) {
         Destination::Literal(ip) => vec![ip],
         Destination::Domain(domain) => {
             if let Some(class) = egress::name_class(&domain) {
-                return check(class, &domain);
+                check(class, &domain)?;
+                // Of the named classes only loopback is ever admitted.
+                return Ok(match class {
+                    AddressClass::Loopback => {
+                        vec![Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into()]
+                    }
+                    _ => vec![],
+                });
             }
-            let addrs = resolve(&domain, egress::port(&parsed))
+            let Some(resolve) = resolve else {
+                return Ok(vec![]);
+            };
+            let addrs = resolve(&domain, port)
                 .map_err(|e| refused(None, format!("{domain} could not be resolved: {e}")))?;
             if addrs.is_empty() {
                 return Err(refused(None, format!("{domain} has no addresses")));
@@ -106,10 +165,10 @@ pub fn decide(
         }
     };
     // Every answer must be allowed, so a resolver cannot mix a public and a refused answer.
-    for ip in addrs {
-        check(egress::classify(ip), &ip.to_string())?;
+    for ip in &addrs {
+        check(egress::classify(*ip), &ip.to_string())?;
     }
-    Ok(())
+    Ok(addrs)
 }
 
 /// The production gate: the workspace setting read from the store when needed, names resolved
@@ -130,18 +189,23 @@ impl BrowserEgress {
         }
     }
 
-    /// Decides `url` under the current setting.
-    pub fn check(&self, url: &str) -> Result<(), Refused> {
-        let allow_private = || {
-            read_snapshot(&*self.store, &ReadOptions::default(), |s| {
-                read_policy(s.configuration())
-            })
-            // A setting that cannot be read refuses the private ranges.
-            .is_ok_and(|p| p.allow_private)
-        };
-        decide(url, &allow_private, &mut |host, port| {
-            self.resolve(host, port)
+    /// Whether the workspace allows private networks now.
+    fn allow_private(&self) -> bool {
+        read_snapshot(&*self.store, &ReadOptions::default(), |s| {
+            read_policy(s.configuration())
         })
+        // A setting that cannot be read refuses the private ranges.
+        .is_ok_and(|p| p.allow_private)
+    }
+
+    /// Decides `url` under the current setting, resolving its name (a navigation's own check,
+    /// before anything is sent).
+    pub fn check(&self, url: &str) -> Result<(), Refused> {
+        decide(
+            url,
+            &|| self.allow_private(),
+            Some(&mut |host, port| self.resolve(host, port)),
+        )
     }
 
     fn resolve(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, String> {
@@ -174,9 +238,22 @@ impl BrowserEgress {
     }
 }
 
+/// The DevTools gate never resolves: it runs on the protocol message loop. Names are checked
+/// when the browser connects, by the egress proxy ([`ConnectPolicy`]).
 impl RequestGate for BrowserEgress {
     fn admit(&self, url: &str) -> Result<(), String> {
-        self.check(url).map_err(|r| r.detail)
+        decide(url, &|| self.allow_private(), None).map_err(|r| r.detail)
+    }
+}
+
+/// The egress proxy's check: the name is resolved once (or its recent answer reused) and the
+/// proxy connects only to the addresses returned here.
+impl ConnectPolicy for BrowserEgress {
+    fn addresses(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, String> {
+        addresses(host, port, &|| self.allow_private(), &mut |h, p| {
+            self.resolve(h, p)
+        })
+        .map_err(|r| r.detail)
     }
 }
 
@@ -204,7 +281,7 @@ mod tests {
 
     fn verdict(url: &str, allow_private: bool) -> Result<(), Refused> {
         let mut asked = Vec::new();
-        decide(url, &|| allow_private, &mut resolver(&mut asked))
+        decide(url, &|| allow_private, Some(&mut resolver(&mut asked)))
     }
 
     fn class(url: &str, allow_private: bool) -> Option<AddressClass> {
@@ -265,7 +342,12 @@ mod tests {
         }
         // `localhost` names are loopback without asking the resolver.
         let mut asked = Vec::new();
-        decide("http://localhost/", &|| false, &mut resolver(&mut asked)).unwrap();
+        decide(
+            "http://localhost/",
+            &|| false,
+            Some(&mut resolver(&mut asked)),
+        )
+        .unwrap();
         assert!(asked.is_empty());
     }
 
@@ -312,8 +394,71 @@ mod tests {
         decide(
             "https://public.example/",
             &|| panic!("the setting was read"),
-            &mut resolver(&mut asked),
+            Some(&mut resolver(&mut asked)),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn the_request_gate_checks_literals_and_named_classes_without_resolving() {
+        let gate = |url: &str| decide(url, &|| false, None);
+        // A name of no known class is left to the connection check: nothing is resolved here.
+        assert_eq!(gate("https://unknown.example/"), Ok(()));
+        assert_eq!(gate("http://localhost:3000/"), Ok(()));
+        for url in [
+            "http://169.254.169.254/",
+            "http://metadata.google.internal/",
+            "http://192.168.1.1/",
+            "file:///etc/passwd",
+        ] {
+            gate(url).expect_err(url);
+        }
+    }
+
+    #[test]
+    fn a_connection_gets_only_admitted_addresses() {
+        let addrs = |host: &str, allow_private: bool| {
+            let mut asked = Vec::new();
+            let r = addresses(host, 443, &|| allow_private, &mut resolver(&mut asked));
+            (r, asked)
+        };
+        let ip = |s: &str| -> IpAddr { s.parse().unwrap() };
+        assert_eq!(
+            addrs("public.example", false).0,
+            Ok(vec![ip("93.184.216.34")])
+        );
+        assert_eq!(addrs("[::1]", false).0, Ok(vec![ip("::1")]));
+        assert_eq!(addrs("8.8.8.8", false).0, Ok(vec![ip("8.8.8.8")]));
+        // `localhost` names are loopback without asking the resolver.
+        let (r, asked) = addrs("app.localhost", false);
+        assert_eq!(r, Ok(vec![ip("127.0.0.1"), ip("::1")]));
+        assert!(asked.is_empty());
+        // One refused answer refuses the connection; private answers follow the setting.
+        for allow_private in [false, true] {
+            for host in [
+                "rebind.example",
+                "metadata.google.internal",
+                "169.254.169.254",
+                "[fd00:ec2::254]",
+                "[fe80::1]",
+                "0.0.0.0",
+            ] {
+                addrs(host, allow_private).0.expect_err(host);
+            }
+        }
+        addrs("lan.example", false).0.expect_err("private");
+        assert_eq!(addrs("lan.example", true).0, Ok(vec![ip("192.168.1.10")]));
+        // Only a bare host is accepted.
+        for host in [
+            "",
+            "public.example:443",
+            "user@public.example",
+            "public.example/x",
+            "::1",
+            "[fe80::1%25en0]",
+            "unknown.example",
+        ] {
+            addrs(host, true).0.expect_err(host);
+        }
     }
 }

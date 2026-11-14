@@ -4,7 +4,7 @@ Baseline 1.1 is the completed local architectural design, based on the captured 
 
 - [Searchable architecture reader](devworks-architecture.html)
 - [Architecture source](devworks-architecture.md)
-- [Requirement traceability](devworks-requirements-traceability.json): all 378 requirements, preserving their Confirmed/Proposed status, with a proposed owner and validation assignment.
+- [Requirement traceability](devworks-requirements-traceability.json): all 390 requirements, preserving their Confirmed/Proposed status, with a proposed owner and validation assignment.
 - [Capability catalog](devworks-capability-catalog.json): 49 operation families with all input/result candidates; public SDK interoperability remains an implementation gate.
 - [Diagram manifest](architecture-diagrams/manifest.json): 44 editable Mermaid sources with locally rendered SVGs.
 - [Visual architecture of the implemented code](visual/README.md) ([manifest](visual/manifest.json)): structure, ownership and workflow diagrams of the Rust code as built (gateway, storage, runtime boot, services, desktop shell, recovery, receipt replies, process cancellation and lease handoff), with planned seams marked (VIS-01..03).
@@ -24,7 +24,7 @@ Baseline 1.1 is the completed local architectural design, based on the captured 
 - [Graph/retrieval/artifact/delivery reader](data-retrieval-delivery-contracts.html) and [source](data-retrieval-delivery-contracts.md): exact views, scoped retrieval, retained citations, deletion, merge uncertainty and safe cleanup.
 - [Data/delivery evidence](validation/data-delivery-contracts/README.md): 39 schemas and 322 message checks, 58 operation input bindings, 25 native SQLite/vec checks, a transaction-lifetime compile-fail doctest and 17 temporary Git checks. Complete services and target qualification remain pending.
 - [Native backend reader](native-backend-feasibility.html) and [evidence](validation/native-boundaries/README.md): 39 narrow UI/PDF/browser/decision/registered-root read checks, exact dependency candidates and remaining native qualification.
-- [Complete local implementation plan](implementation-plan.html), [editable slices](implementation-slices.json) and [coverage register](implementation-plan.json): 78 active slices bind 378 requirements, 359 operations, 494 retained source entries, 33 acceptance groups and 12 workloads; 64 exclusions remain audited. Wire candidates are complete; actual service/SDK/target acceptance remains open.
+- [Complete local implementation plan](implementation-plan.html), [editable slices](implementation-slices.json) and [coverage register](implementation-plan.json): 78 active slices bind 390 requirements, 359 operations, 494 retained source entries, 33 acceptance groups and 12 workloads; 64 exclusions remain audited. Wire candidates are complete; actual service/SDK/target acceptance remains open.
 - [Complete operation schemas](domain-operation-contracts.html), [field reference](domain-operation-reference.html) and [evidence](validation/domain-contracts/README.md): 67 schemas, all 359 input/result candidates, zero unbound inputs and explicit modes/faults/authority/recovery. The original domain checkpoint had 1,029 fixture checks; the baseline 1.1 amendment has 1,049. Actual service/authority/retained behavior remains unqualified.
 - [Architecture handoff checklist](architecture-handoff.md): pre-interface/backend evidence distinguished from later production acceptance.
 - [Native DOCX feasibility evidence](validation/document-extraction-probe/README.md): eleven narrow main-body/rejection checks on one host, not a complete extraction adapter.
@@ -43,7 +43,7 @@ python3 -m http.server 8766 --bind 127.0.0.1 --directory docs
 
 Open `http://127.0.0.1:8766/architecture/devworks-architecture.html`. This optional authoring server is not a product runtime requirement.
 
-Native reproduction tooling: [evaluation README](../../tools/storage-eval/README.md). [Raw evaluation records](validation/storage-evaluation/README.md) and the [aggregate](storage-evaluation-results.json) preserve local measurements and failures; the review export additionally includes the exact compressed fixture.
+Native reproduction tooling: [evaluation README](https://github.com/SceneWorks/DevWorks/tree/f76506ec33c9563d19e03bc68a4b7e9e65178271/tools/storage-eval/README.md) (removed from the main branch; kept at commit `f76506ec`). [Raw evaluation records](validation/storage-evaluation/README.md) and the [aggregate](storage-evaluation-results.json) preserve local measurements and failures; the review export additionally includes the exact compressed fixture.
 
 Router correction: [ROUTE-18–20 and AD62–63](devworks-architecture.html#direct-tier-selection-effort-and-systemone) restore SystemOne decision inference, four direct tier choices and separate effort controls. The [mock UI](../planning/harness-workbench.html) includes the controls and editable sample memberships. Current catalog has 353 operations with concrete native DTO candidates; actual decision transport/profile behavior remains unqualified.
 

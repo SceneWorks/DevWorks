@@ -272,12 +272,16 @@ fn agent_turn(calls: Vec<(&'static str, &'static str)>) -> Turn {
                 )
             });
             let tool_id = read(&*fx.store, |s| {
+                // Each server's catalog is saved in its own namespace.
                 let body = s
                     .configuration()
-                    .current(&ConfigScope::Workspace, "outgoing_mcp")?
+                    .current(
+                        &ConfigScope::Workspace,
+                        &format!("outgoing_mcp/{server_id}"),
+                    )?
                     .unwrap()
                     .body;
-                Ok(body["servers"][0]["capabilities"]
+                Ok(body["capabilities"]
                     .as_array()
                     .unwrap()
                     .iter()

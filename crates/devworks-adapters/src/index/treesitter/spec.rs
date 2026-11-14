@@ -59,12 +59,36 @@ pub(super) struct Spec {
     pub import_types: &'static [&'static str],
     pub property_types: &'static [&'static str],
     pub name_field: &'static str,
-    pub return_type_field: Option<&'static str>,
+    /// Fields read for a callable's `return_type`, first present wins.
+    pub return_type_fields: &'static [&'static str],
     pub parameters_field: Option<&'static str>,
     pub body_field: Option<&'static str>,
     pub superclass_field: Option<&'static str>,
     pub class_label: &'static str,
     pub function_label: &'static str,
+    /// Label of a type-like node by syntax kind, where it is not `class_label`. Members of a
+    /// `Namespace` are not members of a type: they stay functions.
+    pub class_labels: &'static [(&'static str, &'static str)],
+    /// Label of a callable by syntax kind, where it is not `Method`/`function_label`
+    /// (constructors, properties). A `Property` is named `#property:name` and has no signature.
+    pub callable_labels: &'static [(&'static str, &'static str)],
+    /// A declarator kind that defines a callable only when its `value` field has one of the
+    /// listed kinds and its `name` is an identifier (`const f = () => {}`); parameters and
+    /// return type are then read from the value.
+    pub value_callable: Option<(&'static str, &'static [&'static str])>,
+    /// When non-empty, a call whose target has another kind is not a call (`super()`, `a[0]()`).
+    pub call_target_kinds: &'static [&'static str],
+    /// Fields of a call target that name its receiver.
+    pub target_receiver_fields: &'static [&'static str],
+    /// Bare calls to these names are imports of their first string argument, never calls.
+    pub import_calls: &'static [&'static str],
+    /// The language's own reading: the edges the engine adds beyond a retained `LanguageSpecs`
+    /// port (calls outside callables, require-style imports, inheritance) are not marked
+    /// `baseline_extension`, and an import node names its module by its own fields only.
+    pub native: bool,
+    /// The grammar does not say which base is the class, so each base is a naming-convention
+    /// inference (`inheritance_inferred`, medium confidence).
+    pub inferred_bases: bool,
 }
 
 const TARGETS: &[&str] = &["function", "name", "method"];
@@ -84,12 +108,77 @@ const BASE: Spec = Spec {
     import_types: &[],
     property_types: &[],
     name_field: "name",
-    return_type_field: None,
+    return_type_fields: &[],
     parameters_field: None,
     body_field: None,
     superclass_field: None,
     class_label: "Class",
     function_label: "Function",
+    class_labels: &[],
+    callable_labels: &[],
+    value_callable: None,
+    call_target_kinds: &[],
+    target_receiver_fields: RECEIVERS,
+    import_calls: &[],
+    native: false,
+    inferred_bases: false,
+};
+
+/// The callable kinds of every ECMAScript grammar. `variable_declarator` is a callable only
+/// when its value is a function (`value_callable`).
+const ECMA_CALLABLES: &[&str] = &[
+    "function_declaration",
+    "generator_function_declaration",
+    "method_definition",
+    "variable_declarator",
+];
+const ECMA_FUNCTION_VALUES: &[&str] = &[
+    "arrow_function",
+    "function_expression",
+    "function",
+    "generator_function",
+];
+const JS: Spec = Spec {
+    id: "javascript",
+    function_types: ECMA_CALLABLES,
+    class_types: &["class_declaration", "class"],
+    call_types: &["call_expression"],
+    call_target_kinds: &["identifier", "member_expression"],
+    import_types: &["import_statement", "export_statement"],
+    import_calls: &["require"],
+    return_type_fields: &["return_type"],
+    parameters_field: Some("parameters"),
+    body_field: Some("body"),
+    value_callable: Some(("variable_declarator", ECMA_FUNCTION_VALUES)),
+    native: true,
+    ..BASE
+};
+const TS: Spec = Spec {
+    function_types: &[
+        "function_declaration",
+        "generator_function_declaration",
+        "method_definition",
+        "variable_declarator",
+        "method_signature",
+        "abstract_method_signature",
+        "function_signature",
+    ],
+    class_types: &[
+        "class_declaration",
+        "class",
+        "abstract_class_declaration",
+        "interface_declaration",
+        "enum_declaration",
+        "internal_module",
+        "module",
+    ],
+    class_labels: &[
+        ("interface_declaration", "Interface"),
+        ("enum_declaration", "Enum"),
+        ("internal_module", "Namespace"),
+        ("module", "Namespace"),
+    ],
+    ..JS
 };
 
 static SPECS: &[Spec] = &[
@@ -99,7 +188,7 @@ static SPECS: &[Spec] = &[
         class_types: &["struct_specifier", "enum_specifier", "type_definition"],
         call_types: &["call_expression"],
         import_types: &["preproc_include"],
-        return_type_field: Some("type"),
+        return_type_fields: &["type"],
         body_field: Some("body"),
         class_label: "Struct",
         ..BASE
@@ -118,7 +207,7 @@ static SPECS: &[Spec] = &[
         ],
         call_types: &["call_expression"],
         import_types: &["preproc_include"],
-        return_type_field: Some("type"),
+        return_type_fields: &["type"],
         body_field: Some("body"),
         ..BASE
     },
@@ -128,7 +217,7 @@ static SPECS: &[Spec] = &[
         class_types: &["class_definition"],
         call_types: &["call"],
         import_types: &["import_statement", "import_from_statement"],
-        return_type_field: Some("return_type"),
+        return_type_fields: &["return_type"],
         parameters_field: Some("parameters"),
         body_field: Some("body"),
         superclass_field: Some("superclasses"),
@@ -142,7 +231,7 @@ static SPECS: &[Spec] = &[
         class_types: &["type_declaration"],
         call_types: &["call_expression"],
         import_types: &["import_declaration"],
-        return_type_field: Some("result"),
+        return_type_fields: &["result"],
         parameters_field: Some("parameters"),
         body_field: Some("body"),
         ..BASE
@@ -159,7 +248,7 @@ static SPECS: &[Spec] = &[
         call_target_fields: &["name"],
         call_receiver_fields: &["object"],
         import_types: &["import_declaration"],
-        return_type_field: Some("type"),
+        return_type_fields: &["type"],
         parameters_field: Some("parameters"),
         body_field: Some("body"),
         superclass_field: Some("superclass"),
@@ -187,7 +276,7 @@ static SPECS: &[Spec] = &[
         class_types: &["struct_item", "enum_item", "trait_item", "impl_item"],
         call_types: &["call_expression"],
         import_types: &["use_declaration"],
-        return_type_field: Some("return_type"),
+        return_type_fields: &["return_type"],
         parameters_field: Some("parameters"),
         body_field: Some("body"),
         ..BASE
@@ -208,7 +297,7 @@ static SPECS: &[Spec] = &[
         call_target_fields: &["function", "name"],
         call_receiver_fields: &["object", "scope"],
         import_types: &["namespace_use_declaration"],
-        return_type_field: Some("return_type"),
+        return_type_fields: &["return_type"],
         parameters_field: Some("parameters"),
         body_field: Some("body"),
         ..BASE
@@ -238,10 +327,56 @@ static SPECS: &[Spec] = &[
         property_types: &["property_declaration", "protocol_property_declaration"],
         call_types: &["call_expression", "constructor_expression"],
         import_types: &["import_declaration"],
-        return_type_field: Some("return_type"),
+        return_type_fields: &["return_type"],
         body_field: Some("body"),
         ..BASE
     },
+    Spec {
+        id: "csharp",
+        function_types: &[
+            "method_declaration",
+            "constructor_declaration",
+            "local_function_statement",
+            "property_declaration",
+        ],
+        class_types: &[
+            "class_declaration",
+            "interface_declaration",
+            "struct_declaration",
+            "enum_declaration",
+            "record_declaration",
+            "namespace_declaration",
+            "file_scoped_namespace_declaration",
+        ],
+        class_labels: &[
+            ("interface_declaration", "Interface"),
+            ("struct_declaration", "Struct"),
+            ("enum_declaration", "Enum"),
+            ("record_declaration", "Record"),
+            ("namespace_declaration", "Namespace"),
+            ("file_scoped_namespace_declaration", "Namespace"),
+        ],
+        callable_labels: &[
+            ("constructor_declaration", "Constructor"),
+            ("property_declaration", "Property"),
+        ],
+        call_types: &["invocation_expression"],
+        call_target_kinds: &["identifier", "member_access_expression", "generic_name"],
+        target_receiver_fields: &["expression"],
+        import_types: &["using_directive"],
+        return_type_fields: &["returns", "type"],
+        parameters_field: Some("parameters"),
+        body_field: Some("body"),
+        native: true,
+        inferred_bases: true,
+        ..BASE
+    },
+    JS,
+    Spec {
+        id: "typescript",
+        ..TS
+    },
+    Spec { id: "tsx", ..TS },
 ];
 
 /// The retained spec of a language ID (the languages of `LanguageSpecs`).
@@ -273,7 +408,7 @@ fn field_text(src: &[u8], n: Node<'_>, field: &str) -> Option<String> {
         .map(|c| text(src, c))
         .filter(|t| !t.is_empty())
 }
-fn span(n: Node<'_>) -> Span {
+pub(super) fn span(n: Node<'_>) -> Span {
     let s = n.start_position();
     let e = n.end_position();
     Span {
@@ -436,8 +571,27 @@ fn rust_nominal(src: &[u8], n: Option<Node<'_>>) -> Option<String> {
 fn class_label(spec: &Spec, src: &[u8], n: Node<'_>) -> &'static str {
     match spec.id {
         "swift" => swift::class_label(src, n),
-        _ => spec.class_label,
+        _ => label_of(spec.class_labels, n).unwrap_or(spec.class_label),
     }
+}
+fn label_of(table: &[(&str, &'static str)], n: Node<'_>) -> Option<&'static str> {
+    table.iter().find(|(k, _)| *k == n.kind()).map(|(_, l)| *l)
+}
+/// The function value of a declarator that defines a callable (`const f = () => {}`).
+fn value_of<'t>(spec: &Spec, n: Node<'t>) -> Option<Node<'t>> {
+    spec.value_callable
+        .filter(|(k, _)| *k == n.kind())
+        .and_then(|_| child_by_field(n, "value"))
+}
+/// Whether `n`, of a callable kind, defines one: a value declarator only when it binds a
+/// function to an identifier.
+fn defines_callable(spec: &Spec, n: Node<'_>) -> bool {
+    let Some((kind, values)) = spec.value_callable else {
+        return true;
+    };
+    n.kind() != kind
+        || (value_of(spec, n).is_some_and(|v| values.contains(&v.kind()))
+            && child_by_field(n, "name").is_some_and(|x| x.kind() == "identifier"))
 }
 fn is_container_only(spec: &Spec, src: &[u8], n: Node<'_>) -> bool {
     match spec.id {
@@ -459,7 +613,8 @@ fn parameters(spec: &Spec, src: &[u8], n: Node<'_>) -> Option<String> {
     if spec.id == "swift" {
         return Some(swift::declaration_parameters(src, n));
     }
-    spec.parameters_field.and_then(|f| field_text(src, n, f))
+    spec.parameters_field
+        .and_then(|f| field_text(src, value_of(spec, n).unwrap_or(n), f))
 }
 fn abi(spec: &Spec, src: &[u8], n: Node<'_>) -> Option<String> {
     match spec.id {
@@ -537,7 +692,14 @@ fn cpp_linkage(src: &[u8], n: Node<'_>) -> Option<String> {
 }
 
 /// The retained `ExtractImportPath`.
-fn import_path(src: &[u8], n: Node<'_>) -> Option<String> {
+fn import_path(spec: &Spec, src: &[u8], n: Node<'_>) -> Option<String> {
+    if spec.id == "csharp" {
+        // `using A = B.C;` and `using static B.C;` name the last name, not the alias.
+        return named_children(n)
+            .into_iter()
+            .rfind(|x| matches!(x.kind(), "qualified_name" | "identifier"))
+            .map(|x| text(src, x));
+    }
     for field in ["module_name", "source", "path", "name"] {
         if let Some(c) = child_by_field(n, field) {
             return Some(
@@ -546,6 +708,9 @@ fn import_path(src: &[u8], n: Node<'_>) -> Option<String> {
                     .to_owned(),
             );
         }
+    }
+    if spec.native {
+        return None;
     }
     children(n)
         .into_iter()
@@ -957,7 +1122,8 @@ impl<'s, 't> W<'s, 't> {
     fn visit(&mut self, n: Node<'t>, ctx: &Ctx) -> (Node<'t>, Ctx) {
         let spec = self.spec;
         let kind = n.kind();
-        if ctx.extra {
+        // A native spec has no retained walk to differ from: it reads all of a definition.
+        if ctx.extra && !spec.native {
             if spec.call_types.contains(&kind) {
                 let caller = ctx
                     .callable
@@ -1004,6 +1170,7 @@ impl<'s, 't> W<'s, 't> {
             );
         }
         if spec.function_types.contains(&kind)
+            && defines_callable(spec, n)
             && let Some(name) = get_name(spec, self.src, n)
         {
             return self.function_like(n, &name, ctx);
@@ -1025,6 +1192,7 @@ impl<'s, 't> W<'s, 't> {
     fn class_like(&mut self, n: Node<'t>, name: &str, ctx: &Ctx) -> (Node<'t>, Ctx) {
         let spec = self.spec;
         let container: Rc<str> = ctx.class.clone().unwrap_or_else(|| ctx.parent.clone());
+        let namespace = class_label(spec, self.src, n) == "Namespace";
         let mut props = Map::new();
         props.insert("confidence".into(), json!("high"));
         let container_only = is_container_only(spec, self.src, n);
@@ -1099,14 +1267,19 @@ impl<'s, 't> W<'s, 't> {
             self.node(label, name, &qn, n, &source, props);
             self.definition(&ctx.parent.clone(), &qn, "DEFINES", ctx.pending.as_deref());
             for (edge, base) in self.baseline_bases(n) {
-                self.pending(edge, &qn, &base, false, extension_props());
+                let mut p = self.extension_props();
+                if spec.inferred_bases {
+                    p.insert("inheritance_inferred".into(), json!(true));
+                    p.insert("confidence".into(), json!("medium"));
+                }
+                self.pending(edge, &qn, &base, false, p);
             }
         } else if spec.id == "rust"
             && let Some(owner) = &owner_qn
             && let Some(t) = rust_nominal(self.src, child_by_field(n, "trait"))
         {
             // `impl Trait for Type` with the type declared in the file (the previous walk).
-            self.pending("IMPLEMENTS", owner, &t, false, extension_props());
+            self.pending("IMPLEMENTS", owner, &t, false, self.extension_props());
         }
         let target = spec
             .body_field
@@ -1121,8 +1294,16 @@ impl<'s, 't> W<'s, 't> {
             target,
             Ctx {
                 parent: member_parent,
-                class: owner_qn.map(Rc::from),
-                owner: Some(Rc::from(name)),
+                class: if namespace {
+                    ctx.class.clone()
+                } else {
+                    owner_qn.map(Rc::from)
+                },
+                owner: if namespace {
+                    ctx.owner.clone()
+                } else {
+                    Some(Rc::from(name))
+                },
                 callable: None,
                 aliases: Rc::new(HashMap::new()),
                 pending: owner_link,
@@ -1137,24 +1318,31 @@ impl<'s, 't> W<'s, 't> {
         let (class_qn, owner, aliases) = self.callable_context(n, ctx);
         let container: Rc<str> = class_qn.clone().unwrap_or_else(|| ctx.parent.clone());
         let parameters = parameters(spec, self.src, n);
-        let kind = if owner.is_none() {
-            "function"
-        } else {
-            "method"
-        };
-        let qn = format!(
-            "{container}#{kind}:{name}{}",
-            normalize_signature(parameters.as_deref())
-        );
-        let label = if owner.is_some() {
+        let label = label_of(spec.callable_labels, n).unwrap_or(if owner.is_some() {
             "Method"
         } else {
             spec.function_label
+        });
+        let qn = if label == "Property" {
+            format!("{container}#property:{name}")
+        } else {
+            let kind = if owner.is_none() {
+                "function"
+            } else {
+                "method"
+            };
+            format!(
+                "{container}#{kind}:{name}{}",
+                normalize_signature(parameters.as_deref())
+            )
         };
         let mut props = Map::new();
         props.insert("confidence".into(), json!("high"));
-        if let Some(f) = spec.return_type_field
-            && let Some(r) = field_text(self.src, n, f)
+        let typed = value_of(spec, n).unwrap_or(n);
+        if let Some(r) = spec
+            .return_type_fields
+            .iter()
+            .find_map(|f| field_text(self.src, typed, f))
         {
             props.insert("return_type".into(), json!(r));
         }
@@ -1285,6 +1473,9 @@ impl<'s, 't> W<'s, 't> {
             return;
         }
         if let Some((callee, receiver, confidence, kind)) = self.call_target(n, ctx) {
+            if kind == "Bare" && self.spec.import_calls.contains(&callee.as_str()) {
+                return;
+            }
             // Import-like commands are the baseline's imports, never its calls.
             if extension
                 && ((self.spec.id == "ruby"
@@ -1330,13 +1521,33 @@ impl<'s, 't> W<'s, 't> {
                 )
             });
         }
-        let target = target.filter(|t| !spec.call_types.contains(&t.kind()))?;
+        let target = target.filter(|t| {
+            !spec.call_types.contains(&t.kind())
+                && (spec.call_target_kinds.is_empty() || spec.call_target_kinds.contains(&t.kind()))
+        })?;
         let name_node = child_by_field(target, "name")
             .or_else(|| child_by_field(target, "field"))
             .or_else(|| child_by_field(target, "method"));
-        let callee = last_identifier(&self.text(name_node.unwrap_or(target)))?;
+        let callee = if spec.native {
+            // The name node's own text, whole: `$`, `#f`, `@Foo` and combining marks are part
+            // of a name; a generic name is its identifier.
+            let node = name_node
+                .or_else(|| child_by_field(target, "property"))
+                .unwrap_or(target);
+            let node = if node.kind() == "generic_name" {
+                node.named_child(0).unwrap_or(node)
+            } else {
+                node
+            };
+            Some(self.text(node).trim().to_owned()).filter(|t| !t.is_empty())?
+        } else {
+            last_identifier(&self.text(name_node.unwrap_or(target)))?
+        };
         if receiver.is_none() {
-            receiver = RECEIVERS.iter().find_map(|f| child_by_field(target, f));
+            receiver = spec
+                .target_receiver_fields
+                .iter()
+                .find_map(|f| child_by_field(target, f));
         }
         let scope = n.kind() == "scoped_call_expression"
             || matches!(target.kind(), "qualified_identifier" | "scoped_identifier");
@@ -1398,11 +1609,12 @@ impl<'s, 't> W<'s, 't> {
         while let Some((n, depth)) = stack.pop() {
             tick()?;
             let extras = self.baseline_imports(n);
+            let mut named = false;
             if self.spec.import_types.contains(&n.kind()) {
                 let import = if self.spec.id == "swift" {
                     swift::read_import(self.src, n)
                 } else {
-                    import_path(self.src, n).map(|module| swift::Import {
+                    import_path(self.spec, self.src, n).map(|module| swift::Import {
                         module,
                         symbol: None,
                         symbol_kind: None,
@@ -1422,13 +1634,16 @@ impl<'s, 't> W<'s, 't> {
                     }
                     emitted.insert(i.module.trim().to_owned());
                     self.import_edge(&i.module, p);
+                    named = true;
                 }
             }
-            let consumed = !extras.is_empty() || self.spec.import_types.contains(&n.kind());
+            // An import node that names no module (`export const x = require("y")`) is walked.
+            let consumed = !extras.is_empty()
+                || (self.spec.import_types.contains(&n.kind()) && (named || !self.spec.native));
             for m in extras {
                 let m = m.trim().to_owned();
                 if !m.is_empty() && emitted.insert(m.clone()) {
-                    self.import_edge(&m, extension_props());
+                    self.import_edge(&m, self.extension_props());
                 }
             }
             if consumed {
@@ -1491,6 +1706,22 @@ impl<'s, 't> W<'s, 't> {
                 .find(|x| x.kind() == "identifier")
                 .map(|x| vec![text(src, x)])
                 .unwrap_or_default(),
+            (_, "call_expression")
+                if !self.spec.import_calls.is_empty()
+                    && child_by_field(n, "function").is_some_and(|f| {
+                        f.kind() == "identifier"
+                            && self.spec.import_calls.contains(&text(src, f).as_str())
+                    }) =>
+            {
+                child_by_field(n, "arguments")
+                    .and_then(|a| {
+                        super::descendants_of(a, &["string_fragment", "string_content"])
+                            .first()
+                            .map(|s| text(src, *s))
+                    })
+                    .into_iter()
+                    .collect()
+            }
             ("ruby", "call")
                 if child_by_field(n, "receiver").is_none()
                     && child_by_field(n, "method").is_some_and(|m| {
@@ -1591,10 +1822,75 @@ impl<'s, 't> W<'s, 't> {
                     }
                 }
             }
+            "csharp" => {
+                // C# syntax does not say which base is the class: the first is INHERITS when the
+                // name does not follow the interface convention, the others IMPLEMENTS.
+                if let Some(b) = named_children(n)
+                    .into_iter()
+                    .find(|c| c.kind() == "base_list")
+                {
+                    for (i, t) in named_children(b).into_iter().enumerate() {
+                        let name = text(src, t);
+                        let interface_like = name.len() > 1
+                            && name.starts_with('I')
+                            && name.chars().nth(1).is_some_and(char::is_uppercase);
+                        let edge = if n.kind() == "interface_declaration" || interface_like || i > 0
+                        {
+                            "IMPLEMENTS"
+                        } else {
+                            "INHERITS"
+                        };
+                        out.push((edge, name));
+                    }
+                }
+            }
+            "javascript" | "typescript" | "tsx" => {
+                let child = |p: Node<'t>, kind: &str| {
+                    named_children(p).into_iter().find(|c| c.kind() == kind)
+                };
+                if let Some(h) = child(n, "class_heritage") {
+                    match child(h, "extends_clause") {
+                        Some(e) => {
+                            if let Some(v) = child_by_field(e, "value") {
+                                out.push(("INHERITS", text(src, v)));
+                            }
+                        }
+                        // JavaScript: `class A extends B` puts the expression directly.
+                        None => {
+                            if let Some(v) = named_children(h)
+                                .into_iter()
+                                .find(|x| x.kind() != "implements_clause")
+                            {
+                                out.push(("INHERITS", text(src, v)));
+                            }
+                        }
+                    }
+                    if let Some(i) = child(h, "implements_clause") {
+                        for t in super::descendants_of(i, &["type_identifier"]) {
+                            out.push(("IMPLEMENTS", text(src, t)));
+                        }
+                    }
+                }
+                if let Some(e) = child(n, "extends_type_clause") {
+                    for t in super::descendants_of(e, &["type_identifier"]) {
+                        out.push(("INHERITS", text(src, t)));
+                    }
+                }
+            }
             _ => {}
         }
         out.retain(|(_, b)| !b.trim().is_empty());
         out
+    }
+
+    /// The marker of an edge the previous structural walk produced and the retained code does
+    /// not; a native spec has no retained code to differ from.
+    fn extension_props(&self) -> Map<String, Value> {
+        if self.spec.native {
+            Map::new()
+        } else {
+            extension_props()
+        }
     }
 
     fn import_edge(&mut self, module: &str, properties: Map<String, Value>) {
@@ -1688,7 +1984,7 @@ impl<'s, 't> W<'s, 't> {
     /// else a symbol named by the callee.
     fn call_edge(&mut self, c: CallRec) {
         let mut properties = if c.extension {
-            extension_props()
+            self.extension_props()
         } else {
             Map::new()
         };

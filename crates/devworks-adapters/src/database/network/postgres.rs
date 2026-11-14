@@ -1,4 +1,4 @@
-use super::catalog::{Catalog, Query, profile};
+use super::catalog::{Catalog, Query, profile, qualified_release};
 use super::*;
 use futures_util::TryStreamExt;
 use tokio_postgres::{Client, Config, config::SslMode};
@@ -17,7 +17,7 @@ const QUERIES: &[Query] = &[
         sql: r#"SELECT json_build_object('schema',n.nspname,'kind','Index','name',ic.relname,'parent',c.relname,'expressionColumns',0=ANY(i.indkey),'parentKind',CASE WHEN c.relkind IN('v','m') THEN 'View' ELSE 'Table' END,'definition',left(pg_catalog.pg_get_indexdef(i.indexrelid),65536),'truncated',length(pg_catalog.pg_get_indexdef(i.indexrelid))>65536,'metadata',json_build_object('unique',i.indisunique,'indexType',am.amname,'columnNames',COALESCE((SELECT json_agg(a.attname ORDER BY k.ordinality) FROM pg_catalog.unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.attnum WHERE k.ordinality<=i.indnkeyatts),'[]'::json)))::text FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indrelid JOIN pg_catalog.pg_class ic ON ic.oid=i.indexrelid JOIN pg_catalog.pg_am am ON am.oid=ic.relam JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE left(n.nspname,3)<>'pg_' AND n.nspname<>'information_schema' AND pg_catalog.has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,c.relname,ic.relname"#,
     },
     Query {
-        sql: r#"SELECT json_build_object('schema',n.nspname,'kind','Constraint','name',con.conname,'parent',c.relname,'definition',left(pg_catalog.pg_get_constraintdef(con.oid,true),65536),'truncated',length(pg_catalog.pg_get_constraintdef(con.oid,true))>65536,'reference',CASE WHEN con.contype='f' THEN json_build_object('schema',rn.nspname,'table',rc.relname) END,'metadata',json_build_object('constraintType',CASE con.contype WHEN 'p' THEN 'PrimaryKey' WHEN 'u' THEN 'Unique' WHEN 'f' THEN 'ForeignKey' WHEN 'c' THEN 'Check' WHEN 'x' THEN 'Exclusion' ELSE con.contype::text END,'columnNames',COALESCE((SELECT json_agg(a.attname ORDER BY k.ordinality) FROM pg_catalog.unnest(con.conkey) WITH ORDINALITY k(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.attnum),'[]'::json),'referencedTable',CASE WHEN con.contype='f' THEN rn.nspname||'.'||rc.relname END,'referencedColumns',COALESCE((SELECT json_agg(a.attname ORDER BY k.ordinality) FROM pg_catalog.unnest(con.confkey) WITH ORDINALITY k(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=rc.oid AND a.attnum=k.attnum),'[]'::json),'checkClause',CASE WHEN con.contype='c' THEN left(pg_catalog.pg_get_constraintdef(con.oid,true),65536) END))::text FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_class rc ON rc.oid=con.confrelid LEFT JOIN pg_catalog.pg_namespace rn ON rn.oid=rc.relnamespace WHERE left(n.nspname,3)<>'pg_' AND n.nspname<>'information_schema' AND pg_catalog.has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,c.relname,con.conname"#,
+        sql: r#"SELECT json_build_object('schema',n.nspname,'kind','Constraint','name',con.conname,'parent',c.relname,'definition',left(pg_catalog.pg_get_constraintdef(con.oid,true),65536),'truncated',length(pg_catalog.pg_get_constraintdef(con.oid,true))>65536,'reference',CASE WHEN con.contype='f' THEN json_build_object('schema',rn.nspname,'table',rc.relname) END,'metadata',json_build_object('constraintType',CASE con.contype WHEN 'p' THEN 'PrimaryKey' WHEN 'u' THEN 'Unique' WHEN 'f' THEN 'ForeignKey' WHEN 'c' THEN 'Check' WHEN 'x' THEN 'Exclusion' ELSE con.contype::text END,'columnNames',COALESCE((SELECT json_agg(a.attname ORDER BY k.ordinality) FROM pg_catalog.unnest(con.conkey) WITH ORDINALITY k(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.attnum),'[]'::json),'referencedTable',CASE WHEN con.contype='f' THEN rn.nspname||'.'||rc.relname END,'referencedColumns',COALESCE((SELECT json_agg(a.attname ORDER BY k.ordinality) FROM pg_catalog.unnest(con.confkey) WITH ORDINALITY k(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=rc.oid AND a.attnum=k.attnum),'[]'::json),'checkClause',CASE WHEN con.contype='c' THEN left(pg_catalog.pg_get_constraintdef(con.oid,true),65536) END))::text FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_class rc ON rc.oid=con.confrelid LEFT JOIN pg_catalog.pg_namespace rn ON rn.oid=rc.relnamespace WHERE con.contype<>'n' AND left(n.nspname,3)<>'pg_' AND n.nspname<>'information_schema' AND pg_catalog.has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,c.relname,con.conname"#,
     },
     Query {
         sql: r#"SELECT json_build_object('schema',r.routine_schema,'kind','Procedure','name',r.specific_name,'definition',left(r.routine_definition,65536),'truncated',COALESCE(length(r.routine_definition)>65536,false),'metadata',json_build_object('routineType',r.routine_type,'dataType',r.data_type,'parameters',COALESCE((SELECT json_agg(json_build_object('name',COALESCE(p.parameter_name,'parameter-'||p.ordinal_position::text),'ordinal',p.ordinal_position::text,'mode',p.parameter_mode,'dataType',COALESCE(p.udt_schema||'.'||p.udt_name,p.data_type),'nullable',true) ORDER BY p.ordinal_position) FROM information_schema.parameters p WHERE p.specific_catalog=r.specific_catalog AND p.specific_schema=r.specific_schema AND p.specific_name=r.specific_name),'[]'::json)))::text FROM information_schema.routines r WHERE left(r.routine_schema,3)<>'pg_' AND r.routine_schema<>'information_schema' ORDER BY r.routine_schema,r.specific_name"#,
@@ -26,6 +26,11 @@ const QUERIES: &[Query] = &[
         sql: r#"SELECT json_build_object('schema',n.nspname,'kind','Type','name',t.typname,'definition',CASE WHEN t.typtype='e' THEN (SELECT string_agg(e.enumlabel,', ' ORDER BY e.enumsortorder) FROM pg_catalog.pg_enum e WHERE e.enumtypid=t.oid) END,'metadata',json_build_object('dataType',pg_catalog.format_type(t.oid,NULL),'comment',pg_catalog.obj_description(t.oid,'pg_type'),'extra',CASE t.typtype WHEN 'e' THEN 'Enum' WHEN 'd' THEN 'Domain' WHEN 'c' THEN 'Composite' WHEN 'r' THEN 'Range' WHEN 'm' THEN 'Multirange' ELSE 'Base' END))::text FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid=t.typnamespace WHERE left(n.nspname,3)<>'pg_' AND n.nspname<>'information_schema' AND t.typelem=0 AND pg_catalog.has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,t.typname"#,
     },
 ];
+/// Major versions whose catalogs the queries above are qualified against in CI.
+const QUALIFIED: &[&str] = &["14", "15", "16", "17", "18"];
+fn version_gate(version: &str) -> Result<(), MetadataFailure> {
+    qualified_release(version, 1, QUALIFIED, "PostgreSQL 14, 15, 16, 17 or 18")
+}
 fn classify(error: tokio_postgres::Error) -> MetadataFailure {
     match error.code().map(|s| s.code()) {
         Some("28000" | "28P01" | "42501" | "3D000") => MetadataFailure::AccessDenied,
@@ -103,9 +108,7 @@ async fn read_catalog(
         .map_err(classify)?
         .try_get(0)
         .map_err(|_| MetadataFailure::InvalidMetadata)?;
-    if !version.starts_with("17.") {
-        return Err(MetadataFailure::UnsupportedProfile);
-    }
+    version_gate(&version)?;
     let tls = match target.tls {
         SchemaTlsMode::VerifyFull => "VerifyFull; platform roots plus explicit CA",
         SchemaTlsMode::VerifyCa => "VerifyCa; platform roots plus explicit CA",
@@ -240,4 +243,29 @@ pub(super) async fn read(
         }
     }
     Ok(c.finish(profile))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn accepts_exactly_the_qualified_major_versions() {
+        for version in [
+            "14.25 (Debian 14.25-1.pgdg13+1)",
+            "15.20",
+            "16.16",
+            "17.12 (Debian 17.12-1.pgdg13+1)",
+            "18.7",
+        ] {
+            assert_eq!(version_gate(version), Ok(()), "{version}");
+        }
+        for version in ["13.23", "19.0", "18beta1", "17devel", "1.0", "", "x17.1"] {
+            assert_eq!(
+                version_gate(version),
+                Err(MetadataFailure::UnsupportedServerVersion {
+                    supported: "PostgreSQL 14, 15, 16, 17 or 18"
+                }),
+                "{version}"
+            );
+        }
+    }
 }

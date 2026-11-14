@@ -451,48 +451,22 @@ impl IndexService {
             },
         })
     }
+    /// The first 32 coverage gaps and whether more exist. The store finds them in one bounded
+    /// statement, so a search never pages every convention to report them.
     fn search_gaps(
         &self,
         read: &dyn ReadSnapshot,
         filter: &ConventionQuery,
         space: Option<&str>,
     ) -> Result<(Vec<String>, bool), StorageError> {
-        let mut after = None;
-        let mut gaps = Vec::new();
-        let mut more = false;
-        loop {
-            let owners = read.conventions().conventions(filter, after.as_ref(), 64)?;
-            if owners.is_empty() {
-                break;
-            }
-            for owner in &owners {
-                let index = read.conventions().convention_index_head(&owner.id)?;
-                let gap = match index {
-                    None => Some("Unindexed"),
-                    Some(ref g)
-                        if g.state != "Published"
-                            || !matches!(g.status.as_str(), "Ready" | "LexicalOnly") =>
-                    {
-                        Some("IndexNotCurrent")
-                    }
-                    Some(ref g)
-                        if space.is_some()
-                            && (g.embedding_space.as_deref() != space || g.status != "Ready") =>
-                    {
-                        Some("MissingCompatibleVectors")
-                    }
-                    _ => None,
-                };
-                if let Some(reason) = gap {
-                    if gaps.len() < 32 {
-                        gaps.push(format!("{}:{reason}", owner.id.as_str()));
-                    } else {
-                        more = true;
-                    }
-                }
-            }
-            after = owners.last().map(StoredConvention::position);
-        }
+        let mut gaps = read
+            .conventions()
+            .convention_index_gaps(filter, space, 33)?
+            .into_iter()
+            .map(|(id, reason)| format!("{}:{reason}", id.as_str()))
+            .collect::<Vec<_>>();
+        let more = gaps.len() > 32;
+        gaps.truncate(32);
         Ok((gaps, more))
     }
 }

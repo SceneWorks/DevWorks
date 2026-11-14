@@ -442,7 +442,7 @@ pub fn extract_group(
 }
 
 /// The directory of a repository-relative path (`""` at the root).
-fn dir_of(p: &str) -> &str {
+pub(super) fn dir_of(p: &str) -> &str {
     p.rfind('/').map_or("", |i| &p[..i])
 }
 

@@ -3,9 +3,32 @@
 //! read through `artifacts.read` and stored through `artifacts.save`. Nothing here decides
 //! anything the instruction service decides.
 use crate::{
-    backend::{Backend, TaskOutput},
+    backend::{Backend, TaskOutput, screen_slot},
     ops::{self, Failure},
 };
+
+/// The Roles and skills requests the panel waits for. The names are persisted (see
+/// [`crate::backend::Slot`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum InstructionsSlot {
+    /// Settings → Roles and skills: a discovery page (load generation).
+    InstructionSkills(u64),
+    /// The active record of one role (role item ID).
+    InstructionRole(String),
+    /// A history page of the selected item (detail generation).
+    InstructionHistory(u64),
+    /// The text of the shown revision (detail generation).
+    InstructionText(u64),
+    /// A resources page of the selected skill (detail generation).
+    InstructionResources(u64),
+    /// Staging a draft's text (change token).
+    InstructionPrepare(u64),
+    /// The draft text's `artifacts.save` (change token).
+    InstructionArtifact(u64),
+    /// The `*.draft` / `*.rollback` command (change token).
+    InstructionCommand(u64),
+}
+screen_slot!(InstructionsSlot, Instructions);
 use devworks_core::{
     gateway::{CommandOutcome, QueryOutcome},
     protocol::{
@@ -114,6 +137,10 @@ pub struct Status {
     pub effective: Option<bool>,
     pub disabled: bool,
     pub missing: bool,
+    /// A skill folder change observed on disk that waits for a person's confirmation.
+    pub awaiting_confirmation: bool,
+    /// The active revision of a skill whose folder holds a newer change awaiting confirmation.
+    pub disk_change_pending: bool,
     /// Role applicability and any label this surface does not interpret.
     pub other: Vec<String>,
 }
@@ -125,6 +152,8 @@ pub fn status(labels: &[String]) -> Status {
         effective: None,
         disabled: false,
         missing: false,
+        awaiting_confirmation: false,
+        disk_change_pending: false,
         other: Vec::new(),
     };
     for label in labels {
@@ -141,6 +170,8 @@ pub fn status(labels: &[String]) -> Status {
             "overridden" => s.effective = Some(false),
             "disabled" => s.disabled = true,
             "missing" => s.missing = true,
+            "awaiting-confirmation" => s.awaiting_confirmation = true,
+            "disk-change-pending" => s.disk_change_pending = true,
             other => s.other.push(other.to_owned()),
         }
     }
@@ -170,6 +201,12 @@ pub fn current_in(history: &[InstructionRecord]) -> Option<&InstructionRecord> {
 pub fn restorable(record: &InstructionRecord) -> bool {
     let s = record_status(record);
     record.approved && !s.active
+}
+/// Whether a human may confirm this skill folder change observed on disk, which activates it
+/// with the same `skills.rollback` a restore uses.
+pub fn confirmable(record: &InstructionRecord) -> bool {
+    let s = record_status(record);
+    s.awaiting_confirmation && !s.active
 }
 
 /// Where a skill's files are, for display (`root` caption + relative directory).
@@ -455,6 +492,23 @@ mod tests {
         assert!(!restorable(&history[0]));
         assert!(!restorable(&history[2]), "already active");
         assert!(restorable(&rec(1, true, &["state:approved"])));
+    }
+
+    #[test]
+    fn only_an_observed_disk_change_awaiting_confirmation_is_confirmable() {
+        let observed = rec(2, false, &["state:draft", "awaiting-confirmation"]);
+        assert!(confirmable(&observed) && !restorable(&observed));
+        assert!(record_status(&observed).awaiting_confirmation);
+        assert!(
+            !confirmable(&rec(3, false, &["state:draft"])),
+            "an agent draft"
+        );
+        let active = rec(
+            1,
+            true,
+            &["state:approved", "active", "disk-change-pending"],
+        );
+        assert!(!confirmable(&active) && record_status(&active).disk_change_pending);
     }
 
     #[test]

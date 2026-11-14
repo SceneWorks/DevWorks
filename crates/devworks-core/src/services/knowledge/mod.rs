@@ -431,7 +431,9 @@ pub(crate) fn claim_wire(
     let corrupt = |what: &str| StorageError::InvalidRecord(format!("stored claim {what}"));
     let lifecycle: KnowledgeLifecycle =
         model::parse(&c.lifecycle).ok_or_else(|| corrupt("lifecycle"))?;
-    let stale = c.lifecycle == "Active" && read.knowledge_claim_stale(&c.id)?;
+    // One read of the claim's maintained tallies; none of them counts history.
+    let tally = read.knowledge_claim_tally(&c.id)?;
+    let stale = c.lifecycle == "Active" && tally.stale;
     // A deleted claim shows no challenge or address content: only its identity remains.
     let deleted = c.lifecycle == "Deleted";
     let challenges = if deleted {
@@ -439,7 +441,7 @@ pub(crate) fn claim_wire(
     } else {
         read.knowledge_challenges(&c.id, MAX_CHALLENGES as u16)?
     };
-    let open_challenge = !deleted && read.knowledge_open_challenges(&c.id)? > 0;
+    let open_challenge = !deleted && tally.open_challenges > 0;
     let state = match c.lifecycle.as_str() {
         "Retracted" | "Deleted" => KnowledgeState::Retracted,
         _ if open_challenge => KnowledgeState::Challenged,
@@ -466,7 +468,7 @@ pub(crate) fn claim_wire(
     let lesson = match &c.lesson {
         None => None,
         Some(l) => {
-            let events = read.knowledge_lesson_event_count(&c.id)?;
+            let events = tally.lesson_events;
             let threshold = thresholds.get(&c.scope.key()).copied().unwrap_or(3);
             let (rule_state, effect) = model::effective_rule_state(
                 &l.rule_state,
@@ -476,7 +478,7 @@ pub(crate) fn claim_wire(
             );
             let applicability: Applicability = serde_json::from_value(l.applicability.clone())
                 .map_err(|_| corrupt("applicability"))?;
-            let deliveries = read.knowledge_deliveries(&c.id)?;
+            let deliveries = &tally.deliveries;
             let addresses = if deleted {
                 Vec::new()
             } else {

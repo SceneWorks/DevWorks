@@ -1,4 +1,4 @@
-use super::catalog::{Catalog, MAX_ROW_BYTES, Query, profile};
+use super::catalog::{Catalog, MAX_ROW_BYTES, Query, profile, qualified_release};
 use super::*;
 use futures_util::TryStreamExt;
 use sqlx::mysql::{MySqlConnectOptions, MySqlSslMode};
@@ -28,6 +28,16 @@ const QUERIES: &[Query] = &[
         sql: r#"SELECT CASE WHEN OCTET_LENGTH(metadata.document)>131072 THEN NULL ELSE CAST(metadata.document AS CHAR CHARACTER SET utf8mb4) END FROM (SELECT JSON_OBJECT('schema',r.ROUTINE_SCHEMA,'kind','Procedure','name',r.SPECIFIC_NAME,'identity',r.ROUTINE_TYPE,'definition',LEFT(r.ROUTINE_DEFINITION,65536),'truncated',JSON_EXTRACT(IF(OCTET_LENGTH(r.ROUTINE_DEFINITION)>65536,'true','false'),'$'),'metadata',JSON_OBJECT('routineType',r.ROUTINE_TYPE,'comment',r.ROUTINE_COMMENT,'parameters',COALESCE((SELECT JSON_ARRAYAGG(JSON_OBJECT('name',COALESCE(p.PARAMETER_NAME,'return'),'ordinal',CAST(p.ORDINAL_POSITION AS CHAR),'mode',COALESCE(p.PARAMETER_MODE,'RETURN'),'dataType',COALESCE(p.DTD_IDENTIFIER,p.DATA_TYPE),'nullable',JSON_EXTRACT('true','$'))) FROM INFORMATION_SCHEMA.PARAMETERS p WHERE p.SPECIFIC_SCHEMA=r.ROUTINE_SCHEMA AND p.SPECIFIC_NAME=r.SPECIFIC_NAME AND p.ROUTINE_TYPE=r.ROUTINE_TYPE),JSON_ARRAY()))) AS document FROM INFORMATION_SCHEMA.ROUTINES r WHERE r.ROUTINE_SCHEMA=? ORDER BY r.SPECIFIC_NAME,r.ROUTINE_TYPE) metadata"#,
     },
 ];
+/// Release lines whose INFORMATION_SCHEMA the queries above are qualified against in CI.
+const MYSQL_QUALIFIED: &[&str] = &["8.4", "9.7"];
+const MARIADB_QUALIFIED: &[&str] = &["10.11", "11.4", "11.8"];
+fn version_gate(maria: bool, version: &str) -> Result<(), MetadataFailure> {
+    if maria {
+        qualified_release(version, 2, MARIADB_QUALIFIED, "MariaDB 10.11, 11.4 or 11.8")
+    } else {
+        qualified_release(version, 2, MYSQL_QUALIFIED, "MySQL 8.4 or 9.7")
+    }
+}
 fn classify(error: sqlx::Error) -> MetadataFailure {
     let code = error
         .as_database_error()
@@ -70,15 +80,10 @@ pub(super) async fn read(
         .fetch_one(&mut conn)
         .await
         .map_err(classify)?;
-    if maria != version.contains("MariaDB")
-        || !(if maria {
-            version.starts_with("11.4.")
-        } else {
-            version.starts_with("8.4.")
-        })
-    {
+    if maria != version.contains("MariaDB") {
         return Err(MetadataFailure::UnsupportedProfile);
     }
+    version_gate(maria, &version)?;
     sqlx::raw_sql(if maria {
         "SET SESSION max_statement_time=30"
     } else {
@@ -212,4 +217,45 @@ pub(super) async fn read(
         .map_err(classify)?;
     conn.close().await.map_err(classify)?;
     Ok(collector.finish(profile))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn accepts_exactly_the_qualified_release_lines() {
+        for version in ["8.4.13", "9.7.4"] {
+            assert_eq!(version_gate(false, version), Ok(()), "{version}");
+        }
+        for version in [
+            "10.11.19-MariaDB-ubu2204",
+            "11.4.13-MariaDB-ubu2404",
+            "11.8.9-MariaDB-ubu2404-log",
+        ] {
+            assert_eq!(version_gate(true, version), Ok(()), "{version}");
+        }
+        for version in ["8.0.46", "9.6.0", "26.10.0", "8.40.1", "8", ""] {
+            assert_eq!(
+                version_gate(false, version),
+                Err(MetadataFailure::UnsupportedServerVersion {
+                    supported: "MySQL 8.4 or 9.7"
+                }),
+                "{version}"
+            );
+        }
+        for version in [
+            "10.6.28-MariaDB",
+            "11.7.2-MariaDB",
+            "12.3.3-MariaDB",
+            "10.1.48-MariaDB",
+            "11.40.1-MariaDB",
+        ] {
+            assert_eq!(
+                version_gate(true, version),
+                Err(MetadataFailure::UnsupportedServerVersion {
+                    supported: "MariaDB 10.11, 11.4 or 11.8"
+                }),
+                "{version}"
+            );
+        }
+    }
 }

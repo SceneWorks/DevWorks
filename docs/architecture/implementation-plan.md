@@ -1,10 +1,10 @@
 # Local implementation plan
 
-Status: architecture baseline 1.1. This is the complete ownership and dependency breakdown of the captured scope, not implementation authorization or a frozen public API. Requirements remain 231 Confirmed and 147 Proposed; a planned slice does not approve a Proposed requirement. CodeGraph remains the operational source of truth.
+Status: architecture baseline 1.1. This is the complete ownership and dependency breakdown of the captured scope, not implementation authorization or a frozen public API. Requirements remain 243 Confirmed and 147 Proposed; a planned slice does not approve a Proposed requirement. CodeGraph remains the operational source of truth.
 
 ## Success and remaining commitments
 
-The register assigns all 378 requirements, 376 operations across 50 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 80 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 390 requirements, 376 operations across 50 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 80 local slices and no unowned operations, requirements or retained entries.
 
 All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
@@ -311,7 +311,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 ### DW-013
 
-**Configure statuses and atomically allocate eligible work** · Feature · Native implementation in progress; acceptance tracked by DW-13.
+**Configure statuses and atomically allocate eligible work** · Feature · Implemented in native services (`workflows.*` and `next_work.*` have registered handlers); acceptance recorded in the tracker item DW-13.
 
 Priority features/issues share a project queue; automatic feature claims require current implementation approval. Child-task claims stay within their feature. Status removal reassigns occupied records atomically; inspect/release claims obey ownership fences. Filter unsatisfied dependencies before priority and manual rank; use atomic queue revisions for edits/claims. Prove concurrent dependency edits cannot form a project-wide cycle and high-priority blocked tasks cannot bypass prerequisites. No automatic preemption on priority changes. Keep-working yields a fully dependency-blocked root only after quiescence, allowing prerequisite roots to run while preserving one active root, coordinator lineage and explicit holds; valid task-level interleaving across features must not deadlock. Membership changes update root/feature queue eligibility atomically and fence stale claims; an owned task never gains a second execution. Relinking cannot clear an unlink pause.
 
@@ -329,7 +329,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 ### DW-014
 
-**Record exact human decisions and notifications** · Feature · Native implementation in progress; acceptance tracked by DW-14.
+**Record exact human decisions and notifications** · Feature · Implemented in native services (`approvals.*` and `notifications.*` have registered handlers); acceptance recorded in the tracker item DW-14.
 
 Approval proposals bind contents/target/revision, only host human interaction mints decisions, and approval wakeups re-admit saved operations without clearing pauses. Notifications and acknowledgment never resolve their linked decisions. Native OS denial retains in-app access. Feature-plan approval atomically promotes the exact pending draft with active scope/acceptance and history. Stale approval/edit races preserve the original plan; rejection leaves it approved. Approval never clears a pause. Expose app-wide Approvals directly below Chat with project filtering under UI-14. Implement NOTIFY-05 verified feature/issue completion cards as a top-center floating newest-first stack on every page, persistent until explicit individual dismissal across navigation/restart, expandable with work links and retained history. Prevent duplicates, layout shifts, focus theft and essential-control obstruction; reading/opening is not dismissal and grants no decision/resume authority. Schema-3 source-bound settings/feature-plan/finding-risk/saved-operation proposals retain immutable reviewed snapshots; saved operations use real registered admission and owner preflight with original actor provenance and private host human evidence. Knowledge review candidates are informational only: adopted KNOW-03/05 excludes autonomous acknowledgment and rule-approval authority. Explicit read/unread is separate from durable per-card acknowledgment; no duplicate dismissal operation.
 
@@ -445,7 +445,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 ### DW-021
 
-**Attribute prices, budget reservations and cache metrics** · Feature · Native implementation in progress; acceptance tracked by DW-21.
+**Attribute prices, budget reservations and cache metrics** · Feature · Implemented in native services (`router.usage` and the price operations have registered handlers); acceptance recorded in the tracker item DW-21.
 
 Weekly/manual official price snapshots, OpenRouter reported costs, local free/custom untracked and subscription estimates preserve provenance. Feature budgets warn at 75%, reserve/admit atomically and require Continue after caps; issues/jobs have no caps. Include every attempt/auxiliary purpose and unknown tail. Preserve all six retained AdminReports views, filters, normalized time buckets, summaries/series/breakdowns and filter options through bounded revision-bound pages. Canonical attempt identities suppress session/job mirrors; historic observations without deduplication evidence remain explicitly separate coverage gaps and raw fact subtotals. Expose nullable cache/token/cost metrics, reasoning subsets, partial monetary coverage and unknown tails. Current catalog has immutable exact tariff/source history and explicit override clearing; no retrospective repricing or guessed first CAS revision. Feature-only budgets use all existing creation/import/edit surfaces with real human authority for cap lifts and exact approval for pending cap changes; bootstrap readiness and unknown coverage remain visible. Local-free classification uses an explicit human-authored connection flag (defaultfalse/omitted updatepreserves), never hostname inference; admitted attempts retain that connection revision.
 
@@ -889,7 +889,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** See supporting and integration obligations.
 
-**Supporting requirements:** RES-01, RES-02, RES-03, TOOL-01, TOOL-02, TOOL-03, TOOL-04, TOOL-05, TOOL-06, TOOL-07, TOOL-08, TOOL-09
+**Supporting requirements:** RES-01, RES-02, RES-03, TOOL-01, TOOL-02, TOOL-03, TOOL-04, TOOL-05, TOOL-06, TOOL-07, TOOL-08, TOOL-09, WATCH-01, WATCH-05, WATCH-10
 
 **Behavior/workload obligations:** CAP-RESOURCES. Frozen source entries bound: 0. Pending input schemas: 0.
 
@@ -1405,7 +1405,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 ### DW-094
 
-**Watch an owned background process and wake its session** · Feature · Planned; implementation in progress (DW-94).
+**Watch an owned background process and wake its session** · Feature · Implemented in native services (`watch.create`, `watch.list`, `watch.inspect` and `watch.cancel` have registered handlers); acceptance recorded in the tracker item DW-94. WATCH-09 (visibility in workspaces) and WATCH-11 (external processes) are not built yet; GitHub and delegated-agent sources are not built in the code on main.
 
 watch.create launches through the process.execute service and answers before exit; list/inspect/cancel answer the watcher; the observed outcome reaches the owning session's input once as a host-only message, survives a dispatcher restart and is acknowledged only when a carrying turn completes; reviewer roles cannot launch or stop processes through a watcher.
 
@@ -1413,7 +1413,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Operations:** `watch.create`, `watch.list`, `watch.inspect`, `watch.cancel`
 
-**Primary requirement cases:** See supporting and integration obligations.
+**Primary requirement cases:** AT-WATCH-01, AT-WATCH-02, AT-WATCH-03, AT-WATCH-04, AT-WATCH-05, AT-WATCH-06, AT-WATCH-07, AT-WATCH-08, AT-WATCH-09, AT-WATCH-10, AT-WATCH-11, AT-WATCH-12
 
 **Supporting requirements:** None assigned.
 

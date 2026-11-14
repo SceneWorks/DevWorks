@@ -319,6 +319,12 @@
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "gate": "G11"
+    },
+    "WATCH": {
+      "section": "scheduling-lifecycle-and-project-deletion",
+      "owner": "WatchService, ProcessSupervisor and session delivery",
+      "validationFamily": "Observed-outcome, owner-lifecycle, restart and backup-delivery cases",
+      "gate": "G10"
     }
   },
   "overrides": {

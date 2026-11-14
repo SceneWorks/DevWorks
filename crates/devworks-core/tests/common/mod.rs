@@ -2114,6 +2114,18 @@ impl WorkRead for Unsupported {
     ) -> Result<Vec<StoredAllocationClaim>, StorageError> {
         nope()
     }
+    fn live_allocation_claims(
+        &self,
+        _: &ProjectId,
+    ) -> Result<Vec<StoredAllocationClaim>, StorageError> {
+        nope()
+    }
+    fn latest_allocation_claim(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredAllocationClaim>, StorageError> {
+        nope()
+    }
     fn allocation_by_invocation(
         &self,
         _: &Id,
@@ -3020,6 +3032,9 @@ impl KnowledgeRead for Unsupported {
     fn knowledge_claim_stale(&self, _: &Id) -> Result<bool, StorageError> {
         nope()
     }
+    fn knowledge_claim_tally(&self, _: &Id) -> Result<ClaimTally, StorageError> {
+        nope()
+    }
     fn knowledge_source_head(&self, _: &str) -> Result<Option<String>, StorageError> {
         nope()
     }
@@ -3475,6 +3490,37 @@ impl UsageRead for Unsupported {
         _after: Option<&Id>,
         _limit: u16,
     ) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
+        nope()
+    }
+    fn unquiesced_attempts(
+        &self,
+        _after: Option<&Id>,
+        _limit: u16,
+    ) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
+        nope()
+    }
+    fn inference_attempts_between(
+        &self,
+        _filter: &UsageAttemptFilter,
+        _after: Option<&(i64, Id)>,
+        _limit: u16,
+    ) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
+        nope()
+    }
+    fn late_inference_attempts(
+        &self,
+        _filter: &UsageAttemptFilter,
+        _after: Option<&(i64, Id, Id)>,
+        _limit: u16,
+    ) -> Result<Vec<(i64, StoredInferenceAttempt)>, StorageError> {
+        nope()
+    }
+    fn usage_origins_between(
+        &self,
+        _filter: &UsageOriginFilter,
+        _after: Option<&(i64, String, String)>,
+        _limit: u16,
+    ) -> Result<Vec<StoredUsageOrigin>, StorageError> {
         nope()
     }
     fn usage_observation(
@@ -4294,6 +4340,14 @@ impl ConventionIndexRead for Unsupported {
         nope()
     }
     fn convention_index_head(&self, _: &Id) -> Result<Option<StoredConventionIndex>, StorageError> {
+        nope()
+    }
+    fn convention_index_gaps(
+        &self,
+        _: &ConventionQuery,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<Vec<(Id, String)>, StorageError> {
         nope()
     }
     fn convention_index_generation(

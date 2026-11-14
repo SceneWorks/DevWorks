@@ -1,6 +1,14 @@
 # Agents, sessions, and execution availability
 
-The Agents & sessions destination is the place for coordinator/worker assignment visibility. A screen entry or registered protocol DTO alone is not a running agent supervisor. If this build reports the assignment/delegation view unavailable, child delegation, durable agent inboxes, and the autonomous coordinator loop must not be assumed to run.
+The Agents & sessions destination is the place for coordinator/worker assignment visibility. A registered operation is not a running agent: an operation moves records, and an agent runs only while the host holds an activation for its root. Check the actual run, not the screen, to see what is live.
+
+## Agent operations
+
+- `agents.inspect` shows one assignment: its root, role, state, blockers and latest checkpoint.
+- `agents.delegate` asks for a child assignment under a root. It names the root and the root's control revision, the tasks, the role, an instruction, and optionally a checkpoint to continue from. It only records the intent. The host starts the child session, and an agent cannot start itself.
+- `agents.messages` sends a message to an assignment. A message has a class: instruction, status, question or evidence. `agents.inbox` reads an assignment's messages, and `agents.acknowledge` marks one read. Reading never marks a message read.
+- `agents.post`, `agents.receive`, `agents.ack`, `agents.history` and `agents.events` are the project channel. An agent posts a note (info, question, request, blocker or announcement), optionally addressed to a session or to you, and optionally blocking. `receive` pages the messages for a session from a cursor. `ack` marks messages read, and a reply can resolve a request as answered or declined. A repeated post with the same idempotency key does not post twice.
+- `agents.checkpoint` records an assignment's progress at one transcript position. It cannot describe a position that does not exist yet, and it cannot replace a newer checkpoint.
 
 ## Existing control foundations
 

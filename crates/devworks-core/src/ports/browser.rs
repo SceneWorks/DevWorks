@@ -17,7 +17,9 @@
 //! with bounded cancellation and boot recovery.
 use crate::protocol::Id;
 use std::io::Read;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::process::{ControlChannel, ProcessSpec};
@@ -146,6 +148,28 @@ pub trait BrowserPlatform: Send + Sync {
         path: &Path,
         max_bytes: u64,
     ) -> Result<Vec<u8>, BrowserFault>;
+    /// Starts the session's egress proxy on a loopback port: the browser is launched to send
+    /// every connection through it. For each connection the proxy asks `policy` once for the
+    /// addresses of the requested host and port and connects only to one of those addresses,
+    /// so the address that was checked is the address that is reached. Dropping the returned
+    /// handle stops the proxy accepting connections.
+    fn start_egress_proxy(
+        &self,
+        policy: Arc<dyn ConnectPolicy>,
+    ) -> Result<Box<dyn RunningProxy>, BrowserFault>;
+}
+
+/// Decides where the browser's egress proxy may connect.
+pub trait ConnectPolicy: Send + Sync {
+    /// The admitted addresses of `host` (a domain or an IP literal, as the browser asked for
+    /// it) at `port`, every one already checked; `Err` says why the connection is refused.
+    fn addresses(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, String>;
+}
+
+/// A running egress proxy. Dropping it stops the proxy accepting connections.
+pub trait RunningProxy: Send + Sync {
+    /// The loopback address the proxy listens on.
+    fn address(&self) -> SocketAddr;
 }
 
 /// Most open targets one session keeps (live and recorded alike).
