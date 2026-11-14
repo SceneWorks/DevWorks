@@ -60,23 +60,10 @@ impl Shell {
         for (p, f) in &self.work.allocation_filters {
             put(p, "allocation", json!(format!("{f:?}")));
         }
-        if let Some(f) = &self.projects.membership {
-            put(&f.project, "membership", json!(f.repositories));
-        }
         for (p, w) in &self.work.workflows {
             if let Some(d) = &w.draft {
                 put(p, "workflow", json!(format!("{d:?}")));
             }
-        }
-        if let Some(f) = &self.projects.edit {
-            put(
-                &f.project,
-                "project",
-                json!({"name":f.name,"description":f.description,"access":f.access}),
-            );
-        }
-        for (p, f) in &self.projects.base {
-            put(p, "directory", json!(f.buffer));
         }
         if let Some(p) = self.knowledge.purge_owner() {
             if let Some(d) = &self.knowledge.draft {
@@ -199,13 +186,6 @@ impl Shell {
             .list
             .items
             .retain(|r| r.id != scope.project_id);
-        self.projects
-            .deleted
-            .items
-            .retain(|r| r.id != scope.project_id);
-        self.projects.edit = self.projects.edit.take().filter(|f| f.project != p);
-        self.projects.membership = self.projects.membership.take().filter(|f| f.project != p);
-        self.projects.base.remove(p);
         if self
             .projects
             .indexing

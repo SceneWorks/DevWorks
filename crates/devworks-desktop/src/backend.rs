@@ -327,23 +327,10 @@ pub enum Slot {
     /// Active and archived projects.
     ProjectsList,
     /// Deleted projects (their tombstones).
-    DeletedProjects,
     /// Every registered repository.
     RepositoriesList,
     /// The repositories of one project.
     ProjectRepositories(String),
-    ProjectCreate,
-    /// An edit, membership or lifecycle command of one project (one at a time per project).
-    ProjectCommand(String),
-    /// A project's repository base directory setting (read, health, save).
-    ProjectSettings(String),
-    ProjectSettingsHealth(String),
-    ProjectSettingsSave(String),
-    /// A repository's README (`true`) or summary text.
-    RepositoryText(String, bool),
-    /// The artifact content of a repository's README (`true`) or summary.
-    RepositoryContent(String, bool),
-    RemoveIndex(String),
     /// A repository's index status (repository ID).
     IndexStatus(String),
     /// Index runs (repository ID, or `*` for the selected scope).
@@ -415,9 +402,6 @@ pub enum Slot {
     WorkDetail(String),
     WorkGit(String),
     WorkGitInspect(String, String),
-    GitInspect(String),
-    GitDiff(String),
-    GitDiffContent(String),
     /// A change of one work item (one at a time per item).
     WorkCommand(String),
     /// A new feature, task or issue in a project.
@@ -466,6 +450,8 @@ pub enum Slot {
     #[serde(untagged)]
     Browser(crate::artifacts_screen::BrowserSlot),
     #[serde(untagged)]
+    Projects(crate::projects_ops::ProjectsSlot),
+    #[serde(untagged)]
     Watch(crate::watch_ops::WatchSlot),
 }
 impl Slot {
@@ -482,6 +468,7 @@ impl Slot {
             Self::Artifacts(_) => ScreenId::Artifacts,
             Self::Resources(_) => ScreenId::Resources,
             Self::Browser(_) => ScreenId::Browser,
+            Self::Projects(_) => ScreenId::Projects,
             Self::Watch(_) => ScreenId::Watchers,
             _ => ScreenId::Legacy,
         }
@@ -1500,7 +1487,7 @@ mod human_dispatch_tests {
     #[test]
     fn restored_purge_frames_preserve_the_original_frame_without_minting_human_consent() {
         let restored = Unresolved::restored_dispatch(
-            Slot::ProjectCommand("project-a".into()),
+            crate::projects_ops::ProjectsSlot::ProjectCommand("project-a".into()).into(),
             "purge".into(),
             "projects.purge",
             b"original exact frame".to_vec(),
