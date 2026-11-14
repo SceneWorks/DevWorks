@@ -12,7 +12,8 @@
 //! **Untrusted output.** Page text, accessibility names, console messages and URLs are bounded
 //! and passed through the host redactor before they become evidence; URLs lose user info,
 //! fragments and the values of credential-shaped query parameters. No header, cookie or body is
-//! captured, and no network interception or page script is used.
+//! captured, and no page script is used. Every request is intercepted only to serve artifact
+//! pages and to apply the egress policy ([`super::egress`]) before it is sent.
 use super::cdp::{
     ARTIFACT_ORIGIN, Cdp, CdpError, CdpEvent, INTERCEPTED, ServedPage, decode_base64,
     dialog_accepted,
@@ -300,6 +301,8 @@ pub enum ActionError {
     Stale { kind: &'static str, detail: String },
     /// Refused before any input was sent (unsupported key, not a file input, no box).
     Refused { kind: &'static str, detail: String },
+    /// Refused by policy before anything was sent (a destination the egress policy refuses).
+    Denied { kind: &'static str, detail: String },
     /// The browser failed a request before any input was sent.
     Before(CdpError),
     /// The request was sent and its effect is unknown (timeout, transport loss).
@@ -333,6 +336,8 @@ pub struct Live {
     pending_children: Vec<(usize, Child)>,
     /// Targets whose page committed a local document and is to be torn down.
     pending_teardown: Vec<usize>,
+    /// Sessions of attached workers whose requests are not intercepted yet.
+    pending_workers: Vec<String>,
     /// Where this session's artifact pages are served: `<origin>/<unguessable token>/`.
     artifact_prefix: String,
     next_artifact: u64,
@@ -487,6 +492,7 @@ impl Live {
             pending_attach: Vec::new(),
             pending_children: Vec::new(),
             pending_teardown: Vec::new(),
+            pending_workers: Vec::new(),
             artifact_prefix: format!("{ARTIFACT_ORIGIN}/{}/", unguessable()),
             next_artifact: 0,
             started: Instant::now(),
@@ -562,7 +568,8 @@ impl Live {
             "dialogs": "alert and beforeunload accepted, confirm and prompt dismissed",
             "permissionsDenied": denied,
             "permissionsNotApplied": refused,
-            "networkInterception": false,
+            // Every request is intercepted to apply the egress policy (nothing is captured).
+            "networkInterception": true,
             "pageScripts": false,
         });
         self.call(
@@ -843,6 +850,12 @@ impl Live {
                             }
                         }
                     }
+                    // A worker's own requests pass the same interception as its page's.
+                    Some("worker" | "shared_worker" | "service_worker") => {
+                        if let Some(s) = p.get("sessionId").and_then(Value::as_str) {
+                            self.pending_workers.push(s.to_owned());
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1085,8 +1098,21 @@ impl Live {
             if self.pending_attach.is_empty()
                 && self.pending_children.is_empty()
                 && self.pending_teardown.is_empty()
+                && self.pending_workers.is_empty()
             {
                 return Ok(());
+            }
+            for s in std::mem::take(&mut self.pending_workers) {
+                for (method, params) in [
+                    ("Fetch.enable", intercepted()),
+                    ("Runtime.runIfWaitingForDebugger", json!({})),
+                ] {
+                    match self.cdp.call(Some(&s), method, params, bounds.call) {
+                        // A worker that went away before it was configured.
+                        Ok(_) | Err(CdpError::Remote { .. }) => {}
+                        Err(e) => return Err(e),
+                    }
+                }
             }
             for (i, child) in std::mem::take(&mut self.pending_children) {
                 let session = child.session.clone();
@@ -2340,13 +2366,15 @@ pub fn post_dispatch(e: ActionError) -> ActionError {
         ActionError::Before(e) => ActionError::After(e),
         ActionError::Stale { detail, .. }
         | ActionError::Refused { detail, .. }
+        | ActionError::Denied { detail, .. }
         | ActionError::Navigation(detail) => {
             ActionError::After(CdpError::Protocol(format!("after the action: {detail}")))
         }
     }
 }
 
-/// The `Fetch.enable` parameters: every [`INTERCEPTED`] pattern at the request stage.
+/// The `Fetch.enable` parameters: every [`INTERCEPTED`] pattern at the request stage (redirect
+/// hops pause again at their new URL).
 fn intercepted() -> Value {
     let patterns: Vec<Value> = INTERCEPTED
         .iter()

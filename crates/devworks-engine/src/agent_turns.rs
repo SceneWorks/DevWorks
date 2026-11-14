@@ -371,7 +371,8 @@ async fn run_native_loop(
                 if !crate::tool_turn::pending_calls(runtime.store().as_ref(), ctx, session_id)?
                     .is_empty()
                 {
-                    // A call awaiting approval is held: dispatch it again only once something
+                    // A call without an answer yet (an unknown command status, a refusal that
+                    // needs reconciliation) is held: dispatch it again only once something
                     // changed, never on a timer that re-admits it every few hundred ms.
                     wait_for_state_change(&mut changes, &mut stop, dispatched).await;
                     recovered = Some((head, binding, observed_sequence));
@@ -536,7 +537,12 @@ async fn wait_for_linked_effects(
                     .operation(operation_id)?
                     .ok_or(StorageError::ScopeDenied)?;
                 // An unknown outcome changes only through an explicit reconcile, so the turn ends
-                // with it held; the agent was told the outcome is unknown.
+                // with it held; the agent was told the outcome is unknown. An approval waits for
+                // a person: the agent was told, and the decision arrives later as an update.
+                if operation.capability == devworks_core::services::approvals::held::HELD_CAPABILITY
+                {
+                    continue;
+                }
                 match operation.state {
                     OperationState::ObservedComplete
                     | OperationState::Failed

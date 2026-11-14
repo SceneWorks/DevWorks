@@ -28,7 +28,7 @@ pub const OPERATIONS: [&str; 5] = [
     "next_work.inspect_queue",
     "next_work.release_claim",
 ];
-const PAGE: u16 = 500;
+use crate::ports::storage::MAX_PAGE;
 const MAX_LEASE_MS: i64 = 86_400_000;
 #[derive(Clone, serde::Serialize)]
 struct Filters {
@@ -105,8 +105,8 @@ pub fn claims(
 ) -> Result<Vec<StoredAllocationClaim>, StorageError> {
     let mut out: Vec<StoredAllocationClaim> = Vec::new();
     loop {
-        let page = read.allocation_claims(project, out.last().map(|c| &c.id), PAGE)?;
-        let more = page.len() == usize::from(PAGE);
+        let page = read.allocation_claims(project, out.last().map(|c| &c.id), MAX_PAGE)?;
+        let more = page.len() == usize::from(MAX_PAGE);
         out.extend(page);
         if !more {
             return Ok(out);
@@ -191,7 +191,7 @@ fn selection(
                         id: w.id.as_str().into(),
                     },
                     after,
-                    PAGE,
+                    MAX_PAGE,
                 )?;
                 for event in &page.events {
                     if event.kind == "WorkAllocated"
@@ -220,7 +220,7 @@ fn selection(
                         }),
                     });
                 }
-                if page.events.len() < usize::from(PAGE) {
+                if page.events.len() < usize::from(MAX_PAGE) {
                     break;
                 }
                 after = page.events.last().expect("full page").sequence;
@@ -993,13 +993,13 @@ pub fn check_start(
         loop {
             let page = tx
                 .runs()
-                .project_roots(&w.project_id, after.as_ref(), PAGE)?;
+                .project_roots(&w.project_id, after.as_ref(), MAX_PAGE)?;
             for other in &page {
                 if *other != w.id && tx.runs().live_activation(other)?.is_some() {
                     return Err(conflict("project_execution_owned", &w.project_id.0));
                 }
             }
-            if page.len() < usize::from(PAGE) {
+            if page.len() < usize::from(MAX_PAGE) {
                 break;
             }
             after = page.last().cloned();
@@ -1226,12 +1226,12 @@ pub fn reconcile(
                 lifecycles: vec![ACTIVE.into()],
             },
             after.as_ref(),
-            PAGE,
+            MAX_PAGE,
         )?;
         for p in &page {
             changed += reconcile_project(tx, service, &p.id)?;
         }
-        if page.len() < usize::from(PAGE) {
+        if page.len() < usize::from(MAX_PAGE) {
             return Ok(changed);
         }
         after = page.last().map(|p| ProjectPosition {

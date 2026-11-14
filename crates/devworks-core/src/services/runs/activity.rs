@@ -8,12 +8,10 @@
 //! An open durable conversation is not activity: a stopped or recovered activation can leave
 //! one open.
 use crate::ports::storage::{
-    ContainerFilter, ProcessFilter, QueueState, StorageError, StoredActivation, StoredProcess,
-    WriteTransaction,
+    ContainerFilter, MAX_PAGE, ProcessFilter, QueueState, StorageError, StoredActivation,
+    StoredProcess, WriteTransaction,
 };
 use crate::protocol::{AssignmentId, Id, RootId};
-
-const PAGE: u16 = 500;
 
 /// A root-scoped delivery still on the queue.
 #[derive(Clone, Debug)]
@@ -47,7 +45,7 @@ impl RootActivity {
         let mut deliveries = Vec::new();
         let mut after: Option<Id> = None;
         loop {
-            let page = tx.runs().root_deliveries(root, after.as_ref(), PAGE)?;
+            let page = tx.runs().root_deliveries(root, after.as_ref(), MAX_PAGE)?;
             for id in &page {
                 let entry = tx.queue().entry(id)?;
                 let claimed = entry
@@ -67,7 +65,7 @@ impl RootActivity {
                     assignment,
                 });
             }
-            if page.len() < usize::from(PAGE) {
+            if page.len() < usize::from(MAX_PAGE) {
                 break;
             }
             after = page.last().cloned();
@@ -77,9 +75,9 @@ impl RootActivity {
             let page = tx.resources().processes(
                 &ProcessFilter::UnsettledRoot(root.clone()),
                 processes.last().map(|p| &p.id),
-                PAGE,
+                MAX_PAGE,
             )?;
-            let more = page.len() == usize::from(PAGE);
+            let more = page.len() == usize::from(MAX_PAGE);
             processes.extend(page);
             if !more {
                 break;

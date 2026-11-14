@@ -111,7 +111,7 @@ pub const ARCHIVED: &str = "Archived";
 pub fn closed_to_work(lifecycle: &str) -> bool {
     lifecycle != crate::ports::storage::ACTIVE
 }
-const PAGE: u16 = 500;
+use crate::ports::storage::MAX_PAGE;
 
 /// Bounded, categorized retry and lease policy of activations (CONTROL-06).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -336,8 +336,8 @@ pub fn stop_linked_roots(
         .collect();
     let mut after: Option<RootId> = None;
     loop {
-        let page = tx.runs().stop_coverage(op, after.as_ref(), PAGE)?;
-        let more = page.len() == usize::from(PAGE);
+        let page = tx.runs().stop_coverage(op, after.as_ref(), MAX_PAGE)?;
+        let more = page.len() == usize::from(MAX_PAGE);
         after = page.last().map(|c| c.root_id.clone());
         for c in page {
             let card = LinkedStop {
@@ -419,8 +419,8 @@ pub fn active_blockers(
 ) -> Result<Vec<StoredBlocker>, StorageError> {
     let mut out: Vec<StoredBlocker> = Vec::new();
     loop {
-        let page = runs.blockers(filter, out.last().map(|b| &b.id), PAGE)?;
-        let more = page.len() == usize::from(PAGE);
+        let page = runs.blockers(filter, out.last().map(|b| &b.id), MAX_PAGE)?;
+        let more = page.len() == usize::from(MAX_PAGE);
         out.extend(page);
         if !more {
             return Ok(out);
@@ -435,8 +435,8 @@ pub fn root_assignments(
 ) -> Result<Vec<StoredAssignment>, StorageError> {
     let mut out: Vec<StoredAssignment> = Vec::new();
     loop {
-        let page = runs.assignments(root, live_only, out.last().map(|a| &a.id), PAGE)?;
-        let more = page.len() == usize::from(PAGE);
+        let page = runs.assignments(root, live_only, out.last().map(|a| &a.id), MAX_PAGE)?;
+        let more = page.len() == usize::from(MAX_PAGE);
         out.extend(page);
         if !more {
             return Ok(out);
@@ -2431,8 +2431,8 @@ impl ControlService {
         let mut cancelled = Vec::new();
         let mut cursor: Option<Id> = None;
         loop {
-            let page = tx.runs().root_deliveries(root, cursor.as_ref(), PAGE)?;
-            let more = page.len() == usize::from(PAGE);
+            let page = tx.runs().root_deliveries(root, cursor.as_ref(), MAX_PAGE)?;
+            let more = page.len() == usize::from(MAX_PAGE);
             for id in &page {
                 let Some(e) = tx.queue().entry(id)? else {
                     continue;

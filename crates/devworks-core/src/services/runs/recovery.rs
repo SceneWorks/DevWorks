@@ -30,7 +30,7 @@ use crate::ports::storage::{
 use crate::protocol::{Id, OperationId, OperationState, RootId};
 use serde_json::json;
 
-const PAGE: u16 = 500;
+use crate::ports::storage::MAX_PAGE;
 
 /// How a kind of work recovers after a new boot (the AD20 recovery classes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,8 +190,8 @@ impl ControlService {
         loop {
             let page = tx
                 .runs()
-                .activations(&filter, out.last().map(|a| &a.id), PAGE)?;
-            let more = page.len() == usize::from(PAGE);
+                .activations(&filter, out.last().map(|a| &a.id), MAX_PAGE)?;
+            let more = page.len() == usize::from(MAX_PAGE);
             out.extend(page);
             if !more {
                 return Ok(out);
@@ -315,7 +315,7 @@ impl ControlService {
             }
         }
         loop {
-            let turns = tx.runs().turns_prior_boots(&boot, PAGE)?;
+            let turns = tx.runs().turns_prior_boots(&boot, MAX_PAGE)?;
             if turns.is_empty() {
                 break;
             }
@@ -326,8 +326,8 @@ impl ControlService {
         }
         let mut after: Option<RootId> = None;
         loop {
-            let page = tx.runs().pending_stops(after.as_ref(), PAGE)?;
-            let more = page.len() == usize::from(PAGE);
+            let page = tx.runs().pending_stops(after.as_ref(), MAX_PAGE)?;
+            let more = page.len() == usize::from(MAX_PAGE);
             for c in &page {
                 let Some(op) = &c.stop_operation_id else {
                     continue;

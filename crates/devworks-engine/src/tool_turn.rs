@@ -1894,6 +1894,9 @@ pub(crate) fn dispatch_one(
                             "tool command receipt purged before outcome reconciliation",
                         ));
                     }
+                    Ok(reply @ CommandReply::Recorded { .. }) if approval_refusal(&reply) => {
+                        held_approval(runtime, store, ctx, descriptor, &raw)?
+                    }
                     Ok(reply @ CommandReply::Recorded { .. }) => recorded_command(&reply)?,
                     Ok(CommandReply::Rejected { code, retry, .. }) => {
                         if needs_recovery(retry) {
@@ -2107,6 +2110,23 @@ pub(crate) fn cancel_before_dispatch(
 
 const OPERATION_MOVED: &str = "tool operation changed during update publication";
 
+/// Appends the decision on an approval staged for an agent's refused call, or the outcome of its
+/// readmitted command, to that agent's session as an update of the call's operation. A failure
+/// here loses nothing: the operation journal holds the state, and the agent's next wake
+/// reconciles every linked operation into its context.
+pub(crate) fn publish_held_update(
+    store: &dyn ApplicationStore,
+    artifacts: &Arc<ArtifactService>,
+    approval: &Id,
+) {
+    if let Ok(Some((ctx, session, operation, state))) =
+        devworks_core::services::approvals::held::held_target(store, approval)
+        && state != OperationState::IntentRecorded
+    {
+        let _ = record_operation_update(store, artifacts, &ctx, &session, &operation);
+    }
+}
+
 /// Append a later operation state as a separate fact. The accepted tool receipt and its first
 /// response stay immutable; repeated recovery of the same journal revision is a no-op. An
 /// operation that advances between the read and the write is observed again, a bounded number
@@ -2176,7 +2196,17 @@ fn record_observed_operation_update(
                     .and_then(|effect| effect.get("evidence").cloned())
             })
             .flatten();
-        Ok((operation.state, operation.revision, remote_content))
+        // A staged approval's decision and, once approved, the readmitted command's reply.
+        let approval = (operation.capability
+            == devworks_core::services::approvals::held::HELD_CAPABILITY)
+            .then(|| operation.latest_attempt()?.observations.last().cloned())
+            .flatten();
+        Ok((
+            operation.state,
+            operation.revision,
+            remote_content,
+            approval,
+        ))
     })?;
     let mut update = json!({
         "operationId": operation_id,
@@ -2184,6 +2214,9 @@ fn record_observed_operation_update(
         "state": observed.0,
         "untrustedRemoteContent": observed.2,
     });
+    if let Some(approval) = observed.3 {
+        update["approval"] = approval;
+    }
     if observed.0 == OperationState::OutcomeUnknown {
         update["note"] = json!(
             "The outcome is unknown: the call may or may not have taken effect. It is held for \
@@ -2387,6 +2420,74 @@ fn recorded_command(
             completed(serde_json::to_vec(reply).map_err(invalid)?)
         }
     })
+}
+
+/// Whether a domain command refused the call because a person must approve it.
+fn approval_refusal(reply: &DomainCommandReply) -> bool {
+    matches!(reply, CommandReply::Recorded { receipt, .. }
+        if matches!(&receipt.decision, DomainDecision::Refused { fault }
+            if fault.code == DomainErrorCode::ApprovalRequired))
+}
+
+/// Stages the approval a person needs for this exact refused request and answers the call with
+/// it, so the turn goes on; the decision reaches the agent later as an update of the operation.
+/// A request no approval can carry is answered as failed rather than held.
+fn held_approval(
+    runtime: &Runtime,
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    descriptor: &'static OperationDescriptor,
+    raw: &[u8],
+) -> Result<(ToolOutcome, Option<Vec<u8>>), StorageError> {
+    let decoded = admission::decode(
+        Selection {
+            operation: descriptor.name,
+            mode: Mode::Command,
+        },
+        raw,
+    )
+    .map_err(|_| invalid("refused tool frame"))?;
+    let mut frame: Value = serde_json::from_slice(raw).map_err(invalid)?;
+    // The saved input is the frame without its envelope; the approval re-frames it and binds the
+    // refused request's digest, so the person reviews exactly what was refused.
+    let input = match descriptor.envelope {
+        Envelope::Domain => {
+            let mut body = frame["body"].take();
+            body.as_object_mut()
+                .ok_or_else(|| invalid("refused tool body"))?
+                .remove("kind");
+            body
+        }
+        Envelope::Specialized { .. } => {
+            let fields = frame
+                .as_object_mut()
+                .ok_or_else(|| invalid("refused tool frame"))?;
+            for field in ["protocol", Mode::Command.key_member(), "schemaRevision"] {
+                fields.remove(field);
+            }
+            frame
+        }
+    };
+    match runtime.approvals().stage_held(
+        store,
+        ctx,
+        descriptor.name,
+        decoded.revision.0,
+        &input,
+        decoded.fingerprint.as_str(),
+    ) {
+        Ok(held) => Ok((
+            ToolOutcome::ApprovalRequired {
+                approval_id: held.approval_id,
+                operation_id: held.operation_id,
+            },
+            None,
+        )),
+        Err(devworks_core::services::sessions::Failure::Refused(_)) => {
+            Ok(failed("domain_ApprovalRequired"))
+        }
+        Err(devworks_core::services::sessions::Failure::Storage(error)) => Err(error),
+    }
 }
 
 fn blocked_outcome(fault: &DomainFault) -> Result<Option<ToolOutcome>, StorageError> {

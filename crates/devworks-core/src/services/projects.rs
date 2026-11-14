@@ -103,12 +103,12 @@ use crate::protocol::records::{
     SettingAssignment,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Page, Url};
+use crate::protocol::support::{BoundedList, Page, Url};
 use crate::protocol::{
     CorrelationId, DomainErrorCode, DomainFault, EventId, Id, ProjectId, RetryAdvice,
     RevisionDimension,
 };
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::runs::{ControlService, control_of};
 use crate::services::sessions::{
     Failure, Refusal, content, counter, decided, label, not_found, project_visible, query_fault,
@@ -153,7 +153,7 @@ pub const RETAINED_ON_DELETE: [&str; 4] = [
     "artifacts and their shares",
     "settings revisions",
 ];
-const PAGE: u16 = 500;
+use crate::ports::storage::MAX_PAGE;
 
 fn refuse(code: DomainErrorCode, kind: &'static str, id: Option<&Id>) -> Failure {
     Refusal::new(code, kind, id.cloned()).into()
@@ -569,45 +569,27 @@ impl ProjectService {
             &[scope_part, &life_part],
             scope_revision,
         );
-        let after = match &i.page.cursor {
-            None => None,
-            Some(c) => {
-                let pos = binding.decode(&c.0)?;
-                let (at, id) = pos.split_once(':').ok_or(StorageError::CursorExpired)?;
-                Some(ProjectPosition {
-                    created_at_ms: at.parse().map_err(|_| StorageError::CursorExpired)?,
-                    id: ProjectId(Id::new(id).map_err(|_| StorageError::CursorExpired)?),
-                })
-            }
-        };
-        let limit = i.page.limit.get() as usize;
-        let rows = read
-            .projects()
-            .projects(&filter, after.as_ref(), limit as u16)?;
-        let position = |p: &StoredProject| ProjectPosition {
-            created_at_ms: p.created_at_ms,
-            id: p.id.clone(),
-        };
-        let has_more = rows.len() == limit
-            && !read
-                .projects()
-                .projects(&filter, Some(&position(&rows[limit - 1])), 1)?
-                .is_empty();
-        let next = has_more.then(|| {
-            let last = &rows[limit - 1];
-            BoundedText(binding.encode(&format!("{}:{}", last.created_at_ms, last.id.0.as_str())))
-        });
-        let items = rows
-            .iter()
-            .map(|p| read_record(read.projects(), read.configuration(), p))
-            .collect::<Result<Vec<_>, _>>()?;
+        let rows = cursor::page(
+            &binding,
+            &i.page,
+            |after, n| {
+                let after = after
+                    .map(|pos| {
+                        let (at, id) = pos.split_once(':').ok_or(StorageError::CursorExpired)?;
+                        Ok::<_, StorageError>(ProjectPosition {
+                            created_at_ms: at.parse().map_err(|_| StorageError::CursorExpired)?,
+                            id: ProjectId(Id::new(id).map_err(|_| StorageError::CursorExpired)?),
+                        })
+                    })
+                    .transpose()?;
+                read.projects().projects(&filter, after.as_ref(), n)
+            },
+            |p| format!("{}:{}", p.created_at_ms, p.id.0.as_str()),
+        )?;
         Ok((
             OperationResult::ProjectsList {
-                value: Page {
-                    items: BoundedList(items),
-                    next_cursor: next,
-                    has_more,
-                },
+                value: rows
+                    .try_into_page(|p| read_record(read.projects(), read.configuration(), &p))?,
             },
             scope_revision,
         ))
@@ -955,7 +937,7 @@ impl ProjectService {
         let mut live: Vec<Id> = Vec::new();
         let mut after = None;
         loop {
-            let page = tx.runs().project_roots(project, after.as_ref(), PAGE)?;
+            let page = tx.runs().project_roots(project, after.as_ref(), MAX_PAGE)?;
             for root in &page {
                 if let Some(a) = tx.runs().live_activation(root)? {
                     live.push(a.id.clone());
@@ -970,7 +952,7 @@ impl ProjectService {
                     live.push(op.0.clone());
                 }
             }
-            if page.len() < usize::from(PAGE) {
+            if page.len() < usize::from(MAX_PAGE) {
                 break;
             }
             after = page.last().cloned();
@@ -979,13 +961,13 @@ impl ProjectService {
         loop {
             let page =
                 tx.resources()
-                    .processes(&ProcessFilter::Unsettled, cursor.as_ref(), PAGE)?;
+                    .processes(&ProcessFilter::Unsettled, cursor.as_ref(), MAX_PAGE)?;
             live.extend(
                 page.iter()
                     .filter(|p| p.project_id.as_ref() == Some(project))
                     .map(|p| p.id.clone()),
             );
-            if page.len() < usize::from(PAGE) {
+            if page.len() < usize::from(MAX_PAGE) {
                 break;
             }
             cursor = page.last().map(|p| p.id.clone());
@@ -1251,35 +1233,19 @@ impl RepositoryService {
             &[scope_part, &text_part, &language_part],
             scope_revision,
         );
-        let after = page
-            .cursor
-            .as_ref()
-            .map(|c| {
-                binding
-                    .decode(&c.0)
-                    .and_then(|p| Id::new(p).map_err(|_| StorageError::CursorExpired))
-            })
-            .transpose()?;
-        let limit = page.limit.get() as usize;
-        let rows = read
-            .projects()
-            .repositories(&filter, after.as_ref(), limit as u16)?;
-        let has_more = rows.len() == limit
-            && !read
-                .projects()
-                .repositories(&filter, Some(&rows[limit - 1].id), 1)?
-                .is_empty();
-        let next = has_more.then(|| BoundedText(binding.encode(rows[limit - 1].id.as_str())));
-        let items = rows
-            .iter()
-            .map(|r| repository_record(read.projects(), ctx, r))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok((
-            Page {
-                items: BoundedList(items),
-                next_cursor: next,
-                has_more,
+        let rows = cursor::page(
+            &binding,
+            page,
+            |after, n| {
+                let after = after
+                    .map(|p| Id::new(p).map_err(|_| StorageError::CursorExpired))
+                    .transpose()?;
+                read.projects().repositories(&filter, after.as_ref(), n)
             },
+            |r| r.id.as_str().to_owned(),
+        )?;
+        Ok((
+            rows.try_into_page(|r| repository_record(read.projects(), ctx, &r))?,
             scope_revision,
         ))
     }

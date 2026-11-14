@@ -679,6 +679,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 clock.clone(),
                 b.config,
             )
+            .with_resolver(b.resolver)
             .with_git_source(git.clone()),
         )
     });
@@ -1468,6 +1469,12 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     // All recovery precedes saved-operation readmission. The core supplies the original
     // identity and immutable reviewed frame; the existing gateway supplies fresh authority.
     let resumes = ResumeDispatcher::new(store.clone(), approvals.clone(), admitter.clone());
+    {
+        let (store, artifacts) = (store.clone(), artifacts.clone());
+        resumes.on_settled(Arc::new(move |approval| {
+            crate::tool_turn::publish_held_update(store.as_ref(), &artifacts, approval);
+        }));
+    }
     let _ = admitter.resumes.set(Arc::downgrade(&resumes));
     let resuming = tokio::spawn(resumes.clone().run(config.approval_resume_interval));
     let pricing = prices.as_ref().map(|worker| {
@@ -2548,6 +2555,22 @@ impl Runtime {
     /// Dedicated trusted native-human interaction. The ordinary command/tool path cannot
     /// mint this private exact-content witness, even for a context whose kind is Human.
     pub fn record_human_decision(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
+        let outcome = self.decide_as_human(ctx, frame);
+        // A rejection settles an approval staged for an agent's refused call; tell that agent.
+        if let Ok(CommandReply::Recorded { receipt, .. }) = &outcome
+            && let DomainDecision::Applied {
+                result:
+                    devworks_core::protocol::results::OperationResult::ApprovalsRecordHumanDecision {
+                        value,
+                    },
+            } = &receipt.decision
+        {
+            crate::tool_turn::publish_held_update(self.store.as_ref(), &self.artifacts, &value.id);
+        }
+        outcome
+    }
+
+    fn decide_as_human(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
         const OPERATION: &str = "approvals.record_human_decision";
         if self
             .desktop
