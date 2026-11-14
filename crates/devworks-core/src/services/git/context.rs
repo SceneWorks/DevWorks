@@ -99,7 +99,7 @@ impl SourceBinding {
         let tree = ctx.worktree()?;
         Some(Self {
             actor: ctx.principal().clone(),
-            kind: format!("{:?}", ctx.principal_kind()),
+            kind: ctx.principal_kind().as_str().to_string(),
             project: ctx.project_id().cloned(),
             root: ctx.root_id().cloned(),
             assignment: ctx.assignment_id().cloned(),
@@ -203,15 +203,7 @@ impl SourceBinding {
     }
     pub fn context(&self, store: &dyn ApplicationStore) -> Result<InvocationContext, StorageError> {
         use crate::protocol::{Counter, Revision};
-        let kind = match self.kind.as_str() {
-            "Human" => PrincipalKind::Human,
-            "Host" => PrincipalKind::Host,
-            "Agent" => PrincipalKind::Agent,
-            "Package" => PrincipalKind::Package,
-            "McpClient" => PrincipalKind::McpClient,
-            "Schedule" => PrincipalKind::Schedule,
-            _ => return Err(StorageError::ScopeDenied),
-        };
+        let kind = PrincipalKind::parse(&self.kind).ok_or(StorageError::ScopeDenied)?;
         let info = store.info();
         if info.restore_epoch != self.restore_epoch {
             return Err(StorageError::ScopeDenied);

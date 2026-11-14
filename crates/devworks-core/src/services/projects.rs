@@ -10,7 +10,7 @@
 //!
 //! Current authority (role, selected tools, read-only reviewers, project confinement) is the
 //! gateway's authority port; archive, delete and index removal by any principal but the user
-//! need an exact-request approval there (`authority::policy::APPROVAL_REQUIRED`), so an agent can
+//! need an exact-request approval there (the descriptor's `approval_required`), so an agent can
 //! never archive, delete or drop an index on its own. On top of it every use case checks scope:
 //! an invocation bound to a project sees only that project and its member repositories (and only
 //! its own ID among a repository's projects); a workspace invocation sees every project and
@@ -412,7 +412,7 @@ fn event(
     if let Some(map) = payload.as_object_mut() {
         map.insert(
             "principalKind".into(),
-            json!(format!("{:?}", ctx.principal_kind())),
+            json!(ctx.principal_kind().as_str().to_string()),
         );
     }
     tx.history().append(NewEvent {

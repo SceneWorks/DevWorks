@@ -13,7 +13,7 @@ use devworks_engine::conventions::embedding::NativeEmbeddings;
 
 fn source_context(ctx: &InvocationContext) -> Value {
     json!({"version":1,"storeId":ctx.store_id(),"restoreEpoch":ctx.restore_epoch(),"invocationContext":{
-        "principal":ctx.principal(),"kind":format!("{:?}",ctx.principal_kind()),"invocation":ctx.invocation_id(),"namespace":ctx.ingress_namespace(),"session":ctx.session_id(),
+        "principal":ctx.principal(),"kind":ctx.principal_kind().as_str().to_string(),"invocation":ctx.invocation_id(),"namespace":ctx.ingress_namespace(),"session":ctx.session_id(),
         "project":ctx.project_id(),"root":ctx.root_id(),"assignment":ctx.assignment_id(),"jobRun":ctx.job_run_id(),"capability":ctx.capability_registration(),"policyRevision":ctx.policy_revision(),"worktree":null}})
 }
 pub(super) fn probe(f: &Fx) -> (Arc<EmbeddingSpaceService>, OperationRecord) {

@@ -320,6 +320,8 @@ pub enum ProcessFilter {
     UnsettledPriorBoots(Id),
     /// Processes not yet quiesced, of any boot.
     Unsettled,
+    /// Processes not yet quiesced, of any boot, recorded under this root.
+    UnsettledRoot(RootId),
 }
 
 /// Durable ownership and observed lifecycle of a container created for agent work. The public
@@ -396,6 +398,8 @@ impl ContainerPhase {
 pub enum ContainerFilter {
     /// All agent-work records whose engine process may still be running, including uncertain.
     AgentWorkMayRun,
+    /// The agent-work records of one root whose engine process may still be running.
+    AgentWorkMayRunForRoot(RootId),
     Project(ProjectId),
 }
 

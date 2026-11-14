@@ -7,7 +7,7 @@
 - [Schema mechanics](sqlite-mechanics.json): reruns the existing 28 SQLite mechanics checks against the evolved schema, including the router records. The previous persistence-pass schema/results remain separately preserved.
 - [Native schema/vector load](vector-schema-check.json): the retained native sqlite-vec probe loads the evolved schema and repeats its five scoped-distance/dimension checks. No model execution.
 
-Reproduce from the repository root, using the bundled Python runtime:
+Reproduce from the repository root, using the bundled Python runtime. `tools/storage-eval` was removed from the main branch because nothing runs it; its source and README remain at commit [`f76506ec`](https://github.com/SceneWorks/DevWorks/tree/f76506ec33c9563d19e03bc68a4b7e9e65178271/tools/storage-eval). Check out that commit to run the commands below.
 
 ```sh
 python3 tools/planning/probe_router_contracts.py --output-dir /path/to/owned/evidence

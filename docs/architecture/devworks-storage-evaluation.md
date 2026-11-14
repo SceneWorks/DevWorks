@@ -105,7 +105,7 @@ Failed pilots are preserved. Corrections to our adapters are distinguished from 
 - [Candidate status and remaining gates](storage-evaluation-status.json)
 - [Historical Helix dependency probes and later runtime qualification](helix-embedding-validation.json)
 - [Reproduction and raw evidence record](validation/storage-evaluation/README.md) — the full review export archive includes the exact compressed fixture, manifests, raw samples, failed pilots, fault-probe logs, source/toolchain hashes and evaluation source. It excludes build caches and generated databases.
-- Canonical evaluation tooling: `tools/storage-eval/` in the DevWorks repository; its README explains commands, semantics and limits.
+- Canonical evaluation tooling: [`tools/storage-eval/` at commit `f76506ec`](https://github.com/SceneWorks/DevWorks/tree/f76506ec33c9563d19e03bc68a4b7e9e65178271/tools/storage-eval) in the DevWorks repository (removed from the main branch since); its README explains commands, semantics and limits.
 
 **Unresolved before a production choice:** full retained CodeGraph query/analysis inventory (G11), arbitrary property/type/search/pagination behavior, complete incremental file reindexing and publication reconciliation, optimized/multiple overlays, larger representative projects, matched-recall tuning, sustained read/write contention, broader fault boundaries and power-loss durability, migration/manual-backup restoration, app idle/startup behavior, and Windows/Linux/minimum-macOS packaging. These gates remain visible in G01; local benchmarking does not mark them complete. The architecture still has one eventual production graph/vector implementation behind its port, with SQLite authority and file artifacts unchanged.
 

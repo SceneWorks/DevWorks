@@ -18,6 +18,46 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  pick_mac_runners:
+    name: pick macOS runners
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      macos: ${{ steps.pick.outputs.macos }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Idle self-hosted Macs labelled devworks-mac take macOS jobs; the rest use macos-latest.
+      - id: pick
+        env:
+          GH_TOKEN: ${{ secrets.MAC_RUNNER_QUERY_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: bash tools/ci/pick-mac-runners.sh
+
+  # Pull requests run only the test partitions their changed crates can affect
+  # (tools/ci/test-scope.sh); pushes to main run every partition.
+  test_scope:
+    name: test scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+      foundation: ${{ steps.scope.outputs.foundation }}
+      engine: ${{ steps.scope.outputs.engine }}
+      packages: ${{ steps.scope.outputs.packages }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # A pull_request checkout is the PR's merge commit; HEAD^1 is its base.
+          fetch-depth: 2
+      - name: Test the scope rules
+        run: bash tools/ci/test_test_scope.sh
+      - id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: bash tools/ci/test-scope.sh
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
@@ -28,6 +68,10 @@ jobs:
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt
       - run: cargo fmt --all --check
+      - name: Every test source is compiled by a test target
+        run: |
+          python3 -I tools/ci/test_test_reachability.py
+          python3 -I tools/ci/test-reachability.py
 
   codegen:
     name: generated contracts are current
@@ -38,6 +82,37 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: contracts-eval
+          workspaces: tools/contracts-eval -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The contracts-eval pipeline from tools/contracts-eval/README.md, in its order, so the
+      # emitted schemas, fixtures and register below come from the current domain-spec.json.
+      - name: Regenerate contracts-eval domain DTOs
+        run: python3 tools/contracts-eval/build_domain_contracts.py
+      - name: Build and test contracts-eval
+        run: cargo test --locked --no-fail-fast --manifest-path tools/contracts-eval/Cargo.toml
+      - name: Emit contract schemas
+        run: cargo run --locked --manifest-path tools/contracts-eval/Cargo.toml -- emit docs/architecture/contracts
+      - name: Regenerate contract fixtures and register
+        shell: bash
+        run: |
+          python3 tools/contracts-eval/make_domain_fixtures.py
+          # Keep the recorded date: the register is current when only the run date differs.
+          date="$(python3 -c 'import json; print(json.load(open("docs/architecture/contracts/family-coverage.json"))["date"])')"
+          python3 tools/contracts-eval/build_register.py --date "$date"
+      - name: Check fixtures and scenarios against the contracts-eval decoders
+        shell: bash
+        run: |
+          probe=tools/contracts-eval/target/debug/devworks-contract-probe
+          for set in fixtures provider-package-fixtures data-delivery-fixtures domain-fixtures; do
+            if ! "$probe" check "docs/architecture/contracts/$set.json" > "$RUNNER_TEMP/$set.json"; then
+              python3 -c 'import json, sys; [print(json.dumps(c)) for c in json.load(open(sys.argv[1]))["cases"] if not c["passed"]]' "$RUNNER_TEMP/$set.json" || true
+              exit 1
+            fi
+          done
+          "$probe" scenario-check docs/architecture/contracts/provider-package-scenarios.json
       - name: Check the generator's schema-revision rules
         run: python3 -m unittest discover -s tools/core-codegen -p 'test_*.py'
       - name: Check Help coverage against the code
@@ -57,7 +132,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macOS clippy runs inside the single macOS job below.
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install toolchain from rust-toolchain.toml
@@ -71,6 +147,8 @@ jobs:
 
   ubuntu_foundation:
     name: test (ubuntu-foundation)
+    needs: test_scope
+    if: ${{ !cancelled() && needs.test_scope.outputs.foundation != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -105,6 +183,8 @@ jobs:
 
   ubuntu_engine:
     name: test (ubuntu-engine)
+    needs: test_scope
+    if: ${{ !cancelled() && needs.test_scope.outputs.engine != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -122,85 +202,128 @@ jobs:
 
   ubuntu_complete:
     name: test (ubuntu-latest)
-    needs: [ubuntu_foundation, ubuntu_desktop, ubuntu_engine]
+    needs: [test_scope, ubuntu_foundation, ubuntu_desktop, ubuntu_engine]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require all three complete ubuntu partitions
+      - name: Require every ubuntu partition the test scope selected
         run: |
           set -eu
-          test "${{ needs.ubuntu_foundation.result }}" = success
+          # A partition passes, or was skipped because the test scope left it out.
+          passed() { [ "$1" = success ] || { [ "$1" = skipped ] && [ "$2" = false ]; }; }
+          test "${{ needs.test_scope.result }}" = success
+          passed "${{ needs.ubuntu_foundation.result }}" "${{ needs.test_scope.outputs.foundation }}"
           test "${{ needs.ubuntu_desktop.result }}" = success
-          test "${{ needs.ubuntu_engine.result }}" = success
+          passed "${{ needs.ubuntu_engine.result }}" "${{ needs.test_scope.outputs.engine }}"
 
-  macos_foundation:
-    name: test (macos-foundation)
-    runs-on: macos-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install toolchain from rust-toolchain.toml
-        shell: bash
-        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
-      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
-        with:
-          shared-key: test-foundation
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Run complete foundation partition
-        shell: bash
-        run: bash tools/ci/native-tests.sh foundation
-
-  macos_desktop:
-    name: test (macos-desktop)
-    runs-on: macos-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install toolchain from rust-toolchain.toml
-        shell: bash
-        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
-      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
-        with:
-          shared-key: test-desktop
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Run complete desktop partition
-        shell: bash
-        run: bash tools/ci/native-tests.sh desktop
-
-  macos_engine:
-    name: test (macos-engine)
-    runs-on: macos-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install toolchain from rust-toolchain.toml
-        shell: bash
-        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
-      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
-        with:
-          shared-key: test-engine
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Run complete engine partition
-        shell: bash
-        run: bash tools/ci/native-tests.sh engine
-
-  macos_complete:
+  # GitHub runs at most five hosted macOS jobs at a time for the whole organization, so each PR
+  # gets one macOS job: one build, clippy, then the workspace tests the test scope selected,
+  # through cargo-nextest.
+  # Required checks keep their names: this job reports "test (macos-latest)" and the Ubuntu job
+  # below reports "clippy (macos-latest)" from this job's clippy step.
+  macos:
     name: test (macos-latest)
-    needs: [macos_foundation, macos_desktop, macos_engine]
+    needs: [pick_mac_runners, test_scope]
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(needs.pick_mac_runners.outputs.macos || '"macos-latest"') }}
+    timeout-minutes: 90
+    env:
+      # Each self-hosted Mac runner is configured for 4 threads; more test threads than that
+      # time out Help and startup tests.
+      NEXTEST_TEST_THREADS: "4"
+      # The packages the test scope selected; every package when it did not run.
+      PACKAGES: ${{ needs.test_scope.outputs.packages || '--workspace' }}
+    outputs:
+      clippy: ${{ steps.clippy.outcome }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # checkout runs git clean -ffdx, so build output kept between runs lives outside the
+      # workspace. The runner service keeps the PATH from its configuration, which may predate rustup.
+      - name: Keep build output between runs on a self-hosted Mac
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          dir="$HOME/.cache/devworks-ci/$RUNNER_NAME/target-macos"
+          rm -rf "$dir/tmp"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-nextest
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        if: runner.environment == 'github-hosted'
+        with:
+          shared-key: macos
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The SQLite store requests F_FULLFSYNC on macOS, which costs tens of milliseconds per
+      # commit. Test temp files go to a RAM disk instead; the store's durability settings are
+      # unchanged. The engine and desktop test helpers write under CARGO_TARGET_TMPDIR
+      # (<target>/tmp, fixed at compile time), so that folder links to the RAM disk too.
+      - name: Put test temp files on a RAM disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          # One volume per runner: several runners share a self-hosted Mac.
+          volume="devworks-tmp-$RUNNER_NAME"
+          if [ -d "/Volumes/$volume" ]; then hdiutil detach -force "/Volumes/$volume"; fi
+          device="$(hdiutil attach -nomount "ram://$((RAMDISK_MIB * 2048))" | awk '{print $1}')"
+          diskutil erasevolume APFS "$volume" "$device"
+          mkdir -p "/Volumes/$volume/tmp" "/Volumes/$volume/target-tmp"
+          target="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/target}"
+          mkdir -p "$target"
+          rm -rf "$target/tmp"
+          ln -s "/Volumes/$volume/target-tmp" "$target/tmp"
+          echo "TEST_VOLUME=/Volumes/$volume" >> "$GITHUB_ENV"
+          echo "TEST_TMPDIR=/Volumes/$volume/tmp" >> "$GITHUB_ENV"
+        env:
+          RAMDISK_MIB: "4096"
+      - name: Build tests
+        shell: bash
+        run: |
+          read -ra packages <<<"$PACKAGES"
+          cargo nextest run "${packages[@]}" --locked --no-run
+      - name: Clippy
+        id: clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Run workspace tests
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          read -ra packages <<<"$PACKAGES"
+          TMPDIR="$TEST_TMPDIR" cargo nextest run "${packages[@]}" --locked --no-fail-fast
+      - name: Run doctests
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          read -ra packages <<<"$PACKAGES"
+          TMPDIR="$TEST_TMPDIR" cargo test "${packages[@]}" --doc --locked
+      - name: Release the RAM disk
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [ -n "${TEST_VOLUME:-}" ] && [ -d "$TEST_VOLUME" ]; then
+            df -h "$TEST_VOLUME"
+            hdiutil detach -force "$TEST_VOLUME"
+          fi
+
+  macos_clippy:
+    name: clippy (macos-latest)
+    needs: [macos]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require all three complete macos partitions
-        run: |
-          set -eu
-          test "${{ needs.macos_foundation.result }}" = success
-          test "${{ needs.macos_desktop.result }}" = success
-          test "${{ needs.macos_engine.result }}" = success
+      - name: Require clippy to pass in the macOS job
+        run: test "${{ needs.macos.outputs.clippy }}" = success
 
   windows_foundation:
     name: test (windows-foundation)
+    needs: test_scope
+    if: ${{ !cancelled() && needs.test_scope.outputs.foundation != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -278,6 +401,8 @@ jobs:
 
   windows_engine:
     name: test (windows-engine)
+    needs: test_scope
+    if: ${{ !cancelled() && needs.test_scope.outputs.engine != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -295,14 +420,16 @@ jobs:
 
   windows_complete:
     name: test (windows-latest)
-    needs: [windows_foundation, windows_desktop, windows_engine]
+    needs: [test_scope, windows_foundation, windows_desktop, windows_engine]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require all three complete windows partitions
+      - name: Require every windows partition the test scope selected
         run: |
           set -eu
-          test "${{ needs.windows_foundation.result }}" = success
+          # A partition passes, or was skipped because the test scope left it out.
+          passed() { [ "$1" = success ] || { [ "$1" = skipped ] && [ "$2" = false ]; }; }
+          passed "${{ needs.windows_foundation.result }}" "${{ needs.test_scope.outputs.foundation }}"
           test "${{ needs.windows_desktop.result }}" = success
-          test "${{ needs.windows_engine.result }}" = success
+          passed "${{ needs.windows_engine.result }}" "${{ needs.test_scope.outputs.engine }}"

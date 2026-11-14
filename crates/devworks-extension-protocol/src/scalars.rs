@@ -3,7 +3,8 @@
 //! These intentionally mirror the host's private scalar rules (opaque 1–128 ASCII IDs, canonical
 //! signed-64 decimal strings, lowercase SHA-256 digests) instead of depending on `devworks-core`:
 //! the package protocol is versioned and released independently of the host internals, and the
-//! host converts at its boundary.
+//! host converts at its boundary. `devworks-core/tests/extension_scalar_parity.rs` holds each
+//! mirrored type and its core counterpart to one corpus and one schema; change both together.
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;

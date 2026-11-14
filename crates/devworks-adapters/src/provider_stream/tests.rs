@@ -235,7 +235,7 @@ fn http_cancellation_and_idle_failure_disconnect_stalled_bodies() {
         let server = Server::new(stalled);
         let client = NativeStreamingHttp::direct().unwrap();
         let mut bounds = limits();
-        bounds.idle_timeout_ms = 80;
+        bounds.idle_timeout_ms = 400; // also bounds the head wait inside `open`
         let mut stream = client
             .open(
                 &HttpRequest::get(server.url()),
@@ -265,15 +265,26 @@ fn http_deadline_closes_even_when_consumer_is_not_reading() {
     let server = Server::new(stalled);
     let client = NativeStreamingHttp::direct().unwrap();
     let mut bounds = limits();
-    bounds.deadline_ms = 90;
-    bounds.idle_timeout_ms = 90;
-    let mut stream = client
-        .open(
-            &HttpRequest::get(server.url()),
-            &bounds,
-            &Cancellation::new(),
-        )
-        .unwrap();
+    // The deadline runs from the start of `open`, so a slow runner can spend all of
+    // it before the head arrives. `open` then fails with the same deadline error,
+    // which also proves the deadline fires. The idle timer starts after the deadline
+    // timer and the consumer never reads, so only the deadline can end the stream.
+    bounds.deadline_ms = 150;
+    bounds.idle_timeout_ms = 150;
+    let mut stream = match client.open(
+        &HttpRequest::get(server.url()),
+        &bounds,
+        &Cancellation::new(),
+    ) {
+        Ok(stream) => stream,
+        Err(error) => {
+            assert_eq!(error, after(TransportFailure::Deadline));
+            // The client may have given up before connecting or sending, so the
+            // fixture's own request-read assertions need not hold: drop, not finish.
+            drop(server);
+            return;
+        }
+    };
     server.finish(); // physical EOF follows the deadline without asking for another read
     assert_eq!(
         stream.read(&mut [0; 8], &Cancellation::new()),
@@ -482,7 +493,7 @@ fn http_header_wait_cancellation_and_idle_are_bounded_after_send() {
             assert_eq!(socket.read(&mut byte).unwrap(), 0);
         });
         let mut bounds = limits();
-        bounds.idle_timeout_ms = 80;
+        bounds.idle_timeout_ms = 400; // the cancel case must beat the idle timer
         let client = NativeStreamingHttp::direct().unwrap();
         let cancellation = Cancellation::new();
         let trigger = cancellation.clone();

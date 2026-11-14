@@ -897,7 +897,7 @@ pub fn record_verdict(
                 "held": held,
                 "program": argv.first().map(|p| Redactor::new().redact_text(&normalize(p))),
                 "argvSha256": digest,
-                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "principalKind": ctx.principal_kind().as_str().to_string(),
                 "authoritySources": sources,
             }),
         })
@@ -2457,7 +2457,7 @@ pub fn record_assessment(
                 "argvSha256": digest,
                 "profile": profile.as_str(),
                 "residualRisk": RESIDUAL_RISK,
-                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "principalKind": ctx.principal_kind().as_str().to_string(),
                 "authoritySources": sources,
             }),
         })
