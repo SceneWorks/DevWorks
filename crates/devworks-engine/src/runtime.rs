@@ -987,6 +987,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             )
             .with_desktop(desktop.clone())
             .with_instructions(instructions.clone())
+            .with_containers(containers.clone())
             .with_control(runs.service.clone())
             .with_evidence(store.clone(), artifacts.clone()),
         )),

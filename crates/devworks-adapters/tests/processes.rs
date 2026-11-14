@@ -1280,6 +1280,136 @@ fn agent_container_create_refuses_dot_directory_mounts_and_keeps_the_request() {
     ));
 }
 
+/// The approval a person gives for an agent's `containers.create` shows every mount source with
+/// its host path and read-only flag, every published port with its bind address, and the image.
+#[test]
+fn agent_container_create_approval_preview_lists_mounts_ports_and_image() {
+    use devworks_core::ports::Preparation;
+    use devworks_core::services::approvals::SavedOperationOwners;
+    use devworks_core::services::approvals::owner_preview::NativeOwnerPreviews;
+    use devworks_core::services::approvals::requests;
+    use devworks_core::services::sessions::Failure;
+    let _serial = serial();
+    let fx = Fx::new();
+    let runner = Arc::new(ContainerRunner::new(
+        Arc::new(fx.supervisor()),
+        Arc::new(NativeFilesystem::default()),
+        ProtectedRoots::new(Vec::new(), Vec::new(), None),
+    ));
+    let service = Arc::new(ContainerService::new(
+        fx.store.clone(),
+        runner,
+        ToolBindings::default(),
+        HostPlatform {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            macos_major: 0,
+        },
+        fx.h.ids.clone(),
+    ));
+    for child in ["src", "data", ".git"] {
+        std::fs::create_dir_all(fx.h.root.join(child)).unwrap();
+    }
+    let repository_root = fx.h.root.canonicalize().unwrap();
+    let location = repository_root.to_string_lossy().into_owned();
+    fx.write(move |tx| {
+        let now = tx.now_ms();
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("mount-repo"),
+            location,
+            name: "Mount repository".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: "Active".into(),
+            languages: Vec::new(),
+            revision: 1,
+            registered_at_ms: now,
+        })?;
+        tx.projects()
+            .set_members(&project("project-a"), &[id("mount-repo")])
+    });
+    let owners = Arc::new(NativeOwnerPreviews::default().with_containers(Some(service)));
+    assert!(owners.supports("containers.create"));
+    let context = fx.agent("agent-a", "project-a", "s-a");
+    let spec = |relative: &str| {
+        json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:3.20",
+            "command":["sh","-c","serve"],
+            "mounts":[
+                {"source":{"rootId":"mount-repo","relative":relative},"destination":"/src","readOnly":true},
+                {"source":{"rootId":"mount-repo","relative":"data"},"destination":"/data","readOnly":false}],
+            "ports":[
+                {"containerPort":80,"hostPort":8080,"protocol":"Tcp"},
+                {"containerPort":53,"hostPort":5353,"protocol":"Udp","exposeBeyondLoopback":true}],
+            "environment":[],"resourceIds":[]}})
+    };
+    let request = requests::decode("containers.create", 8, &spec("src"), true).unwrap();
+    let env = Preparation::new(&*fx.store, None, None);
+    let preview = owners.prepare(&context, &request, &env).unwrap();
+    let reviewed = &preview.reviewed;
+    assert_eq!(reviewed["image"], "alpine:3.20");
+    assert_eq!(reviewed["command"], json!(["sh", "-c", "serve"]));
+    assert_eq!(
+        reviewed["mounts"],
+        json!([
+            {"source":{"rootId":"mount-repo","relative":"src"},
+             "hostPath":repository_root.join("src").to_string_lossy(),
+             "destination":"/src","readOnly":true},
+            {"source":{"rootId":"mount-repo","relative":"data"},
+             "hostPath":repository_root.join("data").to_string_lossy(),
+             "destination":"/data","readOnly":false}
+        ])
+    );
+    assert_eq!(
+        reviewed["ports"],
+        json!([
+            {"hostPort":8080,"containerPort":80,"protocol":"tcp",
+             "exposeBeyondLoopback":false,"bindAddress":"127.0.0.1"},
+            {"hostPort":5353,"containerPort":53,"protocol":"udp",
+             "exposeBeyondLoopback":true,"bindAddress":"all host interfaces"}
+        ])
+    );
+    assert!(
+        preview.summary.contains("alpine:3.20"),
+        "{}",
+        preview.summary
+    );
+    assert!(
+        preview.summary.contains("1 on all host interfaces"),
+        "{}",
+        preview.summary
+    );
+
+    // The deciding transaction accepts the same preview and refuses it once a mount repository
+    // moves, so the person never approves a source other than the one shown.
+    let validate = |preview: devworks_core::services::approvals::OwnerPreview| {
+        let (owners, context, input) = (owners.clone(), context.clone(), spec("src"));
+        fx.write(move |tx| {
+            let request = requests::decode("containers.create", 8, &input, true).unwrap();
+            Ok(match owners.validate(tx, &context, &request, &preview) {
+                Ok(()) => None,
+                Err(Failure::Refused(r)) => Some(format!("{:?}", r.code)),
+                Err(Failure::Storage(e)) => return Err(e),
+            })
+        })
+    };
+    assert_eq!(validate(preview.clone()), None);
+    fx.h.sql("UPDATE repositories SET revision=revision+1 WHERE id='mount-repo'");
+    assert_eq!(validate(preview), Some("SourceChanged".into()));
+
+    // A source dispatch would refuse (DW-188 dot-directories) is refused before anyone is asked.
+    let request = requests::decode("containers.create", 8, &spec(".git"), true).unwrap();
+    match owners.prepare(&context, &request, &env) {
+        Err(Failure::Refused(refusal)) => {
+            assert_eq!(
+                refusal.code,
+                devworks_core::protocol::DomainErrorCode::InvalidArgument
+            );
+            assert_eq!(refusal.target_kind, "container_mount_source");
+        }
+        other => panic!("expected a typed mount refusal: {other:?}"),
+    }
+}
+
 #[test]
 fn actor_scoped_project_artifact_is_hidden_from_same_project_peer() {
     let _serial = serial();
