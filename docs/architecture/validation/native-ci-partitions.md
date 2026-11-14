@@ -61,8 +61,10 @@ after the runner.
 
 ## DW-342: run only the partitions a PR can affect
 
-The workspace crates form one chain, core → adapters → engine → desktop, and no crate's tests
-read another crate's files outside that chain (only `docs/` and `tools/`). The `test scope` job
+The workspace crates form one chain, core → adapters → engine → desktop. Tests read their own
+crate, earlier crates, `docs/` and `tools/`; the few that read a later crate's source are listed
+in `tools/ci/cross-crate-tests.sh`, which the Ubuntu desktop job runs whenever the foundation
+partition is skipped (DW-351), and `tools/ci/test_test_scope.sh` fails on an unlisted one. The `test scope` job
 (`tools/ci/test-scope.sh`, tested by `tools/ci/test_test_scope.sh`) reads the PR's changed files:
 
 | Changed paths | Partitions that run | macOS packages |
