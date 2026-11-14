@@ -1076,7 +1076,23 @@ impl WatchService {
                     }),
                 );
             }
-            let stop = self.processes.request_cancel(ctx, &process.0, tx)?;
+            // A person or the host at workspace scope stops a project's process within that
+            // project, as the process service requires of every stop.
+            let scoped;
+            let stop_ctx = if ctx.project_id().is_none()
+                && watcher.project_id.is_some()
+                && matches!(
+                    ctx.principal_kind(),
+                    PrincipalKind::Human | PrincipalKind::Host
+                ) {
+                scoped = ctx
+                    .clone()
+                    .with_lineage(watcher.project_id.clone(), None, None);
+                &scoped
+            } else {
+                ctx
+            };
+            let stop = self.processes.request_cancel(stop_ctx, &process.0, tx)?;
             if let DomainDecision::Refused { fault } = stop.decision {
                 return Ok(Decided {
                     decision: DomainDecision::Refused { fault },

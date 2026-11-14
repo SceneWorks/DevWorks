@@ -18,7 +18,7 @@ use devworks_core::protocol::records::{
     WatchOutcomeKind, WatchSourceKind, WatcherRecord, WatcherState,
 };
 use eframe::egui::{self, RichText, Ui};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
 /// How often a shown list is read again.
@@ -44,9 +44,10 @@ pub struct WatchersScreen {
     pub all: WatchList,
     pub session: WatchList,
     pub feature: WatchList,
-    /// Watchers whose cancel is in flight.
-    pub cancelling: BTreeSet<String>,
-    pub notice: Option<(Tone, String)>,
+    /// Watchers whose cancel is in flight, with the view it was sent from.
+    pub cancelling: BTreeMap<String, WatchView>,
+    /// The last cancel's outcome, shown in the view it was sent from.
+    pub notice: Option<(WatchView, Tone, String)>,
     /// Project names by ID, for attribution.
     pub project_names: HashMap<String, String>,
 }
@@ -57,8 +58,8 @@ pub enum WatchAction {
     Show(WatchView, WatchScope),
     Refresh(WatchView),
     More(WatchView),
-    /// Cancel a watcher; `true` also stops the process it launched.
-    Cancel(WatcherRecord, bool),
+    /// Cancel a watcher from a view; `true` also stops the process it launched.
+    Cancel(WatchView, WatcherRecord, bool),
 }
 
 impl WatchersScreen {
@@ -99,7 +100,7 @@ impl WatchersScreen {
                     }
                 }
                 WatchAction::More(view) => self.load(cx, view, true),
-                WatchAction::Cancel(watcher, stop_process) => {
+                WatchAction::Cancel(view, watcher, stop_process) => {
                     let id = watcher.id.as_str().to_owned();
                     self.notice = None;
                     if cx.command(
@@ -108,7 +109,7 @@ impl WatchersScreen {
                         "watch.cancel",
                         move |b| watch_ops::cancel(b, &watcher, stop_process),
                     ) {
-                        self.cancelling.insert(id);
+                        self.cancelling.insert(id, view);
                     }
                 }
             }
@@ -120,13 +121,17 @@ impl WatchersScreen {
         let Some(scope) = list.scope.clone() else {
             return;
         };
-        let cursor = if append {
+        // A refresh reads again every row already shown, so polling keeps loaded pages.
+        let (cursor, limit) = if append {
             let Some(cursor) = list.next_cursor.clone() else {
                 return;
             };
-            Some(cursor)
+            (Some(cursor), usize::from(watch_ops::WATCH_PAGE))
         } else {
-            None
+            (
+                None,
+                list.items.len().max(usize::from(watch_ops::WATCH_PAGE)),
+            )
         };
         list.generation = list.generation.wrapping_add(1);
         let generation = list.generation;
@@ -135,7 +140,7 @@ impl WatchersScreen {
             WatchSlot::WatcherList(view, generation, append),
             "Loading watchers",
             "watch.list",
-            move |b| watch_ops::list(b, &scope, cursor.as_deref()),
+            move |b| watch_ops::list(b, &scope, cursor.as_deref(), limit),
         ) {
             list.loading = true;
         } else {
@@ -175,8 +180,9 @@ impl WatchersScreen {
                 }
             }
             (WatchSlot::WatcherCancel(id), Reply::Command(outcome)) => {
-                self.cancelling.remove(&id);
-                self.notice = Some(match watch_ops::cancelled(outcome) {
+                // A cancel restored after a restart reports in the Watchers screen.
+                let view = self.cancelling.remove(&id).unwrap_or(WatchView::All);
+                let (tone, text) = match watch_ops::cancelled(outcome) {
                     Ok(w) if matches!(w.state, WatcherState::Stopping) => (
                         Tone::Good,
                         "Stop requested; the watcher ends once its process has stopped.".into(),
@@ -191,7 +197,8 @@ impl WatchersScreen {
                         "The watcher has already ended or has no process to stop.".into(),
                     ),
                     Err(e) => (Tone::Bad, e.describe()),
-                });
+                };
+                self.notice = Some((view, tone, text));
                 self.reload_shown(cx);
             }
             (slot, reply) => cx.unhandled(&slot, reply),
@@ -218,6 +225,11 @@ impl WatchersScreen {
             actions.push(WatchAction::Refresh(view));
         }
         ui.ctx().request_repaint_after(WATCH_POLL);
+        if let Some((shown, tone, text)) = &self.notice
+            && *shown == view
+        {
+            widgets::chip(ui, text.clone(), *tone);
+        }
         if let Err(reason) = online {
             widgets::state_block(
                 ui,
@@ -262,7 +274,7 @@ impl WatchersScreen {
             return;
         }
         for watcher in &list.items {
-            self.row(ui, watcher, actions);
+            self.row(ui, view, watcher, actions);
             ui.add_space(6.0);
         }
         if list.next_cursor.is_some()
@@ -274,7 +286,7 @@ impl WatchersScreen {
         }
     }
 
-    fn row(&self, ui: &mut Ui, w: &WatcherRecord, actions: &mut Vec<WatchAction>) {
+    fn row(&self, ui: &mut Ui, view: WatchView, w: &WatcherRecord, actions: &mut Vec<WatchAction>) {
         egui::Frame::new()
             .fill(theme::RAISED)
             .corner_radius(theme::radius())
@@ -303,17 +315,17 @@ impl WatchersScreen {
                     ui.label(RichText::new(shown).monospace().small().color(theme::MUTED));
                 }
                 if matches!(w.state, WatcherState::Active) {
-                    let busy = self.cancelling.contains(w.id.as_str());
+                    let busy = self.cancelling.contains_key(w.id.as_str());
                     ui.horizontal_wrapped(|ui| {
                         if busy {
                             ui.add_enabled(false, egui::Button::new("Cancelling…"));
                             return;
                         }
                         if ui.button("Cancel watcher").clicked() {
-                            actions.push(WatchAction::Cancel(w.clone(), false));
+                            actions.push(WatchAction::Cancel(view, w.clone(), false));
                         }
                         if w.process.is_some() && ui.button("Cancel and stop process").clicked() {
-                            actions.push(WatchAction::Cancel(w.clone(), true));
+                            actions.push(WatchAction::Cancel(view, w.clone(), true));
                         }
                     });
                 }
@@ -454,9 +466,6 @@ impl Screen for WatchersScreen {
                 }
             },
             |ui, st, _| {
-                if let Some((tone, text)) = &st.0.notice {
-                    widgets::chip(ui, text.clone(), *tone);
-                }
                 egui::ScrollArea::vertical()
                     .id_salt("watchers-list")
                     .show(ui, |ui| {
@@ -474,7 +483,7 @@ impl Screen for WatchersScreen {
     }
     fn restore_in_flight(&mut self, slot: &WatchSlot, _u: &Unresolved) {
         if let WatchSlot::WatcherCancel(id) = slot {
-            self.cancelling.insert(id.clone());
+            self.cancelling.insert(id.clone(), WatchView::All);
         }
     }
     fn context(&self, _route: Route, mem: &RouteMemory) -> ScreenContext {

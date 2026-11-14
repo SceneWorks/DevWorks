@@ -2178,6 +2178,26 @@ fn a_person_lists_every_watcher_with_its_owner_and_last_poll_and_cancels_it() {
             "w-person-cancel",
         );
         assert_eq!(cancelled["state"], json!("Cancelled"), "{cancelled}");
+        // A project's process is stopped from workspace scope too, within its project.
+        let running = create(&app, &ctx, "sleep 30", 60_000, "w-person-process");
+        assert!(running["projectId"].is_string(), "{running}");
+        let process = running["process"]["processId"].as_str().unwrap().to_owned();
+        until_running(&app, &process).await;
+        let stopping = command(
+            &app,
+            &person,
+            "watch.cancel",
+            json!({"watcherId": running["id"], "expectedRevision": running["revision"],
+                "stopProcess": true}),
+            "w-person-stop",
+        );
+        assert_eq!(stopping["state"], json!("Stopping"), "{stopping}");
+        let id = running["id"].as_str().unwrap();
+        settle_all(&app, &ctx, &[id]).await;
+        assert_eq!(
+            inspect(&app, &ctx, id)["outcome"]["kind"],
+            json!("Cancelled")
+        );
         app.shutdown().await;
     });
 }

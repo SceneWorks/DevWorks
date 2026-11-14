@@ -1274,7 +1274,9 @@ pub fn sidebar(
     match chat.tab {
         SidebarTab::Current => {
             let session = chat.selected_session().map(|s| s.id.as_str().to_owned());
-            current(ui, session.as_deref(), watchers)
+            egui::ScrollArea::vertical()
+                .id_salt("sidebar-current")
+                .show(ui, |ui| current(ui, session.as_deref(), watchers));
         }
         SidebarTab::History => history(ui, chat, online, actions),
     }

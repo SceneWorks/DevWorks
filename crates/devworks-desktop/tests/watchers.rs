@@ -16,6 +16,7 @@ use devworks_core::services::work::workflow::default_status_id;
 use devworks_desktop::ops;
 use devworks_desktop::route::Route;
 use devworks_desktop::shell::Shell;
+use devworks_desktop::watchers_screen::WATCH_POLL;
 use devworks_desktop::work_ops as wops;
 use eframe::egui::accesskit::Role;
 use egui_kittest::Harness;
@@ -250,8 +251,22 @@ fn watchers_are_listed_attributed_cancelled_and_reported_in_their_conversation()
     shown(&mut h, "watch-feature tests passed");
     assert!(!has_text(&h, "watch-home tests passed"));
 
-    // Cancel from there: the watcher stops observing and the row says so.
+    // A cancel at a revision that changed meanwhile is refused, and the view says so.
+    let id = Id::new("watch-feature").unwrap();
+    seed(&engine, move |tx| {
+        let mut changed = tx.watchers().watcher(&id)?.expect("the watcher");
+        changed.revision += 1;
+        tx.watchers().update_watcher(&changed)
+    });
     click(&mut h, Role::Button, "Cancel watcher");
+    shown(&mut h, "The watcher changed meanwhile; it was reloaded.");
+    assert_eq!(
+        watcher_phase(&engine, "watch-feature"),
+        WatcherPhase::Active
+    );
+    // Cancel again: the watcher stops observing and the row says so.
+    click(&mut h, Role::Button, "Cancel watcher");
+    shown(&mut h, "Watcher cancelled.");
     shown(&mut h, "Cancelled");
     assert_eq!(
         watcher_phase(&engine, "watch-feature"),
@@ -276,5 +291,59 @@ fn watchers_are_listed_attributed_cancelled_and_reported_in_their_conversation()
         h.step();
         settle(&mut h);
     }
+    h.state_mut().on_exit();
+}
+
+/// Rows loaded with More watchers stay while the list polls.
+#[test]
+fn polling_keeps_every_loaded_page() {
+    let _case = native_runtime_case();
+    let root = Root::new("watchers-pages");
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    let home = h
+        .state()
+        .chat
+        .selected_session()
+        .expect("the Home conversation")
+        .id
+        .as_str()
+        .to_owned();
+    let agent = {
+        let id = Id::new(home.clone()).unwrap();
+        read_snapshot(
+            &**engine.host().runtime().store(),
+            &ReadOptions::default(),
+            move |read| read.sessions().session(&id),
+        )
+        .unwrap()
+        .expect("the stored Home session")
+        .agent_id
+    };
+    let rows: Vec<StoredWatcher> = (0..55)
+        .map(|i| {
+            let mut w = timer(&format!("watch-{i:02}"), &home, &agent, None, 3_600_000);
+            // Distinct creation times: watch-00 is the oldest, on the second page.
+            w.created_at_ms += i;
+            w
+        })
+        .collect();
+    seed(&engine, move |tx| {
+        rows.iter()
+            .try_for_each(|w| tx.watchers().insert_watcher(w))
+    });
+    click_nav(&mut h, "Watchers");
+    shown(&mut h, "watch-54 tests passed");
+    assert!(!has_text(&h, "watch-00 tests passed"));
+    click(&mut h, Role::Button, "More watchers");
+    shown(&mut h, "watch-00 tests passed");
+    // Past the poll interval the list has been read again, all 55 rows at once.
+    std::thread::sleep(WATCH_POLL + Duration::from_millis(500));
+    h.step();
+    settle(&mut h);
+    assert!(h.state().watchers.all.items.len() == 55);
+    assert!(has_text(&h, "watch-00 tests passed"));
     h.state_mut().on_exit();
 }

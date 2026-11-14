@@ -55,9 +55,17 @@ pub enum WatchScope {
     Feature(String),
 }
 
-/// One page of the watchers in `scope`, newest first.
-pub fn list(backend: &dyn Backend, scope: &WatchScope, cursor: Option<&str>) -> Vec<u8> {
-    let mut page = json!({"limit": WATCH_PAGE});
+/// Most watchers one read asks for (the protocol's page bound).
+pub const WATCH_MAX_ROWS: usize = 500;
+
+/// Up to `limit` watchers in `scope` after `cursor`, newest first.
+pub fn list(
+    backend: &dyn Backend,
+    scope: &WatchScope,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Vec<u8> {
+    let mut page = json!({"limit": limit.clamp(1, WATCH_MAX_ROWS)});
     if let Some(cursor) = cursor {
         page["cursor"] = json!(cursor);
     }
