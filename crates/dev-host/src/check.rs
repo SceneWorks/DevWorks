@@ -400,7 +400,8 @@ mod tests {
         // junction itself sits on another fixed drive.
         let scratch = Scratch::new("junction");
         let link = scratch.path().join("link");
-        let target = PathBuf::from(std::env::var("SystemRoot").unwrap_or(r"C:\Windows".into()));
+        let target =
+            PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_owned()));
         let made = std::process::Command::new("cmd")
             .arg("/C")
             .arg("mklink")
