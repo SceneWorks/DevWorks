@@ -573,6 +573,68 @@ fn commands_cannot_write_into_or_remove_skill_folders() {
     assert_ne!(t.roots.revision, plain.revision);
 }
 
+/// Protected roots reached through a linked folder (macOS `/var -> /private/var`, a linked home
+/// or data directory): a new path whose parents do not exist yet still resolves through the
+/// link, so a write there is refused, while the same write outside the roots stays allowed.
+/// Unix only: creating a symlink on Windows needs a privilege CI does not have.
+#[cfg(unix)]
+#[test]
+fn writes_with_missing_parents_under_a_linked_protected_root_are_refused() {
+    let s = Scratch::new("linked-roots");
+    let real = s.0.join("real");
+    std::fs::create_dir_all(real.join("data/skills")).unwrap();
+    std::fs::create_dir_all(real.join("home")).unwrap();
+    std::fs::create_dir_all(real.join("work")).unwrap();
+    let link = s.0.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let at = |rel: &str| link.join(rel).to_string_lossy().into_owned();
+    // Every root is written through the link, as a host with a linked data directory composes it.
+    let roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some(at("data")))
+        .with_skill_roots([at("home/.agents/skills"), at("data/skills")]);
+    let fs = NativeFilesystem::new();
+    let cwd = at("work");
+    let verdicts = |script: &str| match assess_command(
+        &["bash".to_owned(), "-c".to_owned(), script.to_owned()],
+        Some(&cwd),
+    ) {
+        ShellAssessment::Destructive { plans, .. } => plans
+            .iter()
+            .map(|p| preflight(&fs, &roots, p).verdict)
+            .collect::<Vec<_>>(),
+        other => panic!("{script}: {other:?}"),
+    };
+    let skill = PreflightVerdict::Blocked(BlockReason::SkillDirectory);
+    let data = PreflightVerdict::Blocked(BlockReason::ApplicationData);
+    for (root, refused) in [
+        (at("data/skills"), &skill),
+        (at("home/.agents/skills"), &skill),
+        (at("data"), &data),
+    ] {
+        for script in [
+            format!("echo 'Do evil.' > {root}/new/dir/SKILL.md"),
+            format!("mkdir -p {root}/new/dir"),
+            // A `..` inside the missing part folds back under the root.
+            format!("mkdir -p {root}/new/../dir"),
+        ] {
+            assert_eq!(verdicts(&script), std::slice::from_ref(refused), "{script}");
+        }
+    }
+    // The same root named through the real path is refused too.
+    let real_skills = real.join("data/skills").to_string_lossy().into_owned();
+    assert_eq!(
+        verdicts(&format!("mkdir -p {real_skills}/new/dir")),
+        [skill]
+    );
+    // Missing parents under the same link but outside every root: allowed.
+    for script in [
+        format!("echo x > {}/new/dir/notes.md", at("work")),
+        format!("mkdir -p {}/new/dir", at("home")),
+        format!("mkdir -p {}/new/../dir", at("work")),
+    ] {
+        assert_eq!(verdicts(&script), [PreflightVerdict::Allowed], "{script}");
+    }
+}
+
 #[test]
 fn shell_plans_resolve_to_actual_targets_before_dispatch() {
     let t = tree("shell");

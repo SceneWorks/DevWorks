@@ -112,6 +112,32 @@ fn shell_deletions_are_recognized_from_arguments_not_command_strings() {
 }
 
 #[test]
+fn mkdir_plans_a_write_of_each_new_folder() {
+    use DestructiveKind::Truncate;
+    assert_eq!(
+        plans(&["mkdir", "-p", "-m", "700", "a/b", "/c"]),
+        [(Truncate, vec!["a/b".into(), "/c".into()])]
+    );
+    assert_eq!(
+        plans(&["sh", "-c", "mkdir -pv -- new 2>/dev/null"]),
+        [(Truncate, vec!["new".into()])]
+    );
+    assert_eq!(
+        plans(&["cmd", "/c", "md", "C:\\x\\y"]),
+        [(Truncate, vec!["C:\\x\\y".into()])]
+    );
+    // An option the model does not know, or a dynamic folder, holds the command.
+    assert_eq!(
+        needs(&["mkdir", "--context=x", "a"]),
+        InputNeeded::UnmodeledConsequentialCommand
+    );
+    assert_eq!(
+        needs(&["sh", "-c", "mkdir -p \"$HOME\"/x"]),
+        InputNeeded::UnresolvedExpansion
+    );
+}
+
+#[test]
 fn unresolved_expansion_and_opaque_targets_are_held() {
     assert_eq!(
         needs(&["sh", "-c", "rm -rf \"$HOME\"/x"]),
