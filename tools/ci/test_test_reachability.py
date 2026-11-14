@@ -9,8 +9,11 @@ reach = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(reach)
 
 
-def crate(root, files, manifest='[package]\nname = "fixture"\n'):
+def crate(root, files, manifest='[package]\nname = "fixture"\nedition = "2024"\n'):
+    root.mkdir(parents=True, exist_ok=True)
     (root / 'Cargo.toml').write_text(manifest, encoding='utf-8')
+    (root / 'src').mkdir(exist_ok=True)
+    (root / 'src' / 'lib.rs').write_text('', encoding='utf-8')
     for name, body in files.items():
         path = root / 'tests' / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -65,9 +68,46 @@ class Reachability(unittest.TestCase):
 
     def test_manifest_test_targets_are_roots(self):
         root = crate(self.root, {'custom/main.rs': '', 'dropped.rs': ''},
-                     manifest='[package]\nname = "fixture"\nautotests = false\n'
+                     manifest='[package]\nname = "fixture"\nedition = "2024"\nautotests = false\n'
                               '[[test]]\nname = "custom"\npath = "tests/custom/main.rs"\n')
         self.assertEqual(orphan_names(root), ['dropped.rs'])
+
+    def test_directory_targets_and_name_only_manifest_targets_are_roots(self):
+        # Cargo discovers tests/suite/main.rs as the `suite` target; its plain children sit beside it.
+        root = crate(self.root, {'suite/main.rs': 'mod helper;\n', 'suite/helper.rs': ''})
+        self.assertEqual(orphan_names(root), [])
+        other = crate(self.root / 'named', {'custom/main.rs': '', 'custom/stray.rs': ''},
+                      manifest='[package]\nname = "named"\nedition = "2024"\nautotests = false\n'
+                               '[[test]]\nname = "custom"\n')
+        self.assertEqual(orphan_names(other), ['custom/stray.rs'])
+
+    def test_inline_modules_add_their_directories(self):
+        root = crate(self.root, {
+            'root.rs': 'mod group { mod child; #[path = "p.rs"] mod p; }\n#[path = "runs/usage.rs"]\nmod usage;\n',
+            'group/child.rs': '', 'group/p.rs': '',
+            'runs/usage.rs': 'mod blk { #[path = "q.rs"] mod q; mod r; }\n',
+            'runs/blk/q.rs': '', 'runs/blk/r.rs': '',
+            'nested.rs': 'mod cases;\n',
+            'cases/mod.rs': 'mod outer;\n',
+            'cases/outer.rs': 'mod inner { #[path = "s.rs"] mod s; }\n',  # not mod-rs
+            'cases/outer/inner/s.rs': '',
+        })
+        self.assertEqual(orphan_names(root), [])
+
+    def test_permanently_disabled_cfg_is_not_reachable_but_platform_cfg_is(self):
+        root = crate(self.root, {
+            'root.rs': 'mod c;\n',
+            'c/mod.rs': ('#[cfg(any())]\n#[path = "disabled/case.rs"]\nmod disabled;\n'
+                         '#[cfg(all(any()))] mod d2;\n#[cfg(not(all()))] mod d3;\n#[cfg(false)] mod d4;\n'
+                         '#[cfg(all(windows, any()))] mod d5;\n#[cfg(any())] mod blk { mod d6; }\n'
+                         '#[cfg(windows)] mod win;\n#[cfg(any(unix, any()))] mod unix;\n'
+                         '#[cfg(not(any()))] mod always;\n#[cfg(feature = "x")] pub(crate) mod feature;\n'),
+            'c/disabled/case.rs': 'compile_error!("never built");\n',
+            **{f'c/{name}.rs': '' for name in ['d2', 'd3', 'd4', 'd5', 'win', 'unix', 'always', 'feature']},
+            'c/blk/d6.rs': '',
+        })
+        self.assertEqual(orphan_names(root), ['c/blk/d6.rs', 'c/d2.rs', 'c/d3.rs', 'c/d4.rs', 'c/d5.rs',
+                                              'c/disabled/case.rs'])
 
 
 if __name__ == '__main__':
