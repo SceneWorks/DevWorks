@@ -16,8 +16,7 @@ pub fn reviewed_job(operation: &str) -> bool {
 pub fn candidate(operation: &str) -> bool {
     operation == "desktop.request_control"
         || reviewed_job(operation)
-        || crate::authority::policy::APPROVAL_REQUIRED.contains(&operation)
-        || crate::authority::policy::NATIVE_EXECUTION.contains(&operation)
+        || registry::find(operation).is_some_and(|d| d.approval_required || d.native_execution)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

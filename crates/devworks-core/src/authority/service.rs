@@ -22,7 +22,7 @@ use crate::protocol::data::{ArtifactCommand, ArtifactDeletion, ArtifactQuery, Gi
 use crate::protocol::provider::UserContent;
 use crate::protocol::records::BrowserLocation;
 use crate::protocol::{ActorId, EventId, Id, ProjectId, RootId, Subject};
-use crate::registry::{self, Mode};
+use crate::registry::{self, AssignmentScope, Mode};
 use crate::settings::catalog::AgentRole;
 use crate::settings::service::PrincipalRoles;
 use serde::{Deserialize, Serialize};
@@ -122,7 +122,7 @@ fn deny(reason: DenialReason) -> Denied {
 fn reviewed_verdict(verdict: Verdict, operation: &str) -> Verdict {
     match verdict {
         Verdict::Allow => Verdict::NeedsGrant {
-            kind: if policy::NATIVE_EXECUTION.contains(&operation) {
+            kind: if registry::find(operation).is_some_and(|d| d.native_execution) {
                 GrantKind::NativeExecution
             } else {
                 GrantKind::Operation
@@ -342,43 +342,20 @@ fn agent_assignment_scope(
     let Some(root) = ctx.root_id() else {
         return Ok(());
     };
-    if !matches!(
-        request.input,
-        OperationInput::Tasks(_)
-            | OperationInput::Approvals(_)
-            | OperationInput::Artifacts(_)
-            | OperationInput::Features(_)
-            | OperationInput::Issues(_)
-            | OperationInput::Jobs(_)
-            | OperationInput::NextWork(_)
-            | OperationInput::Runs(_)
-            | OperationInput::History(_)
-            | OperationInput::Indexing(_)
-            | OperationInput::Knowledge(
-                knowledge::Input::Diagnostics(_) | knowledge::Input::ImportUserData(_)
-            )
-            | OperationInput::Git(git::Input::Commit(_) | git::Input::PullRequest(_))
-            | OperationInput::Browser(browser::Input::Navigate(_) | browser::Input::Upload(_))
-            | OperationInput::Sessions(sessions::Input::AppendMessage(_))
-    ) {
-        return Ok(());
-    }
-    // A root lineage without a delegated assignment retains the pre-existing policies.
-    // New coordinator/Worker turns carry an assignment below.
-    if matches!(
-        request.input,
-        OperationInput::Artifacts(_)
-            | OperationInput::Jobs(_)
-            | OperationInput::Approvals(_)
-            | OperationInput::Git(git::Input::Commit(_) | git::Input::PullRequest(_))
-            | OperationInput::Browser(browser::Input::Navigate(_) | browser::Input::Upload(_))
-            | OperationInput::Sessions(sessions::Input::AppendMessage(_))
-            | OperationInput::Knowledge(
-                knowledge::Input::Diagnostics(_) | knowledge::Input::ImportUserData(_)
-            )
-    ) && assignment.is_none()
-    {
-        return Ok(());
+    match request.descriptor.assignment_scope {
+        // Project-scoped operations; administration commands were refused to root-bound agents
+        // by policy, so only their queries reach here.
+        AssignmentScope::Project | AssignmentScope::Administration => return Ok(()),
+        // A root lineage without a delegated assignment retains the pre-existing policies.
+        // New coordinator/Worker turns carry an assignment below.
+        AssignmentScope::Assignment | AssignmentScope::AssignmentDenied if assignment.is_none() => {
+            return Ok(());
+        }
+        AssignmentScope::Root
+        | AssignmentScope::Coordinator
+        | AssignmentScope::RootDenied
+        | AssignmentScope::Assignment
+        | AssignmentScope::AssignmentDenied => {}
     }
     let assignment_id = ctx
         .assignment_id()
@@ -773,7 +750,9 @@ fn agent_assignment_scope(
             },
         },
         OperationInput::Indexing(_) => false,
-        _ => true,
+        // An operation whose assignment scope needs its target checked, but that has no check
+        // here, is outside every assignment.
+        _ => false,
     };
     if allowed {
         Ok(())
@@ -1319,7 +1298,7 @@ fn mint_grant_in(
         GrantKind::Operation => {}
         GrantKind::NativeExecution => {
             if binding.request_digest.is_none()
-                || !policy::NATIVE_EXECUTION.contains(&binding.operation.as_str())
+                || !registry::find(&binding.operation).is_some_and(|d| d.native_execution)
             {
                 return Err(AdminError::Invalid(
                     "a native grant binds one exact native execution request",
