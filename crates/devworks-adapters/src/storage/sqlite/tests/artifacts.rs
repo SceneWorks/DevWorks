@@ -1144,7 +1144,7 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
     let blocked_attachment = sibling.clone();
     assert!(matches!(
         run_write(fx.store.as_ref(), WriteOptions::default(), move |tx| {
-            devworks_core::services::agents::post_assignment(
+            Ok(devworks_core::services::agents::post_assignment(
                 tx,
                 &blocked_sender,
                 &devworks_core::operations::agents::MessagesInput {
@@ -1157,9 +1157,14 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
                         blocked_attachment,
                     ]),
                 },
-            )
+            ))
         }),
-        Err(StorageError::ScopeDenied)
+        Ok(Err(devworks_core::services::sessions::Failure::Refused(
+            devworks_core::services::sessions::Refusal {
+                code: DomainErrorCode::PermissionDenied,
+                ..
+            }
+        )))
     ));
     assert_eq!(
         fault(fx.query(
@@ -1244,6 +1249,7 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
                 attachments: devworks_core::protocol::support::BoundedList(vec![attachment]),
             },
         )
+        .map_err(|error| StorageError::InvalidRecord(format!("post refused: {error:?}")))
     });
     assert!(matches!(
         fx.query(
@@ -1330,6 +1336,7 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
                 attachments: devworks_core::protocol::support::BoundedList(vec![forwarded]),
             },
         )
+        .map_err(|error| StorageError::InvalidRecord(format!("post refused: {error:?}")))
     });
     assert!(matches!(
         fx.query(
@@ -1379,6 +1386,7 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
                 ]),
             },
         )
+        .map_err(|error| StorageError::InvalidRecord(format!("post refused: {error:?}")))
     });
     assert!(matches!(
         fx.query(
@@ -1431,6 +1439,7 @@ fn assigned_worker_reads_only_own_or_explicitly_referenced_artifacts() {
                 attachments: devworks_core::protocol::support::BoundedList(vec![task_evidence]),
             },
         )
+        .map_err(|error| StorageError::InvalidRecord(format!("post refused: {error:?}")))
     });
     // A completed membership handoff keeps the assignment identity and the artifact's
     // original provenance, while moving the live assignment and session to the new root.
