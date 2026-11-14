@@ -227,6 +227,7 @@ pub mod runs;
 pub mod runtime;
 mod store;
 mod tool_turn;
+pub mod turn_error;
 pub use tool_turn::ResolvedToolCall;
 pub mod usage;
 pub mod watch;

@@ -3,7 +3,7 @@
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::ports::storage::{
     ANY_QUEUE, AgentMessageHistoryFilter, ReadSnapshot, StorageError, StoredAgentDelivery,
-    StoredAgentMessage, StoredAgentMessageEvent, WriteTransaction,
+    StoredAgentMessage, StoredAgentMessageEvent, Unavailable, WriteTransaction,
 };
 use crate::protocol::{AssignmentId, Id, ProjectId, Revision, RevisionDimension, RootId};
 use crate::services::cursor::CursorBinding;
@@ -412,8 +412,9 @@ pub(super) fn delegated_item_ids(
     let Some(context) = tx.runs().agent_assignment_context(&assignment.id)? else {
         return Ok(Vec::new());
     };
-    let tasks: Vec<Id> = serde_json::from_value(context.task_ids)
-        .map_err(|_| StorageError::InvalidRecord("invalid delegated task scope".into()))?;
+    let tasks: Vec<Id> = serde_json::from_value(context.task_ids).map_err(|_| {
+        StorageError::unavailable(Unavailable::Corrupt, "stored delegated task scope")
+    })?;
     if !tasks.contains(&assignment.work_id.0) {
         return Ok(Vec::new());
     }

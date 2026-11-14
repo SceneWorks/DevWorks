@@ -1826,6 +1826,56 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
                 .session_turn(&session.id))
             .is_none()
         );
+        // A context blob the store cannot read now is an I/O fault. The turn that reads it ends
+        // retryable, so the activation backs off instead of raising a Deterministic blocker, and
+        // nothing reaches the provider.
+        let (unreadable_head, _, _) = app
+            .recover_native_context_head(&context, &session.id)
+            .unwrap()
+            .unwrap();
+        let digest = unreadable_head.sha256.as_str().to_owned();
+        let blob_dir = fx
+            .h
+            .root
+            .join("artifacts")
+            .join("sha256")
+            .join(&digest[..2]);
+        let held: Vec<_> = std::fs::read_dir(&blob_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(&format!("{digest}.")))
+            })
+            .map(|path| {
+                let aside = path.with_file_name(format!(
+                    "held-{}",
+                    path.file_name().unwrap().to_str().unwrap()
+                ));
+                std::fs::rename(&path, &aside).unwrap();
+                (path, aside)
+            })
+            .collect();
+        assert!(!held.is_empty(), "context head blob in {blob_dir:?}");
+        let (_stop_tx, stop) = tokio::sync::watch::channel(false);
+        let end = NativeAgentTurnExecutor::new(&app)
+            .run(context.clone(), primary.clone(), stop)
+            .await;
+        assert!(
+            matches!(&end, LaunchEnd::Failed(ActivationFailure::Transient(_))),
+            "{end:?}"
+        );
+        assert_eq!(wire_calls.load(Ordering::SeqCst), 2);
+        for (path, aside) in held {
+            std::fs::rename(aside, path).unwrap();
+        }
+        assert!(
+            read(&*fx.store, |snapshot| snapshot
+                .runs()
+                .session_turn(&session.id))
+            .is_none()
+        );
         assert!(
             devworks_engine::agent_turns::publish_first_context(&app, &context, &primary, &route)
                 .is_err()
