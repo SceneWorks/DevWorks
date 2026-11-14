@@ -24,8 +24,8 @@ use super::{
 };
 use crate::ports::storage::{
     ActivationFilter, ActivationOutcome, ActivationPhase, AssignmentState, AttemptBinding,
-    BlockerFilter, ContainerFilter, DesiredExecution, HoldCause, ProcessFilter, StopCause,
-    StorageError, StoredActivation, WorkRoot, WriteTransaction,
+    BlockerFilter, DesiredExecution, HoldCause, StopCause, StorageError, StoredActivation,
+    WorkRoot, WriteTransaction,
 };
 use crate::protocol::{Id, OperationId, OperationState, RootId};
 use serde_json::json;
@@ -453,14 +453,16 @@ impl ControlService {
             }
         }
         let mut all: Vec<(Id, String)> = uncertain.to_vec();
-        let mut trees: Vec<((Id, String), bool)> = unsettled_processes(tx, root_id)?
+        let mut trees: Vec<((Id, String), bool)> = super::activity::RootActivity::of(tx, root_id)?
+            .unsettled()
             .into_iter()
             .map(|p| (p, superseded))
             .collect();
         for (card, moved) in &linked {
             let fenced = superseded || *moved;
             trees.extend(
-                unsettled_processes(tx, &card.root)?
+                super::activity::RootActivity::of(tx, &card.root)?
+                    .unsettled()
                     .into_iter()
                     .map(|p| (p, fenced)),
             );
@@ -482,7 +484,7 @@ impl ControlService {
                 .live_activation(root_id)?
                 .is_some_and(|a| a.owner.is_some() && a.generation <= covered)
         } else {
-            root_quiesced(tx, root_id)?
+            super::activity::RootActivity::of(tx, root_id)?.admitted_quiesced()
         };
         // The linked cards' retained activations were asked to stop with the feature: the stop
         // is complete only once they ended (a Continue of the feature resumes none of them).
@@ -492,7 +494,7 @@ impl ControlService {
                     .live_activation(&card.root)?
                     .is_some_and(|a| a.owner.is_some() && a.generation <= card.generation)
             } else {
-                root_quiesced(tx, &card.root)?
+                super::activity::RootActivity::of(tx, &card.root)?.admitted_quiesced()
             };
         }
         if !quiesced {
@@ -728,71 +730,4 @@ pub fn stop_reconciliation_targets(
 /// longer paused by it, or a generation newer than the one it covers exists.
 pub fn stop_superseded(control: &crate::ports::storage::StoredRootControl) -> bool {
     control.desired == DesiredExecution::Enabled || control.generation > control.stop_generation
-}
-
-/// Whether nothing admitted for the root is still running: no live activation with an owner and
-/// no root-scoped delivery still claimed.
-pub fn root_quiesced(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
-    if tx
-        .runs()
-        .live_activation(root)?
-        .is_some_and(|a| a.owner.is_some())
-    {
-        return Ok(false);
-    }
-    let mut after: Option<Id> = None;
-    loop {
-        let page = tx.runs().root_deliveries(root, after.as_ref(), MAX_PAGE)?;
-        for id in &page {
-            if tx
-                .queue()
-                .entry(id)?
-                .is_some_and(|e| e.state == crate::ports::storage::QueueState::Claimed)
-            {
-                return Ok(false);
-            }
-        }
-        if page.len() < usize::from(MAX_PAGE) {
-            break;
-        }
-        after = page.last().cloned();
-    }
-    let mut after: Option<Id> = None;
-    loop {
-        let page = tx.resources().containers(
-            &ContainerFilter::AgentWorkMayRun,
-            after.as_ref(),
-            MAX_PAGE,
-        )?;
-        if page.iter().any(|row| row.root_id.as_ref() == Some(root)) {
-            return Ok(false);
-        }
-        if page.len() < usize::from(MAX_PAGE) {
-            return Ok(true);
-        }
-        after = page.last().map(|row| row.id.clone());
-    }
-}
-
-/// Owned process trees of the root not yet verified quiesced, with what is known of each.
-pub fn unsettled_processes(
-    tx: &mut dyn WriteTransaction,
-    root: &RootId,
-) -> Result<Vec<(Id, String)>, StorageError> {
-    let mut out = Vec::new();
-    let mut after: Option<Id> = None;
-    loop {
-        let page = tx
-            .resources()
-            .processes(&ProcessFilter::Unsettled, after.as_ref(), MAX_PAGE)?;
-        for p in &page {
-            if p.root_id.as_ref() == Some(root) {
-                out.push((p.id.clone(), format!("{:?}", p.phase)));
-            }
-        }
-        if page.len() < usize::from(MAX_PAGE) {
-            return Ok(out);
-        }
-        after = page.last().map(|p| p.id.clone());
-    }
 }
