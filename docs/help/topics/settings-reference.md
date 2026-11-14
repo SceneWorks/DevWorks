@@ -400,7 +400,7 @@ Context compaction threshold (%).
 - Policy: Configurable
 - Section: Agents
 
-Not yet active: conversations are not compacted automatically yet, so this value changes nothing. Once they are, this is the context usage at which a conversation is compacted.
+Context usage at which conversations are compacted.
 
 ## containers.preferredRuntime
 

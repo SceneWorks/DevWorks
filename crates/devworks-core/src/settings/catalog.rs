@@ -229,8 +229,6 @@ pub const NOT_YET_ACTIVE: &[&str] = &[
     "delivery.autoMerge",
     "delivery.maxReviewFixCycles",
     "reviews.automationWaitSeconds",
-    // Automatic context compaction: DW-287.
-    "agents.compactionThresholdPercent",
     // Vision extraction of scanned documents: DW-288.
     "knowledge.visionExtraction",
 ];
@@ -725,7 +723,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "agents.compactionThresholdPercent",
             "Context compaction threshold (%)",
-            "Not yet active: conversations are not compacted automatically yet, so this value changes nothing. Once they are, this is the context usage at which a conversation is compacted.",
+            "Context usage at which conversations are compacted.",
             Agents,
             WORKSPACE,
             ValueKind::Integer { min: 50, max: 95 },

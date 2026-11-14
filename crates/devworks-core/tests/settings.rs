@@ -105,7 +105,6 @@ fn settings_nothing_reads_are_marked_not_yet_active() {
         "github.issueTriageIntervalSeconds",
         "delivery.maxReviewFixCycles",
         "reviews.automationWaitSeconds",
-        "agents.compactionThresholdPercent",
         "knowledge.visionExtraction",
     ] {
         assert!(descriptor(key).unwrap().not_yet_active(), "{key}");
@@ -123,6 +122,11 @@ fn settings_nothing_reads_are_marked_not_yet_active() {
     }
     assert!(NOT_YET_ACTIVE.iter().all(|key| descriptor(key).is_some()));
     assert!(!descriptor("web.timeoutMs").unwrap().not_yet_active());
+    assert!(
+        !descriptor("agents.compactionThresholdPercent")
+            .unwrap()
+            .not_yet_active()
+    );
 }
 
 #[test]
