@@ -7,7 +7,7 @@ use crate::ports::IdKind;
 use crate::ports::storage::{
     ActivationPhase, AssignmentState, SessionPosition, SessionScope, StorageError,
     StoredAgentDelivery, StoredAgentMessage, StoredAgentMessageEvent, StoredAssignment,
-    StoredSession, WriteTransaction,
+    StoredSession, Unavailable, WriteTransaction,
 };
 use crate::protocol::{Id, ProjectId, RootId};
 use std::collections::HashSet;
@@ -280,8 +280,9 @@ pub fn post_message(
                 .runs()
                 .agent_assignment_context(assignment_id)?
                 .ok_or(StorageError::ScopeDenied)?;
-            let delegated: Vec<Id> = serde_json::from_value(context.task_ids)
-                .map_err(|_| StorageError::InvalidRecord("assignment task references".into()))?;
+            let delegated: Vec<Id> = serde_json::from_value(context.task_ids).map_err(|_| {
+                StorageError::unavailable(Unavailable::Corrupt, "stored assignment task references")
+            })?;
             if target != &assignment.work_id && !delegated.contains(&target.0) {
                 return Err(StorageError::ScopeDenied);
             }

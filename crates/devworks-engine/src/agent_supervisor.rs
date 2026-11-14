@@ -262,13 +262,11 @@ fn failure(error: Failure) -> StorageError {
 
 fn failed(error: StorageError) -> LaunchEnd {
     let detail = format!("coordinator launch: {error:?}");
-    let category = match error {
-        StorageError::ScopeDenied
-        | StorageError::InvalidRecord(_)
-        | StorageError::NotFound { .. } => ActivationFailure::Deterministic(detail),
-        _ => ActivationFailure::Transient(detail),
-    };
-    LaunchEnd::Failed(category)
+    LaunchEnd::Failed(if crate::turn_error::storage_retryable(&error) {
+        ActivationFailure::Transient(detail)
+    } else {
+        ActivationFailure::Deterministic(detail)
+    })
 }
 
 fn stopped() -> LaunchEnd {
