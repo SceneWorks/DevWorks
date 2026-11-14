@@ -1166,6 +1166,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
+name = "dev-host"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+]
+
+[[package]]
 name = "devworks-adapters"
 version = "0.1.0"
 dependencies = [
