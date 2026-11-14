@@ -32,6 +32,32 @@ mod unix;
 #[cfg(windows)]
 mod windows;
 
+/// Runs `op`, retrying it briefly while Windows answers `PermissionDenied` for a condition
+/// another handle causes and its closing clears: a file deleted while another handle holds it
+/// open stays delete-pending, and every open of it fails with `ERROR_ACCESS_DENIED` (5) until
+/// that handle closes and the name disappears; a handle opened without `FILE_SHARE_DELETE` (an
+/// indexer or scanner) makes a rename fail with `ERROR_SHARING_VIOLATION` (32). Rust maps both
+/// to `PermissionDenied`. Success, any other error, and a denial that outlasts about five
+/// seconds are returned as they are, so a real access refusal still surfaces.
+pub(crate) fn retry_denied<T>(op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    retry_denied_when(cfg!(windows), op)
+}
+fn retry_denied_when<T>(
+    retry: bool,
+    mut op: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let mut attempt = 0;
+    loop {
+        match op() {
+            Err(e) if retry && e.kind() == std::io::ErrorKind::PermissionDenied && attempt < 20 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(25 * attempt));
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Hook run between opening a file and re-verifying its path (race tests only).
 #[cfg(test)]
 pub(crate) type Hook = Box<dyn Fn() + Send + Sync>;

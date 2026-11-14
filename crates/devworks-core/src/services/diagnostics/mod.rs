@@ -96,6 +96,7 @@ use crate::protocol::{
 };
 use crate::registry;
 use crate::services::artifacts::{Viewer, visible};
+use crate::services::cursor::{self, CursorBinding};
 use crate::settings::catalog::{LOG_MAX_RECORDS_KEY, LOG_RETENTION_DAYS_KEY, descriptor};
 use crate::settings::model::{chain, current_chain};
 use serde::Serialize;
@@ -173,7 +174,6 @@ pub const EXPORT_CLAIM_STALE_MS: i64 = 5 * 60 * 1000;
 /// Format identifier of an export document.
 pub const EXPORT_FORMAT: &str = "devworks.diagnostics-export/1";
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
-const CURSOR_VERSION: &str = "l2";
 
 /// `component` is `prefix` or lies beneath it (`indexing.repository` under `indexing`).
 pub fn under(component: &str, prefix: &str) -> bool {
@@ -1542,33 +1542,13 @@ fn retry_of(e: &StorageError) -> RetryAdvice {
     }
 }
 
-enum CursorError {
-    Malformed,
-    Stale,
-}
-/// A continuation: its position, the retention boundary when it was issued, and the binding of
-/// its store, restore epoch, filter and audience.
-fn encode_cursor(position: i64, boundary: i64, binding: &str) -> BoundedText<1, 4096> {
-    BoundedText(format!("{CURSOR_VERSION}.{position}.{boundary}.{binding}"))
-}
-fn decode_cursor(raw: &str, binding: &str) -> Result<(i64, i64), CursorError> {
-    let parts: Vec<&str> = raw.split('.').collect();
-    let [version, position, boundary, bound] = parts.as_slice() else {
-        return Err(CursorError::Malformed);
-    };
-    if *version != CURSOR_VERSION {
-        return Err(CursorError::Malformed);
-    }
-    let position = position
-        .parse::<i64>()
-        .map_err(|_| CursorError::Malformed)?;
-    let boundary = boundary
-        .parse::<i64>()
-        .map_err(|_| CursorError::Malformed)?;
-    if *bound != binding {
-        return Err(CursorError::Stale);
-    }
-    Ok((position, boundary))
+/// A log position: the last sequence read and the retention boundary when it was issued.
+fn log_position(at: &str) -> Result<(i64, i64), StorageError> {
+    let (position, boundary) = at.split_once('.').ok_or(StorageError::CursorExpired)?;
+    Ok((
+        position.parse().map_err(|_| StorageError::CursorExpired)?,
+        boundary.parse().map_err(|_| StorageError::CursorExpired)?,
+    ))
 }
 
 /// Whether retention removed part of a log read's unread range (shared contracts: return
@@ -1612,12 +1592,12 @@ impl QueryHandler for DiagnosticService {
             .map_err(storage)?
             .ok_or_else(|| fault(DomainErrorCode::PermissionDenied, RetryAdvice::Never))?;
         let stamp = snapshot.stamp();
-        let cursor_error = |e: CursorError| match e {
-            CursorError::Malformed => fault(DomainErrorCode::InvalidArgument, RetryAdvice::Never),
-            CursorError::Stale => fault(
+        let paging = |e: StorageError| match e {
+            StorageError::CursorExpired => fault(
                 DomainErrorCode::CursorExpired,
                 RetryAdvice::RefreshAndNewRequest,
             ),
+            e => storage(e),
         };
         let result = match query.input() {
             OperationInput::Workspace(Input::Logs(i)) => {
@@ -1627,19 +1607,13 @@ impl QueryHandler for DiagnosticService {
                 {
                     return Err(fault(DomainErrorCode::InvalidArgument, RetryAdvice::Never));
                 }
-                let binding = format!(
-                    "{}{}",
-                    &sha256_hex(
-                        format!("{}|{}", stamp.store_id.0.as_str(), stamp.restore_epoch).as_bytes()
-                    )[..8],
-                    q.digest(&audience)
-                );
-                let mut filter = q.filter(audience);
+                let binding = CursorBinding::new(ctx, "workspace.logs", &[&q.digest(&audience)], 1);
+                let filter = q.filter(audience);
                 let stats = snapshot.diagnostics().diagnostic_stats().map_err(storage)?;
-                let cursor = match &i.page.cursor {
-                    Some(c) => Some(decode_cursor(&c.0, &binding).map_err(cursor_error)?),
-                    None => None,
-                };
+                let cursor = binding
+                    .resume(&i.page)
+                    .and_then(|at| at.as_deref().map(log_position).transpose())
+                    .map_err(paging)?;
                 if retention_gap(
                     filter.descending,
                     filter.after_sequence,
@@ -1651,41 +1625,26 @@ impl QueryHandler for DiagnosticService {
                         RetryAdvice::RefreshAndNewRequest,
                     ));
                 }
-                if let Some((at, _)) = cursor {
-                    if filter.descending {
-                        filter.before_sequence = Some(at);
-                    } else {
-                        filter.after_sequence = filter.after_sequence.max(at);
-                    }
-                }
-                let limit = u16::try_from(i.page.limit.get()).unwrap_or(500).min(500);
-                let mut rows = snapshot
-                    .diagnostics()
-                    .diagnostics(&filter, (limit + 1).min(500))
-                    .map_err(storage)?;
-                let has_more = rows.len() > usize::from(limit)
-                    || (limit == 500 && rows.len() == 500 && {
-                        let mut probe = filter.clone();
-                        let last = rows.last().map_or(0, |r| r.sequence);
-                        if probe.descending {
-                            probe.before_sequence = Some(last);
-                        } else {
-                            probe.after_sequence = last;
+                let rows = cursor::page(
+                    &binding,
+                    &i.page,
+                    |after, n| {
+                        let mut read = filter.clone();
+                        if let Some(at) = after {
+                            let (at, _) = log_position(at)?;
+                            if read.descending {
+                                read.before_sequence = Some(at);
+                            } else {
+                                read.after_sequence = read.after_sequence.max(at);
+                            }
                         }
-                        !snapshot
-                            .diagnostics()
-                            .diagnostics(&probe, 1)
-                            .map_err(storage)?
-                            .is_empty()
-                    });
-                rows.truncate(usize::from(limit));
-                let next_cursor = (has_more && !rows.is_empty()).then(|| {
-                    encode_cursor(
-                        rows.last().map_or(0, |r| r.sequence),
-                        stats.pruned_through,
-                        &binding,
-                    )
-                });
+                        snapshot.diagnostics().diagnostics(&read, n)
+                    },
+                    |r| format!("{}.{}", r.sequence, stats.pruned_through),
+                )
+                .map_err(paging)?;
+                let next_cursor = rows.next_cursor;
+                let rows = rows.items;
                 let items = rows
                     .iter()
                     .map(entry)
@@ -1714,30 +1673,21 @@ impl QueryHandler for DiagnosticService {
                 // The offset is meaningful only over the same list of checks: a source or
                 // consumer that appeared or went away since the cursor was issued expires it.
                 let components: Vec<&str> = checks.iter().map(|c| c.component.as_str()).collect();
-                let binding = sha256_hex(
-                    format!(
-                        "{}|{}|{}|{}",
-                        stamp.store_id.0.as_str(),
-                        stamp.restore_epoch,
+                let binding = CursorBinding::new(
+                    ctx,
+                    "workspace.diagnostics",
+                    &[
                         i.component.as_ref().map_or("", |c| c.0.as_str()),
-                        components.join(",")
-                    )
-                    .as_bytes(),
-                )[..16]
-                    .to_owned();
-                let start = match &i.page.cursor {
-                    Some(c) => {
-                        usize::try_from(decode_cursor(&c.0, &binding).map_err(cursor_error)?.0)
-                            .unwrap_or(usize::MAX)
-                    }
-                    None => 0,
-                };
-                let limit = usize::try_from(i.page.limit.get()).unwrap_or(500).min(500);
-                let page: Vec<&HealthCheck> = checks.iter().skip(start).take(limit).collect();
-                let end = start + page.len();
-                let next_cursor =
-                    (end < checks.len()).then(|| encode_cursor(end as i64, 0, &binding));
+                        &components.join(","),
+                    ],
+                    1,
+                );
+                let page =
+                    cursor::slice(&binding, checks.iter().collect(), &i.page).map_err(paging)?;
+                let next_cursor = page.next_cursor;
                 let items = page
+                    .items
+                    .0
                     .into_iter()
                     .map(|c| {
                         let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());

@@ -58,7 +58,7 @@ use crate::ports::http::{Entropy, HttpTransport, base64url};
 use crate::ports::router::{ConnectionDirectory, ConnectionState, ConnectionStatus};
 use crate::ports::secrets::{
     Secret, SecretError, SecretKey, SecretRef, SecretResolver, SecretStore, SecretUnavailable,
-    SecretValue, reference_handle,
+    reference_handle,
 };
 use crate::ports::storage::{
     ApplicationStore, DiscoveredModel, NewEvent, ReadOptions, ReadSnapshot, RouterRead,
@@ -76,12 +76,12 @@ use crate::protocol::records::{
     SignInChallenge, SignInMethod, TierName,
 };
 use crate::protocol::results::{DomainCommandReply, DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Page, Url};
+use crate::protocol::support::{BoundedList, BoundedText, Url};
 use crate::protocol::{
     ActorId, CommandReply, CorrelationId, DomainErrorCode, DomainFault, EventId, Id, RetryAdvice,
     RevisionDimension,
 };
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::router::{TIERS, select, tier_members};
 use crate::services::sessions::{Failure, Refusal, counter, decided, label, query_fault, rev};
 use auth::{AuthFailure, Credential, DeviceCode, Tokens};
@@ -116,7 +116,7 @@ pub const RECONCILE_INTERVAL_MS: i64 = 60 * 60 * 1000;
 /// rotated refresh token is never retried without bound).
 const AMBIGUOUS_REFRESH_LIMIT: u32 = 2;
 /// Rows read per repository page (its maximum).
-const PAGE: u16 = 500;
+use crate::ports::storage::MAX_PAGE;
 
 const CONNECTION: &str = "connection";
 const FLOW: &str = "sign_in_flow";
@@ -296,8 +296,8 @@ fn all_connections(read: &dyn RouterRead) -> Result<Vec<StoredConnection>, Stora
     let mut out: Vec<StoredConnection> = Vec::new();
     loop {
         let after = out.last().map(|c| c.id.as_str().to_owned());
-        let page = read.connections(after.as_deref(), PAGE)?;
-        let full = page.len() == PAGE as usize;
+        let page = read.connections(after.as_deref(), MAX_PAGE)?;
+        let full = page.len() == MAX_PAGE as usize;
         out.extend(page);
         if !full {
             return Ok(out);
@@ -308,8 +308,8 @@ fn all_models(read: &dyn RouterRead) -> Result<Vec<StoredRouteModel>, StorageErr
     let mut out: Vec<StoredRouteModel> = Vec::new();
     loop {
         let after = out.last().map(|m| (m.position, m.id.as_str().to_owned()));
-        let page = read.route_models(after.as_ref().map(|(p, i)| (*p, i.as_str())), PAGE)?;
-        let full = page.len() == PAGE as usize;
+        let page = read.route_models(after.as_ref().map(|(p, i)| (*p, i.as_str())), MAX_PAGE)?;
+        let full = page.len() == MAX_PAGE as usize;
         out.extend(page);
         if !full {
             return Ok(out);
@@ -320,8 +320,8 @@ fn all_decision_models(read: &dyn RouterRead) -> Result<Vec<StoredDecisionModel>
     let mut out: Vec<StoredDecisionModel> = Vec::new();
     loop {
         let after = out.last().map(|m| m.id.as_str().to_owned());
-        let page = read.decision_models(after.as_deref(), PAGE)?;
-        let full = page.len() == PAGE as usize;
+        let page = read.decision_models(after.as_deref(), MAX_PAGE)?;
+        let full = page.len() == MAX_PAGE as usize;
         out.extend(page);
         if !full {
             return Ok(out);
@@ -2046,37 +2046,25 @@ impl ConnectionService {
             .collect();
         let digest = crate::fingerprint::sha256_hex(basis.as_bytes());
         let binding = CursorBinding::new(ctx, "router.connections", &[&digest], 1);
-        let after = match &i.page.cursor {
-            None => None,
-            Some(c) => Some(binding.decode(&c.0)?),
-        };
-        let limit = i.page.limit.get() as usize;
         let restore = snapshot.stamp().restore_epoch;
         let now = self.now();
         let human = (ctx.principal_kind() == PrincipalKind::Human).then(|| ctx.principal());
         let live = self.live();
-        let mut items = Vec::new();
-        let mut more = false;
-        for c in rows
-            .iter()
-            .filter(|c| after.as_deref().is_none_or(|a| c.id.as_str() > a))
-        {
-            if items.len() == limit {
-                more = true;
-                break;
-            }
-            items.push(self.record(c, &live, restore, now, human)?);
-        }
-        let next_cursor = match (more, items.last()) {
-            (true, Some(last)) => Some(BoundedText(binding.encode(last.id.as_str()))),
-            _ => None,
-        };
-        Ok(OperationResult::RouterConnections {
-            value: Page {
-                items: BoundedList(items),
-                has_more: next_cursor.is_some(),
-                next_cursor,
+        let page = cursor::page(
+            &binding,
+            &i.page,
+            |after, n| {
+                Ok::<_, StorageError>(
+                    rows.iter()
+                        .filter(|c| after.is_none_or(|a| c.id.as_str() > a))
+                        .take(usize::from(n))
+                        .collect::<Vec<_>>(),
+                )
             },
+            |c| c.id.as_str().to_owned(),
+        )?;
+        Ok(OperationResult::RouterConnections {
+            value: page.try_into_page(|c| self.record(c, &live, restore, now, human))?,
         })
     }
 
@@ -3636,7 +3624,7 @@ const SETTING_SECRET_PREFIX: &str = "dwsecret-";
 /// The production [`SecretResolver`]: settings references resolve from the same OS secret
 /// store, in this store's namespace (one secret-store abstraction).
 impl SecretResolver for ConnectionService {
-    fn resolve(&self, reference: &SecretRef) -> Result<SecretValue, SecretUnavailable> {
+    fn resolve(&self, reference: &SecretRef) -> Result<Secret, SecretUnavailable> {
         let handle = reference_handle(reference).ok_or(SecretUnavailable::NotFound)?;
         let custody = self
             .read(|r| r.configuration().settings_secret(&handle))
@@ -3654,7 +3642,7 @@ impl SecretResolver for ConnectionService {
         match self.noted(self.secrets.get(&self.key(&handle))) {
             Ok(Some(s)) => {
                 crate::authority::redact::register_resolved_secret(s.expose());
-                Ok(SecretValue::new(s.expose()))
+                Ok(s)
             }
             Ok(None) => Err(SecretUnavailable::NotFound),
             Err(SecretError::Unavailable(_)) | Err(SecretError::Denied) => {

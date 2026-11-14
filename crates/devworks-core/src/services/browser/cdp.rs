@@ -5,6 +5,7 @@
 use crate::ports::browser::{BrowserFault, CdpTransport};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Most buffered events. Beyond it the oldest evidence-only event is dropped (and counted); a
@@ -66,18 +67,25 @@ impl std::fmt::Display for CdpError {
 /// socket, so no other process can reach it.
 pub const ARTIFACT_ORIGIN: &str = "https://artifact.devworks.invalid";
 
-/// URL patterns intercepted on every page and frame session: the artifact origin (fulfilled
-/// from the session's staged pages) and every scheme that reaches local data (always refused).
-pub const INTERCEPTED: [&str; 8] = [
-    "https://artifact.devworks.invalid/*",
-    "file:*",
-    "filesystem:*",
-    "chrome:*",
-    "chrome-extension:*",
-    "chrome-untrusted:*",
-    "devtools:*",
-    "view-source:*",
-];
+/// URL patterns intercepted on every page, frame and worker session: every request. A served
+/// artifact page is fulfilled from the session's staged copy; any other artifact URL and every
+/// scheme that reaches local data are refused; a network request is sent only when the
+/// session's [`RequestGate`] admits it.
+pub const INTERCEPTED: [&str; 1] = ["*"];
+
+/// Decides whether the browser may send one intercepted request.
+pub trait RequestGate: Send + Sync {
+    /// `Err` says why `url` is refused.
+    fn admit(&self, url: &str) -> Result<(), String>;
+}
+
+/// The gate of a client nobody configured: every request is refused.
+struct RefuseAll;
+impl RequestGate for RefuseAll {
+    fn admit(&self, _: &str) -> Result<(), String> {
+        Err("no egress policy is configured".into())
+    }
+}
 
 /// Most artifact pages one session keeps ready to serve (the newest ones).
 const SERVED_PAGES: usize = 8;
@@ -101,6 +109,7 @@ pub struct Cdp {
     lifecycle_lost: bool,
     closed: bool,
     served: VecDeque<ServedPage>,
+    gate: Arc<dyn RequestGate>,
 }
 
 impl Cdp {
@@ -114,7 +123,14 @@ impl Cdp {
             lifecycle_lost: false,
             closed: false,
             served: VecDeque::new(),
+            gate: Arc::new(RefuseAll),
         }
+    }
+
+    /// Admits intercepted requests through `gate` (without one, every request is refused).
+    pub fn with_gate(mut self, gate: Arc<dyn RequestGate>) -> Self {
+        self.gate = gate;
+        self
     }
 
     /// Makes `page` available at its URL (the oldest is forgotten past [`SERVED_PAGES`]).
@@ -197,8 +213,9 @@ impl Cdp {
     /// (alert and beforeunload accepted, confirm and prompt dismissed): an open dialog blocks
     /// the page, so input that opened it would otherwise never be acknowledged. An intercepted
     /// request is answered at once too (the navigation awaiting it would otherwise never end):
-    /// a served artifact page is fulfilled from its staged bytes; anything else intercepted (a
-    /// local scheme, an unknown artifact URL) is refused as blocked by the client.
+    /// a served artifact page is fulfilled from its staged bytes; an unknown artifact URL is
+    /// refused as blocked by the client; anything else continues only when the gate admits it
+    /// (a local scheme, or an address the egress policy refuses, is blocked by the client).
     fn file(&mut self, message: Value, bytes: usize) {
         if let Some(method) = message.get("method").and_then(Value::as_str) {
             if method == "Fetch.requestPaused"
@@ -208,6 +225,12 @@ impl Cdp {
                     .pointer("/params/request/url")
                     .and_then(Value::as_str)
                     .unwrap_or("");
+                let refuse = || {
+                    (
+                        "Fetch.failRequest",
+                        json!({"requestId": request, "errorReason": "BlockedByClient"}),
+                    )
+                };
                 let (answer, params) = match self.served_page(url) {
                     Some(page) => (
                         "Fetch.fulfillRequest",
@@ -222,10 +245,11 @@ impl Cdp {
                             "body": encode_base64(&page.body),
                         }),
                     ),
-                    None => (
-                        "Fetch.failRequest",
-                        json!({"requestId": request, "errorReason": "BlockedByClient"}),
-                    ),
+                    None if url.starts_with(ARTIFACT_ORIGIN) => refuse(),
+                    None => match self.gate.admit(url) {
+                        Ok(()) => ("Fetch.continueRequest", json!({"requestId": request})),
+                        Err(_) => refuse(),
+                    },
                 };
                 self.next_id += 1;
                 let mut reply = json!({"id": self.next_id, "method": answer, "params": params});
@@ -422,6 +446,93 @@ mod tests {
             sent: sent.clone(),
         };
         (Cdp::new(Box::new(t)), sent)
+    }
+
+    /// Admits only URLs under `https://allowed.example/`.
+    struct Prefix;
+    impl RequestGate for Prefix {
+        fn admit(&self, url: &str) -> Result<(), String> {
+            if url.starts_with("https://allowed.example/") {
+                Ok(())
+            } else {
+                Err("refused".into())
+            }
+        }
+    }
+
+    #[test]
+    fn every_intercepted_request_is_fulfilled_continued_or_refused() {
+        let paused = |rid: &str, url: &str| {
+            json!({"method": "Fetch.requestPaused", "sessionId": "S1",
+                "params": {"requestId": rid, "request": {"url": url, "method": "GET"}}})
+            .to_string()
+        };
+        let artifact = format!("{ARTIFACT_ORIGIN}/tok/1/page.html");
+        let inbox = Arc::new(Mutex::new(VecDeque::from([
+            paused("served", &artifact),
+            paused(
+                "unknown-artifact",
+                &format!("{ARTIFACT_ORIGIN}/tok/2/x.html"),
+            ),
+            paused("admitted", "https://allowed.example/a.js"),
+            paused("redirect", "http://169.254.169.254/latest/meta-data/"),
+            paused("local", "file:///etc/passwd"),
+        ])));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let t = Scripted {
+            inbox,
+            answer: |_| vec![],
+            sent: sent.clone(),
+        };
+        let mut c = Cdp::new(Box::new(t)).with_gate(Arc::new(Prefix));
+        c.serve(ServedPage {
+            url: artifact,
+            body: b"<p>hi</p>".to_vec(),
+            media_type: "text/html".into(),
+        });
+        c.pump(Duration::from_millis(50), Duration::from_millis(5))
+            .unwrap();
+        let answers: Vec<(String, String)> = sent
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|m| {
+                assert_eq!(m["sessionId"], "S1");
+                (
+                    m["params"]["requestId"].as_str().unwrap().to_owned(),
+                    m["method"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        let expected = [
+            ("served", "Fetch.fulfillRequest"),
+            ("unknown-artifact", "Fetch.failRequest"),
+            ("admitted", "Fetch.continueRequest"),
+            ("redirect", "Fetch.failRequest"),
+            ("local", "Fetch.failRequest"),
+        ];
+        assert_eq!(
+            answers,
+            expected
+                .iter()
+                .map(|(r, m)| (r.to_string(), m.to_string()))
+                .collect::<Vec<_>>()
+        );
+        // Without a gate nothing is sent to the network.
+        let inbox = Arc::new(Mutex::new(VecDeque::from([paused(
+            "r",
+            "https://allowed.example/",
+        )])));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let t = Scripted {
+            inbox,
+            answer: |_| vec![],
+            sent: sent.clone(),
+        };
+        let mut c = Cdp::new(Box::new(t));
+        c.pump(Duration::from_millis(50), Duration::from_millis(5))
+            .unwrap();
+        assert_eq!(sent.lock().unwrap()[0]["method"], "Fetch.failRequest");
     }
 
     #[test]

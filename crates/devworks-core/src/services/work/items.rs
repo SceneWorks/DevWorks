@@ -23,9 +23,9 @@ use crate::protocol::records::{
     WorkRecord,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Label, Page};
+use crate::protocol::support::{BoundedList, Label, Page};
 use crate::protocol::{DomainErrorCode, EventId, Id, ProjectId, RevisionDimension, RootId};
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::runs::{control_of, ensure_control};
 use crate::services::sessions::{Failure, rev};
 use serde_json::json;
@@ -430,22 +430,18 @@ impl WorkService {
             ],
             p.scope_revision,
         );
-        let after = i
-            .page
-            .cursor
-            .as_ref()
-            .map(|c| binding.decode(&c.0).and_then(|s| position(&s)))
-            .transpose()?;
-        let limit = (i.page.limit.get() as usize).min(usize::from(crate::ports::storage::MAX_PAGE));
-        let rows = read.work().works(&filter, after.as_ref(), limit as u16)?;
-        let has_more = rows.len() == limit
-            && !read
-                .work()
-                .works(&filter, Some(&WorkPosition::of(&rows[limit - 1])), 1)?
-                .is_empty();
-        let next = has_more.then(|| {
-            BoundedText(binding.encode(&position_text(&WorkPosition::of(&rows[limit - 1]))))
-        });
+        let rows = cursor::page(
+            &binding,
+            &i.page,
+            |after, n| {
+                let after = after.map(position).transpose()?;
+                read.work().works(&filter, after.as_ref(), n)
+            },
+            |w| position_text(&WorkPosition::of(w)),
+        )?;
+        let next = rows.next_cursor;
+        let has_more = next.is_some();
+        let rows = rows.items;
         let items = rows
             .iter()
             .map(|w| {

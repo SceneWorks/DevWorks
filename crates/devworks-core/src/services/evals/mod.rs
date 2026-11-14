@@ -21,9 +21,9 @@ use crate::ports::{
 use crate::protocol::provider::{Digest, TranscriptBody, UserContent};
 use crate::protocol::records::*;
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Check, DynamicJson, Probability};
+use crate::protocol::support::{BoundedList, BoundedText, Check, DynamicJson, Limit, Probability};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id};
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::{
     Failure, Refusal, counter, decided, query_fault, rev, visible_session,
 };
@@ -812,38 +812,26 @@ impl QueryHandler for EvalService {
             };
             let binding =
                 CursorBinding::new(ctx, "evals.results", &[session.id.as_str()], scope_revision);
-            let after = input
-                .page
-                .cursor
-                .as_ref()
-                .map(|c| {
-                    binding
-                        .decode(&c.0)
-                        .and_then(|s| Id::new(s).map_err(|_| StorageError::CursorExpired))
-                })
-                .transpose()?;
-            let limit = input.page.limit.get().min(REPORT_PAGE) as u16;
-            let mut rows = snapshot
-                .evals()
-                .eval_runs(&session.id, after.as_ref(), limit + 1)?;
-            let more = rows.len() > usize::from(limit);
-            rows.truncate(usize::from(limit));
-            let next = if more {
-                rows.last()
-                    .map(|r| BoundedText(binding.encode(r.id.as_str())))
-            } else {
-                None
-            };
-            let reports = rows
-                .into_iter()
-                .map(|r| stored_report(r.report))
-                .collect::<Result<Vec<_>, _>>()?;
+            let mut request = input.page.clone();
+            request.limit = Limit::new(request.limit.get().min(REPORT_PAGE)).expect("report page");
+            let rows = cursor::page(
+                &binding,
+                &request,
+                |after, n| {
+                    let after = after
+                        .map(|s| Id::new(s).map_err(|_| StorageError::CursorExpired))
+                        .transpose()?;
+                    snapshot.evals().eval_runs(&session.id, after.as_ref(), n)
+                },
+                |r| r.id.as_str().to_owned(),
+            )?;
+            let page = rows.try_into_page(|r| stored_report(r.report))?;
             Ok((
                 OperationResult::EvalsResults {
                     value: EvalReportPage {
-                        items: BoundedList(reports),
-                        next_cursor: next,
-                        has_more: more,
+                        items: page.items,
+                        next_cursor: page.next_cursor,
+                        has_more: page.has_more,
                     },
                 },
                 scope_revision,

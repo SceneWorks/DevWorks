@@ -68,7 +68,7 @@ impl McpClientService {
                 let scope = active_server_scope(ctx, &requested_scope, snapshot.projects())
                     .map_err(|_| StorageError::ScopeDenied)?;
                 let (version, state) = current(snapshot.configuration(), &scope)?;
-                let server = state
+                let mut server = state
                     .servers
                     .into_iter()
                     .find(|server| &server.public.id == server_id)
@@ -76,6 +76,7 @@ impl McpClientService {
                         kind: "mcp_server",
                         id: server_id.as_str().into(),
                     })?;
+                load_catalog(snapshot.configuration(), &scope, &mut server)?;
                 Ok((scope, version, server))
             })
             .map_err(|error| self.fault(error))?;
@@ -145,7 +146,7 @@ impl McpClientService {
             ],
             version,
         );
-        let cap_page = page(&caps, &bounded_page, &binding).map_err(|error| self.fault(error))?;
+        let cap_page = page(caps, &bounded_page, &binding).map_err(|error| self.fault(error))?;
         let mut published_bytes = 0usize;
         let mut charge = |content: &Value| -> Result<(), DomainFault> {
             let size = serde_json::to_vec(content)
@@ -411,14 +412,16 @@ impl McpClientService {
                 crate::authority::policy::Verdict::Allow
             )
             || !state.servers.iter().any(|candidate| {
+                // Every catalog change advances the catalog revision, so an unchanged revision
+                // still holds the catalog `server` was read with.
                 candidate.public.id == server.public.id
                     && candidate.public.revision == server.public.revision
                     && candidate.public.catalog_revision == server.public.catalog_revision
-                    && candidate
-                        .capabilities
-                        .iter()
-                        .any(|current| current.id == cap.id)
             })
+            || !server
+                .capabilities
+                .iter()
+                .any(|current| current.id == cap.id)
         {
             return Err(StorageError::ScopeDenied);
         }
@@ -480,7 +483,7 @@ impl McpClientService {
                         return Err(StorageError::Cancelled);
                     }
                     let (_, state) = current(tx.configuration(), &scope_for_write)?;
-                    let current_server = state
+                    let mut current_server = state
                         .servers
                         .into_iter()
                         .find(|candidate| {
@@ -489,6 +492,7 @@ impl McpClientService {
                                 && candidate.public.catalog_revision == catalog_revision
                         })
                         .ok_or(StorageError::ScopeDenied)?;
+                    load_catalog(tx.configuration(), &scope_for_write, &mut current_server)?;
                     if !current_server
                         .capabilities
                         .iter()

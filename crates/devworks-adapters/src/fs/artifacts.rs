@@ -657,8 +657,13 @@ impl ArtifactFiles for NativeArtifactFiles {
         Ok(Self::relative(digest, generation))
     }
 
+    // `present` and `inspect` may race the removal of the generation they probe (collection
+    // unlinking it while a save or verification looks at it). On Windows a file deleted while
+    // another handle is open stays delete-pending and refuses opens as `PermissionDenied`
+    // until it disappears, so both probes wait that out and then answer absent.
     fn present(&self, digest: &str, generation: &str, byte_count: u64) -> Result<bool, FileFault> {
-        match std::fs::symlink_metadata(self.blob_path(digest, generation)?) {
+        let path = self.blob_path(digest, generation)?;
+        match super::retry_denied(|| std::fs::symlink_metadata(&path)) {
             Ok(m) => Ok(m.is_file() && m.len() == byte_count),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(fault(e)),
@@ -667,7 +672,7 @@ impl ArtifactFiles for NativeArtifactFiles {
 
     fn inspect(&self, digest: &str, generation: &str) -> Result<Option<u64>, FileFault> {
         let path = self.blob_path(digest, generation)?;
-        let mut f = match File::open(&path) {
+        let mut f = match super::retry_denied(|| File::open(&path)) {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(fault(e)),

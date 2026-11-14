@@ -9,8 +9,13 @@
 //! contents are managed artifacts; only an `Approved` revision can be the item's active
 //! revision, which is what agents adopt at their next safe step. Revisions are approved by
 //!
-//! * observation of a user-owned file (shared `~/.agents/skills`, or a harness skill the user
-//!   edited on disk) or of the effective role setting, recorded by the host [`sync`];
+//! * a person's confirmation of a skill folder change observed on disk (shared
+//!   `~/.agents/skills`, or a harness skill edited on disk, or a skill folder seen for the first
+//!   time). The host [`sync`] records the change as a draft awaiting confirmation, because it
+//!   cannot tell who wrote it; the previous revision stays active until a person activates the
+//!   new one with `skills.rollback`. Agent commands are refused writes into both skill folders
+//!   ([`crate::authority::destructive::ProtectedRoots::with_skill_roots`]);
+//! * observation of the effective role setting, recorded approved by the host [`sync`];
 //! * a human save (`skills.draft` / `roles.draft` by a human principal), effective at once;
 //! * a human decision over an agent proposal: `skills.propose` stages a saved
 //!   `skills.rollback` request (activation of the exact proposed revision) through the shared
@@ -92,6 +97,14 @@ pub const HARNESS_ROOT_ID: &str = "skills-harness";
 pub const AGGREGATE: &str = "instruction";
 /// Maximum instruction text a draft may carry.
 pub const MAX_TEXT_BYTES: u64 = scan::MAX_INSTRUCTION_BYTES;
+/// Origin kind of a revision captured from a skill folder on disk.
+pub(crate) const OBSERVED_ORIGIN: &str = "Observed";
+
+/// A skill folder change observed on disk that no person has confirmed yet: a human
+/// `skills.rollback` to it approves and activates it; nothing else can.
+pub(crate) fn awaiting_confirmation(revision: &StoredInstructionRevision) -> bool {
+    revision.state == InstructionRevisionState::Draft && revision.origin["kind"] == OBSERVED_ORIGIN
+}
 
 /// Where file-backed skills are found.
 #[derive(Clone, Debug)]
@@ -328,8 +341,10 @@ pub fn role_item_id(role: AgentRole, scope: &ConfigScope) -> Id {
 }
 
 /// The wire record of one revision. `applicability` carries the item's visible status labels
-/// (`origin:*`, `state:*`, `active`, `effective`/`overridden`/`conflict`, `disabled`, `missing`) followed by
-/// role applicability, so every surface shows origin and which version is active.
+/// (`origin:*`, `state:*`, `awaiting-confirmation`, `active`, `disk-change-pending`,
+/// `effective`/`overridden`/`conflict`, `disabled`, `missing`) followed by role applicability,
+/// so every surface shows origin, which version is active and which on-disk change waits for a
+/// person.
 pub(crate) fn record(
     item: &StoredInstructionItem,
     revision: &StoredInstructionRevision,
@@ -341,8 +356,21 @@ pub(crate) fn record(
         format!("origin:{}", item.origin.as_str().to_ascii_lowercase()),
         format!("state:{}", revision.state.as_str().to_ascii_lowercase()),
     ];
+    if awaiting_confirmation(revision) {
+        labels.push("awaiting-confirmation".into());
+    }
     if item.active_revision == Some(revision.revision) {
         labels.push("active".into());
+        // The folder on disk holds a newer change that waits for a person's confirmation.
+        if item.kind == InstructionKind::Skill
+            && item.present
+            && item
+                .observed_digest
+                .as_deref()
+                .is_some_and(|d| d != revision.content_digest)
+        {
+            labels.push("disk-change-pending".into());
+        }
     }
     if let Some(standing) = standing {
         labels.push(standing.label().into());

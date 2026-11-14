@@ -307,6 +307,7 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "code.impact",
             "code.source",
             "code.traverse",
+            "containers.create",
             "code.graph_scope_status",
             "code.overview",
             "code.nodes_by_file",

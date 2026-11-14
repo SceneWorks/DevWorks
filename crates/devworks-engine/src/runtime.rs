@@ -16,6 +16,7 @@ use crate::package_host::{HostConfig, LaunchPorts, PackageHost};
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
 use crate::runs::{ActivationLauncher, RunGate, RunSupervisor};
+use crate::workers::{DrainAt, Loop, StopAt, Workers};
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, Gateway, QueryOutcome};
 use devworks_core::ports::files::FileFault;
@@ -57,7 +58,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use tokio::sync::{Notify, watch};
-use tokio::task::JoinHandle;
 
 /// The operation whose applied decision may leave blobs pending physical removal.
 const RELEASES_BLOBS: &str = "artifacts.delete";
@@ -420,9 +420,6 @@ pub struct CollectionPass {
 
 struct Collector {
     trigger: Notify,
-    observation_stop: Notify,
-    /// Wakes the watcher loop's wait between passes when the runtime stops.
-    watch_stop: Notify,
     stopping: AtomicBool,
     status: watch::Sender<Option<CollectionPass>>,
 }
@@ -430,8 +427,6 @@ impl Collector {
     fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         self.trigger.notify_one();
-        self.observation_stop.notify_one();
-        self.watch_stop.notify_one();
     }
 }
 
@@ -451,13 +446,11 @@ pub struct Runtime {
     runs: Arc<RunSupervisor>,
     usage: Arc<crate::usage::UsageRuntime>,
     providers: Option<Arc<crate::providers::driver::NativeProviders>>,
-    embedding_probes: Option<Arc<crate::conventions::probes::ProbeRuntime>>,
     conventions: Arc<devworks_core::services::conventions::ConventionService>,
     instructions: Option<Arc<devworks_core::services::instructions::InstructionService>>,
     instruction_boot:
         Option<Result<devworks_core::services::instructions::SyncReport, StorageError>>,
     schemas: Option<Arc<devworks_core::services::schemas::SchemaService>>,
-    usage_task: Mutex<Option<JoinHandle<()>>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
     /// itself is `admission`.
     stage: std::sync::atomic::AtomicU8,
@@ -472,44 +465,31 @@ pub struct Runtime {
     jobs: Arc<JobService>,
     scheduler: Arc<Scheduler>,
     evals: Arc<EvalSupervisor>,
-    grading: Mutex<Option<JoinHandle<()>>>,
     approvals: Arc<ApprovalService>,
     resumes: Arc<ResumeDispatcher>,
-    resuming: Mutex<Option<JoinHandle<()>>>,
     prices: Option<Arc<crate::prices::PriceSupervisor>>,
-    pricing: Mutex<Option<JoinHandle<()>>>,
     price_service: Arc<devworks_core::services::prices::PriceService>,
     notifications: Option<Arc<OsNotificationSupervisor>>,
-    notifying: Mutex<Option<JoinHandle<()>>>,
     keep_awake: Arc<KeepAwake>,
     diagnostics: Arc<DiagnosticService>,
-    monitor: Arc<Monitor>,
     browser: Option<Arc<BrowserService>>,
     process_tools: Option<Arc<devworks_core::services::process::tools::ProcessToolService>>,
     watchers: Option<Arc<crate::watch::WatchSupervisor>>,
     containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
     desktop: Option<Arc<devworks_core::services::desktop::DesktopService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
-    git_wake: Arc<Notify>,
-    help: Option<Arc<devworks_core::services::help::HelpService>>,
-    browser_supervision: Arc<BrowserSupervision>,
     packages: Option<Arc<PackageHost>>,
     shutdown_grace: Duration,
     shutdown_bound: Duration,
     report: BootReport,
-    tasks: Mutex<Vec<JoinHandle<()>>>,
-    /// The run supervision loop, awaited only within the shutdown bound (a root stop it is
-    /// executing may be blocked on a tree).
-    supervision: Mutex<Option<JoinHandle<()>>>,
-    /// The diagnostics monitor task, signalled first at shutdown and joined within the bound
-    /// after the run-control transition (see [`Runtime::shutdown`]).
-    monitoring: Mutex<Option<JoinHandle<()>>>,
     /// Index supervision (none when indexing is not composed).
     indexing: Option<Arc<IndexSupervisor>>,
-    indexing_task: Mutex<Option<JoinHandle<()>>>,
-    /// The scheduler loop, awaited only within the shutdown bound (a cancellation it is
-    /// executing may be stopping a tree).
-    scheduling: Mutex<Option<JoinHandle<()>>>,
+    /// Every background loop boot started, in registration order. Stop, shutdown and drop
+    /// iterate it; each loop is awaited only within the shutdown bound (a root stop or a
+    /// cancellation one is executing may be blocked on a tree).
+    workers: Workers,
+    /// What the usage worker's drain established, for the shutdown report.
+    usage_drain: Arc<Mutex<Option<Result<crate::usage::UsageDrain, StorageError>>>>,
 }
 
 /// Boots the runtime (see the crate documentation, "Boot sequence"):
@@ -679,6 +659,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 clock.clone(),
                 b.config,
             )
+            .with_resolver(b.resolver)
             .with_git_source(git.clone()),
         )
     });
@@ -1241,30 +1222,94 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let (svc, recovered) = (diagnostics.clone(), report.clone());
     let _ = tokio::task::spawn_blocking(move || diag::record_boot(&svc, &recovered)).await;
 
-    let run = dispatcher.clone();
-    let delivery = tokio::spawn(async move { run.run().await });
+    // Every background loop is registered here, at the point boot starts it; see `workers` for
+    // where shutdown stops and drains each one.
+    let mut workers = Workers::default();
+    let (run, stop, idle) = (dispatcher.clone(), dispatcher.clone(), dispatcher.clone());
+    workers.start(
+        StopAt::Work,
+        Some(DrainAt::AfterJoin),
+        Arc::new(
+            Loop::new("delivery", |_| async move { run.run().await })
+                .on_stop(move || stop.stop())
+                .on_drain(move |deadline| {
+                    let idle = idle.clone();
+                    async move {
+                        let _ = tokio::time::timeout_at(deadline, idle.idle()).await;
+                    }
+                }),
+        ),
+    );
     if let Some(h) = &package_host {
         h.start();
     }
     let (status, _) = watch::channel(None);
     let collector = Arc::new(Collector {
         trigger: Notify::new(),
-        observation_stop: Notify::new(),
-        watch_stop: Notify::new(),
         stopping: AtomicBool::new(false),
         status,
     });
-    let collection = tokio::spawn(collect(
-        collector.clone(),
-        artifacts.clone(),
-        store.clone(),
-        config.collect_interval,
-    ));
-    let (keeper, every) = (housekeeper.clone(), config.housekeeping_interval);
-    let housekeeping = tokio::spawn(async move { keeper.run(every).await });
+    let stop = collector.clone();
+    workers.start(
+        StopAt::Work,
+        None,
+        Arc::new(
+            Loop::new("artifact collection", |_| {
+                collect(
+                    collector.clone(),
+                    artifacts.clone(),
+                    store.clone(),
+                    config.collect_interval,
+                )
+            })
+            .on_stop(move || stop.stop()),
+        ),
+    );
+    let (keeper, stop, every) = (
+        housekeeper.clone(),
+        housekeeper.clone(),
+        config.housekeeping_interval,
+    );
+    workers.start(
+        StopAt::Work,
+        None,
+        Arc::new(
+            Loop::new("resource housekeeping", |_| async move {
+                keeper.run(every).await
+            })
+            .on_stop(move || stop.stop()),
+        ),
+    );
     run_supervisor.set_dispatcher_wakeup(dispatcher.wakeup());
-    let supervision = tokio::spawn(run_supervisor.clone().run(every));
-    let usage_task = tokio::spawn(usage.clone().run(Duration::from_secs(1)));
+    let stop = run_supervisor.clone();
+    workers.start(
+        StopAt::Work,
+        None,
+        Arc::new(
+            Loop::new("run supervision", |_| run_supervisor.clone().run(every))
+                .on_stop(move || stop.stop()),
+        ),
+    );
+    let (stop, drain) = (usage.clone(), usage.clone());
+    let usage_drain = Arc::new(Mutex::new(None));
+    let drained = usage_drain.clone();
+    workers.start(
+        StopAt::Admission,
+        Some(DrainAt::BeforeFence),
+        Arc::new(
+            Loop::new("usage accounting", |_| {
+                usage.clone().run(Duration::from_secs(1))
+            })
+            .on_stop(move || stop.stop())
+            .on_drain(move |deadline| {
+                let (usage, drained) = (drain.clone(), drained.clone());
+                async move {
+                    let report = usage.drain_until(deadline).await;
+                    *drained.lock().unwrap_or_else(|p| p.into_inner()) = Some(report);
+                }
+            }),
+        ),
+    );
     diag::sources(
         &diagnostics,
         report.clone(),
@@ -1273,104 +1318,189 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         dispatcher.clone(),
     );
     let browser_supervision = Arc::new(BrowserSupervision::default());
-    let mut tasks = vec![delivery, collection, housekeeping];
     // Unknown external effects remain held, never retried. Re-observe them while the app is
     // running as well as at boot; an owner can establish a terminal fact without a restart.
     if process_tools.is_some() || containers.is_some() {
-        let (observing_dispatcher, observing_stop) = (dispatcher.clone(), collector.clone());
-        tasks.push(tokio::spawn(async move {
-            while !observing_stop.stopping.load(Ordering::Acquire) {
-                let _ = observing_dispatcher.observe_unknown().await;
-                let _ = tokio::time::timeout(
-                    Duration::from_secs(10),
-                    observing_stop.observation_stop.notified(),
-                )
-                .await;
-            }
-        }));
+        let observing = dispatcher.clone();
+        workers.start(
+            StopAt::Work,
+            None,
+            Arc::new(Loop::new(
+                "unknown outcome observation",
+                |mut stopped| async move {
+                    while !stopped.is_set() {
+                        let _ = observing.observe_unknown().await;
+                        stopped.wait(Duration::from_secs(10)).await;
+                    }
+                },
+            )),
+        );
     }
     if let Some(worker) = purge_worker {
-        let stopping = collector.clone();
-        tasks.push(tokio::spawn(async move {
-            while !stopping.stopping.load(Ordering::Acquire) {
-                let (worker, flag) = (worker.clone(), stopping.clone());
-                let _ = tokio::task::spawn_blocking(move || {
-                    worker.step(&mut || flag.stopping.load(Ordering::Acquire))
-                })
-                .await;
-                tokio::time::sleep(Duration::from_millis(250)).await;
-            }
-        }));
+        workers.start(
+            StopAt::Work,
+            None,
+            Arc::new(Loop::new("project purge", |mut stopped| async move {
+                while !stopped.is_set() {
+                    let (worker, flag) = (worker.clone(), stopped.clone());
+                    let _ = tokio::task::spawn_blocking(move || worker.step(&mut || flag.is_set()))
+                        .await;
+                    stopped.wait(Duration::from_millis(250)).await;
+                }
+            })),
+        );
     }
 
     if let Some(supervisor) = &watchers {
-        let (supervisor, stopping) = (supervisor.clone(), collector.clone());
+        let supervisor = supervisor.clone();
         let every = config.watch_interval;
-        tasks.push(tokio::spawn(async move {
-            while !stopping.stopping.load(Ordering::Acquire) {
-                tokio::select! {
-                    () = tokio::time::sleep(every) => {}
-                    () = stopping.watch_stop.notified() => break,
+        workers.start(
+            StopAt::Work,
+            None,
+            Arc::new(Loop::new("watchers", |mut stopped| async move {
+                while !stopped.is_set() {
+                    stopped.wait(every).await;
+                    if stopped.is_set() {
+                        break;
+                    }
+                    let pass = supervisor.clone();
+                    let _ = tokio::task::spawn_blocking(move || pass.tick()).await;
                 }
-                let pass = supervisor.clone();
-                let _ = tokio::task::spawn_blocking(move || pass.tick()).await;
-            }
-        }));
+            })),
+        );
     }
 
-    let (imports, collection_wakeup) = (conventions.imports(), collector.clone());
-    tasks.push(tokio::spawn(async move {
-        let mut after = None;
-        while !imports.is_stopped() {
-            let (service, position) = (imports.clone(), after.clone());
-            if let Ok(Ok(pass)) =
-                tokio::task::spawn_blocking(move || service.cleanup_terminal_page(position)).await
-            {
-                after = pass.next;
-                if pass.released {
-                    collection_wakeup.trigger.notify_one();
+    let (imports, collection_wakeup, stop) = (
+        conventions.imports(),
+        collector.clone(),
+        conventions.clone(),
+    );
+    workers.start(
+        StopAt::Work,
+        None,
+        Arc::new(
+            Loop::new("convention imports", |mut stopped| async move {
+                let mut after = None;
+                while !imports.is_stopped() && !stopped.is_set() {
+                    let (service, position) = (imports.clone(), after.clone());
+                    if let Ok(Ok(pass)) =
+                        tokio::task::spawn_blocking(move || service.cleanup_terminal_page(position))
+                            .await
+                    {
+                        after = pass.next;
+                        if pass.released {
+                            collection_wakeup.trigger.notify_one();
+                        }
+                    }
+                    stopped.wait(Duration::from_secs(1)).await;
                 }
-            }
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    }));
-    let git_wake = Arc::new(Notify::new());
+            })
+            .on_stop(move || stop.stop()),
+        ),
+    );
     if let Some(service) = &git {
-        tasks.push(tokio::spawn(crate::git::run(
-            service.clone(),
-            git_wake.clone(),
-        )));
+        let stop = service.clone();
+        workers.start(
+            StopAt::Work,
+            None,
+            Arc::new(
+                Loop::new("git", |stopped| crate::git::run(service.clone(), stopped))
+                    .on_stop(move || stop.stop()),
+            ),
+        );
     }
     if let Some(b) = &browser {
         let svc = b.clone();
         diagnostics.register_source(Arc::new(move |now| svc.health(now)));
-        tasks.push(tokio::spawn(crate::browser::run(
-            b.clone(),
-            browser_supervision.clone(),
-            config.browser_interval,
-        )));
+        let stop = browser_supervision.clone();
+        workers.start(
+            StopAt::Work,
+            None,
+            Arc::new(
+                Loop::new("browser supervision", |_| {
+                    crate::browser::run(
+                        b.clone(),
+                        browser_supervision.clone(),
+                        config.browser_interval,
+                    )
+                })
+                .on_stop(move || stop.stop()),
+            ),
+        );
     }
     let monitor = Arc::new(Monitor::default());
-    let (watcher, svc, every) = (
+    let (watcher, svc, stop, every) = (
         monitor.clone(),
         diagnostics.clone(),
+        monitor.clone(),
         config.diagnostics_interval,
     );
-    let monitoring = tokio::spawn(async move { watcher.run(svc, every).await });
+    workers.start(
+        StopAt::Fence,
+        None,
+        Arc::new(
+            Loop::new("diagnostics monitor", |_| async move {
+                watcher.run(svc, every).await
+            })
+            .on_stop(move || stop.stop()),
+        ),
+    );
     // Ownership of the package host moves to the Runtime.
     package_guard.0 = None;
-    let indexing_task = index_supervisor
-        .clone()
-        .map(|ix| tokio::spawn(async move { ix.run().await }));
+    if let Some(ix) = &index_supervisor {
+        let (stop, drain) = (ix.clone(), ix.clone());
+        workers.start(
+            StopAt::Work,
+            Some(DrainAt::AfterPackages),
+            Arc::new(
+                Loop::new("index supervision", |_| ix.clone().run())
+                    .on_stop(move || stop.signal_stop())
+                    .on_drain(move |deadline| {
+                        let ix = drain.clone();
+                        async move {
+                            ix.stop(deadline).await;
+                        }
+                    }),
+            ),
+        );
+    }
     let notifications = config
         .native_notifications
         .map(|port| OsNotificationSupervisor::new(store.clone(), ids.clone(), clock.clone(), port));
-    let notifying = notifications
-        .as_ref()
-        .map(|worker| tokio::spawn(worker.clone().run(config.notification_interval)));
+    if let Some(worker) = &notifications {
+        let (stop, drain) = (worker.clone(), worker.clone());
+        workers.start(
+            StopAt::Admission,
+            Some(DrainAt::BeforeFence),
+            Arc::new(
+                Loop::new("notifications", |_| {
+                    worker.clone().run(config.notification_interval)
+                })
+                .on_stop(move || stop.stop())
+                .on_drain(move |_| {
+                    let worker = drain.clone();
+                    async move { worker.drain().await }
+                }),
+            ),
+        );
+    }
     // Recovery has settled prior-boot activations before the first evaluation sweep.
     let evals = EvalSupervisor::new(store.clone(), eval_service, config.automatic_eval_suites);
-    let grading = tokio::spawn(evals.clone().run(config.eval_interval));
+    let (stop, drain) = (evals.clone(), evals.clone());
+    workers.start(
+        StopAt::Admission,
+        // No blocking evaluator job may outlive the runtime: its local write fence is drained
+        // once admission has closed.
+        Some(DrainAt::AfterFence),
+        Arc::new(
+            Loop::new("evaluation", |_| evals.clone().run(config.eval_interval))
+                .on_stop(move || stop.stop())
+                .on_drain(move |_| {
+                    let evals = drain.clone();
+                    async move { evals.drain().await }
+                }),
+        ),
+    );
     let admission = Arc::new(std::sync::RwLock::new(false));
     let admitter = Arc::new(Admitter {
         store: store.clone(),
@@ -1396,61 +1526,90 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         handle: tokio::runtime::Handle::current(),
     });
     if let Some(service) = &help {
-        let service = service.clone();
+        let (service, stop) = (service.clone(), service.clone());
         let command = admitter.clone();
-        tasks.push(tokio::spawn(async move {
-            while !service.is_stopped() {
-                let current = service.clone();
-                let target = command.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    let _ = current.cleanup();
-                    if let Ok(Some((context, frame))) = current.maintenance_request() {
-                        let _ = target.command_with(
-                            &context,
-                            "help.generate_capability_docs",
-                            &frame,
-                            WriteOptions::default(),
-                        );
+        workers.start(
+            StopAt::Work,
+            None,
+            Arc::new(
+                Loop::new("help maintenance", |mut stopped| async move {
+                    while !service.is_stopped() && !stopped.is_set() {
+                        let current = service.clone();
+                        let target = command.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            let _ = current.cleanup();
+                            if let Ok(Some((context, frame))) = current.maintenance_request() {
+                                let _ = target.command_with(
+                                    &context,
+                                    "help.generate_capability_docs",
+                                    &frame,
+                                    WriteOptions::default(),
+                                );
+                            }
+                        })
+                        .await;
+                        stopped.wait(Duration::from_secs(1)).await;
                     }
                 })
-                .await;
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        }));
+                .on_stop(move || stop.stop()),
+            ),
+        );
     }
     if let Some(service) = &schemas {
-        let service = service.clone();
-        tasks.push(tokio::spawn(async move {
-            while !service.is_stopped() {
-                let current = service.clone();
-                let _ = tokio::task::spawn_blocking(move || current.cleanup_retained_views()).await;
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        }));
+        let (service, stop) = (service.clone(), service.clone());
+        workers.start(
+            StopAt::Work,
+            None,
+            Arc::new(
+                Loop::new("schema view cleanup", |mut stopped| async move {
+                    while !service.is_stopped() && !stopped.is_set() {
+                        let current = service.clone();
+                        let _ =
+                            tokio::task::spawn_blocking(move || current.cleanup_retained_views())
+                                .await;
+                        stopped.wait(Duration::from_secs(1)).await;
+                    }
+                })
+                .on_stop(move || stop.stop()),
+            ),
+        );
     }
     if let Some(service) = &containers {
         let service = service.clone();
-        let stopping = collector.clone();
-        tasks.push(tokio::spawn(async move {
-            while !stopping.stopping.load(Ordering::Acquire) {
-                let current = service.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    current.reconcile_revoked_agent_work(Duration::from_secs(30))
-                })
-                .await;
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        }));
+        workers.start(
+            StopAt::Work,
+            None,
+            Arc::new(Loop::new(
+                "container reconciliation",
+                |mut stopped| async move {
+                    while !stopped.is_set() {
+                        let current = service.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            current.reconcile_revoked_agent_work(Duration::from_secs(30))
+                        })
+                        .await;
+                        stopped.wait(Duration::from_secs(1)).await;
+                    }
+                },
+            )),
+        );
     }
     if let Some(worker) = &embedding_probes {
-        let worker = worker.clone();
-        tasks.push(tokio::spawn(async move {
-            while !worker.is_stopped() {
-                let current = worker.clone();
-                let _ = tokio::task::spawn_blocking(move || current.reconcile()).await;
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        }));
+        let (worker, stop) = (worker.clone(), worker.clone());
+        workers.start(
+            StopAt::Work,
+            None,
+            Arc::new(
+                Loop::new("embedding probes", |mut stopped| async move {
+                    while !worker.is_stopped() && !stopped.is_set() {
+                        let current = worker.clone();
+                        let _ = tokio::task::spawn_blocking(move || current.reconcile()).await;
+                        stopped.wait(Duration::from_secs(1)).await;
+                    }
+                })
+                .on_stop(move || stop.stop()),
+            ),
+        );
     }
     let mut scheduler = Scheduler::new(
         store.clone(),
@@ -1464,18 +1623,68 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         s.stop_bound = config.shutdown_bound;
     }
     let _ = admitter.scheduler.set(Arc::downgrade(&scheduler));
-    let scheduling = tokio::spawn(scheduler.clone().run(config.scheduler_interval));
+    let (stop, drain) = (scheduler.clone(), scheduler.clone());
+    workers.start(
+        StopAt::Schedule,
+        // Scheduled runs in flight are awaited after index runs (a cancellation one is
+        // executing may be stopping a tree).
+        Some(DrainAt::AfterPackages),
+        Arc::new(
+            Loop::new("scheduler", |_| {
+                scheduler.clone().run(config.scheduler_interval)
+            })
+            .on_stop(move || stop.stop())
+            .on_drain(move |deadline| {
+                let scheduler = drain.clone();
+                async move { scheduler.drain(deadline).await }
+            }),
+        ),
+    );
     // All recovery precedes saved-operation readmission. The core supplies the original
     // identity and immutable reviewed frame; the existing gateway supplies fresh authority.
     let resumes = ResumeDispatcher::new(store.clone(), approvals.clone(), admitter.clone());
+    {
+        let (store, artifacts) = (store.clone(), artifacts.clone());
+        resumes.on_settled(Arc::new(move |approval| {
+            crate::tool_turn::publish_held_update(store.as_ref(), &artifacts, approval);
+        }));
+    }
     let _ = admitter.resumes.set(Arc::downgrade(&resumes));
-    let resuming = tokio::spawn(resumes.clone().run(config.approval_resume_interval));
-    let pricing = prices.as_ref().map(|worker| {
-        tokio::spawn(worker.clone().run(
-            config.price_refresh.as_ref().expect("composed").interval,
-            dispatcher.wakeup(),
-        ))
-    });
+    let (stop, drain) = (resumes.clone(), resumes.clone());
+    workers.start(
+        StopAt::Admission,
+        Some(DrainAt::Readmission),
+        Arc::new(
+            Loop::new("approval resumes", |_| {
+                resumes.clone().run(config.approval_resume_interval)
+            })
+            .on_stop(move || stop.stop())
+            .on_drain(move |_| {
+                let resumes = drain.clone();
+                async move { resumes.drain().await }
+            }),
+        ),
+    );
+    if let Some(worker) = &prices {
+        let (stop, drain) = (worker.clone(), worker.clone());
+        workers.start(
+            StopAt::Admission,
+            Some(DrainAt::BeforeFence),
+            Arc::new(
+                Loop::new("price refresh", |_| {
+                    worker.clone().run(
+                        config.price_refresh.as_ref().expect("composed").interval,
+                        dispatcher.wakeup(),
+                    )
+                })
+                .on_stop(move || stop.stop())
+                .on_drain(move |deadline| {
+                    let worker = drain.clone();
+                    async move { worker.drain_until(deadline).await }
+                }),
+            ),
+        );
+    }
     Ok(Runtime {
         store,
         ids,
@@ -1489,49 +1698,36 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         runs: run_supervisor,
         usage,
         providers,
-        embedding_probes,
         conventions,
         instruction_boot: instructions.as_ref().map(|service| service.sync()),
         instructions,
         schemas,
-        usage_task: Mutex::new(Some(usage_task)),
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
         admission,
         admitter,
         jobs,
         scheduler,
         evals,
-        grading: Mutex::new(Some(grading)),
         approvals,
         resumes,
-        resuming: Mutex::new(Some(resuming)),
         prices,
-        pricing: Mutex::new(pricing),
         price_service,
         notifications,
-        notifying: Mutex::new(notifying),
         keep_awake,
         diagnostics,
-        monitor,
         browser,
         process_tools,
         watchers: watchers.clone(),
         containers,
         desktop,
         git,
-        git_wake,
-        help,
-        browser_supervision,
         shutdown_grace: config.shutdown_grace,
         shutdown_bound: config.shutdown_bound,
         report,
-        tasks: Mutex::new(tasks),
         packages: package_host,
-        scheduling: Mutex::new(Some(scheduling)),
-        supervision: Mutex::new(Some(supervision)),
-        monitoring: Mutex::new(Some(monitoring)),
         indexing: index_supervisor,
-        indexing_task: Mutex::new(indexing_task),
+        workers,
+        usage_drain,
     })
 }
 
@@ -2548,6 +2744,22 @@ impl Runtime {
     /// Dedicated trusted native-human interaction. The ordinary command/tool path cannot
     /// mint this private exact-content witness, even for a context whose kind is Human.
     pub fn record_human_decision(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
+        let outcome = self.decide_as_human(ctx, frame);
+        // A rejection settles an approval staged for an agent's refused call; tell that agent.
+        if let Ok(CommandReply::Recorded { receipt, .. }) = &outcome
+            && let DomainDecision::Applied {
+                result:
+                    devworks_core::protocol::results::OperationResult::ApprovalsRecordHumanDecision {
+                        value,
+                    },
+            } = &receipt.decision
+        {
+            crate::tool_turn::publish_held_update(self.store.as_ref(), &self.artifacts, &value.id);
+        }
+        outcome
+    }
+
+    fn decide_as_human(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
         const OPERATION: &str = "approvals.record_human_decision";
         if self
             .desktop
@@ -2690,38 +2902,37 @@ impl Runtime {
         let deadline = tokio::time::Instant::now() + self.shutdown_bound;
         // Schedule admission freezes first: no occurrence is claimed and no run started from
         // here on (runs already dispatching finish or are reconciled at the next boot).
-        self.scheduler.stop();
+        self.workers.stop_at(StopAt::Schedule);
         let refresh_shutdown = self
             .use_cases
             .connection_service()
             .map(|connections| connections.close())
             .transpose();
-        self.usage.stop();
-        self.evals.stop();
-        self.resumes.stop();
-        if let Some(worker) = &self.prices {
-            worker.stop();
-        }
-        if let Some(worker) = &self.notifications {
-            worker.stop();
-        }
+        // Usage, evaluation, approval resumes, price refresh and notifications stop admitting.
+        self.workers.stop_at(StopAt::Admission);
         // Preparation/admission/settlement are one drained unit: never orphan a blocking
-        // readmission or let its outbox CAS write after shutdown has returned.
-        self.resumes.drain().await;
-        let inference_shutdown = self.usage.drain_until(deadline).await;
-        if let Some(worker) = &self.prices {
-            worker.drain_until(deadline).await;
-        }
-        if let Some(worker) = &self.notifications {
-            worker.drain().await;
-        }
+        // readmission or let its outbox CAS write after shutdown has returned. Usage, price
+        // refresh and notifications drain next.
+        self.workers.drain(DrainAt::Readmission, deadline).await;
+        self.workers.drain(DrainAt::BeforeFence, deadline).await;
+        let inference_shutdown = self
+            .usage_drain
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+            .unwrap_or_else(|| {
+                Ok(crate::usage::UsageDrain {
+                    unclosed: Vec::new(),
+                    pending_preparations: 0,
+                })
+            });
         let left = || deadline.saturating_duration_since(tokio::time::Instant::now());
         // The diagnostics monitor is only *signalled* here, and joined after the run-control
         // transition below: a pass in progress (a full integrity check of a large store, say)
         // must never use up the bound before the live work is held for Continue. Once signalled
         // it starts no further step or probe, so no retention, probe or sweep write starts after
         // the admission fence closes; none of it is a command, so none of it changes run control.
-        self.monitor.stop();
+        self.workers.stop_at(StopAt::Fence);
         // AD20 step 1: fence admission in memory and cancel retained inbox waits, then commit the
         // run-control transition: live feature/issue work is held for manual Continue and asked
         // to stop; launches get the cooperative grace. A storage failure here is not fatal: the
@@ -2743,7 +2954,7 @@ impl Runtime {
         })
         .await;
         // No blocking evaluator job may outlive the runtime: drain its local write fence.
-        self.evals.drain().await;
+        self.workers.drain(DrainAt::AfterFence, deadline).await;
         self.enter(ShutdownStage::Quiescing);
         let _ = self.runs.quiesce(self.shutdown_grace.min(left())).await;
         self.enter(ShutdownStage::StoppingWork);
@@ -2755,28 +2966,9 @@ impl Runtime {
         // alone, a claim's lease expires into recovery, an interrupted operation is classified.
         // Supervision admits no further root stop once stopping; one it is executing ends
         // within its own bound, and the owned-tree stop below covers its trees.
-        let mut joining: Vec<JoinHandle<()>> =
-            std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner()));
-        for slot in [
-            &self.monitoring,
-            &self.supervision,
-            &self.scheduling,
-            &self.grading,
-            &self.resuming,
-            &self.pricing,
-            &self.notifying,
-            &self.usage_task,
-        ] {
-            joining.extend(slot.lock().unwrap_or_else(|p| p.into_inner()).take());
-        }
-        for mut task in joining {
-            if let dispatch::Either::Left(()) =
-                dispatch::first(tokio::time::sleep_until(deadline), &mut task).await
-            {
-                task.abort();
-            }
-        }
-        let _ = dispatch::first(tokio::time::sleep_until(deadline), self.dispatcher.idle()).await;
+        let _ = self.workers.join(deadline).await;
+        // In-flight deliveries.
+        self.workers.drain(DrainAt::AfterJoin, deadline).await;
         // Browser sessions close through the process owner (their records settle and profiles
         // are removed) before the remaining owned trees are stopped. Like every wait above, it
         // starts only after the run-control hold committed and is abandoned at the one deadline:
@@ -2794,23 +2986,9 @@ impl Runtime {
             let stopping = tokio::task::spawn_blocking(move || host.shutdown(bound));
             let _ = dispatch::first(tokio::time::sleep_until(deadline), stopping).await;
         }
-        // Index runs are signalled and waited for within the same deadline; their Git trees
+        // Index runs, then scheduled runs, are waited for within the same deadline; their trees
         // are owned trees, so the stop below kills any that remain.
-        if let Some(ix) = &self.indexing {
-            ix.stop(deadline).await;
-            let task = self
-                .indexing_task
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .take();
-            if let Some(mut task) = task
-                && let dispatch::Either::Left(()) =
-                    dispatch::first(tokio::time::sleep_until(deadline), &mut task).await
-            {
-                task.abort();
-            }
-        }
-        self.scheduler.drain(deadline).await;
+        self.workers.drain(DrainAt::AfterPackages, deadline).await;
         let container_shutdown = if let Some(service) = self.containers.clone() {
             let bound = left();
             let mut task = tokio::task::spawn_blocking(move || service.shutdown_agent_work(bound));
@@ -2900,44 +3078,13 @@ impl Runtime {
         stopped
     }
 
+    /// Signals every registered worker (each loop then ends, so shutdown can join it) and
+    /// closes outgoing connections.
     fn stop(&self) {
-        if let Some(service) = &self.schemas {
-            service.stop();
-        }
-        self.conventions.stop();
-        if let Some(probes) = &self.embedding_probes {
-            probes.stop();
-        }
-        if let Some(help) = &self.help {
-            help.stop();
-        }
         if let Some(connections) = self.use_cases.connection_service() {
             let _ = connections.close();
         }
-        self.usage.stop();
-        // The Git reconcile loop must end before shutdown joins the boot tasks.
-        if let Some(git) = &self.git {
-            git.stop();
-            self.git_wake.notify_one();
-        }
-        if let Some(worker) = &self.prices {
-            worker.stop();
-        }
-        if let Some(worker) = &self.notifications {
-            worker.stop();
-        }
-        self.resumes.stop();
-        self.evals.stop();
-        self.browser_supervision.stop();
-        if let Some(ix) = &self.indexing {
-            ix.worker().stop_all();
-        }
-        self.scheduler.stop();
-        self.dispatcher.stop();
-        self.collector.stop();
-        self.housekeeper.stop();
-        self.runs.stop();
-        self.monitor.stop();
+        self.workers.stop_all();
     }
 }
 
@@ -3026,7 +3173,10 @@ fn closing_reply(raw: &[u8], correlation: Id) -> CommandOutcome {
 /// killed) and the keep-awake request.
 impl Drop for Runtime {
     fn drop(&mut self) {
+        // Every registered worker is signalled; its loop is left to end on its own.
         self.stop();
+        // The write fences of evaluation, approval resumes, price refresh and notifications
+        // close at once, also fencing jobs that have not begun yet.
         self.evals.close();
         self.resumes.close();
         if let Some(worker) = &self.prices {

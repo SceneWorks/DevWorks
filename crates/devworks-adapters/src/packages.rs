@@ -28,8 +28,11 @@
 //! path (no `..`, `.`, absolute, drive, backslash, control character, trailing dot or space, or
 //! Windows device name), no duplicate or case-aliased entry, no entry the manifest does not
 //! list, and every listed file present with its exact digest and length.
+use crate::web::resolve::SystemResolver;
+use crate::web::transport::NativeTransport;
 use devworks_core::authority::destructive::{EntryKind, FilesystemResolver};
 use devworks_core::authority::reads::{ReadRequest, ReadRoot, VerifiedReader, VerifiedRewindFile};
+use devworks_core::authority::redact::Redactor;
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::framing;
 use devworks_core::ports::packages::VerifiedPackageFile;
@@ -42,15 +45,19 @@ use devworks_core::ports::packages::{
     FieldError, IndexEntry, IndexSource, IndexTransport, IndexVerifier, SchemaValidator,
     VerifiedIndex,
 };
+use devworks_core::ports::web::{HopRequest, HopResponse, HopTransport, NetFault, Resolver};
+use devworks_core::services::web::egress::{self, AddressClass, Destination};
 use devworks_extension_protocol::package::{Contribution, PackageManifest, PermissionRequest};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Bundle magic and format version.
 pub const MAGIC: &[u8; 8] = b"DWPKG\0\x01\0";
@@ -1198,36 +1205,176 @@ fn resolve(source: &str, location: &str) -> Option<String> {
     })
 }
 
-/// Fetches index documents and bundles: `https://` with ureq (rustls, bundled roots, a
-/// bounded body, no redirects to plain http), or a regular file under a local directory.
+/// Redirects one index or bundle download follows.
+const INDEX_REDIRECTS: usize = 5;
+/// The whole download (every hop, resolution, connection and the body) ends within this.
+const INDEX_TIMEOUT: Duration = Duration::from_secs(60);
+const INDEX_USER_AGENT: &str = concat!("DevWorks/", env!("CARGO_PKG_VERSION"), " (packages)");
+
+/// Whether the web egress policy currently allows private networks (`web.fetchAllowPrivateNetwork`).
+pub type PrivateNetworkSetting = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// Fetches index documents and bundles: `https://` through the web tools' pinned-address
+/// transport and the web egress policy, or a regular file under a local directory.
+///
+/// Every hop, the first and each redirect, is `https`, has its host resolved once and every
+/// address classified as `web.fetch` classifies it (loopback and private ranges only when
+/// private networks are allowed; link-local and metadata never), and connects only to an address
+/// it checked. At most [`INDEX_REDIRECTS`] redirects are followed.
 pub struct NativeIndexTransport {
-    agent: package_ureq::Agent,
+    resolver: Arc<dyn Resolver>,
+    transport: Arc<dyn HopTransport>,
+    allow_private: PrivateNetworkSetting,
 }
 impl Default for NativeIndexTransport {
+    /// The system resolver, the bundled-roots transport and private networks refused.
     fn default() -> Self {
+        Self::new(
+            Arc::new(SystemResolver),
+            Arc::new(NativeTransport::new()),
+            Arc::new(|| false),
+        )
+    }
+}
+impl NativeIndexTransport {
+    pub fn new(
+        resolver: Arc<dyn Resolver>,
+        transport: Arc<dyn HopTransport>,
+        allow_private: PrivateNetworkSetting,
+    ) -> Self {
         Self {
-            agent: package_ureq::AgentBuilder::new()
-                .timeout(Duration::from_secs(60))
-                .redirects(5)
-                .https_only(true)
-                .build(),
+            resolver,
+            transport,
+            allow_private,
         }
+    }
+
+    /// Follows the hops of one download to a 2xx answer and reads at most `max_bytes + 1` bytes.
+    fn download(&self, location: &str, max_bytes: u64, out: &mut Vec<u8>) -> Result<(), String> {
+        let deadline = Instant::now() + INDEX_TIMEOUT;
+        let allow_private = (self.allow_private)();
+        let redactor = Redactor::new();
+        let mut url = egress::parse(location)
+            .map_err(|r| format!("fetching {location}: refused ({})", r.target()))?;
+        let mut redirects = 0;
+        loop {
+            let shown = egress::redacted(&url, &redactor);
+            if url.scheme() != "https" {
+                return Err(format!("fetching {shown}: refused (only https is fetched)"));
+            }
+            let port = egress::port(&url);
+            let addrs = self.admit(&url, port, allow_private, deadline, &shown)?;
+            let mut response = self.send(&url, port, &addrs, deadline, &shown)?;
+            let status = response.status;
+            if matches!(status, 301 | 302 | 303 | 307 | 308)
+                && let Some(next) = response.header("location").map(str::to_owned)
+            {
+                drop(response);
+                if redirects == INDEX_REDIRECTS {
+                    return Err(format!(
+                        "fetching {shown}: more than {INDEX_REDIRECTS} redirects"
+                    ));
+                }
+                url = egress::join(&url, &next)
+                    .map_err(|r| format!("fetching {shown}: redirect refused ({})", r.target()))?;
+                redirects += 1;
+                continue;
+            }
+            if !(200..=299).contains(&status) {
+                return Err(format!("fetching {shown}: the server answered {status}"));
+            }
+            return response
+                .body
+                .by_ref()
+                .take(max_bytes + 1)
+                .read_to_end(out)
+                .map(|_| ())
+                .map_err(|e| format!("reading {shown}: {e}"));
+        }
+    }
+
+    /// Resolves the hop's host once and refuses it unless every address is allowed.
+    fn admit(
+        &self,
+        url: &url::Url,
+        port: u16,
+        allow_private: bool,
+        deadline: Instant,
+        shown: &str,
+    ) -> Result<Vec<IpAddr>, String> {
+        let refused =
+            |class: AddressClass| format!("fetching {shown}: refused ({} address)", class.as_str());
+        let addrs = match egress::destination(url) {
+            Destination::Literal(ip) => vec![ip],
+            Destination::Domain(domain) => {
+                if let Some(class) = egress::name_class(&domain)
+                    && !class.allowed(allow_private)
+                {
+                    return Err(refused(class));
+                }
+                self.resolver
+                    .resolve(&domain, port, deadline, &[])
+                    .map_err(|f| format!("fetching {shown}: {}", f.reason()))?
+            }
+        };
+        if addrs.is_empty() {
+            return Err(format!("fetching {shown}: the name has no addresses"));
+        }
+        // One refused address refuses the hop, so a resolver cannot mix a public and a private
+        // answer to slip past the check.
+        match addrs
+            .iter()
+            .map(|ip| egress::classify(*ip))
+            .find(|c| !c.allowed(allow_private))
+        {
+            Some(class) => Err(refused(class)),
+            None => Ok(addrs),
+        }
+    }
+
+    /// Sends the hop to the checked addresses in order until one connects.
+    fn send(
+        &self,
+        url: &url::Url,
+        port: u16,
+        addrs: &[IpAddr],
+        deadline: Instant,
+        shown: &str,
+    ) -> Result<HopResponse, String> {
+        let host_header = egress::host_header(url);
+        let server_name = egress::server_name(url);
+        let target = egress::request_target(url);
+        let mut last = String::from("no address");
+        for ip in addrs {
+            let request = HopRequest {
+                scheme: egress::scheme(url),
+                host_header: &host_header,
+                server_name: &server_name,
+                target: &target,
+                addr: SocketAddr::new(*ip, port),
+                deadline,
+                cancel: Vec::new(),
+                user_agent: INDEX_USER_AGENT,
+                accept: "*/*",
+                headers: &[],
+            };
+            match self.transport.get(&request) {
+                Ok(r) => return Ok(r),
+                // Not sent: the next checked address may still connect.
+                Err(f @ NetFault::NotSent { .. }) if !f.timed_out() => {
+                    last = f.reason().to_owned();
+                }
+                Err(f) => return Err(format!("fetching {shown}: {}", f.reason())),
+            }
+        }
+        Err(format!("fetching {shown}: {last}"))
     }
 }
 impl IndexTransport for NativeIndexTransport {
     fn fetch(&self, location: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
-        use std::io::Read;
         let mut out = Vec::new();
         if location.starts_with("https://") {
-            let resp = self
-                .agent
-                .get(location)
-                .call()
-                .map_err(|e| format!("fetching {location}: {e}"))?;
-            resp.into_reader()
-                .take(max_bytes + 1)
-                .read_to_end(&mut out)
-                .map_err(|e| format!("reading {location}: {e}"))?;
+            self.download(location, max_bytes, &mut out)?;
         } else {
             let path = Path::new(location);
             let meta = std::fs::symlink_metadata(path).map_err(|e| format!("{location}: {e}"))?;

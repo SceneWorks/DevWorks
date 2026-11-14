@@ -393,6 +393,16 @@ pub struct DeliverySummary {
     pub last_at_ms: Option<i64>,
 }
 
+/// A claim's maintained tallies, read together in one store read. The store keeps them as its
+/// deliveries, lesson events and challenges change, so reading them never counts history.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClaimTally {
+    pub stale: bool,
+    pub open_challenges: i64,
+    pub lesson_events: i64,
+    pub deliveries: DeliverySummary,
+}
+
 /// The lesson filters of a [`ClaimQuery`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LessonFilter {
@@ -604,6 +614,8 @@ pub trait KnowledgeRead {
     fn knowledge_deliveries(&self, claim: &Id) -> Result<DeliverySummary, StorageError>;
     /// Whether a later revision of one of the claim's basis sources was observed.
     fn knowledge_claim_stale(&self, claim: &Id) -> Result<bool, StorageError>;
+    /// Staleness, open challenges, lesson events and deliveries of a claim in one read.
+    fn knowledge_claim_tally(&self, claim: &Id) -> Result<ClaimTally, StorageError>;
     fn knowledge_source_head(&self, source_ref: &str) -> Result<Option<String>, StorageError>;
     /// Non-deleted claims of exactly `scope` whose source is `source`, by id, strictly after
     /// `after`, at most `limit`.

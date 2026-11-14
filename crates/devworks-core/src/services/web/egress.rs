@@ -1,5 +1,6 @@
 //! Egress policy of the shared web tools: which URLs may be requested, which addresses may be
-//! connected to, and how a URL appears in records and results.
+//! connected to, and how a URL appears in records and results. The owned browser classifies
+//! addresses with the same [`classify`] (see [`AddressClass::browser_allowed`]).
 //!
 //! * **URLs** are parsed with the WHATWG parser (`url`), so host spellings are canonical before
 //!   any decision: decimal, octal, hexadecimal and shortened IPv4 forms (`2130706433`,
@@ -194,6 +195,13 @@ impl AddressClass {
             Self::Loopback | Self::Private | Self::Shared | Self::UniqueLocal => allow_private,
             _ => false,
         }
+    }
+    /// Whether the owned browser may connect to an address of this class. Loopback is always
+    /// allowed (previewing local development servers is the browser's main use); every other
+    /// class follows [`Self::allowed`], so link-local and metadata addresses are never reachable
+    /// and the private ranges follow the same private-network setting as a fetch.
+    pub fn browser_allowed(self, allow_private: bool) -> bool {
+        self == Self::Loopback || self.allowed(allow_private)
     }
 }
 
@@ -443,6 +451,33 @@ mod tests {
             AddressClass::Reserved,
         ] {
             assert!(!c.allowed(true), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn the_browser_always_allows_loopback_and_never_link_local_or_metadata() {
+        for allow_private in [false, true] {
+            assert!(AddressClass::Loopback.browser_allowed(allow_private));
+            assert!(AddressClass::Global.browser_allowed(allow_private));
+            for c in [
+                AddressClass::LinkLocal,
+                AddressClass::Metadata,
+                AddressClass::Unspecified,
+                AddressClass::Multicast,
+                AddressClass::Broadcast,
+                AddressClass::Documentation,
+                AddressClass::Benchmarking,
+                AddressClass::Reserved,
+            ] {
+                assert!(!c.browser_allowed(allow_private), "{c:?}");
+            }
+            for c in [
+                AddressClass::Private,
+                AddressClass::Shared,
+                AddressClass::UniqueLocal,
+            ] {
+                assert_eq!(c.browser_allowed(allow_private), allow_private, "{c:?}");
+            }
         }
     }
 

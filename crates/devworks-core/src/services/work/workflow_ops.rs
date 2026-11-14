@@ -16,7 +16,7 @@ use crate::protocol::records::{MutationSummary, StatusRecord};
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{Counter, EventId, Id, ProjectId, RevisionDimension};
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::{not_found, rev};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -192,30 +192,8 @@ impl WorkService {
             &[project.id.0.as_str(), &basis],
             project.scope_revision,
         );
-        let offset = i
-            .page
-            .cursor
-            .as_ref()
-            .map(|c| {
-                binding
-                    .decode(&c.0)
-                    .and_then(|v| v.parse::<usize>().map_err(|_| StorageError::CursorExpired))
-            })
-            .transpose()?
-            .unwrap_or(0);
-        if offset > records.len() {
-            return Err(StorageError::CursorExpired.into());
-        }
-        let end = offset
-            .saturating_add(i.page.limit.get() as usize)
-            .min(records.len());
-        let more = end < records.len();
         Ok((
-            Page {
-                items: BoundedList(records[offset..end].to_vec()),
-                next_cursor: more.then(|| BoundedText(binding.encode(&end.to_string()))),
-                has_more: more,
-            },
+            cursor::slice(&binding, records, &i.page)?,
             project.scope_revision,
         ))
     }

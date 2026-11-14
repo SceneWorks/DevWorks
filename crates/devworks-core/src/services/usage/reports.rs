@@ -703,105 +703,179 @@ fn origin(read: &dyn ReadSnapshot, o: StoredUsageOrigin, gaps: &mut Gaps) -> SRe
         legacy: Some(o),
     })
 }
+/// The attempts a report reads: those created in its range and, for an activity view, the late
+/// attempts of requests made in it. Both come through time indexes, so usage outside the range
+/// is never visited. The legacy all-dates selection reads everything, as it always did.
+fn attempts(
+    read: &dyn ReadSnapshot,
+    q: &Query,
+    activity_view: bool,
+    mut visit: impl FnMut(StoredInferenceAttempt) -> SResult<()>,
+) -> SResult<()> {
+    let mut filter = UsageAttemptFilter {
+        project_id: q.project.clone(),
+        ..Default::default()
+    };
+    if q.legacy_all_dates {
+        let mut after = None;
+        loop {
+            let rows = read
+                .usage()
+                .inference_attempts(&filter, after.as_ref(), 500)?;
+            let full = rows.len() == 500;
+            for a in rows {
+                after = Some(a.attempt_id.clone());
+                visit(a)?;
+            }
+            if !full {
+                return Ok(());
+            }
+        }
+    }
+    filter.start_ms = Some(q.start.max(0));
+    filter.end_ms = Some(q.end);
+    let mut after = None;
+    loop {
+        let rows = read
+            .usage()
+            .inference_attempts_between(&filter, after.as_ref(), 500)?;
+        let full = rows.len() == 500;
+        for a in rows {
+            after = Some((a.created_at_ms, a.attempt_id.clone()));
+            visit(a)?;
+        }
+        if !full {
+            break;
+        }
+    }
+    // An attempt is never created before its request, so only a late attempt can be in an
+    // activity range through its request alone.
+    if activity_view {
+        let mut after = None;
+        loop {
+            let rows = read
+                .usage()
+                .late_inference_attempts(&filter, after.as_ref(), 500)?;
+            let full = rows.len() == 500;
+            for (requested_at, a) in rows {
+                after = Some((requested_at, a.request_id.clone(), a.attempt_id.clone()));
+                visit(a)?;
+            }
+            if !full {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+/// The origins recorded in the report's range, through a time index (all, for legacy).
+fn origins(
+    read: &dyn ReadSnapshot,
+    q: &Query,
+    mut visit: impl FnMut(StoredUsageOrigin) -> SResult<()>,
+) -> SResult<()> {
+    let mut filter = UsageOriginFilter {
+        project_id: q.project.clone(),
+        ..Default::default()
+    };
+    if q.legacy_all_dates {
+        let mut after = None;
+        loop {
+            let rows = read.usage().usage_origins(&filter, after.as_deref(), 500)?;
+            let full = rows.len() == 500;
+            for o in rows {
+                after = Some(o.cursor());
+                visit(o)?;
+            }
+            if !full {
+                return Ok(());
+            }
+        }
+    }
+    filter.start_ms = Some(q.start.max(0));
+    filter.end_ms = Some(q.end);
+    let mut after = None;
+    loop {
+        let rows = read
+            .usage()
+            .usage_origins_between(&filter, after.as_ref(), 500)?;
+        let full = rows.len() == 500;
+        for o in rows {
+            after = Some((o.recorded_at_ms, o.source_kind.clone(), o.source_id.clone()));
+            visit(o)?;
+        }
+        if !full {
+            return Ok(());
+        }
+    }
+}
 fn collect(read: &dyn ReadSnapshot, q: &Query, gaps: &mut Gaps) -> SResult<Vec<Fact>> {
     let mut facts = Vec::new();
     if q.end <= 0 {
         return Ok(facts);
     }
-    let mut after = None;
     let activity_view = matches!(
         q.kind,
         UsageReportKind::AssistantUsage
             | UsageReportKind::AssistantActivity
             | UsageReportKind::Filters
     );
-    let filter = UsageAttemptFilter {
-        project_id: q.project.clone(),
-        start_ms: (!activity_view && !q.legacy_all_dates).then(|| q.start.max(0)),
-        end_ms: (!activity_view && !q.legacy_all_dates).then_some(q.end),
-        ..Default::default()
-    };
-    loop {
-        let rows = read
-            .usage()
-            .inference_attempts(&filter, after.as_ref(), 500)?;
-        let full = rows.len() == 500;
-        for a in rows {
-            after = Some(a.attempt_id.clone());
-            if q.ownership(
-                a.project_id.as_ref(),
-                a.feature_id.as_ref(),
-                a.work_id.as_ref(),
-                a.execution_root_id.as_ref(),
-                a.session_id.as_ref(),
-                a.job_run_id.as_ref(),
-            ) {
-                let logical_time = if activity_view {
-                    read.router()
-                        .route_request(&a.request_id)?
-                        .map(|r| r.created_at_ms)
-                } else {
-                    None
-                };
-                if q.in_range(a.created_at_ms) || logical_time.is_some_and(|at| q.in_range(at)) {
-                    facts.push(attempt(read, a, &mut Gaps::default())?);
-                }
+    attempts(read, q, activity_view, |a| {
+        if q.ownership(
+            a.project_id.as_ref(),
+            a.feature_id.as_ref(),
+            a.work_id.as_ref(),
+            a.execution_root_id.as_ref(),
+            a.session_id.as_ref(),
+            a.job_run_id.as_ref(),
+        ) {
+            let logical_time = if activity_view {
+                read.router()
+                    .route_request(&a.request_id)?
+                    .map(|r| r.created_at_ms)
+            } else {
+                None
+            };
+            if q.in_range(a.created_at_ms) || logical_time.is_some_and(|at| q.in_range(at)) {
+                facts.push(attempt(read, a, &mut Gaps::default())?);
             }
         }
-        if !full {
-            break;
+        Ok(())
+    })?;
+    origins(read, q, |o| {
+        if o.attempt_id.is_some() && matches!(o.source_kind.as_str(), "SessionUsage" | "JobUsage") {
+            return Ok(());
         }
-    }
-    let mut after = None;
-    let filter = UsageOriginFilter {
-        project_id: q.project.clone(),
-        start_ms: (!q.legacy_all_dates).then(|| q.start.max(0)),
-        end_ms: (!q.legacy_all_dates).then_some(q.end),
-        ..Default::default()
-    };
-    loop {
-        let rows = read.usage().usage_origins(&filter, after.as_deref(), 500)?;
-        let full = rows.len() == 500;
-        for o in rows {
-            after = Some(o.cursor());
-            if o.attempt_id.is_some()
-                && matches!(o.source_kind.as_str(), "SessionUsage" | "JobUsage")
-            {
-                continue;
-            }
-            if q.root_is_feature
-                && o.feature_id.is_none()
-                && o.work_id.as_ref() != q.root.as_ref()
-                && matches!(o.source_kind.as_str(), "SessionUsage" | "JobUsage")
-            {
-                gaps.add("historical-feature-ownership-unrecorded");
-            }
-            if q.ownership(
-                o.project_id.as_ref(),
-                o.feature_id.as_ref(),
-                o.work_id.as_ref(),
-                None,
-                o.session_id.as_ref(),
-                o.job_run_id.as_ref(),
-            ) {
-                let mut source_gaps = Gaps::default();
-                let fact = origin(read, o, &mut source_gaps)?;
-                for gap in source_gaps.0 {
-                    if gap == "tool-transport-unrecorded" {
-                        if matches!(q.kind, UsageReportKind::McpUsage | UsageReportKind::Filters) {
-                            gaps.add(&gap);
-                        }
-                    } else if matches!(q.kind, UsageReportKind::Attempts) {
+        if q.root_is_feature
+            && o.feature_id.is_none()
+            && o.work_id.as_ref() != q.root.as_ref()
+            && matches!(o.source_kind.as_str(), "SessionUsage" | "JobUsage")
+        {
+            gaps.add("historical-feature-ownership-unrecorded");
+        }
+        if q.ownership(
+            o.project_id.as_ref(),
+            o.feature_id.as_ref(),
+            o.work_id.as_ref(),
+            None,
+            o.session_id.as_ref(),
+            o.job_run_id.as_ref(),
+        ) {
+            let mut source_gaps = Gaps::default();
+            let fact = origin(read, o, &mut source_gaps)?;
+            for gap in source_gaps.0 {
+                if gap == "tool-transport-unrecorded" {
+                    if matches!(q.kind, UsageReportKind::McpUsage | UsageReportKind::Filters) {
                         gaps.add(&gap);
                     }
+                } else if matches!(q.kind, UsageReportKind::Attempts) {
+                    gaps.add(&gap);
                 }
-                facts.push(fact);
             }
+            facts.push(fact);
         }
-        if !full {
-            break;
-        }
-    }
+        Ok(())
+    })?;
     if read.usage().usage_bootstrap()?.phase != "Complete" {
         gaps.add("historical-indexing-incomplete");
     }
@@ -856,21 +930,20 @@ fn totals(facts: &[&Fact], gaps: &mut Gaps) -> SResult<UsageTotals> {
     }
     wire(json!({"attempts":values[0].to_string(),"trackedMicroUsd":values[1].to_string(),"reportedMicroUsd":values[2].to_string(),"estimatedMicroUsd":values[3].to_string(),"reservedMicroUsd":values[4].to_string(),"localFreeAttempts":values[5].to_string(),"untrackedAttempts":values[6].to_string(),"unknownTailAttempts":values[7].to_string(),"incompleteAttempts":values[8].to_string(),"monetaryIncompleteAttempts":values[9].to_string(),"legacyUsageFacts":values[10].to_string(),"legacyUntrackedFacts":values[11].to_string(),"legacyObservationMicroUsd":values[12].to_string()})).map_err(Into::into)
 }
-fn cursor_range(cursor: &str) -> Result<(i64, i64, &str), StorageError> {
-    let mut parts = cursor.splitn(4, '.');
-    if parts.next() != Some("usage1") {
+/// A usage position: the resolved date range the listing started with, then the row offset.
+fn cursor_range(position: &str) -> Result<(i64, i64, usize), StorageError> {
+    let mut parts = position.split('.');
+    let (Some(start), Some(end), Some(offset), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
         return Err(StorageError::CursorExpired);
-    }
-    let start = parts
-        .next()
-        .and_then(|v| v.parse::<i64>().ok())
-        .ok_or(StorageError::CursorExpired)?;
-    let end = parts
-        .next()
-        .and_then(|v| v.parse::<i64>().ok())
-        .ok_or(StorageError::CursorExpired)?;
-    let inner = parts.next().ok_or(StorageError::CursorExpired)?;
-    Ok((start, end, inner))
+    };
+    let parse = |v: &str| v.parse::<i64>().map_err(|_| StorageError::CursorExpired);
+    Ok((
+        parse(start)?,
+        parse(end)?,
+        offset.parse().map_err(|_| StorageError::CursorExpired)?,
+    ))
 }
 trait RowSource<T>: Serialize {
     fn len(&self) -> usize;
@@ -893,17 +966,13 @@ fn page<T: Clone + Serialize>(
     rows: impl RowSource<T>,
 ) -> SResult<(Vec<T>, Option<Cursor>, bool)> {
     let context = serde_json::to_string(&q.context).map_err(|e| corrupt(&e.to_string()))?;
-    let source = crate::fingerprint::sha256_hex(
-        serde_json::to_string(&rows)
-            .map_err(|e| corrupt(&e.to_string()))?
-            .as_bytes(),
-    );
+    // The rows are a function of the query and the snapshot, and the binding carries the
+    // snapshot's read revision, so a cursor needs no digest of every row.
     let binding = CursorBinding::new(
         ctx,
         "router.usage",
         &[
             &context,
-            &source,
             &i.page.limit.get().to_string(),
             if q.legacy_all_dates {
                 "legacy-all-dates"
@@ -913,17 +982,13 @@ fn page<T: Clone + Serialize>(
         ],
         q.context.read_revision.get(),
     );
-    let start = i
-        .page
-        .cursor
-        .as_ref()
-        .map(|c| {
-            binding
-                .decode(cursor_range(&c.0)?.2)
-                .and_then(|s| s.parse::<usize>().map_err(|_| StorageError::CursorExpired))
-        })
-        .transpose()?
-        .unwrap_or(0);
+    let start = match binding.resume(&i.page)? {
+        None => 0,
+        Some(at) => match cursor_range(&at)? {
+            (start, end, offset) if (start, end) == (q.start, q.end) => offset,
+            _ => return Err(StorageError::CursorExpired.into()),
+        },
+    };
     if start > rows.len() {
         return Err(StorageError::CursorExpired.into());
     }
@@ -954,14 +1019,7 @@ fn page<T: Clone + Serialize>(
         (start..end)
             .map(|index| rows.row(index))
             .collect::<SResult<Vec<_>>>()?,
-        more.then(|| {
-            BoundedText(format!(
-                "usage1.{}.{}.{}",
-                q.start,
-                q.end,
-                binding.encode(&end.to_string())
-            ))
-        }),
+        more.then(|| binding.cursor(&format!("{}.{}.{end}", q.start, q.end))),
         more,
     ))
 }
@@ -977,7 +1035,11 @@ fn query_with_mode(
         .page
         .cursor
         .as_ref()
-        .map(|c| cursor_range(&c.0).map(|(start, end, _)| (start, end)))
+        .map(|c| {
+            crate::services::cursor::peek(&c.0)
+                .and_then(|at| cursor_range(&at))
+                .map(|(start, end, _)| (start, end))
+        })
         .transpose()?;
     let q = Query::new(read, ctx, input, now_ms, resolved, legacy_all_dates)?;
     let mut gaps = Gaps::default();

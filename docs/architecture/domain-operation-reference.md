@@ -527,7 +527,7 @@ All 376 qualified operations have typed input/result candidates. Existing input 
 | `containers.capabilities` | **Query**<br>`engineId`: `?Id` | `Page<ContainerCapability>` |
 | `containers.build` | **Command**<br>`engineId`: `Id`<br>`projectId`: `ProjectId`<br>`context`: `RegisteredPath`<br>`definition`: `ArtifactRef`<br>`tag`: `Text` | `ContainerImage` |
 | `containers.pull` | **Command**<br>`engineId`: `Id`<br>`image`: `Text`<br>`credentialRef`: `?Id` | `ContainerImage` |
-| `containers.create` | **Command**<br>`spec`: `ContainerSpec` | `ContainerRecord` |
+| `containers.create` | **Command**<br>`spec`: `ContainerSpec`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `ContainerRecord` |
 | `containers.start` | **Command**<br>`containerId`: `Id`<br>`expectedRevision`: `Revision` | `ContainerRecord` |
 | `containers.exec` | **Command**<br>`containerId`: `Id`<br>`expectedRevision`: `Revision`<br>`command`: `NonEmpty<Text>`<br>`environment`: `Items<EnvironmentEntry>`<br>`timeoutMs`: `PositiveCounter` | `ProcessRecord` |
 | `containers.inspect` | **Query**<br>`containerId`: `Id` | `ContainerRecord` |
@@ -2096,6 +2096,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `containerPort` | `Port` |
 | `hostPort` | `Port` |
 | `protocol` | `PortProtocol` |
+| `exposeBeyondLoopback` | `?bool` · *revision 8+* |
 
 ### PortProtocol
 

@@ -102,13 +102,12 @@ use crate::protocol::records::{
     IndexRunKind, IndexRunRecord, IndexRunState, IndexSourceConfig, MutationSummary,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Page};
 use crate::protocol::{
     ActorId, CorrelationId, Counter, DomainErrorCode, EventId, Id, ProjectId, Revision,
     RevisionDimension,
 };
 use crate::services::artifacts::ArtifactService;
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::diagnostics::DiagnosticService;
 use crate::services::projects::{repository_record, visible_project, visible_repository};
 use crate::services::runs::closed_to_work;
@@ -472,56 +471,33 @@ impl IndexCoordinator {
             ],
             scope_revision,
         );
-        let mut after = i
-            .page
-            .cursor
-            .as_ref()
-            .map(|c| {
-                binding
-                    .decode(&c.0)
-                    .and_then(|p| Id::new(p).map_err(|_| StorageError::CursorExpired))
-            })
-            .transpose()?;
-        let limit = i.page.limit.get() as usize;
-        let mut items = Vec::new();
-        let mut has_more = false;
         // Pages of registrations, filtered by section, until the page fills (bounded scan).
-        'pages: loop {
-            let rows = read
-                .projects()
-                .repositories(&filter, after.as_ref(), MAX_PAGE)?;
-            let full = rows.len() == MAX_PAGE as usize;
-            for r in rows {
-                after = Some(r.id.clone());
-                let section = read.indexing().repository_source(&r.id)?.map(|s| s.section);
-                let wanted = match &section {
-                    None => false,
-                    Some(s) => sections.is_empty() || sections.contains(s),
-                };
-                if !wanted {
-                    continue;
-                }
-                if items.len() == limit {
-                    has_more = true;
-                    break 'pages;
-                }
-                items.push(repository_record(read.projects(), ctx, &r)?);
-            }
-            if !full {
-                break;
-            }
-        }
-        let next = has_more.then(|| {
-            let last = &items[limit - 1];
-            BoundedText(binding.encode(last.id.as_str()))
-        });
+        let rows = cursor::page(
+            &binding,
+            &i.page,
+            |after, n| {
+                let after = after
+                    .map(|p| Id::new(p).map_err(|_| StorageError::CursorExpired))
+                    .transpose()?;
+                cursor::scan(
+                    after,
+                    n,
+                    |after, batch| read.projects().repositories(&filter, after.as_ref(), batch),
+                    |r| Some(r.id.clone()),
+                    |r| {
+                        let section = read.indexing().repository_source(&r.id)?.map(|s| s.section);
+                        Ok(match &section {
+                            None => false,
+                            Some(s) => sections.is_empty() || sections.contains(s),
+                        })
+                    },
+                )
+            },
+            |r| r.id.as_str().to_owned(),
+        )?;
         Ok((
             OperationResult::IndexingDiscover {
-                value: Page {
-                    items: BoundedList(items),
-                    next_cursor: next,
-                    has_more,
-                },
+                value: rows.try_into_page(|r| repository_record(read.projects(), ctx, &r))?,
             },
             scope_revision,
         ))
@@ -591,47 +567,26 @@ impl IndexCoordinator {
             ],
             scope_revision,
         );
-        let after = match &i.page.cursor {
-            None => None,
-            Some(c) => {
-                let pos = binding.decode(&c.0)?;
-                let (at, id) = pos.split_once(':').ok_or(StorageError::CursorExpired)?;
-                Some(RunPosition {
-                    created_at_ms: at.parse().map_err(|_| StorageError::CursorExpired)?,
-                    id: Id::new(id).map_err(|_| StorageError::CursorExpired)?,
-                })
-            }
-        };
-        let limit = i.page.limit.get() as usize;
-        let rows = read
-            .indexing()
-            .runs(&filter, after.as_ref(), limit as u16)?;
-        let has_more = rows.len() == limit && {
-            let last = &rows[limit - 1];
-            !read
-                .indexing()
-                .runs(
-                    &filter,
-                    Some(&RunPosition {
-                        created_at_ms: last.created_at_ms,
-                        id: last.id.clone(),
-                    }),
-                    1,
-                )?
-                .is_empty()
-        };
-        let next = has_more.then(|| {
-            let last = &rows[limit - 1];
-            BoundedText(binding.encode(&format!("{}:{}", last.created_at_ms, last.id.as_str())))
-        });
-        let items = rows.iter().map(status::run_record).collect();
+        let rows = cursor::page(
+            &binding,
+            &i.page,
+            |after, n| {
+                let after = after
+                    .map(|pos| {
+                        let (at, id) = pos.split_once(':').ok_or(StorageError::CursorExpired)?;
+                        Ok::<_, StorageError>(RunPosition {
+                            created_at_ms: at.parse().map_err(|_| StorageError::CursorExpired)?,
+                            id: Id::new(id).map_err(|_| StorageError::CursorExpired)?,
+                        })
+                    })
+                    .transpose()?;
+                read.indexing().runs(&filter, after.as_ref(), n)
+            },
+            |r| format!("{}:{}", r.created_at_ms, r.id.as_str()),
+        )?;
         Ok((
             OperationResult::IndexingRuns {
-                value: Page {
-                    items: BoundedList(items),
-                    next_cursor: next,
-                    has_more,
-                },
+                value: rows.try_into_page(|r| Ok::<_, StorageError>(status::run_record(&r)))?,
             },
             scope_revision,
         ))
