@@ -3,9 +3,9 @@
 //! delete and its repository base directory override, SET-07/08), and the Repositories screen
 //! (registrations, README/summary texts, source control and index removal). The views report
 //! what the user asked for as actions; the controller submits them.
+use crate::indexing_screen::{self, IndexAction, IndexingScreen};
 use crate::memory::RouteMemory;
 use crate::route::Route;
-use crate::shell::indexing::{IndexAction, IndexingUi, index_block};
 use crate::shell::{ListState, ListText, list_body};
 use crate::theme;
 use crate::virtual_list::Scrolls;
@@ -95,7 +95,7 @@ pub enum TextState {
 
 /// The shell's project state: the project and repository lists every screen reads (the
 /// navigation's project selector keeps them loaded), the All projects and Repositories screen,
-/// and indexing. It reads as the All projects and Repositories screen's state.
+/// and the Indexing screen. It reads as the All projects and Repositories screen's state.
 #[derive(Default)]
 pub struct ProjectsUi {
     /// Active and archived projects (the navigation selector and the first two tabs).
@@ -110,7 +110,7 @@ pub struct ProjectsUi {
     pub list_at: u64,
     pub screen: ProjectsScreen,
     /// Index status, runs and the section's indexing sources (DW-23).
-    pub indexing: IndexingUi,
+    pub indexing: IndexingScreen,
 }
 impl Deref for ProjectsUi {
     type Target = ProjectsScreen;
@@ -131,8 +131,8 @@ pub struct ProjectLists<'a> {
     pub repositories: &'a ListState<RepositoryRecord>,
     pub members: &'a ListState<RepositoryRecord>,
     pub members_of: Option<&'a str>,
-    /// Index status, runs and the section's indexing sources.
-    pub indexing: &'a IndexingUi,
+    /// The Indexing screen's state (`None` in that screen's own calls).
+    pub indexing: Option<&'a IndexingScreen>,
 }
 
 /// All projects and Repositories.
@@ -233,7 +233,7 @@ pub(crate) struct RepositoriesView<'a> {
     pub removing: BTreeSet<String>,
     /// Project names by ID.
     pub names: BTreeMap<String, String>,
-    pub indexing: &'a IndexingUi,
+    pub indexing: Option<&'a IndexingScreen>,
 }
 
 impl ProjectsScreen {
@@ -586,12 +586,20 @@ impl ProjectsScreen {
                                         repository_detail(
                                             ui, projects, r, &v.names, enabled, actions,
                                         );
-                                        let indexing = v.indexing;
+                                        let Some(indexing) = v.indexing else {
+                                            return;
+                                        };
                                         let mut index_actions = Vec::new();
                                         if let Some((tone, text)) = &indexing.message {
                                             chip(ui, text.clone(), *tone);
                                         }
-                                        index_block(ui, indexing, r, enabled, &mut index_actions);
+                                        indexing_screen::index_block(
+                                            ui,
+                                            indexing,
+                                            r,
+                                            enabled,
+                                            &mut index_actions,
+                                        );
                                         actions
                                             .extend(index_actions.into_iter().map(Action::Index));
                                     });

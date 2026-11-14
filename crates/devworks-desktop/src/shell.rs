@@ -253,19 +253,21 @@ pub struct Shell {
 }
 
 /// The migrated screens: `screens!(Id => field, ...)` binds each [`ScreenId`] to the `Shell`
-/// field holding that screen.
+/// field holding that screen. Indexing (`projects.indexing`) is bound in the macro itself: every
+/// other screen's context reads it.
 macro_rules! screens {
     ($($id:ident => $($field:ident).+),* $(,)?) => {
         impl Shell {
             fn screens(&self) -> Vec<&dyn DynScreen> {
-                vec![$(&self.$($field).+),*]
+                vec![$(&self.$($field).+,)* &self.projects.indexing]
             }
             fn screens_mut(&mut self) -> Vec<&mut dyn DynScreen> {
-                vec![$(&mut self.$($field).+),*]
+                vec![$(&mut self.$($field).+,)* &mut self.projects.indexing]
             }
             fn screen(&self, id: ScreenId) -> Option<&dyn DynScreen> {
                 match id {
                     $(ScreenId::$id => Some(&self.$($field).+),)*
+                    ScreenId::Indexing => Some(&self.projects.indexing),
                     ScreenId::Legacy => None,
                 }
             }
@@ -275,7 +277,7 @@ macro_rules! screens {
                     return None;
                 }
                 let online = self.online();
-                let cx = Cx {
+                let mut cx = Cx {
                     client: self.client.as_mut(),
                     online,
                     status: &mut self.status,
@@ -289,7 +291,7 @@ macro_rules! screens {
                         repositories: &self.projects.repositories,
                         members: &self.projects.members,
                         members_of: self.projects.members_of.as_deref(),
-                        indexing: &self.projects.indexing,
+                        indexing: None,
                     },
                     catalog: &self.chat.routing.catalog,
                     job_status: &self.jobs.project_status,
@@ -297,7 +299,12 @@ macro_rules! screens {
                     effects: Vec::new(),
                 };
                 match id {
-                    $(ScreenId::$id => Some((&mut self.$($field).+, cx)),)*
+                    $(ScreenId::$id => {
+                        cx.projects.indexing = Some(&self.projects.indexing);
+                        Some((&mut self.$($field).+, cx))
+                    })*
+                    // The Indexing screen's own context does not hold its state.
+                    ScreenId::Indexing => Some((&mut self.projects.indexing, cx)),
                     ScreenId::Legacy => None,
                 }
             }
@@ -583,7 +590,9 @@ impl Shell {
                 Effect::ReviewPurge(p) => self.start_purge_review(p),
                 Effect::OpenGraph(id, name) => self.open_repository_graph(&id, &name),
                 Effect::LoadRouterCatalog => self.load_router_catalog(),
-                Effect::Index(action) => self.index_act(vec![action]),
+                Effect::Index(action) => {
+                    self.with_typed(|s: &mut indexing::IndexingScreen, cx| s.act(cx, vec![action]))
+                }
                 Effect::ConfirmOutcomes => self.confirm_outcomes(),
                 Effect::OpenEmbeddingSetup => self.open_embedding_setup(),
             }
@@ -748,12 +757,6 @@ impl Shell {
                         |b| b.refresh_packages().map(|()| TaskOutput::Refreshed),
                     );
                 }
-            }
-            Route::Indexing => {
-                if self.projects.indexing.sources.is_none() {
-                    self.load_index_sources();
-                }
-                self.index_act(vec![indexing::IndexAction::Runs]);
             }
             Route::Knowledge => {
                 // Scope choices are the projects the user can see.
@@ -1998,9 +2001,6 @@ impl Shell {
             return;
         }
         let Some((slot, reply)) = self.apply_purge(slot, reply) else {
-            return;
-        };
-        let Some((slot, reply)) = self.apply_indexing(slot, reply) else {
             return;
         };
         let Some((slot, reply)) = self.apply_jobs(slot, reply) else {
@@ -4988,6 +4988,7 @@ impl Shell {
                 let mut index_actions = Vec::new();
                 let up = online.is_ok();
                 let indexing = &mut self.projects.indexing;
+                let load_sources = indexing.sources.is_none() && indexing.sources_error.is_none();
                 let mut general = |ui: &mut Ui| {
                     ui.add_space(8.0);
                     indexing::sources_panel(ui, indexing, up, &mut index_actions);
@@ -5008,18 +5009,14 @@ impl Shell {
                 {
                     self.route = Route::Indexing;
                 }
-                if self.projects.indexing.sources.is_none()
-                    && self.projects.indexing.sources_error.is_none()
-                    && online.is_ok()
-                {
-                    self.load_index_sources();
+                if load_sources && online.is_ok() {
+                    index_actions.insert(0, indexing::IndexAction::LoadSources);
                 }
-                self.index_act(index_actions);
+                self.with_typed(|s: &mut indexing::IndexingScreen, cx| s.act(cx, index_actions));
                 let ctx = ui.ctx().clone();
                 self.poll_connections(&ctx);
                 self.poll_mcp(&ctx);
             }
-            Route::Indexing => self.indexing_screen(ui),
             Route::AddOns => {
                 let online = self.online();
                 let mut actions = Vec::new();

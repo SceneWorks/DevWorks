@@ -52,7 +52,12 @@ impl Screen for ProjectsScreen {
             _ => {
                 ctl.load_projects();
                 ctl.load_repositories();
-                if ctl.cx.projects.indexing.sources.is_none() {
+                if ctl
+                    .cx
+                    .projects
+                    .indexing
+                    .is_some_and(|i| i.sources.is_none())
+                {
                     ctl.index(IndexAction::LoadSources);
                 }
             }

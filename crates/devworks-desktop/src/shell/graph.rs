@@ -18,9 +18,12 @@ use serde_json::json;
 impl Shell {
     pub fn open_repository_graph(&mut self, repository: &str, name: &str) {
         self.route = Route::Repositories;
-        self.index_act(vec![super::indexing::IndexAction::Status(
-            repository.into(),
-        )]);
+        self.with_typed(|s: &mut super::indexing::IndexingScreen, cx| {
+            s.act(
+                cx,
+                vec![super::indexing::IndexAction::Status(repository.into())],
+            )
+        });
         self.with_typed(|graph: &mut GraphScreen, cx| {
             GraphCtl { graph, cx }.open(repository, name)
         });
@@ -307,8 +310,10 @@ impl GraphCtl<'_, '_> {
         None
     }
     fn graph_screen(&mut self, ui: &mut Ui) {
-        if let Some(super::indexing::StatusState::Ready(status)) =
-            self.projects.indexing.status.get(&self.graph.repository)
+        if let Some(super::indexing::StatusState::Ready(status)) = self
+            .projects
+            .indexing
+            .and_then(|indexing| indexing.status.get(&self.graph.repository))
         {
             let mut choices: Vec<_> = status
                 .current_view_ids

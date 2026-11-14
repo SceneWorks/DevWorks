@@ -331,20 +331,6 @@ pub enum Slot {
     RepositoriesList,
     /// The repositories of one project.
     ProjectRepositories(String),
-    /// A repository's index status (repository ID).
-    IndexStatus(String),
-    /// Index runs (repository ID, or `*` for the selected scope).
-    IndexRuns(String),
-    /// An index, rebuild or overlay command of one repository (repository ID).
-    IndexCommand(String),
-    /// A run cancellation (run ID).
-    IndexCancel(String),
-    /// An overlay retirement (overlay ID).
-    IndexRetire(String),
-    /// The section configuration save.
-    IndexSourcesSave,
-    /// A discovery scan.
-    IndexDiscover,
     KnowledgeList(u64),
     /// One Knowledge entry with its evidence and history (claim ID).
     KnowledgeRead(String),
@@ -452,6 +438,8 @@ pub enum Slot {
     #[serde(untagged)]
     Projects(crate::projects_ops::ProjectsSlot),
     #[serde(untagged)]
+    Indexing(crate::indexing_ops::IndexingSlot),
+    #[serde(untagged)]
     Watch(crate::watch_ops::WatchSlot),
 }
 impl Slot {
@@ -469,6 +457,7 @@ impl Slot {
             Self::Resources(_) => ScreenId::Resources,
             Self::Browser(_) => ScreenId::Browser,
             Self::Projects(_) => ScreenId::Projects,
+            Self::Indexing(_) => ScreenId::Indexing,
             Self::Watch(_) => ScreenId::Watchers,
             _ => ScreenId::Legacy,
         }

@@ -35,6 +35,7 @@ pub enum ScreenId {
     Browser,
     /// All projects and Repositories.
     Projects,
+    Indexing,
     Watchers,
 }
 impl ScreenId {
@@ -52,6 +53,7 @@ impl ScreenId {
             Self::Resources => "resources",
             Self::Browser => "browser",
             Self::Projects => "projects",
+            Self::Indexing => "indexing",
             Self::Watchers => "watchers",
         }
     }

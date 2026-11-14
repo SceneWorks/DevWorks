@@ -50,6 +50,8 @@ pub mod graph_screen;
 pub mod help_ops;
 pub mod help_screen;
 pub mod host;
+pub mod indexing_ops;
+pub mod indexing_screen;
 pub mod instructions_ops;
 pub mod instructions_screen;
 pub mod knowledge_screen;
