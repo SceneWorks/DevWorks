@@ -137,6 +137,57 @@ class Reachability(unittest.TestCase):
         self.assertEqual(orphan_names(root), ['c/blk/d6.rs', 'c/d2.rs', 'c/d3.rs', 'c/d4.rs', 'c/d5.rs',
                                               'c/disabled/case.rs'])
 
+    def test_cfg_attr_path_applies_when_predicate_is_true_for_test_targets(self):
+        root = crate(self.root, {
+            'root.rs': ('#[cfg_attr(test, path = "cases/mod.rs")]\nmod suite;\n'
+                        '#[cfg_attr(any(windows, test), path = "any/mod.rs", allow(dead_code))]\nmod anyof;\n'
+                        '#[path = "both/a.rs"]\n#[cfg_attr(test, allow(dead_code))]\nmod both;\n'
+                        '#[cfg_attr(test, path = "first/a.rs")]\n#[path = "second/b.rs"]\nmod two;\n'),
+            'cases/mod.rs': 'mod leaf;\n', 'cases/leaf.rs': '',
+            'any/mod.rs': '', 'both/a.rs': '', 'first/a.rs': '', 'second/b.rs': '',
+        })
+        self.assertEqual(orphan_names(root), ['second/b.rs'])
+
+    def test_cfg_attr_path_with_false_predicate_does_not_establish_reachability(self):
+        root = crate(self.root, {
+            'root.rs': ('#[cfg_attr(not(test), path = "off/mod.rs")]\nmod suite;\n'
+                        '#[cfg_attr(any(), path = "never/mod.rs")]\nmod other;\n'
+                        '#[cfg_attr(not(test), path = "off2/mod.rs")]\n#[cfg_attr(test, path = "on/mod.rs")]\nmod mixed;\n'),
+            'suite.rs': '', 'other/mod.rs': '', 'off/mod.rs': '', 'never/mod.rs': '',
+            'off2/mod.rs': '', 'on/mod.rs': '',
+        })
+        self.assertEqual(orphan_names(root), ['never/mod.rs', 'off/mod.rs', 'off2/mod.rs'])
+
+    def test_cfg_attr_with_unevaluable_predicate_never_rejects_valid_code(self):
+        root = crate(self.root, {
+            'root.rs': ('#[cfg_attr(windows, path = "win/mod.rs")]\nmod only_path;\n'
+                        '#[cfg_attr(feature = "x", path = "feat.rs")]\nmod both;\n'
+                        '#[cfg_attr(windows, path = "missing.rs")]\nmod default_only;\n'),
+            'win/mod.rs': '', 'both.rs': '', 'feat.rs': '', 'default_only.rs': '',
+        })
+        self.assertEqual(orphan_names(root), [])
+        (root / 'tests' / 'default_only.rs').unlink()
+        with self.assertRaises(FileNotFoundError):
+            reach.orphans(root)
+
+    def test_unevaluable_cfg_attr_stays_optional_before_a_definite_path_and_on_inline_modules(self):
+        root = crate(self.root, {
+            'root.rs': ('#[cfg_attr(windows, path = "missing.rs")]\n#[path = "real.rs"]\nmod suite;\n'
+                        '#[cfg_attr(windows, path = "win")]\nmod group { mod child; #[path = "c2.rs"] mod c2; }\n'),
+            'real.rs': '', 'group/child.rs': '', 'group/c2.rs': '',
+        })
+        self.assertEqual(orphan_names(root), [])
+        (root / 'tests' / 'real.rs').unlink()
+        with self.assertRaises(FileNotFoundError):
+            reach.orphans(root)
+
+    def test_cfg_attr_path_on_inline_module_sets_its_directory_when_true_for_test(self):
+        root = crate(self.root, {
+            'root.rs': '#[cfg_attr(test, path = "renamed")]\nmod group { mod child; }\n',
+            'renamed/child.rs': '', 'group/child.rs': '',
+        })
+        self.assertEqual(orphan_names(root), ['group/child.rs'])
+
 
 if __name__ == '__main__':
     unittest.main()
