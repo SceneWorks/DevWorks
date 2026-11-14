@@ -14233,11 +14233,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 8,
+              "inputSchema": "domain-request.r8.schema.json",
+              "resultSchema": "operation-result.r8.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r8.schema.json",
+              "completionSchema": "operation-completion.r8.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "External",
-          "semanticRules": "Scoped project tooling only; changed lockfiles/manifest bound to operation and exposed as work evidence.",
+          "semanticRules": "Scoped project tooling only; changed lockfiles/manifest bound to operation and exposed as work evidence. The install runs with package lifecycle scripts disabled. Schema revision 8: allowScripts true runs them; the field is part of the request digest, and a non-human caller needs an approval of the exact request (or a reviewed native grant under Project scope).",
           "familyRules": "Current Full/project/qualified confined profile. Full ambient user access is not a sandbox. Owned trees, bounded output and uncertain effects.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

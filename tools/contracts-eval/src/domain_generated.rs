@@ -22642,6 +22642,13 @@ pub enum DomainCommand {
         expected_revision: Revision,
         manifest: ArtifactRef,
         profile: ToolProfile,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 8))]
+        allow_scripts: Option<bool>,
     },
     #[serde(rename = "process.request_system_install")]
     ProcessRequestSystemInstall {
@@ -24726,11 +24733,13 @@ impl Check for DomainCommand {
                 expected_revision,
                 manifest,
                 profile,
+                allow_scripts,
             } => {
                 repository_id.check()?;
                 expected_revision.check()?;
                 manifest.check()?;
                 profile.check()?;
+                allow_scripts.check()?;
             }
             Self::ProcessRequestSystemInstall {
                 package_spec,
@@ -25663,6 +25672,11 @@ impl Revisioned for DomainCommand {
             }
             Self::DesktopInput { action, .. } => {
                 action.retain_revision(revision);
+            }
+            Self::ProcessInstallProjectDependencies { allow_scripts, .. } => {
+                if revision < 8 {
+                    *allow_scripts = None;
+                }
             }
             Self::ContainersCreate { spec, .. } => {
                 spec.retain_revision(revision);
