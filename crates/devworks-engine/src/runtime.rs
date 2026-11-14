@@ -15,7 +15,7 @@ use crate::notifications::OsNotificationSupervisor;
 use crate::package_host::{HostConfig, LaunchPorts, PackageHost};
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
-use crate::runs::{ActivationLauncher, RunGate, RunSupervisor};
+use crate::runs::{ActivationLauncher, RunGate, RunSettings, RunSupervisor};
 use crate::workers::{DrainAt, Loop, StopAt, Workers};
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, Gateway, QueryOutcome};
@@ -492,31 +492,58 @@ pub struct Runtime {
     usage_drain: Arc<Mutex<Option<Result<crate::usage::UsageDrain, StorageError>>>>,
 }
 
-/// Boots the runtime (see the crate documentation, "Boot sequence"):
-///
-/// 1. composes the dispatcher with the required receipt reply consumer and the caller's
-///    consumers (nothing is claimed yet);
-/// 2. recovers the queue and operation journal: interrupted operations are classified and
-///    claims of earlier boots requeued or held ([`Dispatcher::recover`]);
-/// 3. recovers artifact staging and managed files ([`ArtifactService::recover`]);
-/// 4. registers the machine resources and recovers owned processes and resource leases of
-///    earlier boots ([`Housekeeper::boot`]);
-/// 5. recovers run roots ([`RunSupervisor::boot`]): activations of earlier boots are recorded
-///    interrupted and their roots held for manual Continue;
-/// 6. applies the keep-awake setting;
-/// 7. records what recovery established as a `boot` diagnostic;
-/// 8. starts delivery ([`Dispatcher::run`]);
-/// 9. starts artifact collection (a pass now, then periodically and after every applied
-///    `artifacts.delete`), resource housekeeping ticks, run supervision ticks and the
-///    diagnostics monitor (retention, store inspection, integrity check and write-owner probe
-///    now, then every [`RuntimeConfig::diagnostics_interval`]), and registers the boot report,
-///    collection passes and dispatcher as diagnostics health sources;
-/// 10. returns the handle through which commands are admitted.
-///
-/// A boot that stops records why as a failed `boot` diagnostic when the store still accepts it.
-///
-/// Must be awaited on a Tokio runtime with timers; the tasks it starts run there.
-pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
+/// Every engine-owned service, constructed and wired by [`build`] before any recovery step.
+/// [`boot`] runs recovery and then starts the background loops over this finished set.
+struct Engine {
+    store: Arc<dyn ApplicationStore>,
+    clock: Arc<dyn Clock>,
+    ids: Arc<dyn IdSource>,
+    authority: Arc<dyn AuthorityPort>,
+    artifacts: Arc<ArtifactService>,
+    resources: Arc<ResourceService>,
+    diagnostics: Arc<DiagnosticService>,
+    config: RuntimeConfig,
+    use_cases: UseCases,
+    usage: Arc<crate::usage::UsageRuntime>,
+    dispatcher: Dispatcher,
+    process_tools: Option<Arc<devworks_core::services::process::tools::ProcessToolService>>,
+    containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
+    git: Option<Arc<devworks_core::services::git::GitService>>,
+    browser: Option<Arc<BrowserService>>,
+    desktop: Option<Arc<devworks_core::services::desktop::DesktopService>>,
+    watchers: Option<Arc<crate::watch::WatchSupervisor>>,
+    prices: Option<Arc<crate::prices::PriceSupervisor>>,
+    price_service: Arc<devworks_core::services::prices::PriceService>,
+    purge_worker: Option<Arc<devworks_core::services::projects::purge::PurgeWorker>>,
+    conventions: Arc<devworks_core::services::conventions::ConventionService>,
+    schemas: Option<Arc<devworks_core::services::schemas::SchemaService>>,
+    help: Option<Arc<devworks_core::services::help::HelpService>>,
+    embedding_probes: Option<Arc<crate::conventions::probes::ProbeRuntime>>,
+    index_supervisor: Option<Arc<IndexSupervisor>>,
+    jobs: Arc<JobService>,
+    instructions: Option<Arc<devworks_core::services::instructions::InstructionService>>,
+    approvals: Arc<ApprovalService>,
+    providers: Option<Arc<crate::providers::driver::NativeProviders>>,
+    housekeeper: Arc<Housekeeper>,
+    run_supervisor: Arc<RunSupervisor>,
+    keep_awake: Arc<KeepAwake>,
+    collector: Arc<Collector>,
+    browser_supervision: Arc<BrowserSupervision>,
+    monitor: Arc<Monitor>,
+    notifications: Option<Arc<OsNotificationSupervisor>>,
+    evals: Arc<EvalSupervisor>,
+    admission: Arc<std::sync::RwLock<bool>>,
+    admitter: Arc<Admitter>,
+    scheduler: Arc<Scheduler>,
+    resumes: Arc<ResumeDispatcher>,
+    /// The package host, abandoned if boot stops before the Runtime owns it.
+    package_guard: PackageBootGuard,
+}
+
+/// Builds every engine-owned service from the composition. Nothing here recovers, deletes or
+/// starts anything: the only effect is the Git qualification probe, which decides whether the
+/// Git service (and everything composed with it) exists. Errors are recorded by [`boot`].
+async fn build(composition: Composition) -> Result<Engine, BootError> {
     let Composition {
         store,
         clock,
@@ -536,13 +563,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         indexing,
         config,
     } = composition;
-    // Every error that stops boot passes through this, so each leaves a failed boot diagnostic.
-    // The diagnostics service is part of the composition, so no step runs without one; a store
-    // that cannot take the record is ignored by `record_boot_failure`.
-    let failed = |e: BootError| {
-        diag::record_boot_failure(&diagnostics, &e);
-        e
-    };
     let usage = crate::usage::UsageRuntime::with_process_host(
         store.clone(),
         runs.service.clone(),
@@ -554,8 +574,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     ));
     for suite in &config.automatic_eval_suites {
         devworks_core::protocol::Check::check(suite)
-            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e)))
-            .map_err(failed)?;
+            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e)))?;
     }
     // The one process owner: every owned tree (browsers included) is launched through it. It is
     // built first so the browser service can be composed with it; its recovery still runs at
@@ -573,8 +592,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 composition.validator.clone(),
                 artifacts.clone(),
             )
-            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))
-            .map_err(failed)?;
+            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))?;
         consumers.push(crate::mcp::consumer(service));
     }
     // Agents' package tool calls run as durable operations of their own consumer; the host it
@@ -809,20 +827,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         )
     });
     let use_cases = if let Some(service) = &schemas {
-        // Namespace/reference-only cleanup precedes password intake and command exposure.
-        match service.reconcile_credential_orphans() {
-            Ok(_)
-            | Err(
-                devworks_core::ports::secrets::SecretError::Unavailable(_)
-                | devworks_core::ports::secrets::SecretError::Denied,
-            ) => {}
-            Err(_) => {
-                return Err(failed(BootError::Composition(StorageError::unavailable(
-                    Unavailable::Io,
-                    "schema credential reference reconciliation failed",
-                ))));
-            }
-        }
         consumers.push(crate::schemas::consumer(store.clone(), service.clone()));
         use_cases.with_schemas(service.clone())
     } else {
@@ -854,7 +858,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             ),
         );
         if !service.install_selection_indexer(Arc::downgrade(&conventions.indexing())) {
-            return Err(failed(BootError::Composition(StorageError::ScopeDenied)));
+            return Err(BootError::Composition(StorageError::ScopeDenied));
         }
         Some(service)
     } else {
@@ -886,21 +890,13 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     consumers.insert(0, replies);
     let run_owner = config.dispatcher.owner.clone();
     diagnostics.set_consumers(consumers.iter().map(|c| c.name.clone()).collect());
-    let dispatcher = Dispatcher::new(store.clone(), clock.clone(), consumers, config.dispatcher)
-        .map_err(BootError::Composition)
-        .map_err(failed)?;
-
-    let queue = dispatcher
-        .recover()
-        .await
-        .map_err(BootError::Queue)
-        .map_err(failed)?;
-    let (svc, st) = (artifacts.clone(), store.clone());
-    let recovered = tokio::task::spawn_blocking(move || svc.recover(&*st))
-        .await
-        .unwrap_or_else(|_| Err(panicked("artifact recovery")))
-        .map_err(BootError::Artifacts)
-        .map_err(failed)?;
+    let dispatcher = Dispatcher::new(
+        store.clone(),
+        clock.clone(),
+        consumers,
+        config.dispatcher.clone(),
+    )
+    .map_err(BootError::Composition)?;
     // Indexing runs its Git helpers through this same process owner.
     let index_supervisor = indexing.map(|ix| {
         let env = Arc::new(devworks_core::services::indexing::IndexEnv {
@@ -1016,10 +1012,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 .with_skills(instructions.clone()),
             ));
             let connections = use_cases.connection_service().ok_or_else(|| {
-                failed(BootError::Composition(StorageError::unavailable(
+                BootError::Composition(StorageError::unavailable(
                     Unavailable::UnsupportedRuntime,
                     "native provider composition requires current ConnectionService",
-                )))
+                ))
             })?;
             let schemas = Arc::new(crate::providers::schemas::RegisteredSchemas::new(
                 store.clone(),
@@ -1053,8 +1049,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 router,
                 tokio::runtime::Handle::current(),
             )))
-            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))
-            .map_err(failed)?;
+            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e.into())))?;
     }
     if let (Some(provider), Some(service), Some(worker)) =
         (&providers, &embedding_spaces, &embedding_probes)
@@ -1070,7 +1065,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .indexing()
             .set_embeddings(Some(Arc::new(executor.clone())));
         if !worker.install(executor) {
-            return Err(failed(BootError::Composition(StorageError::ScopeDenied)));
+            return Err(BootError::Composition(StorageError::ScopeDenied));
         }
         service.enable_native_qualification();
     }
@@ -1078,13 +1073,267 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         Arc::new(JobLifecycle(jobs.clone())),
         runs.hooks.clone(),
     ]));
-    let booted_at_ms = clock.now_ms().get();
     let housekeeper = Arc::new(Housekeeper::new(
         store.clone(),
         clock.clone(),
         resources.clone(),
         supervisor.clone(),
     ));
+    // A root stop never outlasts the application's one shutdown bound.
+    let run_supervisor = RunSupervisor::configured(
+        store.clone(),
+        clock.clone(),
+        runs.service.clone(),
+        supervisor.clone(),
+        runs.launcher.clone(),
+        hooks,
+        run_owner,
+        RunSettings {
+            stop_grace: config.shutdown_grace.min(config.shutdown_bound),
+            stop_bound: config.shutdown_bound,
+            containers: containers.clone(),
+            dispatcher: Some(dispatcher.wakeup()),
+        },
+    );
+    let keep_awake = Arc::new(KeepAwake::new(power));
+    let (status, _) = watch::channel(None);
+    let collector = Arc::new(Collector {
+        trigger: Notify::new(),
+        stopping: AtomicBool::new(false),
+        status,
+    });
+    let browser_supervision = Arc::new(BrowserSupervision::default());
+    let monitor = Arc::new(Monitor::default());
+    let notifications = config
+        .native_notifications
+        .clone()
+        .map(|port| OsNotificationSupervisor::new(store.clone(), ids.clone(), clock.clone(), port));
+    let evals = EvalSupervisor::new(
+        store.clone(),
+        eval_service,
+        config.automatic_eval_suites.clone(),
+    );
+    let admission = Arc::new(std::sync::RwLock::new(false));
+    let admitter = Arc::new(Admitter {
+        store: store.clone(),
+        ids: ids.clone(),
+        authority: authority.clone(),
+        use_cases: use_cases.clone(),
+        admission: admission.clone(),
+        receive_waiters: Arc::new(Mutex::new(BTreeMap::new())),
+        next_receive_waiter: AtomicU64::new(0),
+        dispatcher: dispatcher.clone(),
+        runs: run_supervisor.clone(),
+        usage: usage.clone(),
+        collector: collector.clone(),
+        diagnostics: diagnostics.clone(),
+        keep_awake: keep_awake.clone(),
+        scheduler: OnceLock::new(),
+        evals: evals.clone(),
+        resumes: OnceLock::new(),
+        prices: prices.clone(),
+        notifications: notifications.clone(),
+        indexing: index_supervisor.clone(),
+        changes: watch::channel(0).0,
+        handle: tokio::runtime::Handle::current(),
+    });
+    let scheduler = Scheduler::with_stop(
+        store.clone(),
+        jobs.clone(),
+        admitter.clone(),
+        runs.inference.clone(),
+        supervisor.clone(),
+        config.shutdown_grace.min(config.shutdown_bound),
+        config.shutdown_bound,
+    );
+    let _ = admitter.scheduler.set(Arc::downgrade(&scheduler));
+    let settled: Arc<dyn Fn(&Id) + Send + Sync> = {
+        let (store, artifacts) = (store.clone(), artifacts.clone());
+        Arc::new(move |approval| {
+            crate::tool_turn::publish_held_update(store.as_ref(), &artifacts, approval);
+        })
+    };
+    let resumes =
+        ResumeDispatcher::with_settled(store.clone(), approvals.clone(), admitter.clone(), settled);
+    let _ = admitter.resumes.set(Arc::downgrade(&resumes));
+    // Built last: from here every early return abandons the host (breaks the service<->host
+    // cycle that would keep the store and its workspace lock alive, and kills any started
+    // helper) until the completed Runtime owns it.
+    let mut package_guard = PackageBootGuard(None);
+    if let Some(p) = packages {
+        let host = PackageHost::new(
+            store.clone(),
+            p.service.clone(),
+            supervisor,
+            ids.clone(),
+            p.launch,
+            p.config,
+            p.runtimes,
+            p.index,
+        );
+        p.service.set_activity(host.clone());
+        let _ = package_tools.set(Arc::downgrade(&host));
+        // Brokered application calls of packages run through this command path, as the
+        // principal that invoked the package.
+        let gateway: Arc<dyn crate::package_host::broker::GatewayCalls> = admitter.clone();
+        host.attach_broker(crate::package_host::broker::BrokerPorts {
+            gateway: Arc::downgrade(&gateway),
+            artifacts: artifacts.clone(),
+        });
+        package_guard.0 = Some(host);
+    }
+    Ok(Engine {
+        store,
+        clock,
+        ids,
+        authority,
+        artifacts,
+        resources,
+        diagnostics,
+        config,
+        use_cases,
+        usage,
+        dispatcher,
+        process_tools,
+        containers,
+        git,
+        browser,
+        desktop,
+        watchers,
+        prices,
+        price_service,
+        purge_worker,
+        conventions,
+        schemas,
+        help,
+        embedding_probes,
+        index_supervisor,
+        jobs,
+        instructions,
+        approvals,
+        providers,
+        housekeeper,
+        run_supervisor,
+        keep_awake,
+        collector,
+        browser_supervision,
+        monitor,
+        notifications,
+        evals,
+        admission,
+        admitter,
+        scheduler,
+        resumes,
+        package_guard,
+    })
+}
+
+/// Boots the runtime (see the crate documentation, "Boot sequence"):
+///
+/// 1. builds every engine-owned service ([`build`]), including the dispatcher composed with the
+///    required receipt reply consumer and the caller's consumers (nothing is claimed yet);
+/// 2. recovers the queue and operation journal: interrupted operations are classified and
+///    claims of earlier boots requeued or held ([`Dispatcher::recover`]);
+/// 3. recovers artifact staging and managed files ([`ArtifactService::recover`]);
+/// 4. registers the machine resources and recovers owned processes and resource leases of
+///    earlier boots ([`Housekeeper::boot`]);
+/// 5. recovers run roots ([`RunSupervisor::boot`]): activations of earlier boots are recorded
+///    interrupted and their roots held for manual Continue;
+/// 6. applies the keep-awake setting;
+/// 7. records what recovery established as a `boot` diagnostic;
+/// 8. starts delivery ([`Dispatcher::run`]);
+/// 9. starts artifact collection (a pass now, then periodically and after every applied
+///    `artifacts.delete`), resource housekeeping ticks, run supervision ticks and the
+///    diagnostics monitor (retention, store inspection, integrity check and write-owner probe
+///    now, then every [`RuntimeConfig::diagnostics_interval`]), and registers the boot report,
+///    collection passes and dispatcher as diagnostics health sources;
+/// 10. returns the handle through which commands are admitted.
+///
+/// A boot that stops records why as a failed `boot` diagnostic when the store still accepts it.
+///
+/// Must be awaited on a Tokio runtime with timers; the tasks it starts run there.
+pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
+    // Every error that stops boot passes through this, so each leaves a failed boot diagnostic.
+    // The diagnostics service is part of the composition, so no step runs without one; a store
+    // that cannot take the record is ignored by `record_boot_failure`.
+    let diagnostics = composition.diagnostics.clone();
+    let failed = |e: BootError| {
+        diag::record_boot_failure(&diagnostics, &e);
+        e
+    };
+    // Every engine-owned service exists before the first recovery step below.
+    let Engine {
+        store,
+        clock,
+        ids,
+        authority,
+        artifacts,
+        resources,
+        diagnostics,
+        config,
+        use_cases,
+        usage,
+        dispatcher,
+        process_tools,
+        containers,
+        git,
+        browser,
+        desktop,
+        watchers,
+        prices,
+        price_service,
+        purge_worker,
+        conventions,
+        schemas,
+        help,
+        embedding_probes,
+        index_supervisor,
+        jobs,
+        instructions,
+        approvals,
+        providers,
+        housekeeper,
+        run_supervisor,
+        keep_awake,
+        collector,
+        browser_supervision,
+        monitor,
+        notifications,
+        evals,
+        admission,
+        admitter,
+        scheduler,
+        resumes,
+        mut package_guard,
+    } = build(composition).await.map_err(failed)?;
+    if let Some(service) = &schemas {
+        // Namespace/reference-only cleanup precedes password intake and command exposure.
+        match service.reconcile_credential_orphans() {
+            Ok(_)
+            | Err(
+                devworks_core::ports::secrets::SecretError::Unavailable(_)
+                | devworks_core::ports::secrets::SecretError::Denied,
+            ) => {}
+            Err(_) => {
+                return Err(failed(BootError::Composition(StorageError::unavailable(
+                    Unavailable::Io,
+                    "schema credential reference reconciliation failed",
+                ))));
+            }
+        }
+    }
+    let queue = dispatcher
+        .recover()
+        .await
+        .map_err(BootError::Queue)
+        .map_err(failed)?;
+    let (svc, st) = (artifacts.clone(), store.clone());
+    let recovered = tokio::task::spawn_blocking(move || svc.recover(&*st))
+        .await
+        .unwrap_or_else(|_| Err(panicked("artifact recovery")))
+        .map_err(BootError::Artifacts)
+        .map_err(failed)?;
+    let booted_at_ms = clock.now_ms().get();
     let recovered_resources = housekeeper
         .boot(config.machine_resources.clone())
         .await
@@ -1128,21 +1377,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         }
         None => None,
     };
-    let mut run_supervisor = RunSupervisor::new(
-        store.clone(),
-        clock.clone(),
-        runs.service.clone(),
-        supervisor.clone(),
-        runs.launcher.clone(),
-        hooks,
-        run_owner,
-    );
-    // A root stop never outlasts the application's one shutdown bound.
-    if let Some(s) = Arc::get_mut(&mut run_supervisor) {
-        s.stop_grace = config.shutdown_grace.min(config.shutdown_bound);
-        s.stop_bound = config.shutdown_bound;
-        s.with_containers(containers.clone());
-    }
     let recovered_runs = run_supervisor
         .boot()
         .await
@@ -1151,41 +1385,21 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     // Packages (after owned processes are recovered, before any command is admitted): remove
     // interrupted publications and unreferenced install directories, then start every enabled,
     // available package's helper against the committed registry.
-    let mut package_guard = PackageBootGuard(None);
-    let package_host = match packages {
-        Some(p) => {
-            let host = PackageHost::new(
-                store.clone(),
-                p.service.clone(),
-                supervisor.clone(),
-                ids.clone(),
-                p.launch,
-                p.config,
-                p.runtimes,
-                p.index,
-            );
-            p.service.set_activity(host.clone());
-            let _ = package_tools.set(Arc::downgrade(&host));
-            // From here every early return abandons the host (breaks the service<->host cycle
-            // that would keep the store and its workspace lock alive, and kills any started
-            // helper) until the completed Runtime owns it.
-            package_guard.0 = Some(host.clone());
-            let booting = host.clone();
-            tokio::task::spawn_blocking(move || booting.boot())
-                .await
-                .unwrap_or_else(|_| Err(panicked("package boot")))
-                .map_err(BootError::Packages)
-                .map_err(failed)?;
-            let reviews = p.service.clone();
-            tokio::task::spawn_blocking(move || reviews.sync_pending_reviews())
-                .await
-                .unwrap_or_else(|_| Err(panicked("package review recovery")))
-                .map_err(BootError::Packages)
-                .map_err(failed)?;
-            Some(host)
-        }
-        None => None,
-    };
+    let package_host = package_guard.0.clone();
+    if let Some(host) = &package_host {
+        let booting = host.clone();
+        tokio::task::spawn_blocking(move || booting.boot())
+            .await
+            .unwrap_or_else(|_| Err(panicked("package boot")))
+            .map_err(BootError::Packages)
+            .map_err(failed)?;
+        let reviews = host.service().clone();
+        tokio::task::spawn_blocking(move || reviews.sync_pending_reviews())
+            .await
+            .unwrap_or_else(|_| Err(panicked("package review recovery")))
+            .map_err(BootError::Packages)
+            .map_err(failed)?;
+    }
     // The last recovery steps that can stop boot run before any task starts, so a failure here
     // leaves nothing delivering or holding the store.
     if let Some(worker) = &purge_worker {
@@ -1205,7 +1419,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     .map_err(BootError::Composition)
     .map_err(failed)?;
     // Applying may start an OS helper (and wait briefly to see it hold), so off the async thread.
-    let keep_awake = Arc::new(KeepAwake::new(power));
     let (ka, st) = (keep_awake.clone(), store.clone());
     let applied = tokio::task::spawn_blocking(move || {
         devworks_core::ports::storage::read_snapshot(&*st, &Default::default(), |s| {
@@ -1253,12 +1466,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     if let Some(h) = &package_host {
         h.start();
     }
-    let (status, _) = watch::channel(None);
-    let collector = Arc::new(Collector {
-        trigger: Notify::new(),
-        stopping: AtomicBool::new(false),
-        status,
-    });
     let stop = collector.clone();
     workers.start(
         StopAt::Work,
@@ -1290,7 +1497,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .on_stop(move || stop.stop()),
         ),
     );
-    run_supervisor.set_dispatcher_wakeup(dispatcher.wakeup());
     let stop = run_supervisor.clone();
     workers.start(
         StopAt::Work,
@@ -1327,7 +1533,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         collector.status.subscribe(),
         dispatcher.clone(),
     );
-    let browser_supervision = Arc::new(BrowserSupervision::default());
     // Unknown external effects remain held, never retried. Re-observe them while the app is
     // running as well as at boot; an owner can establish a terminal fact without a restart.
     if process_tools.is_some() || containers.is_some() {
@@ -1438,7 +1643,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             ),
         );
     }
-    let monitor = Arc::new(Monitor::default());
     let (watcher, svc, stop, every) = (
         monitor.clone(),
         diagnostics.clone(),
@@ -1474,9 +1678,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             ),
         );
     }
-    let notifications = config
-        .native_notifications
-        .map(|port| OsNotificationSupervisor::new(store.clone(), ids.clone(), clock.clone(), port));
     if let Some(worker) = &notifications {
         let (stop, drain) = (worker.clone(), worker.clone());
         workers.start(
@@ -1495,7 +1696,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         );
     }
     // Recovery has settled prior-boot activations before the first evaluation sweep.
-    let evals = EvalSupervisor::new(store.clone(), eval_service, config.automatic_eval_suites);
     let (stop, drain) = (evals.clone(), evals.clone());
     workers.start(
         StopAt::Admission,
@@ -1511,39 +1711,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 }),
         ),
     );
-    let admission = Arc::new(std::sync::RwLock::new(false));
-    let admitter = Arc::new(Admitter {
-        store: store.clone(),
-        ids: ids.clone(),
-        authority: authority.clone(),
-        use_cases: use_cases.clone(),
-        admission: admission.clone(),
-        receive_waiters: Arc::new(Mutex::new(BTreeMap::new())),
-        next_receive_waiter: AtomicU64::new(0),
-        dispatcher: dispatcher.clone(),
-        runs: run_supervisor.clone(),
-        usage: usage.clone(),
-        collector: collector.clone(),
-        diagnostics: diagnostics.clone(),
-        keep_awake: keep_awake.clone(),
-        scheduler: OnceLock::new(),
-        evals: evals.clone(),
-        resumes: OnceLock::new(),
-        prices: prices.clone(),
-        notifications: notifications.clone(),
-        indexing: index_supervisor.clone(),
-        changes: watch::channel(0).0,
-        handle: tokio::runtime::Handle::current(),
-    });
-    // Brokered application calls of packages run through this command path, as the principal
-    // that invoked the package.
-    if let Some(host) = &package_host {
-        let gateway: Arc<dyn crate::package_host::broker::GatewayCalls> = admitter.clone();
-        host.attach_broker(crate::package_host::broker::BrokerPorts {
-            gateway: Arc::downgrade(&gateway),
-            artifacts: artifacts.clone(),
-        });
-    }
     if let Some(service) = &help {
         let (service, stop) = (service.clone(), service.clone());
         let command = admitter.clone();
@@ -1630,18 +1797,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             ),
         );
     }
-    let mut scheduler = Scheduler::new(
-        store.clone(),
-        jobs.clone(),
-        admitter.clone(),
-        runs.inference.clone(),
-        supervisor,
-    );
-    if let Some(s) = Arc::get_mut(&mut scheduler) {
-        s.stop_grace = config.shutdown_grace.min(config.shutdown_bound);
-        s.stop_bound = config.shutdown_bound;
-    }
-    let _ = admitter.scheduler.set(Arc::downgrade(&scheduler));
     let (stop, drain) = (scheduler.clone(), scheduler.clone());
     workers.start(
         StopAt::Schedule,
@@ -1661,14 +1816,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     );
     // All recovery precedes saved-operation readmission. The core supplies the original
     // identity and immutable reviewed frame; the existing gateway supplies fresh authority.
-    let resumes = ResumeDispatcher::new(store.clone(), approvals.clone(), admitter.clone());
-    {
-        let (store, artifacts) = (store.clone(), artifacts.clone());
-        resumes.on_settled(Arc::new(move |approval| {
-            crate::tool_turn::publish_held_update(store.as_ref(), &artifacts, approval);
-        }));
-    }
-    let _ = admitter.resumes.set(Arc::downgrade(&resumes));
     let (stop, drain) = (resumes.clone(), resumes.clone());
     workers.start(
         StopAt::Admission,

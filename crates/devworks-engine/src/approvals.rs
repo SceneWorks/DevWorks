@@ -56,6 +56,23 @@ impl ResumeDispatcher {
         service: Arc<ApprovalService>,
         admission: Arc<dyn ResumeAdmission>,
     ) -> Arc<Self> {
+        Self::build(store, service, admission, OnceLock::new())
+    }
+    /// [`Self::new`] with what runs after each settled readmission.
+    pub fn with_settled(
+        store: Arc<dyn ApplicationStore>,
+        service: Arc<ApprovalService>,
+        admission: Arc<dyn ResumeAdmission>,
+        settled: Settled,
+    ) -> Arc<Self> {
+        Self::build(store, service, admission, OnceLock::from(settled))
+    }
+    fn build(
+        store: Arc<dyn ApplicationStore>,
+        service: Arc<ApprovalService>,
+        admission: Arc<dyn ResumeAdmission>,
+        settled: OnceLock<Settled>,
+    ) -> Arc<Self> {
         let (status, _) = watch::channel(None);
         Arc::new(Self {
             store,
@@ -67,7 +84,7 @@ impl ResumeDispatcher {
             wake: Notify::new(),
             ticking: tokio::sync::Mutex::new(()),
             status,
-            settled: OnceLock::new(),
+            settled,
         })
     }
     /// Sets what runs after each settled readmission (at most once).
