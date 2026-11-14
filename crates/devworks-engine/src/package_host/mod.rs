@@ -1087,25 +1087,28 @@ impl PackageHost {
         if inst.accounted.swap(true, Ordering::SeqCst) {
             return;
         }
-        inst.set(InstanceStatus::Failed(message.to_owned()));
-        if let Some(s) = inst.session() {
-            s.fail(message);
-        }
         // Accounted first, in memory: the kill and the log below write to the store and may
         // wait, and no reconciliation pass may restart a spent key meanwhile.
         let key = (inst.package_id.clone(), inst.key.clone());
         let mut attempts = self.attempts.lock().unwrap_or_else(|p| p.into_inner());
         let a = attempts.entry(key).or_default();
         a.failures += 1;
-        a.admitted |= inst.admitted.load(Ordering::SeqCst) > 0;
         let failures = a.failures;
-        let admitted = a.admitted;
         // No restart until the failed tree is stopped (the backoff starts after it).
         a.next_at = Some(Instant::now() + Duration::from_secs(3600));
         // Spent before the durable record is written: no reconciliation pass (whose registry
         // snapshot may predate the record) starts this key again in the meantime.
         a.exhausted = failures >= self.config.restart_limit;
+        // Failed only once counted: a pass that no longer sees this instance as current also
+        // sees its failure and backoff, so it never starts a replacement on the old count.
+        inst.set(InstanceStatus::Failed(message.to_owned()));
+        a.admitted |= inst.admitted.load(Ordering::SeqCst) > 0;
+        let admitted = a.admitted;
         drop(attempts);
+        // Closing the session wakes the invocations, whose release starts a pass.
+        if let Some(s) = inst.session() {
+            s.fail(message);
+        }
         let process = inst.take_process();
         if let Some(p) = process {
             let _ = self
