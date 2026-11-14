@@ -67,6 +67,28 @@ impl Root {
     pub fn memory(&self) -> PathBuf {
         self.0.join(memory::FILE)
     }
+    /// Changes whenever the runtime makes durable progress on this root: the files in the
+    /// artifact store (each newly published Help topic adds one) plus the modification time of
+    /// the SQLite write-ahead log (every commit). Idle, neither moves.
+    pub fn write_progress(&self) -> u64 {
+        fn count(dir: &std::path::Path) -> u64 {
+            std::fs::read_dir(dir).map_or(0, |entries| {
+                entries
+                    .flatten()
+                    .map(|e| match e.file_type() {
+                        Ok(t) if t.is_dir() => count(&e.path()),
+                        _ => 1,
+                    })
+                    .sum()
+            })
+        }
+        let wal = std::fs::metadata(self.0.join(format!("{DATABASE_FILE}-wal")))
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_micros() as u64);
+        count(&self.0.join("artifacts")).wrapping_add(wal)
+    }
     /// A file beside (not inside) the data root.
     pub fn file(&self, name: &str, bytes: &[u8]) -> PathBuf {
         let dir = self.0.with_extension("files");
@@ -649,11 +671,35 @@ impl Backend for LoseAcks {
 
 /// Steps (with a short pause, failure-only bounded) until `done` holds.
 pub fn step_until(h: &mut Harness<'_, Shell>, what: &str, done: impl Fn(&Shell) -> bool) {
-    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    step_until_progressing(h, what, || 0, done);
+}
+
+/// [`step_until`] for a wait whose length is a count of durable writes, such as the initial
+/// Help publication: on macOS about 1,300 SQLite commits and 900 artifact flushes, each an
+/// `F_FULLFSYNC` (about 4 ms on an idle Apple SSD, slower for every other process flushing the
+/// same drive), so no fixed bound fits. Fails once `progress` (for example
+/// [`Root::write_progress`]) stops advancing for [`SETTLE_BOUND`].
+pub fn step_until_progressing(
+    h: &mut Harness<'_, Shell>,
+    what: &str,
+    mut progress: impl FnMut() -> u64,
+    done: impl Fn(&Shell) -> bool,
+) {
+    let mut seen = progress();
+    let mut deadline = std::time::Instant::now() + SETTLE_BOUND;
+    let mut sampled = std::time::Instant::now();
     while !done(h.state()) {
+        if sampled.elapsed() >= Duration::from_millis(250) {
+            sampled = std::time::Instant::now();
+            let now = progress();
+            if now != seen {
+                seen = now;
+                deadline = sampled + SETTLE_BOUND;
+            }
+        }
         assert!(
             std::time::Instant::now() < deadline,
-            "{what} never happened; route={:?}; help_scope={:?}; help_selected={:?}; help_loading={}; help_reading={}; help_error={:?}; help_read_error={:?}; help_notice={:?}; database_selected={:?}; database_busy={}; database_loading={}; database_error={:?}; database_notice={:?}; database_sources={:?}",
+            "{what} never happened (no progress for 30 s); route={:?}; help_scope={:?}; help_selected={:?}; help_loading={}; help_reading={}; help_error={:?}; help_read_error={:?}; help_notice={:?}; database_selected={:?}; database_busy={}; database_loading={}; database_error={:?}; database_notice={:?}; database_sources={:?}",
             h.state().route(),
             h.state().help.scope,
             h.state().help.selected,
