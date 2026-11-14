@@ -3091,6 +3091,224 @@ fn bound_agent_gateway_refuses_sibling_work_and_run_controls() {
     }
 }
 
+#[test]
+fn feature_coordinator_orders_and_blocks_only_its_own_work() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    let activation = fx.launch("planning-runner");
+    let host = principal(&*fx.store, "planning-host", PrincipalKind::Host);
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let execution = activation.id.clone();
+    let epoch = activation.owner_epoch;
+    let primary = fx.tx(move |_, tx| {
+        agents
+            .materialize_primary(tx, &host, &execution, epoch)
+            .map_err(|e| StorageError::InvalidRecord(format!("primary: {e:?}")))
+    });
+    let session = read(&*fx.store, |s| {
+        let assignment = s.runs().assignment(&primary.assignment_id)?.unwrap();
+        s.sessions().session(&assignment.session_id)
+    })
+    .unwrap();
+    let context = |actor: ActorId, session: Id, assignment: AssignmentId| {
+        devworks_core::context::HostIngress::new(&*fx.store)
+            .context(
+                actor,
+                PrincipalKind::Agent,
+                id("planning-agent"),
+                id("planning-ingress"),
+                devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            )
+            .with_session(session)
+            .with_lineage(
+                Some(ProjectId(id("project-a"))),
+                Some(rid("root-f")),
+                Some(assignment),
+            )
+            .with_activation(activation.id.clone(), epoch)
+    };
+    let coordinator = context(
+        session.agent_id.clone(),
+        session.id.clone(),
+        primary.assignment_id.clone(),
+    );
+    let revision = |work: &str| {
+        let work = id(work);
+        read(&*fx.store, move |s| {
+            Ok(s.work().work(&work)?.unwrap().revision)
+        })
+        .to_string()
+    };
+    let prioritize = |ctx: &InvocationContext, feature: &str| {
+        fx.command(
+            ctx,
+            "tasks.prioritize",
+            json!({"mode":"Command","protocol":PROTOCOL,"requestKey":fx.key(),
+                "body":{"kind":"tasks.prioritize","projectId":"project-a","featureId":feature,
+                "expectedQueueRevision":"1","priority":5,"orderedTaskIds":["task-f2","task-f1"]}}),
+        )
+    };
+    let block = |ctx: &InvocationContext, task: &str, predecessors: &[&str]| {
+        let edges: Vec<Value> = predecessors
+            .iter()
+            .map(|p| json!({"predecessor":p,"successor":task}))
+            .collect();
+        fx.command(
+            ctx,
+            "tasks.dependency_links",
+            json!({"mode":"Command","protocol":PROTOCOL,"requestKey":fx.key(),
+                "body":{"kind":"tasks.dependency_links","taskId":task,
+                "expectedRevision":revision(task),"replacement":{"edges":edges}}}),
+        )
+    };
+    let block_feature = |ctx: &InvocationContext, feature: &str, predecessors: &[&str]| {
+        let edges: Vec<Value> = predecessors
+            .iter()
+            .map(|p| json!({"predecessor":p,"successor":feature}))
+            .collect();
+        fx.command(
+            ctx,
+            "features.dependencies",
+            json!({"mode":"Command","protocol":PROTOCOL,"requestKey":fx.key(),
+                "body":{"kind":"features.dependencies","featureId":feature,
+                "expectedRevision":revision(feature),"replacement":{"edges":edges}}}),
+        )
+    };
+    let prerequisites = |work: &str| {
+        let work = id(work);
+        read(&*fx.store, move |s| s.work().prerequisites(&work))
+    };
+    let rejected = |reply: DomainCommandReply| matches!(reply, DomainCommandReply::Rejected { .. });
+
+    // Its own feature's task queue, not a sibling feature's.
+    applied(&prioritize(&coordinator, "root-f"));
+    assert!(rejected(prioritize(&coordinator, "root-g")));
+
+    // Blockers on its own tasks: inside the root, and from outside it.
+    applied(&block(&coordinator, "task-f2", &["task-f1"]));
+    applied(&block(&coordinator, "task-f2", &["task-f1", "root-i"]));
+    assert_eq!(prerequisites("task-f2"), vec![id("root-i"), id("task-f1")]);
+    // It removes a blocker inside its root, never one from outside it.
+    assert!(rejected(block(&coordinator, "task-f2", &["task-f1"])));
+    applied(&block(&coordinator, "task-f2", &["root-i"]));
+    assert_eq!(prerequisites("task-f2"), vec![id("root-i")]);
+    // Another root's work is out of reach.
+    assert!(rejected(block(&coordinator, "root-i", &["task-f1"])));
+
+    // Its own feature may wait for another; it cannot drop that wait or edit another feature.
+    applied(&block_feature(&coordinator, "root-f", &["root-g"]));
+    assert!(rejected(block_feature(&coordinator, "root-f", &[])));
+    assert!(rejected(block_feature(&coordinator, "root-g", &[])));
+    assert_eq!(prerequisites("root-f"), vec![id("root-g")]);
+
+    // A delegated Worker does neither.
+    let delegate = devworks_core::operations::agents::DelegateInput {
+        root_id: rid("root-f"),
+        expected_control_revision: Revision::new(fx.control("root-f").revision).unwrap(),
+        task_ids: devworks_core::protocol::support::BoundedList(vec![id("task-f1")]),
+        role_id: id("worker"),
+        instruction: devworks_core::protocol::support::BoundedText("Implement F1".into()),
+        source_checkpoint_id: None,
+    };
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let parent = coordinator.clone();
+    let child = fx.tx(move |_, tx| {
+        agents
+            .delegate(tx, &parent, &delegate)
+            .map_err(|e| StorageError::InvalidRecord(format!("delegate: {e:?}")))
+    });
+    let child_session = read(&*fx.store, |s| {
+        let assignment = s.runs().assignment(&child.assignment_id)?.unwrap();
+        s.sessions().session(&assignment.session_id)
+    })
+    .unwrap();
+    let user = fx.user.clone();
+    let child_actor = child_session.agent_id.clone();
+    fx.tx(move |_, tx| {
+        bind_principal(
+            tx,
+            &user,
+            NewPrincipalBinding {
+                actor: child_actor,
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::Worker),
+                project_id: Some(ProjectId(id("project-a"))),
+                tool_families: None,
+                bound_by: ActorId(id("user-a")),
+            },
+            None,
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("bind: {e:?}")))
+    });
+    let worker = context(
+        child_session.agent_id,
+        child_session.id,
+        child.assignment_id.clone(),
+    );
+    assert!(rejected(prioritize(&worker, "root-f")));
+    assert!(rejected(block(&worker, "task-f1", &["task-f3"])));
+    assert!(rejected(block_feature(&worker, "root-f", &["root-g"])));
+}
+
+#[test]
+fn a_reached_feature_budget_notifies_the_user_once() {
+    use devworks_core::protocol::records::FeatureBudgetInput;
+    let fx = Fx::new();
+    fx.tx(|_, tx| {
+        tx.decisions()
+            .bind_notification_user(&ActorId(id("user-a")))
+    });
+    let limit = |micro_usd: i64| {
+        fx.tx(move |_, tx| {
+            let work = tx.work().work(&id("root-f"))?.unwrap();
+            devworks_core::services::usage::budget::configure(
+                tx,
+                &work,
+                &ActorId(id("user-a")),
+                &FeatureBudgetInput::Limit {
+                    micro_usd: devworks_core::protocol::Counter::new(micro_usd).unwrap(),
+                },
+            )
+            .map(|_| ())
+        })
+    };
+    let cards = || {
+        read(&*fx.store, |s| {
+            s.decisions().notifications(
+                &NotificationFilter {
+                    user_id: ActorId(id("user-a")),
+                    scope: ConfigScope::Workspace,
+                    categories: vec!["Budget".into()],
+                    read: None,
+                    unacknowledged_only: false,
+                    completion_only: false,
+                },
+                None,
+                50,
+            )
+        })
+    };
+    limit(1_000_000);
+    assert!(
+        cards().is_empty(),
+        "a budget under its limit pauses nothing"
+    );
+    limit(0);
+    let paused = cards();
+    assert_eq!(paused.len(), 1);
+    assert_eq!(paused[0].root_id, Some(rid("root-f")));
+    assert!(paused[0].requires_input);
+    assert!(
+        paused[0].title.starts_with("Budget reached"),
+        "{}",
+        paused[0].title
+    );
+    limit(0);
+    assert_eq!(cards().len(), 1, "the same pause is announced once");
+}
+
 struct DelegatingCoordinator {
     store: Arc<dyn ApplicationStore>,
     ids: Arc<dyn devworks_core::ports::IdSource>,
