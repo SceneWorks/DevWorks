@@ -436,9 +436,11 @@ struct InstallCommand {
 ///
 /// - Cargo: `cargo fetch` (downloads only; nothing is compiled, so no `build.rs` runs) instead
 ///   of `cargo build`.
-/// - npm, pnpm and Yarn 1: `--ignore-scripts`. Yarn 2+ (told apart by its lockfile) does not
-///   accept that option; it gets `--mode=skip-build` (no build script runs at all) and
-///   `YARN_ENABLE_SCRIPTS=false`, which overrides its rc files.
+/// - npm, pnpm and Yarn 1: `--ignore-scripts`; pnpm also `--ignore-pnpmfile` (its hooks run
+///   regardless of scripts). Yarn 2+ (told apart by its lockfile) does not accept
+///   `--ignore-scripts`; it gets `--mode=skip-build` (no build script runs at all) and
+///   `YARN_ENABLE_SCRIPTS=false`, which overrides its rc files. A Yarn release or plugin the
+///   repository configures is refused separately (see [`yarn_loads_repository_code`]).
 /// - uv: `--no-build` (no source distribution is built, so no build backend runs) and
 ///   `--no-install-workspace` (the project and its workspace members are not built either).
 /// - pip: `--only-binary :all:`, and only for a requirements file in which nothing could
@@ -494,7 +496,8 @@ fn install_command(
         }
         "pnpm-lock.yaml" => {
             let mut args = strings(&["install", "--frozen-lockfile"]);
-            no_scripts(&mut args, &["--ignore-scripts"]);
+            // `.pnpmfile.cjs` hooks run even with `--ignore-scripts`.
+            no_scripts(&mut args, &["--ignore-scripts", "--ignore-pnpmfile"]);
             args.extend(["--dir".into(), root_text]);
             InstallCommand {
                 program: "pnpm",
@@ -608,8 +611,11 @@ fn binary_only_requirements(manifest: &[u8]) -> bool {
         ("--trusted-host", true),
     ];
     const PER_REQUIREMENT: &[(&str, bool)] = &[("--hash", true)];
+    // Every final suffix of a source archive pip recognizes (.zip, .tar, .tar.gz, .tgz,
+    // .tar.bz2, .tbz, .tar.xz, .txz, .tlz, .tar.lz, .tar.lzma), and .tbz2 as well.
     const ARCHIVES: &[&str] = &[
-        ".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz", ".tar.xz", ".txz",
+        ".zip", ".tar", ".gz", ".tgz", ".bz2", ".tbz", ".tbz2", ".xz", ".txz", ".tlz", ".lz",
+        ".lzma",
     ];
     let Ok(text) = std::str::from_utf8(manifest) else {
         return false;
@@ -655,6 +661,26 @@ fn binary_only_requirements(manifest: &[u8]) -> bool {
             && !ARCHIVES.iter().any(|archive| lower.ends_with(archive))
             && allowed_options(options, PER_REQUIREMENT)
     })
+}
+
+/// Whether Yarn would run JavaScript the repository controls before it installs anything:
+/// a `yarnPath` (Yarn 2+) or `yarn-path` (Yarn 1) release, or Yarn 2+ plugins, set in an rc
+/// file in the repository root or in the home directory an install runs with (which is inside
+/// the repository). No install option stops these, so such an install needs `allowScripts`.
+fn yarn_loads_repository_code(root: &Path) -> bool {
+    [root.to_path_buf(), root.join(".devworks-home")]
+        .iter()
+        .flat_map(|directory| [directory.join(".yarnrc.yml"), directory.join(".yarnrc")])
+        .any(|rc| match std::fs::read(&rc) {
+            Ok(text) => {
+                let text = String::from_utf8_lossy(&text);
+                ["yarnPath", "yarn-path", "plugins"]
+                    .iter()
+                    .any(|key| text.contains(key))
+            }
+            // A directory or unreadable entry under that name cannot be ruled out.
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+        })
 }
 
 /// Whether every token of a requirements-file line's options is one of `allowed`, each taking
@@ -1762,7 +1788,11 @@ impl ProcessToolService {
             }
         }
         let (name, bytes) = selected.ok_or(BindingRefusal::ChangedManifest)?;
-        let command = install_command(&name, &root, &bytes, input.allow_scripts == Some(true))?;
+        let allow_scripts = input.allow_scripts == Some(true);
+        if name == "yarn.lock" && !allow_scripts && yarn_loads_repository_code(&root) {
+            return Err(BindingRefusal::ScriptsRequired);
+        }
+        let command = install_command(&name, &root, &bytes, allow_scripts)?;
         let program = command.program;
         let executable = self
             .bindings
@@ -3497,6 +3527,7 @@ mod tests {
                     "install",
                     "--frozen-lockfile",
                     "--ignore-scripts",
+                    "--ignore-pnpmfile",
                     "--dir",
                     "/repo",
                 ]),
@@ -3657,6 +3688,9 @@ mod tests {
             "pkg @ https://example.invalid/pkg-1.0.tar.gz\n",
             "git+https://example.invalid/repo.git#egg=pkg\n",
             "pkg-1.0.tar.gz\n",
+            "pkg.tlz\n",
+            "pkg-1.0.tar.lzma\n",
+            "pkg-1.0.TAR.LZ\n",
             "pkg --config-settings=key=value\n",
             // Every option on a line counts, not only the first.
             "--no-index --requirement nested.txt\n",
@@ -3676,6 +3710,30 @@ mod tests {
             );
         }
         assert!(!binary_only_requirements(&[0xff, 0xfe]));
+    }
+
+    #[test]
+    fn a_yarn_release_or_plugin_the_repository_configures_needs_install_scripts() {
+        let root = std::env::temp_dir().join(format!("devworks-yarn-rc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".devworks-home")).expect("test root");
+        assert!(!yarn_loads_repository_code(&root));
+        std::fs::write(root.join(".yarnrc.yml"), "nodeLinker: node-modules\n").expect("rc");
+        assert!(!yarn_loads_repository_code(&root));
+        for (file, text) in [
+            (".yarnrc.yml", "yarnPath: .yarn/releases/yarn-4.cjs\n"),
+            (
+                ".yarnrc.yml",
+                "plugins:\n  - path: .yarn/plugins/local.cjs\n",
+            ),
+            (".yarnrc", "yarn-path \"./tools/yarn.js\"\n"),
+            (".devworks-home/.yarnrc.yml", "yarnPath: ../evil.cjs\n"),
+        ] {
+            std::fs::write(root.join(file), text).expect("rc");
+            assert!(yarn_loads_repository_code(&root), "{file}: {text}");
+            std::fs::remove_file(root.join(file)).expect("remove rc");
+        }
+        std::fs::remove_dir_all(root).expect("remove test root");
     }
 
     #[test]
