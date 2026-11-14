@@ -506,7 +506,7 @@ All 376 qualified operations have typed input/result candidates. Existing input 
 | `process.execute` | **Command**<br>`spec`: `ProcessSpec` | `ProcessRecord` |
 | `process.output` | **Query**<br>`processId`: `Id`<br>`afterBytes`: `Counter`<br>`maxBytes`: `ByteLimit` | `ProcessOutput` |
 | `process.cancel` | **Command**<br>`processId`: `Id`<br>`expectedRevision`: `Revision` | `ProcessRecord` |
-| `process.install_project_dependencies` | **Command**<br>`repositoryId`: `Id`<br>`expectedRevision`: `Revision`<br>`manifest`: `ArtifactRef`<br>`profile`: `ToolProfile` | `ProcessRecord` |
+| `process.install_project_dependencies` | **Command**<br>`repositoryId`: `Id`<br>`expectedRevision`: `Revision`<br>`manifest`: `ArtifactRef`<br>`profile`: `ToolProfile`<br>`allowScripts`: `?bool`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `ProcessRecord` |
 | `process.request_system_install` | **Command**<br>`packageSpec`: `ArtifactRef`<br>`contentDigest`: `Digest`<br>`reason`: `Content` | `ProposalRecord` |
 
 ### Web

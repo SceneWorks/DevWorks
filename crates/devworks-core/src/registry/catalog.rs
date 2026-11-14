@@ -6186,7 +6186,7 @@ pub(super) static CATALOG: [OperationDescriptor; 376] = [
         result_type: "ProcessRecord",
         result_schema: schema_of::<ProcessRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(8)],
     },
     OperationDescriptor {
         name: "process.request_system_install",

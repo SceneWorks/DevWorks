@@ -8543,6 +8543,9 @@ mod auxiliary_tests;
 #[path = "runs/watch.rs"]
 mod watch_tests;
 
+#[path = "runs/install.rs"]
+mod install_tests;
+
 #[path = "runs/mcp_agent_tool.rs"]
 mod mcp_agent_tool;
 

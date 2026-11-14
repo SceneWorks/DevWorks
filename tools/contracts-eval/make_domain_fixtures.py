@@ -110,6 +110,12 @@ def _create_body(**port):
 case('input-containers.create-wider-bind','domain-request.r8',_create_body(exposeBeyondLoopback=True))
 case('input-containers.create-loopback-bind','domain-request.r8',_create_body())
 case('reject-containers.create-wider-bind-not-bool','domain-request.r8',_create_body(exposeBeyondLoopback='yes'),False,False)
+# Dependency installs (DW-302): lifecycle scripts stay disabled unless allowScripts (revision 8).
+def _install_body(**fields):
+ frame=request('process.install_project_dependencies','Command'); frame['schemaRevision']=8; frame['body'].update(fields); return frame
+case('input-process.install_project_dependencies-allow-scripts','domain-request.r8',_install_body(allowScripts=True))
+case('input-process.install_project_dependencies-no-scripts','domain-request.r8',_install_body(allowScripts=False))
+case('reject-process.install_project_dependencies-allow-scripts-not-bool','domain-request.r8',_install_body(allowScripts='yes'),False,False)
 case('reject-watch.create-timer-both-times','domain-request.r8',_watch_body(timer={'afterMs':'5000','atMs':'1'}),False,False)
 # Matches (DW-95): a regex over a launched process's output or a file; a file watcher needs one.
 _file={'path':_proc['workingDirectory']}
