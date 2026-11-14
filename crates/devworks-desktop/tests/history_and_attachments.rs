@@ -95,7 +95,7 @@ fn chat_history_groups_conversations_by_last_activity_newest_first() {
         .build_ui_state(
             |ui, chat: &mut Chat| {
                 let mut actions: Vec<ChatAction> = Vec::new();
-                chat::sidebar(ui, chat, Ok(()), &mut actions);
+                chat::sidebar(ui, chat, Ok(()), &mut actions, &mut |_, _| {});
             },
             chat,
         );

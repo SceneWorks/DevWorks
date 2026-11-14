@@ -176,6 +176,8 @@ pub enum WatcherFilter {
     Session(Id),
     /// Watchers in this project (`None`: watchers outside any project).
     Project(Option<ProjectId>),
+    /// Every watcher, in any project or none.
+    All,
 }
 
 pub trait WatcherRead {

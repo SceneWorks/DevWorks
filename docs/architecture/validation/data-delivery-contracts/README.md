@@ -15,7 +15,7 @@ The native store is a fixture-specific subset. It does not implement every repos
 
 Git's ordinary merge ancestry is sufficient for this fixture's chosen method. Squash/rebase, actual async ticket expiry, merge queues, server rule evaluation, auth, remote cancellation, base/head races and real PR evidence still need dedicated adapter fixtures and later authorized compatibility checks. Core policy, OS process fencing and filesystem target-race safety are not demonstrated by temporary Git ownership flags.
 
-Reproduce from the repository root with Cargo and the established authoring Python/Node runtimes. Python `jsonschema==4.26.0` is installed only in the ignored authoring directory; none of these authoring tools becomes a shipped runtime dependency.
+Reproduce from the repository root with Cargo and the established authoring Python/Node runtimes. Python `jsonschema==4.26.0` is installed only in the ignored authoring directory; none of these authoring tools becomes a shipped runtime dependency. The two `tools/store-port-eval` commands and the store executable below need commit [`f76506ec`](https://github.com/SceneWorks/DevWorks/tree/f76506ec33c9563d19e03bc68a4b7e9e65178271/tools/store-port-eval); the store-port probe was removed from the main branch because nothing runs it.
 
 ```sh
 CARGO_TARGET_DIR="$PWD/.planning-build/data-delivery-contracts/cargo-target" cargo build --locked --release --manifest-path tools/contracts-eval/Cargo.toml

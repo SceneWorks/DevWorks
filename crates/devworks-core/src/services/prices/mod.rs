@@ -3,6 +3,7 @@ mod resolver;
 pub use resolver::CatalogPriceResolver;
 pub use resolver::official_price_source;
 
+pub mod derivation;
 mod inspection;
 pub mod refresh;
 mod service;

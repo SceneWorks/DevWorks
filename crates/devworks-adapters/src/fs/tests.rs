@@ -350,6 +350,63 @@ fn glob_expansion_is_bounded_and_explicit() {
 }
 
 #[test]
+fn glob_matching_keeps_shell_semantics() {
+    for (pattern, name, hit) in [
+        ("*.tmp", "a.tmp", true),
+        ("*.tmp", "a.tmpx", false),
+        ("a*b*c", "aXbYc", true),
+        ("a*b*c", "abcb", false),
+        ("*", "", true),
+        ("?", "", false),
+        ("f?.log", "f1.log", true),
+        ("o[0-1].log", "o1.log", true),
+        ("o[0-1].log", "o2.log", false),
+        ("o[!0-1].log", "o2.log", true),
+        ("o[^a]", "oa", false),
+        ("[x", "[x", true),
+        ("**a", "bba", true),
+        ("a**", "a", true),
+    ] {
+        assert_eq!(
+            super::glob(pattern.as_bytes(), name.as_bytes()),
+            hit,
+            "{pattern} vs {name}"
+        );
+    }
+}
+
+#[test]
+fn a_pattern_with_many_stars_matches_in_bounded_time() {
+    // A backtracking matcher takes exponential time in the number of stars on this input.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let pattern = format!("{}b", "a*".repeat(40));
+        let name = "a".repeat(200);
+        let _ = tx.send(super::glob(pattern.as_bytes(), name.as_bytes()));
+    });
+    let hit = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the match finishes promptly");
+    assert!(!hit);
+}
+
+/// A name the reviewed list cannot spell refuses the expansion instead of vanishing from it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_glob_matching_a_non_utf8_name_is_refused_not_dropped() {
+    use std::os::unix::ffi::OsStrExt;
+    let s = Scratch::new("glob-bytes");
+    std::fs::write(s.0.join("plain.tmp"), b"").unwrap();
+    std::fs::write(s.0.join(std::ffi::OsStr::from_bytes(b"bad\xff.tmp")), b"").unwrap();
+    let fs = NativeFilesystem::new();
+    assert!(matches!(
+        fs.expand(&s.p("*.tmp"), None, 10),
+        Err(devworks_core::authority::destructive::ResolveError::Unsupported(_))
+    ));
+    assert_eq!(fs.expand(&s.p("pl*.tmp"), None, 10).unwrap().len(), 1);
+}
+
+#[test]
 fn owned_worktree_cleanup_is_bounded_to_the_exact_stopped_worktree() {
     let t = tree("worktree");
     let cleanup = |id_: &str| IntendedScope::OwnedWorktreeCleanup {
@@ -571,6 +628,68 @@ fn commands_cannot_write_into_or_remove_skill_folders() {
     );
     // The registry revision covers the skill folders.
     assert_ne!(t.roots.revision, plain.revision);
+}
+
+/// Protected roots reached through a linked folder (macOS `/var -> /private/var`, a linked home
+/// or data directory): a new path whose parents do not exist yet still resolves through the
+/// link, so a write there is refused, while the same write outside the roots stays allowed.
+/// Unix only: creating a symlink on Windows needs a privilege CI does not have.
+#[cfg(unix)]
+#[test]
+fn writes_with_missing_parents_under_a_linked_protected_root_are_refused() {
+    let s = Scratch::new("linked-roots");
+    let real = s.0.join("real");
+    std::fs::create_dir_all(real.join("data/skills")).unwrap();
+    std::fs::create_dir_all(real.join("home")).unwrap();
+    std::fs::create_dir_all(real.join("work")).unwrap();
+    let link = s.0.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let at = |rel: &str| link.join(rel).to_string_lossy().into_owned();
+    // Every root is written through the link, as a host with a linked data directory composes it.
+    let roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some(at("data")))
+        .with_skill_roots([at("home/.agents/skills"), at("data/skills")]);
+    let fs = NativeFilesystem::new();
+    let cwd = at("work");
+    let verdicts = |script: &str| match assess_command(
+        &["bash".to_owned(), "-c".to_owned(), script.to_owned()],
+        Some(&cwd),
+    ) {
+        ShellAssessment::Destructive { plans, .. } => plans
+            .iter()
+            .map(|p| preflight(&fs, &roots, p).verdict)
+            .collect::<Vec<_>>(),
+        other => panic!("{script}: {other:?}"),
+    };
+    let skill = PreflightVerdict::Blocked(BlockReason::SkillDirectory);
+    let data = PreflightVerdict::Blocked(BlockReason::ApplicationData);
+    for (root, refused) in [
+        (at("data/skills"), &skill),
+        (at("home/.agents/skills"), &skill),
+        (at("data"), &data),
+    ] {
+        for script in [
+            format!("echo 'Do evil.' > {root}/new/dir/SKILL.md"),
+            format!("mkdir -p {root}/new/dir"),
+            // A `..` inside the missing part folds back under the root.
+            format!("mkdir -p {root}/new/../dir"),
+        ] {
+            assert_eq!(verdicts(&script), std::slice::from_ref(refused), "{script}");
+        }
+    }
+    // The same root named through the real path is refused too.
+    let real_skills = real.join("data/skills").to_string_lossy().into_owned();
+    assert_eq!(
+        verdicts(&format!("mkdir -p {real_skills}/new/dir")),
+        [skill]
+    );
+    // Missing parents under the same link but outside every root: allowed.
+    for script in [
+        format!("echo x > {}/new/dir/notes.md", at("work")),
+        format!("mkdir -p {}/new/dir", at("home")),
+        format!("mkdir -p {}/new/../dir", at("work")),
+    ] {
+        assert_eq!(verdicts(&script), [PreflightVerdict::Allowed], "{script}");
+    }
 }
 
 #[test]
