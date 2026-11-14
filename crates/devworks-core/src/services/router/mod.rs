@@ -75,12 +75,12 @@ use crate::protocol::records::{
     RouteIntent, RouteModel, TierName,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Page};
+use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{
     ActorId, CorrelationId, Counter, DomainErrorCode, DomainFault, EventId, Id, OperationId,
     ProjectId, RetryAdvice, RevisionDimension, RootId,
 };
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::{
     Failure, Refusal, counter, decided, label, not_found, project_visible, query_fault, rev,
     visible_session,
@@ -1024,17 +1024,6 @@ impl InferenceRouter {
             &[if i.include_disabled { "all" } else { "enabled" }],
             revision as i64,
         );
-        let after: Option<(i64, String)> = match &i.page.cursor {
-            None => None,
-            Some(c) => {
-                let at = binding.decode(&c.0)?;
-                let (pos, id) = at.split_once('|').ok_or(StorageError::CursorExpired)?;
-                Some((
-                    pos.parse().map_err(|_| StorageError::CursorExpired)?,
-                    id.to_owned(),
-                ))
-            }
-        };
         let mut rows = Vec::new();
         for id in &f.ordered {
             let m = &f.models[id.as_str()];
@@ -1157,29 +1146,35 @@ impl InferenceRouter {
             }
         }
         rows.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
-        let mut remaining = rows.into_iter().filter(|(p, id, _)| {
-            after
-                .as_ref()
-                .is_none_or(|a| (*p, id.as_str()) > (a.0, a.1.as_str()))
-        });
-        let selected: Vec<_> = remaining
-            .by_ref()
-            .take(i.page.limit.get() as usize)
-            .collect();
-        let more = remaining.next().is_some();
-        let next_cursor = if more {
-            selected
-                .last()
-                .map(|(p, id, _)| BoundedText(binding.encode(&format!("{p}|{id}"))))
-        } else {
-            None
-        };
-        Ok(OperationResult::RouterCatalog {
-            value: Page {
-                items: BoundedList(selected.into_iter().map(|(_, _, row)| row).collect()),
-                has_more: more,
-                next_cursor,
+        let page = cursor::page(
+            &binding,
+            &i.page,
+            |after, n| {
+                let after = after
+                    .map(|at| {
+                        let (pos, id) = at.split_once('|').ok_or(StorageError::CursorExpired)?;
+                        Ok::<_, StorageError>((
+                            pos.parse::<i64>()
+                                .map_err(|_| StorageError::CursorExpired)?,
+                            id.to_owned(),
+                        ))
+                    })
+                    .transpose()?;
+                Ok::<_, StorageError>(
+                    rows.iter()
+                        .filter(|(p, id, _)| {
+                            after
+                                .as_ref()
+                                .is_none_or(|a| (*p, id.as_str()) > (a.0, a.1.as_str()))
+                        })
+                        .take(usize::from(n))
+                        .collect::<Vec<_>>(),
+                )
             },
+            |(p, id, _)| format!("{p}|{id}"),
+        )?;
+        Ok(OperationResult::RouterCatalog {
+            value: page.try_into_page(|(_, _, row)| Ok::<_, StorageError>(row.clone()))?,
         })
     }
 

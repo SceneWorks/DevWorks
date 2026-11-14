@@ -166,6 +166,22 @@ impl ToolBindings {
         Ok(values)
     }
 
+    /// The exact directory of a registered root of `project`.
+    pub fn root_directory(
+        &self,
+        root_id: &Id,
+        project: Option<&ProjectId>,
+    ) -> Result<PathBuf, BindingRefusal> {
+        let root = self
+            .roots
+            .get(root_id.as_str())
+            .ok_or(BindingRefusal::UnknownRoot)?;
+        if root.project.as_ref() != project {
+            return Err(BindingRefusal::OutOfProject);
+        }
+        exact_directory(&root.path).ok_or(BindingRefusal::ChangedRoot)
+    }
+
     /// Resolve a project path under its exact registered root, rejecting symlink escapes.
     pub fn resolve_registered_path(
         &self,
@@ -1173,8 +1189,11 @@ impl ProcessToolService {
     pub(crate) fn resolve_watched_file(
         &self,
         path: &RegisteredPath,
-        project: Option<&ProjectId>,
+        ctx: &InvocationContext,
     ) -> Result<std::path::PathBuf, BindingRefusal> {
+        // The same roots a process watcher may use: static bindings, member repositories and
+        // the caller's own worktrees.
+        let bindings = self.bindings_with_root(&path.root_id, ctx)?;
         let relative = std::path::Path::new(&path.relative.0);
         let name = relative
             .file_name()
@@ -1182,16 +1201,22 @@ impl ProcessToolService {
             .ok_or(BindingRefusal::OutOfProject)?;
         let parent = relative
             .parent()
-            .map_or(String::new(), |p| p.to_string_lossy().into_owned());
-        let directory = RegisteredPath {
-            root_id: path.root_id.clone(),
-            relative: serde_json::from_value(json!(if parent.is_empty() { "." } else { &parent }))
-                .map_err(|_| BindingRefusal::OutOfProject)?,
+            .map(|p| p.to_string_lossy().into_owned())
+            .filter(|p| !p.is_empty());
+        // A file at the root's top level is joined to the root itself; a deeper one to its
+        // directory, resolved under the root like any registered path.
+        let directory = match parent {
+            None => bindings.root_directory(&path.root_id, ctx.project_id())?,
+            Some(parent) => {
+                let directory = RegisteredPath {
+                    root_id: path.root_id.clone(),
+                    relative: serde_json::from_value(json!(parent))
+                        .map_err(|_| BindingRefusal::OutOfProject)?,
+                };
+                bindings.resolve_registered_path(&directory, ctx.project_id())?
+            }
         };
-        Ok(self
-            .bindings
-            .resolve_registered_path(&directory, project)?
-            .join(name))
+        Ok(directory.join(name))
     }
 
     /// The matches of a running watched run's pattern counted so far (`None` once it ended or
@@ -1338,11 +1363,22 @@ impl ProcessToolService {
         input: &ProcessSpec,
         ctx: &InvocationContext,
     ) -> Result<NativeProcessSpec, BindingRefusal> {
+        self.bindings_with_root(&input.working_directory.root_id, ctx)?
+            .resolve(input, ctx.project_id())
+    }
+
+    /// The static bindings, plus `root_id` resolved from storage when no static binding names
+    /// it: a project member repository, or a live worktree this caller owns (same owner, root and
+    /// assignment) whose directory is still the recorded one.
+    fn bindings_with_root(
+        &self,
+        root_id: &Id,
+        ctx: &InvocationContext,
+    ) -> Result<ToolBindings, BindingRefusal> {
         let mut bindings = self.bindings.clone();
-        let root_id = input.working_directory.root_id.as_str();
-        if !bindings.roots.contains_key(root_id) {
+        if !bindings.roots.contains_key(root_id.as_str()) {
             let path = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
-                let id = &input.working_directory.root_id;
+                let id = root_id;
                 if let Some(tree) = snapshot.git().git_worktree(id)? {
                     if tree.removed {
                         return Ok(None);
@@ -1392,15 +1428,15 @@ impl ProcessToolService {
             .map_err(|_| BindingRefusal::ChangedRoot)?
             .ok_or(BindingRefusal::UnknownRoot)?;
             bindings.roots.insert(
-                root_id.to_owned(),
+                root_id.as_str().to_owned(),
                 RegisteredWorkingRoot {
-                    id: input.working_directory.root_id.clone(),
+                    id: root_id.clone(),
                     project: ctx.project_id().cloned(),
                     path,
                 },
             );
         }
-        bindings.resolve(input, ctx.project_id())
+        Ok(bindings)
     }
 
     fn install_plan(

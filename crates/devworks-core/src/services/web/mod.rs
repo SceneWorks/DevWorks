@@ -67,7 +67,7 @@ use crate::ports::storage::{
     ApplicationStore, Cancellation, ConfigScope, ConfigurationRead, ReadOptions, ReadSnapshot,
     StorageError, read_snapshot,
 };
-use crate::ports::web::{HttpTransport, Resolver, SearchProvider};
+use crate::ports::web::{HopTransport, Resolver, SearchProvider};
 use crate::ports::{Clock, IdKind, IdSource, Preparation, Prepared, QueryAnswer, QueryHandler};
 use crate::protocol::data::DataScope;
 use crate::protocol::records::{WebDocument, WebResult};
@@ -108,7 +108,7 @@ pub fn untrusted_operation(operation: &str) -> bool {
 #[derive(Clone)]
 pub struct WebPorts {
     pub resolver: Arc<dyn Resolver>,
-    pub transport: Arc<dyn HttpTransport>,
+    pub transport: Arc<dyn HopTransport>,
     /// Search providers this build can reach, by [`SearchProvider::id`].
     pub providers: Vec<Arc<dyn SearchProvider>>,
     pub secrets: Arc<dyn SecretResolver>,

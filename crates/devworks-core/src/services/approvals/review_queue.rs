@@ -4,7 +4,11 @@ use crate::operations::approvals::ReviewQueueInput;
 use crate::ports::storage::*;
 use crate::protocol::data::DataScope;
 use crate::protocol::results::OperationResult;
-use crate::services::{cursor::CursorBinding, knowledge, sessions::Failure};
+use crate::services::{
+    cursor::{self, CursorBinding},
+    knowledge,
+    sessions::Failure,
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 pub(crate) fn query(
@@ -147,27 +151,17 @@ pub(crate) fn query(
         ],
         s.knowledge().knowledge_scope_revision(&scoped.exact)?,
     );
-    let offset = i
-        .page
-        .cursor
-        .as_ref()
-        .map(|c| binding.decode(&c.0))
-        .transpose()?
-        .map(|p| p.parse::<usize>().map_err(|_| StorageError::CursorExpired))
-        .transpose()?
-        .unwrap_or(0);
-    if offset > items.len() {
-        return Err(StorageError::CursorExpired.into());
-    }
-    let limit = i.page.limit.get() as usize;
-    let more = offset + limit < items.len();
-    let rows = items
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .map(|v| v.4)
-        .collect::<Vec<_>>();
-    let page=serde_json::from_value(json!({"items":rows,"nextCursor":if more{Some(binding.encode(&(offset+limit).to_string()))}else{None},"hasMore":more})).map_err(|e|StorageError::InvalidRecord(format!("review queue: {e}")))?;
+    let page = cursor::slice(
+        &binding,
+        items.into_iter().map(|v| v.4).collect::<Vec<_>>(),
+        &i.page,
+    )?;
+    let page = serde_json::from_value(json!({
+        "items": page.items.0,
+        "nextCursor": page.next_cursor.map(|c| c.0),
+        "hasMore": page.has_more,
+    }))
+    .map_err(|e| StorageError::InvalidRecord(format!("review queue: {e}")))?;
     Ok(OperationResult::ApprovalsReviewQueue { value: page })
 }
 fn priority(c: &StoredClaim) -> (u8, &'static str) {

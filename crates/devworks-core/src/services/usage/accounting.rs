@@ -1,9 +1,9 @@
 //! Native host attempt admission and observation. The journal supplies the attempt identity;
 //! codecs cannot choose budget ownership, prices, a free connection or dispatch authority.
+use super::money::{MoneyError, reported_usd_micros};
 use super::{
     budget,
     meter::{Meter, ObservationSemantics, Quantities},
-    money::{CostAccumulator, Rounding},
     pricing::{self, PricingContext},
 };
 use crate::ports::storage::*;
@@ -103,9 +103,16 @@ pub enum Admission {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReportedCost {
+    /// Decimal as reported. A longer one is stored cut to `REPORTED_LEXEME_CAP` characters as
+    /// evidence only; the rounded result is kept in `BalanceSummary`.
     pub amount: String,
     pub currency: String,
+    /// The provider's original lexeme (for example `1e-200`), cut to `REPORTED_LEXEME_CAP`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_lexeme: Option<String>,
 }
+/// Longest reported amount or lexeme stored, in characters.
+pub const REPORTED_LEXEME_CAP: usize = 128;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Observation {
     pub key: String,
@@ -119,6 +126,12 @@ pub struct Observation {
 pub struct BalanceSummary {
     pub meter: Meter,
     pub reported_cost: Option<ReportedCost>,
+    /// The reported USD amount rounded half up to micro-USD when it is representable.
+    #[serde(default)]
+    pub reported_micro_usd: Option<i64>,
+    /// Why the reported USD amount could not be tracked (below one micro-USD or out of range).
+    #[serde(default)]
+    pub reported_untracked: Option<String>,
     pub unknown_components: Vec<String>,
     pub finished_at_ms: Option<i64>,
     pub cancellation_requested: bool,
@@ -946,6 +959,60 @@ pub(crate) fn mark_dispatched(
     })
 }
 
+fn cap_text(text: &str) -> String {
+    text.chars().take(REPORTED_LEXEME_CAP).collect()
+}
+/// Round a reported USD decimal to micro-USD half up. A value the ledger cannot hold becomes
+/// the reason it stays an untracked component; it never fails the observation.
+fn reported_usd_outcome(amount: &str) -> Result<i64, String> {
+    reported_usd_micros(amount).map_err(|error| {
+        match error {
+            MoneyError::SubMicro => "reported USD amount rounds to zero micro-USD",
+            MoneyError::Overflow => "reported USD amount exceeds the ledger range",
+            MoneyError::InvalidDecimal => "reported USD amount exceeds the supported length",
+        }
+        .into()
+    })
+}
+/// Validate the reported cost, round it from the full amount, then bound what is stored.
+fn bound_reported_cost(
+    observation: &Observation,
+) -> Result<(Observation, Option<Result<i64, String>>), StorageError> {
+    let mut bounded = observation.clone();
+    let Some(reported) = &mut bounded.reported_cost else {
+        return Ok((bounded, None));
+    };
+    if reported.currency.is_empty()
+        || reported.currency.len() > 16
+        || !reported.currency.bytes().all(|b| b.is_ascii_alphabetic())
+    {
+        return Err(invalid("invalid usage currency"));
+    }
+    let mut parts = reported.amount.split('.');
+    let whole = parts.next().unwrap_or("");
+    let fraction = parts.next();
+    if whole.is_empty()
+        || !whole.bytes().all(|b| b.is_ascii_digit())
+        || fraction.is_some_and(|f| f.is_empty() || !f.bytes().all(|b| b.is_ascii_digit()))
+        || parts.next().is_some()
+    {
+        return Err(invalid("invalid reported amount"));
+    }
+    let outcome = reported
+        .currency
+        .eq_ignore_ascii_case("USD")
+        .then(|| reported_usd_outcome(&reported.amount));
+    if reported.amount.chars().count() > REPORTED_LEXEME_CAP {
+        let mut amount = cap_text(&reported.amount);
+        if amount.ends_with('.') {
+            amount.pop();
+        }
+        reported.amount = amount;
+    }
+    reported.raw_lexeme = reported.raw_lexeme.as_deref().map(cap_text);
+    Ok((bounded, outcome))
+}
+
 /// Dedupe immutable observations before merging fields. A later reported charge replaces an
 /// estimate of the same attempt through one explicit delta, never a second expense.
 pub fn observe(
@@ -957,6 +1024,8 @@ pub fn observe(
     if observation.key.is_empty() || observation.key.len() > 256 || observation.sequence <= 0 {
         return Err(invalid("invalid usage observation identity"));
     }
+    let (bounded, reported_usd) = bound_reported_cost(observation)?;
+    let observation = &bounded;
     let payload = encoded(observation)?;
     let digest = crate::jcs::canonicalize(&payload)
         .map(|v| crate::fingerprint::sha256_hex(v.as_bytes()))
@@ -1001,20 +1070,12 @@ pub fn observe(
         {
             return Err(invalid("invalid usage currency"));
         }
-        // Preserve a valid original decimal even when its currency or precision cannot be
-        // represented in the USD ledger. It remains an explicit coverage gap, never zero.
-        let mut parts = reported.amount.split('.');
-        let whole = parts.next().unwrap_or("");
-        let fraction = parts.next();
-        if reported.amount.len() > 128
-            || whole.is_empty()
-            || !whole.bytes().all(|b| b.is_ascii_digit())
-            || fraction.is_some_and(|f| f.is_empty() || !f.bytes().all(|b| b.is_ascii_digit()))
-            || parts.next().is_some()
-        {
-            return Err(invalid("invalid reported amount"));
-        }
         state.reported_cost = Some(reported.clone());
+        (state.reported_micro_usd, state.reported_untracked) = match reported_usd {
+            Some(Ok(micro_usd)) => (Some(micro_usd), None),
+            Some(Err(reason)) => (None, Some(reason)),
+            None => (None, None),
+        };
     }
     if let Some(model) = &observation.provider_model_id {
         let _: crate::protocol::support::Text = serde_json::from_value(json!(model))
@@ -1055,24 +1116,23 @@ pub fn observe(
         )
     {
         if reported.currency.eq_ignore_ascii_case("USD") {
-            let mut exact = CostAccumulator::default();
-            match exact
-                .amount_usd(&reported.amount)
-                .and_then(|_| exact.micro_usd(Rounding::Nearest))
-            {
+            // Summaries stored before the rounded value was recorded carry a full amount.
+            let outcome = match (state.reported_micro_usd, &state.reported_untracked) {
+                (Some(micro_usd), _) => Ok(micro_usd),
+                (None, Some(reason)) => Err(reason.clone()),
+                (None, None) => reported_usd_outcome(&reported.amount),
+            };
+            match outcome {
                 Ok(amount) => {
                     priced.tracked_micro_usd = Some(amount);
                     priced.monetary_complete = true;
                     priced.unknown_components.clear();
                     effective = CostClassification::ReportedCharge;
                 }
-                Err(_) => {
+                Err(reason) => {
                     priced.tracked_micro_usd = None;
                     priced.monetary_complete = false;
-                    priced.unknown_components = vec![
-                        "reported USD amount exceeds supported exact precision or ledger range"
-                            .into(),
-                    ];
+                    priced.unknown_components = vec![reason];
                     effective = CostClassification::Untracked;
                 }
             }

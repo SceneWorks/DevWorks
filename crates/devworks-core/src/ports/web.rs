@@ -6,7 +6,7 @@
 //!
 //! * a [`Resolver`] answers a domain once per hop; core classifies **every** address it returned
 //!   and refuses the hop if any is disallowed;
-//! * the [`HttpTransport`] connects to exactly the [`SocketAddr`] core checked. It never resolves,
+//! * the [`HopTransport`] connects to exactly the [`SocketAddr`] core checked. It never resolves,
 //!   never follows a redirect, never stores or sends a cookie and never adds an authorization or
 //!   proxy header: it sends the fixed request core describes and returns the response head and a
 //!   bounded body stream;
@@ -14,7 +14,7 @@
 //!
 //! Every fault says whether request bytes may have reached the server ([`NetFault::dispatched`]),
 //! so a failure after dispatch is never reported as one before it.
-use crate::ports::secrets::SecretValue;
+use crate::ports::secrets::Secret;
 use crate::ports::storage::Cancellation;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
@@ -158,7 +158,7 @@ impl std::fmt::Debug for HopResponse {
 
 /// Sends one hop. Implementations must not resolve names, follow redirects, keep cookies or add
 /// credentials, and must bound the response head they accept.
-pub trait HttpTransport: Send + Sync {
+pub trait HopTransport: Send + Sync {
     fn get(&self, request: &HopRequest<'_>) -> Result<HopResponse, NetFault>;
 }
 
@@ -170,7 +170,7 @@ pub struct SearchRequest<'a> {
     /// Results wanted (1..=[`SearchProvider::page_max`]).
     pub count: u32,
     /// The provider credential resolved from the native secret store, when it needs one.
-    pub credential: Option<&'a SecretValue>,
+    pub credential: Option<&'a Secret>,
     pub deadline: Instant,
     pub cancel: Vec<Cancellation>,
 }

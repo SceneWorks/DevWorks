@@ -29,9 +29,9 @@ use crate::protocol::records::{
     KnowledgeBundle, KnowledgeClaim, KnowledgeConflict, KnowledgeEntity, KnowledgeQuery,
     KnowledgeRelation, KnowledgeState, SourceEvidence,
 };
-use crate::protocol::support::{BoundedList, BoundedText};
+use crate::protocol::support::BoundedList;
 use crate::protocol::{DomainErrorCode, Id};
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::{Failure, Refusal, content, counter, label, not_found, rev};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
@@ -1174,7 +1174,6 @@ fn full_graph(
     revision: i64,
     filter: &ClaimFilter,
 ) -> Result<KnowledgeBundle, Failure> {
-    let limit = clamp(q.page.limit.get(), 1, 500);
     // Bound to every readable scope's revision: a change to any of them expires the cursor.
     let mut parts = Vec::new();
     for scope in &c.scoped.readable {
@@ -1187,33 +1186,25 @@ fn full_graph(
     parts.push(format!("{filter:?}"));
     let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
     let binding = CursorBinding::new(ctx, "knowledge.subgraph", &parts, revision);
-    let after = match &q.page.cursor {
-        None => None,
-        Some(cursor) => {
-            let at = binding.decode(&cursor.0)?;
-            let (t, id) = at.split_once('|').ok_or(StorageError::CursorExpired)?;
-            Some((
-                t.parse::<i64>().map_err(|_| StorageError::CursorExpired)?,
-                id.to_owned(),
-            ))
-        }
-    };
-    let rows = c.k.knowledge_entities(
-        &c.keys,
-        after.as_ref().map(|(t, id)| (*t, id.as_str())),
-        ((limit + 1) as u16).min(MAX_ROWS),
+    let rows = cursor::page(
+        &binding,
+        &q.page,
+        |after, n| {
+            let after = after
+                .map(|at| {
+                    let (t, id) = at.split_once('|').ok_or(StorageError::CursorExpired)?;
+                    Ok::<_, StorageError>((
+                        t.parse::<i64>().map_err(|_| StorageError::CursorExpired)?,
+                        id.to_owned(),
+                    ))
+                })
+                .transpose()?;
+            c.k.knowledge_entities(&c.keys, after.as_ref().map(|(t, id)| (*t, id.as_str())), n)
+        },
+        |e| format!("{}|{}", e.updated_at_ms, e.id.as_str()),
     )?;
-    let mut more = rows.len() > limit;
-    let page: Vec<StoredEntity> = rows.into_iter().take(limit).collect();
-    // At the store's page maximum the probe row does not fit: ask whether anything follows.
-    if !more
-        && page.len() == limit
-        && let Some(last) = page.last()
-    {
-        more =
-            !c.k.knowledge_entities(&c.keys, Some((last.updated_at_ms, last.id.as_str())), 1)?
-                .is_empty();
-    }
+    let next = rows.next_cursor;
+    let page = rows.items;
     let on_page: HashSet<&Id> = page.iter().map(|e| &e.id).collect();
     let visible_object = |id: &Id| -> Result<bool, StorageError> {
         Ok(on_page.contains(id) || c.entity(id)?.is_some())
@@ -1260,12 +1251,6 @@ fn full_graph(
             }
         }
     }
-    let next = if more {
-        page.last()
-            .map(|last| binding.encode(&format!("{}|{}", last.updated_at_ms, last.id.as_str())))
-    } else {
-        None
-    };
     let s = Selection {
         entities: page.into_iter().map(|e| (e, 0, 0)).collect(),
         claims,
@@ -1273,7 +1258,7 @@ fn full_graph(
         truncated,
     };
     let mut b = bundle(c, q, &s, false)?;
-    b.next_cursor = next.map(BoundedText);
+    b.next_cursor = next;
     Ok(b)
 }
 

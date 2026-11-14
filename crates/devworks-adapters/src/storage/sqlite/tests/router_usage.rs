@@ -238,6 +238,7 @@ fn observation(
         reported_cost: reported.map(|amount| ReportedCost {
             amount: amount.into(),
             currency: "USD".into(),
+            raw_lexeme: None,
         }),
         provider_model_id: None,
     }
@@ -1327,6 +1328,172 @@ fn confirmed_cancelled_activity_uses_last_source_outcome_without_masking_later_r
             i64::from(later == Some(AttemptEnd::Completed))
         );
     }
+}
+
+#[test]
+fn reported_usd_cost_with_many_fractional_digits_is_rounded_and_counts_against_the_budget() {
+    use devworks_core::ports::usage::PriceResolver;
+    use devworks_core::services::usage::budget;
+    let mut f = NativeFx::new();
+    f.fx.cases = std::mem::take(&mut f.fx.cases).with_prices(Arc::new(
+        devworks_core::services::prices::PriceService::new(
+            f.fx.h.ids.clone(),
+            f.fx.h.clock.clone(),
+            false,
+        ),
+    ));
+    let tariffs = [("Input", "0.002"), ("Output", "0.004"), ("CacheRead", "0.0005"), ("CacheWrite", "0.003")]
+        .map(|(kind, amount)| json!({"upstreamModelId":"upstream/accounted","serviceTier":"Standard","modality":"Text","chargeKind":kind,"unit":"Token","units":"1000","amountUsd":amount}));
+    let decision = recorded(f.fx.command_keyed_at(&f.fx.user(), "router.price_override", "non-million-price", json!({"modelId":"accounted","expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}}), 3)).0;
+    assert!(
+        matches!(decision, DomainDecision::Applied { .. }),
+        "{decision:?}"
+    );
+    f.request.query.cache_write_ttl_ms = Some(300_000);
+    f.request.pricing.cache_read_possible = true;
+    f.request.pricing.cache_write_possible = true;
+    f.request.pricing.cache_write_ttl_ms = Some(300_000);
+    f.request.quote = f
+        .fx
+        .read(|r| devworks_core::services::prices::CatalogPriceResolver.quote(r, &f.request.query));
+    f.request.override_revision = 2;
+    assert_eq!(f.request.quote.tariffs.len(), 4);
+    assert!(
+        f.request.quote.rates.is_none(),
+        "the lossy per-million projection is unnecessary"
+    );
+    let feature = f.fx.write(|tx| {
+        let feature = StoredWork {
+            id: id("denominator-feature"),
+            project_id: project("project-a"),
+            kind: FEATURE.into(),
+            parent_feature_id: None,
+            status_id: None,
+            title: "Exact denominator feature".into(),
+            priority: 0,
+            manual_order: 0,
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            created_by: None,
+            updated_by: None,
+            search_key: "denominator feature".into(),
+            caller_ref: None,
+            completion: None,
+            brief: json!({}),
+        };
+        tx.work().insert_work(&feature)?;
+        budget::configure(
+            tx,
+            &feature,
+            &actor("user-a"),
+            &devworks_core::protocol::records::FeatureBudgetInput::Limit {
+                micro_usd: Counter::new(1000).unwrap(),
+            },
+        )?;
+        Ok(feature)
+    });
+    f.request.request_id = id("denominator-logical");
+    f.request.work_id = Some(feature.id.clone());
+    f.request.selection = AttemptSelection::Conversation {
+        intent: RouteIntent::Model {
+            model_id: id("accounted"),
+        },
+        effort: EffortName::Default,
+        required_capabilities: vec![],
+        pin: None,
+    };
+    let router = f.fx.router.clone();
+    let ctx = f.fx.user();
+    f.fx.write(move |tx| {
+        router.admit_owned_request(
+            tx,
+            &ctx,
+            &RequestAdmission {
+                request_id: id("denominator-logical"),
+                purpose: Purpose::Conversation,
+                session_id: Some(id("work-a")),
+                project_id: Some(project("project-a")),
+                root_id: Some(devworks_core::protocol::RootId(id("denominator-feature"))),
+                model_id: id("accounted"),
+                connection_id: id("api"),
+                pin_id: None,
+                args_digest: "d".repeat(64),
+            },
+            devworks_core::services::router::accounting::ReportCategory::Assistant,
+        )
+    });
+    while !f
+        .fx
+        .write(|tx| devworks_core::services::usage::ingest::bootstrap_page(tx, 64))
+        .complete
+    {}
+    let attempt = f.admitted();
+    let lexeme = "0.000035549999999999995";
+    let (src, _) = source(
+        vec![
+            InferenceFrame::Usage(observation("many-digits", 1, Some(100), Some(lexeme))),
+            InferenceFrame::Terminal(AttemptEnd::Completed),
+        ],
+        false,
+    );
+    let DriveOutcome::Settled(balance) = f
+        .host()
+        .drive(attempt.attempt_id.clone(), src, Cancellation::new())
+        .unwrap()
+    else {
+        panic!("unsettled")
+    };
+    assert_eq!(balance.priced_micro_usd, Some(36));
+    assert!(balance.monetary_complete);
+    assert_eq!(balance.classification, "ReportedCharge");
+    assert_eq!(
+        accounting::summary(&balance)
+            .unwrap()
+            .reported_cost
+            .unwrap()
+            .amount,
+        lexeme
+    );
+    let view = f.fx.read(|r| budget::view(r, &feature.id));
+    assert_eq!(view.spent_micro_usd.get(), 36);
+    assert_eq!(view.reserved_micro_usd.get(), 0);
+}
+
+#[test]
+fn unrepresentable_reported_cost_leaves_the_turn_successful_with_an_untracked_component() {
+    let lexeme = "1e-200";
+    let expanded = format!("0.{}1", "0".repeat(199));
+    let f = NativeFx::new();
+    let attempt = f.admitted();
+    let mut frame = observation("tiny", 1, Some(1), Some(&expanded));
+    frame.reported_cost.as_mut().unwrap().raw_lexeme = Some(lexeme.into());
+    let (src, _) = source(
+        vec![
+            InferenceFrame::Usage(frame),
+            InferenceFrame::Terminal(AttemptEnd::Completed),
+        ],
+        false,
+    );
+    let outcome = f
+        .host()
+        .drive(attempt.attempt_id, src, Cancellation::new())
+        .unwrap();
+    let DriveOutcome::Settled(balance) = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(balance.priced_micro_usd, None);
+    assert!(!balance.monetary_complete);
+    let summary = accounting::summary(&balance).unwrap();
+    assert_eq!(summary.unknown_components.len(), 1, "{summary:?}");
+    let cost = summary.reported_cost.unwrap();
+    assert_eq!(cost.raw_lexeme.as_deref(), Some(lexeme));
+    assert_eq!(
+        cost.amount.chars().count(),
+        128,
+        "the stored amount is capped"
+    );
 }
 
 #[test]

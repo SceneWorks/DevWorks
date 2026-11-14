@@ -60,6 +60,7 @@
 //! service; sessions retain their start source and each observation retains its own source.
 //! Unbound invocations record no repository revision.
 pub mod cdp;
+pub mod egress;
 pub mod live;
 
 use crate::authority::destructive::{FilesystemResolver, ProtectedRoots};
@@ -72,10 +73,10 @@ use crate::ports::browser::{
     BrowserAsset, BrowserPlatform, Profile, Qualification, STAGED_NAME_MAX_BYTES,
 };
 use crate::ports::storage::{
-    ApplicationStore, ArtifactScope, BrowserChannel, BrowserFilter, BrowserPhase, MAX_PAGE,
-    NewEvent, NewOperation, NewQueueEntry, OperationRecord, ReadOptions, ReadSnapshot,
-    StorageError, StoredBrowserObservation, StoredBrowserSession, WriteOptions, WriteTransaction,
-    read_snapshot, run_write,
+    ApplicationStore, ArtifactScope, BrowserChannel, BrowserFilter, BrowserPhase, NewEvent,
+    NewOperation, NewQueueEntry, OperationRecord, ReadOptions, ReadSnapshot, StorageError,
+    StoredBrowserObservation, StoredBrowserSession, WriteOptions, WriteTransaction, read_snapshot,
+    run_write,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -97,7 +98,7 @@ use crate::protocol::{
 };
 use crate::services::artifacts::ArtifactService;
 use crate::services::artifacts::evidence::{Evidence, EvidenceFailure, safe_name};
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::diagnostics::HealthCheck;
 use crate::services::process::{
     LaunchPolicy, LaunchRefusal, LaunchRequest, OwnedProcess, ProcessSupervisor, StopOutcome,
@@ -390,6 +391,8 @@ pub struct BrowserService {
     verified: Mutex<HashMap<String, (String, String)>>,
     /// The latest launch failure per asset in this boot.
     launch_failures: Mutex<HashMap<String, String>>,
+    /// Which requests the browser may send (every intercepted request passes it).
+    egress: Arc<egress::BrowserEgress>,
 }
 
 fn owner_kind(k: PrincipalKind) -> &'static str {
@@ -587,6 +590,7 @@ impl BrowserService {
     ) -> Self {
         let assets = platform.assets();
         Self {
+            egress: Arc::new(egress::BrowserEgress::new(store.clone(), None)),
             store,
             platform,
             artifacts,
@@ -603,6 +607,16 @@ impl BrowserService {
             verified: Mutex::new(HashMap::new()),
             launch_failures: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Resolves the names pages request through `resolver`; without one only literal
+    /// addresses and `localhost` names are reachable.
+    pub fn with_resolver(mut self, resolver: Arc<dyn crate::ports::web::Resolver>) -> Self {
+        self.egress = Arc::new(egress::BrowserEgress::new(
+            self.store.clone(),
+            Some(resolver),
+        ));
+        self
     }
 
     pub fn with_git_source(
@@ -1032,7 +1046,7 @@ impl BrowserService {
             id.clone(),
             profile.clone(),
             process.clone(),
-            cdp::Cdp::new(transport),
+            cdp::Cdp::new(transport).with_gate(self.egress.clone()),
         );
         if let Err(e) = live.setup(&self.config.bounds(), self.config.launch_timeout) {
             let why = format!("the browser session could not be configured: {e}");
@@ -1487,6 +1501,9 @@ impl BrowserService {
             Err(ActionError::Refused { kind, detail: d }) => {
                 failed(DomainErrorCode::InvalidArgument, kind, &d)
             }
+            Err(ActionError::Denied { kind, detail: d }) => {
+                failed(DomainErrorCode::PermissionDenied, kind, &d)
+            }
             Err(ActionError::Before(e)) => {
                 failed(DomainErrorCode::ExternalFailure, "browser", &e.to_string())
             }
@@ -1675,7 +1692,15 @@ impl BrowserService {
                 detail: e.to_string(),
             })?;
         let url = match &input.location {
-            BrowserLocation::Remote { url } => url.0.clone(),
+            // The page itself is checked before anything is sent; its redirects and requests are
+            // checked as the browser makes them.
+            BrowserLocation::Remote { url } => {
+                self.egress.check(&url.0).map_err(|r| ActionError::Denied {
+                    kind: "browser_destination",
+                    detail: format!("navigation refused: {}", r.detail),
+                })?;
+                url.0.clone()
+            }
             BrowserLocation::Blank {} => "about:blank".into(),
             // An artifact page is served from the session's artifact origin (never a `file:`
             // URL, which could reach every other local file), from its staged copy.
@@ -2823,50 +2848,31 @@ impl BrowserService {
             .map_or("workspace", |p| p.0.as_str())
             .to_owned();
         let binding = CursorBinding::new(ctx, "browser.sessions", &[&scope_key], 1);
-        let mut after = match &i.page.cursor {
-            Some(c) => {
-                Some(Id::new(binding.decode(&c.0)?).map_err(|_| StorageError::CursorExpired)?)
-            }
-            None => None,
-        };
-        let limit = (i.page.limit.get() as usize).clamp(1, 500);
-        let mut items = Vec::new();
-        let mut more = false;
-        'pages: loop {
-            let page = snapshot.browser().browser_sessions(
-                &BrowserFilter::Scope(project.clone()),
-                after.as_ref(),
-                500,
-            )?;
-            let full = page.len() == 500;
-            for s in page {
-                after = Some(s.id.clone());
-                if !visible(ctx, &s) {
-                    continue;
-                }
-                if items.len() == limit {
-                    more = true;
-                    break 'pages;
-                }
-                items.push(s);
-            }
-            if !full {
-                break;
-            }
-        }
-        let next_cursor = if more {
-            items
-                .last()
-                .map(|s| BoundedText(binding.encode(s.id.as_str())))
-        } else {
-            None
-        };
-        Ok(OperationResult::BrowserSessions {
-            value: Page {
-                items: BoundedList(items.iter().map(session_record).collect()),
-                next_cursor,
-                has_more: more,
+        let rows = cursor::page(
+            &binding,
+            &i.page,
+            |after, n| {
+                let after = after
+                    .map(|a| Id::new(a).map_err(|_| StorageError::CursorExpired))
+                    .transpose()?;
+                cursor::scan(
+                    after,
+                    n,
+                    |after, batch| {
+                        snapshot.browser().browser_sessions(
+                            &BrowserFilter::Scope(project.clone()),
+                            after.as_ref(),
+                            batch,
+                        )
+                    },
+                    |s| Some(s.id.clone()),
+                    |s| Ok(visible(ctx, s)),
+                )
             },
+            |s| s.id.as_str().to_owned(),
+        )?;
+        Ok(OperationResult::BrowserSessions {
+            value: rows.try_into_page(|s| Ok::<_, StorageError>(session_record(&s)))?,
         })
     }
 
@@ -2994,35 +3000,35 @@ impl BrowserService {
             _ => "browser.console",
         };
         let binding = CursorBinding::new(ctx, op_name, &[id.as_str(), &after.to_string()], 1);
-        let mut position = after;
-        if let Some(c) = &page.cursor {
-            position = binding
-                .decode(&c.0)?
-                .parse::<i64>()
-                .map_err(|_| StorageError::CursorExpired)?
-                .max(after);
-        }
-        let limit = (page.limit.get() as usize).clamp(1, MAX_PAGE as usize);
         // The page is read from the gateway's snapshot, taken after this query's preparation
         // published what was pending ([`Self::publish_pending`]): committed sequences form a
         // gap-free prefix (each is allocated and committed by the single writer in turn), so
         // that snapshot also sees every earlier one another query published meanwhile, and a
-        // continuation never skips one.
-        let mut items = observation_page(snapshot, id, channel, position, limit)?;
-        let more = items.len() > limit;
-        items.truncate(limit);
-        let next_cursor = if more {
-            items
-                .last()
-                .map(|i| BoundedText(binding.encode(&i.sequence.get().to_string())))
-        } else {
-            None
-        };
-        Ok(Page {
-            items: BoundedList(items),
-            next_cursor,
-            has_more: more,
-        })
+        // continuation never skips one. An observation whose evidence is gone is skipped.
+        let rows = cursor::page(
+            &binding,
+            page,
+            |at, n| {
+                let position = at.map_or(Ok(after), |a| {
+                    a.parse::<i64>()
+                        .map(|p| p.max(after))
+                        .map_err(|_| StorageError::CursorExpired)
+                })?;
+                cursor::scan(
+                    position,
+                    n,
+                    |p, batch| {
+                        snapshot
+                            .browser()
+                            .browser_observations(id, channel, *p, batch)
+                    },
+                    |o| o.sequence,
+                    |o| Ok(snapshot.artifacts().version(&o.version_id)?.is_some()),
+                )
+            },
+            |o| o.sequence.to_string(),
+        )?;
+        Ok(rows.try_into_page(|o| observation(snapshot, id, o))?)
     }
 
     /// Publishes the notifications of `channel` buffered since the last read as one
@@ -3107,47 +3113,27 @@ enum Observed {
     Published,
 }
 
-/// One page (plus one row of lookahead) of a session's observations after `position`.
-fn observation_page(
+/// The wire observation of a stored one whose evidence version exists.
+fn observation(
     snapshot: &dyn ReadSnapshot,
     id: &Id,
-    channel: BrowserChannel,
-    position: i64,
-    limit: usize,
-) -> Result<Vec<BrowserObservation>, StorageError> {
-    // One row of lookahead, within the repository's page bound.
-    let ask = (limit + 1).min(MAX_PAGE as usize) as u16;
-    let mut rows = snapshot
-        .browser()
-        .browser_observations(id, channel, position, ask)?;
-    if rows.len() == limit
-        && usize::from(ask) == limit
-        && let Some(last) = rows.last().map(|o| o.sequence)
-    {
-        rows.extend(
-            snapshot
-                .browser()
-                .browser_observations(id, channel, last, 1)?,
-        );
-    }
-    let mut items = Vec::new();
-    for o in rows {
-        let Some(v) = snapshot.artifacts().version(&o.version_id)? else {
-            continue;
-        };
-        items.push(BrowserObservation {
-            session_id: id.clone(),
-            sequence: counter(o.sequence),
-            evidence: crate::services::artifacts::version_ref(&v),
-            truncated: o.truncated,
-            tested_repository: o
-                .tested_repository
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(|_| StorageError::InvalidRecord("observation source".into()))?,
-        });
-    }
-    Ok(items)
+    o: StoredBrowserObservation,
+) -> Result<BrowserObservation, StorageError> {
+    let v = snapshot
+        .artifacts()
+        .version(&o.version_id)?
+        .ok_or_else(|| StorageError::InvalidRecord("observation evidence".into()))?;
+    Ok(BrowserObservation {
+        session_id: id.clone(),
+        sequence: counter(o.sequence),
+        evidence: crate::services::artifacts::version_ref(&v),
+        truncated: o.truncated,
+        tested_repository: o
+            .tested_repository
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| StorageError::InvalidRecord("observation source".into()))?,
+    })
 }
 
 /// The staged file name of the `n`th file: `<n>-<safe name>`, at most
@@ -3219,6 +3205,12 @@ fn action_failure(e: ActionError, target: &BrowserTarget) -> Failure {
         }
         ActionError::Refused { kind, .. } => Refusal::new(
             DomainErrorCode::UnsupportedTarget,
+            kind,
+            Some(target.target_id.clone()),
+        )
+        .into(),
+        ActionError::Denied { kind, .. } => Refusal::new(
+            DomainErrorCode::PermissionDenied,
             kind,
             Some(target.target_id.clone()),
         )

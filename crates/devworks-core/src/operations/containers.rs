@@ -93,7 +93,9 @@ impl Check for CreateInput {
     }
 }
 impl Revisioned for CreateInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.spec.retain_revision(revision);
+    }
 }
 
 /// `containers.start` Command input.

@@ -10,6 +10,7 @@ use crate::memory::{Memory, RouteMemory};
 use crate::notifications::{CardAction, Completions};
 use crate::ops::{self, Failure};
 use crate::route::{NAV_ORDER, NavGroup, Route};
+use crate::screen::{Cx, DynScreen, Effect, ScreenId};
 use crate::settings_screen::{KEEP_AWAKE, SettingsAction, SettingsScreen};
 use crate::theme;
 use crate::virtual_list::{self, Scrolls};
@@ -253,6 +254,40 @@ pub struct Shell {
     control: Option<Box<dyn HostControl>>,
 }
 
+/// The migrated screens: `screens!(Id => field, ...)` binds each [`ScreenId`] to the `Shell`
+/// field holding that screen.
+macro_rules! screens {
+    ($($id:ident => $field:ident),* $(,)?) => {
+        impl Shell {
+            fn screens(&self) -> Vec<&dyn DynScreen> {
+                vec![$(&self.$field),*]
+            }
+            fn screens_mut(&mut self) -> Vec<&mut dyn DynScreen> {
+                vec![$(&mut self.$field),*]
+            }
+            fn screen(&self, id: ScreenId) -> Option<&dyn DynScreen> {
+                match id {
+                    $(ScreenId::$id => Some(&self.$field),)*
+                    ScreenId::Legacy => None,
+                }
+            }
+            /// The screen `id` with a context over the rest of the shell.
+            fn screen_mut(&mut self, id: ScreenId) -> Option<(&mut dyn DynScreen, Cx<'_>)> {
+                if id == ScreenId::Legacy {
+                    return None;
+                }
+                let online = self.online();
+                let cx = Cx::new(self.client.as_mut(), online, &mut self.status, self.route);
+                match id {
+                    $(ScreenId::$id => Some((&mut self.$field, cx)),)*
+                    ScreenId::Legacy => None,
+                }
+            }
+        }
+    };
+}
+screens!(Help => help);
+
 impl Shell {
     pub fn new(init: ShellInit) -> Self {
         let memory = init
@@ -461,6 +496,24 @@ impl Shell {
         self.status = Some(text.into());
     }
 
+    /// Runs `f` on screen `id`, then the effects it asked for; `false` for a legacy screen.
+    fn with_screen(&mut self, id: ScreenId, f: impl FnOnce(&mut dyn DynScreen, &mut Cx)) -> bool {
+        let Some((screen, mut cx)) = self.screen_mut(id) else {
+            return false;
+        };
+        f(screen, &mut cx);
+        let effects = cx.into_effects();
+        self.run_effects(effects);
+        true
+    }
+    fn run_effects(&mut self, effects: Vec<Effect>) {
+        for effect in effects {
+            match effect {
+                Effect::Navigate(route) => self.navigate(route),
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------------------------
     // Navigation
 
@@ -507,7 +560,15 @@ impl Shell {
         } else {
             (None, None)
         };
+        let default_memory = RouteMemory::default();
+        let screen_context = self.screen(screen.owner).map(|s| {
+            s.context(
+                self.route,
+                self.routes.get(&self.route).unwrap_or(&default_memory),
+            )
+        });
         let tab = match self.route {
+            _ if screen_context.is_some() => screen_context.as_ref().map_or(0, |c| c.tab),
             Route::Approvals => self.decisions.tab,
             Route::Knowledge => self.knowledge.tab,
             Route::Databases => self.databases.tab,
@@ -515,6 +576,9 @@ impl Shell {
             _ => self.routes.get(&self.route).map_or(0, |view| view.tab),
         };
         let selection = match self.route {
+            _ if screen_context.is_some() => {
+                screen_context.as_ref().and_then(|c| c.selection.as_deref())
+            }
             Route::Approvals => self.decisions.selected.as_ref().map(|v| v.id.as_str()),
             Route::Knowledge => self.knowledge.selected.as_ref().map(Id::as_str),
             Route::Databases => self
@@ -528,7 +592,6 @@ impl Shell {
             }
             Route::Jobs => self.jobs.selected.as_deref(),
             Route::AddOns => self.addons.selected.as_deref(),
-            Route::Help => self.help.selected.as_ref().map(|(_, topic)| topic.as_str()),
             _ => self
                 .routes
                 .get(&self.route)
@@ -589,6 +652,10 @@ impl Shell {
     }
 
     fn load_route(&mut self) {
+        let route = self.route;
+        if self.with_screen(route.screen().owner, |s, cx| s.load(cx, route)) {
+            return;
+        }
         match self.route {
             Route::Chat => self.ensure_conversation_loaded(),
             Route::Usage => {
@@ -607,7 +674,6 @@ impl Shell {
                 self.load_settings();
             }
             Route::Databases => self.load_databases(false),
-            Route::Help if !self.help.loaded && !self.help.loading => self.refresh_help(),
             Route::Artifacts => self.load_artifacts(),
             Route::Resources => self.load_resources(),
             Route::Browser => self.load_browser(),
@@ -706,16 +772,8 @@ impl Shell {
         op: &'static str,
         frame: impl FnOnce(&dyn Backend) -> Vec<u8>,
     ) -> bool {
-        if self.online().is_err() {
-            return false;
-        }
-        let Some(b) = self.backend() else {
-            return false;
-        };
-        let frame = frame(&*b);
-        self.client
-            .as_mut()
-            .is_some_and(|c| c.query(slot, label, op, frame))
+        let online = self.online().is_ok();
+        crate::screen::submit_query(self.client.as_mut(), online, slot, label, op, frame)
     }
     /// Submits a command; `false` when it was not submitted now (offline or closing; a closed
     /// client keeps it unresolved). A caller that marked state for it restores that state.
@@ -726,30 +784,16 @@ impl Shell {
         op: &'static str,
         frame: impl FnOnce(&dyn Backend) -> Vec<u8>,
     ) -> bool {
-        if self.online().is_err() {
-            return false;
-        }
-        // A slot whose earlier command has no definite outcome keeps it until Confirm outcomes
-        // settles that exact frame: a new request there would replace it (and could commit a
-        // second time under a fresh request key).
-        if self
-            .client
-            .as_ref()
-            .is_some_and(|c| c.unresolved().iter().any(|u| u.slot == slot))
-        {
-            self.announce(format!(
-                "{label}: an earlier request here is not confirmed yet. Use Confirm outcomes \
-                 first; nothing is applied twice."
-            ));
-            return false;
-        }
-        let Some(b) = self.backend() else {
-            return false;
-        };
-        let frame = frame(&*b);
-        self.client
-            .as_mut()
-            .is_some_and(|c| c.command(slot, label, op, frame))
+        let online = self.online().is_ok();
+        crate::screen::submit_command(
+            self.client.as_mut(),
+            online,
+            &mut self.status,
+            slot,
+            label,
+            op,
+            frame,
+        )
     }
 
     pub fn load_sessions(&mut self) {
@@ -1909,6 +1953,11 @@ impl Shell {
     }
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
+        let owner = slot.screen();
+        if owner != ScreenId::Legacy {
+            self.with_screen(owner, |s, cx| s.apply(cx, slot, reply));
+            return;
+        }
         let Some((slot, reply)) = self.apply_conventions(slot, reply) else {
             return;
         };
@@ -1940,9 +1989,6 @@ impl Shell {
             return;
         };
         let Some((slot, reply)) = self.apply_decisions(slot, reply) else {
-            return;
-        };
-        let Some((slot, reply)) = self.apply_help(slot, reply) else {
             return;
         };
         match (slot, reply) {
@@ -3230,6 +3276,10 @@ impl Shell {
         {
             self.load_connections();
         }
+        let route = self.route;
+        if self.with_screen(route.screen().owner, |s, cx| s.refresh(cx, route)) {
+            return;
+        }
         match self.route {
             Route::Databases
                 if !self.databases.loading
@@ -3238,7 +3288,6 @@ impl Shell {
             {
                 self.load_databases(false)
             }
-            Route::Help if !self.help.loading => self.probe_help(),
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
             Route::Browser if !self.pending(&Slot::BrowserSessions) => self.load_browser(),
@@ -3969,22 +4018,33 @@ impl Shell {
     /// them with their exact frames.
     fn pending_memory(&self) -> crate::memory::PendingMemory {
         use crate::memory::{PendingCommand, PendingMemory, RemovedMemory, SubmittedMemory};
-        let commands: Vec<PendingCommand> = self
+        let unconfirmed = self
             .client
             .as_ref()
-            .map(|c| {
-                c.unconfirmed()
-                    .iter()
-                    .map(|u| PendingCommand {
-                        slot: u.slot.clone(),
-                        label: u.label.clone(),
-                        operation: u.operation().to_owned(),
-                        frame: u.frame().to_vec(),
-                        dispatch: u.dispatch,
-                    })
-                    .collect()
-            })
+            .map(Client::unconfirmed)
             .unwrap_or_default();
+        let commands: Vec<PendingCommand> = unconfirmed
+            .iter()
+            .map(|u| PendingCommand {
+                slot: u.slot.clone(),
+                label: u.label.clone(),
+                operation: u.operation().to_owned(),
+                frame: u.frame().to_vec(),
+                dispatch: u.dispatch,
+            })
+            .collect();
+        let screens = self
+            .screens()
+            .into_iter()
+            .filter_map(|screen| {
+                let own: Vec<&Unresolved> = unconfirmed
+                    .iter()
+                    .filter(|u| u.slot.screen() == screen.id())
+                    .collect();
+                let saved = screen.pending_memory(&own)?;
+                Some((screen.id().key().to_owned(), saved))
+            })
+            .collect();
         let has = |f: &dyn Fn(&Slot) -> bool| commands.iter().any(|c| f(&c.slot));
         let submitted = match (&self.chat.submitted, &self.chat.sending) {
             (Some(sent), Some(id)) if has(&|s| *s == Slot::Append(id.clone())) => {
@@ -4051,6 +4111,7 @@ impl Shell {
                 .filter_map(|f| serde_json::to_value(f).ok())
                 .collect(),
             commands,
+            screens,
         }
     }
 
@@ -4064,6 +4125,11 @@ impl Shell {
                 frame: i.frame.clone(),
             });
         }
+        for screen in self.screens_mut() {
+            if let Some(saved) = pending.screens.get(screen.id().key()) {
+                screen.restore_pending(saved);
+            }
+        }
         let mut confirming: Vec<String> = Vec::new();
         for c in pending.commands {
             let slot = c.slot.clone();
@@ -4072,6 +4138,11 @@ impl Shell {
             else {
                 continue;
             };
+            for screen in self.screens_mut() {
+                if screen.id() == slot.screen() {
+                    screen.restore_in_flight(&u);
+                }
+            }
             match &slot {
                 Slot::DatabaseCa | Slot::DatabaseCommand(_) => self.databases.busy = true,
                 Slot::ConventionArtifact(key, _) | Slot::ConventionCommand(key, _) => {
@@ -4131,10 +4202,6 @@ impl Shell {
                     p.sequence = p.sequence.max(*n);
                     p.restore_edit(*n, u.frame());
                     p.busy.push((*n, u.label.clone()));
-                }
-                Slot::HelpGenerate => {
-                    self.help.generating = true;
-                    self.help.generation_unknown = true;
                 }
                 Slot::SettingsSave => {
                     self.settings.saving = true;
@@ -4873,6 +4940,10 @@ impl Shell {
     }
 
     fn content(&mut self, ui: &mut Ui) {
+        let route = self.route;
+        if self.with_screen(route.screen().owner, |s, cx| s.ui(cx, route, ui)) {
+            return;
+        }
         match self.route {
             Route::Chat => self.home(ui),
             Route::Settings => {
@@ -4915,7 +4986,6 @@ impl Shell {
                 self.poll_mcp(&ctx);
             }
             Route::Databases => self.databases_screen(ui),
-            Route::Help => self.help_screen(ui),
             Route::Indexing => self.indexing_screen(ui),
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),

@@ -1514,10 +1514,30 @@ fn composition(
             fs: Arc::new(NativeFilesystem::new()),
             app_data_root: Some(h.root.to_string_lossy().into_owned()),
             config: browser,
+            resolver: Arc::new(FixtureResolver),
         }),
         use_cases: UseCases::new().with_queue(),
         consumers: Vec::new(),
         config,
+    }
+}
+
+/// Resolves `lan.test` to a private address and every other fixture name to a public one.
+struct FixtureResolver;
+impl devworks_core::ports::web::Resolver for FixtureResolver {
+    fn resolve(
+        &self,
+        host: &str,
+        _: u16,
+        _: Instant,
+        _: &[Cancellation],
+    ) -> Result<Vec<std::net::IpAddr>, devworks_core::ports::web::NetFault> {
+        let ip = if host == "lan.test" {
+            "192.168.1.20"
+        } else {
+            "93.184.216.34"
+        };
+        Ok(vec![ip.parse().unwrap()])
     }
 }
 
@@ -3968,6 +3988,121 @@ fn local_documents_are_never_loaded_or_read_through_an_owned_browser() {
 }
 
 #[test]
+fn the_egress_policy_refuses_metadata_and_private_destinations_on_every_request() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let b = fx.platform.browser(&session);
+    let answered = |rid: &str| {
+        b.lock().unwrap().log.iter().find_map(|m| {
+            (m["params"]["requestId"] == rid).then(|| m["method"].as_str().unwrap_or("").to_owned())
+        })
+    };
+    let pause = |requests: &[(&str, &str, &str)]| {
+        let mut br = b.lock().unwrap();
+        let (s, f) = (br.pages[0].session.clone(), br.pages[0].frame.clone());
+        for (rid, kind, url) in requests {
+            br.emit(
+                Some(&s),
+                "Fetch.requestPaused",
+                json!({"requestId": rid, "request": {"url": url, "method": "GET"}, "frameId": f, "resourceType": kind}),
+            );
+        }
+    };
+    let navigations = requests(&b, "Page.navigate");
+    // A refused page is refused before anything is sent: metadata and link-local always,
+    // private addresses (literal or resolved) while the private-network setting is off.
+    for url in [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://metadata.google.internal/computeMetadata/v1/",
+        "http://[fe80::1]/",
+        "http://192.168.1.1/",
+        "https://lan.test/",
+    ] {
+        match fx.navigate(&user, &session, Some("t1"), url) {
+            OperationCompletion::Failed { fault, .. } => {
+                assert_eq!(fault.code, DomainErrorCode::PermissionDenied, "{url}");
+                assert_eq!(
+                    fault.target_kind.as_ref().unwrap().0,
+                    "browser_destination",
+                    "{url}"
+                );
+            }
+            other => panic!("{url}: {other:?}"),
+        }
+    }
+    assert_eq!(
+        requests(&b, "Page.navigate"),
+        navigations,
+        "nothing was sent"
+    );
+    // Loopback is always allowed: local development servers.
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "http://127.0.0.1:3000/"));
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "http://localhost:5173/"));
+    // Redirect hops and subresources pause at their own URL and pass the same policy.
+    pause(&[
+        (
+            "redirect-1",
+            "Document",
+            "http://169.254.169.254/latest/meta-data/",
+        ),
+        (
+            "sub-1",
+            "XHR",
+            "http://metadata.google.internal/computeMetadata/v1/",
+        ),
+        ("sub-2", "Image", "http://192.168.1.1/x.png"),
+        ("sub-3", "Script", "https://partner.test/a.js"),
+        ("sub-4", "Image", "http://127.0.0.1:3000/logo.png"),
+    ]);
+    fx.svc().tick();
+    for (rid, method) in [
+        ("redirect-1", "Fetch.failRequest"),
+        ("sub-1", "Fetch.failRequest"),
+        ("sub-2", "Fetch.failRequest"),
+        ("sub-3", "Fetch.continueRequest"),
+        ("sub-4", "Fetch.continueRequest"),
+    ] {
+        assert_eq!(answered(rid).as_deref(), Some(method), "{rid}");
+    }
+    // With private networks allowed, private addresses are reachable; metadata still is not.
+    set_workspace(
+        &**fx.app().store(),
+        devworks_core::settings::catalog::WEB_FETCH_PRIVATE_KEY,
+        json!(true),
+    );
+    fx.snapshot(fx.navigate(&user, &session, Some("t1"), "http://192.168.1.1/"));
+    pause(&[
+        ("sub-5", "Image", "https://lan.test/x.png"),
+        ("redirect-2", "Document", "http://169.254.169.254/"),
+    ]);
+    fx.svc().tick();
+    assert_eq!(answered("sub-5").as_deref(), Some("Fetch.continueRequest"));
+    assert_eq!(answered("redirect-2").as_deref(), Some("Fetch.failRequest"));
+    // A worker's requests are intercepted too.
+    {
+        let mut br = b.lock().unwrap();
+        let s = br.pages[0].session.clone();
+        br.emit(
+            Some(&s),
+            "Target.attachedToTarget",
+            json!({"sessionId": "W1", "targetInfo": {"targetId": "WT1", "type": "worker", "url": "https://app.test/w.js"}, "waitingForDebugger": false}),
+        );
+    }
+    fx.svc().tick();
+    assert!(
+        b.lock()
+            .unwrap()
+            .log
+            .iter()
+            .any(|m| m["method"] == "Fetch.enable" && m["sessionId"] == "W1"),
+        "the worker's requests are intercepted"
+    );
+}
+
+#[test]
 fn a_browser_whose_main_process_exits_is_settled_while_its_helpers_linger() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();
@@ -4009,14 +4144,19 @@ fn a_browser_whose_main_process_exits_is_settled_while_its_helpers_linger() {
 
 /// Writes the workspace artifact storage limit directly (as a settings save would).
 fn set_quota(store: &dyn ApplicationStore, bytes: i64) {
-    use devworks_core::settings::catalog::{ARTIFACT_QUOTA_KEY, descriptor};
+    use devworks_core::settings::catalog::ARTIFACT_QUOTA_KEY;
+    set_workspace(store, ARTIFACT_QUOTA_KEY, json!(bytes));
+}
+
+/// Writes one workspace setting directly (as a settings save would).
+fn set_workspace(store: &dyn ApplicationStore, key: &'static str, value: Value) {
+    use devworks_core::settings::catalog::descriptor;
     use devworks_core::settings::model;
     write(store, move |tx| {
         let current = model::current_layer(tx.configuration(), &ConfigScope::Workspace)?;
-        let schema =
-            serde_json::to_value(descriptor(ARTIFACT_QUOTA_KEY).unwrap().schema_ref()).unwrap();
+        let schema = serde_json::to_value(descriptor(key).unwrap().schema_ref()).unwrap();
         let a = serde_json::from_value(
-            json!({"key": ARTIFACT_QUOTA_KEY, "value": {"schema": schema, "value": bytes}}),
+            json!({"key": key, "value": {"schema": schema, "value": value}}),
         )
         .unwrap();
         let plan = model::plan(&current, &[a]);

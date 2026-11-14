@@ -61,6 +61,7 @@ pub mod platform;
 pub mod project_purge;
 pub mod route;
 pub mod routing;
+pub mod screen;
 pub mod settings_screen;
 pub mod shell;
 pub mod theme;

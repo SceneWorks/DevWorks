@@ -20,7 +20,7 @@ use crate::protocol::records::{
 };
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::{BoundedList, BoundedText, Page};
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::{Failure, content, counter, label, rev};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -500,27 +500,30 @@ pub fn catalog(
     let reg = read.packages();
     let registry_revision = reg.registry_revision()?;
     let binding = CursorBinding::new(ctx, "addons.catalog", &[], 1);
-    let after = i
-        .page
-        .cursor
-        .as_ref()
-        .map(|c| binding.decode(&c.0))
-        .transpose()?;
-    let limit = (i.page.limit.get() as usize).clamp(1, 500);
     let all = load(reg as &dyn PackageRegistryRead)?;
     let offered = super::index::offers(reg as &dyn PackageRegistryRead)?;
     // Installed or proposed packages and packages only an index offers, in one ID order.
     let ids: std::collections::BTreeSet<&String> = all.keys().chain(offered.keys()).collect();
-    let rows: Vec<&String> = ids
-        .into_iter()
-        .filter(|id| after.as_deref().is_none_or(|a| id.as_str() > a))
-        .take(limit + 1)
-        .collect();
-    let has_more = rows.len() > limit;
-    let rows = &rows[..rows.len().min(limit)];
+    let rows = cursor::page(
+        &binding,
+        &i.page,
+        |after, n| {
+            Ok::<_, StorageError>(
+                ids.iter()
+                    .copied()
+                    .filter(|id| after.is_none_or(|a| id.as_str() > a))
+                    .take(usize::from(n))
+                    .collect::<Vec<&String>>(),
+            )
+        },
+        |id| (*id).clone(),
+    )?;
+    let next = rows.next_cursor;
+    let has_more = next.is_some();
+    let rows = rows.items;
     let project = ctx.project_id().map(|p| p.0.as_str());
     let mut items = Vec::with_capacity(rows.len());
-    for id in rows {
+    for id in &rows {
         match all.get(*id) {
             Some((p, active)) => {
                 let mut r = package_record(reg, &all, p, host, runtimes, project)?;
@@ -538,7 +541,6 @@ pub fn catalog(
             }
         }
     }
-    let next = has_more.then(|| BoundedText(binding.encode(rows[rows.len() - 1])));
     Ok(OperationResult::AddonsCatalog {
         value: Page {
             items: BoundedList(items),
@@ -560,29 +562,26 @@ pub fn logs(
         &[i.package_id.as_str(), &i.after_sequence.get().to_string()],
         1,
     );
-    let after = match &i.page.cursor {
-        Some(c) => binding
-            .decode(&c.0)?
-            .parse::<i64>()
-            .map_err(|_| StorageError::CursorExpired)?,
-        None => i.after_sequence.get(),
-    };
-    let limit = (i.page.limit.get() as usize).clamp(1, 500);
-    let filter = DiagnosticFilter {
-        after_sequence: after,
-        component: Some(COMPONENT.into()),
-        target_id: Some(i.package_id.clone()),
-        ..Default::default()
-    };
-    let rows = read
-        .diagnostics()
-        .diagnostics(&filter, (limit + 1) as u16)?;
-    let has_more = rows.len() > limit;
-    let rows = &rows[..rows.len().min(limit)];
-    let items = rows
-        .iter()
-        .map(|d| -> Result<Diagnostic, StorageError> {
-            let e = crate::services::diagnostics::entry(d)?;
+    let rows = cursor::page(
+        &binding,
+        &i.page,
+        |after, n| {
+            let after = after.map_or(Ok(i.after_sequence.get()), |a| {
+                a.parse::<i64>().map_err(|_| StorageError::CursorExpired)
+            })?;
+            let filter = DiagnosticFilter {
+                after_sequence: after,
+                component: Some(COMPONENT.into()),
+                target_id: Some(i.package_id.clone()),
+                ..Default::default()
+            };
+            read.diagnostics().diagnostics(&filter, n)
+        },
+        |d| d.sequence.to_string(),
+    )?;
+    Ok(OperationResult::AddonsLogs {
+        value: rows.try_into_page(|d| -> Result<Diagnostic, StorageError> {
+            let e = crate::services::diagnostics::entry(&d)?;
             Ok(Diagnostic {
                 id: e.id,
                 severity: e.severity,
@@ -592,15 +591,6 @@ pub fn logs(
                 correlation_id: e.correlation_id,
                 evidence: e.evidence,
             })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let next =
-        has_more.then(|| BoundedText(binding.encode(&rows[rows.len() - 1].sequence.to_string())));
-    Ok(OperationResult::AddonsLogs {
-        value: Page {
-            items: BoundedList(items),
-            next_cursor: next,
-            has_more,
-        },
+        })?,
     })
 }
