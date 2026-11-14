@@ -179,7 +179,7 @@ mutate('reject-oversize-page','input-projects.list-Query',['body','page','limit'
 mutate('reject-invalid-counter','input-projects.edit-Command',['body','expectedRevision'],'01')
 mutate('reject-counter-range','input-projects.edit-Command',['body','expectedRevision'],'9223372036854775808',schema=True)
 mutate('reject-parent-path','input-git.diff-Query',['body','paths'],['../secret'])
-mutate('reject-absolute-root','input-process.execute-Command',['body','spec','workingDirectory','relative'],'/tmp')
+mutate('reject-absolute-root','input-process.execute-Command',['body','spec','workingDirectory','relative'],'/tmp')  # dev-host: allow-path rejection fixture: an absolute working folder the contract must refuse
 # A task belongs to its project; feature association and assignment parentage are separate.
 mutate('accept-task-without-feature','input-tasks.create-Command',['body','parentId'],DELETE,typed=True,schema=True)
 mutate('accept-task-null-feature','input-tasks.create-Command',['body','parentId'],None,typed=True,schema=True)
@@ -1192,7 +1192,7 @@ case('r1-result-skills.resources-refs','operation-result',{'kind':'skills.resour
 case('reject-r1-result-skills.resources-paths','operation-result',{'kind':'skills.resources','value':skill_resources},False,False)
 case('reject-r2-result-skills.resources-paths','operation-result.r2',{'kind':'skills.resources','value':skill_resources},False,False)
 case('reject-r3-result-skills.resources-plain-refs','operation-result.r3',{'kind':'skills.resources','value':{'items':[copy.deepcopy(ART)],'hasMore':False}},False,False)
-for i,bad in enumerate(['/etc/passwd','../escape.md','C:\\x.md','a//b.md','']):
+for i,bad in enumerate(['/etc/passwd','../escape.md','C:\\x.md','a//b.md','']):  # dev-host: allow-path rejection fixtures: paths the contract must refuse
  case(f'reject-r3-result-skills.resources-path-{i}','operation-result.r3',{'kind':'skills.resources','value':{'items':[{**skill_resources['items'][0],'path':bad}],'hasMore':False}},False,False)
 case('reject-r3-result-skills.resources-no-executable','operation-result.r3',{'kind':'skills.resources','value':{'items':[{k:v for k,v in skill_resources['items'][0].items() if k!='executable'}],'hasMore':False}},False,False)
 # Every newly registered domain revision has an admitted input and matching result fixture.

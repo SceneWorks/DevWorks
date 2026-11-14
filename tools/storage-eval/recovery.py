@@ -1,6 +1,7 @@
 """Owned-process fault probes. No inference; never touches user databases."""
 from pathlib import Path
 import argparse,datetime,hashlib,json,os,signal,subprocess,time
+from cargo_target import release_binary
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('--fixture',type=Path,required=True);p.add_argument('--work-dir',type=Path,required=True);p.add_argument('--timeout',type=float,default=120);p.add_argument('--engines',default='overgraph,grafeo,helix,sqlite');a=p.parse_args()
@@ -10,7 +11,7 @@ def main():
  for engine in a.engines.split(','):
   assert engine in ['overgraph','grafeo','helix','sqlite','graphqlite']
   for action,check in [('recovery_writer','recovery_check'),('interrupted_writer','interrupted_open')]:
-   case=out/f'{engine}-{action}';case.mkdir();marker=case/'ack';output=case/'result.json';exe=root/'target/release'/f'eval-{engine}'
+   case=out/f'{engine}-{action}';case.mkdir();marker=case/'ack';output=case/'result.json';exe=release_binary(root,f'eval-{engine}')
    config={'fixture':str(a.fixture.resolve()),'database':str((case/'database').resolve()),'output':str(output.resolve()),'limit':1000 if action=='recovery_writer' else 2**63-1,'action':action,'signal':str(marker.resolve())}
    cfg=case/'config.json';cfg.write_text(json.dumps(config,indent=2));env=os.environ.copy();env['RAYON_NUM_THREADS']='4'
    if engine=='graphqlite':env['GRAPHQLITE_EXTENSION_DIR']=str((case/'extension').resolve())

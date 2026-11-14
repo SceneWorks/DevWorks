@@ -9,7 +9,7 @@ use dev_host::config::{self, Budgets};
 use dev_host::guard::{self, Rules};
 use dev_host::plan::{self, Format, Request};
 use dev_host::slots::CargoLockProbe;
-use dev_host::{Vars, check, shim};
+use dev_host::{Vars, check, install, shim};
 
 const USAGE: &str = "\
 usage:
@@ -63,9 +63,16 @@ usage:
                    campaigns/ locks/; `dev-host env`; `dev-host: allow-path`; and the
                    rule never to search from / or $HOME (\"never search\" with $HOME).
       Exit 0 when clean, 1 on findings, 2 on usage or git errors.
+  dev-host install --version X
+      Download the dev-host X release binary for this platform (macOS arm64, Windows x64)
+      over HTTPS with curl, verify its SHA-256 against the published checksum and that it
+      reports version X, then move it into place: $HOME/.local/bin on macOS,
+      %LOCALAPPDATA%\\dev-host\\bin on Windows. Nothing is installed on any mismatch.
+  dev-host --version
+      Print \"dev-host <version>\".
 
-environment: DEV_HOST_ROOT (required except for guard), DEV_HOST_SLOTS, DEV_HOST_SESSION,
-             DEV_HOST_REAL_CARGO
+environment: DEV_HOST_ROOT (required except for guard and install), DEV_HOST_SLOTS,
+             DEV_HOST_SESSION, DEV_HOST_REAL_CARGO
 ";
 
 fn main() -> ExitCode {
@@ -96,6 +103,7 @@ fn main() -> ExitCode {
         "env" => run_env(&vars, &rest[1..]),
         "cleanup" => run_cleanup(&vars, &rest[1..]),
         "guard" => run_guard(&rest[1..]),
+        "install" => run_install(&vars, &rest[1..]),
         "cargo" => {
             let tail = &rest[1..];
             let tail = if tail.first().is_some_and(|a| a == "--") {
@@ -263,6 +271,46 @@ fn run_cleanup(vars: &Vars, args: &[OsString]) -> ExitCode {
             }
         }
         Err(e) => fail(&format!("dev-host cleanup: {e}")),
+    }
+}
+
+fn run_install(vars: &Vars, args: &[OsString]) -> ExitCode {
+    let version = match args {
+        [flag, version] if flag == "--version" => version.to_string_lossy().into_owned(),
+        _ => return usage_error("install needs --version X"),
+    };
+    let Some(triple) = install::platform_triple() else {
+        return fail(
+            "dev-host install: no released binary for this platform; build it with \
+             `cargo build -p dev-host --release`",
+        );
+    };
+    let dir = match install::install_dir(vars, triple) {
+        Ok(dir) => dir,
+        Err(e) => return fail(&format!("dev-host install: {e}")),
+    };
+    match install::install(&version, triple, &dir, &install::curl_fetch) {
+        Ok(installed) => {
+            println!(
+                "dev-host install: installed dev-host {version} at {}",
+                installed.path.display()
+            );
+            if let Some(old) = installed.leftover {
+                println!(
+                    "dev-host install: the previous binary is still running; delete {} once \
+                     it exits",
+                    old.display()
+                );
+            }
+            let on_path = vars
+                .get("PATH")
+                .is_some_and(|p| std::env::split_paths(p).any(|d| d == dir));
+            if !on_path {
+                println!("dev-host install: {} is not on PATH; add it", dir.display());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(&format!("dev-host install: {e}")),
     }
 }
 

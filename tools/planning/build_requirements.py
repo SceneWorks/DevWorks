@@ -183,7 +183,7 @@ words=sum(len(' '.join(str(x) for x in b[1:]).split()) for s in sections for b i
 print(json.dumps({'sections':len(sections),'requirements':len(ids),'words_approx':words,'docx_bytes':(OUT/'devworks-requirements.docx').stat().st_size}))
 
 if args.export_dir:
- destination=args.export_dir.expanduser().resolve()
+ destination=args.export_dir.expanduser().resolve()  # dev-host: allow-path expands ~ in the user's own --export-dir argument
  if destination!=OUT.resolve():shutil.copytree(OUT,destination,dirs_exist_ok=True)
  for suffix in ('html','docx'):
   shutil.copyfile(destination/('devworks-requirements.'+suffix),destination/('superharness-requirements.'+suffix))

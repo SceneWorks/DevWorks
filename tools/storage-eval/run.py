@@ -5,6 +5,7 @@ never remove or reuse a database to hide a failure. No inference is invoked.
 """
 from pathlib import Path
 import argparse, datetime, hashlib, json, os, platform, random, re, signal, subprocess, time
+from cargo_target import release_binary
 
 def main():
     p=argparse.ArgumentParser()
@@ -29,7 +30,7 @@ def main():
                 case=run/f'{profile}-{iteration+1}-{engine}';case.mkdir()
                 config={'fixture':str(a.fixture.resolve()),'database':str((case/'database').resolve()),'output':str((case/'result.json').resolve()),'limit':limit,'overlay':overlay,'samples':120 if a.phase=='pilot' else 2000,'vector_samples':8 if a.phase=='pilot' else 80}
                 (case/'config.json').write_text(json.dumps(config,indent=2))
-                executable=root/'target/release'/f'eval-{engine}'
+                executable=release_binary(root,f'eval-{engine}')
                 native_command=[str(executable),'--workload',str(case/'config.json')]
                 command=['/usr/bin/time','-l',*native_command] if platform.system()=='Darwin' else native_command
                 entry={'engine':engine,'profile':profile,'iteration':iteration+1,'command':command,'case':str(case),'binary_bytes':executable.stat().st_size,'binary_sha256':hashlib.sha256(executable.read_bytes()).hexdigest()}

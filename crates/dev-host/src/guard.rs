@@ -351,8 +351,40 @@ fn target_dir_set(line: &str, rules: &Rules) -> bool {
     env_set || flag_set
 }
 
+/// Folder names cargo writes directly under its target folder.
+const CARGO_OUTPUT_DIRS: &[&str] = &[
+    "release",
+    "debug",
+    "doc",
+    "tmp",
+    "package",
+    "build",
+    "deps",
+    "incremental",
+    "examples",
+    "nextest",
+    "criterion",
+];
+
+/// Prose such as "operation/target/stage" or "source/target": a token made only of
+/// letter-only words joined by `/`, where the word after `target` (if any) is not a cargo
+/// output folder. A path holding a `.`, `$`, `_`, `-`, number or backslash is never prose.
+fn prose_slash_list(token: &str) -> bool {
+    let words: Vec<&str> = token.split('/').collect();
+    words.len() > 1
+        && words
+            .iter()
+            .all(|w| !w.is_empty() && w.bytes().all(|b| b.is_ascii_alphabetic()))
+        && words
+            .windows(2)
+            .all(|pair| pair[0] != "target" || !CARGO_OUTPUT_DIRS.contains(&pair[1]))
+}
+
 fn repo_target(line: &str) -> bool {
     line.match_indices("target").any(|(i, _)| {
+        if prose_slash_list(token(line, i)) {
+            return false;
+        }
         let prev = prev_char(line, i);
         let next = next_char(line, i + "target".len());
         let next_sep = matches!(next, Some('/' | '\\'));
@@ -813,6 +845,10 @@ mod tests {
             r#"out = repo_root / "target" / "release""#,
             r#"const out = path.join(root, "target", "debug");"#,
             r#"p = Path("target") / "x""#,
+            "ls target/release",
+            "cp target/debug/app out/app",
+            "du -sh target/doc",
+            "exe=root/'target/release'/f'eval-{engine}'",
         ] {
             fails(line, R_REPO_TARGET);
         }
@@ -824,6 +860,11 @@ mod tests {
             "echo ${{ matrix.target }}",
             "retarget/stuff",
             "ls targets/",
+            "Exact target/digest approval where required.",
+            "names target/revision and creates",
+            "Compare selected source/target records",
+            "production/authority/SDK/provider/target and retained",
+            "the record also carries operation/target/stage,",
         ] {
             assert_ne!(reason(line), Some(R_REPO_TARGET), "line: {line}");
         }
