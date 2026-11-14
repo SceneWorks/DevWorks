@@ -35,6 +35,7 @@ pub enum ScreenId {
     Browser,
     /// All projects and Repositories.
     Projects,
+    Indexing,
 }
 impl ScreenId {
     /// The screen's key in persisted pending state (`PendingMemory::screens`).
@@ -51,6 +52,7 @@ impl ScreenId {
             Self::Resources => "resources",
             Self::Browser => "browser",
             Self::Projects => "projects",
+            Self::Indexing => "indexing",
         }
     }
 }

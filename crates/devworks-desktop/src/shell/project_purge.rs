@@ -94,15 +94,6 @@ impl Shell {
         if let Some((owner, draft)) = self.jobs.purge_draft() {
             put(&owner, "job", draft);
         }
-        if let Some(f) = &self.projects.indexing.sources
-            && let Some(p) = &f.project
-        {
-            put(
-                p,
-                "indexSources",
-                json!({"languages":f.languages,"packages":f.packages,"excludes":f.excludes,"max":f.max_bytes}),
-            );
-        }
         for screen in self.screens() {
             screen.purge_live(&mut live);
         }
@@ -186,17 +177,6 @@ impl Shell {
             .list
             .items
             .retain(|r| r.id != scope.project_id);
-        if self
-            .projects
-            .indexing
-            .sources
-            .as_ref()
-            .is_some_and(|f| f.project.as_deref() == Some(p))
-        {
-            self.projects.indexing.sources = None;
-            self.projects.indexing.message = None;
-        }
-        self.projects.indexing.runs = Default::default();
 
         self.knowledge.projects.retain(|(id, _)| id != p);
         if let Some(project) = &mut self.purge.project
