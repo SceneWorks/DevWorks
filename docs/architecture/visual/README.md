@@ -28,10 +28,19 @@ No inheritance is drawn because the code has none; supertraits appear only where
 | [15 Shell request and close](15-shell-request-and-close.svg) ([source](15-shell-request-and-close.mmd)) | sequence | A UI action through `Client` workers to `Runtime::command`, slot-superseded replies, runtime hints re-querying visible data incrementally, and the close path to `Runtime::shutdown` and release of the data root. | `crates/devworks-desktop/src/{shell.rs,backend.rs,host.rs}` |
 | [16 Shell close states](16-shell-close-states.svg) ([source](16-shell-close-states.mmd)) | state | `shell::Lifecycle`: `Open → Quiescing → Persisting → ShuttingDown → Exiting → Closed`, the offline path, and the Quiescing seam (`HostControl::begin_quiesce`/`quiesced`) where run controls (DW-9) will pause active work roots. | `crates/devworks-desktop/src/shell.rs` |
 
-Coordinator delegation, routed inference and tool execution, indexing, approvals, Git delivery
-and the executable package lifecycle (also named by VIS-02) have no implementation yet; their
-proposed workflows stay in the [architecture baseline](../architecture-diagrams/manifest.json) and
-the items that build them add implemented diagrams here.
+The diagrams above cover the gateway, storage, runtime, process, lease and shell code. Several
+subsystems that VIS-02 names have since been built and registered, and no implemented diagram
+shows them yet: model routing and connections, coordinator delegation and agent messaging
+(`agents.*`), approvals, indexing and graph queries, Git task operations, the executable package
+lifecycle, containers, desktop control, outgoing MCP, watchers and schema metadata. Each is
+backed by a registered handler in `crates/devworks-core/src/services/`. Until its diagram is
+drawn here, read the service module and the proposed workflow in the
+[architecture baseline](../architecture-diagrams/manifest.json), and treat the code as
+authoritative. Operations with no registered handler (Git cleanup and integration, the incoming
+MCP server, document import and search, GitHub, reviews, releases and the other families named in
+the repository [README](../../../README.md)) have no code to diagram. Diagrams 04 and 05 still
+show the registered services and the `<<planned: ...>>` seams as they stood when drawn, so some of
+those seams have since been built.
 
 ## Editing and rendering
 

@@ -68,6 +68,11 @@ pub enum MetadataFailure {
     Cancelled,
     Deadline,
     UnsupportedProfile,
+    /// The server answered with a version outside the reader's qualified set. `supported`
+    /// is the adapter's fixed list, never text reported by the server.
+    UnsupportedServerVersion {
+        supported: &'static str,
+    },
     InvalidTarget,
     CredentialsRequired,
     AccessDenied,

@@ -881,7 +881,7 @@ pub(super) fn package_source_context(
                 Some(proposal.originator.0.clone()),
             )
         })?;
-    if proposal.origin["kind"].as_str() != Some(kind_name(kind)) {
+    if proposal.origin["kind"].as_str() != Some(kind.as_str()) {
         return Err(Refusal::new(
             DomainErrorCode::SourceChanged,
             "package_proposal_author",

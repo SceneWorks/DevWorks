@@ -145,15 +145,16 @@ fn a_selected_server_samples_through_the_boot_installed_sampler_during_an_agent_
             })
             .unwrap();
             let (tool, sampling) = read(f.store.as_ref(), |s| {
-                let state = s
+                // Each server's catalog is saved in its own namespace.
+                let catalog = s
                     .configuration()
-                    .current(&ConfigScope::Workspace, "outgoing_mcp")?
+                    .current(
+                        &ConfigScope::Workspace,
+                        &format!("outgoing_mcp/{}", server.id.as_str()),
+                    )?
                     .unwrap()
                     .body;
-                let caps = state["servers"][0]["capabilities"]
-                    .as_array()
-                    .unwrap()
-                    .clone();
+                let caps = catalog["capabilities"].as_array().unwrap().clone();
                 let find = |kind: &str| {
                     caps.iter()
                         .find(|cap| cap["kind"] == kind)

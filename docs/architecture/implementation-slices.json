@@ -1,5 +1,5 @@
 {
-  "status": "Architecture baseline 1.1 local implementation plan; execution not started",
+  "status": "Architecture baseline 1.1 local implementation plan; native execution is under way, and per-slice state is tracked in the tracker",
   "source": "Adopted architecture/requirements and retained operation inventory; candidate wire coverage complete; actual service/SDK/provider/platform acceptance remains required",
   "slices": [
     {
@@ -251,7 +251,7 @@
         "G01",
         "G11"
       ],
-      "status": "Native implementation in progress; acceptance tracked by DW-13",
+      "status": "Implemented in native services (`workflows.*` and `next_work.*` have registered handlers); acceptance recorded in the tracker item DW-13",
       "readinessAcceptance": "Automatic allocation skips incomplete/unapproved plans and wholly blocked roots without eligible independent work. An otherwise eligible approved feature with missing/stale assessment can activate its coordinator to assess readiness, but cannot dispatch implementation until cleared. Locally blocked roots may allocate assessed independent tasks. Activation/dispatch rechecks changed readiness and finding revisions; keep-working and schedules preserve the shared gate and independent holds."
     },
     {
@@ -273,7 +273,7 @@
         "G04",
         "G10"
       ],
-      "status": "Native implementation in progress; acceptance tracked by DW-14",
+      "status": "Implemented in native services (`approvals.*` and `notifications.*` have registered handlers); acceptance recorded in the tracker item DW-14",
       "readinessAcceptance": "Generic plan approval or notification acknowledgment cannot close readiness findings. Finding-specific human risk acceptance binds the finding/scope/revision and rationale, preserves history and still requires actual prerequisites, enforced permissions and required verification; stale decisions cannot clear changed findings or make incomplete work complete."
     },
     {
@@ -419,7 +419,7 @@
         "G03",
         "G12"
       ],
-      "status": "Native implementation in progress; acceptance tracked by DW-21",
+      "status": "Implemented in native services (`router.usage` and the price operations have registered handlers); acceptance recorded in the tracker item DW-21",
       "integratesOperations": [
         "features.create",
         "features.edit",
@@ -1748,7 +1748,7 @@
         "G04",
         "G10"
       ],
-      "status": "Planned; implementation in progress (DW-94)"
+      "status": "Implemented in native services (`watch.create`, `watch.list`, `watch.inspect` and `watch.cancel` have registered handlers); acceptance recorded in the tracker item DW-94. WATCH-09 (visibility in workspaces) and WATCH-11 (external processes) are not built yet; GitHub and delegated-agent sources are not built in the code on main"
     }
   ],
   "retiredSlices": [

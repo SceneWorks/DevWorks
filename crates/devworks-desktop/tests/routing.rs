@@ -819,6 +819,8 @@ struct HeldState {
     held: std::collections::BTreeSet<String>,
     /// Per operation: calls arrived, calls released, calls returned.
     counts: std::collections::BTreeMap<String, (u64, u64, u64)>,
+    /// Per operation: the body of each call that arrived, in arrival order.
+    bodies: std::collections::BTreeMap<String, Vec<serde_json::Value>>,
 }
 impl Held {
     fn over(inner: Arc<dyn Backend>, held: &[&str]) -> Arc<Self> {
@@ -826,7 +828,7 @@ impl Held {
             inner,
             state: std::sync::Mutex::new(HeldState {
                 held: held.iter().map(|s| (*s).to_owned()).collect(),
-                counts: Default::default(),
+                ..Default::default()
             }),
             changed: std::sync::Condvar::new(),
             hints: false,
@@ -844,12 +846,20 @@ impl Held {
     fn hold(&self, operation: &str) {
         self.state.lock().unwrap().held.insert(operation.to_owned());
     }
-    fn gated<T>(&self, operation: &str, call: impl FnOnce() -> T) -> T {
+    fn gated<T>(&self, operation: &str, frame: &[u8], call: impl FnOnce() -> T) -> T {
         let mut st = self.state.lock().unwrap();
         if !st.held.contains(operation) {
             drop(st);
             return call();
         }
+        // The question asked, without the envelope's per-request id.
+        let body =
+            serde_json::from_slice::<serde_json::Value>(frame).expect("frames are JSON")["body"]
+                .clone();
+        st.bodies
+            .entry(operation.to_owned())
+            .or_default()
+            .push(body);
         let c = st.counts.entry(operation.to_owned()).or_default();
         let ticket = c.0;
         c.0 += 1;
@@ -871,6 +881,16 @@ impl Held {
             .counts
             .get(operation)
             .map_or(0, |c| c.0)
+    }
+    /// The bodies of the calls of `operation` that arrived while it was held.
+    fn bodies(&self, operation: &str) -> Vec<serde_json::Value> {
+        self.state
+            .lock()
+            .unwrap()
+            .bodies
+            .get(operation)
+            .cloned()
+            .unwrap_or_default()
     }
     /// Releases every call of `operation` that has arrived and waits until each returned, then
     /// gives the client's worker a moment to hand its reply over (failure-only bound).
@@ -894,10 +914,10 @@ impl Held {
 }
 impl Backend for Held {
     fn query(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
-        self.gated(operation, || self.inner.query(operation, frame))
+        self.gated(operation, frame, || self.inner.query(operation, frame))
     }
     fn command(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
-        self.gated(operation, || self.inner.command(operation, frame))
+        self.gated(operation, frame, || self.inner.command(operation, frame))
     }
     fn mint_workspace_upload(&self, file: &std::path::Path) -> Result<Id, String> {
         self.inner.mint_workspace_upload(file)
@@ -1058,10 +1078,12 @@ fn refreshes_never_stack_availability_queries_on_a_slow_router() {
         s.chat.selected.is_some()
     });
     let session = h.state().chat.selected.clone().unwrap();
+    // A hint-driven refresh before the start's reply is applied may also ask about the new
+    // chat's draft (no session): a different question, so only identical ones are counted.
+    let about_session = |b: &serde_json::Value| b["sessionId"] == json!(session);
     step_until(&mut h, "its availability is asked", |_| {
-        held.arrived("router.availability") >= 1
+        held.bodies("router.availability").iter().any(about_session)
     });
-    let asked = held.arrived("router.availability");
     // Runtime changes elsewhere wake the shell's refreshes again and again.
     for i in 0..6 {
         ops::started(real.command(
@@ -1073,11 +1095,13 @@ fn refreshes_never_stack_availability_queries_on_a_slow_router() {
             h.step();
         }
     }
-    assert_eq!(
-        held.arrived("router.availability"),
-        asked,
-        "the same question is not asked again while it is unanswered"
-    );
+    let asked = held.bodies("router.availability");
+    for (i, q) in asked.iter().enumerate() {
+        assert!(
+            !asked[..i].contains(q),
+            "the same question is not asked again while it is unanswered: {q}"
+        );
+    }
     // So a worker is still free for the message's save.
     h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
         .focus();

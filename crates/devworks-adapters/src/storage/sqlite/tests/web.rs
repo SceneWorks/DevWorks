@@ -18,10 +18,10 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::files::ArtifactFiles;
-use devworks_core::ports::secrets::{SecretResolver, SecretUnavailable, SecretValue};
+use devworks_core::ports::secrets::{Secret, SecretResolver, SecretUnavailable};
 use devworks_core::ports::storage::*;
 use devworks_core::ports::web::{
-    HopRequest, HopResponse, HttpTransport, NetFault, Resolver, SearchProvider,
+    HopRequest, HopResponse, HopTransport, NetFault, Resolver, SearchProvider,
 };
 use devworks_core::protocol::records::{SettingAssignment, TrustLevel, WebDocument, WebResult};
 use devworks_core::protocol::results::{DomainQueryReply, OperationResult};
@@ -213,7 +213,7 @@ impl Mapped {
         self.map.lock().unwrap().insert(ip(public), to);
     }
 }
-impl HttpTransport for Mapped {
+impl HopTransport for Mapped {
     fn get(&self, request: &HopRequest<'_>) -> Result<HopResponse, NetFault> {
         self.asked.lock().unwrap().push(request.addr);
         self.headers.lock().unwrap().push(
@@ -235,12 +235,12 @@ impl HttpTransport for Mapped {
 #[derive(Default)]
 struct Secrets(Mutex<HashMap<String, String>>);
 impl SecretResolver for Secrets {
-    fn resolve(&self, r: &SecretRef) -> Result<SecretValue, SecretUnavailable> {
+    fn resolve(&self, r: &SecretRef) -> Result<Secret, SecretUnavailable> {
         self.0
             .lock()
             .unwrap()
             .get(r.as_str())
-            .map(|v| SecretValue::new(v.clone()))
+            .map(|v| Secret::new(v.clone()))
             .ok_or(SecretUnavailable::NotFound)
     }
 }

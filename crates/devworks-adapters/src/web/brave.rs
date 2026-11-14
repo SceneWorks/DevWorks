@@ -7,7 +7,7 @@
 //! runs past that page, the next one, so no result is skipped. Each answer body is bounded to
 //! [`BODY_LIMIT`] bytes.
 use devworks_core::ports::web::{
-    HopRequest, HttpTransport, NetFault, Resolver, SearchFault, SearchHit, SearchPage,
+    HopRequest, HopTransport, NetFault, Resolver, SearchFault, SearchHit, SearchPage,
     SearchProvider, SearchRequest,
 };
 use devworks_core::services::web::egress;
@@ -30,18 +30,18 @@ pub const BODY_LIMIT: usize = 2 * 1024 * 1024;
 /// The Brave Search provider.
 pub struct BraveSearch {
     resolver: Arc<dyn Resolver>,
-    transport: Arc<dyn HttpTransport>,
+    transport: Arc<dyn HopTransport>,
     endpoint: url::Url,
 }
 
 impl BraveSearch {
-    pub fn new(resolver: Arc<dyn Resolver>, transport: Arc<dyn HttpTransport>) -> Self {
+    pub fn new(resolver: Arc<dyn Resolver>, transport: Arc<dyn HopTransport>) -> Self {
         Self::with_endpoint(resolver, transport, ENDPOINT).expect("the built-in endpoint parses")
     }
     /// The provider against another endpoint (a test server).
     pub fn with_endpoint(
         resolver: Arc<dyn Resolver>,
-        transport: Arc<dyn HttpTransport>,
+        transport: Arc<dyn HopTransport>,
         endpoint: &str,
     ) -> Result<Self, String> {
         let endpoint = egress::parse(endpoint).map_err(|r| format!("{r:?}"))?;

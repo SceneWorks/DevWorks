@@ -432,8 +432,9 @@ pub struct VerifiedIndex {
 /// Largest index document fetched.
 pub const MAX_INDEX_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Fetches index documents and bundles (https, or a local directory). Tests use a fake; nothing
-/// in the core reaches the network.
+/// Fetches index documents and bundles (https, or a local directory). An https download checks
+/// its first hop and every redirect hop against the `web.fetch` egress policy
+/// ([`crate::services::web::egress`]). Tests use a fake; nothing in the core reaches the network.
 pub trait IndexTransport: Send + Sync {
     /// The bytes at `location`, at most `max_bytes` (more is an error).
     fn fetch(&self, location: &str, max_bytes: u64) -> Result<Vec<u8>, String>;

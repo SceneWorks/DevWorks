@@ -3,10 +3,16 @@
 //! text, and a `ui-state.json` holding unconfirmed commands.
 mod common;
 use common::*;
+use devworks_desktop::artifacts_screen::{ArtifactsSlot, BrowserSlot, ResourcesSlot};
 use devworks_desktop::backend::{CommandDispatch, Slot};
+use devworks_desktop::conventions_ops::ConventionsSlot;
+use devworks_desktop::databases_ops::DatabasesSlot;
+use devworks_desktop::graph_ops::GraphSlot;
 use devworks_desktop::help_ops::HelpSlot;
+use devworks_desktop::instructions_ops::InstructionsSlot;
 use devworks_desktop::memory::Memory;
 use devworks_desktop::screen::ScreenId;
+use devworks_desktop::usage_ops::UsageSlot;
 use serde::de::DeserializeOwned;
 
 const SLOTS: &str = include_str!("fixtures/slots-main.jsonl");
@@ -20,22 +26,22 @@ fn samples() -> Vec<Slot> {
         Slot::PurgePage,
         Slot::PurgeConfirm,
         Slot::PurgeStatus,
-        Slot::DatabaseList(7, true),
-        Slot::DatabaseObjects(7, true),
-        Slot::DatabaseRelations(7, true),
-        Slot::DatabasePrepare,
-        Slot::DatabaseCaPrepare,
-        Slot::DatabaseCa,
-        Slot::DatabaseCommand("s".into()),
-        Slot::GraphRead(7),
-        Slot::GraphTrust("s".into()),
-        Slot::Usage(7, true),
-        Slot::UsageOptions(7),
-        Slot::Prices(7, true),
-        Slot::PriceProbe(7),
-        Slot::PriceOverride,
-        Slot::PriceRefresh,
-        Slot::PriceOperation,
+        Slot::Databases(DatabasesSlot::DatabaseList(7, true)),
+        Slot::Databases(DatabasesSlot::DatabaseObjects(7, true)),
+        Slot::Databases(DatabasesSlot::DatabaseRelations(7, true)),
+        Slot::Databases(DatabasesSlot::DatabasePrepare),
+        Slot::Databases(DatabasesSlot::DatabaseCaPrepare),
+        Slot::Databases(DatabasesSlot::DatabaseCa),
+        Slot::Databases(DatabasesSlot::DatabaseCommand("s".into())),
+        Slot::Graph(GraphSlot::GraphRead(7)),
+        Slot::Graph(GraphSlot::GraphTrust("s".into())),
+        Slot::Usage(UsageSlot::Usage(7, true)),
+        Slot::Usage(UsageSlot::UsageOptions(7)),
+        Slot::Usage(UsageSlot::Prices(7, true)),
+        Slot::Usage(UsageSlot::PriceProbe(7)),
+        Slot::Usage(UsageSlot::PriceOverride),
+        Slot::Usage(UsageSlot::PriceRefresh),
+        Slot::Usage(UsageSlot::PriceOperation),
         Slot::Help(HelpSlot::HelpTopics(7, true)),
         Slot::Help(HelpSlot::HelpProbe(7)),
         Slot::Help(HelpSlot::HelpRead(7)),
@@ -68,11 +74,11 @@ fn samples() -> Vec<Slot> {
         Slot::Attach("s".into(), 7),
         Slot::Preview("s".into(), 7),
         Slot::DeleteAttachment("s".into()),
-        Slot::ArtifactsList,
-        Slot::ResourcesList,
-        Slot::BrowserSessions,
-        Slot::ProjectBrowserSessions("s".into()),
-        Slot::BrowserClose("s".into()),
+        Slot::Artifacts(ArtifactsSlot::ArtifactsList),
+        Slot::Resources(ResourcesSlot::ResourcesList),
+        Slot::Browser(BrowserSlot::BrowserSessions),
+        Slot::Browser(BrowserSlot::ProjectBrowserSessions("s".into())),
+        Slot::Browser(BrowserSlot::BrowserClose("s".into())),
         Slot::AddonsList,
         Slot::AddonsLogs("s".into()),
         Slot::AddonsCommand,
@@ -120,17 +126,22 @@ fn samples() -> Vec<Slot> {
         Slot::IndexRetire("s".into()),
         Slot::IndexSourcesSave,
         Slot::IndexDiscover,
-        Slot::ConventionsList("s".into(), 7, true, true),
-        Slot::ConventionRead("s".into(), 7),
-        Slot::ConventionEditor("s".into(), "s".into(), 7),
-        Slot::ConventionVersions("s".into(), 7, true),
-        Slot::ConventionResources("s".into(), 7, true),
-        Slot::ConventionParents("s".into(), "s".into(), 7, true),
-        Slot::ConventionCommand("s".into(), "s".into()),
-        Slot::ConventionOperation("s".into(), "s".into()),
-        Slot::ConventionPrepare("s".into(), "s".into()),
-        Slot::ConventionArtifact("s".into(), "s".into()),
-        Slot::ConventionTransfer("s".into(), "s".into()),
+        Slot::Conventions(ConventionsSlot::ConventionsList("s".into(), 7, true, true)),
+        Slot::Conventions(ConventionsSlot::ConventionRead("s".into(), 7)),
+        Slot::Conventions(ConventionsSlot::ConventionEditor("s".into(), "s".into(), 7)),
+        Slot::Conventions(ConventionsSlot::ConventionVersions("s".into(), 7, true)),
+        Slot::Conventions(ConventionsSlot::ConventionResources("s".into(), 7, true)),
+        Slot::Conventions(ConventionsSlot::ConventionParents(
+            "s".into(),
+            "s".into(),
+            7,
+            true,
+        )),
+        Slot::Conventions(ConventionsSlot::ConventionCommand("s".into(), "s".into())),
+        Slot::Conventions(ConventionsSlot::ConventionOperation("s".into(), "s".into())),
+        Slot::Conventions(ConventionsSlot::ConventionPrepare("s".into(), "s".into())),
+        Slot::Conventions(ConventionsSlot::ConventionArtifact("s".into(), "s".into())),
+        Slot::Conventions(ConventionsSlot::ConventionTransfer("s".into(), "s".into())),
         Slot::KnowledgeList(7),
         Slot::KnowledgeRead("s".into()),
         Slot::KnowledgeDiagnostics,
@@ -183,14 +194,14 @@ fn samples() -> Vec<Slot> {
         Slot::ConnectionCatalog(7),
         Slot::EmbeddingSpaces(7),
         Slot::Configure(7),
-        Slot::InstructionSkills(7),
-        Slot::InstructionRole("s".into()),
-        Slot::InstructionHistory(7),
-        Slot::InstructionText(7),
-        Slot::InstructionResources(7),
-        Slot::InstructionPrepare(7),
-        Slot::InstructionArtifact(7),
-        Slot::InstructionCommand(7),
+        Slot::Instructions(InstructionsSlot::InstructionSkills(7)),
+        Slot::Instructions(InstructionsSlot::InstructionRole("s".into())),
+        Slot::Instructions(InstructionsSlot::InstructionHistory(7)),
+        Slot::Instructions(InstructionsSlot::InstructionText(7)),
+        Slot::Instructions(InstructionsSlot::InstructionResources(7)),
+        Slot::Instructions(InstructionsSlot::InstructionPrepare(7)),
+        Slot::Instructions(InstructionsSlot::InstructionArtifact(7)),
+        Slot::Instructions(InstructionsSlot::InstructionCommand(7)),
     ]
 }
 
@@ -214,7 +225,17 @@ fn variant_names<T: DeserializeOwned>() -> Vec<String> {
 
 /// Every migrated screen's slot variant names.
 fn screen_variants() -> Vec<(ScreenId, Vec<String>)> {
-    vec![(ScreenId::Help, variant_names::<HelpSlot>())]
+    vec![
+        (ScreenId::Help, variant_names::<HelpSlot>()),
+        (ScreenId::Usage, variant_names::<UsageSlot>()),
+        (ScreenId::Graph, variant_names::<GraphSlot>()),
+        (ScreenId::Databases, variant_names::<DatabasesSlot>()),
+        (ScreenId::Instructions, variant_names::<InstructionsSlot>()),
+        (ScreenId::Conventions, variant_names::<ConventionsSlot>()),
+        (ScreenId::Artifacts, variant_names::<ArtifactsSlot>()),
+        (ScreenId::Resources, variant_names::<ResourcesSlot>()),
+        (ScreenId::Browser, variant_names::<BrowserSlot>()),
+    ]
 }
 
 /// The variant name a slot's JSON carries.
@@ -231,6 +252,18 @@ fn reported(slot: &Slot) -> String {
     match slot.screen() {
         ScreenId::Legacy => format!("{slot:?}"),
         ScreenId::Help => format!("{:?}", HelpSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Usage => format!("{:?}", UsageSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Graph => format!("{:?}", GraphSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Databases => format!("{:?}", DatabasesSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Instructions => {
+            format!("{:?}", InstructionsSlot::try_from(slot.clone()).unwrap())
+        }
+        ScreenId::Conventions => {
+            format!("{:?}", ConventionsSlot::try_from(slot.clone()).unwrap())
+        }
+        ScreenId::Artifacts => format!("{:?}", ArtifactsSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Resources => format!("{:?}", ResourcesSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Browser => format!("{:?}", BrowserSlot::try_from(slot.clone()).unwrap()),
     }
 }
 

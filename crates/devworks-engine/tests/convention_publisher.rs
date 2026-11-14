@@ -26,6 +26,9 @@ impl Fixture {
     fn new() -> Self {
         let h = Harness::new();
         let store = h.open();
+        Self::over(h, store)
+    }
+    fn over(h: Harness, store: Arc<dyn ApplicationStore>) -> Self {
         let ctx = principal(&*store, "author", PrincipalKind::Human);
         let (artifacts, index) = services(&h, store.clone());
         Self {
@@ -763,3 +766,38 @@ fn historical_body_never_borrows_new_body_index_but_unchanged_body_revisions_sha
 
 #[path = "convention_publisher/controls.rs"]
 mod controls;
+
+/// A search's coverage gaps stop at the 33 the reply needs: the search costs the same with 40
+/// or 400 conventions that have no index.
+#[test]
+fn a_search_costs_the_same_however_many_conventions_lack_an_index() {
+    let h = Harness::new();
+    let counted = h.open_counted();
+    let f = Fixture::over(h, counted.store.clone());
+    for name in ["a", "b", "c"] {
+        let (_, op) = f.source(name, "# Policy\nalpha authoritative rule");
+        f.index.run_index(&op, &Cancellation::new(), None).unwrap();
+    }
+    let mut created = 0;
+    let mut unindexed = |to: usize| {
+        for n in created..to {
+            f.source(&format!("unindexed-{n:04}"), "# Draft\nnot yet indexed");
+        }
+        created = to;
+    };
+    let mut queries = 0;
+    let mut measure = || {
+        queries += 1;
+        let (reply, work) = counted.count(|| search(&f, &format!("gaps-{queries}"), None, 3));
+        let page = &reply["result"]["value"];
+        assert_eq!(page["items"].as_array().unwrap().len(), 1, "{reply}");
+        assert_eq!(page["retrieval"]["gaps"].as_array().unwrap().len(), 32);
+        assert_eq!(page["retrieval"]["moreGaps"], true);
+        work
+    };
+    unindexed(40);
+    let small = measure();
+    unindexed(400);
+    let large = measure();
+    assert_no_growth("convention search", small, large);
+}

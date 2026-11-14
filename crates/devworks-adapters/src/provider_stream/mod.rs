@@ -42,8 +42,9 @@ fn after(kind: TransportFailure) -> TransportError {
     error(SendPhase::AfterSend, kind)
 }
 
-// A single owned runtime thread, not a thread per DNS lookup/request. Dropping the last
-// adapter/stream joins it even when the host happens to be inside another async runtime.
+// A single owned runtime thread, not a thread per request (system name lookups run on the
+// runtime's blocking pool; shutdown bounds them). Dropping the last adapter/stream joins it even
+// when the host happens to be inside another async runtime.
 struct IoRuntime {
     handle: Handle,
     stop: Option<oneshot::Sender<()>>,
@@ -141,7 +142,6 @@ impl NativeStreamingHttp {
         let mut builder = reqwest::Client::builder()
             .use_preconfigured_tls(tls)
             .http1_only()
-            .hickory_dns(true)
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .referer(false)

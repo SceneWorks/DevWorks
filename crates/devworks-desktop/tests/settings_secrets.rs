@@ -4,7 +4,7 @@ use common::*;
 use devworks_adapters::web::brave::BraveSearch;
 use devworks_core::ports::secrets::{Secret, SecretError, SecretKey, SecretStore, SessionSecrets};
 use devworks_core::ports::storage::Cancellation;
-use devworks_core::ports::web::{HopRequest, HopResponse, HttpTransport, NetFault, Resolver};
+use devworks_core::ports::web::{HopRequest, HopResponse, HopTransport, NetFault, Resolver};
 use devworks_core::protocol::Id;
 use devworks_core::services::web::WebPorts;
 use devworks_core::settings::catalog::{
@@ -40,7 +40,7 @@ impl Resolver for Names {
 }
 #[derive(Default)]
 struct RecordedBrave(Mutex<Vec<String>>);
-impl HttpTransport for RecordedBrave {
+impl HopTransport for RecordedBrave {
     fn get(&self, request: &HopRequest<'_>) -> Result<HopResponse, NetFault> {
         assert_eq!(request.host_header, "api.search.brave.com");
         let token = request

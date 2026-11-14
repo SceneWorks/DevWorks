@@ -10,11 +10,15 @@ use devworks_core::ports::packages::{
     IndexSource, IndexTransport, IndexVerifier, InspectError, PackageFileError, PackageFiles,
     PackageInspector, SchemaValidator,
 };
+use devworks_core::ports::storage::Cancellation;
+use devworks_core::ports::web::{HopRequest, HopResponse, HopTransport, NetFault, Resolver};
 use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 fn manifest(files: &[(&str, &[u8])], extra: impl FnOnce(&mut Value)) -> Vec<u8> {
     let mut m = json!({
@@ -474,6 +478,139 @@ fn the_local_transport_reads_bounded_regular_files_only() {
             .is_err()
     );
     let _ = std::fs::remove_dir_all(&r);
+}
+
+/// Names that resolve to fixed addresses (no network).
+struct Names;
+impl Resolver for Names {
+    fn resolve(
+        &self,
+        host: &str,
+        _: u16,
+        _: Instant,
+        _: &[Cancellation],
+    ) -> Result<Vec<IpAddr>, NetFault> {
+        let ip = match host {
+            "packs.example.test" => "93.184.216.34",
+            "internal.example.test" => "10.0.0.5",
+            "mixed.example.test" => {
+                return Ok(vec![
+                    "93.184.216.35".parse().unwrap(),
+                    "192.168.1.9".parse().unwrap(),
+                ]);
+            }
+            _ => {
+                return Err(NetFault::NotSent {
+                    reason: "unknown".into(),
+                    timed_out: false,
+                });
+            }
+        };
+        Ok(vec![ip.parse().unwrap()])
+    }
+}
+
+/// Answers by address: the public index redirects to `redirect_to`; any other address serves
+/// `index`. Records every address a hop connected to.
+struct Scripted {
+    redirect_to: String,
+    connected: Mutex<Vec<SocketAddr>>,
+}
+impl HopTransport for Scripted {
+    fn get(&self, request: &HopRequest<'_>) -> Result<HopResponse, NetFault> {
+        self.connected.lock().unwrap().push(request.addr);
+        let (status, headers, body): (u16, Vec<(String, String)>, &[u8]) = if request
+            .addr
+            .ip()
+            .to_string()
+            == "93.184.216.34"
+            && request.target == "/index.json"
+        {
+            (
+                302,
+                vec![("Location".into(), self.redirect_to.clone())],
+                b"",
+            )
+        } else {
+            (200, Vec::new(), b"index")
+        };
+        Ok(HopResponse {
+            status,
+            headers,
+            body: Box::new(std::io::Cursor::new(body.to_vec())),
+        })
+    }
+}
+
+fn scripted(redirect_to: &str, allow_private: bool) -> (Arc<Scripted>, NativeIndexTransport) {
+    let wire = Arc::new(Scripted {
+        redirect_to: redirect_to.to_owned(),
+        connected: Mutex::new(Vec::new()),
+    });
+    let t = NativeIndexTransport::new(
+        Arc::new(Names),
+        wire.clone(),
+        Arc::new(move || allow_private),
+    );
+    (wire, t)
+}
+
+#[test]
+fn package_downloads_refuse_a_redirect_to_a_private_address() {
+    const INDEX: &str = "https://packs.example.test/index.json";
+    // A redirect to a name that resolves privately, and to private, loopback and metadata
+    // literals: refused before any connection to that address.
+    for to in [
+        "https://internal.example.test/index.json",
+        "https://10.1.2.3/index.json",
+        "https://127.0.0.1/index.json",
+        "https://169.254.169.254/latest/meta-data",
+        "https://mixed.example.test/index.json",
+    ] {
+        let (wire, t) = scripted(to, false);
+        let e = t.fetch(INDEX, 100).unwrap_err();
+        assert!(e.contains("refused"), "{to}: {e}");
+        assert_eq!(
+            *wire.connected.lock().unwrap(),
+            vec!["93.184.216.34:443".parse::<SocketAddr>().unwrap()],
+            "{to}"
+        );
+    }
+    // A redirect to plain http is refused too.
+    let (_, t) = scripted("http://packs.example.test/other.json", true);
+    assert!(t.fetch(INDEX, 100).unwrap_err().contains("only https"));
+    // The web.fetch private-network setting allows private and loopback ranges, never
+    // link-local metadata.
+    let (wire, t) = scripted("https://internal.example.test/index.json", true);
+    assert_eq!(t.fetch(INDEX, 100).unwrap(), b"index");
+    assert_eq!(wire.connected.lock().unwrap().len(), 2);
+    let (_, t) = scripted("https://169.254.169.254/latest/meta-data", true);
+    assert!(t.fetch(INDEX, 100).unwrap_err().contains("Metadata"));
+    // A public redirect is followed, and the body is still bounded.
+    let (_, t) = scripted("/bundles/index.json", false);
+    assert_eq!(t.fetch(INDEX, 100).unwrap(), b"index");
+    assert!(t.fetch(INDEX, 4).unwrap_err().contains("larger than"));
+}
+
+#[test]
+fn package_downloads_never_connect_to_a_private_first_hop() {
+    // A listener on loopback: an https download of it must be refused before connecting.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let t = NativeIndexTransport::default();
+    let e = t
+        .fetch(
+            &format!("https://127.0.0.1:{port}/devworks-index.json"),
+            100,
+        )
+        .unwrap_err();
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        listener.accept().is_err(),
+        "connected to a loopback index: {e}"
+    );
+    assert!(e.contains("Loopback"), "{e}");
 }
 
 #[test]

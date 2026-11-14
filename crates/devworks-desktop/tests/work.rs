@@ -402,6 +402,16 @@ fn features_board_issues_and_overview_share_the_agent_operations() {
     click(&mut h, Role::Button, "Activity");
     assert!(has_text(&h, "older history on demand"));
     assert!(has_text(&h, "You"));
+    // Each row names the event's kind and summary and its local time, not raw epoch ms.
+    let first = &h.state().work.activity.items[0];
+    let local = devworks_desktop::shell::jobs::local_time(Some(&first.occurred_at_ms));
+    let row = h
+        .query_all_by_label_contains(" · Change: command ")
+        .filter_map(|n| n.accesskit_node().value().map(|v| v.to_string()))
+        .next()
+        .expect("an Activity row with its event body");
+    assert!(row.contains(&local), "{row}");
+    assert!(!row.contains(first.occurred_at_ms.as_str()), "{row}");
     // The archive confirmation counts the work it would stop.
     h.state_mut().navigate(Route::Portfolio);
     settle(&mut h);
@@ -630,6 +640,61 @@ fn a_plan_save_submits_the_form_it_started_from_into_the_project() {
         pending.draft.content.version_id
     );
     assert!(h.state().work.plan.is_none());
+}
+
+#[test]
+fn an_activity_row_shows_the_event_kind_summary_and_local_time() {
+    use devworks_core::protocol::{
+        ActorId, AttemptId, CommandId, Counter, Event, EventBody, EventId, EventRevisionKind,
+        EventSubject, Id, ObservationDisposition, OperationId, OperationState, Protocol, Revision,
+        RootId,
+    };
+    use devworks_desktop::shell::work::activity_line;
+    let at = 1_700_000_000_123_i64;
+    let id = |s: &str| Id::new(s).unwrap();
+    let event = |body| Event {
+        protocol: Protocol::Draft1,
+        event_id: EventId(id("event")),
+        sequence: Revision::new(7).unwrap(),
+        aggregate: EventSubject::Root(RootId(id("work"))),
+        aggregate_revision: Revision::new(3).unwrap(),
+        aggregate_revision_kind: EventRevisionKind::Work,
+        actor_id: ActorId(id("agent")),
+        occurred_at_ms: Counter::new(at).unwrap(),
+        command_id: None,
+        project_id: None,
+        root_id: None,
+        event: body,
+    };
+    let local = devworks_desktop::shell::jobs::local_time(Some(&Counter::new(at).unwrap()));
+    assert_eq!(
+        activity_line(
+            &event(EventBody::CommandDecided {
+                command_id: CommandId(id("command-1")),
+            }),
+            "You",
+            "Task Fix login (Doing)",
+        ),
+        format!(
+            "#7 · Change: command command-1 decided; revision 3 · You · Task Fix login (Doing) · {local}"
+        )
+    );
+    let observed = activity_line(
+        &event(EventBody::OperationObserved {
+            operation_id: OperationId(id("op-1")),
+            attempt_id: AttemptId(id("attempt-1")),
+            owner_generation: Revision::new(1).unwrap(),
+            observation: ObservationDisposition::CurrentOwner,
+            state: OperationState::Failed,
+        }),
+        "agent",
+        "the project",
+    );
+    assert!(
+        observed.starts_with("#7 · Operation: operation op-1 Failed · agent"),
+        "{observed}"
+    );
+    assert!(!observed.contains(&at.to_string()), "{observed}");
 }
 
 #[test]

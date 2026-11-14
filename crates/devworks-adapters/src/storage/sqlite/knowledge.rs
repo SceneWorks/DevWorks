@@ -1233,11 +1233,7 @@ macro_rules! knowledge_reads {
                 .collect()
             }
             fn knowledge_lesson_event_count(&self, claim: &Id) -> Result<i64, StorageError> {
-                db(self.conn.query_row(
-                    "SELECT count(*) FROM knowledge_lesson_events WHERE claim_id=?1",
-                    params![claim.as_str()],
-                    |r| r.get(0),
-                ))
+                Ok(self.knowledge_claim_tally(claim)?.lesson_events)
             }
             fn knowledge_lesson_events(
                 &self,
@@ -1319,11 +1315,7 @@ macro_rules! knowledge_reads {
                 .transpose()
             }
             fn knowledge_open_challenges(&self, claim: &Id) -> Result<i64, StorageError> {
-                db(self.conn.query_row(
-                    "SELECT count(*) FROM knowledge_challenges WHERE claim_id=?1 AND state='Open'",
-                    params![claim.as_str()],
-                    |r| r.get(0),
-                ))
+                Ok(self.knowledge_claim_tally(claim)?.open_challenges)
             }
             fn knowledge_addresses(&self, claim: &Id) -> Result<Vec<StoredAddress>, StorageError> {
                 rows(
@@ -1356,16 +1348,33 @@ macro_rules! knowledge_reads {
                 .collect()
             }
             fn knowledge_deliveries(&self, claim: &Id) -> Result<DeliverySummary, StorageError> {
-                let (sessions, last) = db(self.conn.query_row(
-                    "SELECT count(DISTINCT session_id), max(delivered_at) FROM \
-                     knowledge_deliveries WHERE claim_id=?1",
-                    params![claim.as_str()],
-                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?)),
-                ))?;
-                Ok(DeliverySummary {
-                    sessions,
-                    last_at_ms: last,
-                })
+                Ok(self.knowledge_claim_tally(claim)?.deliveries)
+            }
+            fn knowledge_claim_tally(&self, claim: &Id) -> Result<ClaimTally, StorageError> {
+                // Migration 54's triggers maintain the tallies; an absent claim has none.
+                Ok(db(self
+                    .conn
+                    .query_row(
+                        &format!(
+                            "SELECT {STALE_SQL}, c.open_challenges, c.lesson_events, \
+                             c.delivered_sessions, c.last_delivered_at FROM knowledge_claims c \
+                             WHERE c.id=?1"
+                        ),
+                        params![claim.as_str()],
+                        |r| {
+                            Ok(ClaimTally {
+                                stale: r.get(0)?,
+                                open_challenges: r.get(1)?,
+                                lesson_events: r.get(2)?,
+                                deliveries: DeliverySummary {
+                                    sessions: r.get(3)?,
+                                    last_at_ms: r.get(4)?,
+                                },
+                            })
+                        },
+                    )
+                    .optional())?
+                .unwrap_or_default())
             }
             fn knowledge_claim_stale(&self, claim: &Id) -> Result<bool, StorageError> {
                 db(self.conn.query_row(

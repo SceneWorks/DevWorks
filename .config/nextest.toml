@@ -1,0 +1,36 @@
+# cargo-nextest runs each test in its own process. These groups keep the limits that test
+# binaries otherwise enforce with in-process mutexes, which do not span processes.
+
+[test-groups]
+# Binaries whose tests serialize on one static mutex (`serial()` and similar).
+desktop-help = { max-threads = 1 }
+engine-packages = { max-threads = 1 }
+engine-browser = { max-threads = 1 }
+adapters-indexing = { max-threads = 1 }
+adapters-processes = { max-threads = 1 }
+# tests/common/native_runtime_case.rs admits at most two heavy runtime cases at a time.
+engine-native-runtime = { max-threads = 2 }
+
+[[profile.default.overrides]]
+filter = 'package(devworks-desktop) & binary(help)'
+test-group = 'desktop-help'
+
+[[profile.default.overrides]]
+filter = 'package(devworks-engine) & binary(packages)'
+test-group = 'engine-packages'
+
+[[profile.default.overrides]]
+filter = 'package(devworks-engine) & binary(browser)'
+test-group = 'engine-browser'
+
+[[profile.default.overrides]]
+filter = 'package(devworks-adapters) & binary(indexing)'
+test-group = 'adapters-indexing'
+
+[[profile.default.overrides]]
+filter = 'package(devworks-adapters) & binary(processes)'
+test-group = 'adapters-processes'
+
+[[profile.default.overrides]]
+filter = 'package(devworks-engine) & (binary(runs) | binary(indexing) | binary(prices) | binary(providers))'
+test-group = 'engine-native-runtime'

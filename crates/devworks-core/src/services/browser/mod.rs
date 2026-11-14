@@ -201,8 +201,17 @@ pub enum EffectOutcome {
 
 /// Launch flags of every owned browser (headless, empty profile, the private DevTools pipe and
 /// no DevTools port, no first-run, sync, background networking, extensions, keychain or prompts).
-pub fn launch_args(profile: &Profile) -> Vec<String> {
+///
+/// Every connection goes through the session's egress proxy at `proxy`: loopback is not
+/// bypassed (`<-loopback>`), QUIC (which a proxy cannot carry) and DNS-over-HTTPS are off, and
+/// WebRTC may not send UDP outside the proxy. The browser then never resolves a name it
+/// connects to: the proxy resolves and checks it.
+pub fn launch_args(profile: &Profile, proxy: std::net::SocketAddr) -> Vec<String> {
     vec![
+        format!("--proxy-server=http://{proxy}"),
+        "--proxy-bypass-list=<-loopback>".into(),
+        "--disable-quic".into(),
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp".into(),
         "--headless=new".into(),
         "--remote-debugging-pipe".into(),
         format!("--user-data-dir={}", profile.user_data.display()),
@@ -215,7 +224,7 @@ pub fn launch_args(profile: &Profile) -> Vec<String> {
         "--disable-breakpad".into(),
         "--disable-default-apps".into(),
         "--disable-extensions".into(),
-        "--disable-features=Translate,MediaRouter,OptimizationHints".into(),
+        "--disable-features=Translate,MediaRouter,OptimizationHints,DnsOverHttps".into(),
         "--metrics-recording-only".into(),
         "--password-store=basic".into(),
         "--use-mock-keychain".into(),
@@ -393,27 +402,6 @@ pub struct BrowserService {
     launch_failures: Mutex<HashMap<String, String>>,
     /// Which requests the browser may send (every intercepted request passes it).
     egress: Arc<egress::BrowserEgress>,
-}
-
-fn owner_kind(k: PrincipalKind) -> &'static str {
-    match k {
-        PrincipalKind::Human => "Human",
-        PrincipalKind::Agent => "Agent",
-        PrincipalKind::Package => "Package",
-        PrincipalKind::McpClient => "McpClient",
-        PrincipalKind::Schedule => "Schedule",
-        PrincipalKind::Host => "Host",
-    }
-}
-fn kind_of(s: &str) -> PrincipalKind {
-    match s {
-        "Human" => PrincipalKind::Human,
-        "Package" => PrincipalKind::Package,
-        "McpClient" => PrincipalKind::McpClient,
-        "Schedule" => PrincipalKind::Schedule,
-        "Host" => PrincipalKind::Host,
-        _ => PrincipalKind::Agent,
-    }
 }
 
 /// The wire state of a durable phase: `Partial` while starting, `Healthy` when ready,
@@ -733,11 +721,16 @@ impl BrowserService {
     }
 
     /// The host context a journaled effect runs under: the session's principal and lineage.
-    fn host_context(&self, s: &StoredBrowserSession, op: &OperationId) -> InvocationContext {
+    /// `None` when the stored owner kind is not recognised.
+    fn host_context(
+        &self,
+        s: &StoredBrowserSession,
+        op: &OperationId,
+    ) -> Option<InvocationContext> {
         let info = self.store.info();
         let mut ctx = InvocationContext::new(
             s.owner.clone(),
-            kind_of(&s.owner_kind),
+            PrincipalKind::parse(&s.owner_kind)?,
             op.0.clone(),
             Id::new("browser-effects").expect("namespace"),
             info.store_id,
@@ -752,7 +745,7 @@ impl BrowserService {
         if let Some(a) = &s.agent_session_id {
             ctx = ctx.with_session(a.clone());
         }
-        ctx
+        Some(ctx)
     }
 
     fn read_session(&self, id: &Id) -> Result<Option<StoredBrowserSession>, StorageError> {
@@ -955,10 +948,29 @@ impl BrowserService {
                 return failed(DomainErrorCode::ExternalFailure, "browser_profile", &why);
             }
         };
+        // No browser starts without its egress proxy.
+        let proxy = match self.platform.start_egress_proxy(self.egress.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                let why = format!("the browser's egress proxy could not be started: {e}");
+                let _ = self.platform.remove_profile(id);
+                self.fail_session(id, &why, BrowserPhase::Failed);
+                drop(guard);
+                self.forget(id);
+                return failed(DomainErrorCode::ExternalFailure, ASSET, &why);
+            }
+        };
         let spec = self
             .platform
-            .command(&asset, &profile, &launch_args(&profile));
-        let ctx = self.host_context(&s, &op.id);
+            .command(&asset, &profile, &launch_args(&profile, proxy.address()));
+        let Some(ctx) = self.host_context(&s, &op.id) else {
+            let why = "the browser session owner kind is not recognised";
+            let _ = self.platform.remove_profile(id);
+            self.fail_session(id, why, BrowserPhase::Failed);
+            drop(guard);
+            self.forget(id);
+            return EffectOutcome::NotApplied(why.into());
+        };
         let roots = match ProtectedRoots::read(&*self.store, vec![], self.app_data_root.clone()) {
             Ok(r) => r,
             Err(e) => {
@@ -1048,6 +1060,7 @@ impl BrowserService {
             process.clone(),
             cdp::Cdp::new(transport).with_gate(self.egress.clone()),
         );
+        live.egress_proxy = Some(proxy);
         if let Err(e) = live.setup(&self.config.bounds(), self.config.launch_timeout) {
             let why = format!("the browser session could not be configured: {e}");
             self.note_launch_failure(&s.asset_id, &why);
@@ -1212,11 +1225,12 @@ impl BrowserService {
     /// principal only while its host binding is active (a revoked agent's queued actions are
     /// never performed).
     fn owner_active(&self, s: &StoredBrowserSession) -> bool {
-        if matches!(
-            kind_of(&s.owner_kind),
-            PrincipalKind::Human | PrincipalKind::Host
-        ) {
+        let kind = PrincipalKind::parse(&s.owner_kind);
+        if matches!(kind, Some(PrincipalKind::Human | PrincipalKind::Host)) {
             return true;
+        }
+        if kind.is_none() {
+            return false;
         }
         let owner = s.owner.clone();
         matches!(
@@ -2491,7 +2505,7 @@ impl BrowserService {
             phase: BrowserPhase::Starting,
             boot_id: boot,
             owner: ctx.principal().clone(),
-            owner_kind: owner_kind(ctx.principal_kind()).into(),
+            owner_kind: ctx.principal_kind().as_str().into(),
             agent_session_id: ctx.session_id().cloned(),
             project_id: project,
             root_id: ctx.root_id().cloned(),

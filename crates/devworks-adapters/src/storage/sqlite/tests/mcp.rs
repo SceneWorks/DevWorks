@@ -2574,6 +2574,7 @@ fn a_resource_saved_before_capabilities_carried_uris_still_names_its_uri() {
         panic!("MCP server configuration failed");
     };
     let server_id = server.id.clone();
+    let catalog = format!("outgoing_mcp/{}", server.id.as_str());
     let service_for_write = service.clone();
     run_write(&*store, WriteOptions::default(), move |tx| {
         service_for_write.publish_remote_catalog(
@@ -2594,15 +2595,15 @@ fn a_resource_saved_before_capabilities_carried_uris_still_names_its_uri() {
         // Store the catalog as an earlier version did: the capability without its URI.
         let saved = tx
             .configuration()
-            .current(&ConfigScope::Workspace, "outgoing_mcp")?
+            .current(&ConfigScope::Workspace, &catalog)?
             .unwrap();
         let mut body = saved.body.clone();
-        for cap in body["servers"][0]["capabilities"].as_array_mut().unwrap() {
+        for cap in body["capabilities"].as_array_mut().unwrap() {
             cap.as_object_mut().unwrap().remove("uri");
         }
         tx.configuration().append_revision(
             &ConfigScope::Workspace,
-            "outgoing_mcp",
+            &catalog,
             saved.revision,
             saved.schema_version,
             body,

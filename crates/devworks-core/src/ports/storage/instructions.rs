@@ -60,12 +60,13 @@ impl InstructionOrigin {
 /// Lifecycle of one immutable revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InstructionRevisionState {
-    /// Agent-authored content not yet proposed; never effective.
+    /// Agent-authored content not yet proposed, or a skill folder change observed on disk
+    /// awaiting a person's confirmation; never effective.
     Draft,
     /// Bound to a pending human decision; never effective.
     Proposed,
-    /// Approved content (human-saved, observed from a user-owned file or approved). Eligible to
-    /// be the active revision.
+    /// Approved content (human-saved, confirmed by a person after it was observed on disk, an
+    /// observed role setting, or approved). Eligible to be the active revision.
     Approved,
     /// A human rejected the proposal; never effective.
     Rejected,

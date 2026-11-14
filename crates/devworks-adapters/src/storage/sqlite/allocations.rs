@@ -84,6 +84,30 @@ pub(super) fn one(
 ) -> Result<Option<StoredAllocationClaim>, StorageError> {
     Ok(read(conn, "id=?1", [value.as_str()])?.into_iter().next())
 }
+/// Live claims of a project, through the partial index of migration 54.
+pub(super) fn live_claims(
+    conn: &Connection,
+    project: &ProjectId,
+) -> Result<Vec<StoredAllocationClaim>, StorageError> {
+    read(
+        conn,
+        "project_id=?1 AND state IN ('Active','Transferred','Yielding') ORDER BY id",
+        [project.0.as_str()],
+    )
+}
+/// The work's highest-fence claim.
+pub(super) fn latest(
+    conn: &Connection,
+    work: &Id,
+) -> Result<Option<StoredAllocationClaim>, StorageError> {
+    Ok(read(
+        conn,
+        "work_id=?1 ORDER BY fence DESC LIMIT 1",
+        [work.as_str()],
+    )?
+    .into_iter()
+    .next())
+}
 pub(super) fn page(
     conn: &Connection,
     project: &ProjectId,

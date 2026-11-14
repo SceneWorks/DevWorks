@@ -14,7 +14,7 @@
 //! `AfterSend`.
 use devworks_core::ports::storage::Cancellation;
 use devworks_core::ports::web::{
-    HopRequest, HopResponse, HttpTransport, NetFault, Scheme, ServerName,
+    HopRequest, HopResponse, HopTransport, NetFault, Scheme, ServerName,
 };
 use rustls::pki_types::{IpAddr as TlsIp, ServerName as TlsName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
@@ -144,7 +144,7 @@ fn clean(s: &str) -> bool {
     !s.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0)
 }
 
-impl HttpTransport for NativeTransport {
+impl HopTransport for NativeTransport {
     fn get(&self, request: &HopRequest<'_>) -> Result<HopResponse, NetFault> {
         let not_sent = |reason: String, timed_out: bool| NetFault::NotSent { reason, timed_out };
         if cancelled(&request.cancel) {
