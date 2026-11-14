@@ -127,7 +127,7 @@ pub static SCREENS: [Screen; 20] = [
         summary_strip: &[],
         pending: None,
         link: None,
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Projects,
     },
     Screen {
         route: Route::Overview,
@@ -185,7 +185,7 @@ pub static SCREENS: [Screen; 20] = [
         // Reviews subviews show their owners (DW-28, DW-29).
         pending: None,
         link: Some(("Indexing logs", Route::Indexing)),
-        owner: ScreenId::Legacy,
+        owner: ScreenId::Projects,
     },
     Screen {
         route: Route::Agents,

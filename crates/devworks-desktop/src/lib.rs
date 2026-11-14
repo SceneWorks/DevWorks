@@ -60,6 +60,8 @@ pub mod notifications;
 pub mod ops;
 pub mod platform;
 pub mod project_purge;
+pub mod projects_ops;
+pub mod projects_screen;
 pub mod route;
 pub mod routing;
 pub mod screen;
