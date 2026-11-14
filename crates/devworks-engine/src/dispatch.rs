@@ -354,6 +354,10 @@ struct Inner {
     stopping: AtomicBool,
     rotation: AtomicUsize,
     passes: AtomicU64,
+    /// Passes in a row that failed (reset by a pass that succeeds).
+    failed_passes: AtomicU64,
+    /// The latest failed pass, or delivery failure that could not be recorded (diagnostics).
+    last_failure: Mutex<Option<String>>,
     /// Claimed deliveries waiting for their operation to become ready, without a permit.
     parked: AtomicUsize,
 }
@@ -393,12 +397,25 @@ pub struct Dispatcher {
 /// Read-only diagnostics must not keep consumers (and their services) alive.
 pub(crate) struct DispatcherObserver(Weak<Inner>);
 
+/// What the dispatcher health source reports.
+pub(crate) struct DispatcherMetrics {
+    pub in_flight: usize,
+    pub passes: u64,
+    pub failed_passes: u64,
+    pub last_failure: Option<String>,
+}
+
 impl DispatcherObserver {
-    pub(crate) fn metrics(&self) -> Option<(usize, u64)> {
+    pub(crate) fn metrics(&self) -> Option<DispatcherMetrics> {
         let dispatcher = Dispatcher {
             inner: self.0.upgrade()?,
         };
-        Some((dispatcher.in_flight(), dispatcher.passes()))
+        Some(DispatcherMetrics {
+            in_flight: dispatcher.in_flight(),
+            passes: dispatcher.passes(),
+            failed_passes: dispatcher.failed_passes(),
+            last_failure: dispatcher.last_failure(),
+        })
     }
 }
 
@@ -473,6 +490,8 @@ impl Dispatcher {
                 stopping: AtomicBool::new(false),
                 rotation: AtomicUsize::new(0),
                 passes: AtomicU64::new(0),
+                failed_passes: AtomicU64::new(0),
+                last_failure: Mutex::new(None),
                 parked: AtomicUsize::new(0),
             }),
         })
@@ -508,6 +527,28 @@ impl Dispatcher {
     /// Passes completed by [`Dispatcher::run`] (diagnostics).
     pub fn passes(&self) -> u64 {
         self.inner.passes.load(Ordering::SeqCst)
+    }
+
+    /// Passes of [`Dispatcher::run`] in a row that failed; 0 once one succeeds (diagnostics).
+    pub fn failed_passes(&self) -> u64 {
+        self.inner.failed_passes.load(Ordering::SeqCst)
+    }
+
+    /// The latest failed pass, or delivery failure that could not be recorded (diagnostics).
+    pub fn last_failure(&self) -> Option<String> {
+        self.inner
+            .last_failure
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    fn note_failure(&self, failure: String) {
+        *self
+            .inner
+            .last_failure
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(store::bounded(&failure));
     }
 
     /// Stops admission; in-flight deliveries finish (see [`Dispatcher::idle`]). Running
@@ -923,8 +964,15 @@ impl Dispatcher {
     {
         let inner = &self.inner;
         while !inner.stopping.load(Ordering::SeqCst) {
-            // A failed pass (store busy or unavailable) is retried after the sweep interval.
-            let _ = self.tick().await;
+            // A failed pass (store busy or unavailable) is retried after the sweep interval; it
+            // is counted and kept for the health check until a pass succeeds.
+            match self.tick().await {
+                Ok(_) => inner.failed_passes.store(0, Ordering::SeqCst),
+                Err(e) => {
+                    inner.failed_passes.fetch_add(1, Ordering::SeqCst);
+                    self.note_failure(format!("a dispatcher pass failed: {e}"));
+                }
+            }
             inner.passes.fetch_add(1, Ordering::SeqCst);
             let now = inner.clock.now_ms().get();
             let due = store::read(&inner.store, move |r| r.queue().next_due_ms(now))
@@ -1394,7 +1442,9 @@ impl Dispatcher {
         }
         let policy = consumer.retry;
         let cause = format!("delivery failed: {cause}");
-        let _ = store::write(&self.inner.store, move |tx| {
+        // Unrecorded, the claim stays until its lease expires and recovery reclaims it; the
+        // health check shows why.
+        let recorded = store::write(&self.inner.store, move |tx| {
             let Some(e) = current(tx, &claimed)? else {
                 return Ok(());
             };
@@ -1429,6 +1479,9 @@ impl Dispatcher {
             Ok(())
         })
         .await;
+        if let Err(e) = recorded {
+            self.note_failure(format!("a delivery failure could not be recorded: {e}"));
+        }
     }
 }
 

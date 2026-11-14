@@ -1101,19 +1101,22 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// The tool output text. An error carries only the joined text and the flag: the host's
+/// internal result record (artifact ids and digests) never reaches the provider.
 fn result_text(content: &[ResultBlock], is_error: bool) -> Result<String, ProviderError> {
-    if is_error {
-        return serde_json::to_string(&json!({"is_error":true,"content":content}))
-            .map_err(|_| ProviderError::InvalidInput("tool_result_json"));
-    }
-    Ok(content
+    let text = content
         .iter()
         .filter_map(|v| match v {
             ResultBlock::Text { text } => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
-        .join("\n"))
+        .join("\n");
+    if is_error {
+        return serde_json::to_string(&json!({"is_error":true,"content":text}))
+            .map_err(|_| ProviderError::InvalidInput("tool_result_json"));
+    }
+    Ok(text)
 }
 fn flush_result_images(images: &mut Vec<Value>, out: &mut Vec<Value>) {
     if !images.is_empty() {

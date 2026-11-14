@@ -92,6 +92,11 @@ impl RootEligibility for RunGate {
     }
 }
 
+/// Writes of an activation's end before its lease expiry is left to record it.
+const END_WRITE_ATTEMPTS: u32 = 3;
+/// Pause between those writes.
+const END_WRITE_RETRY: Duration = Duration::from_millis(100);
+
 /// How a launched activation ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LaunchEnd {
@@ -662,9 +667,13 @@ impl RunSupervisor {
             let (Some(end), Some(me)) = (end, weak.upgrade()) else {
                 return;
             };
-            if owned {
-                let (service, x) = (me.service.clone(), id.clone());
-                let _ = store::write(&me.store, move |tx| {
+            // A busy or unavailable store recorded nothing, so the end is written again a bounded
+            // number of times. A refusal (ownership lost), an invalid record or an unknown commit
+            // is final here; an end that was never recorded leaves the activation's lease
+            // to expire, and the next pass records it as a transient failure.
+            for attempt in (1..=END_WRITE_ATTEMPTS).filter(|_| owned) {
+                let (service, x, end) = (me.service.clone(), id.clone(), end.clone());
+                let written = store::write(&me.store, move |tx| {
                     let stopping = tx
                         .runs()
                         .activation(&x)?
@@ -680,6 +689,14 @@ impl RunSupervisor {
                     }
                 })
                 .await;
+                match written {
+                    Err(StorageError::Busy | StorageError::StorageUnavailable { .. })
+                        if attempt < END_WRITE_ATTEMPTS =>
+                    {
+                        tokio::time::sleep(END_WRITE_RETRY).await;
+                    }
+                    _ => break,
+                }
             }
             // Only this claim's entry: a relaunch of the activation has its own key.
             me.running

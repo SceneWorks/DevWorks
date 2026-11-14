@@ -43,6 +43,8 @@ struct State {
     cleaned: Vec<ProjectPurgeClientScope>,
     awaiting_ui: BTreeSet<String>,
     fences: BTreeMap<String, Fence>,
+    /// Where an undecodable saved state is set aside (see [`load_checked`]).
+    set_aside: PathBuf,
 }
 pub struct NativePurgeClient {
     path: PathBuf,
@@ -50,39 +52,47 @@ pub struct NativePurgeClient {
     state: Mutex<State>,
 }
 fn interrupted(path: &std::path::Path) -> bool {
-    [
-        path.with_extension("purge.tmp"),
-        path.with_extension("json.tmp"),
-    ]
-    .iter()
-    .any(|p| std::fs::symlink_metadata(p).is_ok())
+    crate::memory::interrupted_saves(path)
+        .iter()
+        .any(|p| std::fs::symlink_metadata(p).is_ok())
 }
-fn save_checkpoint(memory: &Memory, path: &std::path::Path) -> std::io::Result<()> {
-    use std::io::Write;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+fn set_aside(path: &std::path::Path) -> PathBuf {
+    path.with_extension("rejected.json")
+}
+/// The strictly decoded saved state. A file that is unreadable, or that may record a purge
+/// fence, is held (`None`): a fence is never dropped. Any other file that fails the strict
+/// decode is copied aside unchanged (`ui-state.rejected.json`) and custody continues from the
+/// defaults, so one bad file cannot stop every later save. The copy stays in purge custody: a
+/// review binds its digest, and a confirmed purge removes it, since its content cannot be
+/// partitioned by project.
+fn load_checked(path: &std::path::Path) -> Option<Memory> {
+    match purge::load(path) {
+        Ok(memory) => Some(memory),
+        Err(purge::MemoryPurgeFault::Unavailable) => None,
+        Err(
+            purge::MemoryPurgeFault::UnknownShape | purge::MemoryPurgeFault::UnsupportedVersion,
+        ) => {
+            let bytes = crate::files::read_regular(path, crate::memory::MAX_BYTES).ok()?;
+            let fenced = serde_json::from_slice::<Value>(&bytes).is_ok_and(|v| {
+                v.get("purge_fences")
+                    .is_some_and(|f| f.as_object().is_none_or(|o| !o.is_empty()))
+            });
+            if fenced {
+                return None;
+            }
+            std::fs::write(set_aside(path), &bytes).ok()?;
+            Some(Memory::default())
+        }
     }
-    let bytes = serde_json::to_vec_pretty(memory)?;
-    if bytes.len() as u64 > crate::memory::MAX_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::FileTooLarge,
-            "client checkpoint exceeds its read bound",
-        ));
+}
+/// Removes the reviewed set-aside copy, which may hold a purged project's drafts and frames and
+/// cannot be partitioned by project.
+fn remove_set_aside(state: &State) -> Result<(), PurgeFileFault> {
+    match std::fs::remove_file(&state.set_aside) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(PurgeFileFault::Io),
     }
-    let tmp = path.with_extension("purge.tmp");
-    let mut file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&tmp)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(&tmp, path)?;
-    #[cfg(unix)]
-    if let Some(parent) = path.parent() {
-        std::fs::File::open(parent)?.sync_all()?;
-    }
-    Ok(())
 }
 fn fault(_: purge::MemoryPurgeFault) -> PurgeFileFault {
     PurgeFileFault::Unattributed
@@ -104,6 +114,11 @@ fn witness(
 ) -> Result<(purge::ScopedProjection, PurgeClientSnapshot), PurgeFileFault> {
     let memory = state.memory.as_ref().ok_or(PurgeFileFault::Unattributed)?;
     let (partition, digest) = purge::scoped_witness(memory, scope).map_err(fault)?;
+    let set_aside = match crate::files::read_regular(&state.set_aside, crate::memory::MAX_BYTES) {
+        Ok(bytes) => Some(sha256_hex(&bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err(PurgeFileFault::Unattributed),
+    };
     let project = scope.project_id.0.as_str();
     let mut surviving = partition.sessions.surviving_references.clone();
     surviving.extend(
@@ -114,7 +129,7 @@ fn witness(
             .filter(|(p, _)| p.as_str() != project)
             .flat_map(|(_, r)| r.clone()),
     );
-    let digest = sha256_hex(&serde_json::to_vec(&serde_json::json!({"memory":digest,"live":state.live.projects.get(project),"references":surviving,"paths":state.live.paths.iter().filter(|(p,_)|p.as_str()!=project).collect::<BTreeMap<_,_>>()})).map_err(|_| PurgeFileFault::Unattributed)?);
+    let digest = sha256_hex(&serde_json::to_vec(&serde_json::json!({"memory":digest,"live":state.live.projects.get(project),"references":surviving,"paths":state.live.paths.iter().filter(|(p,_)|p.as_str()!=project).collect::<BTreeMap<_,_>>(),"setAside":set_aside})).map_err(|_| PurgeFileFault::Unattributed)?);
     let snapshot = PurgeClientSnapshot {
         digest,
         surviving_artifacts: surviving,
@@ -144,9 +159,13 @@ impl NativePurgeClient {
         path: PathBuf,
         sources: Arc<devworks_adapters::fs::sources::HostArtifactSources>,
     ) -> Self {
-        let memory = purge::load(&path)
-            .ok()
-            .filter(|m| m.purge_fences.is_empty());
+        // Runs before anything in this process saves: a temporary file now is left over from
+        // a process that stopped mid-save, and would otherwise refuse every later save.
+        for stale in crate::memory::interrupted_saves(&path) {
+            let _ = std::fs::remove_file(stale);
+        }
+        let memory = load_checked(&path).filter(|m| m.purge_fences.is_empty());
+        let set_aside = set_aside(&path);
         let live = memory
             .as_ref()
             .and_then(|m| m.purge_live.clone())
@@ -162,13 +181,14 @@ impl NativePurgeClient {
                 cleaned: vec![],
                 awaiting_ui: BTreeSet::new(),
                 fences: BTreeMap::new(),
+                set_aside,
             }),
         }
     }
     /// Restore fences only from the exact committed native manifest, never from a forged
     /// UI-state scope. This checks identities against the immutable reviewed row hashes.
     pub fn with_store(self, store: &dyn devworks_core::ports::storage::ApplicationStore) -> Self {
-        let restored = purge::load(&self.path).ok().and_then(|memory| {
+        let restored = load_checked(&self.path).and_then(|memory| {
             let fences =
                 devworks_core::ports::storage::read_snapshot(store, &Default::default(), |read| {
                     let mut fences = BTreeMap::new();
@@ -240,7 +260,7 @@ impl NativePurgeClient {
         memory.purge_live =
             (!state.frozen.is_empty() || current.purge_live.is_some()).then(|| live.clone());
         if save {
-            save_checkpoint(&memory, &self.path).map_err(|e| e.to_string())?;
+            memory.save(&self.path).map_err(|e| e.to_string())?;
         }
         state.memory = Some(memory);
         state.live = live;
@@ -265,7 +285,7 @@ impl NativePurgeClient {
             .clone()
             .ok_or("Saved client state is unavailable")?;
         memory.purge_live = Some(state.live.clone());
-        save_checkpoint(&memory, &self.path).map_err(|e| e.to_string())?;
+        memory.save(&self.path).map_err(|e| e.to_string())?;
         state.memory = Some(memory);
         state.frozen.insert(project.into());
         Ok(())
@@ -296,6 +316,7 @@ impl ProjectPurgeClient for NativePurgeClient {
             .get(key)
             .is_some_and(|f| f.scope == *scope && f.digest == digest)
         {
+            remove_set_aside(&state)?;
             self.sources.revoke_project(&scope.project_id);
             return if state.online && state.awaiting_ui.contains(key) {
                 Err(PurgeFileFault::InUse)
@@ -317,7 +338,7 @@ impl ProjectPurgeClient for NativePurgeClient {
         // Persist only the compact commitment. Exact identities already live in the
         // immutable native effect and are restored through the validating store port.
         after.purge_fences.insert(key.into(), digest.into());
-        save_checkpoint(&after, &self.path).map_err(|_| PurgeFileFault::Io)?;
+        after.save(&self.path).map_err(|_| PurgeFileFault::Io)?;
         state.fences.insert(
             key.into(),
             Fence {
@@ -331,6 +352,9 @@ impl ProjectPurgeClient for NativePurgeClient {
         state.live.paths.remove(key);
         state.cleaned.push(scope.clone());
         self.sources.revoke_project(&scope.project_id);
+        // After the fence is durable: a failure here (or a restart) is retried through the
+        // fence above, never against a witness the removal already changed.
+        remove_set_aside(&state)?;
         if state.online {
             state.awaiting_ui.insert(key.into());
             Err(PurgeFileFault::InUse)
@@ -463,7 +487,7 @@ mod tests {
         client
             .publish(Memory::default(), Live::default(), false)
             .unwrap();
-        let temporary = path.with_extension("purge.tmp");
+        let temporary = crate::memory::temporary(&path);
         std::fs::write(&temporary, b"independent existing bytes").unwrap();
         assert!(client.freeze("p", true).is_err());
         assert_eq!(
@@ -509,6 +533,140 @@ mod tests {
             )
             .unwrap();
         assert!(client.inspect(&scope()).unwrap().pending);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_save_interrupted_by_an_earlier_process_does_not_block_later_saves() {
+        let root =
+            std::env::temp_dir().join(format!("dw233-stale-{}", HostIds::new().token("fixture")));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("ui-state.json");
+        Memory::default().save(&path).unwrap();
+        for stale in crate::memory::interrupted_saves(&path) {
+            std::fs::write(stale, b"half a checkpoint").unwrap();
+        }
+        let client = client(path.clone());
+        client
+            .publish(Memory::default(), Live::default(), true)
+            .unwrap();
+        client.inspect(&scope()).unwrap();
+        client.freeze("p", true).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_failed_save_removes_its_own_temporary_file() {
+        let root =
+            std::env::temp_dir().join(format!("dw233-failed-{}", HostIds::new().token("fixture")));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("ui-state.json");
+        let client = client(path.clone());
+        // A directory in the file's place makes the final rename fail.
+        std::fs::create_dir_all(path.join("occupied")).unwrap();
+        assert!(
+            client
+                .publish(Memory::default(), Live::default(), true)
+                .is_err()
+        );
+        assert!(!crate::memory::temporary(&path).exists());
+        std::fs::remove_dir_all(&path).unwrap();
+        client
+            .publish(Memory::default(), Live::default(), true)
+            .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn an_undecodable_saved_state_is_set_aside_unless_it_may_record_a_fence() {
+        let root =
+            std::env::temp_dir().join(format!("dw233-strict-{}", HostIds::new().token("fixture")));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("ui-state.json");
+        let unknown = br#"{"version":1,"fieldFromANewerBuild":true}"#;
+        std::fs::write(&path, unknown).unwrap();
+        let client = client(path.clone());
+        client
+            .publish(Memory::default(), Live::default(), true)
+            .unwrap();
+        assert_eq!(std::fs::read(set_aside(&path)).unwrap(), unknown);
+        assert!(purge::load(&path).is_ok());
+        let fenced = br#"{"version":1,"purge_fences":{"p":"digest"},"fieldFromANewerBuild":true}"#;
+        std::fs::write(&path, fenced).unwrap();
+        let held = super::NativePurgeClient::new(path.clone(), client.sources.clone());
+        assert!(
+            held.publish(Memory::default(), Live::default(), true)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), fenced);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_purge_removes_the_set_aside_state_that_holds_the_projects_draft() {
+        let root =
+            std::env::temp_dir().join(format!("dw233-aside-{}", HostIds::new().token("fixture")));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("ui-state.json");
+        let mut memory = Memory::default();
+        memory.drafts.insert(
+            "session-p".into(),
+            DraftMemory {
+                text: "PRIVATE-SET-ASIDE-SENTINEL".into(),
+                ..Default::default()
+            },
+        );
+        let mut saved = serde_json::to_value(&memory).unwrap();
+        saved["fieldFromANewerBuild"] = serde_json::json!(true);
+        let saved = serde_json::to_vec(&saved).unwrap();
+        std::fs::write(&path, &saved).unwrap();
+        let client = client(path.clone());
+        client
+            .publish(Memory::default(), Live::default(), true)
+            .unwrap();
+        assert_eq!(std::fs::read(set_aside(&path)).unwrap(), saved);
+        // A copy that changed after review refuses the stale confirmation.
+        let reviewed = client.inspect(&scope()).unwrap();
+        std::fs::write(set_aside(&path), b"{}").unwrap();
+        assert_eq!(
+            client.remove_reviewed(&scope(), &reviewed.digest),
+            Err(PurgeFileFault::Changed)
+        );
+        std::fs::write(set_aside(&path), &saved).unwrap();
+        let reviewed = client.inspect(&scope()).unwrap();
+        assert_eq!(
+            client.remove_reviewed(&scope(), &reviewed.digest),
+            Err(PurgeFileFault::InUse)
+        );
+        assert!(!set_aside(&path).exists());
+        for entry in std::fs::read_dir(&root).unwrap() {
+            let text = std::fs::read_to_string(entry.unwrap().path()).unwrap_or_default();
+            assert!(!text.contains("PRIVATE-"), "{text}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_purge_whose_fence_save_failed_is_retried_with_the_set_aside_copy_intact() {
+        let root =
+            std::env::temp_dir().join(format!("dw233-retry-{}", HostIds::new().token("fixture")));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("ui-state.json");
+        std::fs::write(&path, br#"{"version":1,"fieldFromANewerBuild":true}"#).unwrap();
+        let client = client(path.clone());
+        client
+            .publish(Memory::default(), Live::default(), true)
+            .unwrap();
+        let reviewed = client.inspect(&scope()).unwrap();
+        // A directory in the file's place makes the fence save fail.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir_all(path.join("occupied")).unwrap();
+        assert_eq!(
+            client.remove_reviewed(&scope(), &reviewed.digest),
+            Err(PurgeFileFault::Io)
+        );
+        assert!(set_aside(&path).exists());
+        std::fs::remove_dir_all(&path).unwrap();
+        assert_eq!(
+            client.remove_reviewed(&scope(), &reviewed.digest),
+            Err(PurgeFileFault::InUse)
+        );
+        assert!(!set_aside(&path).exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

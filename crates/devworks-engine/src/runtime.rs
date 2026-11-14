@@ -2451,8 +2451,7 @@ impl Runtime {
         let mut base = source.context;
         let old = std::mem::take(&mut base.instruction_stamps);
         let old_count: usize = old.iter().map(|stamp| stamp.sources.len()).sum();
-        base.instructions
-            .truncate(base.instructions.len() - old_count);
+        drop_stamped_guidance(&mut base.instructions, old_count)?;
         let old_skills = base.skill_stamp.take();
         if old_skills.is_some() {
             base.instructions.pop();
@@ -3483,6 +3482,19 @@ impl ResumeAdmission for Admitter {
     }
 }
 
+/// Removes the trailing `count` guidance blocks named by the stored stamps. A stored context
+/// whose stamps name more blocks than it holds is inconsistent: refuse it, never underflow.
+fn drop_stamped_guidance(
+    instructions: &mut Vec<devworks_core::providers::context::TextBlock>,
+    count: usize,
+) -> Result<(), StorageError> {
+    let kept = instructions.len().checked_sub(count).ok_or_else(|| {
+        StorageError::InvalidRecord("instruction stamps exceed the stored instructions".into())
+    })?;
+    instructions.truncate(kept);
+    Ok(())
+}
+
 /// The `SkillRevisionsAdopted` payload of a skill-set change: the selected skills with exact
 /// revisions and digests, the transitions and any unresolved conflicts.
 /// The role prefix replaced by `role` when its text differs, keeping the host-authored blocks
@@ -3545,7 +3557,7 @@ fn skill_adoption_payload(
 
 #[cfg(test)]
 mod role_adoption_tests {
-    use super::with_role;
+    use super::{drop_stamped_guidance, with_role};
     use devworks_core::providers::context::TextBlock;
 
     fn block(text: &str) -> TextBlock {
@@ -3571,5 +3583,18 @@ mod role_adoption_tests {
         let set = with_role(&cleared, vec![block("role")]).expect("set");
         assert_eq!(set[0].text, "role");
         assert_eq!(set[1].text, notice);
+    }
+
+    #[test]
+    fn stamps_naming_more_blocks_than_stored_are_refused_not_underflowed() {
+        let mut instructions = vec![block("role"), block("guidance")];
+        drop_stamped_guidance(&mut instructions, 1).expect("consistent");
+        assert_eq!(instructions.len(), 1);
+        let err = drop_stamped_guidance(&mut instructions, 2).expect_err("inconsistent");
+        assert!(matches!(
+            err,
+            devworks_core::ports::storage::StorageError::InvalidRecord(_)
+        ));
+        assert_eq!(instructions.len(), 1);
     }
 }

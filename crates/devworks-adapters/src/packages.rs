@@ -537,14 +537,16 @@ impl NativePackageFiles {
             .join(under)
             .join(format!("{}-{nanos}-{n}", std::process::id()))
     }
-    fn sync_dir(dir: &Path) {
-        // Directory fsync makes a rename durable on Unix; Windows has no directory handles here.
+    /// Directory fsync makes a rename durable on Unix; Windows has no directory handles here.
+    /// A failure is the publication's failure: the caller cannot claim a durable install.
+    fn sync_dir(dir: &Path) -> Result<(), PackageFileError> {
         #[cfg(unix)]
-        if let Ok(d) = std::fs::File::open(dir) {
-            let _ = d.sync_all();
-        }
+        std::fs::File::open(dir)
+            .and_then(|d| d.sync_all())
+            .map_err(Self::io)?;
         #[cfg(not(unix))]
         let _ = dir;
+        Ok(())
     }
     /// The marker recording the last publication or reuse of a version directory.
     fn marker(&self, package: &str, digest: &str) -> PathBuf {
@@ -899,7 +901,7 @@ impl PackageFiles for NativePackageFiles {
                 out.sync_all().map_err(Self::io)?;
             }
             self.check(&stage, expected)?;
-            Self::sync_dir(&stage);
+            Self::sync_dir(&stage)?;
             let parent = dest.parent().expect("package directory");
             std::fs::create_dir_all(parent).map_err(Self::io)?;
             match std::fs::rename(&stage, &dest) {
@@ -910,7 +912,7 @@ impl PackageFiles for NativePackageFiles {
                 }
                 Err(e) => return Err(Self::io(e)),
             }
-            Self::sync_dir(parent);
+            Self::sync_dir(parent)?;
             self.touch(package_id, manifest_digest);
             Ok(())
         })();
