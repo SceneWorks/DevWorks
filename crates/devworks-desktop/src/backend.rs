@@ -501,12 +501,15 @@ pub enum Slot {
     // alone, so persisted commands keep the JSON they had in the single enum.
     #[serde(untagged)]
     Help(crate::help_ops::HelpSlot),
+    #[serde(untagged)]
+    Watch(crate::watch_ops::WatchSlot),
 }
 impl Slot {
     /// The screen whose replies this slot waits for.
     pub fn screen(&self) -> crate::screen::ScreenId {
         match self {
             Self::Help(_) => crate::screen::ScreenId::Help,
+            Self::Watch(_) => crate::screen::ScreenId::Watchers,
             _ => crate::screen::ScreenId::Legacy,
         }
     }

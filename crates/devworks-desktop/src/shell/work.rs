@@ -17,6 +17,7 @@ use crate::backend::{Reply, Slot, TaskOutput, is_unknown, resolve_command};
 use crate::ops::{self, Failure};
 use crate::route::Route;
 use crate::theme;
+use crate::watch_ops::{WatchScope, WatchView};
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use crate::work_ops as wops;
 use devworks_core::protocol::provider::ArtifactRef;
@@ -2511,9 +2512,12 @@ impl Shell {
             .unwrap_or_default();
         let tab = mem.tab.min(1);
         let mut new_tab = tab;
+        let mut watch_actions = Vec::new();
         {
             let work = &mut self.work;
-            let mut st = (&mut *work, &mut mem, &mut actions);
+            let watch = &self.watchers;
+            let watch_online = online.as_ref().map(|_| ()).map_err(String::as_str);
+            let mut st = (&mut *work, &mut mem, &mut actions, &mut watch_actions);
             widgets::with_right_sidebar(
                 ui,
                 theme::SIDEBAR,
@@ -2591,6 +2595,7 @@ impl Shell {
                 },
                 |ui, st| {
                     let (work, mem, actions) = (&mut *st.0, &*st.1, &mut *st.2);
+                    let watch_actions = &mut *st.3;
                     widgets::secondary_pane(ui, "Feature", |ui| {
                         if tab == 1
                             && let Some(c) = work.card.clone()
@@ -2627,6 +2632,7 @@ impl Shell {
                             }
                             Some(f) => {
                                 let id = f.id.as_str().to_owned();
+                                let scope = WatchScope::Feature(id.clone());
                                 feature_detail(
                                     ui,
                                     work,
@@ -2635,6 +2641,15 @@ impl Shell {
                                     &projects_repos,
                                     open && !waiting.contains(&id),
                                     actions,
+                                    &mut |ui| {
+                                        watch.section(
+                                            ui,
+                                            WatchView::Feature,
+                                            scope.clone(),
+                                            watch_online,
+                                            watch_actions,
+                                        )
+                                    },
                                 );
                             }
                         }
@@ -2654,6 +2669,7 @@ impl Shell {
         self.unlink_dialog(ui.ctx(), &mut actions);
         self.workflow_dialog(ui.ctx(), &mut actions);
         self.work_act(actions);
+        self.watch_act(watch_actions);
     }
 
     pub(super) fn issues_screen(&mut self, ui: &mut Ui) {
@@ -3821,6 +3837,7 @@ fn board(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn feature_detail(
     ui: &mut Ui,
     work: &mut WorkUi,
@@ -3829,6 +3846,7 @@ fn feature_detail(
     project_repos: &[String],
     enabled: bool,
     actions: &mut Vec<Action>,
+    watchers: &mut dyn FnMut(&mut Ui),
 ) {
     egui::ScrollArea::vertical().id_salt("feature-detail").show(ui, |ui| {
         ui.label(RichText::new(&f.title.0).strong());
@@ -4007,6 +4025,9 @@ fn feature_detail(
         if ui.button("Show its activity").clicked() {
             actions.push(Action::ShowActivity(f.id.as_str().to_owned()));
         }
+        ui.add_space(8.0);
+        ui.label(RichText::new("Watchers").strong());
+        watchers(ui);
     });
 }
 

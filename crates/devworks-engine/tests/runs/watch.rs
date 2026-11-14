@@ -9,6 +9,7 @@ use devworks_core::protocol::results::OperationResult;
 use devworks_core::services::process::tools::{
     RegisteredExecutable, RegisteredWorkingRoot, ToolBindings,
 };
+use devworks_core::services::watch::WATCHER_NOTICE_MEDIA_TYPE;
 use devworks_engine::runtime::{ProcessToolComposition, Runtime};
 
 /// Provider wire that records each request body and, at each request, whether the watcher
@@ -1472,6 +1473,11 @@ fn the_backup_check_delivers_a_missed_outcome_once_with_its_event_id() {
             delivered[0]["source"], record["event"]["id"],
             "its own event ID"
         );
+        assert_eq!(
+            delivered[0]["artifact"]["mediaType"],
+            json!(WATCHER_NOTICE_MEDIA_TYPE),
+            "a backup delivery is a watcher notice too"
+        );
         let kinds = watcher_history(&app, &id_text);
         assert_eq!(
             kinds.iter().filter(|k| *k == "WatcherBackupCatch").count(),
@@ -2075,6 +2081,103 @@ fn a_timer_fires_at_its_due_time() {
             delivered[0]["source"], record["event"]["id"],
             "{delivered:?}"
         );
+        assert_eq!(
+            delivered[0]["artifact"]["mediaType"],
+            json!(WATCHER_NOTICE_MEDIA_TYPE),
+            "a surface tells watcher notices apart"
+        );
+        app.shutdown().await;
+    });
+}
+
+fn list(app: &Runtime, ctx: &InvocationContext, body: Value) -> Vec<Value> {
+    match app
+        .query(
+            ctx,
+            "watch.list",
+            &frame("Query", "watch.list", body, "list"),
+        )
+        .unwrap()
+    {
+        DomainQueryReply::Result {
+            result: OperationResult::WatchList { value },
+            ..
+        } => value
+            .items
+            .0
+            .into_iter()
+            .map(|w| serde_json::to_value(w).unwrap())
+            .collect(),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A person at workspace scope sees and cancels every watcher, attributed to the agent and work
+/// that own it, with when the watcher service last polled it; a feature filter keeps only the
+/// watchers of that feature's sessions.
+#[test]
+fn a_person_lists_every_watcher_with_its_owner_and_last_poll_and_cancels_it() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-person-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, primary) = agent_context(&fx);
+        let watchers = app.watchers().expect("watchers composed");
+        let timer = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"timer": {"afterMs": "60000"}}),
+            "w-person",
+        );
+        let id = timer["id"].as_str().unwrap().to_owned();
+        let person = principal(&*fx.store, "watch-person", PrincipalKind::Human);
+        let before = list(&app, &person, json!({"page":{"limit":50}}));
+        assert_eq!(before.len(), 1, "{before:?}");
+        assert_eq!(before[0]["lastPolledAtMs"], Value::Null, "not polled yet");
+        fx.h.advance(1500);
+        watchers.settle().unwrap();
+        let listed = list(&app, &person, json!({"page":{"limit":50}}));
+        let record = &listed[0];
+        assert_eq!(record["id"], json!(id));
+        assert_eq!(counter_at(record, "/lastPolledAtMs"), Some(fx.h.now()));
+        let owner = &record["owner"];
+        assert!(owner["agentId"].is_string(), "{record}");
+        assert_eq!(owner["workId"], json!("root-i"), "{record}");
+        assert_eq!(
+            owner["assignmentId"],
+            json!(primary.assignment_id),
+            "{record}"
+        );
+        let feature = owner["featureId"].clone();
+        if feature.is_string() {
+            let theirs = list(
+                &app,
+                &person,
+                json!({"featureId": feature, "page":{"limit":50}}),
+            );
+            assert_eq!(theirs.len(), 1, "{theirs:?}");
+        }
+        let other = list(
+            &app,
+            &person,
+            json!({"featureId": "root-other", "page":{"limit":50}}),
+        );
+        assert!(other.is_empty(), "{other:?}");
+        let cancelled = command(
+            &app,
+            &person,
+            "watch.cancel",
+            json!({"watcherId": id, "expectedRevision": record["revision"], "stopProcess": false}),
+            "w-person-cancel",
+        );
+        assert_eq!(cancelled["state"], json!("Cancelled"), "{cancelled}");
         app.shutdown().await;
     });
 }

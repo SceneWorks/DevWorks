@@ -19556,7 +19556,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "An agent lists its own session's watchers; a human lists watchers visible in the current project scope. Newest first.",
+          "semanticRules": "An agent lists its own session's watchers; a person or the host lists the watchers visible in their scope (every project's at workspace scope), optionally only those of one session or of one feature's sessions. Newest first.",
           "familyRules": "Watchers observe a source on an agent's behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching (a process or a probe command) and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles may create observing watchers but cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor or the host clock observed.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

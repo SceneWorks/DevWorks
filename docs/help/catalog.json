@@ -815,7 +815,9 @@
     "id": "watchers",
     "title": "Watching background processes",
     "file": "topics/watchers.md",
-    "screenIds": [],
+    "screenIds": [
+      "watchers"
+    ],
     "settingsSections": [],
     "relatedCapabilityIds": [
       "watch.create",

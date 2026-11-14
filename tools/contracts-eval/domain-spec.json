@@ -6559,6 +6559,17 @@
         "next_cursor": "?Cursor"
       }
     },
+    "WatchOwner": {
+      "kind": "record",
+      "fields": {
+        "agent_id": "ActorId",
+        "work_id": "?RootId",
+        "work_title": "?Text",
+        "feature_id": "?RootId",
+        "feature_title": "?Text",
+        "assignment_id": "?AssignmentId"
+      }
+    },
     "WatcherRecord": {
       "kind": "record",
       "fields": {
@@ -6573,9 +6584,11 @@
         "matches": "?Counter",
         "session_id": "Id",
         "project_id": "?ProjectId",
+        "owner": "?WatchOwner",
         "created_at_ms": "Counter",
         "settled_at_ms": "?Counter",
         "elapsed_ms": "Counter",
+        "last_polled_at_ms": "?Counter",
         "outcome": "?WatchOutcome",
         "duration_ms": "?Counter",
         "output_tail": "?Content",
@@ -11286,13 +11299,14 @@
       "mode": "Query",
       "fields": {
         "session_id": "?Id",
+        "feature_id": "?RootId",
         "states": "?Items<WatcherState>",
         "page": "PageRequest"
       },
       "result": "WatcherPage",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "An agent lists its own session's watchers; a human lists watchers visible in the current project scope. Newest first.",
+      "rules": "An agent lists its own session's watchers; a person or the host lists the watchers visible in their scope (every project's at workspace scope), optionally only those of one session or of one feature's sessions. Newest first.",
       "introducedRevision": 8
     },
     "watch.inspect": {

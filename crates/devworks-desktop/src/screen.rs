@@ -17,6 +17,7 @@ pub enum ScreenId {
     /// Still handled inside the shell.
     Legacy,
     Help,
+    Watchers,
 }
 impl ScreenId {
     /// The screen's key in persisted pending state (`PendingMemory::screens`).
@@ -24,6 +25,7 @@ impl ScreenId {
         match self {
             Self::Legacy => "legacy",
             Self::Help => "help",
+            Self::Watchers => "watchers",
         }
     }
 }

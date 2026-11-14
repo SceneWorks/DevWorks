@@ -11,10 +11,10 @@ use crate::operations::{OperationInput, watch as ops};
 use crate::ports::process::{Probe, ProcessSpec as NativeProcessSpec};
 use crate::ports::storage::{
     ApplicationStore, ArtifactScope, ConfigScope, ConfigurationRead, MAX_WATCH_TAIL_BYTES,
-    NewEvent, OperationRecord, ProcessPhase, ReadOptions, ReadSnapshot, StorageError, StoredMatch,
-    StoredProbe, StoredProcess, StoredWatchEvent, StoredWatchOutcome, StoredWatcher,
-    WatchEventState, WatcherFilter, WatcherPhase, WriteOptions, WriteTransaction, read_snapshot,
-    run_write,
+    NewEvent, OperationRecord, ProcessPhase, ReadOptions, ReadSnapshot, StorageError,
+    StoredAssignment, StoredMatch, StoredProbe, StoredProcess, StoredWatchEvent,
+    StoredWatchOutcome, StoredWatcher, WatchEventState, WatcherFilter, WatcherPhase, WriteOptions,
+    WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -22,14 +22,14 @@ use crate::ports::{
 };
 use crate::protocol::provider::TranscriptBody;
 use crate::protocol::records::{
-    WatchDeliveryState, WatchEvent, WatchOutcome, WatchOutcomeKind, WatchProbeStatus,
+    WatchDeliveryState, WatchEvent, WatchOutcome, WatchOutcomeKind, WatchOwner, WatchProbeStatus,
     WatchProcessSource, WatchSourceKind, WatcherPage, WatcherRecord, WatcherState,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{
-    CorrelationId, DomainErrorCode, DomainFault, EventId, Id, OperationId, OperationState,
-    ProjectId, RevisionDimension,
+    AssignmentId, CorrelationId, DomainErrorCode, DomainFault, EventId, Id, OperationId,
+    OperationState, ProjectId, RevisionDimension, RootId,
 };
 use crate::services::artifacts::host::HostArtifactPublication;
 use crate::services::artifacts::{ArtifactService, version_ref};
@@ -47,6 +47,7 @@ use crate::settings::catalog::{WATCH_MAX_LIFETIME_KEY, descriptor};
 use crate::settings::model::{chain, current_chain};
 use base64::Engine;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Store bound on an event body (`watcher_events.payload_json`), with room for its envelope.
@@ -97,6 +98,10 @@ fn probe_backoff(interval_ms: i64, runs: i64) -> i64 {
 }
 const PAGE: u16 = 100;
 
+/// Media type of the transcript notices watchers deliver (events and reminders), which lets a
+/// surface tell them from other host notices. Text, so agent turns read it as any notice.
+pub const WATCHER_NOTICE_MEDIA_TYPE: &str = "text/x-devworks-watcher; charset=utf-8";
+
 /// What one [`WatchService::tick`] pass did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WatchTick {
@@ -118,6 +123,8 @@ pub struct WatchService {
     diagnostics: Option<Arc<DiagnosticService>>,
     /// When the backup check last came due (store clock), or `None` before the first tick.
     last_backup_ms: std::sync::Mutex<Option<i64>>,
+    /// When each open watcher last checked its source in this process (store clock).
+    last_polled: std::sync::Mutex<HashMap<Id, i64>>,
 }
 
 /// What one watcher backup check did (WATCH-12).
@@ -146,6 +153,7 @@ impl WatchService {
             control: None,
             diagnostics: None,
             last_backup_ms: std::sync::Mutex::new(None),
+            last_polled: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -195,7 +203,13 @@ impl WatchService {
             };
             after = Some(last.id.clone());
             for watcher in &page {
-                settled += usize::from(self.advance(watcher)?);
+                if self.advance(watcher)? {
+                    settled += 1;
+                    self.last_polled
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .remove(&watcher.id);
+                }
             }
             if page.len() < usize::from(PAGE) {
                 return Ok(settled);
@@ -426,7 +440,7 @@ impl WatchService {
                 &pending,
                 HostArtifactPublication {
                     title: "Watcher reminder",
-                    media_type: "text/plain; charset=utf-8",
+                    media_type: WATCHER_NOTICE_MEDIA_TYPE,
                     provenance: json!({"kind":"WatcherReminder","watcherId":watcher.id.as_str()}),
                     scope,
                     owner: session.agent_id.clone(),
@@ -552,6 +566,10 @@ impl WatchService {
         let owner_ended = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
             owner_ended(read.sessions(), read.projects(), watcher)
         })?;
+        self.last_polled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(watcher.id.clone(), now);
         if owner_ended.is_some() {
             let id = watcher.id.clone();
             let step = run_write(&*self.store, WriteOptions::default(), move |tx| {
@@ -725,7 +743,7 @@ impl WatchService {
                 &pending,
                 HostArtifactPublication {
                     title: "Watcher event",
-                    media_type: "text/plain; charset=utf-8",
+                    media_type: WATCHER_NOTICE_MEDIA_TYPE,
                     provenance: json!({"kind":"WatcherEvent","eventId":event.id.as_str(),"watcherId":event.watcher_id.as_str(),"backup":backup}),
                     scope,
                     owner: session.agent_id.clone(),
@@ -770,10 +788,11 @@ impl WatchService {
 
     fn record(
         &self,
+        read: &dyn ReadSnapshot,
         watcher: &StoredWatcher,
         event: Option<&StoredWatchEvent>,
         now_ms: i64,
-    ) -> WatcherRecord {
+    ) -> Result<WatcherRecord, StorageError> {
         let live = (watcher.phase.is_open())
             .then(|| {
                 watcher
@@ -782,16 +801,29 @@ impl WatchService {
                     .and_then(|op| self.processes.live_tail(&op.0))
             })
             .flatten();
-        record_of(watcher, event, now_ms, live)
+        let mut record = record_of(watcher, event, now_ms, live);
+        record.owner = owner_of(read, watcher)?;
+        record.last_polled_at_ms = self
+            .last_polled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&watcher.id)
+            .copied()
+            .map(counter);
+        Ok(record)
     }
 
+    /// An agent sees its own session's watchers in its project. A person or the host sees the
+    /// watchers of its project, or every watcher at workspace scope (no project).
     fn visible(ctx: &InvocationContext, watcher: &StoredWatcher) -> bool {
+        if matches!(
+            ctx.principal_kind(),
+            PrincipalKind::Human | PrincipalKind::Host
+        ) {
+            return ctx.project_id().is_none() || watcher.project_id.as_ref() == ctx.project_id();
+        }
         watcher.project_id.as_ref() == ctx.project_id()
-            && (ctx.session_id() == Some(&watcher.session_id)
-                || matches!(
-                    ctx.principal_kind(),
-                    PrincipalKind::Human | PrincipalKind::Host
-                ))
+            && ctx.session_id() == Some(&watcher.session_id)
     }
 
     fn decide_create(
@@ -1159,7 +1191,9 @@ impl QueryHandler for WatchService {
                     .watch_event_for_watcher(&watcher.id)
                     .map_err(fault)?;
                 OperationResult::WatchInspect {
-                    value: self.record(&watcher, event.as_ref(), now),
+                    value: self
+                        .record(snapshot, &watcher, event.as_ref(), now)
+                        .map_err(fault)?,
                 }
             }
             OperationInput::Watch(ops::Input::List(input)) => {
@@ -1170,9 +1204,10 @@ impl QueryHandler for WatchService {
                     (Some(session), _) if ctx.session_id() == Some(session) => {
                         WatcherFilter::Session(session.clone())
                     }
-                    (None, PrincipalKind::Human | PrincipalKind::Host) => {
-                        WatcherFilter::Project(ctx.project_id().cloned())
-                    }
+                    (None, PrincipalKind::Human | PrincipalKind::Host) => match ctx.project_id() {
+                        Some(project) => WatcherFilter::Project(Some(project.clone())),
+                        None => WatcherFilter::All,
+                    },
                     (None, _) if ctx.session_id().is_some() => {
                         WatcherFilter::Session(ctx.session_id().cloned().expect("checked"))
                     }
@@ -1190,10 +1225,15 @@ impl QueryHandler for WatchService {
                     .as_ref()
                     .map(|states| states.0.iter().map(phase_of).collect())
                     .unwrap_or_default();
+                let feature = input.feature_id.clone();
                 let binding = CursorBinding::new(
                     ctx,
                     "watch.list",
-                    &[&format!("{filter:?}"), &format!("{phases:?}")],
+                    &[
+                        &format!("{filter:?}"),
+                        &format!("{phases:?}"),
+                        &format!("{feature:?}"),
+                    ],
                     1,
                 );
                 // Rows another caller may not see are skipped; reading continues until the page
@@ -1217,7 +1257,18 @@ impl QueryHandler for WatchService {
                                 )
                             },
                             |w| Some((w.created_at_ms, w.id.clone())),
-                            |w| Ok(Self::visible(ctx, w)),
+                            |w| {
+                                Ok(Self::visible(ctx, w)
+                                    && match &feature {
+                                        None => true,
+                                        Some(feature) => {
+                                            owner_of(snapshot, w)?
+                                                .and_then(|o| o.feature_id)
+                                                .as_ref()
+                                                == Some(feature)
+                                        }
+                                    })
+                            },
                         )
                     },
                     |w| format!("{}:{}", w.created_at_ms, w.id.as_str()),
@@ -1230,7 +1281,10 @@ impl QueryHandler for WatchService {
                         .watchers()
                         .watch_event_for_watcher(&watcher.id)
                         .map_err(fault)?;
-                    items.push(self.record(watcher, event.as_ref(), now));
+                    items.push(
+                        self.record(snapshot, watcher, event.as_ref(), now)
+                            .map_err(fault)?,
+                    );
                 }
                 OperationResult::WatchList {
                     value: WatcherPage {
@@ -2266,6 +2320,74 @@ fn text(bytes: &[u8]) -> String {
     lossy.chars().take(65_536).collect()
 }
 
+/// Who owns a watcher: its session's agent, the session's assignment, the work item that
+/// assignment is for (else the session's root) and that item's feature. `None` when the session
+/// is no longer stored.
+fn owner_of(
+    read: &dyn ReadSnapshot,
+    watcher: &StoredWatcher,
+) -> Result<Option<WatchOwner>, StorageError> {
+    let Some(session) = read.sessions().session(&watcher.session_id)? else {
+        return Ok(None);
+    };
+    let assignment = match &session.root_id {
+        Some(root) => assignment_of(read, root, &watcher.session_id)?,
+        None => None,
+    };
+    let work_id = assignment
+        .as_ref()
+        .map(|a| a.work_id.clone())
+        .or_else(|| session.root_id.clone());
+    let work = match &work_id {
+        Some(work) => read.sessions().work_root(work)?,
+        None => None,
+    };
+    let feature = match &work {
+        Some(work) if work.kind == "feature" => Some(work.clone()),
+        Some(work) => match &work.parent_feature_id {
+            Some(feature) => read.sessions().work_root(feature)?,
+            None => None,
+        },
+        None => None,
+    };
+    Ok(Some(WatchOwner {
+        agent_id: session.agent_id.clone(),
+        work_id: work.as_ref().map(|w| w.id.clone()),
+        work_title: work.as_ref().map(|w| BoundedText(w.title.clone())),
+        feature_id: feature.as_ref().map(|f| f.id.clone()),
+        feature_title: feature.map(|f| BoundedText(f.title)),
+        assignment_id: assignment.map(|a| a.id),
+    }))
+}
+
+/// The assignment of `root` that `session` runs: a live one, else the latest one it ran.
+fn assignment_of(
+    read: &dyn ReadSnapshot,
+    root: &RootId,
+    session: &Id,
+) -> Result<Option<StoredAssignment>, StorageError> {
+    let mut latest: Option<StoredAssignment> = None;
+    let mut after: Option<AssignmentId> = None;
+    loop {
+        let page = read.runs().assignments(root, false, after.as_ref(), PAGE)?;
+        for assignment in page.iter().filter(|a| a.session_id == *session) {
+            if assignment.state.is_live() {
+                return Ok(Some(assignment.clone()));
+            }
+            if latest
+                .as_ref()
+                .is_none_or(|l| l.created_at_ms <= assignment.created_at_ms)
+            {
+                latest = Some(assignment.clone());
+            }
+        }
+        match page.last() {
+            Some(last) if page.len() == usize::from(PAGE) => after = Some(last.id.clone()),
+            _ => return Ok(latest),
+        }
+    }
+}
+
 fn record_of(
     watcher: &StoredWatcher,
     event: Option<&StoredWatchEvent>,
@@ -2303,9 +2425,11 @@ fn record_of(
         matches: watcher.matching.as_ref().map(|m| counter(m.total)),
         session_id: watcher.session_id.clone(),
         project_id: watcher.project_id.clone(),
+        owner: None,
         created_at_ms: counter(watcher.created_at_ms),
         settled_at_ms: watcher.settled_at_ms.map(counter),
         elapsed_ms: counter(end - watcher.created_at_ms),
+        last_polled_at_ms: None,
         outcome: watcher.outcome.as_ref().map(|o| WatchOutcome {
             kind: outcome_kind(&o.kind),
             exit_code: o.exit_code.and_then(|c| i32::try_from(c).ok()),

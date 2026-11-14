@@ -999,9 +999,10 @@ impl Backend for DesktopBackend {
                 &**self.host.runtime.store(),
                 &self.host.ctx,
                 reference,
-                8_000,
+                // A watcher notice carries an output tail of up to 64 KiB.
+                96_000,
             )
-            .map_err(|error| format!("coordinator context read: {error:?}"))?;
+            .map_err(|error| format!("host notice read: {error:?}"))?;
         String::from_utf8(bytes).map_err(|_| "coordinator context is not UTF-8".into())
     }
     fn append_coordinator_notice(

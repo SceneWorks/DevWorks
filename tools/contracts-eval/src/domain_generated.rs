@@ -18100,6 +18100,37 @@ impl Check for WatcherPage {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchOwner {
+    pub agent_id: ActorId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_title: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_title: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_id: Option<AssignmentId>,
+}
+impl Check for WatchOwner {
+    fn check(&self) -> Result<(), String> {
+        self.agent_id.check()?;
+        self.work_id.check()?;
+        self.work_title.check()?;
+        self.feature_id.check()?;
+        self.feature_title.check()?;
+        self.assignment_id.check()?;
+        super::domain_rules::record(
+            "WatchOwner",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WatcherRecord {
     pub id: Id,
     pub revision: Revision,
@@ -18118,10 +18149,14 @@ pub struct WatcherRecord {
     pub session_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<WatchOwner>,
     pub created_at_ms: Counter,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settled_at_ms: Option<Counter>,
     pub elapsed_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_polled_at_ms: Option<Counter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<WatchOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18146,9 +18181,11 @@ impl Check for WatcherRecord {
         self.matches.check()?;
         self.session_id.check()?;
         self.project_id.check()?;
+        self.owner.check()?;
         self.created_at_ms.check()?;
         self.settled_at_ms.check()?;
         self.elapsed_ms.check()?;
+        self.last_polled_at_ms.check()?;
         self.outcome.check()?;
         self.duration_ms.check()?;
         self.output_tail.check()?;
@@ -19537,6 +19574,8 @@ pub enum DomainQuery {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_id: Option<Id>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        feature_id: Option<RootId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         states: Option<Items<WatcherState>>,
         page: PageRequest,
     },
@@ -20893,10 +20932,12 @@ impl Check for DomainQuery {
             }
             Self::WatchList {
                 session_id,
+                feature_id,
                 states,
                 page,
             } => {
                 session_id.check()?;
+                feature_id.check()?;
                 states.check()?;
                 page.check()?;
             }
