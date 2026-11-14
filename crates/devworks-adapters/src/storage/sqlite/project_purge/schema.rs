@@ -24,9 +24,13 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// `PRAGMA optimize` that clean shutdown runs) hold no project rows and are not part of the digest.
 /// Migration 53 rebuilds watchers (match and file columns) and watcher_events (several events per
 /// watcher, match_count); both keep their project owner and add no table or ownership edge, and a
-/// project's purge still removes all of their rows.
+/// project's purge still removes all of their rows. Migration 54 drops session_usage and
+/// job_run_usage, with their policy rows, after copying their items into usage_origins; adds
+/// usage_origins.committed_seq, four usage_origins indexes and the recreated update trigger.
+/// usage_origins keeps its project owner (`project_id`), so a project's purge removes the copied
+/// rows with it, and adds no table or ownership edge.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "812180517e5371e73f697e8453fcf7611ba29ce30a6506cf7001128d1f8b6844";
+    "7222b640f0431113d3c8401957018204ae497d230394dcf02e41dbf44cfa35ab";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

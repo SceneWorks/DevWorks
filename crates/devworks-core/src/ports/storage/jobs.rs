@@ -186,7 +186,7 @@ pub struct StoredJobAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredJobUsage {
     pub run_id: Id,
-    /// Per-run sequence (assigned on insert).
+    /// Per-run sequence (assigned by `prepare_usage`).
     pub seq: i64,
     pub request_id: Id,
     pub purpose: String,
@@ -217,12 +217,6 @@ pub struct JobUsageTotals {
 }
 
 pub trait JobRead {
-    /// Global immutable usage facts in exclusive (run_id,seq) order, bounded to MAX_PAGE.
-    fn usage_history(
-        &self,
-        after: Option<&super::UsageJobPosition>,
-        limit: u16,
-    ) -> Result<Vec<StoredJobUsage>, StorageError>;
     fn job(&self, id: &Id) -> Result<Option<StoredJob>, StorageError>;
     /// Live (not deleted) jobs of `scope` in case-insensitive title order, then ID, strictly
     /// after `after` (title, ID), optionally only `enabled` ones, at most `limit` (1..=500).
@@ -328,6 +322,8 @@ pub trait JobRepository: JobRead {
         action: &StoredJobAction,
         expected_revision: i64,
     ) -> Result<StoredJobAction, StorageError>;
-    /// Records a usage item with the run's next sequence; a repeated request is `Duplicate`.
-    fn record_usage(&mut self, usage: &StoredJobUsage) -> Result<StoredJobUsage, StorageError>;
+    /// Validates a usage item of an existing run and returns it with the run's next usage
+    /// sequence; a request the run already recorded is `Duplicate` (`job_usage`). It writes
+    /// nothing: the caller records the item as a `JobUsage` usage origin.
+    fn prepare_usage(&self, usage: &StoredJobUsage) -> Result<StoredJobUsage, StorageError>;
 }

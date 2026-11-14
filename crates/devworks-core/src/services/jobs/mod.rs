@@ -1977,13 +1977,6 @@ mod tests {
             };
             Ok(vec![job; usize::from(limit)])
         }
-        fn usage_history(
-            &self,
-            _: Option<&crate::ports::storage::UsageJobPosition>,
-            _: u16,
-        ) -> Result<Vec<StoredJobUsage>, StorageError> {
-            unreachable!()
-        }
         fn job(&self, _: &Id) -> Result<Option<StoredJob>, StorageError> {
             unreachable!()
         }

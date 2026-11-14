@@ -202,7 +202,6 @@
       "resource_leases",
       "router_requests",
       "schedules",
-      "session_usage",
       "sessions",
       "tool_invocations",
       "usage_attempts",
@@ -215,8 +214,7 @@
     "schedule_lineage": [
       "job_actions",
       "job_checkpoints",
-      "job_run_links",
-      "job_run_usage"
+      "job_run_links"
     ],
     "scope_key_owned_rows": [
       "configuration_proposals",
