@@ -7,6 +7,7 @@ use devworks_desktop::backend::{CommandDispatch, Slot};
 use devworks_desktop::help_ops::HelpSlot;
 use devworks_desktop::memory::Memory;
 use devworks_desktop::screen::ScreenId;
+use devworks_desktop::watch_ops::WatchSlot;
 use serde::de::DeserializeOwned;
 
 const SLOTS: &str = include_str!("fixtures/slots-main.jsonl");
@@ -214,7 +215,10 @@ fn variant_names<T: DeserializeOwned>() -> Vec<String> {
 
 /// Every migrated screen's slot variant names.
 fn screen_variants() -> Vec<(ScreenId, Vec<String>)> {
-    vec![(ScreenId::Help, variant_names::<HelpSlot>())]
+    vec![
+        (ScreenId::Help, variant_names::<HelpSlot>()),
+        (ScreenId::Watchers, variant_names::<WatchSlot>()),
+    ]
 }
 
 /// The variant name a slot's JSON carries.
@@ -231,6 +235,7 @@ fn reported(slot: &Slot) -> String {
     match slot.screen() {
         ScreenId::Legacy => format!("{slot:?}"),
         ScreenId::Help => format!("{:?}", HelpSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Watchers => format!("{:?}", WatchSlot::try_from(slot.clone()).unwrap()),
     }
 }
 
