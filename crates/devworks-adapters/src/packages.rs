@@ -35,7 +35,6 @@ use devworks_core::authority::reads::{ReadRequest, ReadRoot, VerifiedReader, Ver
 use devworks_core::authority::redact::Redactor;
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::framing;
-use devworks_core::jcs;
 use devworks_core::ports::packages::VerifiedPackageFile;
 use devworks_core::ports::packages::{
     BundleFile, InspectError, InspectedBundle, InspectedContribution, InspectedDependency,
@@ -213,8 +212,7 @@ fn kind(c: &Contribution) -> &'static str {
     }
 }
 fn canonical_digest(v: &Value) -> Result<String, InspectError> {
-    jcs::canonicalize(v)
-        .map(|c| sha256_hex(c.as_bytes()))
+    devworks_core::fingerprint::canonical_digest(v)
         .map_err(|e| InspectError::Manifest(format!("{e:?}")))
 }
 
@@ -555,8 +553,7 @@ impl NativePackageFiles {
     }
     fn valid_name(package: &str, digest: &str) -> bool {
         devworks_core::protocol::Id::new(package).is_ok()
-            && digest.len() == 64
-            && digest.bytes().all(|b| b.is_ascii_hexdigit())
+            && devworks_core::fingerprint::is_sha256_hex(digest)
     }
     fn stopped(stopped: &mut dyn FnMut() -> bool) -> Result<(), PackageFileError> {
         if stopped() {
@@ -1040,9 +1037,7 @@ pub fn write_index(index: &Value, key: &SigningKey) -> Vec<u8> {
 }
 
 fn is_digest(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    devworks_core::fingerprint::is_sha256_hex(s)
 }
 
 /// Verifies index documents against their source.

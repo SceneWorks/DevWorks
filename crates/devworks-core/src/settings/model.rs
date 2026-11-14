@@ -18,20 +18,6 @@ pub const BODY_SCHEMA_VERSION: i64 = 1;
 /// `SettingEntry` from the workspace at revision 1 is therefore the built-in default.
 pub const INITIAL_REVISION: i64 = 1;
 
-pub fn scope_of(s: &DataScope) -> ConfigScope {
-    match s {
-        DataScope::Workspace => ConfigScope::Workspace,
-        DataScope::Project { project_id } => ConfigScope::Project(project_id.clone()),
-    }
-}
-pub fn data_scope(s: &ConfigScope) -> DataScope {
-    match s {
-        ConfigScope::Workspace => DataScope::Workspace,
-        ConfigScope::Project(p) => DataScope::Project {
-            project_id: p.clone(),
-        },
-    }
-}
 pub fn kind_of(s: &ConfigScope) -> ScopeKind {
     match s {
         ConfigScope::Workspace => ScopeKind::Workspace,
@@ -130,7 +116,7 @@ pub fn entry(
             schema: d.schema_ref(),
             value: DynamicJson(value),
         },
-        source_scope: data_scope(source),
+        source_scope: DataScope::from(source),
         revision: Revision::new(revision).expect("positive revision"),
     }
 }

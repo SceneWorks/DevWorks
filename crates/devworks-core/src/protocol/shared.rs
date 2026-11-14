@@ -648,12 +648,7 @@ impl Blockers {
 }
 impl Receipt {
     fn validate(&self) -> Result<(), &'static str> {
-        if self.request_digest.len() != 64
-            || !self
-                .request_digest
-                .bytes()
-                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
-        {
+        if !crate::fingerprint::is_sha256_hex(&self.request_digest) {
             return Err("invalid request digest");
         }
         match &self.decision {
@@ -822,11 +817,7 @@ pub fn validate_domain_reply<D>(reply: &CommandReply<D>) -> Result<(), &'static 
         super::support::Check::check(outcome).map_err(|_| "invalid purged receipt outcome")?;
     }
     if let CommandReply::Recorded { receipt, .. } = reply
-        && (receipt.request_digest.len() != 64
-            || !receipt
-                .request_digest
-                .bytes()
-                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)))
+        && !crate::fingerprint::is_sha256_hex(&receipt.request_digest)
     {
         return Err("invalid request digest");
     }

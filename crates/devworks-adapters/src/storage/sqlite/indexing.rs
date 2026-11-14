@@ -53,11 +53,8 @@ fn strings(v: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 fn oid_ok(o: &Option<String>) -> bool {
-    o.as_ref().is_none_or(|o| {
-        matches!(o.len(), 40 | 64)
-            && o.bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-    })
+    o.as_deref()
+        .is_none_or(devworks_core::services::indexing::git::oid_ok)
 }
 fn repository_exists(conn: &Connection, id: &Id) -> Result<bool, StorageError> {
     db(db(conn.prepare_cached("SELECT 1 FROM repositories WHERE id=?1"))?.exists([id.as_str()]))
@@ -86,7 +83,7 @@ fn config_from(
     })
 }
 
-const SOURCE_COLUMNS: &str = "repository_id,section,section_root,location,state,head_oid,head_ref,object_format,remote_url,revision,observed_at";
+const SOURCE_COLUMNS: &str = "repository_id,section,section_root,location,state,head_oid,head_ref,object_format,remote_url,revision,observed_at,default_ref";
 fn source_of(r: &Row<'_>) -> rusqlite::Result<StoredRepositorySourceRaw> {
     Ok((
         r.get(2)?,
@@ -100,6 +97,7 @@ fn source_of(r: &Row<'_>) -> rusqlite::Result<StoredRepositorySourceRaw> {
         r.get(8)?,
         r.get(9)?,
         r.get(10)?,
+        r.get(11)?,
     ))
 }
 type StoredRepositorySourceRaw = (
@@ -114,6 +112,7 @@ type StoredRepositorySourceRaw = (
     Option<String>,
     i64,
     i64,
+    Option<String>,
 );
 fn source_from(raw: StoredRepositorySourceRaw) -> Result<StoredRepositorySource, StorageError> {
     let (
@@ -128,6 +127,7 @@ fn source_from(raw: StoredRepositorySourceRaw) -> Result<StoredRepositorySource,
         remote,
         revision,
         at,
+        default_ref,
     ) = raw;
     Ok(StoredRepositorySource {
         repository_id: id_of(id)?,
@@ -139,6 +139,7 @@ fn source_from(raw: StoredRepositorySourceRaw) -> Result<StoredRepositorySource,
         head_ref,
         object_format: format,
         remote_url: remote,
+        default_ref,
         revision,
         observed_at_ms: at,
     })
@@ -955,6 +956,9 @@ impl IndexRepository for Unit<'_> {
             || !oid_ok(&s.head_oid)
             || s.revision < 1
             || s.location.is_empty()
+            || s.default_ref
+                .as_deref()
+                .is_some_and(|r| !r.starts_with("refs/heads/") || r.len() > 1024)
         {
             return Err(invalid("repository source identity"));
         }
@@ -971,8 +975,8 @@ impl IndexRepository for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(&format!(
-            "INSERT INTO repository_sources({SOURCE_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) \
-             ON CONFLICT(repository_id) DO UPDATE SET section=excluded.section,section_root=excluded.section_root,location=excluded.location,state=excluded.state,head_oid=excluded.head_oid,head_ref=excluded.head_ref,object_format=excluded.object_format,remote_url=excluded.remote_url,revision=excluded.revision,observed_at=excluded.observed_at"
+            "INSERT INTO repository_sources({SOURCE_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) \
+             ON CONFLICT(repository_id) DO UPDATE SET section=excluded.section,section_root=excluded.section_root,location=excluded.location,state=excluded.state,head_oid=excluded.head_oid,head_ref=excluded.head_ref,object_format=excluded.object_format,remote_url=excluded.remote_url,revision=excluded.revision,observed_at=excluded.observed_at,default_ref=excluded.default_ref"
         )))?
         .execute(params![
             s.repository_id.as_str(),
@@ -985,7 +989,8 @@ impl IndexRepository for Unit<'_> {
             s.object_format,
             s.remote_url,
             s.revision,
-            s.observed_at_ms
+            s.observed_at_ms,
+            s.default_ref
         ]))?;
         Ok(())
     }

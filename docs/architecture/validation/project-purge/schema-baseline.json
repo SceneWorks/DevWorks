@@ -4660,7 +4660,8 @@
         "object_format",
         "remote_url",
         "revision",
-        "observed_at"
+        "observed_at",
+        "default_ref"
       ],
       "foreignKeys": [
         {

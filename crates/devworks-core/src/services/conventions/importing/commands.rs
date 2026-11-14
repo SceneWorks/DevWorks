@@ -216,8 +216,13 @@ pub(super) fn validate(
         .conventions()
         .convention_import(&op.id)?
         .ok_or_else(|| invalid("missing import"))?;
-    access::scope_in(tx, &ctx, Some(&model::scope(&draft.scope)), true)
-        .map_err(|_| StorageError::ScopeDenied)?;
+    access::scope_in(
+        tx,
+        &ctx,
+        Some(&crate::protocol::data::DataScope::from(&draft.scope)),
+        true,
+    )
+    .map_err(|_| StorageError::ScopeDenied)?;
     if tx
         .queue()
         .entry(&job.delivery)?

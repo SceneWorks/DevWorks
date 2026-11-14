@@ -376,62 +376,14 @@ pub fn dialog_accepted(kind: &str) -> bool {
 
 /// Strict standard base64 (RFC 4648 with padding), as CDP encodes binary results.
 pub fn decode_base64(text: &str) -> Option<Vec<u8>> {
-    fn value(c: u8) -> Option<u32> {
-        Some(match c {
-            b'A'..=b'Z' => u32::from(c - b'A'),
-            b'a'..=b'z' => u32::from(c - b'a') + 26,
-            b'0'..=b'9' => u32::from(c - b'0') + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        })
-    }
-    let bytes = text.as_bytes();
-    if !bytes.len().is_multiple_of(4) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    for (i, chunk) in bytes.chunks(4).enumerate() {
-        let last = i + 1 == bytes.len() / 4;
-        let pad = chunk.iter().rev().take_while(|b| **b == b'=').count();
-        if pad > 2 || (pad > 0 && !last) {
-            return None;
-        }
-        let mut n = 0u32;
-        for (j, b) in chunk.iter().enumerate() {
-            let v = if j >= 4 - pad { 0 } else { value(*b)? };
-            n = (n << 6) | v;
-        }
-        let triple = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
-        // Non-canonical padding bits are refused.
-        if (pad == 1 && triple[2] != 0) || (pad == 2 && triple[1] != 0) {
-            return None;
-        }
-        out.extend_from_slice(&triple[..3 - pad]);
-    }
-    Some(out)
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.decode(text).ok()
 }
 
 /// Standard base64 with padding (test fixtures and fake endpoints).
 pub fn encode_base64(bytes: &[u8]) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            chunk.get(1).copied().unwrap_or(0),
-            chunk.get(2).copied().unwrap_or(0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 #[cfg(test)]

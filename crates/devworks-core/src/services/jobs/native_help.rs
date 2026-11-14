@@ -40,14 +40,14 @@ pub(super) fn argument_schema(operation: &str, revision: SchemaRevision) -> Opti
     if let Some(definitions) = definitions {
         schema["$defs"] = definitions;
     }
-    let canonical = crate::jcs::canonicalize(&schema).ok()?;
+    let digest = crate::fingerprint::canonical_digest(&schema).ok()?;
     Some(SchemaRef {
         schema_id: QualifiedId::try_from(format!(
             "{ARGUMENT_SCHEMA_NAMESPACE}/{operation}-current"
         ))
         .ok()?,
         revision: Revision::new(i64::from(revision.0)).ok()?,
-        sha256: Digest(sha256_hex(canonical.as_bytes())),
+        sha256: Digest(digest),
     })
 }
 

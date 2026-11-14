@@ -52,7 +52,7 @@ impl ConventionService {
         }
         // The owner was already resolved under the request scope; desktop Humans have no
         // project lineage from which a subsequent implicit scope could be recovered.
-        let owner_scope = model::scope(&owner.scope);
+        let owner_scope = crate::protocol::data::DataScope::from(&owner.scope);
         let (lease, upload) = env.read(|read| {
             Ok((|| {
                 let selection = if same(owner.content_ref.as_ref(), reference) {
@@ -252,7 +252,12 @@ impl ConventionService {
                 let owner =
                     access::owner(read, ctx, &input.convention_id, None, input.scope.as_ref())?;
                 let destination = access::scope(read, ctx, Some(&input.destination), true)?;
-                let source = access::scope(read, ctx, Some(&model::scope(&owner.scope)), true)?;
+                let source = access::scope(
+                    read,
+                    ctx,
+                    Some(&crate::protocol::data::DataScope::from(&owner.scope)),
+                    true,
+                )?;
                 let witness = hierarchy::witness(read.conventions(), &owner)?;
                 let mut prospective = owner.clone();
                 prospective.scope = destination.exact.clone();

@@ -1,9 +1,7 @@
 //! The registered portable import format and retained source bounds. Bounds apply to complete
 //! source entries; protocol passage bounds never narrow a legal authored document.
 use crate::fingerprint::sha256_hex;
-use crate::ports::storage::{
-    KnowledgeScope, StorageError, StoredConvention, StoredConventionResource,
-};
+use crate::ports::storage::{StorageError, StoredConvention, StoredConventionResource};
 use crate::protocol::Revision;
 use crate::protocol::data::DataScope;
 use crate::protocol::provider::{Digest, QualifiedId, SchemaRef};
@@ -35,15 +33,6 @@ pub fn manifest_schema() -> SchemaRef {
     }
 }
 
-pub fn scope(scope: &KnowledgeScope) -> DataScope {
-    match scope {
-        KnowledgeScope::Workspace => DataScope::Workspace,
-        KnowledgeScope::Project(project_id) => DataScope::Project {
-            project_id: project_id.clone(),
-        },
-    }
-}
-
 /// Absence of an index head is not a successful empty index or a queued operation.
 pub fn unindexed() -> ConventionIndexStatus {
     ConventionIndexStatus {
@@ -72,7 +61,7 @@ pub fn record(
     let result = ConventionRecord {
         id: row.id.clone(),
         revision: Revision::new(row.revision).map_err(|e| StorageError::InvalidRecord(e.into()))?,
-        scope: scope(&row.scope),
+        scope: DataScope::from(&row.scope),
         slug: GraphText(row.slug.clone()),
         title: GraphText(row.title.clone()),
         parent_id: row.parent_id.clone(),
@@ -102,7 +91,7 @@ pub fn resource(
         convention_id: row.convention_id.clone(),
         convention_revision: Revision::new(row.convention_revision)
             .map_err(|e| StorageError::InvalidRecord(e.into()))?,
-        scope: scope(&owner.scope),
+        scope: DataScope::from(&owner.scope),
         name: BoundedText(row.name.clone()),
         lifecycle: parse(Value::String(row.lifecycle.clone()))?,
         content: parse(row.content_ref.clone())?,
@@ -126,11 +115,3 @@ pub fn resource(
 #[path = "manifest_writer.rs"]
 mod manifest_writer;
 pub use manifest_writer::{EditorConvention, EditorResource, EditorText, write_editor_manifest};
-
-/// The storage scope corresponding to the closed wire scope.
-pub(crate) fn scope_storage(scope: &DataScope) -> KnowledgeScope {
-    match scope {
-        DataScope::Workspace => KnowledgeScope::Workspace,
-        DataScope::Project { project_id } => KnowledgeScope::Project(project_id.clone()),
-    }
-}

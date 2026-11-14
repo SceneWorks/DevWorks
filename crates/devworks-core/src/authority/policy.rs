@@ -11,13 +11,14 @@ use crate::fingerprint::sha256_hex;
 use crate::operations::{OperationInput, git, watch};
 use crate::ports::AuthorityRequest;
 use crate::ports::storage::{
-    ConfigScope, ConfigurationRead, GrantKind, PrincipalBinding, StorageError,
+    ConfigScope, ConfigurationRead, GithubRead, GrantKind, PrincipalBinding, ReadSnapshot,
+    StorageError, WriteTransaction,
 };
-use crate::protocol::ProjectId;
 use crate::protocol::data::{GitCommand, PushMode};
+use crate::protocol::{Id, ProjectId};
 use crate::registry::{AuthorityClass, EffectClass, Mode};
 use crate::settings::catalog::{AgentRole, TOOL_OVERRIDES_KEY, descriptor};
-use crate::settings::model::{chain, current_chain, scope_of};
+use crate::settings::model::{chain, current_chain};
 use std::collections::BTreeMap;
 
 /// Setting that selects the access profile (Full is the initial default for new projects).
@@ -182,7 +183,7 @@ pub fn resolve_policy(
         Some(e) => (
             e.value.value.0.as_str().and_then(AccessProfile::parse),
             Some(Provenance {
-                scope: scope_of(&e.source_scope),
+                scope: crate::ports::storage::ConfigScope::from(&e.source_scope),
                 revision: e.revision.get(),
             }),
         ),
@@ -428,6 +429,50 @@ pub fn protected_ref(target: &str, extra: &[String]) -> bool {
         .map(|r| short(r))
         .chain(extra.iter().map(|r| short(r)))
         .any(|p| p == name)
+}
+
+/// The branches protected in `repository` besides `main` and `master`: its default branch, as
+/// discovery last recorded it from the clone (`refs/remotes/origin/HEAD`), or else as GitHub
+/// reported it for the repository's active binding.
+pub fn repository_protected_branches(
+    s: &dyn ReadSnapshot,
+    repository: &Id,
+) -> Result<Vec<String>, StorageError> {
+    let local = s
+        .indexing()
+        .repository_source(repository)?
+        .and_then(|source| source.default_ref);
+    default_branch(local, s.github(), repository)
+}
+
+/// [`repository_protected_branches`] inside a unit of work.
+pub fn repository_protected_branches_in(
+    tx: &mut dyn WriteTransaction,
+    repository: &Id,
+) -> Result<Vec<String>, StorageError> {
+    let local = tx
+        .indexing()
+        .repository_source(repository)?
+        .and_then(|source| source.default_ref);
+    default_branch(local, tx.github(), repository)
+}
+
+/// The recorded local default branch, else the bound GitHub repository's default branch.
+fn default_branch(
+    local: Option<String>,
+    github: &dyn GithubRead,
+    repository: &Id,
+) -> Result<Vec<String>, StorageError> {
+    if local.is_some() {
+        return Ok(local.into_iter().collect());
+    }
+    Ok(github
+        .github_repository(repository)?
+        .and_then(|bound| bound.default_branch)
+        .filter(|branch| !branch.is_empty())
+        .map(|branch| format!("refs/heads/{branch}"))
+        .into_iter()
+        .collect())
 }
 
 pub fn evaluate(

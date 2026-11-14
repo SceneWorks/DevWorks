@@ -1097,10 +1097,12 @@ impl CommandHandler for WatchService {
                         .map(Prepped::File),
                     None => spec
                         .map(|spec| {
-                            self.processes.bind_spec(spec, ctx).map(|bound| {
-                                let verdict = self.processes.preflight(&bound);
-                                (bound, verdict)
-                            })
+                            let bound = self.processes.bind_spec(spec, ctx)?;
+                            let verdict = self
+                                .processes
+                                .preflight(&bound, &spec.working_directory.root_id)
+                                .map_err(|_| BindingRefusal::ChangedRoot)?;
+                            Ok((bound, verdict))
                         })
                         .transpose()
                         .map(Prepped::Launch),

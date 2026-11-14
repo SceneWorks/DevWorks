@@ -605,11 +605,7 @@ impl ArtifactRepository for Unit<'_> {
         if Id::new(generation).is_err() {
             return Err(invalid("blob generation must be an opaque identifier"));
         }
-        if digest.len() != 64
-            || !digest
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-        {
+        if !devworks_core::fingerprint::is_sha256_hex(digest) {
             return Err(invalid("blob digest must be 64 lower-case hex characters"));
         }
         if byte_count < 0 {

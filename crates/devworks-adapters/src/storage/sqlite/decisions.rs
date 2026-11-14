@@ -103,11 +103,7 @@ fn bounded(s: &str, max: usize, empty: bool) -> Result<(), StorageError> {
     }
 }
 fn sha(s: &str) -> Result<(), StorageError> {
-    if s.len() != 64
-        || !s
-            .bytes()
-            .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
-    {
+    if !devworks_core::fingerprint::is_sha256_hex(s) {
         Err(invalid("decision digest must be lowercase SHA-256"))
     } else {
         Ok(())

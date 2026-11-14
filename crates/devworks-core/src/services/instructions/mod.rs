@@ -220,14 +220,6 @@ pub(crate) fn config_scope(
         }
     }
 }
-fn data_scope(scope: &ConfigScope) -> DataScope {
-    match scope {
-        ConfigScope::Workspace => DataScope::Workspace,
-        ConfigScope::Project(p) => DataScope::Project {
-            project_id: p.clone(),
-        },
-    }
-}
 /// Whether the invocation may see an item of `scope`: workspace instructions apply in every
 /// project, a project's only within it.
 pub(crate) fn visible(ctx: &InvocationContext, scope: &ConfigScope) -> bool {
@@ -275,26 +267,27 @@ pub(crate) fn visible_revision(
 }
 /// The project a draft by this invocation is confined to: a non-human author confined to one
 /// project (by its invocation or its binding) writing a workspace instruction, whose draft
-/// would otherwise be readable from every project before any approval.
+/// would otherwise be readable from every project before any approval. A non-human author
+/// without an active host binding has no reach and is refused.
 pub(crate) fn draft_confinement(
-    tx: &mut dyn WriteTransaction,
+    authority: &dyn crate::ports::storage::AuthorityRead,
     ctx: &InvocationContext,
     scope: &ConfigScope,
 ) -> Result<Option<ProjectId>, Failure> {
-    if ctx.principal_kind() == crate::context::PrincipalKind::Human
-        || *scope != ConfigScope::Workspace
-    {
+    if ctx.principal_kind() == crate::context::PrincipalKind::Human {
+        return Ok(None);
+    }
+    let reach = crate::services::knowledge::reach(authority, ctx)?;
+    if *scope != ConfigScope::Workspace {
         return Ok(None);
     }
     if let Some(p) = ctx.project_id() {
         return Ok(Some(p.clone()));
     }
-    Ok(
-        match crate::services::artifacts::authorized_scope(tx.authority(), ctx)? {
-            crate::services::artifacts::AuthorizedScope::Workspace => None,
-            crate::services::artifacts::AuthorizedScope::Project(p) => Some(p),
-        },
-    )
+    Ok(match reach {
+        crate::authority::reach::Reach::Workspace => None,
+        crate::authority::reach::Reach::Project(p) => Some(p),
+    })
 }
 pub(crate) fn target_kind(kind: InstructionKind) -> &'static str {
     match kind {
@@ -408,7 +401,7 @@ pub(crate) fn record(
         id: item.id.clone(),
         revision: rev(revision.revision),
         name: label(&item.name, "instruction"),
-        scope: data_scope(&item.scope),
+        scope: DataScope::from(&item.scope),
         content,
         source_path,
         approved: revision.state == InstructionRevisionState::Approved,
@@ -649,4 +642,91 @@ pub(crate) fn kind_of(input: &OperationInput) -> Option<InstructionKind> {
 
 pub(crate) fn not_found_failure(kind: InstructionKind, id: &Id) -> Failure {
     not_found(target_kind(kind), id).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ports::storage::{
+        AuthorityGrant, AuthorityRead, PrincipalBinding, RegisteredRepository,
+    };
+    use crate::protocol::{ActorId, Counter, Revision, StoreId};
+    use crate::settings::catalog::AgentRole;
+
+    /// The authority records of one agent: its binding (if any).
+    struct Bound(Option<PrincipalBinding>);
+    impl AuthorityRead for Bound {
+        fn principal(&self, _: &ActorId) -> Result<Option<PrincipalBinding>, StorageError> {
+            Ok(self.0.clone())
+        }
+        fn authority_grant(&self, _: &Id) -> Result<Option<AuthorityGrant>, StorageError> {
+            Ok(None)
+        }
+        fn registered_repositories(&self) -> Result<Vec<RegisteredRepository>, StorageError> {
+            Ok(Vec::new())
+        }
+    }
+    fn id(s: &str) -> Id {
+        Id::new(s).unwrap()
+    }
+    fn agent() -> InvocationContext {
+        InvocationContext::new(
+            ActorId(id("agent")),
+            PrincipalKind::Agent,
+            id("invocation"),
+            id("namespace"),
+            StoreId(id("store")),
+            Counter::new(0).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+    }
+    fn binding(active: bool, project: Option<&str>) -> PrincipalBinding {
+        PrincipalBinding {
+            actor: ActorId(id("agent")),
+            kind: PrincipalKind::Agent,
+            role: Some(AgentRole::Worker),
+            project_id: project.map(|p| ProjectId(id(p))),
+            tool_families: None,
+            active,
+            revision: 1,
+            bound_by: ActorId(id("user")),
+            updated_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn an_agent_without_an_active_binding_is_refused_an_instruction_draft() {
+        let ctx = agent();
+        for (case, authority) in [
+            ("missing binding", Bound(None)),
+            ("inactive binding", Bound(Some(binding(false, None)))),
+        ] {
+            for scope in [
+                ConfigScope::Workspace,
+                ConfigScope::Project(ProjectId(id("project-a"))),
+            ] {
+                assert!(
+                    matches!(
+                        draft_confinement(&authority, &ctx, &scope),
+                        Err(Failure::Refused(Refusal {
+                            code: DomainErrorCode::PermissionDenied,
+                            ..
+                        }))
+                    ),
+                    "{case} {scope:?}"
+                );
+            }
+        }
+        // An active binding drafts: unconfined workspace-wide, confined to its bound project.
+        let unconfined = Bound(Some(binding(true, None)));
+        assert_eq!(
+            draft_confinement(&unconfined, &ctx, &ConfigScope::Workspace).ok(),
+            Some(None)
+        );
+        let confined = Bound(Some(binding(true, Some("project-a"))));
+        assert_eq!(
+            draft_confinement(&confined, &ctx, &ConfigScope::Workspace).ok(),
+            Some(Some(ProjectId(id("project-a"))))
+        );
+    }
 }

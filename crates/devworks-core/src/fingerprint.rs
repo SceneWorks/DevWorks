@@ -25,11 +25,7 @@ impl Fingerprint {
     }
     /// Reconstructs a stored fingerprint; it must be 64 lowercase hex characters.
     pub fn from_hex(hex: &str) -> Option<Self> {
-        (hex.len() == 64
-            && hex
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
-        .then(|| Self(hex.to_owned()))
+        is_sha256_hex(hex).then(|| Self(hex.to_owned()))
     }
 }
 impl fmt::Display for Fingerprint {
@@ -44,6 +40,29 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// Whether `s` is exactly `len` lowercase hexadecimal characters. Uppercase is refused: every
+/// digest and object ID DevWorks writes is lowercase, and the store refuses any other spelling.
+pub fn is_lower_hex(s: &str, len: usize) -> bool {
+    s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Whether `s` is a SHA-256 digest in its one canonical spelling: 64 lowercase hex characters.
+pub fn is_sha256_hex(s: &str) -> bool {
+    is_lower_hex(s, 64)
+}
+
+/// SHA-256 (lowercase hex) of the RFC 8785 canonical form of `value`.
+pub fn canonical_digest(value: &Value) -> Result<String, JcsError> {
+    jcs::canonicalize(value).map(|canonical| sha256_hex(canonical.as_bytes()))
+}
+
+/// [`canonical_digest`], except that a value JCS cannot represent (an exact integer outside the
+/// I-JSON range) is hashed as its serde_json text, so the exact integer is kept rather than
+/// refused. Stored digests of such values were computed this way.
+pub fn canonical_digest_or_text(value: &Value) -> String {
+    canonical_digest(value).unwrap_or_else(|_| sha256_hex(value.to_string().as_bytes()))
 }
 
 /// The versioned document that is canonicalized and hashed for one admitted request.
@@ -68,6 +87,31 @@ pub fn compute(
     revision: SchemaRevision,
     normalized_input: &Value,
 ) -> Result<Fingerprint, JcsError> {
-    let canonical = jcs::canonicalize(&document(descriptor, mode, revision, normalized_input))?;
-    Ok(Fingerprint(sha256_hex(canonical.as_bytes())))
+    canonical_digest(&document(descriptor, mode, revision, normalized_input)).map(Fingerprint)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_digest_has_one_spelling_and_one_canonical_form() {
+        let digest = sha256_hex(b"x");
+        assert!(is_sha256_hex(&digest));
+        assert!(!is_sha256_hex(&digest.to_ascii_uppercase()));
+        assert!(!is_sha256_hex(&digest[..63]));
+        assert!(is_lower_hex(&digest[..40], 40));
+        // Key order does not change the canonical digest.
+        assert_eq!(
+            canonical_digest(&json!({"a": 1, "b": 2})).unwrap(),
+            canonical_digest(&json!({"b": 2, "a": 1})).unwrap()
+        );
+        // An integer JCS cannot represent is refused, or hashed exactly as text.
+        let huge = json!({"n": u64::MAX});
+        assert!(canonical_digest(&huge).is_err());
+        assert_eq!(
+            canonical_digest_or_text(&huge),
+            sha256_hex(huge.to_string().as_bytes())
+        );
+    }
 }

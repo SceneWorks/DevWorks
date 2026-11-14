@@ -31,9 +31,7 @@ fn invalid(message: &str) -> StorageError {
     StorageError::InvalidRecord(message.into())
 }
 fn digest(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    devworks_core::fingerprint::is_sha256_hex(s)
 }
 
 pub(super) fn insert_manifest(

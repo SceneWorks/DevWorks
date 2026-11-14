@@ -2113,6 +2113,206 @@ fn a_probe_command_the_shell_preflight_blocks_is_refused_at_creation() {
     });
 }
 
+/// The shell guard protects the working root's repository default branch, not only main and
+/// master: a forced push and a branch delete of `develop` are blocked when the repository's
+/// default branch is `develop`.
+#[test]
+fn the_shell_guard_blocks_rewriting_the_repository_default_branch() {
+    use devworks_core::ports::storage::{StoredRepository, StoredRepositorySource};
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-default-branch-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let location = work.to_string_lossy().into_owned();
+    write(&*fx.store, move |tx| {
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("watch-root"),
+            location: location.clone(),
+            name: "watched".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: "Active".into(),
+            languages: vec![],
+            revision: 1,
+            registered_at_ms: 1,
+        })?;
+        tx.indexing()
+            .put_repository_source(&StoredRepositorySource {
+                repository_id: id("watch-root"),
+                section: "workspace".into(),
+                section_root: None,
+                location,
+                state: "Present".into(),
+                head_oid: None,
+                head_ref: Some("refs/heads/develop".into()),
+                object_format: "Sha1".into(),
+                remote_url: None,
+                default_ref: Some("refs/heads/develop".into()),
+                revision: 1,
+                observed_at_ms: 1,
+            })
+    })
+    .unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        for (n, script) in [
+            "git push --force origin develop",
+            "git push origin --delete develop",
+            "git push origin :refs/heads/develop",
+            "git branch -D develop",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let refused = decision(
+                &app,
+                &ctx,
+                probe(script, 1000, json!({})),
+                &format!("w-default-{n}"),
+            );
+            let DomainDecision::Refused { fault } = refused else {
+                panic!("{script}: a rewrite of the default branch was admitted: {refused:?}");
+            };
+            assert_eq!(fault.code, DomainErrorCode::PermissionDenied, "{fault:?}");
+        }
+        // Another branch is not protected: the guard only holds its push for the Git owner.
+        let admitted = decision(
+            &app,
+            &ctx,
+            probe("git push --force origin feature", 1000, json!({})),
+            "w-default-other",
+        );
+        assert!(
+            !matches!(admitted, DomainDecision::Refused { .. }),
+            "{admitted:?}"
+        );
+        app.shutdown().await;
+    });
+}
+
+/// A clone that records no `refs/remotes/origin/HEAD` still protects its default branch: the
+/// shell guard falls back to the default branch GitHub reported for the repository's binding.
+#[test]
+fn the_shell_guard_protects_the_bound_github_default_branch_without_origin_head() {
+    use devworks_core::ports::storage::{
+        StoredGithubAccount, StoredGithubObservation, StoredGithubRepository,
+        StoredGithubRepositoryBinding, StoredRepository, StoredRepositorySource,
+    };
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-github-default-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let location = work.to_string_lossy().into_owned();
+    write(&*fx.store, move |tx| {
+        let remote = "https://github.com/org/watched.git".to_owned();
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("watch-root"),
+            location: location.clone(),
+            name: "watched".into(),
+            remote_url: Some(remote.clone()),
+            primary: true,
+            lifecycle: "Active".into(),
+            languages: vec![],
+            revision: 1,
+            registered_at_ms: 1,
+        })?;
+        // Discovery saw the clone, but it records no remote HEAD.
+        tx.indexing().put_repository_source(&StoredRepositorySource {
+            repository_id: id("watch-root"),
+            section: "workspace".into(),
+            section_root: None,
+            location,
+            state: "Present".into(),
+            head_oid: None,
+            head_ref: Some("refs/heads/develop".into()),
+            object_format: "Sha1".into(),
+            remote_url: Some(remote.clone()),
+            default_ref: None,
+            revision: 1,
+            observed_at_ms: 1,
+        })?;
+        tx.github().put_github_account(
+            &StoredGithubAccount {
+                id: id("account"),
+                revision: 1,
+                state: "Connected".into(),
+                remote_user_id: Some("123".into()),
+                login: Some("person".into()),
+                credential_revision: 1,
+                permission_revision: 1,
+                granted_scopes: vec!["repo".into()],
+                observed_at_ms: 1,
+                last_error: None,
+            },
+            None,
+        )?;
+        let canonical = StoredGithubRepository {
+            id: id("github-watched"),
+            account_id: id("account"),
+            revision: 1,
+            remote_repository_id: "remote-watched".into(),
+            owner: "org".into(),
+            name: "watched".into(),
+            owner_kind: "Organization".into(),
+            url: "https://github.com/org/watched".into(),
+            default_branch: Some("develop".into()),
+            permissions: json!({"pull":true,"push":true}),
+            permission_revision: 1,
+            observed_at_ms: 1,
+        };
+        tx.github().put_github_repository(&canonical, None)?;
+        let observed = tx.github().append_github_observation(&StoredGithubObservation {
+            id: id("identity-watched"),
+            repository_id: canonical.id.clone(),
+            kind: "Repository".into(),
+            subject_id: canonical.remote_repository_id.clone(),
+            remote_revision: "actual-provider-metadata".into(),
+            url: canonical.url.clone(),
+            head: None,
+            payload: json!({"requestedRemote":remote,"repository":{"node_id":canonical.remote_repository_id,"owner":{"login":canonical.owner},"name":canonical.name}}),
+            source_updated_at_ms: Some(1),
+            observed_at_ms: 1,
+        })?;
+        tx.github().put_github_repository_binding(
+            &StoredGithubRepositoryBinding {
+                repository_id: id("watch-root"),
+                github_repository_id: canonical.id,
+                revision: 1,
+                repository_revision: 1,
+                registered_remote: remote,
+                observation_id: observed.id,
+                state: "Active".into(),
+            },
+            None,
+        )
+    })
+    .unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let refused = decision(
+            &app,
+            &ctx,
+            probe("git push --force origin develop", 1000, json!({})),
+            "w-github-default",
+        );
+        let DomainDecision::Refused { fault } = refused else {
+            panic!("a forced push of the bound default branch was admitted: {refused:?}");
+        };
+        assert_eq!(fault.code, DomainErrorCode::PermissionDenied, "{fault:?}");
+        app.shutdown().await;
+    });
+}
+
 /// A process that exits before its launch report is consumed still settles with its real exit,
 /// never Lost: the outcome is recorded once the launch was reported, whatever the timing.
 #[test]

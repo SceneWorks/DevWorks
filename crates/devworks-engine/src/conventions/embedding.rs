@@ -74,11 +74,8 @@ fn invalid(why: &str) -> StorageError {
     StorageError::InvalidRecord(why.into())
 }
 fn digest(value: &Value) -> Result<String, StorageError> {
-    Ok(sha256_hex(
-        devworks_core::jcs::canonicalize(value)
-            .map_err(|_| invalid("native embedding identity"))?
-            .as_bytes(),
-    ))
+    devworks_core::fingerprint::canonical_digest(value)
+        .map_err(|_| invalid("native embedding identity"))
 }
 fn rev(value: i64) -> Result<Revision, StorageError> {
     Revision::new(value).map_err(|_| invalid("embedding revision"))

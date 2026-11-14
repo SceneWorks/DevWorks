@@ -606,6 +606,111 @@ fn force_push_of_main_is_refused_for_everyone_and_feature_force_push_needs_exact
 }
 
 #[test]
+fn the_pushed_repository_default_branch_is_protected_without_a_configured_list() {
+    use devworks_core::protocol::data::{GitOid, ObjectFormat};
+    let fx = Fx::new();
+    let user = fx.ctx("user-a", PrincipalKind::Human);
+    let tree = StoredGitWorktree {
+        id: id("work-a"),
+        repository_id: id("repo-git"),
+        work_id: id("task-git"),
+        owner: actor("user-a"),
+        ownership_revision: 1,
+        owner_root_id: None,
+        owner_assignment_id: None,
+        registered_root_id: id("owned-root"),
+        path: "/owned/task-git".into(),
+        branch: "refs/heads/develop".into(),
+        head: GitOid {
+            format: ObjectFormat::Sha1,
+            hex: "a".repeat(40),
+        },
+        revision: 1,
+        removed: false,
+        location: None,
+        pending_operation_id: None,
+        last_operation_id: None,
+        last_result: None,
+    };
+    fx.write(move |tx| {
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("repo-git"),
+            location: "/repo-git".into(),
+            name: "Git".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: "Active".into(),
+            languages: vec![],
+            revision: 1,
+            registered_at_ms: 1,
+        })?;
+        tx.indexing()
+            .put_repository_source(&StoredRepositorySource {
+                repository_id: id("repo-git"),
+                section: "workspace".into(),
+                section_root: None,
+                location: "/repo-git".into(),
+                state: "Present".into(),
+                head_oid: None,
+                head_ref: Some("refs/heads/develop".into()),
+                object_format: "Sha1".into(),
+                remote_url: None,
+                default_ref: Some("refs/heads/develop".into()),
+                revision: 1,
+                observed_at_ms: 1,
+            })?;
+        tx.projects()
+            .set_members(&ProjectId(id("project-a")), &[id("repo-git")])?;
+        tx.work().insert_work(&StoredWork {
+            id: id("task-git"),
+            project_id: ProjectId(id("project-a")),
+            kind: "task".into(),
+            parent_feature_id: None,
+            status_id: None,
+            title: "Git".into(),
+            priority: 0,
+            manual_order: 0,
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            created_by: None,
+            updated_by: None,
+            search_key: "git".into(),
+            caller_ref: None,
+            completion: None,
+            brief: json!({}),
+        })?;
+        tx.git().insert_git_worktree(&tree)
+    });
+    // The desktop composition passes no configured names; the repository's recorded default
+    // branch is still refused a force-push, in any case spelling.
+    for target in ["refs/heads/develop", "refs/heads/Develop"] {
+        assert_eq!(
+            reason(decide(
+                &fx,
+                &user,
+                "git.push",
+                Mode::Command,
+                &push(target, 'b')
+            )),
+            Some(DenialReason::ProtectedBranch),
+            "{target}"
+        );
+    }
+    assert_eq!(
+        reason(decide(
+            &fx,
+            &user,
+            "git.push",
+            Mode::Command,
+            &push("refs/heads/codex/task-a", 'b')
+        )),
+        None
+    );
+}
+
+#[test]
 fn project_scope_denies_native_execution_without_a_reviewed_native_grant() {
     let fx = Fx::new();
     let user = fx.ctx("user-a", PrincipalKind::Human);

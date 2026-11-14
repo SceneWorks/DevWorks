@@ -5,7 +5,6 @@
 //! batches record their effective source boundary. Historical sources stamped at the end of a
 //! batch cannot prove the revisions of earlier steps in that batch. Never substitute present
 //! configuration or an assignment's mutable revisions.
-use crate::fingerprint::sha256_hex;
 use crate::ports::storage::{
     SessionRead, StorageError, StoredContextSource, StoredEntry, StoredSession,
 };
@@ -34,8 +33,7 @@ fn relevant(kind: &str) -> bool {
 }
 fn digest(sources: &[ContextSourceInput]) -> Result<String, StorageError> {
     let value = serde_json::to_value(sources).map_err(|e| invalid(&e.to_string()))?;
-    let canonical = crate::jcs::canonicalize(&value).map_err(|e| invalid(&e.to_string()))?;
-    Ok(sha256_hex(canonical.as_bytes()))
+    crate::fingerprint::canonical_digest(&value).map_err(|e| invalid(&e.to_string()))
 }
 fn complete(sources: &[ContextSourceInput]) -> bool {
     !sources.is_empty()

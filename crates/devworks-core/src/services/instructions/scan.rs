@@ -89,11 +89,7 @@ pub fn revision_digest(instruction_sha256: &str, resources: &[(String, String, b
         "instruction": instruction_sha256,
         "resources": resources.iter().map(|(p, d, s)| json!([p, d, s])).collect::<Vec<_>>(),
     });
-    sha256_hex(
-        crate::jcs::canonicalize(&value)
-            .expect("canonical revision digest")
-            .as_bytes(),
-    )
+    crate::fingerprint::canonical_digest(&value).expect("canonical revision digest")
 }
 
 impl ScannedSkill {

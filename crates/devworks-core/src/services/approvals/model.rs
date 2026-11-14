@@ -7,11 +7,7 @@ use crate::services::sessions::{content, counter, label, rev};
 use serde_json::{Value, json};
 
 pub(crate) fn hash(value: &Value) -> String {
-    crate::fingerprint::sha256_hex(
-        crate::jcs::canonicalize(value)
-            .unwrap_or_else(|_| value.to_string())
-            .as_bytes(),
-    )
+    crate::fingerprint::canonical_digest_or_text(value)
 }
 /// The one binding shared by generic staging and the original owner's admission proof.
 pub(crate) fn scope_digest(owner: &Value, authority: Option<&Value>) -> String {

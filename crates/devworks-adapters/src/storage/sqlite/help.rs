@@ -23,10 +23,7 @@ fn json(value: &str) -> Result<Value, StorageError> {
     serde_json::from_str(value).map_err(|_| corrupt("invalid Help JSON"))
 }
 fn digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    devworks_core::fingerprint::is_sha256_hex(value)
 }
 fn text(value: &str, min: usize, max: usize) -> bool {
     !value.contains('\0') && (min..=max).contains(&value.chars().count())
