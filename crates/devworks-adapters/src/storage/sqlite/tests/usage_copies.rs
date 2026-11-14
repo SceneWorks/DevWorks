@@ -15,10 +15,19 @@ fn id(s: &str) -> Id {
     Id::new(s).unwrap()
 }
 
-/// (session, batch, ordinal, amountUsd, priceKind, priceOrigin, incomplete). Batch `b2`'s item
-/// and job item 3 were already ingested when the old build wrote them; the rest predate
-/// migration 28 and were never bootstrapped.
-const SESSION_ROWS: [(&str, &str, i64, Option<&str>, &str, &str, bool); 5] = [
+/// (session, batch, ordinal, amountUsd, priceKind, priceOrigin, incomplete).
+type SessionRow = (
+    &'static str,
+    &'static str,
+    i64,
+    Option<&'static str>,
+    &'static str,
+    &'static str,
+    bool,
+);
+/// Batch `b2`'s item and job item 3 were already ingested when the old build wrote them; the
+/// rest predate migration 28 and were never bootstrapped.
+const SESSION_ROWS: [SessionRow; 5] = [
     (
         "s1",
         "b1",
@@ -77,7 +86,7 @@ const JOB_ROWS: [(i64, Option<&str>, &str, &str, bool); 4] = [
 const INGESTED_SESSION: (&str, &str, i64) = ("s1", "b2", 1);
 const INGESTED_JOB: i64 = 3;
 
-fn item(row: &(&str, &str, i64, Option<&str>, &str, &str, bool)) -> Value {
+fn item(row: &SessionRow) -> Value {
     let (session, batch, ordinal, amount, kind, origin, incomplete) = *row;
     let mut v = json!({"requestId": format!("request-{session}-{batch}-{ordinal}"),
         "purpose": "Conversation", "modelId": "sol", "inputTokens": "10", "outputTokens": "5",
@@ -273,10 +282,7 @@ fn seed(s: &SqliteStore) -> Vec<(String, i64)> {
     .unwrap()
 }
 
-fn stored_usage(
-    row: &(&str, &str, i64, Option<&str>, &str, &str, bool),
-    batches: &[(String, i64)],
-) -> StoredUsage {
+fn stored_usage(row: &SessionRow, batches: &[(String, i64)]) -> StoredUsage {
     let (session, batch, ordinal, ..) = *row;
     let s1 = session == "s1";
     StoredUsage {
