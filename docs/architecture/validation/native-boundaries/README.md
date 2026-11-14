@@ -9,7 +9,7 @@ Recorded 1 November 2026 on macOS arm64. Architecture experiments only: no nativ
 - [Read guard results](guards-results.json): 6 checks, actual macOS root-relative no-follow regular-file open, substitution-resistant descriptor, fixture revision deny and byte bound. No production authority, deletion, mount/hard-link or confined-executable claim.
 - [Evidence manifest](evidence.json): source/result hashes, host/tool versions and explicit PDFium asset provenance. Downloaded binary is unsigned experiment input; shipping audit/signing/SBOM/notices and all target builds remain open.
 - [Reader verification](reader-checks.json): generated reader/layout/link/filter checks, separately identified from native assertions.
-- [Reproduction source and instructions](../../../../tools/native-boundary-eval/README.md).
+- [Reproduction source and instructions](https://github.com/SceneWorks/DevWorks/tree/f76506ec33c9563d19e03bc68a4b7e9e65178271/tools/native-boundary-eval/README.md) at commit `f76506ec`; the probe was removed from the main branch.
 - [Native backend decisions and limits](../../native-backend-feasibility.md).
 - [Complete implementation ownership draft](../../implementation-plan.json).
 
