@@ -173,8 +173,8 @@ class Reachability(unittest.TestCase):
     def test_unevaluable_cfg_attr_stays_optional_before_a_definite_path_and_on_inline_modules(self):
         root = crate(self.root, {
             'root.rs': ('#[cfg_attr(windows, path = "missing.rs")]\n#[path = "real.rs"]\nmod suite;\n'
-                        '#[cfg_attr(windows, path = "win")]\nmod group { mod child; }\n'),
-            'real.rs': '', 'group/child.rs': '',
+                        '#[cfg_attr(windows, path = "win")]\nmod group { mod child; #[path = "c2.rs"] mod c2; }\n'),
+            'real.rs': '', 'group/child.rs': '', 'group/c2.rs': '',
         })
         self.assertEqual(orphan_names(root), [])
         (root / 'tests' / 'real.rs').unlink()

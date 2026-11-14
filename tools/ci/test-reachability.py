@@ -267,19 +267,20 @@ def child_files(file, owns_directory, source):
     children = []
     for inline, paths, default, name in mod_declarations(source):
         base = file.parent if owns_directory else file.parent / file.stem
-        directories = [None]  # None: no enclosing inline module
+        directories = [(None, False)]  # (directory, optional); None: no enclosing inline module
         for module, (module_paths, module_default) in inline:
             grown = []
-            for directory in directories:
-                grown.extend((file.parent if directory is None else directory) / p for p, _ in module_paths)
+            for directory, optional in directories:
+                grown.extend(((file.parent if directory is None else directory) / p, optional or opt)
+                             for p, opt in module_paths)
                 if module_default:
-                    grown.append((base if directory is None else directory) / module)
+                    grown.append(((base if directory is None else directory) / module, optional))
             directories = grown
         found = False
-        for directory in directories:
+        for directory, directory_optional in directories:
             for path, optional in paths:
                 target = ((file.parent if directory is None else directory) / path).resolve()
-                if optional and not target.is_file():
+                if (optional or directory_optional) and not target.is_file():
                     continue  # an unevaluable cfg_attr path may not apply
                 children.append((target, True))
                 found = True
@@ -294,7 +295,7 @@ def child_files(file, owns_directory, source):
                 children.append((nested.resolve(), True))
                 found = True
         if not found:
-            where = base if directories[0] is None else directories[0]
+            where = base if directories[0][0] is None else directories[0][0]
             raise FileNotFoundError(
                 f"{file}: `mod {name};` matches neither {where / f'{name}.rs'} nor {where / name / 'mod.rs'}")
     return children
