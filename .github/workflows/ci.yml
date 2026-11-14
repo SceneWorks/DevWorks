@@ -18,6 +18,26 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  pick_mac_runners:
+    name: pick macOS runners
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      foundation: ${{ steps.pick.outputs.foundation }}
+      engine: ${{ steps.pick.outputs.engine }}
+      desktop: ${{ steps.pick.outputs.desktop }}
+      clippy: ${{ steps.pick.outputs.clippy }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Idle self-hosted Macs labelled devworks-mac take macOS jobs; the rest use macos-latest.
+      - id: pick
+        env:
+          GH_TOKEN: ${{ secrets.MAC_RUNNER_QUERY_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: bash tools/ci/pick-mac-runners.sh
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
@@ -87,7 +107,9 @@ jobs:
 
   clippy:
     name: clippy (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    needs: pick_mac_runners
+    if: ${{ !cancelled() }}
+    runs-on: ${{ matrix.os == 'macos-latest' && fromJSON(needs.pick_mac_runners.outputs.clippy || '"macos-latest"') || matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -98,7 +120,15 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
+      - name: Keep build output between runs on a self-hosted Mac
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          dir="$HOME/.cache/devworks-ci/target-clippy"
+          rm -rf "$dir/tmp"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: clippy
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -171,14 +201,24 @@ jobs:
 
   macos_foundation:
     name: test (macos-foundation)
-    runs-on: macos-latest
+    needs: pick_mac_runners
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(needs.pick_mac_runners.outputs.foundation || '"macos-latest"') }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
+      - name: Keep build output between runs on a self-hosted Mac
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          dir="$HOME/.cache/devworks-ci/target-foundation"
+          rm -rf "$dir/tmp"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: test-foundation
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -188,14 +228,24 @@ jobs:
 
   macos_desktop:
     name: test (macos-desktop)
-    runs-on: macos-latest
+    needs: pick_mac_runners
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(needs.pick_mac_runners.outputs.desktop || '"macos-latest"') }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
+      - name: Keep build output between runs on a self-hosted Mac
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          dir="$HOME/.cache/devworks-ci/target-desktop"
+          rm -rf "$dir/tmp"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: test-desktop
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -205,14 +255,24 @@ jobs:
 
   macos_engine:
     name: test (macos-engine)
-    runs-on: macos-latest
+    needs: pick_mac_runners
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(needs.pick_mac_runners.outputs.engine || '"macos-latest"') }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
+      - name: Keep build output between runs on a self-hosted Mac
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          dir="$HOME/.cache/devworks-ci/target-engine"
+          rm -rf "$dir/tmp"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        if: runner.environment == 'github-hosted'
         with:
           shared-key: test-engine
           save-if: ${{ github.ref == 'refs/heads/main' }}
