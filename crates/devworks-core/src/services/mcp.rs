@@ -260,29 +260,12 @@ pub fn credential_references(read: &dyn ReadSnapshot) -> Result<BTreeSet<String>
 
 /// One page of `items`. The cursor carries the offset, bound to the caller, store, scope
 /// revision and the query it was issued for, so any other binding is `CursorExpired`.
-fn page<T: Clone>(
-    items: &[T],
+fn page<T>(
+    items: Vec<T>,
     request: &PageRequest,
     binding: &CursorBinding,
 ) -> Result<Page<T>, StorageError> {
-    let offset = match &request.cursor {
-        None => 0,
-        Some(cursor) => binding
-            .decode(&cursor.0)?
-            .parse::<usize>()
-            .map_err(|_| StorageError::CursorExpired)?,
-    };
-    if offset > items.len() {
-        return Err(StorageError::CursorExpired);
-    }
-    let end = offset
-        .saturating_add(request.limit.get() as usize)
-        .min(items.len());
-    Ok(Page {
-        items: BoundedList(items[offset..end].to_vec()),
-        next_cursor: (end < items.len()).then(|| BoundedText(binding.encode(&end.to_string()))),
-        has_more: end < items.len(),
-    })
+    crate::services::cursor::slice(binding, items, request)
 }
 
 /// The cursor binding for a listing of `scope`. A project scope names its project; the
@@ -2733,7 +2716,7 @@ impl QueryHandler for McpClientService {
                     })
                     .collect();
                 let binding = list_binding(ctx, "mcp.servers", &scope, &[], version);
-                let value = page(&records, &input.page, &binding).map_err(|e| self.fault(e))?;
+                let value = page(records, &input.page, &binding).map_err(|e| self.fault(e))?;
                 (version, OperationResult::McpServers { value })
             }
             OperationInput::Mcp(ops::Input::Capabilities(input)) => {
@@ -2775,8 +2758,7 @@ impl QueryHandler for McpClientService {
                     &[input.server_id.as_str(), input.catalog_revision.as_str()],
                     version,
                 );
-                let value =
-                    page(&capabilities, &input.page, &binding).map_err(|e| self.fault(e))?;
+                let value = page(capabilities, &input.page, &binding).map_err(|e| self.fault(e))?;
                 (version, OperationResult::McpCapabilities { value })
             }
             _ => {
@@ -2896,11 +2878,11 @@ mod cursor_binding_tests {
         let items = [1, 2, 3, 4, 5];
         let alice = ctx("alice", "store-1", None);
         let scope = ConfigScope::Workspace;
-        let first = page(&items, &request(None), &binding(&alice, &scope, 7)).unwrap();
+        let first = page(items.to_vec(), &request(None), &binding(&alice, &scope, 7)).unwrap();
         assert_eq!(first.items.0, vec![1, 2]);
         let cursor = first.next_cursor.unwrap().0;
         let resumed = page(
-            &items,
+            items.to_vec(),
             &request(Some(cursor.clone())),
             &binding(&alice, &scope, 7),
         );
@@ -2923,7 +2905,7 @@ mod cursor_binding_tests {
         for (what, other) in others {
             assert!(
                 matches!(
-                    page(&items, &request(Some(cursor.clone())), &other),
+                    page(items.to_vec(), &request(Some(cursor.clone())), &other),
                     Err(StorageError::CursorExpired)
                 ),
                 "a cursor from another {what} must expire"
@@ -2931,7 +2913,11 @@ mod cursor_binding_tests {
         }
         let altered = format!("{cursor}0");
         assert!(matches!(
-            page(&items, &request(Some(altered)), &binding(&alice, &scope, 7)),
+            page(
+                items.to_vec(),
+                &request(Some(altered)),
+                &binding(&alice, &scope, 7)
+            ),
             Err(StorageError::CursorExpired)
         ));
     }

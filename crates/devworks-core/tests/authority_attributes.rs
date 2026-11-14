@@ -46,17 +46,14 @@ const OLD_HUMAN_ONLY: [&str; 7] = [
     "mcp.remove",
 ];
 /// Refused to an agent with a root (`registered_tool_visibility`).
-const OLD_ROOT_DENIED: [&str; 10] = [
+const OLD_ROOT_DENIED: [&str; 7] = [
     "features.list",
     "features.create",
     "features.prioritize",
-    "features.dependencies",
     "issues.list",
     "issues.create",
     "issues.prioritize",
     "tasks.list",
-    "tasks.prioritize",
-    "tasks.dependency_links",
 ];
 /// Refused to an agent with an assignment (`artifacts.list`, `jobs.*` and two approval views).
 fn old_assignment_denied(op: &str) -> bool {
@@ -71,7 +68,7 @@ fn old_administration(op: &str) -> bool {
         || op == "next_work.claim_project_queue"
 }
 /// Refused to a root-bound Worker.
-const OLD_WORKER_DENIED: [&str; 11] = [
+const OLD_WORKER_DENIED: [&str; 14] = [
     "runs.start",
     "runs.pause",
     "runs.continue",
@@ -79,6 +76,9 @@ const OLD_WORKER_DENIED: [&str; 11] = [
     "runs.stop",
     "tasks.create",
     "tasks.sync_plan",
+    "tasks.prioritize",
+    "tasks.dependency_links",
+    "features.dependencies",
     "features.edit",
     "features.edit_plan",
     "features.request_plan_approval",

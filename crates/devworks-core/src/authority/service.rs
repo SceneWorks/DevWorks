@@ -274,6 +274,34 @@ fn bound(
     }
 }
 
+/// Whether a rooted agent's replacement of `target`'s blockers stays within its root: it may add
+/// any blocker (the work service checks the project and cycles), but it may remove only a
+/// blocker inside its root. A blocker it did not place from outside the root stays.
+fn blocker_edit_scoped(
+    s: &dyn ReadSnapshot,
+    target: &Id,
+    replacement: &crate::protocol::records::DependencyReplacement,
+    scoped: &dyn Fn(&Id) -> Result<bool, DenialReason>,
+) -> Result<bool, DenialReason> {
+    let kept: Vec<&Id> = replacement
+        .edges
+        .0
+        .iter()
+        .filter(|e| &e.successor == target)
+        .map(|e| &e.predecessor)
+        .collect();
+    for current in s
+        .work()
+        .prerequisites(target)
+        .map_err(|_| DenialReason::AuthorityUnavailable)?
+    {
+        if !kept.contains(&&current) && !scoped(&current)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// A project binding does not grant a running agent authority over sibling roots. Check the
 /// selected typed input here so direct gateway callers have the same boundary as advertised tools.
 fn agent_assignment_scope(
@@ -628,13 +656,24 @@ fn agent_assignment_scope(
             tasks::Input::SetFeature(i) => {
                 scoped(&i.task_id)? && !i.clear_feature && i.feature_id.as_ref() == Some(root)
             }
-            tasks::Input::Prioritize(_) | tasks::Input::DependencyLinks(_) => false,
+            // A coordinator orders its own feature's task queue; the work service checks every
+            // named task is a member of that queue.
+            tasks::Input::Prioritize(i) => coordinator && i.feature_id.as_ref() == Some(root),
+            tasks::Input::DependencyLinks(i) => {
+                coordinator
+                    && scoped(&i.task_id)?
+                    && blocker_edit_scoped(s, &i.task_id, &i.replacement, &scoped)?
+            }
         },
         OperationInput::Features(input) => match input {
+            features::Input::Dependencies(i) => {
+                coordinator
+                    && &i.feature_id == root
+                    && blocker_edit_scoped(s, &i.feature_id.0, &i.replacement, &scoped)?
+            }
             features::Input::List(_)
             | features::Input::Create(_)
-            | features::Input::Prioritize(_)
-            | features::Input::Dependencies(_) => false,
+            | features::Input::Prioritize(_) => false,
             features::Input::Get(i) => scoped(&i.work_id)?,
             features::Input::Edit(i) => scoped(&i.work_id)?,
             features::Input::EditPlan(i) => coordinator && &i.feature_id == root,

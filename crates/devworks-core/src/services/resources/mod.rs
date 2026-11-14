@@ -77,12 +77,12 @@ use crate::protocol::records::{
     LeaseEnd, LeaseRecord, LeaseState, ResourcePriority, ResourceRecord, ResourceScope,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Limit, Page, PositiveCounter};
+use crate::protocol::support::{BoundedList, BoundedText, Limit, PositiveCounter};
 use crate::protocol::{
     ActorId, CorrelationId, DomainErrorCode, DomainFault, EventId, Id, ResourceId, RetryAdvice,
     RevisionDimension, RootId,
 };
-use crate::services::cursor::CursorBinding;
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::sessions::{Failure, Refusal, counter, decided, query_fault, rev};
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
@@ -117,7 +117,7 @@ pub const DESKTOP_CONSENT_PURPOSE: &str = "desktop-consent:";
 pub const LEASE_AGGREGATE: &str = "resource_lease";
 /// History aggregate of reconciliation passes.
 pub const RECONCILE_AGGREGATE: &str = "resources";
-const PAGE: u16 = 500;
+use crate::ports::storage::MAX_PAGE;
 
 // ---------------------------------------------------------------------------------------------
 // Machine resources and dispatch-time enforcement (RES-02)
@@ -1129,34 +1129,14 @@ impl ResourceService {
             ResourceFilter::Project(p) => p.0.as_str().to_owned(),
         };
         let binding = CursorBinding::new(ctx, "resources.list", &[&scope_part], 1);
-        let after = i
-            .page
-            .cursor
-            .as_ref()
-            .map(|c| binding.decode(&c.0))
-            .transpose()?;
-        let limit = i.page.limit.get() as usize;
-        // A full page probes for one more row separately: the store bounds a listing at
-        // `MAX_PAGE`, which is also the largest wire page, so it cannot over-fetch by one.
-        let rows = read
-            .resources()
-            .resources(&filter, after.as_deref(), limit as u16)?;
-        let has_more = rows.len() == limit
-            && !read
-                .resources()
-                .resources(&filter, Some(&rows[limit - 1].canonical_key), 1)?
-                .is_empty();
-        let next = has_more.then(|| BoundedText(binding.encode(&rows[limit - 1].canonical_key)));
-        let items = rows
-            .iter()
-            .map(|r| resource_record(read.resources(), r, now))
-            .collect::<Result<Vec<_>, _>>()?;
+        let rows = cursor::page(
+            &binding,
+            &i.page,
+            |after, n| read.resources().resources(&filter, after, n),
+            |r| r.canonical_key.clone(),
+        )?;
         Ok(OperationResult::ResourcesList {
-            value: Page {
-                items: BoundedList(items),
-                next_cursor: next,
-                has_more,
-            },
+            value: rows.try_into_page(|r| resource_record(read.resources(), &r, now))?,
         })
     }
 
@@ -1175,46 +1155,25 @@ impl ResourceService {
             &[&res.canonical_key],
             res.revision,
         );
-        let mut after = match &i.page.cursor {
-            None => 0,
-            Some(c) => binding
-                .decode(&c.0)?
-                .parse::<i64>()
-                .map_err(|_| StorageError::CursorExpired)?,
-        };
-        let limit = i.page.limit.get() as usize;
-        let mut items = Vec::new();
-        let mut has_more = false;
-        'pages: loop {
-            let page = read.resources().holders(&res.id, after, PAGE)?;
-            let full = page.len() == PAGE as usize;
-            for l in page {
-                after = l.fence;
-                if effective(&l, &res, now).0 == LeasePhase::Released {
-                    continue;
-                }
-                if items.len() == limit {
-                    has_more = true;
-                    break 'pages;
-                }
-                items.push(l);
-            }
-            if !full {
-                break;
-            }
-        }
-        let next = has_more
-            .then(|| BoundedText(binding.encode(&items.last().map_or(0, |l| l.fence).to_string())));
-        let items = items
-            .iter()
-            .map(|l| lease_record(read.resources(), l, &res, now))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(OperationResult::ResourcesHolders {
-            value: Page {
-                items: BoundedList(items),
-                next_cursor: next,
-                has_more,
+        let rows = cursor::page(
+            &binding,
+            &i.page,
+            |after, n| {
+                let after = after.map_or(Ok(0), |a| {
+                    a.parse::<i64>().map_err(|_| StorageError::CursorExpired)
+                })?;
+                cursor::scan(
+                    after,
+                    n,
+                    |after, batch| read.resources().holders(&res.id, *after, batch),
+                    |l| l.fence,
+                    |l| Ok(effective(l, &res, now).0 != LeasePhase::Released),
+                )
             },
+            |l| l.fence.to_string(),
+        )?;
+        Ok(OperationResult::ResourcesHolders {
+            value: rows.try_into_page(|l| lease_record(read.resources(), &l, &res, now))?,
         })
     }
 
@@ -1235,74 +1194,52 @@ impl ResourceService {
         );
         // The cursor carries the last listed (priority, ticket) and how many live waiters came
         // before it, so positions stay exact across pages.
-        let (mut after, mut position) = match &i.page.cursor {
-            None => (None, 0),
-            Some(c) => {
-                let p = binding.decode(&c.0)?;
-                let v: Vec<i64> = p
-                    .split(':')
-                    .map(str::parse)
-                    .collect::<Result<_, _>>()
-                    .map_err(|_| StorageError::CursorExpired)?;
-                match v[..] {
-                    [priority, queue_seq, position] => (
+        let rows = cursor::page(
+            &binding,
+            &i.page,
+            |after, n| {
+                let (after, position) = match after {
+                    None => (None, 0),
+                    Some(p) => {
+                        let v: Vec<i64> = p
+                            .split(':')
+                            .map(str::parse)
+                            .collect::<Result<_, _>>()
+                            .map_err(|_| StorageError::CursorExpired)?;
+                        match v[..] {
+                            [priority, queue_seq, position] => (
+                                Some(QueuePosition {
+                                    priority,
+                                    queue_seq,
+                                }),
+                                position,
+                            ),
+                            _ => return Err(StorageError::CursorExpired),
+                        }
+                    }
+                };
+                let live = cursor::scan(
+                    after,
+                    n,
+                    |after, batch| read.resources().waiters(&res.id, *after, batch),
+                    |l| {
                         Some(QueuePosition {
-                            priority,
-                            queue_seq,
-                        }),
-                        position,
-                    ),
-                    _ => return Err(StorageError::CursorExpired.into()),
-                }
-            }
-        };
-        let limit = i.page.limit.get() as usize;
-        let mut items = Vec::new();
-        let mut has_more = false;
-        'pages: loop {
-            let page = read.resources().waiters(&res.id, after, PAGE)?;
-            let full = page.len() == PAGE as usize;
-            for l in page {
-                if effective(&l, &res, now).0 == LeasePhase::Released {
-                    after = Some(QueuePosition {
-                        priority: l.priority,
-                        queue_seq: l.queue_seq,
-                    });
-                    continue;
-                }
-                if items.len() == limit {
-                    has_more = true;
-                    break 'pages;
-                }
-                after = Some(QueuePosition {
-                    priority: l.priority,
-                    queue_seq: l.queue_seq,
-                });
-                position += 1;
-                items.push((l, position));
-            }
-            if !full {
-                break;
-            }
-        }
-        let next = has_more.then(|| {
-            let last = &items[items.len() - 1].0;
-            BoundedText(binding.encode(&format!("{}:{}:{position}", last.priority, last.queue_seq)))
-        });
-        let items = items
-            .iter()
-            .map(|(l, p)| {
-                let mut r = lease_record_at(l, &res, now, None);
-                r.queue_position = Some(counter(*p));
-                r
-            })
-            .collect();
-        Ok(OperationResult::ResourcesWaiters {
-            value: Page {
-                items: BoundedList(items),
-                next_cursor: next,
-                has_more,
+                            priority: l.priority,
+                            queue_seq: l.queue_seq,
+                        })
+                    },
+                    |l| Ok(effective(l, &res, now).0 != LeasePhase::Released),
+                )?;
+                Ok(live.into_iter().zip(position + 1..).collect::<Vec<_>>())
             },
+            |(l, p)| format!("{}:{}:{p}", l.priority, l.queue_seq),
+        )?;
+        Ok(OperationResult::ResourcesWaiters {
+            value: rows.try_into_page(|(l, p)| {
+                let mut r = lease_record_at(&l, &res, now, None);
+                r.queue_position = Some(counter(p));
+                Ok::<_, StorageError>(r)
+            })?,
         })
     }
 }
@@ -1571,8 +1508,10 @@ fn open_leases(
     let mut out = Vec::new();
     let mut after: Option<Id> = None;
     loop {
-        let page = tx.resources().open_leases(filter, after.as_ref(), PAGE)?;
-        let full = page.len() == PAGE as usize;
+        let page = tx
+            .resources()
+            .open_leases(filter, after.as_ref(), MAX_PAGE)?;
+        let full = page.len() == MAX_PAGE as usize;
         after = page.last().map(|l| l.id.clone());
         out.extend(page);
         if !full {
@@ -1594,13 +1533,15 @@ fn quiesced(
     }
     let mut after: Option<Id> = None;
     loop {
-        let page =
-            tx.resources()
-                .processes(&ProcessFilter::Lease(l.id.clone()), after.as_ref(), PAGE)?;
+        let page = tx.resources().processes(
+            &ProcessFilter::Lease(l.id.clone()),
+            after.as_ref(),
+            MAX_PAGE,
+        )?;
         if page.iter().any(|p| !p.phase.quiesced()) {
             return Ok(false);
         }
-        if page.len() < PAGE as usize {
+        if page.len() < MAX_PAGE as usize {
             break;
         }
         after = page.last().map(|p| p.id.clone());
@@ -1623,8 +1564,8 @@ fn settle(
     let now = tx.now_ms();
     let mut after = 0;
     loop {
-        let page = tx.resources().holders(&res.id, after, PAGE)?;
-        let full = page.len() == PAGE as usize;
+        let page = tx.resources().holders(&res.id, after, MAX_PAGE)?;
+        let full = page.len() == MAX_PAGE as usize;
         for mut l in page {
             after = l.fence;
             let expired = l.expires_at_ms <= now;
@@ -1684,8 +1625,8 @@ fn settle(
     }
     let mut after = None;
     loop {
-        let page = tx.resources().waiters(&res.id, after, PAGE)?;
-        let full = page.len() == PAGE as usize;
+        let page = tx.resources().waiters(&res.id, after, MAX_PAGE)?;
+        let full = page.len() == MAX_PAGE as usize;
         for mut l in page {
             after = Some(QueuePosition {
                 priority: l.priority,
@@ -1722,8 +1663,8 @@ fn promote(
     let mut used = 0;
     let mut after = 0;
     loop {
-        let page = tx.resources().holders(&res.id, after, PAGE)?;
-        let full = page.len() == PAGE as usize;
+        let page = tx.resources().holders(&res.id, after, MAX_PAGE)?;
+        let full = page.len() == MAX_PAGE as usize;
         for l in &page {
             used += l.units;
             after = l.fence;
@@ -1962,8 +1903,8 @@ fn lease_record(
         let mut n = 0;
         let mut found = None;
         'pages: loop {
-            let page = read.waiters(&res.id, after, PAGE)?;
-            let full = page.len() == PAGE as usize;
+            let page = read.waiters(&res.id, after, MAX_PAGE)?;
+            let full = page.len() == MAX_PAGE as usize;
             for w in &page {
                 after = Some(QueuePosition {
                     priority: w.priority,
@@ -1997,8 +1938,8 @@ fn resource_record(
     let mut used = 0;
     let mut after = 0;
     loop {
-        let page = read.holders(&res.id, after, PAGE)?;
-        let full = page.len() == PAGE as usize;
+        let page = read.holders(&res.id, after, MAX_PAGE)?;
+        let full = page.len() == MAX_PAGE as usize;
         for l in &page {
             after = l.fence;
             if effective(l, res, now).0 == LeasePhase::Released {
@@ -2014,7 +1955,7 @@ fn resource_record(
         }
     }
     let waiters = read
-        .waiters(&res.id, None, PAGE)?
+        .waiters(&res.id, None, MAX_PAGE)?
         .into_iter()
         .filter(|l| effective(l, res, now).0 != LeasePhase::Released)
         .take(LISTED)

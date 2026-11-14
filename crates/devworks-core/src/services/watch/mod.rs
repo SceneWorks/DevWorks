@@ -33,6 +33,7 @@ use crate::protocol::{
 };
 use crate::services::artifacts::host::HostArtifactPublication;
 use crate::services::artifacts::{ArtifactService, version_ref};
+use crate::services::cursor::{self, CursorBinding};
 use crate::services::diagnostics::{DiagnosticService, LogEntry};
 use crate::services::process::STOPPED_ON_REQUEST;
 use crate::services::process::tools::{
@@ -1092,7 +1093,7 @@ impl CommandHandler for WatchService {
                 let prepared: PreparedLaunch = match &input.file {
                     Some(file) => self
                         .processes
-                        .resolve_watched_file(&file.path, ctx.project_id())
+                        .resolve_watched_file(&file.path, ctx)
                         .map(Prepped::File),
                     None => spec
                         .map(|spec| {
@@ -1189,33 +1190,42 @@ impl QueryHandler for WatchService {
                     .as_ref()
                     .map(|states| states.0.iter().map(phase_of).collect())
                     .unwrap_or_default();
-                let before = match &input.page.cursor {
-                    Some(cursor) => Some(parse_cursor(&cursor.0).ok_or_else(|| {
-                        Refusal::new(DomainErrorCode::InvalidArgument, "cursor", None)
-                            .fault(self.correlation())
-                    })?),
-                    None => None,
-                };
-                let limit = u16::try_from(input.page.limit.get())
-                    .unwrap_or(u16::MAX)
-                    .min(crate::ports::storage::MAX_PAGE);
-                let rows = snapshot
-                    .watchers()
-                    .watchers(
-                        &filter,
-                        &phases,
-                        before.as_ref().map(|(at, id)| (*at, id)),
-                        limit,
-                    )
-                    .map_err(fault)?;
-                let visible: Vec<StoredWatcher> =
-                    rows.into_iter().filter(|w| Self::visible(ctx, w)).collect();
-                let next_cursor = (visible.len() == usize::from(limit))
-                    .then(|| visible.last())
-                    .flatten()
-                    .map(|w| BoundedText(format!("{}:{}", w.created_at_ms, w.id.as_str())));
-                let mut items = Vec::with_capacity(visible.len());
-                for watcher in &visible {
+                let binding = CursorBinding::new(
+                    ctx,
+                    "watch.list",
+                    &[&format!("{filter:?}"), &format!("{phases:?}")],
+                    1,
+                );
+                // Rows another caller may not see are skipped; reading continues until the page
+                // fills.
+                let rows = cursor::page(
+                    &binding,
+                    &input.page,
+                    |before, n| {
+                        let before = before
+                            .map(|at| parse_cursor(at).ok_or(StorageError::CursorExpired))
+                            .transpose()?;
+                        cursor::scan(
+                            before,
+                            n,
+                            |before, batch| {
+                                snapshot.watchers().watchers(
+                                    &filter,
+                                    &phases,
+                                    before.as_ref().map(|(at, id)| (*at, id)),
+                                    batch,
+                                )
+                            },
+                            |w| Some((w.created_at_ms, w.id.clone())),
+                            |w| Ok(Self::visible(ctx, w)),
+                        )
+                    },
+                    |w| format!("{}:{}", w.created_at_ms, w.id.as_str()),
+                )
+                .map_err(fault)?;
+                let next_cursor = rows.next_cursor;
+                let mut items = Vec::with_capacity(rows.items.len());
+                for watcher in &rows.items {
                     let event = snapshot
                         .watchers()
                         .watch_event_for_watcher(&watcher.id)

@@ -541,7 +541,7 @@ pub(super) static CATALOG: [OperationDescriptor; 376] = [
         native_execution: false,
         approval_required: false,
         human_only: false,
-        assignment_scope: AssignmentScope::RootDenied,
+        assignment_scope: AssignmentScope::Coordinator,
     },
     OperationDescriptor {
         name: "features.request_plan_approval",
@@ -905,7 +905,7 @@ pub(super) static CATALOG: [OperationDescriptor; 376] = [
         native_execution: false,
         approval_required: false,
         human_only: false,
-        assignment_scope: AssignmentScope::RootDenied,
+        assignment_scope: AssignmentScope::Coordinator,
     },
     OperationDescriptor {
         name: "tasks.move",
@@ -983,7 +983,7 @@ pub(super) static CATALOG: [OperationDescriptor; 376] = [
         native_execution: false,
         approval_required: false,
         human_only: false,
-        assignment_scope: AssignmentScope::RootDenied,
+        assignment_scope: AssignmentScope::Coordinator,
     },
     OperationDescriptor {
         name: "tasks.acceptance_evidence",

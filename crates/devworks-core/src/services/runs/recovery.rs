@@ -30,7 +30,7 @@ use crate::ports::storage::{
 use crate::protocol::{Id, OperationId, OperationState, RootId};
 use serde_json::json;
 
-const PAGE: u16 = 500;
+use crate::ports::storage::MAX_PAGE;
 
 /// How a kind of work recovers after a new boot (the AD20 recovery classes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,8 +190,8 @@ impl ControlService {
         loop {
             let page = tx
                 .runs()
-                .activations(&filter, out.last().map(|a| &a.id), PAGE)?;
-            let more = page.len() == usize::from(PAGE);
+                .activations(&filter, out.last().map(|a| &a.id), MAX_PAGE)?;
+            let more = page.len() == usize::from(MAX_PAGE);
             out.extend(page);
             if !more {
                 return Ok(out);
@@ -315,7 +315,7 @@ impl ControlService {
             }
         }
         loop {
-            let turns = tx.runs().turns_prior_boots(&boot, PAGE)?;
+            let turns = tx.runs().turns_prior_boots(&boot, MAX_PAGE)?;
             if turns.is_empty() {
                 break;
             }
@@ -326,8 +326,8 @@ impl ControlService {
         }
         let mut after: Option<RootId> = None;
         loop {
-            let page = tx.runs().pending_stops(after.as_ref(), PAGE)?;
-            let more = page.len() == usize::from(PAGE);
+            let page = tx.runs().pending_stops(after.as_ref(), MAX_PAGE)?;
+            let more = page.len() == usize::from(MAX_PAGE);
             for c in &page {
                 let Some(op) = &c.stop_operation_id else {
                     continue;
@@ -742,7 +742,7 @@ pub fn root_quiesced(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<boo
     }
     let mut after: Option<Id> = None;
     loop {
-        let page = tx.runs().root_deliveries(root, after.as_ref(), PAGE)?;
+        let page = tx.runs().root_deliveries(root, after.as_ref(), MAX_PAGE)?;
         for id in &page {
             if tx
                 .queue()
@@ -752,20 +752,22 @@ pub fn root_quiesced(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<boo
                 return Ok(false);
             }
         }
-        if page.len() < usize::from(PAGE) {
+        if page.len() < usize::from(MAX_PAGE) {
             break;
         }
         after = page.last().cloned();
     }
     let mut after: Option<Id> = None;
     loop {
-        let page =
-            tx.resources()
-                .containers(&ContainerFilter::AgentWorkMayRun, after.as_ref(), PAGE)?;
+        let page = tx.resources().containers(
+            &ContainerFilter::AgentWorkMayRun,
+            after.as_ref(),
+            MAX_PAGE,
+        )?;
         if page.iter().any(|row| row.root_id.as_ref() == Some(root)) {
             return Ok(false);
         }
-        if page.len() < usize::from(PAGE) {
+        if page.len() < usize::from(MAX_PAGE) {
             return Ok(true);
         }
         after = page.last().map(|row| row.id.clone());
@@ -782,13 +784,13 @@ pub fn unsettled_processes(
     loop {
         let page = tx
             .resources()
-            .processes(&ProcessFilter::Unsettled, after.as_ref(), PAGE)?;
+            .processes(&ProcessFilter::Unsettled, after.as_ref(), MAX_PAGE)?;
         for p in &page {
             if p.root_id.as_ref() == Some(root) {
                 out.push((p.id.clone(), format!("{:?}", p.phase)));
             }
         }
-        if page.len() < usize::from(PAGE) {
+        if page.len() < usize::from(MAX_PAGE) {
             return Ok(out);
         }
         after = page.last().map(|p| p.id.clone());
