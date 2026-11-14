@@ -664,6 +664,9 @@ impl SettingsScreen {
                     ui.label(RichText::new(d.label).strong());
                     let (text, tone) = status(&item);
                     chip(ui, text, tone);
+                    if d.not_yet_active() {
+                        chip(ui, "Not yet active", Tone::Attention);
+                    }
                     if item.is_dirty() {
                         chip(ui, "Unsaved", Tone::Accent);
                     }
@@ -854,7 +857,7 @@ fn self_editor(
                 .changed()
                 .then(|| json!(text))
         }
-        ValueKind::ModelList => {
+        ValueKind::ModelList | ValueKind::ExecutableNames => {
             let buffer = buffers.entry(d.key).or_insert_with(|| {
                 shown
                     .as_array()
@@ -868,7 +871,11 @@ fn self_editor(
             });
             let r = ui.add(
                 egui::TextEdit::singleline(buffer)
-                    .hint_text("Model IDs, comma separated")
+                    .hint_text(if d.kind == ValueKind::ModelList {
+                        "Model IDs, comma separated"
+                    } else {
+                        "Command names, comma separated"
+                    })
                     .desired_width(f32::INFINITY),
             );
             named(r, egui::Role::TextInput).changed().then(|| {

@@ -181,8 +181,10 @@ fn validate_scope(
             return Err(invalid("client scope differs from the reviewed manifest"));
         }
     }
-    let mut expected_records =
-        std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    let mut expected_records = std::collections::BTreeMap::<
+        devworks_core::ports::storage::ProjectRecordKind,
+        std::collections::BTreeSet<String>,
+    >::new();
     for row in reviewed.rows.iter().filter(|r| {
         matches!(
             r.action,
@@ -194,9 +196,9 @@ fn validate_scope(
                 | devworks_core::ports::storage::ProjectPurgeRowReason::PurgeControlAudit
         )
     }) {
-        if super::candidates::primary_keys(conn, &row.table)? == ["id"] {
+        if super::candidates::primary_keys(conn, row.table.as_str())? == ["id"] {
             expected_records
-                .entry(row.table.clone())
+                .entry(row.table)
                 .or_default()
                 .insert(row.key_digest.clone());
         }
@@ -212,7 +214,7 @@ fn validate_scope(
                 return Err(invalid("duplicate client record scope"));
             }
         }
-        records.insert(table.clone(), keys);
+        records.insert(*table, keys);
     }
     if records != expected_records {
         return Err(invalid("client record scope differs from review"));

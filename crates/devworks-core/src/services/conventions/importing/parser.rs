@@ -535,11 +535,7 @@ impl<'a> Parser<'a> {
     }
     fn digest(&mut self) -> Result<String, Error> {
         let value = self.small(64, false)?;
-        if value.len() != 64
-            || !value
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
+        if !crate::fingerprint::is_sha256_hex(&value) {
             return Err(Error::Invalid("invalid digest"));
         }
         Ok(value)

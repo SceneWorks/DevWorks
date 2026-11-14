@@ -870,6 +870,11 @@ impl Shell {
                     self.select_project(Some(id.as_str().into()));
                     self.navigate(Route::Overview);
                 }
+                "connection" => {
+                    self.navigate(Route::Settings);
+                    self.settings.show_connections = true;
+                    self.load_connections();
+                }
                 _ => {
                     self.status = Some(format!(
                         "No native view is registered for {} target {}.",

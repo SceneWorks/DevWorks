@@ -133,6 +133,8 @@ pub struct Observed {
     pub head_ref: Option<String>,
     pub object_format: String,
     pub remote: Option<String>,
+    /// The default branch the clone records for `origin` (`refs/heads/...`).
+    pub default_ref: Option<String>,
     pub worktrees: Vec<(String, Option<String>, Option<String>)>,
 }
 
@@ -148,6 +150,10 @@ pub fn observe_checkout(git: &Git<'_>, dir: &Path) -> Result<Observed, String> {
         .origin(dir)
         .map_err(|e| e.to_string())?
         .filter(|r| !carries_credentials(r) && r.len() <= 4096);
+    let default_ref = git
+        .default_branch(dir)
+        .map_err(|e| e.to_string())?
+        .filter(|r| r.len() <= 1024);
     let worktrees = git
         .worktrees(dir)
         .map_err(|e| e.to_string())?
@@ -160,6 +166,7 @@ pub fn observe_checkout(git: &Git<'_>, dir: &Path) -> Result<Observed, String> {
         head_ref,
         object_format,
         remote,
+        default_ref,
         worktrees,
     })
 }
@@ -468,6 +475,7 @@ fn reconcile(
                 s.head_ref.clone(),
                 s.object_format.clone(),
                 s.remote_url.clone(),
+                s.default_ref.clone(),
                 s.location.clone(),
             )
         };
@@ -486,6 +494,7 @@ fn reconcile(
             head_ref: observed.head_ref.clone(),
             object_format: observed.object_format.clone(),
             remote_url: observed.remote.clone(),
+            default_ref: observed.default_ref.clone(),
             revision: 1,
             observed_at_ms: now,
         };

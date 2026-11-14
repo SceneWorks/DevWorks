@@ -8,7 +8,7 @@ use crate::operations::agents as ops;
 use crate::ports::storage::{
     ActivationPhase, ActorRead, AssignmentState, BlockerFilter, NewPrincipalBinding, ReadSnapshot,
     RunRead, StorageError, StoredAgentAssignmentContext, StoredAgentDelivery, StoredAgentMessage,
-    StoredAgentMessageEvent, StoredAssignment, StoredSession, WriteTransaction,
+    StoredAgentMessageEvent, StoredAssignment, StoredSession, Unavailable, WriteTransaction,
 };
 use crate::ports::{
     CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, QueryAnswer,
@@ -36,28 +36,71 @@ use crate::settings::catalog::AgentRole;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-fn denied() -> StorageError {
-    StorageError::ScopeDenied
+// ---------------------------------------------------------------------------------------------
+// Refusals and storage faults
+//
+// A rule this service checks refuses with its own target kind. A stored row it cannot read is a
+// storage fault (`Unavailable::Corrupt`), never the caller's invalid argument.
+
+/// The caller's context, scope or authority does not permit this action on `kind`.
+fn denied(kind: &'static str) -> Refusal {
+    Refusal::new(DomainErrorCode::PermissionDenied, kind, None)
+}
+
+/// The request carries a value for `kind` that its rule does not accept.
+fn invalid(kind: &'static str) -> Refusal {
+    Refusal::new(DomainErrorCode::InvalidArgument, kind, None)
+}
+
+fn missing(kind: &'static str, id: &Id) -> Refusal {
+    Refusal::new(DomainErrorCode::NotFound, kind, Some(id.clone()))
+}
+
+/// A stored row this service reads is malformed.
+fn corrupt(what: &str) -> StorageError {
+    StorageError::unavailable(Unavailable::Corrupt, format!("stored {what}"))
+}
+
+/// The retained-message helpers report their own rules as scope and record errors. Their
+/// malformed stored rows are `Unavailable::Corrupt`, so these two kinds are always a rule.
+fn retained_rule(kind: &'static str) -> impl FnOnce(StorageError) -> Failure {
+    move |error| match error {
+        StorageError::ScopeDenied => denied(kind).into(),
+        StorageError::InvalidRecord(_) => invalid(kind).into(),
+        other => other.into(),
+    }
+}
+
+/// The wire failure of a use-case outcome. A shared helper of another service that denies scope
+/// or finds no row keeps its permission or not-found code, and an inbox cursor from another
+/// caller restarts. Every other storage error, a corrupt row included, stays a storage fault.
+fn failure(error: Failure) -> Failure {
+    match error {
+        Failure::Storage(StorageError::ScopeDenied) => denied("assignment").into(),
+        Failure::Storage(StorageError::NotFound { kind, id }) => {
+            Refusal::new(DomainErrorCode::NotFound, kind, Id::new(id).ok()).into()
+        }
+        Failure::Storage(StorageError::CursorExpired) => {
+            Refusal::new(DomainErrorCode::CursorExpired, "agent_inbox_cursor", None)
+                .retry(crate::protocol::RetryAdvice::RefreshAndNewRequest)
+                .into()
+        }
+        other => other,
+    }
 }
 
 fn assignment_scope(
     tx: &mut dyn WriteTransaction,
     recipient: &AssignmentId,
-) -> Result<(crate::ports::storage::StoredAssignment, ProjectId), StorageError> {
+) -> Result<(crate::ports::storage::StoredAssignment, ProjectId), Failure> {
     let assignment = tx
         .runs()
         .assignment(recipient)?
-        .ok_or_else(|| StorageError::NotFound {
-            kind: "assignment",
-            id: recipient.0.as_str().into(),
-        })?;
+        .ok_or_else(|| missing("assignment", &recipient.0))?;
     let root = tx
         .sessions()
         .work_root(&assignment.root_id)?
-        .ok_or_else(|| StorageError::NotFound {
-            kind: "root",
-            id: assignment.root_id.0.as_str().into(),
-        })?;
+        .ok_or_else(|| missing("root", &assignment.root_id.0))?;
     Ok((assignment, root.project_id))
 }
 
@@ -66,29 +109,38 @@ fn source_assignment(
     ctx: &InvocationContext,
     project: &ProjectId,
     root: &crate::protocol::RootId,
-) -> Result<Option<AssignmentId>, StorageError> {
+) -> Result<Option<AssignmentId>, Failure> {
     if ctx.project_id().is_some_and(|p| p != project) || ctx.root_id().is_some_and(|r| r != root) {
-        return Err(denied());
+        return Err(denied("root").into());
     }
     if ctx.principal_kind() != PrincipalKind::Agent {
         return Ok(None);
     }
-    let id = ctx.assignment_id().ok_or_else(denied)?;
-    let assignment = tx.runs().assignment(id)?.ok_or_else(denied)?;
+    let id = ctx.assignment_id().ok_or_else(|| denied("assignment"))?;
+    let assignment = tx
+        .runs()
+        .assignment(id)?
+        .ok_or_else(|| denied("assignment"))?;
     let session = tx
         .sessions()
         .session(&assignment.session_id)?
-        .ok_or_else(denied)?;
+        .ok_or_else(|| denied("session"))?;
     if assignment.root_id != *root
         || assignment.state != AssignmentState::Active
         || ctx.session_id() != Some(&assignment.session_id)
         || session.agent_id != *ctx.principal()
         || session.closed()
     {
-        return Err(denied());
+        return Err(denied("assignment").into());
     }
-    let execution = assignment.execution_id.as_ref().ok_or_else(denied)?;
-    let activation = tx.runs().activation(execution)?.ok_or_else(denied)?;
+    let execution = assignment
+        .execution_id
+        .as_ref()
+        .ok_or_else(|| denied("activation"))?;
+    let activation = tx
+        .runs()
+        .activation(execution)?
+        .ok_or_else(|| denied("activation"))?;
     if activation.root_id != *root
         || ctx.activation() != Some((execution, activation.owner_epoch))
         || activation.phase != ActivationPhase::Running
@@ -97,7 +149,7 @@ fn source_assignment(
             .lease_until_ms
             .is_some_and(|until| until > tx.now_ms())
     {
-        return Err(denied());
+        return Err(denied("activation").into());
     }
     Ok(Some(id.clone()))
 }
@@ -107,16 +159,19 @@ fn sender_can_read_attachment(
     sender: Option<&AssignmentId>,
     root: &crate::protocol::RootId,
     reference: &ArtifactRef,
-) -> Result<bool, StorageError> {
+) -> Result<bool, Failure> {
     let Some(sender) = sender else {
         return Ok(true);
     };
-    let assignment = tx.runs().assignment(sender)?.ok_or_else(denied)?;
+    let assignment = tx
+        .runs()
+        .assignment(sender)?
+        .ok_or_else(|| denied("assignment"))?;
     let coordinator = assignment.parent_id.is_none();
     let context = tx
         .runs()
         .agent_assignment_context(sender)?
-        .ok_or_else(denied)?;
+        .ok_or_else(|| corrupt("assignment context"))?;
     if tx
         .artifacts()
         .artifact(&reference.artifact_id)?
@@ -128,8 +183,8 @@ fn sender_can_read_attachment(
     {
         return Ok(true);
     }
-    let task_ids: Vec<Id> = serde_json::from_value(context.task_ids)
-        .map_err(|_| StorageError::InvalidRecord("assignment task scope".into()))?;
+    let task_ids: Vec<Id> =
+        serde_json::from_value(context.task_ids).map_err(|_| corrupt("assignment task scope"))?;
     for link in tx.artifacts().links(&reference.artifact_id)? {
         if link.purpose != crate::ports::storage::LinkPurpose::Reference
             || link.version_id != reference.version_id
@@ -193,15 +248,24 @@ fn query_source_assignment(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     root: &crate::protocol::RootId,
-) -> Result<AssignmentId, StorageError> {
-    let id = ctx.assignment_id().ok_or_else(denied)?;
-    let assignment = snapshot.runs().assignment(id)?.ok_or_else(denied)?;
+) -> Result<AssignmentId, Failure> {
+    let id = ctx.assignment_id().ok_or_else(|| denied("assignment"))?;
+    let assignment = snapshot
+        .runs()
+        .assignment(id)?
+        .ok_or_else(|| denied("assignment"))?;
     let session = snapshot
         .sessions()
         .session(&assignment.session_id)?
-        .ok_or_else(denied)?;
-    let execution = assignment.execution_id.as_ref().ok_or_else(denied)?;
-    let activation = snapshot.runs().activation(execution)?.ok_or_else(denied)?;
+        .ok_or_else(|| denied("session"))?;
+    let execution = assignment
+        .execution_id
+        .as_ref()
+        .ok_or_else(|| denied("activation"))?;
+    let activation = snapshot
+        .runs()
+        .activation(execution)?
+        .ok_or_else(|| denied("activation"))?;
     if assignment.root_id != *root
         || assignment.state != AssignmentState::Active
         || ctx.session_id() != Some(&assignment.session_id)
@@ -211,7 +275,7 @@ fn query_source_assignment(
         || activation.phase != ActivationPhase::Running
         || ctx.activation() != Some((execution, activation.owner_epoch))
     {
-        return Err(denied());
+        return Err(denied("assignment").into());
     }
     Ok(id.clone())
 }
@@ -230,9 +294,7 @@ fn class_of(name: &str) -> Result<MessageClass, StorageError> {
         "Status" => Ok(MessageClass::Status),
         "Question" => Ok(MessageClass::Question),
         "Evidence" => Ok(MessageClass::Evidence),
-        _ => Err(StorageError::InvalidRecord(
-            "message is outside the assignment contract".into(),
-        )),
+        _ => Err(corrupt("assignment message class")),
     }
 }
 fn wire(
@@ -242,9 +304,9 @@ fn wire(
     let to = message
         .to_assignment_id
         .clone()
-        .ok_or_else(|| StorageError::InvalidRecord("assignment message has no recipient".into()))?;
+        .ok_or_else(|| corrupt("assignment message recipient"))?;
     let attachments: Vec<ArtifactRef> = serde_json::from_value(message.attachments.clone())
-        .map_err(|_| StorageError::InvalidRecord("invalid stored message attachments".into()))?;
+        .map_err(|_| corrupt("message attachments"))?;
     Ok(AgentMessage {
         id: message.id.clone(),
         revision: rev(delivery.revision),
@@ -255,31 +317,6 @@ fn wire(
         artifact_refs: BoundedList(attachments),
         acknowledged: matches!(delivery.state.as_str(), "Read" | "Answered" | "Declined"),
     })
-}
-
-fn failure(error: StorageError) -> Failure {
-    match error {
-        StorageError::ScopeDenied => {
-            Refusal::new(DomainErrorCode::PermissionDenied, "assignment", None).into()
-        }
-        StorageError::NotFound { kind, id } => Refusal::new(
-            DomainErrorCode::NotFound,
-            kind,
-            crate::protocol::Id::new(id).ok(),
-        )
-        .into(),
-        StorageError::InvalidRecord(_) => {
-            Refusal::new(DomainErrorCode::InvalidArgument, "agent_message", None).into()
-        }
-        // An inbox cursor from another caller, inbox or format: the caller restarts from a
-        // fresh receive.
-        StorageError::CursorExpired => {
-            Refusal::new(DomainErrorCode::CursorExpired, "agent_inbox_cursor", None)
-                .retry(crate::protocol::RetryAdvice::RefreshAndNewRequest)
-                .into()
-        }
-        other => other.into(),
-    }
 }
 
 fn fenced(error: Fenced) -> Failure {
@@ -299,14 +336,14 @@ fn agent_record(
 ) -> Result<AgentRecord, StorageError> {
     let context = read
         .agent_assignment_context(&assignment.id)?
-        .ok_or_else(|| StorageError::InvalidRecord("assignment has no role context".into()))?;
+        .ok_or_else(|| corrupt("assignment context"))?;
     let checkpoint = assignment
         .checkpoint
         .as_ref()
         .map(|value| {
             serde_json::from_value::<CheckpointRecord>(value.clone())
                 .map(|record| record.content)
-                .map_err(|_| StorageError::InvalidRecord("invalid stored checkpoint".into()))
+                .map_err(|_| corrupt("assignment checkpoint"))
         })
         .transpose()?;
     let state = match assignment.state {
@@ -338,17 +375,14 @@ fn agent_record(
 fn primary_brief(
     tx: &mut dyn WriteTransaction,
     root: &crate::ports::storage::WorkRoot,
-) -> Result<String, StorageError> {
-    let work = tx
-        .work()
-        .work(&root.id.0)?
-        .ok_or(StorageError::ScopeDenied)?;
+) -> Result<String, Failure> {
+    let work = tx.work().work(&root.id.0)?.ok_or_else(|| denied("work"))?;
     if work.project_id != root.project_id
         || work.revision != root.revision
         || !(work.kind == root.kind
             || root.kind == "issue" && work.kind == crate::ports::storage::TASK)
     {
-        return Err(StorageError::ScopeDenied);
+        return Err(denied("work").into());
     }
     let brief = crate::services::work::model::WorkBrief::of(&work)?;
     let repositories = tx.work().work_repositories(&work.id)?;
@@ -359,13 +393,13 @@ fn primary_brief(
             .and_then(|slot| slot.approved)
             .map(|value| {
                 serde_json::from_value::<crate::services::work::model::ActivePlan>(value)
-                    .map_err(|_| StorageError::InvalidRecord("stored approved plan".into()))
+                    .map_err(|_| corrupt("approved plan"))
             })
             .transpose()?
     } else {
         None
     };
-    serde_json::to_string(&serde_json::json!({
+    Ok(serde_json::to_string(&serde_json::json!({
         "workId": root.id,
         "projectId": root.project_id,
         "kind": root.kind,
@@ -378,7 +412,7 @@ fn primary_brief(
         "openPrerequisites": prerequisites,
         "approvedPlan": approved_plan,
     }))
-    .map_err(|_| StorageError::InvalidRecord("coordinator brief serialization".into()))
+    .map_err(|_| StorageError::InvalidRecord("coordinator brief serialization".into()))?)
 }
 
 fn link_unlinked_redirect_attachments(
@@ -387,7 +421,7 @@ fn link_unlinked_redirect_attachments(
     root: &crate::protocol::RootId,
     project: &ProjectId,
     session: &Id,
-) -> Result<(), StorageError> {
+) -> Result<(), Failure> {
     let mut after = 0;
     loop {
         let page = tx.runs().instructions(root, after, 500)?;
@@ -398,7 +432,7 @@ fn link_unlinked_redirect_attachments(
                 continue;
             }
             let attachments: Vec<ArtifactRef> = serde_json::from_value(instruction.attachments)
-                .map_err(|_| StorageError::InvalidRecord("stored redirect attachments".into()))?;
+                .map_err(|_| corrupt("redirect attachments"))?;
             for artifact in attachments {
                 if !crate::services::sessions::transcript::reference_resolves(
                     tx,
@@ -408,7 +442,7 @@ fn link_unlinked_redirect_attachments(
                 )? || host.principal_kind() == PrincipalKind::Agent
                     && !sender_can_read_attachment(tx, host.assignment_id(), root, &artifact)?
                 {
-                    return Err(denied());
+                    return Err(denied("attachment").into());
                 }
                 crate::services::artifacts::reference_from_host_owner(
                     tx,
@@ -466,13 +500,13 @@ impl AgentService {
         let root = tx
             .sessions()
             .work_root(&activation.root_id)?
-            .ok_or_else(denied)?;
+            .ok_or_else(|| denied("root"))?;
         if !runs::is_run_root(&root)
             || host.project_id().is_some_and(|p| p != &root.project_id)
             || host.root_id().is_some_and(|r| r != &root.id)
             || !self.runs.root_permits_dispatch(tx, &root.id)?
         {
-            return Err(denied().into());
+            return Err(denied("root").into());
         }
         let role = if root.kind == "feature" {
             AgentRole::FeatureCoordinator
@@ -530,17 +564,17 @@ impl AgentService {
         let session = tx
             .sessions()
             .session(&assignment.session_id)?
-            .ok_or_else(denied)?;
+            .ok_or_else(|| denied("session"))?;
         if session.closed()
             || session.root_id.as_ref() != Some(&root.id)
             || session.project_id.as_ref() != Some(&root.project_id)
             || tx.actors().actor_kind(&session.agent_id)? != Some(PrincipalKind::Agent)
         {
-            return Err(denied().into());
+            return Err(denied("session").into());
         }
         if let Some(context) = tx.runs().agent_assignment_context(&assignment.id)? {
             if context.project_id != root.project_id || context.role_id.as_str() != role.as_str() {
-                return Err(denied().into());
+                return Err(denied("assignment").into());
             }
         } else {
             let instructions = crate::settings::service::role_instructions(
@@ -559,7 +593,7 @@ impl AgentService {
                 .insert_agent_assignment_context(&StoredAgentAssignmentContext {
                     assignment_id: assignment.id.clone(),
                     project_id: root.project_id.clone(),
-                    role_id: crate::protocol::Id::new(role.as_str()).map_err(|_| denied())?,
+                    role_id: crate::protocol::Id::new(role.as_str()).map_err(|_| denied("role_id"))?,
                     role_instructions: instructions.text,
                     role_revisions: serde_json::json!({"workspace":instructions.revisions.workspace,"project":instructions.revisions.project}),
                     brief,
@@ -588,7 +622,7 @@ impl AgentService {
         };
         retained::handover_item(tx, &assignment.id)?;
         retained::handover_direct(tx, &session.id)?;
-        agent_record(tx.runs(), &assignment).map_err(failure)
+        Ok(agent_record(tx.runs(), &assignment)?)
     }
 
     /// A coordinator may finish only after its descendants have settled. The host checks the
@@ -604,8 +638,14 @@ impl AgentService {
         if host.principal_kind() != PrincipalKind::Host {
             return Err(Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into());
         }
-        let activation = tx.runs().activation(activation_id)?.ok_or_else(denied)?;
-        let assignment = tx.runs().assignment(assignment_id)?.ok_or_else(denied)?;
+        let activation = tx
+            .runs()
+            .activation(activation_id)?
+            .ok_or_else(|| denied("activation"))?;
+        let assignment = tx
+            .runs()
+            .assignment(assignment_id)?
+            .ok_or_else(|| denied("assignment"))?;
         if activation.phase != ActivationPhase::Running
             || activation.owner_epoch != owner_epoch
             || assignment.purpose != crate::ports::storage::AssignmentPurpose::Primary
@@ -649,8 +689,14 @@ impl AgentService {
         if host.principal_kind() != PrincipalKind::Host {
             return Err(Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into());
         }
-        let activation = tx.runs().activation(activation_id)?.ok_or_else(denied)?;
-        let assignment = tx.runs().assignment(assignment_id)?.ok_or_else(denied)?;
+        let activation = tx
+            .runs()
+            .activation(activation_id)?
+            .ok_or_else(|| denied("activation"))?;
+        let assignment = tx
+            .runs()
+            .assignment(assignment_id)?
+            .ok_or_else(|| denied("assignment"))?;
         if activation.phase != ActivationPhase::Running
             || activation.owner_epoch != owner_epoch
             || assignment.purpose != crate::ports::storage::AssignmentPurpose::Child
@@ -694,8 +740,14 @@ impl AgentService {
         if host.principal_kind() != PrincipalKind::Host {
             return Err(Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into());
         }
-        let activation = tx.runs().activation(activation_id)?.ok_or_else(denied)?;
-        let mut assignment = tx.runs().assignment(assignment_id)?.ok_or_else(denied)?;
+        let activation = tx
+            .runs()
+            .activation(activation_id)?
+            .ok_or_else(|| denied("activation"))?;
+        let mut assignment = tx
+            .runs()
+            .assignment(assignment_id)?
+            .ok_or_else(|| denied("assignment"))?;
         if activation.phase != ActivationPhase::Running
             || activation.owner_epoch != owner_epoch
             || assignment.purpose != crate::ports::storage::AssignmentPurpose::Child
@@ -735,7 +787,10 @@ impl AgentService {
         if host.principal_kind() != PrincipalKind::Host {
             return Err(Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into());
         }
-        let assignment = tx.runs().assignment(assignment_id)?.ok_or_else(denied)?;
+        let assignment = tx
+            .runs()
+            .assignment(assignment_id)?
+            .ok_or_else(|| denied("assignment"))?;
         if assignment.purpose != crate::ports::storage::AssignmentPurpose::Child
             || !matches!(
                 assignment.state,
@@ -759,7 +814,10 @@ impl AgentService {
         )? {
             return Ok(Err(fenced));
         }
-        let current = tx.runs().assignment(assignment_id)?.ok_or_else(denied)?;
+        let current = tx
+            .runs()
+            .assignment(assignment_id)?
+            .ok_or_else(|| denied("assignment"))?;
         if current.purpose != crate::ports::storage::AssignmentPurpose::Child
             || !matches!(
                 current.state,
@@ -771,7 +829,10 @@ impl AgentService {
                 "the child changed during activation admission".into(),
             )));
         }
-        let parent = current.parent_id.as_ref().ok_or_else(denied)?;
+        let parent = current
+            .parent_id
+            .as_ref()
+            .ok_or_else(|| corrupt("child assignment parent"))?;
         if !tx
             .runs()
             .assignment(parent)?
@@ -793,7 +854,7 @@ impl AgentService {
         let root = tx
             .sessions()
             .work_root(&active.root_id)?
-            .ok_or_else(denied)?;
+            .ok_or_else(|| denied("root"))?;
         link_unlinked_redirect_attachments(
             tx,
             host,
@@ -803,7 +864,7 @@ impl AgentService {
         )?;
         bind_child_authority(tx, host, assignment_id)?;
         retained::handover_item(tx, assignment_id)?;
-        Ok(Ok(agent_record(tx.runs(), &active).map_err(failure)?))
+        Ok(Ok(agent_record(tx.runs(), &active)?))
     }
 
     fn inspect(
@@ -811,22 +872,19 @@ impl AgentService {
         snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         input: &ops::InspectInput,
-    ) -> Result<(AgentRecord, i64), StorageError> {
+    ) -> Result<(AgentRecord, i64), Failure> {
         let assignment = snapshot
             .runs()
             .assignment(&input.assignment_id)?
-            .ok_or_else(|| StorageError::NotFound {
-                kind: "assignment",
-                id: input.assignment_id.0.as_str().into(),
-            })?;
+            .ok_or_else(|| missing("assignment", &input.assignment_id.0))?;
         let root = snapshot
             .sessions()
             .work_root(&assignment.root_id)?
-            .ok_or_else(denied)?;
+            .ok_or_else(|| denied("root"))?;
         if ctx.project_id().is_some_and(|p| p != &root.project_id)
             || ctx.root_id().is_some_and(|r| r != &root.id)
         {
-            return Err(denied());
+            return Err(denied("root").into());
         }
         if ctx.principal_kind() == PrincipalKind::Agent {
             query_source_assignment(snapshot, ctx, &root.id)?;
@@ -855,8 +913,7 @@ impl AgentService {
                 Refusal::new(DomainErrorCode::InvalidArgument, "root", Some(root.id.0)).into(),
             );
         }
-        let parent = source_assignment(tx, ctx, &root.project_id, &root.id)
-            .map_err(failure)?
+        let parent = source_assignment(tx, ctx, &root.project_id, &root.id)?
             .ok_or_else(|| Refusal::new(DomainErrorCode::PermissionDenied, "assignment", None))?;
         let control = runs::control_of(tx.runs(), &root.id)?;
         if control.revision != input.expected_control_revision.get() {
@@ -882,8 +939,9 @@ impl AgentService {
         let parent_context = tx
             .runs()
             .agent_assignment_context(&parent)?
-            .ok_or_else(denied)?;
-        let parent_role = AgentRole::parse(parent_context.role_id.as_str()).ok_or_else(denied)?;
+            .ok_or_else(|| corrupt("assignment context"))?;
+        let parent_role = AgentRole::parse(parent_context.role_id.as_str())
+            .ok_or_else(|| corrupt("assignment role"))?;
         let allowed = matches!(role, AgentRole::Worker | AgentRole::CodeReviewer)
             && matches!(
                 parent_role,
@@ -897,15 +955,18 @@ impl AgentService {
             )
             .into());
         }
-        let role_id = crate::protocol::Id::new(role.as_str()).map_err(|_| denied())?;
+        let role_id = crate::protocol::Id::new(role.as_str()).map_err(|_| denied("role_id"))?;
         if input.instruction.0.trim().is_empty() {
             return Err(Refusal::new(DomainErrorCode::InvalidArgument, "instruction", None).into());
         }
         if parent_role == AgentRole::Worker {
-            let parent_assignment = tx.runs().assignment(&parent)?.ok_or_else(denied)?;
+            let parent_assignment = tx
+                .runs()
+                .assignment(&parent)?
+                .ok_or_else(|| denied("assignment"))?;
             let parent_tasks: Vec<crate::protocol::Id> =
                 serde_json::from_value(parent_context.task_ids.clone())
-                    .map_err(|_| StorageError::InvalidRecord("invalid parent task scope".into()))?;
+                    .map_err(|_| corrupt("parent task scope"))?;
             if input.task_ids.0.is_empty() && parent_assignment.work_id != root.id {
                 return Err(Refusal::new(DomainErrorCode::PermissionDenied, "task", None).into());
             }
@@ -942,13 +1003,14 @@ impl AgentService {
             }
         }
         if let Some(source) = &input.source_checkpoint_id {
-            let assignment = tx.runs().assignment(&parent)?.ok_or_else(denied)?;
+            let assignment = tx
+                .runs()
+                .assignment(&parent)?
+                .ok_or_else(|| denied("assignment"))?;
             let checkpoint: Option<CheckpointRecord> = assignment
                 .checkpoint
                 .map(|value| {
-                    serde_json::from_value(value).map_err(|_| {
-                        StorageError::InvalidRecord("invalid parent checkpoint".into())
-                    })
+                    serde_json::from_value(value).map_err(|_| corrupt("parent checkpoint"))
                 })
                 .transpose()?;
             if checkpoint.as_ref().map(|c| &c.id) != Some(source) {
@@ -1029,7 +1091,7 @@ impl AgentService {
             &assignment.session_id,
         )?;
         retained::handover_item(tx, &assignment.id)?;
-        agent_record(tx.runs(), &assignment).map_err(failure)
+        Ok(agent_record(tx.runs(), &assignment)?)
     }
 
     fn inbox(
@@ -1037,28 +1099,22 @@ impl AgentService {
         snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         input: &ops::InboxInput,
-    ) -> Result<(Page<AgentMessage>, i64), StorageError> {
+    ) -> Result<(Page<AgentMessage>, i64), Failure> {
         let assignment = snapshot
             .runs()
             .assignment(&input.assignment_id)?
-            .ok_or_else(|| StorageError::NotFound {
-                kind: "assignment",
-                id: input.assignment_id.0.as_str().into(),
-            })?;
+            .ok_or_else(|| missing("assignment", &input.assignment_id.0))?;
         let root = snapshot
             .sessions()
             .work_root(&assignment.root_id)?
-            .ok_or_else(|| StorageError::NotFound {
-                kind: "root",
-                id: assignment.root_id.0.as_str().into(),
-            })?;
+            .ok_or_else(|| missing("root", &assignment.root_id.0))?;
         if ctx.project_id().is_some_and(|p| p != &root.project_id)
             || ctx.root_id().is_some_and(|r| r != &assignment.root_id)
             || ctx.principal_kind() == PrincipalKind::Agent
                 && (ctx.assignment_id() != Some(&assignment.id)
                     || ctx.session_id() != Some(&assignment.session_id))
         {
-            return Err(denied());
+            return Err(denied("assignment").into());
         }
         if ctx.principal_kind() == PrincipalKind::Agent {
             query_source_assignment(snapshot, ctx, &assignment.root_id)?;
@@ -1066,7 +1122,7 @@ impl AgentService {
         let project = snapshot
             .projects()
             .project(&root.project_id)?
-            .ok_or_else(denied)?;
+            .ok_or_else(|| denied("project"))?;
         let direction = match input.direction {
             MessageDirection::Inbound => "Inbound",
             MessageDirection::Outbound => "Outbound",
@@ -1131,7 +1187,9 @@ fn retained_actor(
     actor: &ActorId,
     session: Option<Id>,
 ) -> Result<RetainedActor, StorageError> {
-    let stored = actors.actor(actor)?.ok_or(StorageError::ScopeDenied)?;
+    let stored = actors
+        .actor(actor)?
+        .ok_or_else(|| corrupt("message actor"))?;
     let kind = if session.is_some() {
         "session"
     } else {
@@ -1168,9 +1226,7 @@ fn retained_message(
         "Blocker" => RetainedMessageKind::Blocker,
         "Announcement" => RetainedMessageKind::Announcement,
         _ => {
-            return Err(StorageError::InvalidRecord(
-                "unknown retained message kind".into(),
-            ));
+            return Err(corrupt("retained message kind"));
         }
     };
     let state = row
@@ -1180,9 +1236,7 @@ fn retained_message(
             "Open" => Ok(RetainedMessageState::Open),
             "Answered" => Ok(RetainedMessageState::Answered),
             "Declined" => Ok(RetainedMessageState::Declined),
-            _ => Err(StorageError::InvalidRecord(
-                "unknown retained message state".into(),
-            )),
+            _ => Err(corrupt("retained message state")),
         })
         .transpose()?;
     Ok(RetainedMessage {
@@ -1194,8 +1248,7 @@ fn retained_message(
         from_session_id: row.sender_session_id,
         from,
         body: BoundedText(row.body),
-        created_at_ms: Counter::new(row.created_at_ms)
-            .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+        created_at_ms: Counter::new(row.created_at_ms).map_err(|_| corrupt("message counter"))?,
         state,
         blocking: row.blocking,
         to_session_id: row.target_session_id,
@@ -1210,7 +1263,7 @@ fn retained_message(
             .resolved_at_ms
             .map(Counter::new)
             .transpose()
-            .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+            .map_err(|_| corrupt("message counter"))?,
         delivery: None,
         handed_over: None,
     })
@@ -1249,7 +1302,7 @@ fn retained_history(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     input: &ops::HistoryInput,
-) -> Result<(RetainedHistoryPage, i64), StorageError> {
+) -> Result<(RetainedHistoryPage, i64), Failure> {
     let channel = input
         .channel
         .as_ref()
@@ -1260,13 +1313,11 @@ fn retained_history(
             "resource" => Ok("Resource"),
             "session" => Ok("Session"),
             "human" => Ok("Human"),
-            _ => Err(StorageError::InvalidRecord(
-                "unknown message channel".into(),
-            )),
+            _ => Err(invalid("channel")),
         })
         .transpose()?;
     let limit = u16::try_from(input.limit.as_ref().map_or(50, Revision::get))
-        .map_err(|_| StorageError::InvalidRecord("message history limit".into()))?;
+        .map_err(|_| invalid("limit"))?;
     let page = retained::history(
         snapshot,
         ctx,
@@ -1281,11 +1332,12 @@ fn retained_history(
             before: input.before.as_ref().map(Counter::get),
             limit,
         },
-    )?;
+    )
+    .map_err(retained_rule("agent_message"))?;
     let scope = snapshot
         .projects()
         .project(&input.project_id)?
-        .ok_or(StorageError::ScopeDenied)?
+        .ok_or_else(|| denied("project"))?
         .scope_revision;
     Ok((
         RetainedHistoryPage {
@@ -1299,7 +1351,7 @@ fn retained_history(
                 .next_before
                 .map(Counter::new)
                 .transpose()
-                .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+                .map_err(|_| corrupt("message counter"))?,
         },
         scope,
     ))
@@ -1309,16 +1361,17 @@ fn retained_events(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     input: &ops::EventsInput,
-) -> Result<(RetainedEventPage, i64), StorageError> {
+) -> Result<(RetainedEventPage, i64), Failure> {
     let limit = u16::try_from(input.limit.as_ref().map_or(100, Revision::get))
-        .map_err(|_| StorageError::InvalidRecord("message event limit".into()))?;
+        .map_err(|_| invalid("limit"))?;
     let page = retained::events(
         snapshot,
         ctx,
         &input.project_id,
         input.after.as_ref().map(Counter::get),
         limit,
-    )?;
+    )
+    .map_err(retained_rule("agent_message"))?;
     let mut items = Vec::with_capacity(page.items.len());
     for event in page.items {
         let row = snapshot.runs().agent_message(&event.message_id)?;
@@ -1359,9 +1412,7 @@ fn retained_events(
                 "Read" => Ok(RetainedDeliveryState::Read),
                 "Answered" => Ok(RetainedDeliveryState::Answered),
                 "Declined" => Ok(RetainedDeliveryState::Declined),
-                _ => Err(StorageError::InvalidRecord(
-                    "unknown retained delivery state".into(),
-                )),
+                _ => Err(corrupt("retained delivery state")),
             })
             .transpose()?;
         let line = message.map(|m| {
@@ -1377,14 +1428,13 @@ fn retained_events(
             event.kind.to_ascii_lowercase()
         };
         items.push(RetainedMessageEvent {
-            sequence: Counter::new(event.sequence)
-                .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+            sequence: Counter::new(event.sequence).map_err(|_| corrupt("message counter"))?,
             project_id: event.project_id,
             message_id: event.message_id,
             kind: BoundedText(kind),
             actor: retained_actor(snapshot.actors(), &event.actor_id, actor_session)?,
             created_at_ms: Counter::new(event.created_at_ms)
-                .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+                .map_err(|_| corrupt("message counter"))?,
             recipient: if event.recipient_human {
                 Some(BoundedText("human".into()))
             } else {
@@ -1398,13 +1448,13 @@ fn retained_events(
     let scope = snapshot
         .projects()
         .project(&input.project_id)?
-        .ok_or(StorageError::ScopeDenied)?
+        .ok_or_else(|| denied("project"))?
         .scope_revision;
     Ok((
         RetainedEventPage {
             items: BoundedList(items),
             next_sequence: Counter::new(page.next_sequence)
-                .map_err(|e| StorageError::InvalidRecord(e.into()))?,
+                .map_err(|_| corrupt("message counter"))?,
         },
         scope,
     ))
@@ -1414,27 +1464,25 @@ fn post_retained(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     input: &ops::PostInput,
-) -> Result<RetainedPostResult, StorageError> {
+) -> Result<RetainedPostResult, Failure> {
     if input.session_id.as_ref() != ctx.session_id() && input.session_id.is_some() {
-        return Err(denied());
+        return Err(denied("session").into());
     }
     let project = if let Some(project) = input.project_id.as_ref().or(ctx.project_id()) {
         project.clone()
     } else if let Some(root) = input.item_id.as_ref().or(input.feature_id.as_ref()) {
         tx.sessions()
             .work_root(root)?
-            .ok_or_else(denied)?
+            .ok_or_else(|| denied("work"))?
             .project_id
     } else if let Some(session) = ctx.session_id() {
         tx.sessions()
             .session(session)?
-            .ok_or_else(denied)?
+            .ok_or_else(|| denied("session"))?
             .project_id
-            .ok_or_else(denied)?
+            .ok_or_else(|| denied("project"))?
     } else {
-        return Err(StorageError::InvalidRecord(
-            "retained post needs a project, item or session".into(),
-        ));
+        return Err(invalid("project_id").into());
     };
     let kind = match input
         .message_kind
@@ -1468,7 +1516,8 @@ fn post_retained(
             resolves,
             idempotency_key: input.idempotency_key.as_ref().map(|value| value.0.clone()),
         },
-    )?;
+    )
+    .map_err(retained_rule("agent_message"))?;
     Ok(RetainedPostResult {
         created: posted.created,
         message: retained_message(tx.actors(), posted.message)?,
@@ -1508,48 +1557,51 @@ fn receive_after(
     })
 }
 
-fn receive_selection(input: &ops::ReceiveInput) -> Result<(u16, u64), StorageError> {
+fn receive_selection(input: &ops::ReceiveInput) -> Result<(u16, u64), Refusal> {
     let limit = u16::try_from(input.limit.as_ref().map_or(10, Revision::get))
-        .map_err(|_| StorageError::InvalidRecord("inbox limit".into()))?;
+        .map_err(|_| invalid("limit"))?;
     if !(1..=100).contains(&limit) {
-        return Err(StorageError::InvalidRecord("inbox limit".into()));
+        return Err(invalid("limit"));
     }
     let wait = input.wait_seconds.unwrap_or(0);
     if !(0..=55).contains(&wait) {
-        return Err(StorageError::InvalidRecord("inbox wait_seconds".into()));
+        return Err(invalid("wait_seconds"));
     }
     Ok((limit, wait as u64))
+}
+
+/// The inbox a receive or ack reads: the calling session's, or a person's named project inbox.
+fn inbox_owner(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    named: Option<&ProjectId>,
+) -> Result<(ProjectId, retained::Recipient), Failure> {
+    if let Some(session_id) = ctx.session_id() {
+        let session = tx
+            .sessions()
+            .session(session_id)?
+            .ok_or_else(|| denied("session"))?;
+        let project = session.project_id.ok_or_else(|| denied("project"))?;
+        if named.is_some_and(|named| named != &project) {
+            return Err(denied("project").into());
+        }
+        Ok((project, retained::Recipient::Session(session_id.clone())))
+    } else {
+        let project = named.cloned().ok_or_else(|| invalid("project_id"))?;
+        Ok((project, retained::Recipient::Human))
+    }
 }
 
 fn receive_retained(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     input: &ops::ReceiveInput,
-) -> Result<(RetainedInboxResult, bool), StorageError> {
+) -> Result<(RetainedInboxResult, bool), Failure> {
     if input.session_id.is_some() && input.session_id.as_ref() != ctx.session_id() {
-        return Err(denied());
+        return Err(denied("session").into());
     }
     let (limit, _) = receive_selection(input)?;
-    let (project, recipient) = if let Some(session_id) = ctx.session_id() {
-        let session = tx.sessions().session(session_id)?.ok_or_else(denied)?;
-        let project = session.project_id.ok_or_else(denied)?;
-        if input
-            .project_id
-            .as_ref()
-            .is_some_and(|named| named != &project)
-        {
-            return Err(denied());
-        }
-        (project, retained::Recipient::Session(session_id.clone()))
-    } else {
-        (
-            input
-                .project_id
-                .clone()
-                .ok_or_else(|| StorageError::InvalidRecord("human inbox needs project".into()))?,
-            retained::Recipient::Human,
-        )
-    };
+    let (project, recipient) = inbox_owner(tx, ctx, input.project_id.as_ref())?;
     let after = receive_after(ctx, input, &project, &recipient)?;
     let page = retained::deliver_inbox(
         tx,
@@ -1561,10 +1613,9 @@ fn receive_retained(
         limit,
     )
     .map_err(|error| match error {
-        StorageError::CursorExpired => {
-            StorageError::InvalidRecord("cursor is ahead of inbox head".into())
-        }
-        other => other,
+        // A cursor ahead of the inbox head cannot be one this inbox issued.
+        StorageError::CursorExpired => invalid("cursor").into(),
+        other => retained_rule("agent_inbox")(other),
     })?;
     let changed = !page.items.is_empty();
     let mut items = Vec::with_capacity(page.items.len());
@@ -1576,7 +1627,7 @@ fn receive_retained(
             "Read" => RetainedDeliveryState::Read,
             "Answered" => RetainedDeliveryState::Answered,
             "Declined" => RetainedDeliveryState::Declined,
-            _ => return Err(StorageError::InvalidRecord("inbox delivery state".into())),
+            _ => return Err(corrupt("inbox delivery state").into()),
         });
         message.handed_over = delivery.handed_over.then_some(true);
         items.push(message);
@@ -1597,37 +1648,17 @@ fn ack_retained(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     input: &ops::AckInput,
-) -> Result<RetainedAckResult, StorageError> {
+) -> Result<RetainedAckResult, Failure> {
     if input.session_id.is_some() && input.session_id.as_ref() != ctx.session_id() {
-        return Err(denied());
+        return Err(denied("session").into());
     }
+    // An ack names message ids or an inbox cursor; only ids carry a resolution.
     if input.messages.is_some() == input.up_to.is_some()
         || (input.resolution.is_some() && input.messages.is_none())
     {
-        return Err(StorageError::InvalidRecord(
-            "ack requires message ids or an inbox cursor; resolution requires ids".into(),
-        ));
+        return Err(invalid("ack_selection").into());
     }
-    let (project, recipient) = if let Some(session_id) = ctx.session_id() {
-        let session = tx.sessions().session(session_id)?.ok_or_else(denied)?;
-        let project = session.project_id.ok_or_else(denied)?;
-        if input
-            .project_id
-            .as_ref()
-            .is_some_and(|named| named != &project)
-        {
-            return Err(denied());
-        }
-        (project, retained::Recipient::Session(session_id.clone()))
-    } else {
-        (
-            input
-                .project_id
-                .clone()
-                .ok_or_else(|| StorageError::InvalidRecord("human ack needs project".into()))?,
-            retained::Recipient::Human,
-        )
-    };
+    let (project, recipient) = inbox_owner(tx, ctx, input.project_id.as_ref())?;
     let selection = match (&input.messages, &input.up_to) {
         (Some(ids), None) => retained::AckSelection::Messages(ids.0.clone()),
         (None, Some(cursor)) => retained::AckSelection::Through(retained::parse_inbox_cursor(
@@ -1642,10 +1673,9 @@ fn ack_retained(
     });
     let acked = retained::acknowledge(tx, ctx, &project, &recipient, selection, resolution)
         .map_err(|error| match error {
-            StorageError::CursorExpired => {
-                StorageError::InvalidRecord("up_to is ahead of inbox head".into())
-            }
-            other => other,
+            // An `up_to` ahead of the inbox head cannot be a cursor this inbox issued.
+            StorageError::CursorExpired => invalid("up_to").into(),
+            other => retained_rule("agent_inbox")(other),
         })?;
     let count = acked.changed.len();
     let mut lines = Vec::new();
@@ -1657,11 +1687,7 @@ fn ack_retained(
             "Read" => RetainedDeliveryState::Read,
             "Answered" => RetainedDeliveryState::Answered,
             "Declined" => RetainedDeliveryState::Declined,
-            _ => {
-                return Err(StorageError::InvalidRecord(
-                    "unknown ack delivery state".into(),
-                ));
-            }
+            _ => return Err(corrupt("inbox delivery state").into()),
         };
         lines.push(retained_line(
             message,
@@ -1696,14 +1722,14 @@ pub fn post_assignment(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     input: &ops::MessagesInput,
-) -> Result<AgentMessage, StorageError> {
+) -> Result<AgentMessage, Failure> {
     let (recipient, project) = assignment_scope(tx, &input.recipient_assignment_id)?;
     if !recipient.state.is_live() {
-        return Err(denied());
+        return Err(denied("assignment").into());
     }
     let sender = source_assignment(tx, ctx, &project, &recipient.root_id)?;
     if input.content.0.trim().is_empty() {
-        return Err(StorageError::InvalidRecord("empty message".into()));
+        return Err(invalid("content").into());
     }
     for attachment in &input.attachments.0 {
         if !crate::services::sessions::transcript::reference_resolves(
@@ -1711,11 +1737,9 @@ pub fn post_assignment(
             ctx,
             Some(&project),
             attachment,
-        )? {
-            return Err(denied());
-        }
-        if !sender_can_read_attachment(tx, sender.as_ref(), &recipient.root_id, attachment)? {
-            return Err(denied());
+        )? || !sender_can_read_attachment(tx, sender.as_ref(), &recipient.root_id, attachment)?
+        {
+            return Err(denied("attachment").into());
         }
     }
     // Delivery itself grants the exact immutable version to this recipient. Record that grant
@@ -1790,7 +1814,7 @@ pub fn post_assignment(
     tx.runs().insert_agent_message(&message)?;
     tx.runs().insert_agent_delivery(&delivery)?;
     tx.runs().insert_agent_message_event(&event)?;
-    wire(&message, &delivery)
+    Ok(wire(&message, &delivery)?)
 }
 
 /// Explicitly marks one assignment delivery read. Inbox observation is pure; only this command
@@ -1799,7 +1823,7 @@ pub fn acknowledge_assignment(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     input: &ops::AcknowledgeInput,
-) -> Result<AgentMessage, StorageError> {
+) -> Result<AgentMessage, Failure> {
     let (assignment, project) = assignment_scope(tx, &input.assignment_id)?;
     if !assignment.state.is_live()
         || ctx.principal_kind() != PrincipalKind::Agent
@@ -1807,29 +1831,26 @@ pub fn acknowledge_assignment(
         || ctx.session_id() != Some(&assignment.session_id)
         || ctx.project_id().is_some_and(|p| p != &project)
     {
-        return Err(denied());
+        return Err(denied("assignment").into());
     }
     let session = tx
         .sessions()
         .session(&assignment.session_id)?
-        .ok_or_else(denied)?;
+        .ok_or_else(|| denied("session"))?;
     if session.closed() || session.agent_id != *ctx.principal() {
-        return Err(denied());
+        return Err(denied("session").into());
     }
-    let message =
-        tx.runs()
-            .agent_message(&input.message_id)?
-            .ok_or_else(|| StorageError::NotFound {
-                kind: "agent_message",
-                id: input.message_id.as_str().into(),
-            })?;
+    let message = tx
+        .runs()
+        .agent_message(&input.message_id)?
+        .ok_or_else(|| missing("agent_message", &input.message_id))?;
     if message.project_id != project || message.to_assignment_id.as_ref() != Some(&assignment.id) {
-        return Err(denied());
+        return Err(denied("agent_message").into());
     }
     let mut delivery = tx
         .runs()
         .agent_delivery(&message.id, Some(&assignment.id))?
-        .ok_or_else(denied)?;
+        .ok_or_else(|| corrupt("assignment message delivery"))?;
     if delivery.revision != input.expected_revision.get() {
         return Err(StorageError::conflict(
             RevisionDimension::Store,
@@ -1837,10 +1858,11 @@ pub fn acknowledge_assignment(
             message.id.clone(),
             input.expected_revision.clone(),
             rev(delivery.revision),
-        ));
+        )
+        .into());
     }
     if matches!(delivery.state.as_str(), "Read" | "Answered" | "Declined") {
-        return wire(&message, &delivery);
+        return Ok(wire(&message, &delivery)?);
     }
     delivery.state = "Read".into();
     delivery.revision += 1;
@@ -1860,7 +1882,7 @@ pub fn acknowledge_assignment(
         created_at_ms: tx.now_ms(),
     };
     tx.runs().insert_agent_message_event(&event)?;
-    wire(&message, &delivery)
+    Ok(wire(&message, &delivery)?)
 }
 
 /// A checkpoint is bound to the assignment's own transcript position and advances its revision.
@@ -1869,21 +1891,21 @@ pub fn checkpoint_assignment(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     input: &ops::CheckpointInput,
-) -> Result<CheckpointRecord, StorageError> {
+) -> Result<CheckpointRecord, Failure> {
     let (mut assignment, project) = assignment_scope(tx, &input.assignment_id)?;
     if !assignment.state.is_live()
         || ctx.assignment_id() != Some(&assignment.id)
         || ctx.session_id() != Some(&assignment.session_id)
         || ctx.project_id().is_some_and(|p| p != &project)
     {
-        return Err(denied());
+        return Err(denied("assignment").into());
     }
     let session = tx
         .sessions()
         .session(&assignment.session_id)?
-        .ok_or_else(denied)?;
+        .ok_or_else(|| denied("session"))?;
     if session.closed() || session.agent_id != *ctx.principal() {
-        return Err(denied());
+        return Err(denied("session").into());
     }
     if assignment.revision != input.expected_revision.get() {
         return Err(StorageError::conflict(
@@ -1892,21 +1914,19 @@ pub fn checkpoint_assignment(
             assignment.id.0.clone(),
             input.expected_revision.clone(),
             rev(assignment.revision),
-        ));
+        )
+        .into());
     }
+    // A checkpoint attests to a durable transcript entry, never a future one or an older one.
     let sequence = input.transcript_sequence.get();
     if sequence > session.last_durable_sequence() {
-        return Err(StorageError::InvalidRecord(
-            "checkpoint is ahead of the transcript".into(),
-        ));
+        return Err(invalid("transcript_sequence").into());
     }
     if let Some(previous) = &assignment.checkpoint {
         let previous: CheckpointRecord = serde_json::from_value(previous.clone())
-            .map_err(|_| StorageError::InvalidRecord("invalid stored checkpoint".into()))?;
+            .map_err(|_| corrupt("assignment checkpoint"))?;
         if sequence < previous.transcript_sequence.get() {
-            return Err(StorageError::InvalidRecord(
-                "checkpoint sequence regressed".into(),
-            ));
+            return Err(invalid("transcript_sequence").into());
         }
     }
     if !crate::services::sessions::transcript::reference_resolves(
@@ -1915,7 +1935,7 @@ pub fn checkpoint_assignment(
         Some(&project),
         &input.content,
     )? {
-        return Err(denied());
+        return Err(denied("content").into());
     }
     let record = CheckpointRecord {
         id: tx.new_id(IdKind::Event),
@@ -1934,7 +1954,7 @@ pub fn checkpoint_assignment(
     let root = tx
         .sessions()
         .work_root(&assignment.root_id)?
-        .ok_or_else(denied)?;
+        .ok_or_else(|| missing("root", &assignment.root_id.0))?;
     crate::services::runs::record(
         tx,
         ctx.principal(),
@@ -2029,23 +2049,23 @@ pub fn bind_child_authority(
     let root = tx
         .sessions()
         .work_root(&assignment.root_id)?
-        .ok_or_else(denied)?;
+        .ok_or_else(|| denied("root"))?;
     let context = tx
         .runs()
         .agent_assignment_context(assignment_id)?
-        .ok_or_else(denied)?;
+        .ok_or_else(|| corrupt("assignment context"))?;
     if context.project_id != root.project_id {
-        return Err(denied().into());
+        return Err(denied("assignment").into());
     }
-    let role = AgentRole::parse(context.role_id.as_str())
-        .ok_or_else(|| StorageError::InvalidRecord("unknown stored assignment role".into()))?;
+    let role =
+        AgentRole::parse(context.role_id.as_str()).ok_or_else(|| corrupt("assignment role"))?;
     let session = tx
         .sessions()
         .session(&assignment.session_id)?
-        .ok_or_else(denied)?;
+        .ok_or_else(|| denied("session"))?;
     let actor = session.agent_id;
     if tx.actors().actor_kind(&actor)? != Some(PrincipalKind::Agent) {
-        return Err(denied().into());
+        return Err(denied("session").into());
     }
     bind_role_authority(tx, host, &actor, role, &root.project_id)?;
     Ok(actor)
@@ -2124,34 +2144,34 @@ impl CommandHandler for AgentService {
                     return Ok(true);
                 }
                 if input.session_id.is_some() && input.session_id.as_ref() != ctx.session_id() {
-                    return Err(denied());
+                    return Err(StorageError::ScopeDenied);
                 }
                 if snapshot.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind()) {
-                    return Err(denied());
+                    return Err(StorageError::ScopeDenied);
                 }
                 let (project, recipient) = if let Some(session_id) = ctx.session_id() {
                     if ctx.principal_kind() != PrincipalKind::Agent {
-                        return Err(denied());
+                        return Err(StorageError::ScopeDenied);
                     }
                     let session = snapshot
                         .sessions()
                         .session(session_id)?
-                        .ok_or_else(denied)?;
+                        .ok_or(StorageError::ScopeDenied)?;
                     if session.closed() || session.agent_id != *ctx.principal() {
-                        return Err(denied());
+                        return Err(StorageError::ScopeDenied);
                     }
-                    let project = session.project_id.ok_or_else(denied)?;
+                    let project = session.project_id.ok_or(StorageError::ScopeDenied)?;
                     if input
                         .project_id
                         .as_ref()
                         .is_some_and(|named| named != &project)
                     {
-                        return Err(denied());
+                        return Err(StorageError::ScopeDenied);
                     }
                     (project, retained::Recipient::Session(session_id.clone()))
                 } else {
                     if ctx.principal_kind() != PrincipalKind::Human {
-                        return Err(denied());
+                        return Err(StorageError::ScopeDenied);
                     }
                     let project = input.project_id.clone().ok_or_else(|| {
                         StorageError::InvalidRecord("human inbox needs project".into())
@@ -2161,7 +2181,7 @@ impl CommandHandler for AgentService {
                 if ctx.project_id().is_some_and(|scope| scope != &project)
                     || snapshot.projects().project(&project)?.is_none()
                 {
-                    return Err(denied());
+                    return Err(StorageError::ScopeDenied);
                 }
                 let after = receive_after(ctx, input, &project, &recipient)?;
                 if after > snapshot.runs().agent_delivery_head()? {
@@ -2187,6 +2207,8 @@ impl CommandHandler for AgentService {
                 };
                 Ok(!rows.is_empty())
             });
+            // A rule this check meets is refused by `decide` with its own target; only a
+            // storage fault ends the wait here.
             let available = match available {
                 Ok(available) => available,
                 Err(

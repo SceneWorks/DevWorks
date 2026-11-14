@@ -11,7 +11,7 @@ use crate::{
     },
     services::{
         approvals,
-        conventions::{access, model},
+        conventions::access,
         sessions::{Failure, Refusal},
     },
 };
@@ -107,7 +107,7 @@ impl IndexService {
                     convention_id: id.clone(),
                     revision: row.revision,
                 },
-                model::scope(&row.scope),
+                crate::protocol::data::DataScope::from(&row.scope),
             )
         } else {
             let requested = input.all_scope.as_ref().ok_or_else(|| {
@@ -197,7 +197,8 @@ impl IndexService {
                 serde_json::from_value(existing.payload).map_err(|_| StorageError::ScopeDenied)?;
             if existing.capability != "conventions.index"
                 || existing.args_digest != identity.fingerprint
-                || model::scope_storage(&prior.scope) != model::scope_storage(&scope)
+                || crate::ports::storage::KnowledgeScope::from(&prior.scope)
+                    != crate::ports::storage::KnowledgeScope::from(&scope)
                 || prior.source_context != approvals::save_source_context(ctx)
                 || prior.selection_event.as_ref() != identity.selection.map(|(event, _)| event)
             {
@@ -223,8 +224,9 @@ impl IndexService {
         let controls = crate::services::conventions::control::capture(tx, ctx)?;
         let index_source_revision = matches!(target, IndexTarget::All { .. })
             .then(|| {
-                tx.conventions()
-                    .convention_index_source_revision(&model::scope_storage(&scope))
+                tx.conventions().convention_index_source_revision(
+                    &crate::ports::storage::KnowledgeScope::from(&scope),
+                )
             })
             .transpose()?;
         let job = IndexJob {
@@ -329,7 +331,7 @@ impl IndexService {
                 convention_id: row.id.clone(),
                 revision: row.revision,
             },
-            model::scope(&row.scope),
+            crate::protocol::data::DataScope::from(&row.scope),
             fences,
             &fingerprint,
         )

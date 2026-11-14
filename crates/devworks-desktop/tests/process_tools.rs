@@ -14,6 +14,24 @@ use devworks_desktop::ops;
 use serde_json::json;
 use std::time::{Duration, Instant};
 
+/// Names `names` in the workspace's process executables, as the Settings screen saves it.
+fn allow_executables(backend: &dyn devworks_desktop::backend::Backend, names: &[&str]) {
+    let key = devworks_core::settings::catalog::PROCESS_EXECUTABLES_KEY;
+    let (revision, _) = ops::settings_entries(
+        backend.query("settings.read_effective", &ops::settings_read(backend)),
+    )
+    .expect("workspace settings");
+    let d = devworks_core::settings::catalog::descriptor(key).unwrap();
+    let body = json!({"scope": {"kind": "Workspace"},
+        "expectedRevision": revision.to_string(), "entries": [
+        {"key": key, "value": {"schema": d.schema_ref(), "value": names}}]});
+    ops::settings_saved(backend.command(
+        "settings.save_revision",
+        &ops::command_frame(backend, "settings.save_revision", body),
+    ))
+    .expect("process executables saved");
+}
+
 #[test]
 fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     let _case = native_runtime_case();
@@ -40,6 +58,25 @@ fn native_execute_has_receipt_identity_completion_and_bounded_output() {
     )
     .expect("registered root");
     let backend = engine.backend();
+    let spec = json!({
+        "executableRef":"printf", "args":["process-output"],
+        "workingDirectory":{"rootId":"process-repository","relative":"work"},
+        "environment":[], "profile":"Full", "timeoutMs":"5000", "outputLimitBytes":"7"
+    });
+    // `printf` is on PATH but not a configured process executable, so it cannot be selected
+    // until the workspace setting names it; the saved change applies without a restart.
+    let unlisted = backend
+        .command(
+            "process.execute",
+            &ops::command_frame(&*backend, "process.execute", json!({"spec":spec})),
+        )
+        .expect("unlisted reply");
+    assert!(
+        matches!(&unlisted, CommandReply::Recorded { receipt, .. }
+            if matches!(receipt.decision, DomainDecision::Refused { .. })),
+        "{unlisted:?}"
+    );
+    allow_executables(&*backend, &["printf", "sleep", "cargo"]);
     let spec = json!({
         "executableRef":"printf", "args":["process-output"],
         "workingDirectory":{"rootId":"process-repository","relative":"work"},

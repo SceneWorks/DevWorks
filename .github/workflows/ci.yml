@@ -64,6 +64,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # dev-host guard --diff needs the merge base with the PR's base branch.
+          fetch-depth: 0
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
         run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt
@@ -72,6 +75,15 @@ jobs:
         run: |
           python3 -I tools/ci/test_test_reachability.py
           python3 -I tools/ci/test-reachability.py
+      # DevWorks is dev-host's home, so the guard is built from this PR's own source.
+      - name: dev-host guard (new hardcoded paths, agent docs)
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          cargo build -p dev-host --locked
+          cargo run -q -p dev-host --locked -- guard --diff "origin/$BASE_REF"
+          cargo run -q -p dev-host --locked -- guard --docs
 
   codegen:
     name: generated contracts are current
@@ -166,6 +178,8 @@ jobs:
 
   ubuntu_desktop:
     name: test (ubuntu-desktop)
+    needs: test_scope
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -180,6 +194,11 @@ jobs:
       - name: Run complete desktop partition
         shell: bash
         run: bash tools/ci/native-tests.sh desktop
+      # Tests in skipped partitions that read a later crate's source still run.
+      - name: Run cross-crate tests the test scope skipped
+        if: ${{ needs.test_scope.outputs.foundation == 'false' }}
+        shell: bash
+        run: bash tools/ci/cross-crate-tests.sh
 
   ubuntu_engine:
     name: test (ubuntu-engine)
@@ -267,8 +286,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # One volume per runner: several runners share a self-hosted Mac.
-          volume="devworks-tmp-$RUNNER_NAME"
+          # One volume per runner: several runners share a self-hosted Mac. Hosted runner
+          # names contain spaces ("GitHub Actions 123"), and tests that build shell
+          # commands from temp paths split on them, so keep only [A-Za-z0-9_-].
+          volume="devworks-tmp-${RUNNER_NAME//[^A-Za-z0-9_-]/-}"
           if [ -d "/Volumes/$volume" ]; then hdiutil detach -force "/Volumes/$volume"; fi
           device="$(hdiutil attach -nomount "ram://$((RAMDISK_MIB * 2048))" | awk '{print $1}')"
           diskutil erasevolume APFS "$volume" "$device"

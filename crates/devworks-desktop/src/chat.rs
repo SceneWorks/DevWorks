@@ -22,6 +22,7 @@ use devworks_core::protocol::provider::{
     ArtifactRef, TranscriptBody, TranscriptEntry, TranscriptPage, UserContent,
 };
 use devworks_core::protocol::records::SessionRecord;
+use devworks_core::services::watch::WATCHER_NOTICE_MEDIA_TYPE;
 use eframe::egui::{self, Align, Key, Layout, Modifiers, RichText, TextureHandle, Ui};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -730,12 +731,13 @@ fn transcript_state(
     }
     // The atomic transcript commit can precede the registry's final sequence marker.
     // Keep one copy of this attempt's text throughout that handover.
+    // Every watcher notice is shown; of the other host notices (screen context), the latest.
     let latest_notice = t
         .entries
         .iter()
-        .rposition(|entry| matches!(&entry.body, TranscriptBody::HostNotice { .. }));
+        .rposition(|entry| other_notice(&entry.body));
     let entries: Vec<_> = t.entries.iter().enumerate().filter_map(|(index, entry)| {
-        if matches!(&entry.body, TranscriptBody::HostNotice { .. }) && Some(index) != latest_notice {
+        if other_notice(&entry.body) && Some(index) != latest_notice {
             return None;
         }
         if matches!(
@@ -796,10 +798,24 @@ fn empty_invitation(ui: &mut Ui, surface: Surface) {
     });
 }
 
+/// A host notice a watcher delivered (an event or a reminder).
+pub fn watcher_notice(body: &TranscriptBody) -> bool {
+    matches!(body, TranscriptBody::HostNotice { artifact, .. }
+        if artifact.media_type == WATCHER_NOTICE_MEDIA_TYPE)
+}
+/// A host notice other than a watcher's (coordinator screen context).
+fn other_notice(body: &TranscriptBody) -> bool {
+    matches!(body, TranscriptBody::HostNotice { .. }) && !watcher_notice(body)
+}
+
+/// Lines of a watcher notice the transcript shows (its output tail can be long).
+const NOTICE_LINES: usize = 40;
+
 fn entry_block(ui: &mut Ui, entry: &TranscriptEntry, notice_texts: &HashMap<String, String>) {
     let (who, fill) = match &entry.body {
         TranscriptBody::UserMessage { .. } => ("You", theme::RAISED),
         TranscriptBody::AssistantAttempt { .. } => ("Coordinator", theme::PANEL),
+        body if watcher_notice(body) => ("Watcher", theme::RAISED),
         TranscriptBody::HostNotice { .. } => ("DevWorks", theme::PANEL),
         _ => ("Activity", theme::PANEL),
     };
@@ -854,16 +870,25 @@ fn entry_block(ui: &mut Ui, entry: &TranscriptEntry, notice_texts: &HashMap<Stri
                 TranscriptBody::ToolResponseRecorded { .. } => {
                     ui.label(RichText::new("Tool result recorded").color(theme::MUTED));
                 }
-                TranscriptBody::HostNotice { artifact, .. } => {
-                    ui.label(
-                        RichText::new(
-                            notice_texts
-                                .get(artifact.version_id.as_str())
-                                .map(String::as_str)
-                                .unwrap_or("Host notice"),
-                        )
-                        .color(theme::MUTED),
-                    );
+                body @ TranscriptBody::HostNotice { artifact, .. } => {
+                    let text = notice_texts.get(artifact.version_id.as_str());
+                    let shown = match text {
+                        Some(text) if watcher_notice(body) => {
+                            let lines: Vec<&str> = text.lines().collect();
+                            let mut shown = lines[..lines.len().min(NOTICE_LINES)].join("\n");
+                            if lines.len() > NOTICE_LINES {
+                                shown.push_str(&format!(
+                                    "\n… {} more lines",
+                                    lines.len() - NOTICE_LINES
+                                ));
+                            }
+                            shown
+                        }
+                        Some(text) => text.clone(),
+                        None if watcher_notice(body) => "Watcher event".into(),
+                        None => "Host notice".into(),
+                    };
+                    ui.label(RichText::new(shown).color(theme::MUTED));
                 }
                 TranscriptBody::NativeItem { .. } => {
                     ui.label(RichText::new("Provider continuation material").color(theme::DIM));
@@ -1228,6 +1253,7 @@ pub fn sidebar(
     chat: &mut Chat,
     online: Result<(), &str>,
     actions: &mut Vec<ChatAction>,
+    watchers: &mut dyn FnMut(&mut Ui, &str),
 ) {
     ui.horizontal(|ui| {
         if ui
@@ -1246,12 +1272,24 @@ pub fn sidebar(
     widgets::divider(ui);
     ui.add_space(6.0);
     match chat.tab {
-        SidebarTab::Current => current(ui),
+        SidebarTab::Current => {
+            let session = chat.selected_session().map(|s| s.id.as_str().to_owned());
+            egui::ScrollArea::vertical()
+                .id_salt("sidebar-current")
+                .show(ui, |ui| current(ui, session.as_deref(), watchers));
+        }
         SidebarTab::History => history(ui, chat, online, actions),
     }
 }
 
-fn current(ui: &mut Ui) {
+/// The selected conversation's watchers, then the cross-project summary.
+fn current(ui: &mut Ui, session: Option<&str>, watchers: &mut dyn FnMut(&mut Ui, &str)) {
+    ui.label(RichText::new("Watchers").strong());
+    match session {
+        Some(session) => watchers(ui, session),
+        None => widgets::caption(ui, "Start or select a conversation to see its watchers."),
+    }
+    ui.add_space(10.0);
     widgets::caption(ui, "Across all projects");
     for (title, what, owner) in [
         (

@@ -9,6 +9,7 @@ use devworks_core::protocol::results::OperationResult;
 use devworks_core::services::process::tools::{
     RegisteredExecutable, RegisteredWorkingRoot, ToolBindings,
 };
+use devworks_core::services::watch::WATCHER_NOTICE_MEDIA_TYPE;
 use devworks_engine::runtime::{ProcessToolComposition, Runtime};
 
 /// Provider wire that records each request body and, at each request, whether the watcher
@@ -1472,6 +1473,11 @@ fn the_backup_check_delivers_a_missed_outcome_once_with_its_event_id() {
             delivered[0]["source"], record["event"]["id"],
             "its own event ID"
         );
+        assert_eq!(
+            delivered[0]["artifact"]["mediaType"],
+            json!(WATCHER_NOTICE_MEDIA_TYPE),
+            "a backup delivery is a watcher notice too"
+        );
         let kinds = watcher_history(&app, &id_text);
         assert_eq!(
             kinds.iter().filter(|k| *k == "WatcherBackupCatch").count(),
@@ -2075,6 +2081,123 @@ fn a_timer_fires_at_its_due_time() {
             delivered[0]["source"], record["event"]["id"],
             "{delivered:?}"
         );
+        assert_eq!(
+            delivered[0]["artifact"]["mediaType"],
+            json!(WATCHER_NOTICE_MEDIA_TYPE),
+            "a surface tells watcher notices apart"
+        );
+        app.shutdown().await;
+    });
+}
+
+fn list(app: &Runtime, ctx: &InvocationContext, body: Value) -> Vec<Value> {
+    match app
+        .query(
+            ctx,
+            "watch.list",
+            &frame("Query", "watch.list", body, "list"),
+        )
+        .unwrap()
+    {
+        DomainQueryReply::Result {
+            result: OperationResult::WatchList { value },
+            ..
+        } => value
+            .items
+            .0
+            .into_iter()
+            .map(|w| serde_json::to_value(w).unwrap())
+            .collect(),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A person at workspace scope sees and cancels every watcher, attributed to the agent and work
+/// that own it, with when the watcher service last polled it; a feature filter keeps only the
+/// watchers of that feature's sessions.
+#[test]
+fn a_person_lists_every_watcher_with_its_owner_and_last_poll_and_cancels_it() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-person-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, primary) = agent_context(&fx);
+        let watchers = app.watchers().expect("watchers composed");
+        let timer = command(
+            &app,
+            &ctx,
+            "watch.create",
+            json!({"timer": {"afterMs": "60000"}}),
+            "w-person",
+        );
+        let id = timer["id"].as_str().unwrap().to_owned();
+        let person = principal(&*fx.store, "watch-person", PrincipalKind::Human);
+        let before = list(&app, &person, json!({"page":{"limit":50}}));
+        assert_eq!(before.len(), 1, "{before:?}");
+        assert_eq!(before[0]["lastPolledAtMs"], Value::Null, "not polled yet");
+        fx.h.advance(1500);
+        watchers.settle().unwrap();
+        let listed = list(&app, &person, json!({"page":{"limit":50}}));
+        let record = &listed[0];
+        assert_eq!(record["id"], json!(id));
+        assert_eq!(counter_at(record, "/lastPolledAtMs"), Some(fx.h.now()));
+        let owner = &record["owner"];
+        assert!(owner["agentId"].is_string(), "{record}");
+        assert_eq!(owner["workId"], json!("root-i"), "{record}");
+        assert_eq!(
+            owner["assignmentId"],
+            json!(primary.assignment_id),
+            "{record}"
+        );
+        let feature = owner["featureId"].clone();
+        if feature.is_string() {
+            let theirs = list(
+                &app,
+                &person,
+                json!({"featureId": feature, "page":{"limit":50}}),
+            );
+            assert_eq!(theirs.len(), 1, "{theirs:?}");
+        }
+        let other = list(
+            &app,
+            &person,
+            json!({"featureId": "root-other", "page":{"limit":50}}),
+        );
+        assert!(other.is_empty(), "{other:?}");
+        let cancelled = command(
+            &app,
+            &person,
+            "watch.cancel",
+            json!({"watcherId": id, "expectedRevision": record["revision"], "stopProcess": false}),
+            "w-person-cancel",
+        );
+        assert_eq!(cancelled["state"], json!("Cancelled"), "{cancelled}");
+        // A project's process is stopped from workspace scope too, within its project.
+        let running = create(&app, &ctx, "sleep 30", 60_000, "w-person-process");
+        assert!(running["projectId"].is_string(), "{running}");
+        let process = running["process"]["processId"].as_str().unwrap().to_owned();
+        until_running(&app, &process).await;
+        let stopping = command(
+            &app,
+            &person,
+            "watch.cancel",
+            json!({"watcherId": running["id"], "expectedRevision": running["revision"],
+                "stopProcess": true}),
+            "w-person-stop",
+        );
+        assert_eq!(stopping["state"], json!("Stopping"), "{stopping}");
+        let id = running["id"].as_str().unwrap();
+        settle_all(&app, &ctx, &[id]).await;
+        assert_eq!(
+            inspect(&app, &ctx, id)["outcome"]["kind"],
+            json!("Cancelled")
+        );
         app.shutdown().await;
     });
 }
@@ -2109,6 +2232,206 @@ fn a_probe_command_the_shell_preflight_blocks_is_refused_at_creation() {
                 .watchers(&WatcherFilter::Session(session.clone()), &[], None, 10)
         });
         assert!(watchers.is_empty(), "nothing was recorded: {watchers:?}");
+        app.shutdown().await;
+    });
+}
+
+/// The shell guard protects the working root's repository default branch, not only main and
+/// master: a forced push and a branch delete of `develop` are blocked when the repository's
+/// default branch is `develop`.
+#[test]
+fn the_shell_guard_blocks_rewriting_the_repository_default_branch() {
+    use devworks_core::ports::storage::{StoredRepository, StoredRepositorySource};
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-default-branch-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let location = work.to_string_lossy().into_owned();
+    write(&*fx.store, move |tx| {
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("watch-root"),
+            location: location.clone(),
+            name: "watched".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: "Active".into(),
+            languages: vec![],
+            revision: 1,
+            registered_at_ms: 1,
+        })?;
+        tx.indexing()
+            .put_repository_source(&StoredRepositorySource {
+                repository_id: id("watch-root"),
+                section: "workspace".into(),
+                section_root: None,
+                location,
+                state: "Present".into(),
+                head_oid: None,
+                head_ref: Some("refs/heads/develop".into()),
+                object_format: "Sha1".into(),
+                remote_url: None,
+                default_ref: Some("refs/heads/develop".into()),
+                revision: 1,
+                observed_at_ms: 1,
+            })
+    })
+    .unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        for (n, script) in [
+            "git push --force origin develop",
+            "git push origin --delete develop",
+            "git push origin :refs/heads/develop",
+            "git branch -D develop",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let refused = decision(
+                &app,
+                &ctx,
+                probe(script, 1000, json!({})),
+                &format!("w-default-{n}"),
+            );
+            let DomainDecision::Refused { fault } = refused else {
+                panic!("{script}: a rewrite of the default branch was admitted: {refused:?}");
+            };
+            assert_eq!(fault.code, DomainErrorCode::PermissionDenied, "{fault:?}");
+        }
+        // Another branch is not protected: the guard only holds its push for the Git owner.
+        let admitted = decision(
+            &app,
+            &ctx,
+            probe("git push --force origin feature", 1000, json!({})),
+            "w-default-other",
+        );
+        assert!(
+            !matches!(admitted, DomainDecision::Refused { .. }),
+            "{admitted:?}"
+        );
+        app.shutdown().await;
+    });
+}
+
+/// A clone that records no `refs/remotes/origin/HEAD` still protects its default branch: the
+/// shell guard falls back to the default branch GitHub reported for the repository's binding.
+#[test]
+fn the_shell_guard_protects_the_bound_github_default_branch_without_origin_head() {
+    use devworks_core::ports::storage::{
+        StoredGithubAccount, StoredGithubObservation, StoredGithubRepository,
+        StoredGithubRepositoryBinding, StoredRepository, StoredRepositorySource,
+    };
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("watch-github-default-work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let work = work.canonicalize().unwrap();
+    let location = work.to_string_lossy().into_owned();
+    write(&*fx.store, move |tx| {
+        let remote = "https://github.com/org/watched.git".to_owned();
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("watch-root"),
+            location: location.clone(),
+            name: "watched".into(),
+            remote_url: Some(remote.clone()),
+            primary: true,
+            lifecycle: "Active".into(),
+            languages: vec![],
+            revision: 1,
+            registered_at_ms: 1,
+        })?;
+        // Discovery saw the clone, but it records no remote HEAD.
+        tx.indexing().put_repository_source(&StoredRepositorySource {
+            repository_id: id("watch-root"),
+            section: "workspace".into(),
+            section_root: None,
+            location,
+            state: "Present".into(),
+            head_oid: None,
+            head_ref: Some("refs/heads/develop".into()),
+            object_format: "Sha1".into(),
+            remote_url: Some(remote.clone()),
+            default_ref: None,
+            revision: 1,
+            observed_at_ms: 1,
+        })?;
+        tx.github().put_github_account(
+            &StoredGithubAccount {
+                id: id("account"),
+                revision: 1,
+                state: "Connected".into(),
+                remote_user_id: Some("123".into()),
+                login: Some("person".into()),
+                credential_revision: 1,
+                permission_revision: 1,
+                granted_scopes: vec!["repo".into()],
+                observed_at_ms: 1,
+                last_error: None,
+            },
+            None,
+        )?;
+        let canonical = StoredGithubRepository {
+            id: id("github-watched"),
+            account_id: id("account"),
+            revision: 1,
+            remote_repository_id: "remote-watched".into(),
+            owner: "org".into(),
+            name: "watched".into(),
+            owner_kind: "Organization".into(),
+            url: "https://github.com/org/watched".into(),
+            default_branch: Some("develop".into()),
+            permissions: json!({"pull":true,"push":true}),
+            permission_revision: 1,
+            observed_at_ms: 1,
+        };
+        tx.github().put_github_repository(&canonical, None)?;
+        let observed = tx.github().append_github_observation(&StoredGithubObservation {
+            id: id("identity-watched"),
+            repository_id: canonical.id.clone(),
+            kind: "Repository".into(),
+            subject_id: canonical.remote_repository_id.clone(),
+            remote_revision: "actual-provider-metadata".into(),
+            url: canonical.url.clone(),
+            head: None,
+            payload: json!({"requestedRemote":remote,"repository":{"node_id":canonical.remote_repository_id,"owner":{"login":canonical.owner},"name":canonical.name}}),
+            source_updated_at_ms: Some(1),
+            observed_at_ms: 1,
+        })?;
+        tx.github().put_github_repository_binding(
+            &StoredGithubRepositoryBinding {
+                repository_id: id("watch-root"),
+                github_repository_id: canonical.id,
+                revision: 1,
+                repository_revision: 1,
+                registered_remote: remote,
+                observation_id: observed.id,
+                state: "Active".into(),
+            },
+            None,
+        )
+    })
+    .unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let (composed, _wired) = watch_composition(&fx, &work);
+        let app = Arc::new(boot(composed).await.unwrap());
+        let (ctx, _) = agent_context(&fx);
+        let refused = decision(
+            &app,
+            &ctx,
+            probe("git push --force origin develop", 1000, json!({})),
+            "w-github-default",
+        );
+        let DomainDecision::Refused { fault } = refused else {
+            panic!("a forced push of the bound default branch was admitted: {refused:?}");
+        };
+        assert_eq!(fault.code, DomainErrorCode::PermissionDenied, "{fault:?}");
         app.shutdown().await;
     });
 }
