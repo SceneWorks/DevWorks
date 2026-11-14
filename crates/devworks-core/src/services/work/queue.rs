@@ -41,6 +41,25 @@ pub fn queue(
     project: &ProjectId,
     feature: Option<&Id>,
 ) -> Result<(i64, Vec<Candidate>), StorageError> {
+    queue_in(read, project, feature, false)
+}
+
+/// The same queue limited to items in a Ready or InProgress status, the only ones an
+/// allocation can select: completed and backlog items are never read.
+pub fn actionable(
+    read: &dyn WorkRead,
+    project: &ProjectId,
+    feature: Option<&Id>,
+) -> Result<(i64, Vec<Candidate>), StorageError> {
+    queue_in(read, project, feature, true)
+}
+
+fn queue_in(
+    read: &dyn WorkRead,
+    project: &ProjectId,
+    feature: Option<&Id>,
+    actionable: bool,
+) -> Result<(i64, Vec<Candidate>), StorageError> {
     let (key, selections) = match feature {
         None => (
             PROJECT_QUEUE.to_owned(),
@@ -53,23 +72,38 @@ pub fn queue(
     };
     let revision = read.queue_revision(project, &key)?;
     let statuses = read.statuses(project)?;
+    // One read per actionable status, so the store walks that status's items in queue order
+    // through its index; every other status is never read. An unfiltered queue reads once.
+    let status_sets: Vec<Vec<Id>> = if actionable {
+        statuses
+            .iter()
+            .filter(|s| {
+                s.semantic == super::workflow::READY || s.semantic == super::workflow::IN_PROGRESS
+            })
+            .map(|s| vec![s.id.clone()])
+            .collect()
+    } else {
+        vec![Vec::new()]
+    };
     let mut items: Vec<StoredWork> = Vec::new();
     for s in selections {
-        let filter = WorkFilter {
-            project: project.clone(),
-            selection: s,
-            status_ids: Vec::new(),
-            repository_ids: Vec::new(),
-            text: None,
-        };
-        let mut after: Option<WorkPosition> = None;
-        loop {
-            let page = read.works(&filter, after.as_ref(), 500)?;
-            let more = page.len() == 500;
-            after = page.last().map(WorkPosition::of);
-            items.extend(page);
-            if !more {
-                break;
+        for status_ids in &status_sets {
+            let filter = WorkFilter {
+                project: project.clone(),
+                selection: s.clone(),
+                status_ids: status_ids.clone(),
+                repository_ids: Vec::new(),
+                text: None,
+            };
+            let mut after: Option<WorkPosition> = None;
+            loop {
+                let page = read.works(&filter, after.as_ref(), 500)?;
+                let more = page.len() == 500;
+                after = page.last().map(WorkPosition::of);
+                items.extend(page);
+                if !more {
+                    break;
+                }
             }
         }
     }
