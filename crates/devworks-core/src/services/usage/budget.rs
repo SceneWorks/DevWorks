@@ -264,6 +264,7 @@ fn reconcile_latch(
                 "FeatureBudgetReached",
                 json!({"spentMicroUsd":totals.spent_micro_usd,"limitMicroUsd":limit}),
             )?;
+            crate::services::notifications::budget_paused(tx, feature, budget.revision)?;
         }
     }
     Ok(totals.spent_micro_usd >= limit)

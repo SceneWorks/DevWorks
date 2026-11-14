@@ -229,6 +229,16 @@ pub trait WorkRead {
         after: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<StoredAllocationClaim>, StorageError>;
+    /// The project's claims in a live state (Active, Transferred, Yielding), in ID order.
+    fn live_allocation_claims(
+        &self,
+        project: &ProjectId,
+    ) -> Result<Vec<StoredAllocationClaim>, StorageError>;
+    /// The work's claim with the highest fence, live or not.
+    fn latest_allocation_claim(
+        &self,
+        work: &Id,
+    ) -> Result<Option<StoredAllocationClaim>, StorageError>;
     fn allocation_by_invocation(
         &self,
         namespace: &Id,

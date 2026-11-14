@@ -1434,3 +1434,6 @@ mod mcp_sampling_budget;
 
 #[path = "budget_warning.rs"]
 mod budget_warning;
+
+#[path = "usage_bounded.rs"]
+mod usage_bounded;

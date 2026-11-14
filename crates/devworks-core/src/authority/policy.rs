@@ -457,6 +457,8 @@ pub fn registered_tool_visibility(
     let command = selected.mode == Mode::Command;
     // These project-wide operations have no target that can be narrowed to the running root.
     // Agents use addressed reads and writes for their root and delegated task references.
+    // Ordering a feature's own task queue and editing its blockers are narrowed to the root by
+    // the assignment check (`agent_assignment_scope`).
     if kind == PrincipalKind::Agent
         && ctx.root_id().is_some()
         && matches!(
@@ -464,13 +466,10 @@ pub fn registered_tool_visibility(
             "features.list"
                 | "features.create"
                 | "features.prioritize"
-                | "features.dependencies"
                 | "issues.list"
                 | "issues.create"
                 | "issues.prioritize"
                 | "tasks.list"
-                | "tasks.prioritize"
-                | "tasks.dependency_links"
         )
     {
         return Verdict::Deny(DenialReason::OutOfAssignmentScope);
@@ -560,6 +559,9 @@ pub fn registered_tool_visibility(
                 | "runs.stop"
                 | "tasks.create"
                 | "tasks.sync_plan"
+                | "tasks.prioritize"
+                | "tasks.dependency_links"
+                | "features.dependencies"
                 | "features.edit"
                 | "features.edit_plan"
                 | "features.request_plan_approval"
