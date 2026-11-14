@@ -807,7 +807,9 @@ fn tool_window_count(total: usize) -> usize {
 }
 
 /// Estimated input tokens of the next request from `head` with tool window `window`: the context
-/// and the offered tool schemas, by the attributed estimate of four bytes per token.
+/// and the offered tool schemas, by the attributed estimate of four bytes per token. Tool-call
+/// arguments and native blocks the context only references count at their artifact size, since
+/// the request carries their content.
 pub fn context_tokens(
     runtime: &Runtime,
     ctx: &InvocationContext,
@@ -822,10 +824,28 @@ pub fn context_tokens(
     let tool_bytes = serde_json::to_vec(tool_window(&selected, window)?)
         .map_err(|error| StorageError::InvalidRecord(format!("tool schemas: {error}")))?
         .len();
+    let (context_bytes, _) = runtime
+        .artifacts()
+        .read_exact(runtime.store().as_ref(), ctx, head, 32 * 1024 * 1024)
+        .map_err(|_| StorageError::ScopeDenied)?;
+    let context: ProviderContext = serde_json::from_slice(&context_bytes)
+        .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?;
+    let referenced = context
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .filter_map(|block| match block {
+            ContentBlock::ToolCall { arguments, .. } => Some(arguments.byte_length.get()),
+            ContentBlock::Native { artifact, .. } => Some(artifact.byte_length.get()),
+            _ => None,
+        })
+        .try_fold(0i64, i64::checked_add)
+        .ok_or(StorageError::ScopeDenied)?;
     let bytes = head
         .byte_length
         .get()
         .checked_add(i64::try_from(tool_bytes).map_err(|_| StorageError::ScopeDenied)?)
+        .and_then(|bytes| bytes.checked_add(referenced))
         .ok_or(StorageError::ScopeDenied)?;
     Ok(devworks_core::services::sessions::token_estimate(bytes))
 }
@@ -1841,20 +1861,24 @@ fn plan_request(
         .get()
         .checked_add(i64::try_from(tool_bytes).map_err(|_| StorageError::ScopeDenied)?)
         .ok_or(StorageError::ScopeDenied)?;
+    let mut identity = format!(
+        "{}:{}:{}:{}:{}",
+        session_id.as_str(),
+        head.sha256.as_str(),
+        route.pin_id.as_str(),
+        route.pin_revision.get(),
+        window.unwrap_or(0)
+    );
+    if compaction {
+        // A compaction input republished after a restart has the same bytes under a new
+        // version: it is a new request, not a replay of the first one.
+        identity.push(':');
+        identity.push_str(head.version_id.as_str());
+    }
     let request_id = Id::new(format!(
         "agent-{}-{}",
         if compaction { "compaction" } else { "request" },
-        sha256_hex(
-            format!(
-                "{}:{}:{}:{}:{}",
-                session_id.as_str(),
-                head.sha256.as_str(),
-                route.pin_id.as_str(),
-                route.pin_revision.get(),
-                window.unwrap_or(0)
-            )
-            .as_bytes()
-        )
+        sha256_hex(identity.as_bytes())
     ))
     .map_err(|_| StorageError::ScopeDenied)?;
     let info = runtime.store().info();
