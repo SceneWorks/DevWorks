@@ -370,40 +370,50 @@ fn application(
                 OperationState::Failed,
             ),
         },
-        Mode::Command => match gateway.command(principal, admitted.descriptor.name, &frame) {
-            Ok(reply @ CommandReply::Recorded { .. }) => Ended::Answered(
-                OperationState::ObservedComplete,
-                serde_json::to_vec(&reply).unwrap_or_default(),
-            ),
-            Ok(reply @ CommandReply::Rejected { .. }) => Ended::Answered(
-                OperationState::Failed,
-                serde_json::to_vec(&reply).unwrap_or_default(),
-            ),
-            Ok(other) => Ended::Failed(
-                rpc_error(
-                    RpcErrorClass::OutcomeUnknown,
-                    &format!("the command's status is unknown: {other:?}"),
-                ),
-                OperationState::OutcomeUnknown,
-            ),
-            // Nothing was admitted or recorded for these.
-            Err(e @ (GatewayFailure::NoUseCase(_) | GatewayFailure::Unaddressable { .. })) => {
-                Ended::Failed(
-                    rpc_error(
-                        RpcErrorClass::Unavailable,
-                        &format!("the command was not admitted: {e}"),
-                    ),
+        // A command is admitted and committed under the invocation's revocation lock (as a state
+        // compare-and-set is): a cancelled or expired invocation never applies one afterwards.
+        Mode::Command => {
+            match fenced_command(&*gateway, slot, principal, admitted.descriptor.name, &frame) {
+                None => Ended::Failed(
+                    denied("the invocation is no longer live"),
                     OperationState::Failed,
-                )
-            }
-            Err(e) => Ended::Failed(
-                rpc_error(
-                    RpcErrorClass::OutcomeUnknown,
-                    &format!("the command failed before its receipt: {e}"),
                 ),
-                OperationState::OutcomeUnknown,
-            ),
-        },
+                Some(outcome) => match outcome {
+                    Ok(reply @ CommandReply::Recorded { .. }) => Ended::Answered(
+                        OperationState::ObservedComplete,
+                        serde_json::to_vec(&reply).unwrap_or_default(),
+                    ),
+                    Ok(reply @ CommandReply::Rejected { .. }) => Ended::Answered(
+                        OperationState::Failed,
+                        serde_json::to_vec(&reply).unwrap_or_default(),
+                    ),
+                    Ok(other) => Ended::Failed(
+                        rpc_error(
+                            RpcErrorClass::OutcomeUnknown,
+                            &format!("the command's status is unknown: {other:?}"),
+                        ),
+                        OperationState::OutcomeUnknown,
+                    ),
+                    // Nothing was admitted or recorded for these.
+                    Err(
+                        e @ (GatewayFailure::NoUseCase(_) | GatewayFailure::Unaddressable { .. }),
+                    ) => Ended::Failed(
+                        rpc_error(
+                            RpcErrorClass::Unavailable,
+                            &format!("the command was not admitted: {e}"),
+                        ),
+                        OperationState::Failed,
+                    ),
+                    Err(e) => Ended::Failed(
+                        rpc_error(
+                            RpcErrorClass::OutcomeUnknown,
+                            &format!("the command failed before its receipt: {e}"),
+                        ),
+                        OperationState::OutcomeUnknown,
+                    ),
+                },
+            }
+        }
     };
     match ended {
         Ended::Failed(error, state) => {
@@ -423,6 +433,22 @@ fn application(
             Ok(RpcResult::BrokerCompleted { artifact: produced })
         }
     }
+}
+
+/// Runs a command while holding the invocation's revocation lock; `None` when it was already
+/// revoked (nothing ran).
+fn fenced_command(
+    gateway: &dyn GatewayCalls,
+    slot: &Slot,
+    principal: &InvocationContext,
+    operation: &str,
+    frame: &[u8],
+) -> Option<CommandOutcome> {
+    let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+    if slot.revoked.load(std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
+    Some(gateway.command(principal, operation, frame))
 }
 
 /// Journals an admitted call before it runs: its operation (`Dispatching`) and a history event
