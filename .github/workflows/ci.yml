@@ -279,8 +279,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # One volume per runner: several runners share a self-hosted Mac.
-          volume="devworks-tmp-$RUNNER_NAME"
+          # One volume per runner: several runners share a self-hosted Mac. Hosted runner
+          # names contain spaces ("GitHub Actions 123"), and tests that build shell
+          # commands from temp paths split on them, so keep only [A-Za-z0-9_-].
+          volume="devworks-tmp-${RUNNER_NAME//[^A-Za-z0-9_-]/-}"
           if [ -d "/Volumes/$volume" ]; then hdiutil detach -force "/Volumes/$volume"; fi
           device="$(hdiutil attach -nomount "ram://$((RAMDISK_MIB * 2048))" | awk '{print $1}')"
           diskutil erasevolume APFS "$volume" "$device"
