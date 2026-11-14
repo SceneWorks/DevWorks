@@ -17,10 +17,12 @@ HELP = ROOT / 'docs/help'
 
 def macro_arguments(source, start):
     depth = 1
+    angle = 0
     quoted = False
     escaped = False
     args = []
     part = []
+    previous = ''
     for char in source[start:]:
         if quoted:
             part.append(char)
@@ -33,6 +35,10 @@ def macro_arguments(source, start):
             continue
         if char == '"':
             quoted = True
+        if char == '<' and previous == ':':
+            angle += 1  # turbofish generics, e.g. Map::<String, Value>::new()
+        elif char == '>' and angle and previous not in '-=':
+            angle -= 1
         if char in '([{':
             depth += 1
         elif char in ')]}':
@@ -40,11 +46,12 @@ def macro_arguments(source, start):
             if depth == 0:
                 args.append(''.join(part).strip())
                 return args
-        if char == ',' and depth == 1:
+        if char == ',' and depth == 1 and not angle:
             args.append(''.join(part).strip())
             part = []
         else:
             part.append(char)
+        previous = char
     raise ValueError('unclosed setting macro')
 
 
@@ -177,7 +184,9 @@ def main():
         'repositories':'repositories', 'indexing':'indexing', 'work':'workflow',
         'notifications':'approvals', 'help':'help', 'usage':'usage',
         'prices':'usage', 'graph':'code-exploration', 'instructions':'settings-Instructions',
-        'watchers':'watchers'
+        'watchers':'watchers', 'agents':'agents', 'conventions':'conventions',
+        'schemas':'databases', 'embedding_spaces':'routing-context', 'mcp':'mcp-servers',
+        'process_tools':'process-tools', 'containers':'containers', 'desktop':'desktop-control'
     }
     for owner in re.findall(r'pub fn with_(\w+)\(', services):
         if owner not in owners or owners[owner] not in ids:

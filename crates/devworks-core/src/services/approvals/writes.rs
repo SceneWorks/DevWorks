@@ -539,7 +539,7 @@ pub(crate) fn authority_binding(
 ) -> Result<Value, StorageError> {
     let policy =
         crate::authority::policy::resolve_policy(tx.configuration(), ctx.project_id())?.digest();
-    let principal=tx.authority().principal(ctx.principal())?.map(|p|json!({"revision":p.revision,"active":p.active,"kind":format!("{:?}",p.kind),"role":p.role.map(|r|r.as_str()),"projectId":p.project_id,"tools":p.tool_families}));
+    let principal=tx.authority().principal(ctx.principal())?.map(|p|json!({"revision":p.revision,"active":p.active,"kind":p.kind.as_str(),"role":p.role.map(|r|r.as_str()),"projectId":p.project_id,"tools":p.tool_families}));
     Ok(
         json!({"policyDigest":policy,"principal":principal,"projectId":ctx.project_id(),"rootId":ctx.root_id(),"assignmentId":ctx.assignment_id(),"restoreEpoch":ctx.restore_epoch()}),
     )

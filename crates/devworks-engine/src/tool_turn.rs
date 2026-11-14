@@ -1552,12 +1552,6 @@ pub(crate) fn frame(
     arguments: Value,
 ) -> Result<Vec<u8>, &'static str> {
     call.validate()?;
-    if !descriptor.supports(revision) || descriptor.binding(mode).is_none() {
-        return Err("unsupported selected tool binding");
-    }
-    let Value::Object(mut arguments) = arguments else {
-        return Err("tool arguments must be an object");
-    };
     let identity = format!(
         "tool-{}",
         sha256_hex(
@@ -1571,6 +1565,24 @@ pub(crate) fn frame(
             .as_bytes()
         )
     );
+    frame_as(identity, descriptor, mode, revision, arguments)
+}
+
+/// Build the gateway frame of `arguments` under the host-chosen request `identity` (a stable
+/// identity makes a retried command find its original receipt).
+pub(crate) fn frame_as(
+    identity: String,
+    descriptor: &'static OperationDescriptor,
+    mode: Mode,
+    revision: SchemaRevision,
+    arguments: Value,
+) -> Result<Vec<u8>, &'static str> {
+    if !descriptor.supports(revision) || descriptor.binding(mode).is_none() {
+        return Err("unsupported selected tool binding");
+    }
+    let Value::Object(mut arguments) = arguments else {
+        return Err("tool arguments must be an object");
+    };
     let key = mode.key_member();
     let value = match descriptor.envelope {
         Envelope::Domain => {
@@ -1800,6 +1812,23 @@ pub(crate) fn dispatch_one(
             Err(StorageError::InvalidRecord(_)) => failed("tool_invalid_arguments"),
             Err(error) => return Err(error),
         }
+    } else if runtime.packages().is_some()
+        && crate::package_tools::is_package_tool(store, call.capability_id.as_str())
+    {
+        // A package tool runs as its own durable operation; the response records it accepted.
+        // The dispatch marker commits first: once the operation is runnable, a cancellation can
+        // no longer record the call cancelled before dispatch.
+        mark_dispatch_started(store, ctx, session_id, key, cancellation)?;
+        match crate::package_tools::queue(store, schemas, ctx, session_id, &call) {
+            Ok(operation_id) => accepted(
+                serde_json::to_vec(&json!({"operationId": operation_id})).map_err(invalid)?,
+                operation_id,
+            ),
+            // Not a selected, verified tool of the active version: nothing was queued.
+            Err(StorageError::ScopeDenied) => failed("package_tool_unavailable"),
+            // Recovery queues the same call again under its stable operation identity.
+            Err(error) => return Err(error),
+        }
     } else {
         let result = match selected_builtin(schemas, &call) {
             Ok((descriptor, mode, revision)) => {
@@ -1856,12 +1885,11 @@ pub(crate) fn dispatch_one(
                         return Err(StorageError::Cancelled);
                     }
                     if fault.code == DomainErrorCode::ApprovalRequired {
-                        return Err(StorageError::unavailable(
-                            Unavailable::UnsupportedRuntime,
-                            "tool query approval lacks a durable approval and operation identity",
-                        ));
-                    }
-                    if let Some(blocked) = blocked_outcome(&fault)? {
+                        // A saved-operation approval carries and replays commands only, so no
+                        // approval can be staged for a query. Answer the call at once: the query
+                        // did not run and only a person can run it.
+                        failed(QUERY_APPROVAL_REQUIRED)
+                    } else if let Some(blocked) = blocked_outcome(&fault)? {
                         (blocked, None)
                     } else if needs_recovery(fault.retry) {
                         return Err(StorageError::unavailable(
@@ -2179,8 +2207,10 @@ fn record_observed_operation_update(
             .operations()
             .operation(operation_id)?
             .ok_or(StorageError::ScopeDenied)?;
-        let remote_content = (operation.capability == "mcp.tool"
-            && operation.state == OperationState::ObservedComplete)
+        let remote_content = (matches!(
+            operation.capability.as_str(),
+            "mcp.tool" | crate::package_tools::CAPABILITY
+        ) && operation.state == OperationState::ObservedComplete)
             .then(|| {
                 operation
                     .latest_attempt()?
@@ -2514,6 +2544,10 @@ fn needs_recovery(retry: RetryAdvice) -> bool {
             | RetryAdvice::AfterBlockerClears
     )
 }
+
+/// The failure code an agent's query refused `ApprovalRequired` is answered with: the query was
+/// not run, and a person must run it.
+const QUERY_APPROVAL_REQUIRED: &str = "domain_ApprovalRequired-query_not_run-a_person_must_run_it";
 
 fn failed(code: &str) -> (ToolOutcome, Option<Vec<u8>>) {
     (

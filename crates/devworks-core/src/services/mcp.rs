@@ -62,19 +62,24 @@ struct Configuration {
     servers: Vec<StoredServer>,
 }
 
+/// A server's saved configuration. Its catalog (capabilities, schemas, resource URIs and
+/// retired tools) is stored apart, one configuration namespace per server ([`catalog_namespace`]),
+/// so reading one server never reads every server's catalog: [`current`] returns servers with
+/// empty catalogs, [`load_catalog`] fills one, and [`save_catalog`] writes one.
 #[derive(Clone, Serialize, Deserialize)]
 struct StoredServer {
     public: McpServer,
     transport: McpTransport,
+    #[serde(default, skip_serializing)]
     capabilities: Vec<McpCapability>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     schemas: BTreeMap<String, Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     resource_uris: BTreeMap<String, String>,
     /// The last available version of each selected tool that a later discovery no longer
     /// listed. It stays in the catalog without an input schema, so it is shown unavailable and
     /// never offered; it is selected again when the server lists it again unchanged.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default, skip_serializing)]
     retired: BTreeMap<String, McpCapability>,
     /// A person's read-only classification of a tool, by capability ID, in place of the
     /// server's hint. It is kept apart from the catalog so rediscovery and a transport reset
@@ -108,6 +113,79 @@ impl StoredServer {
             sampling: self.samples(),
         }
     }
+}
+
+/// The stored form of one server's catalog.
+#[derive(Serialize, Deserialize, Default)]
+struct Catalog {
+    #[serde(default)]
+    capabilities: Vec<McpCapability>,
+    #[serde(default)]
+    schemas: BTreeMap<String, Value>,
+    #[serde(default)]
+    resource_uris: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    retired: BTreeMap<String, McpCapability>,
+}
+
+/// The configuration namespace holding one server's catalog.
+fn catalog_namespace(server: &Id) -> String {
+    format!("{NAMESPACE}/{}", server.as_str())
+}
+
+/// Fills `server`'s catalog from its own namespace; a server without one has an empty catalog.
+fn load_catalog(
+    read: &dyn crate::ports::storage::ConfigurationRead,
+    scope: &ConfigScope,
+    server: &mut StoredServer,
+) -> Result<(), StorageError> {
+    if let Some(revision) = read.current(scope, &catalog_namespace(&server.public.id))? {
+        if revision.schema_version != SCHEMA_VERSION {
+            return Err(StorageError::IncompatibleSchema(
+                "outgoing MCP catalog version".into(),
+            ));
+        }
+        let catalog: Catalog = serde_json::from_value(revision.body)
+            .map_err(|_| StorageError::InvalidRecord("outgoing MCP catalog".into()))?;
+        server.capabilities = catalog.capabilities;
+        server.schemas = catalog.schemas;
+        server.resource_uris = catalog.resource_uris;
+        server.retired = catalog.retired;
+    }
+    // A catalog saved before capabilities carried their URI keeps it only in `resource_uris`.
+    for cap in &mut server.capabilities {
+        if cap.kind.0 == "resource" && cap.uri.is_none() {
+            cap.uri = server
+                .resource_uris
+                .get(cap.id.as_str())
+                .cloned()
+                .map(BoundedText);
+        }
+    }
+    Ok(())
+}
+
+/// Saves `server`'s catalog in its own namespace, in the same write as its configuration.
+fn save_catalog(
+    tx: &mut dyn WriteTransaction,
+    scope: &ConfigScope,
+    server: &StoredServer,
+) -> Result<(), StorageError> {
+    let namespace = catalog_namespace(&server.public.id);
+    let expected = tx
+        .configuration()
+        .current(scope, &namespace)?
+        .map_or(1, |revision| revision.revision);
+    let body = serde_json::to_value(Catalog {
+        capabilities: server.capabilities.clone(),
+        schemas: server.schemas.clone(),
+        resource_uris: server.resource_uris.clone(),
+        retired: server.retired.clone(),
+    })
+    .map_err(|_| StorageError::InvalidRecord("outgoing MCP catalog".into()))?;
+    tx.configuration()
+        .append_revision(scope, &namespace, expected, SCHEMA_VERSION, body)?;
+    Ok(())
 }
 
 /// The agent invocation a sampling request runs under, rebuilt from its `mcp.tool` journal.
@@ -197,20 +275,8 @@ fn current(
             "outgoing MCP configuration version".into(),
         ));
     }
-    let mut config: Configuration = serde_json::from_value(revision.body)
+    let config: Configuration = serde_json::from_value(revision.body)
         .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
-    // A catalog saved before capabilities carried their URI keeps it only in `resource_uris`.
-    for server in &mut config.servers {
-        for cap in &mut server.capabilities {
-            if cap.kind.0 == "resource" && cap.uri.is_none() {
-                cap.uri = server
-                    .resource_uris
-                    .get(cap.id.as_str())
-                    .cloned()
-                    .map(BoundedText);
-            }
-        }
-    }
     Ok((revision.revision, config))
 }
 
@@ -339,6 +405,17 @@ impl McpClientService {
         ctx: &InvocationContext,
         snapshot: &dyn ReadSnapshot,
     ) -> Result<Vec<McpToolMaterial>, StorageError> {
+        self.materials(ctx, snapshot, None)
+    }
+
+    /// The selected tool materials of every visible server, or of the one `only` names; only
+    /// the catalogs of servers with a selection are read.
+    fn materials(
+        &self,
+        ctx: &InvocationContext,
+        snapshot: &dyn ReadSnapshot,
+        only: Option<(&ConfigScope, &Id)>,
+    ) -> Result<Vec<McpToolMaterial>, StorageError> {
         if snapshot.stamp().store_id != *ctx.store_id()
             || snapshot.stamp().restore_epoch != ctx.restore_epoch().get()
             || snapshot.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
@@ -355,11 +432,18 @@ impl McpClientService {
             .chain(ctx.project_id().cloned().map(ConfigScope::Project));
         let mut selected = Vec::new();
         for scope in scopes {
+            if only.is_some_and(|(wanted, _)| *wanted != scope) {
+                continue;
+            }
             let (_, state) = current(snapshot.configuration(), &scope)?;
-            for server in state.servers {
-                if !matches!(server.public.state, ItemState::Healthy) {
+            for mut server in state.servers {
+                if !matches!(server.public.state, ItemState::Healthy)
+                    || server.public.selected_tool_ids.0.is_empty()
+                    || only.is_some_and(|(_, id)| *id != server.public.id)
+                {
                     continue;
                 }
+                load_catalog(snapshot.configuration(), &scope, &mut server)?;
                 for cap in &server.capabilities {
                     if cap.kind.0 != "tool" || !server.public.selected_tool_ids.0.contains(&cap.id)
                     {
@@ -565,15 +649,16 @@ impl McpClientService {
                     return Err(StorageError::ScopeDenied);
                 }
                 let (_, state) = current(tx.configuration(), &material.server_scope)?;
-                let server = state
+                let mut server = state
                     .servers
-                    .iter()
+                    .into_iter()
                     .find(|server| {
                         server.public.id == material.server_id
                             && server.public.revision == material.server_revision
                             && server.public.catalog_revision == material.catalog_revision
                     })
                     .ok_or(StorageError::ScopeDenied)?;
+                load_catalog(tx.configuration(), &material.server_scope, &mut server)?;
                 if !server
                     .public
                     .selected_tool_ids
@@ -597,7 +682,7 @@ impl McpClientService {
                     "serverRevision":material.server_revision.get(),"catalogRevision":material.catalog_revision.get(),
                     "capabilityId":material.capability_id,"schema":material.alias.input_schema,
                     "wireName":material.wire_name,"arguments":arguments,
-                    "principal":ctx.principal(),"principalKind":format!("{:?}",ctx.principal_kind()),
+                    "principal":ctx.principal(),"principalKind":ctx.principal_kind().as_str().to_string(),
                     "sessionId":ctx.session_id(),"projectId":ctx.project_id(),"fences":fences,"call":call,
                 }),
             })?;
@@ -673,14 +758,13 @@ impl McpClientService {
         else {
             return McpEffectOutcome::Failed("invalid MCP effect principal".into());
         };
-        let kind = match op.payload.get("principalKind").and_then(Value::as_str) {
-            Some("Human") => PrincipalKind::Human,
-            Some("Agent") => PrincipalKind::Agent,
-            Some("Package") => PrincipalKind::Package,
-            Some("McpClient") => PrincipalKind::McpClient,
-            Some("Schedule") => PrincipalKind::Schedule,
-            Some("Host") => PrincipalKind::Host,
-            _ => return McpEffectOutcome::Failed("invalid MCP principal kind".into()),
+        let Some(kind) = op
+            .payload
+            .get("principalKind")
+            .and_then(Value::as_str)
+            .and_then(PrincipalKind::parse)
+        else {
+            return McpEffectOutcome::Failed("invalid MCP principal kind".into());
         };
         let Some(fences) = op
             .payload
@@ -979,10 +1063,13 @@ impl McpClientService {
         else {
             return McpEffectOutcome::Failed("invalid MCP tool principal".into());
         };
-        let principal_kind = match op.payload.get("principalKind").and_then(Value::as_str) {
-            Some("Agent") => PrincipalKind::Agent,
-            Some("Host") => PrincipalKind::Host,
-            _ => return McpEffectOutcome::Failed("invalid MCP tool principal kind".into()),
+        let Some(principal_kind @ (PrincipalKind::Agent | PrincipalKind::Host)) = op
+            .payload
+            .get("principalKind")
+            .and_then(Value::as_str)
+            .and_then(PrincipalKind::parse)
+        else {
+            return McpEffectOutcome::Failed("invalid MCP tool principal kind".into());
         };
         let Some(session_id) = op
             .payload
@@ -1039,7 +1126,7 @@ impl McpClientService {
             {
                 return Err(StorageError::ScopeDenied);
             }
-            self.selected_tool_materials(&context, snapshot)?
+            self.materials(&context, snapshot, Some((&scope, &server_id)))?
                 .into_iter()
                 .find(|material| {
                     material.server_scope == scope
@@ -1113,7 +1200,7 @@ impl McpClientService {
                             {
                                 return Err(StorageError::ScopeDenied);
                             }
-                            self.selected_tool_materials(&context, snapshot)?
+                            self.materials(&context, snapshot, Some((&scope, &server_id)))?
                                 .into_iter()
                                 .find(|candidate| {
                                     candidate.server_id == server_id
@@ -1483,14 +1570,16 @@ impl McpClientService {
         catalog: RemoteCatalog,
     ) -> Result<McpServer, StorageError> {
         let (_, state) = current(tx.configuration(), scope)?;
-        let previous = state
+        let mut previous = state
             .servers
-            .iter()
+            .into_iter()
             .find(|server| &server.public.id == server_id)
             .ok_or_else(|| StorageError::NotFound {
                 kind: "mcp_server",
                 id: server_id.as_str().into(),
             })?;
+        load_catalog(tx.configuration(), scope, &mut previous)?;
+        let previous = &previous;
         let mut capabilities = Vec::new();
         let mut schemas = BTreeMap::new();
         let mut resource_uris = BTreeMap::new();
@@ -1646,6 +1735,7 @@ impl McpClientService {
                 current: server.public.catalog_revision.clone(),
             })));
         }
+        load_catalog(tx.configuration(), scope, server)?;
         // The 500-entry bound applies to remote entries; the one host sampling entry is extra.
         let sampling_id = capability_id(server_id, SAMPLING_KIND, SAMPLING_NAME)?;
         if capabilities
@@ -1803,6 +1893,7 @@ impl McpClientService {
         server.public.state = ItemState::Healthy;
         server.public.last_failure = None;
         let result = server.public.clone();
+        save_catalog(tx, scope, server)?;
         let body = serde_json::to_value(state)
             .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
         tx.configuration()
@@ -1882,7 +1973,9 @@ impl McpClientService {
                 server.public.selected_tool_ids = BoundedList(Vec::new());
                 server.capabilities.clear();
                 server.schemas.clear();
+                server.resource_uris.clear();
                 server.retired.clear();
+                save_catalog(tx, &scope, server)?;
             }
             server.transport = input.transport.clone();
             server.view(ctx)
@@ -1973,6 +2066,7 @@ impl McpClientService {
                 .into());
             }
         }
+        load_catalog(tx.configuration(), &scope, server)?;
         if input.tool_ids.0.iter().any(|id| {
             !server
                 .capabilities
@@ -2035,6 +2129,7 @@ impl McpClientService {
             }))
             .into());
         }
+        load_catalog(tx.configuration(), &scope, server)?;
         if !server
             .capabilities
             .iter()
@@ -2148,7 +2243,7 @@ impl McpClientService {
                 "serverId": input.server_id,
                 "pendingRevision": pending_revision,
                 "principal": ctx.principal(),
-                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "principalKind": ctx.principal_kind().as_str().to_string(),
                 "sessionId": ctx.session_id(),
                 "fences": command.authorization().fences(),
             }),
@@ -2254,7 +2349,18 @@ impl McpClientService {
         let result = server.view(ctx);
         let removing = operation == "mcp.remove";
         if removing {
-            state.servers.remove(index);
+            let mut removed = state.servers.remove(index);
+            if tx
+                .configuration()
+                .current(&scope, &catalog_namespace(&removed.public.id))?
+                .is_some()
+            {
+                removed.capabilities.clear();
+                removed.schemas.clear();
+                removed.resource_uris.clear();
+                removed.retired.clear();
+                save_catalog(tx, &scope, &removed)?;
+            }
         }
         let body = serde_json::to_value(state)
             .map_err(|_| StorageError::InvalidRecord("outgoing MCP configuration".into()))?;
@@ -2418,7 +2524,7 @@ impl McpClientService {
             payload: json!({
                 "scope":scope.key(),"serverId":input.server_id,"pendingRevision":pending_revision,
                 "catalogRevision":input.expected_catalog_revision.get(),
-                "principal":ctx.principal(),"principalKind":format!("{:?}",ctx.principal_kind()),
+                "principal":ctx.principal(),"principalKind":ctx.principal_kind().as_str().to_string(),
                 "sessionId":ctx.session_id(),"fences":command.authorization().fences(),
             }),
         })?;
@@ -2747,7 +2853,7 @@ impl QueryHandler for McpClientService {
                     .map_err(|e| self.fault(e))?;
                 let (version, state) =
                     current(snapshot.configuration(), &scope).map_err(|e| self.fault(e))?;
-                let server = state
+                let mut server = state
                     .servers
                     .into_iter()
                     .find(|s| s.public.id == input.server_id)
@@ -2768,6 +2874,8 @@ impl QueryHandler for McpClientService {
                         },
                     ))));
                 }
+                load_catalog(snapshot.configuration(), &scope, &mut server)
+                    .map_err(|e| self.fault(e))?;
                 let mut capabilities = server.capabilities;
                 for cap in &mut capabilities {
                     cap.read_only_override =

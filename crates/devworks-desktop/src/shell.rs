@@ -17,9 +17,7 @@ use crate::virtual_list::{self, Scrolls};
 use crate::web_panel::WebAction;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::{
-    ArtifactRecord, BrowserSession, ConnectionLifecycle, ItemState, ResourceRecord,
-};
+use devworks_core::protocol::records::{ConnectionLifecycle, ItemState};
 use devworks_core::protocol::{DomainErrorCode, Id};
 use devworks_core::settings::validate::codes;
 use devworks_core::settings::view::Health;
@@ -195,12 +193,9 @@ pub struct Shell {
     pub help: crate::help_screen::HelpScreen,
     pub knowledge: KnowledgeScreen,
     pub conventions: crate::conventions_screen::ConventionsScreen,
-    pub artifacts: ListState<ArtifactRecord>,
-    pub resources: ListState<ResourceRecord>,
-    /// Every listed browser session: the workspace's, then each listed project's.
-    pub browser: ListState<BrowserSession>,
-    /// The browser sessions per scope (`None`: the workspace), combined into `browser`.
-    browser_parts: BTreeMap<Option<String>, ListState<BrowserSession>>,
+    pub artifacts: crate::artifacts_screen::ArtifactsScreen,
+    pub resources: crate::artifacts_screen::ResourcesScreen,
+    pub browser: crate::artifacts_screen::BrowserScreen,
     pub addons: crate::addons::AddonsScreen,
     /// All projects, the project selector and Repositories (DW-11).
     pub projects: projects::ProjectsUi,
@@ -233,13 +228,11 @@ pub struct Shell {
     preview_target: Option<String>,
     preview_generation: u64,
     restored_selection: Option<String>,
-    /// Applied session mutations (start, message) and artifact mutations (save, delete). A
-    /// list query started before the latest mutation may miss it: its reply is dropped and
-    /// the list re-queried, so it never overwrites newer records.
+    /// Applied session mutations (start, message). A list query started before the latest
+    /// mutation may miss it: its reply is dropped and the list re-queried, so it never
+    /// overwrites newer records. Artifacts counts its own mutations the same way.
     session_mutations: u64,
-    artifact_mutations: u64,
     sessions_list_at: u64,
-    artifacts_list_at: u64,
     /// The drafts the pending `settings.validate` checked; a report for other drafts is stale.
     validated_drafts: Option<BTreeMap<String, serde_json::Value>>,
     /// The settings revision each pending `settings.explain_source` was asked at; a chain read
@@ -257,17 +250,17 @@ pub struct Shell {
 /// The migrated screens: `screens!(Id => field, ...)` binds each [`ScreenId`] to the `Shell`
 /// field holding that screen.
 macro_rules! screens {
-    ($($id:ident => $field:ident),* $(,)?) => {
+    ($($id:ident => $($field:ident).+),* $(,)?) => {
         impl Shell {
             fn screens(&self) -> Vec<&dyn DynScreen> {
-                vec![$(&self.$field),*]
+                vec![$(&self.$($field).+),*]
             }
             fn screens_mut(&mut self) -> Vec<&mut dyn DynScreen> {
-                vec![$(&mut self.$field),*]
+                vec![$(&mut self.$($field).+),*]
             }
             fn screen(&self, id: ScreenId) -> Option<&dyn DynScreen> {
                 match id {
-                    $(ScreenId::$id => Some(&self.$field),)*
+                    $(ScreenId::$id => Some(&self.$($field).+),)*
                     ScreenId::Legacy => None,
                 }
             }
@@ -277,16 +270,38 @@ macro_rules! screens {
                     return None;
                 }
                 let online = self.online();
-                let cx = Cx::new(self.client.as_mut(), online, &mut self.status, self.route);
+                let cx = Cx {
+                    client: self.client.as_mut(),
+                    online,
+                    status: &mut self.status,
+                    route: self.route,
+                    routes: &mut self.routes,
+                    scrolls: &mut self.scrolls,
+                    dialogs: &mut *self.dialogs,
+                    selected_project: self.selected_project.clone(),
+                    projects: &self.projects,
+                    catalog: &self.chat.routing.catalog,
+                    effects: Vec::new(),
+                };
                 match id {
-                    $(ScreenId::$id => Some((&mut self.$field, cx)),)*
+                    $(ScreenId::$id => Some((&mut self.$($field).+, cx)),)*
                     ScreenId::Legacy => None,
                 }
             }
         }
     };
 }
-screens!(Help => help);
+screens!(
+    Help => help,
+    Usage => usage,
+    Graph => graph,
+    Databases => databases,
+    Instructions => settings.instructions,
+    Conventions => conventions,
+    Artifacts => artifacts,
+    Resources => resources,
+    Browser => browser,
+);
 
 impl Shell {
     pub fn new(init: ShellInit) -> Self {
@@ -393,10 +408,9 @@ impl Shell {
             help: Default::default(),
             knowledge: KnowledgeScreen::new(),
             conventions: crate::conventions_screen::ConventionsScreen::default(),
-            artifacts: ListState::default(),
-            resources: ListState::default(),
-            browser: ListState::default(),
-            browser_parts: BTreeMap::new(),
+            artifacts: Default::default(),
+            resources: Default::default(),
+            browser: Default::default(),
             addons: Default::default(),
             projects: projects::ProjectsUi::default(),
             purge: Default::default(),
@@ -424,9 +438,7 @@ impl Shell {
             preview_generation: 0,
             restored_selection: memory.selected_session,
             session_mutations: 0,
-            artifact_mutations: 0,
             sessions_list_at: 0,
-            artifacts_list_at: 0,
             validated_drafts: None,
             explained_at: BTreeMap::new(),
             notifications_open: false,
@@ -506,12 +518,45 @@ impl Shell {
         self.run_effects(effects);
         true
     }
+    /// Runs `f` on the registered screen of type `S`, then the effects it asked for.
+    fn with_typed<S: crate::screen::Screen>(&mut self, f: impl FnOnce(&mut S, &mut Cx)) {
+        self.with_screen(S::ID, |s, cx| {
+            f(
+                s.as_any_mut()
+                    .downcast_mut()
+                    .expect("the registry holds S under S::ID"),
+                cx,
+            )
+        });
+    }
     fn run_effects(&mut self, effects: Vec<Effect>) {
         for effect in effects {
             match effect {
                 Effect::Navigate(route) => self.navigate(route),
+                Effect::OpenWork(id) => self.open_work(&id),
+                Effect::OpenSession(id) => {
+                    self.chat.selected = Some(id.clone());
+                    self.load_transcript(&id);
+                    self.navigate(Route::Chat);
+                }
+                Effect::LoadProjects => self.load_projects(),
+                Effect::LoadRouterCatalog => self.load_router_catalog(),
+                Effect::IndexStatus(repository) => {
+                    self.index_act(vec![indexing::IndexAction::Status(repository)])
+                }
+                Effect::ConfirmOutcomes => self.confirm_outcomes(),
+                Effect::OpenEmbeddingSetup => self.open_embedding_setup(),
             }
         }
+    }
+    /// The screen drawn on the current route: one hosted there, or the route's owner.
+    fn shown_screen(&self) -> ScreenId {
+        let default_memory = RouteMemory::default();
+        let mem = self.routes.get(&self.route).unwrap_or(&default_memory);
+        self.screens()
+            .into_iter()
+            .find(|s| s.hosted(self.route, mem))
+            .map_or(self.route.screen().owner, |s| s.id())
     }
 
     // -----------------------------------------------------------------------------------------
@@ -561,7 +606,7 @@ impl Shell {
             (None, None)
         };
         let default_memory = RouteMemory::default();
-        let screen_context = self.screen(screen.owner).map(|s| {
+        let screen_context = self.screen(self.shown_screen()).map(|s| {
             s.context(
                 self.route,
                 self.routes.get(&self.route).unwrap_or(&default_memory),
@@ -571,8 +616,6 @@ impl Shell {
             _ if screen_context.is_some() => screen_context.as_ref().map_or(0, |c| c.tab),
             Route::Approvals => self.decisions.tab,
             Route::Knowledge => self.knowledge.tab,
-            Route::Databases => self.databases.tab,
-            Route::Usage => self.usage.tab,
             _ => self.routes.get(&self.route).map_or(0, |view| view.tab),
         };
         let selection = match self.route {
@@ -581,15 +624,6 @@ impl Shell {
             }
             Route::Approvals => self.decisions.selected.as_ref().map(|v| v.id.as_str()),
             Route::Knowledge => self.knowledge.selected.as_ref().map(Id::as_str),
-            Route::Databases => self
-                .databases
-                .selected_object
-                .as_ref()
-                .map(|object| object.id.as_str())
-                .or(self.databases.selected.as_deref()),
-            Route::Repositories if self.graph.opened => {
-                self.graph.selected.as_ref().map(|v| v.node_id.as_str())
-            }
             Route::Jobs => self.jobs.selected.as_deref(),
             Route::AddOns => self.addons.selected.as_deref(),
             _ => self
@@ -658,14 +692,6 @@ impl Shell {
         }
         match self.route {
             Route::Chat => self.ensure_conversation_loaded(),
-            Route::Usage => {
-                self.usage.tab = self.routes.entry(Route::Usage).or_default().tab;
-                self.load_usage();
-                self.load_router_catalog();
-                if !self.projects.list.loaded {
-                    self.load_projects();
-                }
-            }
             Route::Approvals => {
                 self.decisions.tab = self.routes.entry(Route::Approvals).or_default().tab;
                 self.load_approvals();
@@ -673,10 +699,6 @@ impl Shell {
             Route::Settings if self.settings.view.is_none() && !self.settings.loading => {
                 self.load_settings();
             }
-            Route::Databases => self.load_databases(false),
-            Route::Artifacts => self.load_artifacts(),
-            Route::Resources => self.load_resources(),
-            Route::Browser => self.load_browser(),
             Route::AddOns => {
                 self.load_addons();
                 if let Some(c) = &mut self.client {
@@ -856,118 +878,6 @@ impl Shell {
             ops::container_capabilities,
         );
     }
-    fn load_artifacts(&mut self) {
-        self.artifacts_list_at = self.artifact_mutations;
-        self.query(
-            Slot::ArtifactsList,
-            "Loading artifacts",
-            "artifacts.list",
-            ops::workspace_artifacts,
-        );
-    }
-    /// The workspace's browser sessions and the selected project's, or every listed project's
-    /// when none is selected: a person may see and interrupt each of them.
-    pub(crate) fn load_browser(&mut self) {
-        let projects: Vec<String> = match &self.selected_project {
-            Some(p) => vec![p.clone()],
-            None => {
-                if !self.projects.list.loaded && !self.pending(&Slot::ProjectsList) {
-                    self.load_projects();
-                }
-                self.projects
-                    .list
-                    .items
-                    .iter()
-                    .map(|p| p.id.0.as_str().to_owned())
-                    .collect()
-            }
-        };
-        self.browser_parts
-            .retain(|scope, _| scope.as_ref().is_none_or(|p| projects.contains(p)));
-        self.combine_browser();
-        self.query(
-            Slot::BrowserSessions,
-            "Loading browser sessions",
-            "browser.sessions",
-            |b| ops::browser_sessions_list(b, None),
-        );
-        for p in projects {
-            let q = p.clone();
-            self.query(
-                Slot::ProjectBrowserSessions(p),
-                "Loading a project's browser sessions",
-                "browser.sessions",
-                move |b| ops::browser_sessions_list(b, Some(&q)),
-            );
-        }
-    }
-
-    /// Records one scope's page and rebuilds the combined list.
-    fn browser_part(
-        &mut self,
-        scope: Option<String>,
-        page: Result<(Vec<BrowserSession>, bool), Failure>,
-    ) {
-        let part = match page {
-            Ok((items, more)) => ListState {
-                items,
-                loaded: true,
-                error: None,
-                more,
-            },
-            Err(e) => ListState {
-                error: Some(e.describe()),
-                ..ListState::default()
-            },
-        };
-        self.browser_parts.insert(scope, part);
-        self.combine_browser();
-    }
-    fn combine_browser(&mut self) {
-        let parts = &self.browser_parts;
-        self.browser = ListState {
-            items: parts.values().flat_map(|p| p.items.clone()).collect(),
-            loaded: !parts.is_empty() && parts.values().all(|p| p.loaded),
-            error: parts.values().find_map(|p| p.error.clone()),
-            more: parts.values().any(|p| p.more),
-        };
-    }
-    /// The scope a listed browser session belongs to, for its row.
-    fn browser_scope_labels(&self) -> std::collections::HashMap<String, String> {
-        let mut out = std::collections::HashMap::new();
-        for (scope, part) in &self.browser_parts {
-            let label = match scope {
-                None => "Workspace".to_owned(),
-                Some(p) => self
-                    .projects
-                    .list
-                    .items
-                    .iter()
-                    .find(|r| r.id.0.as_str() == p)
-                    .map_or_else(|| p.clone(), |r| r.name.0.clone()),
-            };
-            for s in &part.items {
-                out.insert(s.id.as_str().to_owned(), label.clone());
-            }
-        }
-        out
-    }
-
-    /// Interrupts a browser session: Close stops its browser through the process owner.
-    fn close_browser(&mut self, session: &BrowserSession) {
-        let (id, revision) = (
-            session.id.as_str().to_owned(),
-            session.revision.as_str().to_owned(),
-        );
-        let sid = id.clone();
-        self.command(
-            Slot::BrowserClose(id),
-            "Closing the browser session",
-            "browser.sessions",
-            move |b| ops::browser_close(b, &sid, &revision),
-        );
-    }
-
     /// Loads the whole catalog, following its pages (see the `AddonsList` reply).
     fn load_addons(&mut self) {
         self.addons.catalog_pending = None;
@@ -1385,15 +1295,6 @@ impl Shell {
             }
         }
     }
-    fn load_resources(&mut self) {
-        self.query(
-            Slot::ResourcesList,
-            "Loading resources",
-            "resources.list",
-            ops::resources_list,
-        );
-    }
-
     /// Drops the catalog and availability derived from routing settings, reloading what is
     /// visible.
     fn invalidate_routing(&mut self) {
@@ -1958,18 +1859,6 @@ impl Shell {
             self.with_screen(owner, |s, cx| s.apply(cx, slot, reply));
             return;
         }
-        let Some((slot, reply)) = self.apply_conventions(slot, reply) else {
-            return;
-        };
-        let Some((slot, reply)) = self.apply_instructions(slot, reply) else {
-            return;
-        };
-        let Some((slot, reply)) = self.apply_databases(slot, reply) else {
-            return;
-        };
-        let Some((slot, reply)) = self.apply_graph(slot, reply) else {
-            return;
-        };
         let Some((slot, reply)) = self.apply_purge(slot, reply) else {
             return;
         };
@@ -1983,9 +1872,6 @@ impl Shell {
             return;
         };
         let Some((slot, reply)) = self.apply_work(slot, reply) else {
-            return;
-        };
-        let Some((slot, reply)) = self.apply_usage(slot, reply) else {
             return;
         };
         let Some((slot, reply)) = self.apply_decisions(slot, reply) else {
@@ -2290,7 +2176,7 @@ impl Shell {
                     }
                     Ok(TaskOutput::Stored { outcome, .. }) => match ops::saved_artifact(outcome) {
                         Ok(record) => {
-                            self.artifact_mutations += 1;
+                            self.artifacts.mutations += 1;
                             AttachState::Stored(record.artifact)
                         }
                         Err(e) => AttachState::Failed(e.describe()),
@@ -2691,7 +2577,7 @@ impl Shell {
             },
             (Slot::DeleteAttachment(_), Reply::Command(c)) => match ops::deleted(c) {
                 Ok(()) => {
-                    self.artifact_mutations += 1;
+                    self.artifacts.mutations += 1;
                     self.announce("The removed attachment was deleted.");
                 }
                 Err(Failure::Unknown) => {
@@ -2702,44 +2588,6 @@ impl Shell {
                     e.describe()
                 )),
             },
-            (Slot::ArtifactsList, Reply::Query(_))
-                if self.artifacts_list_at != self.artifact_mutations =>
-            {
-                self.load_artifacts();
-            }
-            (Slot::ArtifactsList, Reply::Query(q)) => match ops::artifacts(q) {
-                Ok((items, more)) => {
-                    self.artifacts = ListState {
-                        items,
-                        loaded: true,
-                        error: None,
-                        more,
-                    };
-                }
-                Err(e) => self.artifacts.error = Some(e.describe()),
-            },
-            (Slot::BrowserSessions, Reply::Query(q)) => {
-                self.browser_part(None, ops::browser_sessions(q));
-            }
-            (Slot::ProjectBrowserSessions(p), Reply::Query(q)) => {
-                self.browser_part(Some(p), ops::browser_sessions(q));
-            }
-            (Slot::BrowserClose(_), Reply::Command(c)) => {
-                match ops::browser_closed(c) {
-                    Ok(true) => self.announce("The browser session is being closed."),
-                    Ok(false) => self.announce(
-                        "Close is already requested, or the browser session has stopped.",
-                    ),
-                    Err(Failure::Unknown) => {
-                        self.announce("Closing the browser session: outcome not confirmed.")
-                    }
-                    Err(e) => self.announce(format!(
-                        "The browser session could not be closed: {}",
-                        e.describe()
-                    )),
-                }
-                self.load_browser();
-            }
             (Slot::AddonsList, Reply::Query(q)) => match crate::addons::catalog(q) {
                 Ok((items, registry, next)) => {
                     let (mut all, first) = self
@@ -2962,17 +2810,6 @@ impl Shell {
                     }
                 }
             }
-            (Slot::ResourcesList, Reply::Query(q)) => match ops::resources(q) {
-                Ok((items, more)) => {
-                    self.resources = ListState {
-                        items,
-                        loaded: true,
-                        error: None,
-                        more,
-                    };
-                }
-                Err(e) => self.resources.error = Some(e.describe()),
-            },
             (Slot::EmbeddingSpaces(g), Reply::Query(q)) => {
                 let panel = &mut self.settings.connections.embedding_spaces;
                 if g != panel.generation {
@@ -3254,9 +3091,6 @@ impl Shell {
             }
         }
         self.refresh_waiting_first_routes();
-        if self.route == Route::Usage && self.usage.tab == 2 && !self.usage.prices_loading {
-            self.refresh_visible_prices();
-        }
         self.load_completion_notifications();
         if self.route == Route::Approvals
             && !self.pending(&Slot::ApprovalsList)
@@ -3281,16 +3115,6 @@ impl Shell {
             return;
         }
         match self.route {
-            Route::Databases
-                if !self.databases.loading
-                    && !self.databases.batch_scanning
-                    && self.databases.connections.len() <= 100 =>
-            {
-                self.load_databases(false)
-            }
-            Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
-            Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
-            Route::Browser if !self.pending(&Slot::BrowserSessions) => self.load_browser(),
             Route::Portfolio | Route::Repositories
                 if !self.pending(&Slot::ProjectsList) && !self.pending(&Slot::RepositoriesList) =>
             {
@@ -3450,7 +3274,9 @@ impl Shell {
                 SettingsAction::OpenHelp(topic) => self.open_help_context(&topic),
                 SettingsAction::Connection(a) => self.connection_action(a),
                 SettingsAction::Web(action) => self.web_action(action),
-                SettingsAction::Instructions(action) => self.instruction_action(action),
+                SettingsAction::Instructions(action) => self.with_typed(
+                    |p: &mut crate::instructions_screen::InstructionsPanel, cx| p.act(cx, action),
+                ),
                 SettingsAction::Mcp(action) => self.mcp_action(action),
             }
         }
@@ -3889,7 +3715,7 @@ impl Shell {
     /// Begins the close lifecycle (the window's close button lands here).
     pub fn request_close(&mut self) {
         if self.lifecycle == Lifecycle::Open {
-            self.cancel_convention_queries();
+            self.conventions.cancel_queries();
             if let Some(c) = &mut self.client {
                 c.close();
             }
@@ -3957,7 +3783,7 @@ impl Shell {
     /// Called when the window is gone without the lifecycle (process exit paths): saves view
     /// state; the engine's own drop still performs its bounded shutdown.
     pub fn on_exit(&mut self) {
-        self.cancel_convention_queries();
+        self.conventions.cancel_queries();
         self.persist(true);
         if let Some(c) = &mut self.client {
             c.close();
@@ -4033,7 +3859,7 @@ impl Shell {
                 dispatch: u.dispatch,
             })
             .collect();
-        let screens = self
+        let mut screens: BTreeMap<String, serde_json::Value> = self
             .screens()
             .into_iter()
             .filter_map(|screen| {
@@ -4071,8 +3897,12 @@ impl Shell {
             _ => None,
         };
         PendingMemory {
-            conventions: self.conventions_pending_memory(),
-            databases: self.databases.pending_memory(),
+            conventions: screens
+                .remove(ScreenId::Conventions.key())
+                .unwrap_or_default(),
+            databases: screens
+                .remove(ScreenId::Databases.key())
+                .unwrap_or_default(),
             starting: self
                 .chat
                 .starting
@@ -4116,9 +3946,19 @@ impl Shell {
     }
 
     /// Puts back what [`Self::pending_memory`] kept; the first frame confirms it.
-    fn restore_pending(&mut self, pending: crate::memory::PendingMemory) {
-        self.restore_conventions_pending(&pending.conventions);
-        self.databases.restore_pending(&pending.databases);
+    fn restore_pending(&mut self, mut pending: crate::memory::PendingMemory) {
+        // Conventions and Databases keep the named fields their state had before the
+        // per-screen map, so earlier files read back unchanged.
+        for (id, saved) in [
+            (ScreenId::Conventions, &mut pending.conventions),
+            (ScreenId::Databases, &mut pending.databases),
+        ] {
+            if !saved.is_null() {
+                pending
+                    .screens
+                    .insert(id.key().to_owned(), std::mem::take(saved));
+            }
+        }
         if let Some(i) = &pending.knowledge_import {
             self.knowledge.import = Some(knowledge_screen::ImportStage::Unconfirmed {
                 name: i.name.clone(),
@@ -4144,25 +3984,6 @@ impl Shell {
                 }
             }
             match &slot {
-                Slot::DatabaseCa | Slot::DatabaseCommand(_) => self.databases.busy = true,
-                Slot::ConventionArtifact(key, _) | Slot::ConventionCommand(key, _) => {
-                    if let Some(scope) = self
-                        .conventions
-                        .states
-                        .keys()
-                        .find(|s| s.key() == *key)
-                        .cloned()
-                    {
-                        self.conventions.states.get_mut(&scope).expect("scope").busy = true;
-                    }
-                }
-                Slot::GraphTrust(_) => {
-                    self.graph.trust_busy = true;
-                    self.graph.trust_unknown = true;
-                }
-                Slot::PriceOverride | Slot::PriceRefresh => {
-                    self.restore_price_command(&slot, u.frame())
-                }
                 Slot::WorkPlan(id) => confirming.push(id.clone()),
                 Slot::SessionStart => {
                     self.chat.starting = Some(pending.starting.unwrap_or(StartReason::ForDraft));
@@ -4232,7 +4053,10 @@ impl Shell {
             .filter_map(|v| serde_json::from_value(v).ok())
             .collect();
         self.restore_plan_saves(plans, &confirming);
-        self.resume_database_batch();
+        let ids: Vec<ScreenId> = self.screens().iter().map(|s| s.id()).collect();
+        for id in ids {
+            self.with_screen(id, |s, cx| s.restored(cx));
+        }
         for r in pending.removed {
             let local = self.chat.next_local();
             self.chat.removed.insert(
@@ -4463,7 +4287,9 @@ impl Shell {
                 self.attach(dropped);
             } else if self.route == Route::Knowledge && self.route_memory(Route::Knowledge).tab == 2
             {
-                self.import_dropped_convention(dropped);
+                self.with_typed(|c: &mut crate::conventions_screen::ConventionsScreen, cx| {
+                    c.import_dropped(cx, dropped)
+                });
             } else if self.route == Route::Knowledge {
                 // A file dropped on an entry view is previewed before import.
                 self.knowledge_actions(vec![KnowledgeAction::ImportFiles(dropped)]);
@@ -4941,7 +4767,7 @@ impl Shell {
 
     fn content(&mut self, ui: &mut Ui) {
         let route = self.route;
-        if self.with_screen(route.screen().owner, |s, cx| s.ui(cx, route, ui)) {
+        if self.with_screen(self.shown_screen(), |s, cx| s.ui(cx, route, ui)) {
             return;
         }
         match self.route {
@@ -4985,11 +4811,7 @@ impl Shell {
                 self.poll_connections(&ctx);
                 self.poll_mcp(&ctx);
             }
-            Route::Databases => self.databases_screen(ui),
             Route::Indexing => self.indexing_screen(ui),
-            Route::Artifacts => self.artifacts_screen(ui),
-            Route::Resources => self.resources_screen(ui),
-            Route::Browser => self.browser_screen(ui),
             Route::AddOns => {
                 let online = self.online();
                 let mut actions = Vec::new();
@@ -5002,9 +4824,6 @@ impl Shell {
             }
             Route::Portfolio => self.portfolio_screen(ui),
             Route::Repositories => self.repositories_screen(ui),
-            Route::Knowledge if self.routes.entry(Route::Knowledge).or_default().tab == 2 => {
-                self.conventions_screen(ui)
-            }
             Route::Knowledge => {
                 let online = self.online();
                 let mut actions = Vec::new();
@@ -5020,7 +4839,6 @@ impl Shell {
                 self.knowledge_actions(actions);
             }
             Route::Approvals => self.approvals_screen(ui),
-            Route::Usage => self.usage_screen(ui),
             Route::Jobs => self.jobs_screen(ui),
             Route::Overview => self.overview_screen(ui),
             Route::Features => self.features_screen(ui),
@@ -5199,313 +5017,6 @@ impl Shell {
         }
     }
 
-    fn artifacts_screen(&mut self, ui: &mut Ui) {
-        let screen = Route::Artifacts.screen();
-        let online = self.online();
-        let mut reload = false;
-        let mut mem = self.routes.remove(&Route::Artifacts).unwrap_or_default();
-        let tab = mem.tab;
-        let list = &self.artifacts;
-        let scrolls = &mut self.scrolls;
-        let mut st = (&mut reload, &mut mem);
-        let (_, tab) = widgets::pane(
-            ui,
-            Header {
-                title: screen.title,
-                summary: screen.summary,
-                tabs: screen.subviews,
-                tab,
-            },
-            &mut st,
-            |ui, st| {
-                if widgets::secondary_button(ui, "Refresh").clicked() {
-                    *st.0 = true;
-                }
-            },
-            |ui, st, tab| {
-                if tab == 1 {
-                    widgets::state_block(
-                        ui,
-                        &ViewState::Unavailable {
-                            what: "project artifacts".into(),
-                            owner: "DW-11 (projects)".into(),
-                        },
-                    );
-                    return;
-                }
-                let mem = &mut *st.1;
-                let r = ui.add(
-                    egui::TextEdit::singleline(&mut mem.filter)
-                        .hint_text("Filter by name or tag")
-                        .desired_width(280.0),
-                );
-                r.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Filter artifacts")
-                });
-                let RouteMemory {
-                    filter, selection, ..
-                } = mem;
-                list_body(
-                    ui,
-                    &online,
-                    list,
-                    ListText {
-                        what: "workspace artifacts",
-                        empty_title: "No workspace artifacts yet",
-                        empty_body: "Attachments you add to a Home conversation are kept here.",
-                        id_salt: "artifacts-list",
-                    },
-                    st.0,
-                    scrolls,
-                    |a: &ArtifactRecord| {
-                        let tags = a.tags.as_ref().map(|t| t.0.join(", ")).unwrap_or_default();
-                        format!("{} {} {}", a.name.0, a.artifact.media_type, tags)
-                    },
-                    |a: &ArtifactRecord| a.artifact.artifact_id.as_str().to_owned(),
-                    filter,
-                    selection,
-                    |ui, a: &ArtifactRecord, selected| {
-                        if let Some(source) = &a.tested_repository {
-                            if let Some(url) = &source.repository_url {
-                                ui.hyperlink_to(
-                                    &source.head.hex,
-                                    format!("{}/commit/{}", url.0, source.head.hex),
-                                );
-                            } else {
-                                ui.monospace(&source.head.hex);
-                            }
-                            widgets::caption(
-                                ui,
-                                format!(
-                                    "{} · {}",
-                                    source.repository_id.as_str(),
-                                    if source.dirty {
-                                        "dirty at observation"
-                                    } else {
-                                        "clean at observation"
-                                    }
-                                ),
-                            );
-                        }
-                        let r = ui.selectable_label(
-                            selected,
-                            format!(
-                                "{}  ·  {}  ·  {}",
-                                a.name.0,
-                                a.artifact.media_type,
-                                chat::bytes_label(a.artifact.byte_length.get())
-                            ),
-                        );
-                        let r = match &a.tags {
-                            Some(t) if !t.0.is_empty() => r.on_hover_text(t.0.join(", ")),
-                            _ => r,
-                        };
-                        r.clicked()
-                    },
-                );
-            },
-        );
-        mem.tab = tab;
-        self.routes.insert(Route::Artifacts, mem);
-        if reload {
-            self.load_artifacts();
-        }
-    }
-
-    fn browser_screen(&mut self, ui: &mut Ui) {
-        let screen = Route::Browser.screen();
-        let online = self.online();
-        let mut reload = false;
-        let mut close: Option<BrowserSession> = None;
-        let mut mem = self.routes.remove(&Route::Browser).unwrap_or_default();
-        let scopes = self.browser_scope_labels();
-        let list = &self.browser;
-        let scrolls = &mut self.scrolls;
-        let mut st = (&mut reload, &mut mem, &mut close);
-        widgets::pane(
-            ui,
-            Header {
-                title: screen.title,
-                summary: screen.summary,
-                tabs: &[],
-                tab: 0,
-            },
-            &mut st,
-            |ui, st| {
-                if widgets::secondary_button(ui, "Refresh").clicked() {
-                    *st.0 = true;
-                }
-                let selected =
-                    st.1.selection
-                        .as_ref()
-                        .and_then(|id| list.items.iter().find(|s| s.id.as_str() == id));
-                if let Some(s) = selected.filter(|s| {
-                    matches!(
-                        s.state,
-                        ItemState::Healthy | ItemState::Partial | ItemState::Unavailable
-                    )
-                }) && widgets::secondary_button(ui, "Close session").clicked()
-                {
-                    *st.2 = Some(s.clone());
-                }
-            },
-            |ui, st, _| {
-                let mem = &mut *st.1;
-                let RouteMemory {
-                    filter, selection, ..
-                } = mem;
-                list_body(
-                    ui,
-                    &online,
-                    list,
-                    ListText {
-                        what: "browser sessions",
-                        empty_title: "No browser sessions",
-                        empty_body: "Agents' owned browser sessions appear here; evidence they record is kept in Artifacts.",
-                        id_salt: "browser-list",
-                    },
-                    st.0,
-                    scrolls,
-                    |s: &BrowserSession| s.id.as_str().to_owned(),
-                    |s: &BrowserSession| s.id.as_str().to_owned(),
-                    filter,
-                    selection,
-                    |ui, s: &BrowserSession, selected| {
-                        let state = match s.state {
-                            ItemState::Partial => "starting",
-                            ItemState::Healthy => "running",
-                            ItemState::Disabled => "closed",
-                            ItemState::Failed => "failed",
-                            ItemState::Unavailable => "stop not verified",
-                            ItemState::Enabled => "enabled",
-                        };
-                        let scope = scopes.get(s.id.as_str()).map_or("", String::as_str);
-                        if let Some(source) = &s.tested_repository {
-                            if let Some(url) = &source.repository_url {
-                                ui.hyperlink_to(
-                                    &source.head.hex,
-                                    format!("{}/commit/{}", url.0, source.head.hex),
-                                );
-                            }
-                            widgets::caption(
-                                ui,
-                                format!(
-                                    "{} · worktree {} · {} · {} · observed {}",
-                                    source.repository_id.as_str(),
-                                    source.worktree_id.as_str(),
-                                    source.head.hex,
-                                    if source.dirty { "dirty" } else { "clean" },
-                                    source.observed_at_ms.as_str()
-                                ),
-                            );
-                        } else {
-                            widgets::caption(ui, "No tested repository revision recorded");
-                        }
-                        ui.selectable_label(
-                            selected,
-                            format!(
-                                "{}  ·  {scope}  ·  {state}  ·  {} target(s)  ·  revision {}",
-                                s.id.as_str(),
-                                s.target_ids.0.len(),
-                                s.revision.as_str()
-                            ),
-                        )
-                        .clicked()
-                    },
-                );
-            },
-        );
-        self.routes.insert(Route::Browser, mem);
-        if let Some(s) = close {
-            self.close_browser(&s);
-        }
-        if reload {
-            self.load_browser();
-        }
-    }
-
-    fn resources_screen(&mut self, ui: &mut Ui) {
-        let screen = Route::Resources.screen();
-        let online = self.online();
-        let mut reload = false;
-        let mut link = false;
-        let mut mem = self.routes.remove(&Route::Resources).unwrap_or_default();
-        let list = &self.resources;
-        let scrolls = &mut self.scrolls;
-        let mut st = (&mut reload, &mut mem, &mut link);
-        widgets::pane(
-            ui,
-            Header {
-                title: screen.title,
-                summary: screen.summary,
-                tabs: &[],
-                tab: 0,
-            },
-            &mut st,
-            |ui, st| {
-                if widgets::secondary_button(ui, "Refresh").clicked() {
-                    *st.0 = true;
-                }
-                if let Some((label, _)) = screen.link
-                    && widgets::secondary_button(ui, label).clicked()
-                {
-                    *st.2 = true;
-                }
-            },
-            |ui, st, _| {
-                let mem = &mut *st.1;
-                let r = ui.add(
-                    egui::TextEdit::singleline(&mut mem.filter)
-                        .hint_text("Filter resources")
-                        .desired_width(280.0),
-                );
-                r.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Filter resources")
-                });
-                let RouteMemory {
-                    filter, selection, ..
-                } = mem;
-                list_body(
-                    ui,
-                    &online,
-                    list,
-                    ListText {
-                        what: "resources",
-                        empty_title: "No shared resources registered",
-                        empty_body: "Machine resources are registered at boot.",
-                        id_salt: "resources-list",
-                    },
-                    st.0,
-                    scrolls,
-                    |r: &ResourceRecord| r.canonical_key.0.clone(),
-                    |r: &ResourceRecord| r.id.0.as_str().to_owned(),
-                    filter,
-                    selection,
-                    |ui, r: &ResourceRecord, selected| {
-                        ui.selectable_label(
-                            selected,
-                            format!(
-                                "{}  ·  capacity {}  ·  {} holding  ·  {} waiting",
-                                r.canonical_key.0,
-                                r.capacity.get(),
-                                r.holders.0.len(),
-                                r.waiters.0.len()
-                            ),
-                        )
-                        .clicked()
-                    },
-                );
-            },
-        );
-        self.routes.insert(Route::Resources, mem);
-        if link && let Some((_, target)) = screen.link {
-            self.navigate(target);
-        }
-        if reload {
-            self.load_resources();
-        }
-    }
-
     fn overlays(&mut self, ctx: &egui::Context) {
         let card_actions = self.completions.ui(ctx, TOOLBAR + 8.0);
         for a in card_actions {
@@ -5580,17 +5091,17 @@ impl Shell {
 }
 
 /// Texts of a bound list's states.
-struct ListText<'a> {
-    what: &'a str,
-    empty_title: &'a str,
-    empty_body: &'a str,
-    id_salt: &'a str,
+pub(crate) struct ListText<'a> {
+    pub what: &'a str,
+    pub empty_title: &'a str,
+    pub empty_body: &'a str,
+    pub id_salt: &'a str,
 }
 
 /// The body of a list bound to one query: offline, failed, loading, empty and filtered states,
 /// then the rows (virtualized) with the remembered selection.
 #[allow(clippy::too_many_arguments)]
-fn list_body<T>(
+pub(crate) fn list_body<T>(
     ui: &mut Ui,
     online: &Result<(), String>,
     list: &ListState<T>,

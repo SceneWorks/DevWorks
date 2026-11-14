@@ -30,6 +30,11 @@ url = "=2.5.8"
 [features]
 # Reusable behavioral contract suite for `ports::storage` implementations (STORE-11).
 contract-suite = []
+[dev-dependencies]
+# Only tests/extension_scalar_parity.rs: the package protocol mirrors core's wire scalars without
+# depending on core, and that test holds both copies to one corpus.
+devworks-extension-protocol = { path = "../devworks-extension-protocol" }
+
 [target.'cfg(unix)'.dependencies]
 # Opening a watched file without blocking on a FIFO; version already resolved in the workspace.
 libc = "=0.2.191"

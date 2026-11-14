@@ -7,7 +7,7 @@
 - [Native scalar vector results](vector-distance.json): actual rusqlite 0.41.1, linked SQLite 3.54.1 and sqlite-vec 0.1.7. The same schema loads; the authorized set is materialized before exact ranking, while the global nearest candidate is excluded. Checks real distance and dimension errors. In-memory fixture; no production-scale or complete policy/overlay acceptance.
 - [Native probe source and lockfile](vector-probe/Cargo.toml): isolated authoring crate, not an application dependency or an additional store.
 
-From the repository root, use the bundled Python runtime for:
+From the repository root, use the bundled Python runtime for the command below. `tools/storage-eval` was removed from the main branch because nothing runs it; its source and README remain at commit [`f76506ec`](https://github.com/SceneWorks/DevWorks/tree/f76506ec33c9563d19e03bc68a4b7e9e65178271/tools/storage-eval). Check out that commit to run the commands below.
 
 ```sh
 python3 tools/storage-eval/persistence_contract_probe.py --schema docs/architecture/validation/persistence-refinement/schema-at-review.sql --output-dir /path/to/owned/evidence

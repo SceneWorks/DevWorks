@@ -191,6 +191,12 @@ impl InstructionsPanel {
                     "Shared skills: ~/.agents/skills (never written here). Harness skills: \
                      <data folder>/skills.",
                 );
+                widgets::caption(
+                    ui,
+                    "A change made in a skill folder on disk, or a new skill folder, waits for \
+                     you to confirm it in the skill's history; until then the previous version \
+                     stays active.",
+                );
                 ui.horizontal_wrapped(|ui| {
                     widgets::caption(
                         ui,
@@ -518,6 +524,20 @@ impl InstructionsPanel {
                                     target: revision,
                                 });
                             }
+                        } else if iop::confirmable(record) {
+                            let label = format!("Confirm revision {revision}");
+                            if ui
+                                .add_enabled(!busy && latest.is_some(), egui::Button::new(label))
+                                .clicked()
+                                && let Some(expected) = latest
+                            {
+                                actions.push(InstructionAction::Restore {
+                                    kind: sel.kind,
+                                    id: sel.id.clone(),
+                                    expected,
+                                    target: revision,
+                                });
+                            }
                         } else if !record.approved && !s.active && s.state == State::Proposed {
                             widgets::caption(ui, "Decided in Approvals");
                         }
@@ -735,6 +755,12 @@ fn status_chips(ui: &mut Ui, s: &iop::Status, revision: i64, skill: bool) {
     }
     if s.missing {
         chip(ui, "missing", Tone::Bad);
+    }
+    if s.awaiting_confirmation {
+        chip(ui, "awaiting your confirmation", Tone::Attention);
+    }
+    if s.disk_change_pending {
+        chip(ui, "change on disk awaiting confirmation", Tone::Attention);
     }
 }
 
