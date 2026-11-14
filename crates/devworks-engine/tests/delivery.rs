@@ -1716,3 +1716,70 @@ fn frequent_command_wakeups_cannot_starve_a_parked_claims_lease() {
         assert_eq!(t.blocker_fx.executed(), 1);
     }));
 }
+
+/// Refuses every read and write while `down`.
+struct Outage {
+    inner: Arc<dyn ApplicationStore>,
+    down: std::sync::atomic::AtomicBool,
+}
+impl ApplicationStore for Outage {
+    fn info(&self) -> StoreInfo {
+        self.inner.info()
+    }
+    fn submit_write(&self, o: WriteOptions, job: Box<dyn WriteJob>) -> Result<(), StorageError> {
+        if self.down.load(Ordering::SeqCst) {
+            return Err(StorageError::Busy);
+        }
+        self.inner.submit_write(o, job)
+    }
+    fn read(
+        &self,
+        o: &ReadOptions,
+        w: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        if self.down.load(Ordering::SeqCst) {
+            return Err(StorageError::Busy);
+        }
+        self.inner.read(o, w)
+    }
+}
+
+/// A pass that fails is counted and its cause kept, so health does not read a rising pass
+/// count as working delivery; the first pass that succeeds clears the count.
+#[test]
+fn failed_dispatcher_passes_are_counted_until_one_succeeds() {
+    let h = Harness::new();
+    let outage = Arc::new(Outage {
+        inner: h.open(),
+        down: std::sync::atomic::AtomicBool::new(true),
+    });
+    let d = dispatcher(&h, outage.clone(), vec![consumer("work", Recorder::ok())]);
+    let sweep = Arc::new(tokio::sync::Notify::new());
+    runtime().block_on(within(
+        "failed_dispatcher_passes_are_counted_until_one_succeeds",
+        async {
+            let (tick, d2) = (sweep.clone(), d.clone());
+            let looping = tokio::spawn(async move {
+                d2.run_with_sweep(move |_| {
+                    let tick = tick.clone();
+                    async move { tick.notified().await }
+                })
+                .await
+            });
+            while d.failed_passes() < 2 {
+                sweep.notify_one();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let last = d.last_failure().expect("the failure is kept");
+            assert!(last.contains("dispatcher pass failed"), "{last}");
+            outage.down.store(false, Ordering::SeqCst);
+            while d.failed_passes() > 0 {
+                sweep.notify_one();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            d.stop();
+            sweep.notify_one();
+            looping.await.unwrap();
+        },
+    ));
+}

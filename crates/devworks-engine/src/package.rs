@@ -111,8 +111,7 @@ pub fn payload_digest(commit: &EventCommit) -> Result<String, StorageError> {
         o.remove("invocationId");
         o.remove("invocationToken");
     }
-    let canonical = jcs::canonicalize(&v).map_err(|e| invalid(format!("{e:?}")))?;
-    Ok(sha256_hex(canonical.as_bytes()))
+    devworks_core::fingerprint::canonical_digest(&v).map_err(|e| invalid(format!("{e:?}")))
 }
 
 /// The checkpoint a new commit for `entry` must present (see the module documentation).

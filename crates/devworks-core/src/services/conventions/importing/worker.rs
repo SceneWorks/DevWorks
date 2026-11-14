@@ -440,8 +440,13 @@ impl ImportService {
         let id = draft.convention_id.clone();
         let scope = draft.scope.clone();
         Preparation::new(self.store.as_ref(), None, None).read(|read| {
-            super::super::access::scope(read, ctx, Some(&model::scope(&scope)), false)
-                .map_err(failure)?;
+            super::super::access::scope(
+                read,
+                ctx,
+                Some(&crate::protocol::data::DataScope::from(&scope)),
+                false,
+            )
+            .map_err(failure)?;
             let operation = read
                 .operations()
                 .operation(&draft.operation_id)?
@@ -460,8 +465,9 @@ impl ImportService {
             else {
                 return Err(invalid("import publication result kind"));
             };
-            let expected_scope = serde_json::to_value(model::scope(&scope))
-                .map_err(|_| invalid("import publication scope"))?;
+            let expected_scope =
+                serde_json::to_value(crate::protocol::data::DataScope::from(&scope))
+                    .map_err(|_| invalid("import publication scope"))?;
             if record.id != id
                 || record.revision.get() != 1
                 || serde_json::to_value(&record.scope)

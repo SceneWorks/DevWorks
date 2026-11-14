@@ -837,8 +837,8 @@ fn tool_result_errors_and_grouped_images_keep_call_and_artifact_order() {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(error["is_error"], true);
-        assert_eq!(error["content"][0]["text"], "first failed");
+        // Only the flag and the joined text: no internal result record or artifact reference.
+        assert_eq!(error, json!({"is_error": true, "content": "first failed"}));
         let images = rows
             .iter()
             .find(|r| r["role"] == "user" && r["content"].as_array().is_some_and(|c| c.len() == 2))

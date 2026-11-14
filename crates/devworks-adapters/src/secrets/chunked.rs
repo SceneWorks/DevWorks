@@ -1,15 +1,21 @@
 //! A secret split over several fixed-size entries (the Windows Credential Manager holds at most
-//! 2560 bytes per credential). The first entry (`<base>`) starts with a two-byte header (format
-//! 1, part count) and later parts are `<base>/part<i>`. Later parts are written first and the
-//! first entry last, so a reader never sees a header naming parts that do not exist yet; a
-//! delete removes the first entry first, so a partial delete reads as absent.
+//! 2560 bytes per credential). The first entry (`<base>`) starts with a header and later parts
+//! are `<base>/part<n>`. The header (format 2) names the part count, which of two banks of part
+//! numbers holds this value's parts (bank `b` uses `n = b * 256 + i`) and the SHA-256 of the
+//! whole value. An update writes its parts into the other bank, then the first entry (one
+//! credential write, so the switch is atomic), then removes the old bank: an interrupted update
+//! reads as the old value, never old and new chunks joined, and a value whose parts do not
+//! match the digest is refused. Format 1 (two-byte header, parts `1..`) is still read. A delete
+//! removes the first entry first, so a partial delete reads as absent.
 //!
-//! An interrupted write or delete can leave `/part<i>` entries without their first entry. They
-//! are never lost: [`list`] reports them under their base handle, and [`delete`] removes every
-//! part it finds by enumeration (never by the header alone), so reconciliation removes them.
+//! An interrupted write or delete can leave `/part<n>` entries without their first entry, or an
+//! unused bank. They are never lost: [`list`] reports them under their base handle, the next
+//! [`put`] removes every part outside the new bank, and [`delete`] removes every part it finds
+//! by enumeration (never by the header alone), so reconciliation removes them.
 use super::handle_of;
 use devworks_core::ports::secrets::SecretError;
 use devworks_core::protocol::Id;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 /// The single-entry operations of a facility.
@@ -23,9 +29,14 @@ pub(crate) trait Entries {
     fn names(&self, prefix: &str) -> Result<Vec<String>, SecretError>;
 }
 
-const FORMAT: u8 = 1;
-const HEADER: usize = 2;
+const LEGACY: u8 = 1;
+const LEGACY_HEADER: usize = 2;
+const FORMAT: u8 = 2;
+/// Format, part count, bank, SHA-256 of the whole value.
+const HEADER: usize = 3 + 32;
 const MAX_PARTS: usize = 255;
+/// Part numbers per bank: bank `b` holds parts `b * BANK + 1 ..`.
+const BANK: usize = 256;
 
 pub(crate) fn part(base: &str, i: usize) -> String {
     format!("{base}/part{i}")
@@ -41,31 +52,56 @@ fn parts_of(e: &dyn Entries, base: &str) -> Result<Vec<usize>, SecretError> {
         .collect())
 }
 
+fn digest(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+/// The bank the stored value's parts use (a format-1 value uses bank 0's numbers).
+fn bank_of(head: &[u8]) -> Option<usize> {
+    match head {
+        [LEGACY, ..] => Some(0),
+        [FORMAT, _, bank, ..] => Some(usize::from(*bank)),
+        _ => None,
+    }
+}
+
 pub(crate) fn put(
     e: &dyn Entries,
     base: &str,
     bytes: &[u8],
     blob: usize,
 ) -> Result<(), SecretError> {
-    let first = (blob - HEADER).min(bytes.len());
+    let first = blob.saturating_sub(HEADER).min(bytes.len());
     let rest: Vec<&[u8]> = bytes[first..].chunks(blob).collect();
     if rest.len() + 1 > MAX_PARTS {
         return Err(SecretError::TooLarge);
     }
+    // The bank the current value does not use, so it stays whole until the first entry switches.
+    let current = e.read(base)?;
+    let bank = match current.as_deref().and_then(bank_of) {
+        Some(0) => 1,
+        _ => 0,
+    };
+    if let Some(mut old) = current {
+        old.iter_mut().for_each(|b| *b = 0);
+    }
     for (i, chunk) in rest.iter().enumerate() {
-        e.write(&part(base, i + 1), chunk)?;
+        e.write(&part(base, bank * BANK + i + 1), chunk)?;
     }
     let mut head = Vec::with_capacity(HEADER + first);
     head.push(FORMAT);
     head.push((rest.len() + 1) as u8);
+    head.push(bank as u8);
+    head.extend_from_slice(&digest(bytes));
     head.extend_from_slice(&bytes[..first]);
     let written = e.write(base, &head);
     head.iter_mut().for_each(|b| *b = 0);
     written?;
-    // Parts a longer previous value (or an interrupted write) left beyond this one.
-    for i in parts_of(e, base)? {
-        if i > rest.len() {
-            e.remove(&part(base, i))?;
+    // The previous value's bank, and parts an interrupted write left beyond this one.
+    let kept = bank * BANK + 1..=bank * BANK + rest.len();
+    for n in parts_of(e, base)? {
+        if !kept.contains(&n) {
+            e.remove(&part(base, n))?;
         }
     }
     Ok(())
@@ -75,15 +111,26 @@ pub(crate) fn get(e: &dyn Entries, base: &str) -> Result<Option<Vec<u8>>, Secret
     let Some(head) = e.read(base)? else {
         return Ok(None);
     };
-    if head.len() < HEADER || head[0] != FORMAT || head[1] == 0 {
-        return Err(SecretError::Failed("unrecognized credential format".into()));
-    }
-    let mut bytes = head[HEADER..].to_vec();
-    for i in 1..head[1] as usize {
-        match e.read(&part(base, i))? {
+    let unrecognized = || SecretError::Failed("unrecognized credential format".into());
+    let (count, bank, expected, start) = match head.as_slice() {
+        [LEGACY, count, ..] if *count > 0 => (*count, 0, None, LEGACY_HEADER),
+        [FORMAT, count, bank, ..] if *count > 0 && head.len() >= HEADER && *bank <= 1 => {
+            (*count, usize::from(*bank), Some(&head[3..HEADER]), HEADER)
+        }
+        _ => return Err(unrecognized()),
+    };
+    let mut bytes = head[start..].to_vec();
+    for i in 1..count as usize {
+        match e.read(&part(base, bank * BANK + i))? {
             Some(chunk) => bytes.extend_from_slice(&chunk),
             None => return Err(SecretError::Failed("a credential part is missing".into())),
         }
+    }
+    if expected.is_some_and(|d| d != digest(&bytes)) {
+        bytes.iter_mut().for_each(|b| *b = 0);
+        return Err(SecretError::Failed(
+            "the credential parts do not match their digest".into(),
+        ));
     }
     Ok(Some(bytes))
 }
@@ -171,7 +218,12 @@ mod tests {
         }
     }
     const BASE: &str = "DevWorks/ns/h1";
-    const BLOB: usize = 8;
+    /// Room for the header and 5 value bytes in the first entry.
+    const BLOB: usize = HEADER + 5;
+    /// Five parts beyond the first entry.
+    fn long() -> Vec<u8> {
+        (0..200u8).map(|i| b'a' + i % 26).collect()
+    }
 
     fn accounts(m: &Memory) -> Vec<Id> {
         let names = m.names_all();
@@ -184,11 +236,10 @@ mod tests {
     #[test]
     fn values_round_trip_over_parts_and_shrink_cleanly() {
         let m = Memory::default();
-        put(&m, BASE, b"0123456789abcdefghijklmnop", BLOB).unwrap();
-        assert_eq!(
-            get(&m, BASE).unwrap().unwrap(),
-            b"0123456789abcdefghijklmnop"
-        );
+        put(&m, BASE, &long(), BLOB).unwrap();
+        assert_eq!(get(&m, BASE).unwrap().unwrap(), long());
+        put(&m, BASE, &long()[..60], BLOB).unwrap();
+        assert_eq!(get(&m, BASE).unwrap().unwrap(), &long()[..60]);
         put(&m, BASE, b"short", BLOB).unwrap();
         assert_eq!(get(&m, BASE).unwrap().unwrap(), b"short");
         assert_eq!(m.names_all(), [BASE]);
@@ -199,7 +250,7 @@ mod tests {
         let m = Memory::default();
         // Parts are written, the first entry is not.
         *m.fail_after.lock().unwrap() = Some(2);
-        assert!(put(&m, BASE, b"0123456789abcdefghijklmnop", BLOB).is_err());
+        assert!(put(&m, BASE, &long(), BLOB).is_err());
         *m.fail_after.lock().unwrap() = None;
         assert_eq!(
             get(&m, BASE).unwrap(),
@@ -218,7 +269,7 @@ mod tests {
     #[test]
     fn a_retried_delete_removes_every_part_without_the_first_entry() {
         let m = Memory::default();
-        put(&m, BASE, b"0123456789abcdefghijklmnopqrstuvwxyz", BLOB).unwrap();
+        put(&m, BASE, &long(), BLOB).unwrap();
         assert!(m.names_all().len() > 3);
         // The first entry and one part go; the rest remain.
         *m.fail_after.lock().unwrap() = Some(2);
@@ -229,6 +280,60 @@ mod tests {
         assert!(delete(&m, BASE).unwrap());
         assert!(m.names_all().is_empty(), "{:?}", m.names_all());
         assert!(!delete(&m, BASE).unwrap());
+    }
+
+    #[test]
+    fn an_interrupted_update_reads_as_the_old_value_not_a_mix() {
+        let m = Memory::default();
+        let old = long();
+        let new: Vec<u8> = long().iter().rev().copied().collect();
+        put(&m, BASE, &old, BLOB).unwrap();
+        // Some of the new parts are written, the first entry is not.
+        *m.fail_after.lock().unwrap() = Some(1);
+        assert!(put(&m, BASE, &new, BLOB).is_err());
+        *m.fail_after.lock().unwrap() = None;
+        assert_eq!(get(&m, BASE).unwrap().unwrap(), old);
+        // The next update completes and leaves only its own parts.
+        put(&m, BASE, &new, BLOB).unwrap();
+        assert_eq!(get(&m, BASE).unwrap().unwrap(), new);
+        let parts = m.names_all().len() - 1;
+        assert_eq!(parts, (new.len() - 5).div_ceil(BLOB));
+        put(&m, BASE, &old, BLOB).unwrap();
+        assert_eq!(get(&m, BASE).unwrap().unwrap(), old);
+        assert_eq!(m.names_all().len() - 1, parts);
+    }
+
+    #[test]
+    fn parts_that_do_not_match_the_digest_are_refused() {
+        let m = Memory::default();
+        put(&m, BASE, &long(), BLOB).unwrap();
+        let name = m
+            .names_all()
+            .into_iter()
+            .find(|n| n.contains("/part"))
+            .unwrap();
+        m.items.lock().unwrap().insert(name, b"tampered".to_vec());
+        assert!(get(&m, BASE).is_err());
+    }
+
+    #[test]
+    fn a_format_one_value_is_read_and_replaced() {
+        let m = Memory::default();
+        let mut head = vec![LEGACY, 3];
+        head.extend_from_slice(b"abc");
+        m.items.lock().unwrap().insert(BASE.into(), head);
+        m.items
+            .lock()
+            .unwrap()
+            .insert(part(BASE, 1), b"def".to_vec());
+        m.items
+            .lock()
+            .unwrap()
+            .insert(part(BASE, 2), b"ghi".to_vec());
+        assert_eq!(get(&m, BASE).unwrap().unwrap(), b"abcdefghi");
+        put(&m, BASE, &long(), BLOB).unwrap();
+        assert_eq!(get(&m, BASE).unwrap().unwrap(), long());
+        assert!(!m.names_all().contains(&part(BASE, 1)));
     }
 
     #[test]

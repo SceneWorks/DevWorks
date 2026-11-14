@@ -209,10 +209,7 @@ fn fault(e: io::Error) -> FileFault {
     }
 }
 fn valid_digest(d: &str) -> Result<(), FileFault> {
-    if d.len() == 64
-        && d.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
+    if devworks_core::fingerprint::is_sha256_hex(d) {
         Ok(())
     } else {
         Err(FileFault::Unsupported("not a SHA-256 digest".into()))

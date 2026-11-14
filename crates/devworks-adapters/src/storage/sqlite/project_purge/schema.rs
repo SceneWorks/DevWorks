@@ -33,9 +33,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// scope. It adds no table or ownership edge: the tallies are columns of their claim, and the
 /// catalogs are configuration rows of the scope that already owns the server. Migration 55 adds
 /// two partial indexes, owned_process_root_unsettled and owned_containers_root_agent_work; it
-/// adds no table, column or ownership edge, and both tables keep their purge policy.
+/// adds no table, column or ownership edge, and both tables keep their purge policy. Migration 56
+/// adds the nullable default_ref column to repository_sources; the row keeps its owner, and the
+/// migration adds no table or ownership edge.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "6114192011efe4351949a7980632a3f563b79a3803fdccf45847f45f551ad57c";
+    "0dd9682cb2bfca3ff6c513704ff5da29243840140f8ea4a85ae85c877141c416";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

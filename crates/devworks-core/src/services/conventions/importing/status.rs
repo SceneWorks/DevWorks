@@ -12,7 +12,7 @@ use crate::{
         results::{DomainDecision, OperationResult},
     },
     services::{
-        conventions::{access, model},
+        conventions::access,
         sessions::{Failure, counter, not_found, rev},
     },
 };
@@ -54,7 +54,7 @@ fn status(
         },
         revision: rev(op.revision),
         kind: ConventionOperationKind::Import,
-        scope: model::scope(&d.scope),
+        scope: crate::protocol::data::DataScope::from(&d.scope),
         phase,
         processed_items: counter(d.processed_resources),
         total_items: d.total_resources.map(counter),

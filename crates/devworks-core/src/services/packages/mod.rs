@@ -122,9 +122,7 @@
 //! authorship. The host's checks govern only brokered operations (state, events, and later the
 //! SDK's host calls); requested access is an admission input and display, not containment.
 use crate::context::{InvocationContext, PrincipalKind};
-use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
-use crate::jcs;
 use crate::operations::{OperationInput, addons as ops};
 use crate::ports::packages::{
     FieldError, HostPlatform, InspectError, Inspection, MAX_BUNDLE_BYTES, PackageActivity,
@@ -223,15 +221,13 @@ pub fn host_schema(id: &str) -> Option<Value> {
 /// The exact `SchemaRef` (wire JSON) of a host-defined configuration schema.
 pub fn host_schema_ref(id: &str) -> Option<Value> {
     let doc = host_schema(id)?;
-    let canonical = jcs::canonicalize(&doc).ok()?;
-    Some(json!({"schemaId": id, "revision": "1", "sha256": sha256_hex(canonical.as_bytes())}))
+    let digest = crate::fingerprint::canonical_digest(&doc).ok()?;
+    Some(json!({"schemaId": id, "revision": "1", "sha256": digest}))
 }
 
 /// SHA-256 of a schema reference's canonical JSON.
 pub fn schema_digest(schema: &Value) -> String {
-    jcs::canonicalize(schema)
-        .map(|c| sha256_hex(c.as_bytes()))
-        .unwrap_or_else(|_| sha256_hex(schema.to_string().as_bytes()))
+    crate::fingerprint::canonical_digest_or_text(schema)
 }
 
 /// The package service and its host ports.

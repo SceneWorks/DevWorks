@@ -49,10 +49,7 @@ fn value(value: String) -> Result<Value, StorageError> {
     serde_json::from_str(&value).map_err(|_| corrupt("invalid graph JSON"))
 }
 fn digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    devworks_core::fingerprint::is_sha256_hex(value)
 }
 fn scope_json(conn: &Connection, scope: &GraphScope) -> Result<String, StorageError> {
     if scope.views.is_empty() || scope.views.len() > GRAPH_MAX_VIEWS {

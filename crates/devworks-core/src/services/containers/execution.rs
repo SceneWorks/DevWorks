@@ -10,9 +10,10 @@ pub fn bound_spec(
     args: Vec<String>,
     cwd: Option<PathBuf>,
 ) -> Result<ProcessSpec, BindingRefusal> {
-    let program = bindings.resolve_named_executable(backend.executable())?;
+    let (program, arg0) = bindings.resolve_launch(backend.executable())?;
     Ok(ProcessSpec {
         program,
+        arg0: Some(arg0),
         args,
         cwd,
         env: Vec::new(),

@@ -86,6 +86,8 @@ impl AuthorityPort for StoreAuthority {
         HostAuthority {
             store: &*self.store,
             clock: &*self.clock,
+            // No names beyond main and master are configured: the authority adds the pushed
+            // repository's recorded default branch itself.
             protected_branches: &[],
         }
         .authorize(ctx, request)
