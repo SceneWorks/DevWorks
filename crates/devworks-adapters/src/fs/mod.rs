@@ -197,8 +197,26 @@ fn absolute(path: &str, working_directory: Option<&str>) -> Result<PathBuf, Reso
 
 /// Lexical normalization (only used where nothing exists to canonicalize).
 fn lexical(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in p.components() {
+    fold(PathBuf::new(), p)
+}
+
+/// `p` as the kernel would reach it when its trailing components do not exist yet: the longest
+/// existing ancestor resolved (links followed), the missing rest appended with `.` and `..`
+/// folded. The kernel cannot traverse a component past that ancestor (it is missing or a
+/// dangling link), so folding there is exact. This keeps a new path under a linked folder
+/// comparable with the resolved protected roots.
+fn resolve_missing(p: &Path) -> PathBuf {
+    for a in p.ancestors() {
+        if let Ok(base) = std::fs::canonicalize(a) {
+            return fold(base, p.strip_prefix(a).unwrap_or(Path::new("")));
+        }
+    }
+    lexical(p)
+}
+
+/// Appends `rest` to `out`, applying `.` and `..` lexically.
+fn fold(mut out: PathBuf, rest: &Path) -> PathBuf {
+    for c in rest.components() {
         match c {
             Component::ParentDir => {
                 out.pop();
@@ -278,12 +296,9 @@ impl FilesystemResolver for NativeFilesystem {
         // followed. A path ending in `..` or a root names a directory, which is resolved fully.
         let entry_path = match (joined.file_name(), joined.parent()) {
             (Some(name), Some(parent)) if !joined.ends_with("..") => {
-                match std::fs::canonicalize(parent) {
-                    Ok(p) => p.join(name),
-                    Err(_) => lexical(&joined),
-                }
+                resolve_missing(parent).join(name)
             }
-            _ => std::fs::canonicalize(&joined).unwrap_or_else(|_| lexical(&joined)),
+            _ => resolve_missing(&joined),
         };
         let entry_meta = match std::fs::symlink_metadata(&entry_path) {
             Ok(m) => Some(m),
