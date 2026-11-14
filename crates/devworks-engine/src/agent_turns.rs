@@ -874,8 +874,22 @@ fn measure(
         .checked_add(tool_bytes)
         .and_then(|bytes| bytes.checked_add(referenced))
         .ok_or(StorageError::ScopeDenied)?;
+    // Compaction keeps the first message without an earlier summary, which it replaces.
     let fixed = ProviderContext {
-        messages: context.messages.iter().take(1).cloned().collect(),
+        messages: context
+            .messages
+            .iter()
+            .take(1)
+            .map(|message| Message {
+                role: message.role.clone(),
+                content: message
+                    .content
+                    .iter()
+                    .filter(|block| !crate::compaction::is_summary(block))
+                    .cloned()
+                    .collect(),
+            })
+            .collect(),
         ..context.clone()
     };
     let fixed_bytes = serde_json::to_vec(&fixed)

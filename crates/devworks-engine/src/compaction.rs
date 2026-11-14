@@ -211,6 +211,11 @@ fn outstanding_calls(
     })
 }
 
+/// The block carrying an earlier compaction summary, which the next compaction replaces.
+pub(crate) fn is_summary(block: &ContentBlock) -> bool {
+    matches!(block, ContentBlock::Text { text, .. } if text.starts_with(SUMMARY_PREFIX))
+}
+
 fn compacted_context(
     source: &ProviderContext,
     epoch: i64,
@@ -226,7 +231,7 @@ fn compacted_context(
                 .content
                 .iter()
                 .filter(|block| match block {
-                    ContentBlock::Text { text, .. } => !text.starts_with(SUMMARY_PREFIX),
+                    ContentBlock::Text { .. } => !is_summary(block),
                     ContentBlock::Image { .. } => true,
                     _ => false,
                 })
