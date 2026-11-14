@@ -43,7 +43,7 @@ python3 -m http.server 8766 --bind 127.0.0.1 --directory docs
 
 Open `http://127.0.0.1:8766/architecture/devworks-architecture.html`. This optional authoring server is not a product runtime requirement.
 
-Native reproduction tooling: [evaluation README](../../tools/storage-eval/README.md). [Raw evaluation records](validation/storage-evaluation/README.md) and the [aggregate](storage-evaluation-results.json) preserve local measurements and failures; the review export additionally includes the exact compressed fixture.
+Native reproduction tooling: [evaluation README](https://github.com/SceneWorks/DevWorks/tree/f76506ec33c9563d19e03bc68a4b7e9e65178271/tools/storage-eval/README.md) (removed from the main branch; kept at commit `f76506ec`). [Raw evaluation records](validation/storage-evaluation/README.md) and the [aggregate](storage-evaluation-results.json) preserve local measurements and failures; the review export additionally includes the exact compressed fixture.
 
 Router correction: [ROUTE-18–20 and AD62–63](devworks-architecture.html#direct-tier-selection-effort-and-systemone) restore SystemOne decision inference, four direct tier choices and separate effort controls. The [mock UI](../planning/harness-workbench.html) includes the controls and editable sample memberships. Current catalog has 353 operations with concrete native DTO candidates; actual decision transport/profile behavior remains unqualified.
 
