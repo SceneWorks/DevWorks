@@ -296,7 +296,7 @@ fn record_observed(
         created_at_ms: now,
         provenance: json!({
             "producedBy": ctx.principal().0.as_str(),
-            "principalKind": format!("{:?}", ctx.principal_kind()),
+            "principalKind": ctx.principal_kind().as_str().to_string(),
             "sessionId": ctx.session_id().map(Id::as_str),
             "assignmentId": ctx.assignment_id().map(|a| a.0.as_str()),
             "invocationId": ctx.invocation_id().as_str(),

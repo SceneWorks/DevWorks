@@ -577,6 +577,15 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .map_err(failed)?;
         consumers.push(crate::mcp::consumer(service));
     }
+    // Agents' package tool calls run as durable operations of their own consumer; the host it
+    // invokes is created after the dispatcher (set below, before deliveries start).
+    let package_tools: Arc<OnceLock<std::sync::Weak<PackageHost>>> = Arc::default();
+    if packages.is_some() {
+        consumers.push(crate::package_tools::consumer(
+            store.clone(),
+            package_tools.clone(),
+        ));
+    }
     let process_tools = config.process_tools.as_ref().map(|composition| {
         Arc::new(
             devworks_core::services::process::tools::ProcessToolService::new(
@@ -987,6 +996,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             )
             .with_desktop(desktop.clone())
             .with_instructions(instructions.clone())
+            .with_containers(containers.clone())
             .with_control(runs.service.clone())
             .with_evidence(store.clone(), artifacts.clone()),
         )),
@@ -1156,6 +1166,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 p.index,
             );
             p.service.set_activity(host.clone());
+            let _ = package_tools.set(Arc::downgrade(&host));
             // From here every early return abandons the host (breaks the service<->host cycle
             // that would keep the store and its workspace lock alive, and kills any started
             // helper) until the completed Runtime owns it.
@@ -1525,6 +1536,15 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         changes: watch::channel(0).0,
         handle: tokio::runtime::Handle::current(),
     });
+    // Brokered application calls of packages run through this command path, as the principal
+    // that invoked the package.
+    if let Some(host) = &package_host {
+        let gateway: Arc<dyn crate::package_host::broker::GatewayCalls> = admitter.clone();
+        host.attach_broker(crate::package_host::broker::BrokerPorts {
+            gateway: Arc::downgrade(&gateway),
+            artifacts: artifacts.clone(),
+        });
+    }
     if let Some(service) = &help {
         let (service, stop) = (service.clone(), service.clone());
         let command = admitter.clone();
@@ -3428,6 +3448,20 @@ impl Admitter {
             );
         }
         outcome
+    }
+}
+impl crate::package_host::broker::GatewayCalls for Admitter {
+    fn query(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> QueryOutcome {
+        self.use_cases.query_with(
+            &self.gateway(),
+            ctx,
+            operation,
+            raw,
+            devworks_core::ports::storage::ReadOptions::default(),
+        )
+    }
+    fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
+        self.command_with(ctx, operation, raw, WriteOptions::default())
     }
 }
 impl NativeJobDispatch for Admitter {
