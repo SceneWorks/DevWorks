@@ -350,6 +350,63 @@ fn glob_expansion_is_bounded_and_explicit() {
 }
 
 #[test]
+fn glob_matching_keeps_shell_semantics() {
+    for (pattern, name, hit) in [
+        ("*.tmp", "a.tmp", true),
+        ("*.tmp", "a.tmpx", false),
+        ("a*b*c", "aXbYc", true),
+        ("a*b*c", "abcb", false),
+        ("*", "", true),
+        ("?", "", false),
+        ("f?.log", "f1.log", true),
+        ("o[0-1].log", "o1.log", true),
+        ("o[0-1].log", "o2.log", false),
+        ("o[!0-1].log", "o2.log", true),
+        ("o[^a]", "oa", false),
+        ("[x", "[x", true),
+        ("**a", "bba", true),
+        ("a**", "a", true),
+    ] {
+        assert_eq!(
+            super::glob(pattern.as_bytes(), name.as_bytes()),
+            hit,
+            "{pattern} vs {name}"
+        );
+    }
+}
+
+#[test]
+fn a_pattern_with_many_stars_matches_in_bounded_time() {
+    // A backtracking matcher takes exponential time in the number of stars on this input.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let pattern = format!("{}b", "a*".repeat(40));
+        let name = "a".repeat(200);
+        let _ = tx.send(super::glob(pattern.as_bytes(), name.as_bytes()));
+    });
+    let hit = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the match finishes promptly");
+    assert!(!hit);
+}
+
+/// A name the reviewed list cannot spell refuses the expansion instead of vanishing from it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_glob_matching_a_non_utf8_name_is_refused_not_dropped() {
+    use std::os::unix::ffi::OsStrExt;
+    let s = Scratch::new("glob-bytes");
+    std::fs::write(s.0.join("plain.tmp"), b"").unwrap();
+    std::fs::write(s.0.join(std::ffi::OsStr::from_bytes(b"bad\xff.tmp")), b"").unwrap();
+    let fs = NativeFilesystem::new();
+    assert!(matches!(
+        fs.expand(&s.p("*.tmp"), None, 10),
+        Err(devworks_core::authority::destructive::ResolveError::Unsupported(_))
+    ));
+    assert_eq!(fs.expand(&s.p("pl*.tmp"), None, 10).unwrap().len(), 1);
+}
+
+#[test]
 fn owned_worktree_cleanup_is_bounded_to_the_exact_stopped_worktree() {
     let t = tree("worktree");
     let cleanup = |id_: &str| IntendedScope::OwnedWorktreeCleanup {
