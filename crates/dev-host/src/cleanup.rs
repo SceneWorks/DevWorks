@@ -69,11 +69,29 @@ impl Liveness for ProcessLiveness {
                         .filter_map(|fd| std::fs::read_link(fd.path()).ok()),
                 );
             }
+            // A mapped file (a loaded library, an mmapped data file) needs no open descriptor.
+            if let Ok(maps) = std::fs::read_to_string(pid_dir.join("maps")) {
+                let mapped: HashSet<PathBuf> = mapped_paths(&maps).collect();
+                out.extend(mapped);
+            }
         }
         // `root` is "/" for nearly every process; it would make everything look live.
         out.retain(|p| p.parent().is_some());
         Ok(out)
     }
+}
+
+/// The files named in a `/proc/<pid>/maps` listing. Each line is `address perms offset dev
+/// inode pathname`; only the pathname contains `/`, and it may contain spaces. A file deleted
+/// while mapped carries a ` (deleted)` suffix.
+#[cfg(any(target_os = "linux", test))]
+fn mapped_paths(maps: &str) -> impl Iterator<Item = PathBuf> + '_ {
+    maps.lines().filter_map(|line| {
+        let path = &line[line.find('/')?..];
+        Some(PathBuf::from(
+            path.strip_suffix(" (deleted)").unwrap_or(path),
+        ))
+    })
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
@@ -316,6 +334,23 @@ fn is_real_dir(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir())
 }
 
+/// Whether `path` is a symlink (on Windows also a junction), which cleanup never follows.
+fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// Whether `path` itself lies strictly inside `root` (canonical): its parent, with every link
+/// resolved, is `root` or below it. The last component is not resolved, since deleting a
+/// symlink removes the link, not its target.
+fn inside(path: &Path, root: &Path) -> bool {
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => parent
+            .canonicalize()
+            .is_ok_and(|p| p.join(name).starts_with(root) && p.join(name) != root),
+        _ => false,
+    }
+}
+
 fn plain_candidate(path: PathBuf, area: Area) -> Candidate {
     let u = usage(&path);
     let last_used = u
@@ -351,6 +386,8 @@ fn held_by_process(path: &Path, open: &[PathBuf]) -> bool {
 
 struct Run<'a> {
     budgets: &'a Budgets,
+    /// The canonical root every deleted path must lie inside, when cleaning a root.
+    confine: Option<PathBuf>,
     now: SystemTime,
     open: Vec<PathBuf>,
     busy: &'a dyn BusyProbe,
@@ -360,6 +397,27 @@ struct Run<'a> {
 impl Run<'_> {
     fn age_limit(&self) -> Duration {
         DAY * u32::try_from(self.budgets.age_days).unwrap_or(u32::MAX)
+    }
+
+    /// Whether `path` is a symlink, reported as kept: a link on the way to a candidate could
+    /// lead outside the root.
+    fn skip_link(&mut self, path: &Path) -> bool {
+        let link = is_link(path);
+        if link {
+            self.report.skipped.push(Skipped {
+                path: path.to_path_buf(),
+                why: "a symlink; cleanup does not follow links".to_owned(),
+            });
+        }
+        link
+    }
+
+    /// The entries of `dir`, or none when `dir` is a symlink.
+    fn unlinked_children(&mut self, dir: &Path) -> Vec<PathBuf> {
+        if self.skip_link(dir) {
+            return Vec::new();
+        }
+        children(dir)
     }
 
     fn keep(&mut self, c: &mut Candidate, why: &str) {
@@ -373,6 +431,17 @@ impl Run<'_> {
     /// Deletes `c` (or records that it would) unless a liveness rule keeps it. With
     /// `recheck_age`, a build slot whose stamp was refreshed since the scan is kept.
     fn try_remove(&mut self, c: &mut Candidate, why: String, recheck_age: bool) -> bool {
+        if let Some(root) = &self.confine
+            && !inside(&c.path, root)
+        {
+            c.settled = true;
+            self.report.errors.push(format!(
+                "refusing {}: it resolves outside the dev-host root {}",
+                c.path.display(),
+                root.display()
+            ));
+            return false;
+        }
         if !c.complete {
             self.keep(c, "could not read all of it");
             return false;
@@ -452,6 +521,7 @@ pub fn run(
     })?;
     let mut run = Run {
         budgets,
+        confine: Some(root.clone()),
         now,
         open,
         busy,
@@ -464,10 +534,11 @@ pub fn run(
         run.report.notes.push(note.to_owned());
     }
 
-    // Scan.
+    // Scan. A symlinked folder on the way to a candidate could lead outside the root, so no
+    // level is followed through a link: the top-level areas, projects and campaigns included.
     let mut candidates = Vec::new();
     let mut build_other = 0u64;
-    for project in children(&root.join("build")) {
+    for project in run.unlinked_children(&root.join("build")) {
         if !is_real_dir(&project) {
             build_other += usage(&project).bytes;
             continue;
@@ -505,11 +576,14 @@ pub fn run(
             }
         }
     }
-    for path in children(&root.join("t")) {
+    for path in run.unlinked_children(&root.join("t")) {
         candidates.push(plain_candidate(path, Area::T));
     }
-    for project in children(&root.join("campaigns")) {
-        for campaign in children(&project) {
+    for project in run.unlinked_children(&root.join("campaigns")) {
+        for campaign in run.unlinked_children(&project) {
+            if run.skip_link(&campaign) {
+                continue;
+            }
             let work = campaign.join("work");
             if is_real_dir(&work) {
                 candidates.push(plain_candidate(work, Area::CampaignWork));
@@ -658,7 +732,11 @@ pub fn migrate(
         Ok(_) => {}
         Err(e) => return Err(format!("{shown}: {e}")),
     }
-    let path = resolve(&absolute, cwd);
+    // The target exists, so resolve it as the OS will open it: `a/link/../b` is the `b` beside
+    // the link's target, not `a/b`.
+    let path = absolute
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve {shown}: {e}"))?;
     let root = resolve(root, cwd);
     if path.parent().is_none() {
         return Err(format!("refusing {shown}: it is a filesystem root"));
@@ -688,6 +766,7 @@ pub fn migrate(
     })?;
     let mut run = Run {
         budgets: &Budgets::default(),
+        confine: None,
         now: SystemTime::now(),
         open,
         busy,
@@ -914,6 +993,137 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn real_process_scan_sees_a_mapped_file() {
+        // A copy of a shared library this test binary uses, preloaded into a child: the loader
+        // maps it and closes its descriptor, so only /proc/<pid>/maps shows it.
+        let scratch = Scratch::new("cleanup-maps");
+        let root = root(&scratch);
+        let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
+        let Some(lib) = mapped_paths(&maps).find(|p| {
+            let name = p.file_name().unwrap_or_default().to_string_lossy();
+            name.contains(".so") && !name.starts_with("libc.") && !name.starts_with("ld-")
+        }) else {
+            eprintln!("no shared library other than libc is mapped; nothing to preload");
+            return;
+        };
+        let copy = root.join("t/mapped01/lib.so");
+        std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        std::fs::copy(&lib, &copy).unwrap();
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .env("LD_PRELOAD", &copy)
+            .current_dir(scratch.path())
+            .spawn()
+            .unwrap();
+        let seen = (0..100).any(|_| {
+            let found = ProcessLiveness.open_paths().unwrap().contains(&copy);
+            if !found {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            found
+        });
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            seen,
+            "{} mapped by the child was not listed",
+            copy.display()
+        );
+    }
+
+    #[test]
+    fn mapped_paths_read_proc_maps_lines() {
+        let maps = "\
+55d0a000-55d0b000 r--p 00000000 08:01 1234                       /usr/bin/sleep
+7f00-7f01 r-xp 00001000 08:01 99   /data/root/t/ab cd/lib.so
+7f01-7f02 rw-p 00000000 00:00 0 
+7f02-7f03 rw-s 00000000 00:05 7    /data/root/t/gone/f (deleted)
+7ffd-7ffe rw-p 00000000 00:00 0                          [stack]
+";
+        let paths: Vec<PathBuf> = mapped_paths(maps).collect();
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("/usr/bin/sleep"),
+                PathBuf::from("/data/root/t/ab cd/lib.so"),
+                PathBuf::from("/data/root/t/gone/f"),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_folders_are_never_followed() {
+        let scratch = Scratch::new("cleanup-links");
+        let root = root(&scratch);
+        let outside = scratch.path().join("outside");
+        let link = |target: &Path, at: &Path| {
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(target, at).unwrap();
+        };
+        // build/ itself, with a stale slot behind it.
+        let slot_dir = outside.join("build/demo/key/slot-0");
+        write_aged(&slot_dir.join("debug/payload"), 10, days_ago(9));
+        write_aged(&slot_dir.join(slots::STAMP_FILE), 1, days_ago(9));
+        link(&outside.join("build"), &root.join("build"));
+        // t/ itself.
+        write_aged(&outside.join("t/old00001/f"), 10, days_ago(9));
+        link(&outside.join("t"), &root.join("t"));
+        // A campaign project, and a campaign.
+        write_aged(&outside.join("project/c1/work/x"), 10, days_ago(9));
+        link(&outside.join("project"), &root.join("campaigns/p1"));
+        write_aged(&outside.join("campaign/work/x"), 10, days_ago(9));
+        link(&outside.join("campaign"), &root.join("campaigns/p2/c2"));
+
+        let report = run(
+            &root,
+            &budgets(|b| {
+                b.build = Some(0);
+                b.t = Some(0);
+            }),
+            false,
+            SystemTime::now(),
+            &NoProcesses,
+            &CargoLockProbe,
+        )
+        .unwrap();
+        assert!(report.removed.is_empty(), "{}", report.render());
+        for kept in [
+            slot_dir.join("debug/payload"),
+            outside.join("t/old00001/f"),
+            outside.join("project/c1/work/x"),
+            outside.join("campaign/work/x"),
+        ] {
+            assert!(kept.exists(), "{} was deleted", kept.display());
+        }
+        for linked in ["build", "t", "campaigns/p1", "campaigns/p2/c2"] {
+            assert!(
+                report.skipped.iter().any(|s| s.path == root.join(linked)),
+                "{linked}: {}",
+                report.render()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deletion_is_confined_to_paths_whose_parent_resolves_inside_the_root() {
+        let scratch = Scratch::new("cleanup-inside");
+        let root = root(&scratch);
+        let outside = scratch.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(root.join("t")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("t/link")).unwrap();
+        assert!(inside(&root.join("t/a"), &root));
+        // The link itself is inside (removing it removes the link); what is behind it is not.
+        assert!(inside(&root.join("t/link"), &root));
+        assert!(!inside(&root.join("t/link/a"), &root));
+        assert!(!inside(&root, &root));
+        assert!(!inside(&outside.join("a"), &root));
+    }
+
     #[test]
     fn failed_process_scan_removes_nothing() {
         let scratch = Scratch::new("cleanup-broken");
@@ -1038,6 +1248,21 @@ mod tests {
             let link = scratch.path().join("link");
             std::os::unix::fs::symlink(&old, &link).unwrap();
             assert!(m(&link, false).unwrap_err().contains("symlink"));
+        }
+        #[cfg(unix)]
+        {
+            // `left/link/../victim` is the victim beside the link's target, not `left/victim`.
+            let left = scratch.path().join("left");
+            let right = scratch.path().join("right");
+            write_aged(&left.join("victim/f"), 10, days_ago(1));
+            write_aged(&right.join("victim/f"), 10, days_ago(1));
+            std::fs::create_dir_all(right.join("sub")).unwrap();
+            std::os::unix::fs::symlink(right.join("sub"), left.join("link")).unwrap();
+            let report = m(&left.join("link/../victim"), false).unwrap();
+            assert_eq!(report.removed.len(), 1, "{}", report.render());
+            assert_eq!(report.removed[0].path, right.join("victim"));
+            assert!(!right.join("victim").exists());
+            assert!(left.join("victim/f").exists());
         }
         let held = old.join("debug").join(CARGO_LOCK);
         std::fs::write(&held, "").unwrap();
