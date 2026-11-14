@@ -170,6 +170,24 @@ class Reachability(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             reach.orphans(root)
 
+    def test_unevaluable_cfg_attr_stays_optional_before_a_definite_path_and_on_inline_modules(self):
+        root = crate(self.root, {
+            'root.rs': ('#[cfg_attr(windows, path = "missing.rs")]\n#[path = "real.rs"]\nmod suite;\n'
+                        '#[cfg_attr(windows, path = "win")]\nmod group { mod child; }\n'),
+            'real.rs': '', 'group/child.rs': '',
+        })
+        self.assertEqual(orphan_names(root), [])
+        (root / 'tests' / 'real.rs').unlink()
+        with self.assertRaises(FileNotFoundError):
+            reach.orphans(root)
+
+    def test_cfg_attr_path_on_inline_module_sets_its_directory_when_true_for_test(self):
+        root = crate(self.root, {
+            'root.rs': '#[cfg_attr(test, path = "renamed")]\nmod group { mod child; }\n',
+            'renamed/child.rs': '', 'group/child.rs': '',
+        })
+        self.assertEqual(orphan_names(root), ['group/child.rs'])
+
 
 if __name__ == '__main__':
     unittest.main()

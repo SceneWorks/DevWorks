@@ -156,16 +156,17 @@ def path_overrides(attribute, strings, definite):
 
 
 def path_candidates(attributes, strings):
-    """Return (paths, default possible): the #[path] values that may apply and whether the default file may.
+    """Return ([(path, optional)], default possible): the #[path] values that may apply and whether the default may.
 
-    rustc uses the first #[path] that is in effect. A predicate this checker cannot evaluate (for
+    rustc uses the first #[path] that is in effect. A path is optional when a cfg_attr predicate this
+    checker cannot evaluate guards it; the default is possible unless an unconditional path is in effect. A predicate this checker cannot evaluate (for
     example `windows`) keeps both outcomes open, so the checker follows every candidate that exists
     instead of rejecting code that may be valid; it can then miss an orphan hidden behind such a cfg.
     """
     paths = []
     for attribute in attributes:
         for path, certain in path_overrides(attribute, strings, True):
-            paths.append(path)
+            paths.append((path, not certain))
             if certain:
                 return paths, False
     return paths, True
@@ -189,13 +190,13 @@ def declares_module(tokens):
 def mod_declarations(source):
     """Yield (enclosing inline modules, #[path] candidates, default file possible, name) per live `mod name;`.
 
-    Each enclosing inline module is a (name, #[path] value or None) pair. Macro bodies are not
+    Each enclosing inline module is a (name, (#[path] candidates, default possible)) pair. Macro bodies are not
     compiled unless expanded, so `macro_rules!` bodies are skipped; a macro that declares modules
     and is invoked, or an invocation whose tokens declare modules, raises Unsupported.
     """
     text, strings = lex(source)
     tokens = TOKEN.findall(text)
-    frames = [(None, None, True)]  # (inline module name or None for other blocks, #[path], compiled)
+    frames = [(None, ([], True), True)]  # (inline module name or None for other blocks, (#[path] candidates, default), compiled)
     declaring_macros, invoked = set(), set()
     attributes, i = [], 0
     while i < len(tokens):
@@ -240,11 +241,11 @@ def mod_declarations(source):
                 if compiled and all(live for _, _, live in frames):
                     yield [(n, p) for n, p, _ in frames if n is not None], paths, default, name
             else:
-                frames.append((name, paths[0] if paths else None, compiled))
+                frames.append((name, (paths, default), compiled))
             attributes, i = [], i + 3
             continue
         if token == "{":
-            frames.append((None, None, True))
+            frames.append((None, ([], True), True))
         elif token == "}" and len(frames) > 1:
             frames.pop()
         attributes = []
@@ -266,29 +267,36 @@ def child_files(file, owns_directory, source):
     children = []
     for inline, paths, default, name in mod_declarations(source):
         base = file.parent if owns_directory else file.parent / file.stem
-        directory = None  # None: no enclosing inline module
-        for module, module_path in inline:
-            if module_path is not None:
-                directory = (file.parent if directory is None else directory) / module_path
-            else:
-                directory = (base if directory is None else directory) / module
+        directories = [None]  # None: no enclosing inline module
+        for module, (module_paths, module_default) in inline:
+            grown = []
+            for directory in directories:
+                grown.extend((file.parent if directory is None else directory) / p for p, _ in module_paths)
+                if module_default:
+                    grown.append((base if directory is None else directory) / module)
+            directories = grown
         found = False
-        for path in paths:
-            target = ((file.parent if directory is None else directory) / path).resolve()
-            if default and not target.is_file():
-                continue  # an unevaluable cfg_attr path may not apply; the default file can still
-            children.append((target, True))
-            found = True
-        if not default:
-            continue
-        base = base if directory is None else directory
-        flat, nested = base / f"{name}.rs", base / name / "mod.rs"
-        if flat.is_file():
-            children.append((flat.resolve(), False))
-        elif nested.is_file():
-            children.append((nested.resolve(), True))
-        elif not found:
-            raise FileNotFoundError(f"{file}: `mod {name};` matches neither {flat} nor {nested}")
+        for directory in directories:
+            for path, optional in paths:
+                target = ((file.parent if directory is None else directory) / path).resolve()
+                if optional and not target.is_file():
+                    continue  # an unevaluable cfg_attr path may not apply
+                children.append((target, True))
+                found = True
+            if not default:
+                continue
+            where = base if directory is None else directory
+            flat, nested = where / f"{name}.rs", where / name / "mod.rs"
+            if flat.is_file():
+                children.append((flat.resolve(), False))
+                found = True
+            elif nested.is_file():
+                children.append((nested.resolve(), True))
+                found = True
+        if not found:
+            where = base if directories[0] is None else directories[0]
+            raise FileNotFoundError(
+                f"{file}: `mod {name};` matches neither {where / f'{name}.rs'} nor {where / name / 'mod.rs'}")
     return children
 
 
