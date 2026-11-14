@@ -20,6 +20,7 @@ pub struct NativeOwnerPreviews {
     jobs: Option<Arc<JobService>>,
     desktop: Option<Arc<DesktopService>>,
     instructions: Option<Arc<crate::services::instructions::InstructionService>>,
+    containers: Option<Arc<crate::services::containers::service::ContainerService>>,
     evidence: Option<(
         Arc<dyn crate::ports::storage::ApplicationStore>,
         Arc<crate::services::artifacts::ArtifactService>,
@@ -37,6 +38,7 @@ impl NativeOwnerPreviews {
             jobs,
             desktop: None,
             instructions: None,
+            containers: None,
             evidence: None,
         }
     }
@@ -68,6 +70,13 @@ impl NativeOwnerPreviews {
         self.instructions = instructions;
         self
     }
+    pub fn with_containers(
+        mut self,
+        containers: Option<Arc<crate::services::containers::service::ContainerService>>,
+    ) -> Self {
+        self.containers = containers;
+        self
+    }
 }
 fn unsupported() -> Failure {
     Refusal::new(
@@ -86,6 +95,7 @@ impl SavedOperationOwners for NativeOwnerPreviews {
             "jobs.create" | "jobs.edit" | "jobs.enable" | "jobs.run_now" => self.jobs.is_some(),
             "desktop.request_control" => self.desktop.is_some(),
             "skills.rollback" | "roles.rollback" => self.instructions.is_some(),
+            "containers.create" => self.containers.is_some(),
             _ => false,
         }
     }
@@ -121,6 +131,11 @@ impl SavedOperationOwners for NativeOwnerPreviews {
                 .approval_preview(ctx, request, env),
             "skills" | "roles" => self
                 .instructions
+                .as_ref()
+                .ok_or_else(unsupported)?
+                .approval_preview(ctx, request, env),
+            "containers" => self
+                .containers
                 .as_ref()
                 .ok_or_else(unsupported)?
                 .approval_preview(ctx, request, env),
@@ -190,6 +205,11 @@ impl SavedOperationOwners for NativeOwnerPreviews {
                 .as_ref()
                 .ok_or_else(unsupported)?
                 .validate_approval(tx, ctx, request, preview),
+            "containers" => self
+                .containers
+                .as_ref()
+                .ok_or_else(unsupported)?
+                .validate_approval_preview(tx, ctx, request, preview),
             _ => Err(unsupported()),
         }
     }
@@ -480,7 +500,7 @@ pub(crate) fn publish_review_evidence(
             crate::ports::storage::ArtifactScope::Project,
         ),
         producer: ctx.principal().clone(),
-        principal_kind: format!("{:?}", ctx.principal_kind()),
+        principal_kind: ctx.principal_kind().as_str().to_string(),
         agent_session: ctx.session_id().cloned(),
         root: ctx.root_id().cloned(),
         assignment: ctx.assignment_id().cloned(),

@@ -291,7 +291,7 @@ impl GitService {
         let evidence = Evidence {
             scope: project.map_or(ArtifactScope::Workspace, ArtifactScope::Project),
             producer: ctx.principal().clone(),
-            principal_kind: format!("{:?}", ctx.principal_kind()),
+            principal_kind: ctx.principal_kind().as_str().to_string(),
             agent_session: ctx.session_id().cloned(),
             root: ctx.root_id().cloned(),
             assignment: ctx.assignment_id().cloned(),
@@ -426,7 +426,7 @@ impl GitService {
             let evidence = Evidence {
                 scope: project.map_or(ArtifactScope::Workspace, ArtifactScope::Project),
                 producer: ctx.principal().clone(),
-                principal_kind: format!("{:?}", ctx.principal_kind()),
+                principal_kind: ctx.principal_kind().as_str().to_string(),
                 agent_session: ctx.session_id().cloned(),
                 root: ctx.root_id().cloned(),
                 assignment: ctx.assignment_id().cloned(),

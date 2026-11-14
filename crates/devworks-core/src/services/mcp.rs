@@ -682,7 +682,7 @@ impl McpClientService {
                     "serverRevision":material.server_revision.get(),"catalogRevision":material.catalog_revision.get(),
                     "capabilityId":material.capability_id,"schema":material.alias.input_schema,
                     "wireName":material.wire_name,"arguments":arguments,
-                    "principal":ctx.principal(),"principalKind":format!("{:?}",ctx.principal_kind()),
+                    "principal":ctx.principal(),"principalKind":ctx.principal_kind().as_str().to_string(),
                     "sessionId":ctx.session_id(),"projectId":ctx.project_id(),"fences":fences,"call":call,
                 }),
             })?;
@@ -758,14 +758,13 @@ impl McpClientService {
         else {
             return McpEffectOutcome::Failed("invalid MCP effect principal".into());
         };
-        let kind = match op.payload.get("principalKind").and_then(Value::as_str) {
-            Some("Human") => PrincipalKind::Human,
-            Some("Agent") => PrincipalKind::Agent,
-            Some("Package") => PrincipalKind::Package,
-            Some("McpClient") => PrincipalKind::McpClient,
-            Some("Schedule") => PrincipalKind::Schedule,
-            Some("Host") => PrincipalKind::Host,
-            _ => return McpEffectOutcome::Failed("invalid MCP principal kind".into()),
+        let Some(kind) = op
+            .payload
+            .get("principalKind")
+            .and_then(Value::as_str)
+            .and_then(PrincipalKind::parse)
+        else {
+            return McpEffectOutcome::Failed("invalid MCP principal kind".into());
         };
         let Some(fences) = op
             .payload
@@ -1064,10 +1063,13 @@ impl McpClientService {
         else {
             return McpEffectOutcome::Failed("invalid MCP tool principal".into());
         };
-        let principal_kind = match op.payload.get("principalKind").and_then(Value::as_str) {
-            Some("Agent") => PrincipalKind::Agent,
-            Some("Host") => PrincipalKind::Host,
-            _ => return McpEffectOutcome::Failed("invalid MCP tool principal kind".into()),
+        let Some(principal_kind @ (PrincipalKind::Agent | PrincipalKind::Host)) = op
+            .payload
+            .get("principalKind")
+            .and_then(Value::as_str)
+            .and_then(PrincipalKind::parse)
+        else {
+            return McpEffectOutcome::Failed("invalid MCP tool principal kind".into());
         };
         let Some(session_id) = op
             .payload
@@ -2241,7 +2243,7 @@ impl McpClientService {
                 "serverId": input.server_id,
                 "pendingRevision": pending_revision,
                 "principal": ctx.principal(),
-                "principalKind": format!("{:?}", ctx.principal_kind()),
+                "principalKind": ctx.principal_kind().as_str().to_string(),
                 "sessionId": ctx.session_id(),
                 "fences": command.authorization().fences(),
             }),
@@ -2522,7 +2524,7 @@ impl McpClientService {
             payload: json!({
                 "scope":scope.key(),"serverId":input.server_id,"pendingRevision":pending_revision,
                 "catalogRevision":input.expected_catalog_revision.get(),
-                "principal":ctx.principal(),"principalKind":format!("{:?}",ctx.principal_kind()),
+                "principal":ctx.principal(),"principalKind":ctx.principal_kind().as_str().to_string(),
                 "sessionId":ctx.session_id(),"fences":command.authorization().fences(),
             }),
         })?;

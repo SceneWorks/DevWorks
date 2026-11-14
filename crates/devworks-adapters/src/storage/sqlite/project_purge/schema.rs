@@ -32,10 +32,12 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// each outgoing MCP server's catalog into its own configuration_revisions namespace in the same
 /// scope. It adds no table or ownership edge: the tallies are columns of their claim, and the
 /// catalogs are configuration rows of the scope that already owns the server. Migration 55 adds
-/// the nullable default_ref column to repository_sources; the row keeps its owner, and the
+/// two partial indexes, owned_process_root_unsettled and owned_containers_root_agent_work; it
+/// adds no table, column or ownership edge, and both tables keep their purge policy. Migration 56
+/// adds the nullable default_ref column to repository_sources; the row keeps its owner, and the
 /// migration adds no table or ownership edge.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "80952d5271d7d70049f269e849bc9f782beddefb9fa965f0bb43fe0ff50528cd";
+    "0dd9682cb2bfca3ff6c513704ff5da29243840140f8ea4a85ae85c877141c416";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

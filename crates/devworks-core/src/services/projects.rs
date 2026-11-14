@@ -412,7 +412,7 @@ fn event(
     if let Some(map) = payload.as_object_mut() {
         map.insert(
             "principalKind".into(),
-            json!(format!("{:?}", ctx.principal_kind())),
+            json!(ctx.principal_kind().as_str().to_string()),
         );
     }
     tx.history().append(NewEvent {

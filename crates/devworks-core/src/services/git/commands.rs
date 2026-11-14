@@ -108,15 +108,10 @@ fn reviewed_commit_matches(git: &Git<'_>, path: &Path, job: &Job, head: &str) ->
 }
 
 impl Job {
-    fn context(&self, service: &GitService, operation: &OperationId) -> InvocationContext {
-        let kind = match self.kind.as_str() {
-            "Human" => PrincipalKind::Human,
-            "Agent" => PrincipalKind::Agent,
-            "Package" => PrincipalKind::Package,
-            "McpClient" => PrincipalKind::McpClient,
-            "Schedule" => PrincipalKind::Schedule,
-            _ => PrincipalKind::Host,
-        };
+    /// The invocation context for this job, or `None` when the stored principal kind is not
+    /// recognised (the effect is then refused rather than run as another kind).
+    fn context(&self, service: &GitService, operation: &OperationId) -> Option<InvocationContext> {
+        let kind = PrincipalKind::parse(&self.kind)?;
         let mut ctx = InvocationContext::new(
             self.actor.clone(),
             kind,
@@ -134,7 +129,7 @@ impl Job {
         if let Some(session) = &self.session {
             ctx = ctx.with_session(session.clone());
         }
-        ctx
+        Some(ctx)
     }
 }
 
@@ -571,7 +566,7 @@ impl GitService {
             delivery_id: queue.clone(),
             feature_id: work.parent_feature_id.clone(),
             actor: ctx.principal().clone(),
-            kind: format!("{:?}", ctx.principal_kind()),
+            kind: ctx.principal_kind().as_str().to_string(),
             session: ctx.session_id().cloned(),
             project: work.project_id.clone(),
             root: ctx.root_id().cloned(),
@@ -641,7 +636,9 @@ impl GitService {
                 "restored store requires observation before any Git write".into(),
             ));
         }
-        let ctx = job.context(self, operation);
+        let ctx = job
+            .context(self, operation)
+            .ok_or_else(|| denied("invalid principal kind"))?;
         let j = job.clone();
         let c = ctx.clone();
         let repository = run_write(&*self.store, WriteOptions::default(), move |tx| {
@@ -741,7 +738,9 @@ impl GitService {
                 );
             }
         };
-        let ctx = job.context(self, operation);
+        let Some(ctx) = job.context(self, operation) else {
+            return denied("invalid principal kind");
+        };
         let stop = || false;
         let helpers = crate::services::indexing::helper::RecordedHelpers {
             inner: &*self.helpers,
@@ -1234,7 +1233,9 @@ impl GitService {
     }
 
     fn observe_pending(&self, job: &Job, operation: &OperationRecord) -> EffectOutcome {
-        let ctx = job.context(self, &operation.id);
+        let Some(ctx) = job.context(self, &operation.id) else {
+            return denied("invalid principal kind");
+        };
         let stop = || false; // observation is permitted while the originating work is paused
         let helpers = crate::services::indexing::helper::RecordedHelpers {
             inner: &*self.helpers,

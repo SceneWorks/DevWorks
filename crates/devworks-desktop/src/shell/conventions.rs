@@ -1,12 +1,128 @@
 //! The native manager submits only the convention owner's scoped commands and reads.
 use super::*;
 use crate::{
-    conventions_ops as cop,
-    conventions_screen::{self as cv, Scope, Target},
+    conventions_ops::{self as cop, ConventionsSlot},
+    conventions_screen::{self as cv, ConventionsScreen, Scope, Target},
+    project_purge::Live,
+    screen::{Cx, Screen, ScreenContext, ScreenId, controller},
 };
+use devworks_core::ports::storage::ProjectPurgeClientScope;
 use devworks_core::protocol::records::*;
+use serde_json::json;
 
-impl Shell {
+controller!(ConventionsCtl, conventions: ConventionsScreen);
+
+/// Conventions is drawn as the third Knowledge subview.
+impl Screen for ConventionsScreen {
+    type Slot = ConventionsSlot;
+    const ID: ScreenId = ScreenId::Conventions;
+    fn load(&mut self, _cx: &mut Cx, _route: Route) {}
+    fn refresh(&mut self, _cx: &mut Cx, _route: Route) {}
+    fn apply(&mut self, cx: &mut Cx, slot: ConventionsSlot, reply: Reply) {
+        let unhandled = ConventionsCtl {
+            conventions: self,
+            cx,
+        }
+        .apply_conventions(slot, reply);
+        if let Some((slot, reply)) = unhandled {
+            cx.unhandled(&slot, reply);
+        }
+    }
+    fn ui(&mut self, cx: &mut Cx, _route: Route, ui: &mut Ui) {
+        ConventionsCtl {
+            conventions: self,
+            cx,
+        }
+        .conventions_screen(ui);
+    }
+    fn hosted(&self, route: Route, mem: &RouteMemory) -> bool {
+        route == Route::Knowledge && mem.tab == 2
+    }
+    fn pending_memory(&self, _unresolved: &[&Unresolved]) -> Option<serde_json::Value> {
+        Some(self.conventions_pending_memory()).filter(|v| !v.is_null())
+    }
+    fn restore_pending(&mut self, saved: &serde_json::Value) {
+        self.restore_conventions_pending(saved);
+    }
+    fn restore_in_flight(&mut self, slot: &ConventionsSlot, _u: &Unresolved) {
+        if let ConventionsSlot::ConventionArtifact(key, _)
+        | ConventionsSlot::ConventionCommand(key, _) = slot
+            && let Some(state) = self.states.iter_mut().find(|(s, _)| s.key() == *key)
+        {
+            state.1.busy = true;
+        }
+    }
+    fn purge_live(&self, out: &mut Live) {
+        let mut put = |project: &str, kind: &str, value: serde_json::Value| {
+            out.projects
+                .entry(project.into())
+                .or_insert_with(|| json!({}))[kind] = value;
+        };
+        for (scope, state) in &self.states {
+            let p = match scope {
+                Scope::Project(p) => p.as_str(),
+                Scope::Workspace => "",
+            };
+            {
+                let draft = |d: &crate::conventions_screen::Draft| json!({"title":d.title,"slug":d.slug,"base":d.base,"anchor":d.anchor,"markdown":*d.markdown,"raw":*d.raw,"parent":d.parent,"path":d.parent_path,"applicability":d.applicability,"editorState":format!("{d:?}")});
+                put(
+                    p,
+                    "conventions",
+                    json!({"new":state.new_draft.as_ref().map(draft),"drafts":state.drafts.iter().map(|(id,d)|(id,draft(d))).collect::<BTreeMap<_,_>>(),"query":state.text,"slug":state.slug_input,"path":state.path_input,"upload":state.upload.as_ref().map(|d|json!({"base":d.base,"path":d.path.to_string_lossy(),"name":d.name,"mediaType":d.media_type})),"resources":state.resource_drafts.iter().map(|(k,d)|(k,json!({"record":d.resource,"base":d.base,"name":d.name,"mediaType":d.media_type,"retired":d.retired,"replacement":d.replacement.as_ref().map(|p|p.to_string_lossy())}))).collect::<BTreeMap<_,_>>(),"moves":state.move_drafts.iter().map(|(k,d)|(k,json!({"base":d.base,"anchor":d.anchor,"scope":d.scope,"parent":d.parent,"order":d.order}))).collect::<BTreeMap<_,_>>()}),
+                );
+            }
+        }
+        for (scope, state) in &self.states {
+            let owner = match scope {
+                Scope::Project(p) => p.as_str(),
+                Scope::Workspace => "",
+            };
+            let paths = out.paths.entry(owner.into()).or_default();
+            if let Some(upload) = &state.upload {
+                paths.push(upload.path.clone());
+            }
+            paths.extend(
+                state
+                    .resource_drafts
+                    .values()
+                    .filter_map(|d| d.replacement.clone()),
+            );
+        }
+    }
+    fn remove_purged(&mut self, scope: &ProjectPurgeClientScope) {
+        let p = scope.project_id.0.as_str();
+        self.states.remove(&Scope::Project(p.into()));
+        if self.scope == Scope::Project(p.into()) {
+            self.scope = Scope::Workspace;
+        }
+        self.projects.retain(|(id, _)| id != p);
+    }
+    fn context(&self, _route: Route, mem: &RouteMemory) -> ScreenContext {
+        ScreenContext {
+            tab: mem.tab,
+            selection: None,
+        }
+    }
+}
+
+impl ConventionsScreen {
+    pub(super) fn import_dropped(&mut self, cx: &mut Cx, paths: Vec<std::path::PathBuf>) {
+        ConventionsCtl {
+            conventions: self,
+            cx,
+        }
+        .import_dropped_convention(paths);
+    }
+    pub(super) fn cancel_queries(&self) {
+        for state in self.states.values() {
+            if let Some((_, token)) = &state.active_search {
+                token.cancel();
+            }
+        }
+    }
+}
+
+impl ConventionsCtl<'_, '_> {
     fn convention_scope(&self, key: &str) -> Option<Scope> {
         self.conventions
             .states
@@ -79,7 +195,7 @@ impl Shell {
             }
         } else {
             self.query(
-                Slot::ConventionsList(key, generation, append, false),
+                ConventionsSlot::ConventionsList(key, generation, append, false),
                 "Reading conventions",
                 operation,
                 move |b| cop::query(b, operation, body),
@@ -157,7 +273,7 @@ impl Shell {
             (state.reader.generation, body)
         };
         if !self.query(
-            Slot::ConventionRead(key, generation),
+            ConventionsSlot::ConventionRead(key, generation),
             "Reading convention source",
             "conventions.read",
             move |b| cop::query(b, "conventions.read", body),
@@ -188,7 +304,7 @@ impl Shell {
             (s.version_generation, body)
         };
         if !self.query(
-            Slot::ConventionVersions(key, generation, append),
+            ConventionsSlot::ConventionVersions(key, generation, append),
             "Reading convention versions",
             "conventions.version",
             move |b| cop::query(b, "conventions.version", body),
@@ -259,7 +375,7 @@ impl Shell {
             (s.resource_generation, body)
         };
         if !self.query(
-            Slot::ConventionResources(key, generation, append),
+            ConventionsSlot::ConventionResources(key, generation, append),
             "Reading convention resources",
             "conventions.resources",
             move |b| cop::query(b, "conventions.resources", body),
@@ -293,16 +409,23 @@ impl Shell {
             (record.id.as_str().to_owned(), d.generation, body)
         };
         self.query(
-            Slot::ConventionParents(key, target, generation, append),
+            ConventionsSlot::ConventionParents(key, target, generation, append),
             "Reading destination conventions",
             "conventions.list",
             move |b| cop::query(b, "conventions.list", body),
         );
     }
-    pub(super) fn apply_conventions(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
+    fn apply_conventions(
+        &mut self,
+        slot: ConventionsSlot,
+        reply: Reply,
+    ) -> Option<(ConventionsSlot, Reply)> {
         let mut refresh_index_metadata = false;
         match (slot, reply) {
-            (Slot::ConventionsList(key, generation, append, search), Reply::Query(outcome)) => {
+            (
+                ConventionsSlot::ConventionsList(key, generation, append, search),
+                Reply::Query(outcome),
+            ) => {
                 let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 let uncertain = search && cop::search_uncertain(&outcome);
@@ -422,7 +545,10 @@ impl Shell {
                     }
                 }
             }
-            (Slot::ConventionsList(key, generation, _, true), Reply::Task(Err(error))) => {
+            (
+                ConventionsSlot::ConventionsList(key, generation, _, true),
+                Reply::Task(Err(error)),
+            ) => {
                 let scope = self.convention_scope(&key)?;
                 let state = self.conventions.states.get_mut(&scope).expect("scope");
                 if state
@@ -439,7 +565,7 @@ impl Shell {
                     ));
                 }
             }
-            (Slot::ConventionRead(key, generation), Reply::Query(outcome)) => {
+            (ConventionsSlot::ConventionRead(key, generation), Reply::Query(outcome)) => {
                 let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 if s.reader.generation != generation {
@@ -469,7 +595,10 @@ impl Shell {
                     Err(error) => s.reader.error = Some(error.describe()),
                 }
             }
-            (Slot::ConventionVersions(key, generation, append), Reply::Query(outcome)) => {
+            (
+                ConventionsSlot::ConventionVersions(key, generation, append),
+                Reply::Query(outcome),
+            ) => {
                 let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 if generation != s.version_generation {
@@ -495,7 +624,10 @@ impl Shell {
                     Err(error) => s.notice = Some((Tone::Attention, error.describe())),
                 }
             }
-            (Slot::ConventionResources(key, generation, append), Reply::Query(outcome)) => {
+            (
+                ConventionsSlot::ConventionResources(key, generation, append),
+                Reply::Query(outcome),
+            ) => {
                 let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 if generation != s.resource_generation {
@@ -550,7 +682,10 @@ impl Shell {
                     Err(error) => s.notice = Some((Tone::Attention, error.describe())),
                 }
             }
-            (Slot::ConventionParents(key, id, generation, append), Reply::Query(outcome)) => {
+            (
+                ConventionsSlot::ConventionParents(key, id, generation, append),
+                Reply::Query(outcome),
+            ) => {
                 let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 let d = s.move_drafts.get_mut(&id)?;
@@ -576,7 +711,7 @@ impl Shell {
                     Err(error) => s.notice = Some((Tone::Attention, error.describe())),
                 }
             }
-            (Slot::ConventionEditor(key, id, identity), Reply::Task(result)) => {
+            (ConventionsSlot::ConventionEditor(key, id, identity), Reply::Task(result)) => {
                 let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 let draft = s.drafts.get_mut(&id).filter(|d| d.identity == identity)?;
@@ -600,7 +735,7 @@ impl Shell {
                     }
                 }
             }
-            (Slot::ConventionOperation(key, id), Reply::Query(outcome)) => {
+            (ConventionsSlot::ConventionOperation(key, id), Reply::Query(outcome)) => {
                 let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 match cop::operation(outcome) {
@@ -681,13 +816,13 @@ impl Shell {
                     }
                 }
             }
-            (Slot::ConventionPrepare(key, token), Reply::Task(result)) => match result {
+            (ConventionsSlot::ConventionPrepare(key, token), Reply::Task(result)) => match result {
                 Ok(TaskOutput::Convention(cop::TaskResult::Pipeline(p))) => {
                     self.begin_convention_pipeline(token, p)
                 }
                 Ok(TaskOutput::Convention(cop::TaskResult::Prepared(frame))) => {
                     self.command(
-                        Slot::ConventionArtifact(key.clone(), token.clone()),
+                        ConventionsSlot::ConventionArtifact(key.clone(), token.clone()),
                         "Storing convention source",
                         "artifacts.save",
                         move |_| frame,
@@ -700,7 +835,7 @@ impl Shell {
                     "The prepared source did not match this transfer.".into(),
                 ),
             },
-            (Slot::ConventionArtifact(key, token), Reply::Command(outcome)) => {
+            (ConventionsSlot::ConventionArtifact(key, token), Reply::Command(outcome)) => {
                 if is_unknown(&outcome) {
                     self.fail_convention_pipeline(&key,&token,"The source save outcome is unknown. Confirm outcomes reuses the exact original save request; the draft is kept.".into());
                     if let Some(scope) = self.convention_scope(&key) {
@@ -734,7 +869,7 @@ impl Shell {
                     Err(error) => self.fail_convention_pipeline(&key, &token, error.describe()),
                 }
             }
-            (Slot::ConventionTransfer(key, _), Reply::Task(result)) => {
+            (ConventionsSlot::ConventionTransfer(key, _), Reply::Task(result)) => {
                 if let Some(scope) = self.convention_scope(&key) {
                     let state = self.conventions.states.get_mut(&scope).expect("scope");
                     state.notice = Some(match result {
@@ -749,7 +884,7 @@ impl Shell {
                     });
                 }
             }
-            (Slot::ConventionCommand(key, token), Reply::Command(outcome)) => {
+            (ConventionsSlot::ConventionCommand(key, token), Reply::Command(outcome)) => {
                 self.finish_convention_change(&key, &token, outcome)
             }
             (slot, reply) => return Some((slot, reply)),
@@ -761,7 +896,7 @@ impl Shell {
     }
 }
 
-impl Shell {
+impl ConventionsCtl<'_, '_> {
     fn submit_convention(
         &mut self,
         operation: &'static str,
@@ -788,7 +923,7 @@ impl Shell {
             resource: None,
         };
         if self.command(
-            Slot::ConventionCommand(key, token.clone()),
+            ConventionsSlot::ConventionCommand(key, token.clone()),
             "Saving convention change",
             operation,
             move |b| cop::command(b, operation, body),
@@ -1091,7 +1226,7 @@ impl Shell {
     }
 }
 
-impl Shell {
+impl ConventionsCtl<'_, '_> {
     fn load_convention_editor(&mut self) {
         let scope = self.conventions.scope.clone();
         let key = scope.key();
@@ -1110,15 +1245,20 @@ impl Shell {
             draft.error = None;
             (record, draft.identity)
         };
-        let slot = Slot::ConventionEditor(key, record.id.as_str().into(), identity);
+        let slot = ConventionsSlot::ConventionEditor(key, record.id.as_str().into(), identity);
         if self.pending(&slot) {
             return;
         }
         if let Some(client) = &mut self.client {
             let selected_scope = scope.clone();
-            client.task(slot, "Loading complete convention source", move |b| {
-                cop::load_editor(b, &selected_scope, &record, identity).map(TaskOutput::Convention)
-            });
+            client.task(
+                slot.into(),
+                "Loading complete convention source",
+                move |b| {
+                    cop::load_editor(b, &selected_scope, &record, identity)
+                        .map(TaskOutput::Convention)
+                },
+            );
         } else if let Some(draft) = self
             .conventions
             .states
@@ -1137,7 +1277,6 @@ impl Shell {
         match action {
             cv::Action::Knowledge(tab) => {
                 self.routes.entry(Route::Knowledge).or_default().tab = *tab;
-                self.knowledge.tab = *tab;
             }
             cv::Action::Scope(scope) => {
                 self.conventions.scope = scope.clone();
@@ -1372,12 +1511,12 @@ impl Shell {
     }
 }
 
-impl Shell {
+impl ConventionsCtl<'_, '_> {
     fn inspect_convention_operation(&mut self, id: String) {
         let scope = self.conventions.scope.clone();
         let key = scope.key();
         self.query(
-            Slot::ConventionOperation(key, id.clone()),
+            ConventionsSlot::ConventionOperation(key, id.clone()),
             "Reading convention operation",
             "conventions.read",
             move |b| {
@@ -1391,7 +1530,7 @@ impl Shell {
     }
 }
 
-impl Shell {
+impl ConventionsCtl<'_, '_> {
     fn convention_notice(&mut self, text: String) {
         self.conventions.state_mut().notice = Some((Tone::Attention, text));
     }
@@ -1434,7 +1573,7 @@ impl Shell {
             draft.base.as_ref().map(|r| r.id.as_str().into()),
             Some((draft.identity, draft.generation)),
         );
-        let slot = Slot::ConventionPrepare(scope.key(), token);
+        let slot = ConventionsSlot::ConventionPrepare(scope.key(), token);
         let s = self.conventions.state_mut();
         s.busy = true;
         if let Some(d) = s.draft_mut() {
@@ -1442,13 +1581,13 @@ impl Shell {
         }
         self.conventions.submissions.insert(
             match &slot {
-                Slot::ConventionPrepare(_, token) => token.clone(),
+                ConventionsSlot::ConventionPrepare(_, token) => token.clone(),
                 _ => unreachable!(),
             },
             submission.clone(),
         );
         if let Some(c) = &mut self.client {
-            c.task(slot, "Preparing convention source", move |b| {
+            c.task(slot.into(), "Preparing convention source", move |b| {
                 crate::conventions_transfer::prepare_edit(b, scope, draft, submission)
                     .map(cop::TaskResult::Pipeline)
                     .map(TaskOutput::Convention)
@@ -1480,7 +1619,7 @@ impl Shell {
             let body = p.body.clone();
             let scopekey = p.scope.key();
             if self.command(
-                Slot::ConventionCommand(scopekey, token.clone()),
+                ConventionsSlot::ConventionCommand(scopekey, token.clone()),
                 "Saving convention",
                 operation,
                 move |b| cop::command(b, operation, body),
@@ -1489,7 +1628,7 @@ impl Shell {
             }
         } else if let Some(c) = &mut self.client {
             c.task(
-                Slot::ConventionPrepare(p.scope.key(), token),
+                ConventionsSlot::ConventionPrepare(p.scope.key(), token).into(),
                 "Preparing source upload",
                 move |b| {
                     crate::conventions_transfer::prepare_artifact(b, &p)
@@ -1520,7 +1659,7 @@ impl Shell {
             d.error = Some(error);
         }
     }
-    pub(super) fn import_dropped_convention(&mut self, paths: Vec<std::path::PathBuf>) {
+    fn import_dropped_convention(&mut self, paths: Vec<std::path::PathBuf>) {
         if paths.len() != 1 {
             self.conventions.state_mut().notice = Some((
                 Tone::Attention,
@@ -1579,7 +1718,7 @@ impl Shell {
                 let token = b.token("export");
                 if let Some(c) = &mut self.client {
                     c.task(
-                        Slot::ConventionTransfer(scope.key(), token),
+                        ConventionsSlot::ConventionTransfer(scope.key(), token).into(),
                         "Exporting convention",
                         move |b| {
                             crate::conventions_transfer::export(b, &scope, &record, format, &path)
@@ -1604,7 +1743,7 @@ impl Shell {
                 let token = b.token("download");
                 if let Some(c) = &mut self.client {
                     c.task(
-                        Slot::ConventionTransfer(scope.key(), token),
+                        ConventionsSlot::ConventionTransfer(scope.key(), token).into(),
                         "Downloading attachment",
                         move |b| {
                             crate::conventions_transfer::download(b, &scope, &resource, &path).map(
@@ -1768,7 +1907,7 @@ impl Shell {
             },
         );
     }
-    pub(super) fn conventions_screen(&mut self, ui: &mut Ui) {
+    fn conventions_screen(&mut self, ui: &mut Ui) {
         if !self.conventions.initialized {
             self.conventions.initialized = true;
             if let Some(project) = self.selected_project() {
@@ -1817,7 +1956,7 @@ impl Shell {
                 })
                 .unwrap_or_default();
             for id in ids {
-                if !self.pending(&Slot::ConventionOperation(
+                if !self.pending(&ConventionsSlot::ConventionOperation(
                     self.conventions.scope.key(),
                     id.clone(),
                 )) {
@@ -1852,48 +1991,45 @@ impl Shell {
     }
 }
 
-impl Shell {
-    pub(super) fn conventions_pending_memory(&self) -> serde_json::Value {
+impl ConventionsScreen {
+    fn conventions_pending_memory(&self) -> serde_json::Value {
         let operations: Vec<_> = self
-            .conventions
             .states
             .iter()
             .filter(|(_, s)| !s.operation_ids.is_empty())
             .map(|(scope, s)| serde_json::json!({"scope":scope,"ids":s.operation_ids}))
             .collect();
-        let searches:Vec<_>=self.conventions.states.iter().filter(|(_,s)|s.search_recovery.is_some()||s.last_search.is_some()).map(|(scope,s)|serde_json::json!({"scope":scope,"recovery":s.search_recovery,"last":s.last_search,"preparation":s.search_preparation,"earlier":s.previous_searches})).collect();
-        if self.conventions.pipelines.is_empty()
-            && self.conventions.submissions.is_empty()
+        let searches:Vec<_>=self.states.iter().filter(|(_,s)|s.search_recovery.is_some()||s.last_search.is_some()).map(|(scope,s)|serde_json::json!({"scope":scope,"recovery":s.search_recovery,"last":s.last_search,"preparation":s.search_preparation,"earlier":s.previous_searches})).collect();
+        if self.pipelines.is_empty()
+            && self.submissions.is_empty()
             && operations.is_empty()
             && searches.is_empty()
         {
             return serde_json::Value::Null;
         }
-        serde_json::json!({"pipelines":self.conventions.pipelines,"submissions":self.conventions.submissions,"operations":operations,"searches":searches,"scope":self.conventions.scope})
+        serde_json::json!({"pipelines":self.pipelines,"submissions":self.submissions,"operations":operations,"searches":searches,"scope":self.scope})
     }
-    pub(super) fn restore_conventions_pending(&mut self, value: &serde_json::Value) {
+    fn restore_conventions_pending(&mut self, value: &serde_json::Value) {
         if let Ok(scope) = serde_json::from_value(value["scope"].clone()) {
-            self.conventions.scope = scope;
-            self.conventions.initialized = true;
+            self.scope = scope;
+            self.initialized = true;
         }
-        self.conventions.pipelines =
-            serde_json::from_value(value["pipelines"].clone()).unwrap_or_default();
-        self.conventions.submissions =
-            serde_json::from_value(value["submissions"].clone()).unwrap_or_default();
-        for p in self.conventions.pipelines.values_mut() {
+        self.pipelines = serde_json::from_value(value["pipelines"].clone()).unwrap_or_default();
+        self.submissions = serde_json::from_value(value["submissions"].clone()).unwrap_or_default();
+        for p in self.pipelines.values_mut() {
             p.submission.draft = None;
             p.submission.resource = None;
-            self.conventions.states.entry(p.scope.clone()).or_default();
+            self.states.entry(p.scope.clone()).or_default();
         }
-        for p in self.conventions.submissions.values_mut() {
+        for p in self.submissions.values_mut() {
             p.draft = None;
             p.resource = None;
-            self.conventions.states.entry(p.scope.clone()).or_default();
+            self.states.entry(p.scope.clone()).or_default();
         }
         if let Some(searches) = value["searches"].as_array() {
             for search in searches {
                 if let Ok(scope) = serde_json::from_value::<Scope>(search["scope"].clone()) {
-                    let state = self.conventions.states.entry(scope).or_default();
+                    let state = self.states.entry(scope).or_default();
                     state.search_recovery =
                         serde_json::from_value(search["recovery"].clone()).unwrap_or_default();
                     state.last_search =
@@ -1911,18 +2047,14 @@ impl Shell {
                     serde_json::from_value::<Scope>(operation["scope"].clone()),
                     serde_json::from_value::<Vec<String>>(operation["ids"].clone()),
                 ) {
-                    self.conventions
-                        .states
-                        .entry(scope)
-                        .or_default()
-                        .operation_ids = ids;
+                    self.states.entry(scope).or_default().operation_ids = ids;
                 }
             }
         }
     }
 }
 
-impl Shell {
+impl ConventionsCtl<'_, '_> {
     fn dispatch_convention_search(
         &mut self,
         scope: Scope,
@@ -1944,7 +2076,8 @@ impl Shell {
             generation,
         });
         state.active_search = Some((generation, token.clone()));
-        let slot = Slot::ConventionsList(scope.key(), generation, append, true);
+        let slot: Slot =
+            ConventionsSlot::ConventionsList(scope.key(), generation, append, true).into();
         let submitted = self.client.as_mut().is_some_and(|c| {
             if backend.supports_query_cancellation() {
                 c.query_cancellable(
@@ -2024,16 +2157,9 @@ impl Shell {
                 Some("The original search cannot be confirmed while offline or closing.".into());
         }
     }
-    pub(super) fn cancel_convention_queries(&self) {
-        for state in self.conventions.states.values() {
-            if let Some((_, token)) = &state.active_search {
-                token.cancel();
-            }
-        }
-    }
 }
 
-impl Shell {
+impl ConventionsCtl<'_, '_> {
     fn archive_convention_search(&mut self) {
         let state = self.conventions.state_mut();
         if let Some(request) = state.search_recovery.take() {
