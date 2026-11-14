@@ -6,7 +6,7 @@ The probe extracts main-body runs/table paragraphs and stable paragraph locators
 
 Known limits: local XML names are used without a full OOXML namespace/content-type/relationship validator; only the main part is parsed. No auxiliary stories, tracked-change interpretation, style/list semantics, nested-table fidelity, layout, encryption classification, full output/time policy or app publication/recovery adapter. The generated fixture packages are intentionally minimal; the requirements document is an additional real package. Full production acceptance remains G08.
 
-Reproduce from the repository root:
+Reproduce from the repository root. `tools/document-eval` was removed from the main branch because nothing runs it; its source and README remain at commit [`f76506ec`](https://github.com/SceneWorks/DevWorks/tree/f76506ec33c9563d19e03bc68a4b7e9e65178271/tools/document-eval). Check out that commit to run the commands below.
 
 ```sh
 CARGO_TARGET_DIR="$PWD/.planning-build/remaining-decisions/cargo-target" cargo build --locked --release --manifest-path tools/document-eval/Cargo.toml

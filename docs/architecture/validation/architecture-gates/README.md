@@ -12,7 +12,7 @@
 - `all-document-links.json`: all top-level architecture/planning HTML local targets, images and page errors.
 - `document-review.json`: current source/generated document inventory, baseline scope and structural reconciliation. Historical raw evidence remains scoped to its original checkpoint.
 
-Reproduce native checks using [the probe README](../../../../tools/architecture-gates-eval/README.md). Normal verification never invokes a provider, sign-in, installed inference model or user-visible browser tab. This review used only `claude --help`/`--version` while evaluating the subsequently rejected CLI alternative; no Claude inference was run. The final design retains the direct simple-router subscription option and separate Anthropic API-key access.
+Reproduce native checks using [the probe README](https://github.com/SceneWorks/DevWorks/tree/f76506ec33c9563d19e03bc68a4b7e9e65178271/tools/architecture-gates-eval/README.md) at commit `f76506ec`; the probe was removed from the main branch. Normal verification never invokes a provider, sign-in, installed inference model or user-visible browser tab. This review used only `claude --help`/`--version` while evaluating the subsequently rejected CLI alternative; no Claude inference was run. The final design retains the direct simple-router subscription option and separate Anthropic API-key access.
 
 A transient Helix native-reader experiment demonstrated bounded structural reduction before the user removed the reader. It has no current admission gate or production ownership. Its new probe source was removed; the older four-engine storage comparison remains historical evidence. DW-038 is retired. Neither code indexing nor app storage uses HelixDB.
 
