@@ -66,6 +66,18 @@ Tier Low members.
 
 Configured models allocated round-robin for Tier Low.
 
+## tools.overrides
+
+Selected agent tools.
+
+- Default: `serde_json::Map::<String`
+- Scope: Workspace only
+- Adoption: Value>::new()
+- Policy: NextSafeStep
+- Section: Tools
+
+Explicit per-tool choices shared by agents. Missing tools use their origin's default; reviewer read-only rules and other safety controls still apply.
+
 ## tools.webSearch
 
 Web search.
@@ -260,7 +272,7 @@ Import existing open issues when a repository is connected and newly reported on
 
 ## github.syncLinkedIssueFields
 
-Synchronize linked issue fields.
+Receive linked issue updates.
 
 - Default: `true`
 - Scope: Workspace → Project
@@ -268,7 +280,7 @@ Synchronize linked issue fields.
 - Policy: Configurable
 - Section: GitHub
 
-Two-way synchronization of linked issue fields.
+Reflect remote issue updates locally. Keep intermediate execution details local; publish a resolution only after completed work is verified.
 
 ## github.issueTriageIntervalSeconds
 
@@ -317,6 +329,42 @@ Review fix cycles.
 - Section: Delivery
 
 Maximum review/fix cycles before asking for help. Engineering default.
+
+## watch.backupEnabled
+
+Watcher backup check.
+
+- Default: `true`
+- Scope: Workspace only
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Agents
+
+Periodically re-check every unfinished or unacknowledged watcher by a separate path, so an outcome whose first delivery was missed still reaches its agent, and an agent whose watcher stalled is reminded to check it. Engineering default.
+
+## watch.backupIntervalMs
+
+Watcher backup check interval (ms).
+
+- Default: `900_000`
+- Scope: Workspace only
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Agents
+
+How often the watcher backup check runs while some agent has an unfinished or unacknowledged watcher. Engineering default.
+
+## watch.maxLifetimeMs
+
+Polling watcher lifetime (ms).
+
+- Default: `86_400_000`
+- Scope: Workspace → Project
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Agents
+
+Longest a polling watcher (a probe command) keeps checking before it ends TimedOut, unless the watcher sets its own. A day covers slow deploys and queues without leaving forgotten probes running. Engineering default.
 
 ## reviews.automationWaitSeconds
 

@@ -396,6 +396,8 @@ macro_rules! work_reads {
             fn allocation_replay(&self,key:&str)->Result<Option<StoredAllocationReplay>,StorageError>{super::allocations::replay(self.conn,key)}
             fn allocation_claim(&self,id:&Id)->Result<Option<StoredAllocationClaim>,StorageError>{super::allocations::one(self.conn,id)}
             fn allocation_claims(&self,project:&ProjectId,after:Option<&Id>,limit:u16)->Result<Vec<StoredAllocationClaim>,StorageError>{super::allocations::page(self.conn,project,after,limit)}
+            fn live_allocation_claims(&self,project:&ProjectId)->Result<Vec<StoredAllocationClaim>,StorageError>{super::allocations::live_claims(self.conn,project)}
+            fn latest_allocation_claim(&self,work:&Id)->Result<Option<StoredAllocationClaim>,StorageError>{super::allocations::latest(self.conn,work)}
             fn allocation_by_invocation(&self,namespace:&Id,invocation:&Id)->Result<Option<StoredAllocationClaim>,StorageError>{super::allocations::invocation(self.conn,namespace,invocation)}
             fn work(&self, id: &Id) -> Result<Option<StoredWork>, StorageError> {
                 one_work(self.conn, id)

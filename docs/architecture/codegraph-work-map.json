@@ -3373,7 +3373,7 @@
       ]
     }
   ],
-  "nativeCurrentStatus": "ready",
+  "nativeCurrentStatus": "Native delivery is under way. Per-item state lives in the tracker. The code on main registers a handler for 303 of the 376 registry operations; the 73 without one are listed in the repository README.",
   "nativeInitialStatusIsHistorical": true,
   "readinessAmendment": {
     "date": "2026-11-02",

@@ -6,7 +6,7 @@ pub mod resolve;
 pub mod transport;
 
 use devworks_core::ports::secrets::SecretResolver;
-use devworks_core::ports::web::{HttpTransport, Resolver, SearchProvider};
+use devworks_core::ports::web::{HopTransport, Resolver, SearchProvider};
 use devworks_core::services::web::WebPorts;
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ use std::sync::Arc;
 /// every search provider this build supports, resolving credentials through `secrets`.
 pub fn native_ports(secrets: Arc<dyn SecretResolver>) -> WebPorts {
     let resolver: Arc<dyn Resolver> = Arc::new(resolve::SystemResolver);
-    let transport: Arc<dyn HttpTransport> = Arc::new(transport::NativeTransport::new());
+    let transport: Arc<dyn HopTransport> = Arc::new(transport::NativeTransport::new());
     let providers: Vec<Arc<dyn SearchProvider>> = vec![Arc::new(brave::BraveSearch::new(
         resolver.clone(),
         transport.clone(),

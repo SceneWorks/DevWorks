@@ -25,7 +25,9 @@ use devworks_core::protocol::records::{
     ReadinessDisposition, ReadinessFreshness, RequirementItem, RequirementStatus, RetainedMessage,
     RetainedMessageEvent, RootSnapshot, WorkKind, WorkRecord,
 };
-use devworks_core::protocol::{DomainErrorCode, Event, EventSubject, Id};
+use devworks_core::protocol::{
+    BlockerChange, ControlReason, DomainErrorCode, Event, EventBody, EventSubject, Id,
+};
 use devworks_core::services::work::deps::MAX_PREREQUISITES;
 use devworks_core::services::work::fold;
 mod workflow;
@@ -3103,6 +3105,69 @@ fn message_board(ui: &mut Ui, board: &mut MessageBoard, open: bool, actions: &mu
     }
 }
 
+/// What an Activity event is and what it says, from its body.
+pub fn event_summary(e: &Event) -> (&'static str, String) {
+    match &e.event {
+        EventBody::CommandDecided { command_id } => (
+            "Change",
+            format!(
+                "command {} decided; revision {}",
+                command_id.0.as_str(),
+                e.aggregate_revision.as_str()
+            ),
+        ),
+        EventBody::RootControlChanged { reason, .. } => (
+            "Run control",
+            match reason {
+                ControlReason::Paused => "paused".into(),
+                ControlReason::Continued => "continued".into(),
+            },
+        ),
+        EventBody::ActivationRequested {
+            execution_id,
+            generation,
+            ..
+        } => (
+            "Run start",
+            format!(
+                "activation {} requested (generation {})",
+                execution_id.0.as_str(),
+                generation.as_str()
+            ),
+        ),
+        EventBody::BlockerChanged { blocker, change } => (
+            "Blocker",
+            format!(
+                "{} {:?}",
+                match change {
+                    BlockerChange::Raised => "raised",
+                    BlockerChange::Cleared => "cleared",
+                },
+                blocker.cause
+            ),
+        ),
+        EventBody::OperationObserved {
+            operation_id,
+            state,
+            ..
+        } => (
+            "Operation",
+            format!("operation {} {state:?}", operation_id.0.as_str()),
+        ),
+    }
+}
+
+/// One Activity row: its sequence, the event's kind and summary, who, what it concerns and when,
+/// in local time.
+pub fn activity_line(e: &Event, who: &str, what: &str) -> String {
+    let (kind, summary) = event_summary(e);
+    format!(
+        "#{} · {kind}: {summary} · {who} · {what} · {}",
+        e.sequence.as_str(),
+        super::jobs::local_time(Some(&e.occurred_at_ms)),
+    )
+}
+
 fn activity(
     ui: &mut Ui,
     work: &mut WorkUi,
@@ -3224,13 +3289,7 @@ fn activity(
                 ),
                 None => subject.map_or("the project".into(), |s| format!("work {s}")),
             };
-            let line = format!(
-                "#{} · {} · {} · {}",
-                e.sequence.as_str(),
-                if mine { "You" } else { e.actor_id.0.as_str() },
-                what,
-                e.occurred_at_ms.as_str()
-            );
+            let line = activity_line(e, if mine { "You" } else { e.actor_id.0.as_str() }, &what);
             (kind_ok && actor_ok && item_ok && matches_text_line(&line, &a.text)).then_some(line)
         })
         .collect();
@@ -4722,7 +4781,7 @@ fn card_detail(
         }
         egui::ScrollArea::vertical().id_salt(("card-history", w.id.as_str())).max_height(160.0).show(ui, |ui| {
             for e in history {
-                widgets::caption(ui, format!("#{} by {}", e.sequence.as_str(), e.actor_id.0.as_str()));
+                widgets::caption(ui, activity_line(e, e.actor_id.0.as_str(), "this item"));
             }
         });
     });
