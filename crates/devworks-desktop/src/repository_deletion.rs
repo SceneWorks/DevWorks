@@ -58,6 +58,14 @@ pub fn refusal_text(refusal: &DeletionRefusal) -> String {
         DeletionRefusal::Failed(why) => {
             format!("The deletion stopped part way ({why}). What remains is recorded.")
         }
+        DeletionRefusal::Unrecorded(outcome) if outcome.complete => {
+            "The folder was deleted, but recording the deletion in history failed.".into()
+        }
+        DeletionRefusal::Unrecorded(outcome) => format!(
+            "The folder was partly deleted ({} entries remain), but recording the deletion in \
+             history failed.",
+            outcome.remaining.len()
+        ),
         DeletionRefusal::Storage(e) => format!("Nothing was deleted: {e:?}"),
     }
 }
@@ -132,4 +140,26 @@ pub(crate) fn review_window(
             });
         });
     decided
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use devworks_core::authority::destructive::RemovalOutcome;
+
+    #[test]
+    fn a_removal_whose_record_failed_never_reads_as_nothing_deleted() {
+        let done = refusal_text(&DeletionRefusal::Unrecorded(RemovalOutcome {
+            removed_entries: 3,
+            remaining: Vec::new(),
+            complete: true,
+        }));
+        assert!(done.contains("was deleted") && !done.contains("Nothing was deleted"));
+        let partial = refusal_text(&DeletionRefusal::Unrecorded(RemovalOutcome {
+            removed_entries: 1,
+            remaining: vec!["a".into(), "b".into()],
+            complete: false,
+        }));
+        assert!(partial.contains("2 entries remain") && !partial.contains("Nothing was deleted"));
+    }
 }

@@ -126,6 +126,8 @@ pub enum DeletionRefusal {
     Guarded(&'static str),
     /// The removal started and failed; the partial outcome is recorded.
     Failed(String),
+    /// The removal ran (this is what it did) but recording its outcome failed.
+    Unrecorded(RemovalOutcome),
     Storage(StorageError),
 }
 impl From<StorageError> for DeletionRefusal {
@@ -248,15 +250,63 @@ pub fn dependencies(
     })
 }
 
-/// The preview of `repository` as it is now: the protected roots and dependencies read from the
-/// store. Like [`prepare`], it confers nothing.
+/// Most recorded task worktrees read per page.
+const WORKTREES_PAGE: u16 = 500;
+
+/// The repository's recorded task worktrees that are not removed, and their current use: a
+/// worktree is in use while a Git write holds it, and stopped unless its owning work has a live
+/// activation. Deleting the primary checkout removes the Git metadata they depend on.
+pub fn worktrees(
+    store: &dyn ApplicationStore,
+    repository: &Id,
+) -> Result<Vec<OwnedWorktree>, StorageError> {
+    let repository = repository.clone();
+    read_snapshot(store, &ReadOptions::default(), move |s| {
+        let mut out = Vec::new();
+        let mut after: Option<Id> = None;
+        loop {
+            let page =
+                s.git()
+                    .git_repository_worktrees(&repository, after.as_ref(), WORKTREES_PAGE)?;
+            for w in page.iter().filter(|w| !w.removed) {
+                let live = match &w.owner_root_id {
+                    Some(root) => s.runs().live_activation(root)?.is_some(),
+                    None => false,
+                };
+                out.push(OwnedWorktree {
+                    id: w.id.clone(),
+                    repository_id: w.repository_id.clone(),
+                    location: w.path.clone(),
+                    stopped: !live,
+                    active_users: u32::from(w.pending_operation_id.is_some()),
+                });
+            }
+            if page.len() < usize::from(WORKTREES_PAGE) {
+                return Ok(out);
+            }
+            after = page.last().map(|w| w.id.clone());
+        }
+    })
+}
+
+/// The protected roots as they are now, with `repository`'s recorded task worktrees.
+fn current_roots(
+    store: &dyn ApplicationStore,
+    app_data_root: Option<String>,
+    repository: &Id,
+) -> Result<ProtectedRoots, StorageError> {
+    ProtectedRoots::read(store, worktrees(store, repository)?, app_data_root)
+}
+
+/// The preview of `repository` as it is now: the protected roots, its recorded task worktrees
+/// and its dependencies read from the store. Like [`prepare`], it confers nothing.
 pub fn preview(
     store: &dyn ApplicationStore,
     fs: &dyn FilesystemResolver,
     app_data_root: Option<String>,
     repository: &Id,
 ) -> Result<DeletionPreview, DeletionRefusal> {
-    let roots = ProtectedRoots::read(store, Vec::new(), app_data_root)?;
+    let roots = current_roots(store, app_data_root, repository)?;
     prepare(fs, &roots, repository, dependencies(store, repository)?)
 }
 
@@ -276,7 +326,8 @@ pub fn delete<F: FilesystemResolver + DestructiveExecutor>(
     let current = preview(store, fs, app_data_root.clone(), &reviewed.repository_id)?;
     let grant = confirm_within(store, ctx, reviewed, MAX_CONFIRMATION_LIFETIME_MS)?;
     let permit = authorize(store, ctx, &grant.id, &current)?;
-    let registry = ProtectedRoots::read(store, Vec::new(), app_data_root)?;
+    let repository = &current.repository_id;
+    let registry = current_roots(store, app_data_root.clone(), repository)?;
     let plan = EffectPlan {
         kind: DestructiveKind::RemoveTree,
         targets: vec![current.location.clone()],
@@ -291,7 +342,10 @@ pub fn delete<F: FilesystemResolver + DestructiveExecutor>(
         (PreflightVerdict::Allowed, Some([target])) => target,
         _ => return Err(DeletionRefusal::Guarded(decision.rationale())),
     };
-    let step = destructive::revalidate(fs, &decision, &registry.revision)
+    // The protected roots are read again immediately before the step: a repository registered
+    // (or a worktree recorded) since the preflight changes their revision and refuses it.
+    let now = current_roots(store, app_data_root, repository)?;
+    let step = destructive::revalidate(fs, &decision, &now.revision)
         .map_err(|_| DeletionRefusal::Changed)
         .and_then(|()| {
             fs.execute(
@@ -309,13 +363,18 @@ pub fn delete<F: FilesystemResolver + DestructiveExecutor>(
                 remaining: vec![current.location.clone()],
                 complete: false,
             };
-            record_outcome(store, ctx, &permit, &partial)?;
-            return Err(DeletionRefusal::Failed(why));
+            return Err(match record_outcome(store, ctx, &permit, &partial) {
+                Ok(_) => DeletionRefusal::Failed(why),
+                Err(_) => DeletionRefusal::Unrecorded(partial),
+            });
         }
         Err(other) => return Err(other),
     };
-    record_outcome(store, ctx, &permit, &outcome)?;
-    Ok(outcome)
+    // Once the folder was removed, a failure to record it never reads as nothing removed.
+    match record_outcome(store, ctx, &permit, &outcome) {
+        Ok(_) => Ok(outcome),
+        Err(_) => Err(DeletionRefusal::Unrecorded(outcome)),
+    }
 }
 
 fn require_user(

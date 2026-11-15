@@ -3251,6 +3251,14 @@ impl GitRead for Unsupported {
     fn git_worktree(&self, _: &Id) -> Result<Option<StoredGitWorktree>, StorageError> {
         Ok(None)
     }
+    fn git_repository_worktrees(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredGitWorktree>, StorageError> {
+        Ok(vec![])
+    }
     fn git_worktrees(
         &self,
         _: &Id,
