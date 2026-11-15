@@ -810,6 +810,52 @@ impl ProcessHost for DelayedRegistrationHost {
     }
 }
 
+// The roots a host composes at boot name only its data and skill folders. Every launch (process
+// tools, watchers, containers, MCP servers, packages) is checked against the repositories
+// registered now, so an agent's command cannot remove a registered repository's folder
+// (DW-327).
+#[cfg(unix)]
+#[test]
+fn a_launch_is_checked_against_the_repositories_registered_now() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let repo = fx.h.root.with_extension("checkout");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    let location = repo.display().to_string();
+    fx.h.sql_with(
+        "INSERT INTO repositories(id,canonical_location,revision) VALUES('repo-a',?1,1)",
+        &location,
+    );
+    let (fs, boot_roots) = policy_parts();
+    let policy = LaunchPolicy {
+        fs: &fs,
+        roots: &boot_roots,
+        protected_branches: &[],
+    };
+    let spec = ProcessSpec::new(&["rm".to_owned(), "-rf".to_owned(), location]).unwrap();
+    let verdict = fx.supervisor().preflight(&spec, &policy);
+    assert!(
+        matches!(
+            verdict,
+            devworks_core::authority::shell::CommandVerdict::Blocked { .. }
+        ),
+        "{verdict:?}"
+    );
+    let refused = fx.supervisor().launch(
+        &fx.agent("agent-a", "project-a", "s-a"),
+        LaunchRequest {
+            spec,
+            operation_id: None,
+            lease: None,
+            approved_hold: false,
+        },
+        &policy,
+    );
+    assert!(matches!(refused, Err(LaunchRefusal::Blocked(_))));
+    assert!(repo.join(".git").exists());
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
 #[test]
 fn container_cli_runner_uses_owned_process_and_redacts_bounded_native_output() {
     let _serial = serial();

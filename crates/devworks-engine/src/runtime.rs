@@ -2995,6 +2995,14 @@ impl Runtime {
         self.command(ctx, OPERATION, frame)
     }
 
+    /// Whether desktop automation may be generating UI events: trusted native confirmation
+    /// ingress (such as a repository deletion) stays closed while it may.
+    pub fn desktop_automation_may_be_active(&self) -> bool {
+        self.desktop
+            .as_ref()
+            .is_some_and(|desktop| desktop.automation_may_be_active())
+    }
+
     pub fn approvals(&self) -> &Arc<ApprovalService> {
         &self.approvals
     }

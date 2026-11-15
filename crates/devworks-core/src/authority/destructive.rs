@@ -105,6 +105,12 @@ pub trait FilesystemResolver: Send + Sync {
     fn home(&self) -> Option<PathBuf>;
     /// The `gitdir:` pointer of a `.git` file (linked worktrees and submodules), unresolved.
     fn gitfile_target(&self, gitfile: &Path) -> Option<String>;
+    /// Whether this adapter's [`DestructiveExecutor`] performs destructive steps on this
+    /// platform. Without it the dedicated repository deletion is refused before anything is
+    /// confirmed (fail closed: an adapter that does not say so performs none).
+    fn destructive_steps_supported(&self) -> bool {
+        false
+    }
 }
 
 /// An owned task worktree as recorded by its owner.
@@ -147,6 +153,25 @@ impl ProtectedRoots {
             roots.store = Some((s.stamp().store_id.clone(), s.stamp().restore_epoch));
             Ok(roots)
         })
+    }
+    /// These roots with the repositories registered in `store` now added. Roots composed at boot
+    /// name only the application data and skill folders, so every launch is checked against the
+    /// current registry instead. The result honors no deletion permit: it is not bound to a
+    /// store ([`Self::read`] is).
+    pub fn with_registered(&self, store: &dyn ApplicationStore) -> Result<Self, StorageError> {
+        let read = Self::read(store, Vec::new(), None)?;
+        let mut repositories = self.repositories.clone();
+        for r in read.repositories {
+            if !repositories.iter().any(|x| x.id == r.id) {
+                repositories.push(r);
+            }
+        }
+        Ok(Self::new(
+            repositories,
+            self.worktrees.clone(),
+            self.app_data_root.clone(),
+        )
+        .with_skill_roots(self.skill_roots.clone()))
     }
     /// The store and restore epoch these roots were read from, if any.
     pub fn store(&self) -> Option<&(StoreId, i64)> {
