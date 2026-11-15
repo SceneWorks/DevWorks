@@ -188,7 +188,8 @@ fn save_catalog(
     Ok(())
 }
 
-/// The agent invocation a sampling request runs under, rebuilt from its `mcp.tool` journal.
+/// The agent invocation a sampling request runs under, rebuilt from its tool call's journal.
+#[derive(Clone)]
 pub struct SamplingGrant {
     pub context: InvocationContext,
     pub operation_id: OperationId,

@@ -138,6 +138,10 @@ impl Grants {
     pub(super) fn principal(&self) -> Option<&InvocationContext> {
         self.principal.as_ref()
     }
+    /// Whether the approved manifest grants network access to `endpoint`.
+    pub(super) fn network_granted(&self, endpoint: &str) -> bool {
+        self.network.contains(endpoint)
+    }
 }
 
 fn denied(message: &str) -> RpcError {
@@ -206,20 +210,27 @@ pub(super) fn call(
             if !grants.inference {
                 return Err(denied("the approved manifest grants no inference access"));
             }
-            Err(rpc_error(
-                RpcErrorClass::Unavailable,
-                "brokered inference is not yet active",
-            ))
+            super::inference::call(host, ctx, slot, params)
         }
-        BrokerCall::ArtifactRead { artifact } => {
-            if !ctx.in_scope(artifact) {
-                return Err(denied("the artifact is not an artifact of this invocation"));
-            }
-            Err(rpc_error(
-                RpcErrorClass::Unavailable,
-                "brokered artifact reads are not yet active",
-            ))
+        BrokerCall::ArtifactRead { artifact, offset } => {
+            super::artifact_io::read(host, ctx, artifact, offset.as_ref())
         }
+        BrokerCall::ArtifactAppend { write_id, data } => {
+            super::artifact_io::append(ctx, params.action_key.as_str(), write_id.as_str(), data)
+        }
+        BrokerCall::ArtifactPublish {
+            write_id,
+            media_type,
+            sha256,
+        } => super::artifact_io::publish(
+            host,
+            ctx,
+            slot,
+            params.action_key.as_str(),
+            write_id.as_str(),
+            media_type,
+            sha256,
+        ),
         BrokerCall::ArtifactWrite { .. } => Err(rpc_error(
             RpcErrorClass::Unavailable,
             "brokered artifact writes are not yet active",
@@ -333,9 +344,10 @@ impl Grants {
     /// Whether the approved manifest lets this contribution commit `call` as an effect intent of
     /// `broker.commit_event` (who it runs as is resolved when it executes, see
     /// [`super::intents`]). An application call's arguments must be an artifact of the invocation
-    /// (`in_scope`), and an intent never runs a human-only operation. HTTP, inference and
-    /// artifact writes are refused as the live broker refuses them; an artifact read is not an
-    /// effect and is accepted.
+    /// (`in_scope`), and an intent never runs a human-only operation. An HTTP call needs the
+    /// endpoint's network grant and a body of the invocation (its connection is resolved when it
+    /// executes). Inference and artifact writes are refused as the live broker refuses them; an
+    /// artifact read is not an effect and is accepted.
     pub(super) fn permits_intent(
         &self,
         call: &BrokerCall,
@@ -358,16 +370,18 @@ impl Grants {
                 }
                 Ok(())
             }
-            BrokerCall::Http { endpoint_id, .. } => {
+            BrokerCall::Http {
+                endpoint_id, body, ..
+            } => {
                 if !self.network.contains(endpoint_id.as_str()) {
                     return Err(denied(
                         "the approved manifest grants no network access to this endpoint",
                     ));
                 }
-                Err(rpc_error(
-                    RpcErrorClass::Unavailable,
-                    "brokered HTTP calls are not yet active",
-                ))
+                if body.as_ref().is_some_and(|b| !in_scope(b)) {
+                    return Err(denied("the body is not an artifact of this invocation"));
+                }
+                Ok(())
             }
             BrokerCall::Inference { .. } => {
                 if !self.inference {
@@ -383,6 +397,13 @@ impl Grants {
                 RpcErrorClass::Unavailable,
                 "brokered artifact writes are not yet active",
             )),
+            // An invocation's writes are its own, not intents of a commit.
+            BrokerCall::ArtifactAppend { .. } | BrokerCall::ArtifactPublish { .. } => {
+                Err(rpc_error(
+                    RpcErrorClass::Unavailable,
+                    "artifact writes are not event intents",
+                ))
+            }
         }
     }
 }
@@ -502,7 +523,7 @@ fn application(
                 &ports.artifacts,
                 principal,
                 &operation,
-                Some((state, json!({}))),
+                Journaling::Settle(state, json!({})),
                 &reply,
             )
             .map_err(|e| {
@@ -731,16 +752,25 @@ pub(super) fn settle(
     Ok(())
 }
 
-/// Publishes a call's typed reply as an artifact owned by the invoking principal and, with a
-/// `settled` state and observation, settles its journal in the same transaction, recording the
-/// artifact as the observation's `result` (a dispatched intent's journal is settled by the
-/// dispatcher instead).
+/// What [`publish`] records in the call's journal in the transaction that publishes its reply,
+/// with the reply artifact as the observation's `result`.
+pub(super) enum Journaling {
+    /// Nothing (a dispatched intent's outcome is the dispatcher's to record).
+    None,
+    /// Settles the call with this state and observation.
+    Settle(OperationState, Value),
+    /// Adds this observation to the call's current attempt; the dispatcher settles it.
+    Observe(Value),
+}
+
+/// Publishes a call's typed reply as an artifact owned by the invoking principal and records it
+/// in the call's journal as `journaling` says, in the same transaction.
 pub(super) fn publish(
     host: &PackageHost,
     artifacts: &Arc<ArtifactService>,
     principal: &InvocationContext,
     operation: &OperationId,
-    settled: Option<(OperationState, Value)>,
+    journaling: Journaling,
     reply: &[u8],
 ) -> Result<HostArtifact, StorageError> {
     let staged = artifacts
@@ -773,12 +803,28 @@ pub(super) fn publish(
             },
         )?;
         let produced = version_ref(&version);
-        if let Some((state, observation)) = &settled {
+        let with_result = |observation: &Value| {
             let mut observation = observation.clone();
             if let Some(fields) = observation.as_object_mut() {
                 fields.insert("result".into(), json!(produced));
             }
-            settle(tx, &operation, *state, observation)?;
+            observation
+        };
+        match &journaling {
+            Journaling::None => {}
+            Journaling::Settle(state, observation) => {
+                settle(tx, &operation, *state, with_result(observation))?;
+            }
+            Journaling::Observe(observation) => {
+                if let Some(attempt) = tx
+                    .operations()
+                    .operation(&operation)?
+                    .and_then(|op| op.latest_attempt().map(|a| a.attempt_no))
+                {
+                    tx.operations()
+                        .observe(&operation, attempt, with_result(observation))?;
+                }
+            }
         }
         Ok(produced)
     });
