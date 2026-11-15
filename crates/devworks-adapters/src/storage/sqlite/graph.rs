@@ -289,11 +289,70 @@ fn incident(
     after: Option<&GraphPosition>,
     limit: u16,
 ) -> Result<Option<GraphPage<GraphEdge>>, StorageError> {
-    let scope = scope_json(conn, scope)?;
-    let (limit, after) = bounded(limit, after)?;
     if filter.nodes.len() > usize::from(GRAPH_MAX_PAGE) {
         return Err(invalid("an incident edge read names at most 500 endpoints"));
     }
+    let filter_json = json!({"nodes":filter.nodes,"kinds":filter.kinds}).to_string();
+    let sql = incident_sql(filter.end, Probe::Exact);
+    probed(
+        conn,
+        scope,
+        filter.nodes.is_empty(),
+        &filter_json,
+        &sql,
+        after,
+        limit,
+    )
+}
+/// Composed edges whose endpoint node ID, or `targetQualifiedName`, is one of the probed values;
+/// the caller resolves which of them end at its node.
+fn candidates(
+    conn: &Connection,
+    scope: &GraphScope,
+    filter: &GraphCandidateFilter,
+    after: Option<&GraphPosition>,
+    limit: u16,
+) -> Result<Option<GraphPage<GraphEdge>>, StorageError> {
+    if filter.values.len() > usize::from(GRAPH_MAX_PAGE) {
+        return Err(invalid("a candidate edge read names at most 500 endpoints"));
+    }
+    let probe = match (filter.key, filter.end) {
+        (GraphEndpointKey::NodeId, _) => Probe::NodeId,
+        (GraphEndpointKey::TargetQualifiedName, GraphEdgeEnd::Target) => Probe::Qualified,
+        (GraphEndpointKey::TargetQualifiedName, GraphEdgeEnd::Source) => {
+            return Err(invalid("a qualified name names only an edge target"));
+        }
+    };
+    let nodes: Vec<Value> = filter
+        .values
+        .iter()
+        .map(|value| json!({"node_id":value}))
+        .collect();
+    let filter_json = json!({"nodes":nodes,"kinds":filter.kinds}).to_string();
+    let sql = incident_sql(filter.end, probe);
+    probed(
+        conn,
+        scope,
+        filter.values.is_empty(),
+        &filter_json,
+        &sql,
+        after,
+        limit,
+    )
+}
+/// Runs an endpoint-probe query of [`incident_sql`]: `None` while an overlay view in scope has no
+/// stored links, whose composed endpoints only the scan can tell.
+fn probed(
+    conn: &Connection,
+    scope: &GraphScope,
+    empty: bool,
+    filter_json: &str,
+    sql: &str,
+    after: Option<&GraphPosition>,
+    limit: u16,
+) -> Result<Option<GraphPage<GraphEdge>>, StorageError> {
+    let scope = scope_json(conn, scope)?;
+    let (limit, after) = bounded(limit, after)?;
     let unlinked: bool = db(conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM json_each(?1,'$.views') j JOIN index_views v ON v.id=json_extract(j.value,'$.view_id') WHERE (v.branch_id IS NOT NULL OR v.worktree_id IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM graph_view_link_sets s WHERE s.view_id=v.id))",
         [&scope],
@@ -302,15 +361,13 @@ fn incident(
     if unlinked {
         return Ok(None);
     }
-    if filter.nodes.is_empty() {
+    if empty {
         return Ok(Some(GraphPage {
             items: Vec::new(),
             has_more: false,
         }));
     }
-    let filter_json = json!({"nodes":filter.nodes,"kinds":filter.kinds}).to_string();
-    let sql = incident_sql(filter.end);
-    let mut statement = db(conn.prepare_cached(&sql))?;
+    let mut statement = db(conn.prepare_cached(sql))?;
     let rows = db(db(
         statement.query_map(params![scope, filter_json, after, limit], |r| {
             Ok((
@@ -349,8 +406,19 @@ fn incident(
         .collect::<Result<Vec<_>, StorageError>>()?;
     Ok(Some(page(items, (limit - 1) as u16)))
 }
+/// What an endpoint probe of [`incident_sql`] compares.
+#[derive(Clone, Copy, Debug)]
+enum Probe {
+    /// The exact composite endpoint identity of [`GraphEdgeFilter`].
+    Exact,
+    /// The endpoint node ID only, in any unit and repository.
+    NodeId,
+    /// The `targetQualifiedName` of a stored edge (`graph_edges_target_qualified`). A view link
+    /// never carries one: only an edge naming no other repository is linked.
+    Qualified,
+}
 /// The incident-edge query for one endpoint (?1 scope, ?2 nodes and kinds, ?3 after, ?4 limit).
-fn incident_sql(end: GraphEdgeEnd) -> String {
+fn incident_sql(end: GraphEdgeEnd, probe: Probe) -> String {
     let (node, index, linked, identity) = match end {
         GraphEdgeEnd::Target => (
             "target_node_id",
@@ -365,8 +433,23 @@ fn incident_sql(end: GraphEdgeEnd) -> String {
             "w.repo=coalesce(json_extract(c.payload_json,'$.sourceRepositoryId'),c.repo) AND w.unit=coalesce(json_extract(c.payload_json,'$.sourceUnit'),c.unit_key) AND w.node=c.source_node_id",
         ),
     };
+    let (index, stored_match, identity) = match probe {
+        Probe::Exact => (index, format!("e.{node}=p.node"), identity),
+        Probe::NodeId => (index, format!("e.{node}=p.node"), "1"),
+        Probe::Qualified => (
+            "graph_edges_target_qualified",
+            "json_extract(e.payload_json,'$.targetQualifiedName')=p.node".to_owned(),
+            "1",
+        ),
+    };
+    let candidates = match probe {
+        Probe::Qualified => "candidates AS (SELECT * FROM stored)".to_owned(),
+        Probe::Exact | Probe::NodeId => format!(
+            "linked AS (SELECT l.repo,l.view_id,l.priority,k.generation_id,k.unit_key,k.edge_id,k.source_node_id,k.target_node_id,e.kind,k.payload_json FROM probes p CROSS JOIN layers l CROSS JOIN graph_view_links k INDEXED BY {linked} CROSS JOIN graph_edges e ON k.view_id=l.view_id AND k.{node}=p.node AND k.generation_id=l.generation_id AND e.generation_id=k.generation_id AND e.unit_key=k.unit_key AND e.edge_id=k.edge_id), candidates AS (SELECT * FROM stored UNION ALL SELECT * FROM linked)"
+        ),
+    };
     format!(
-        "{LAYERS}, stored AS (SELECT l.repo,l.view_id,l.priority,e.generation_id,e.unit_key,e.edge_id,e.source_node_id,e.target_node_id,e.kind,e.payload_json FROM probes p CROSS JOIN layers l CROSS JOIN graph_edges e INDEXED BY {index} WHERE e.generation_id=l.generation_id AND e.{node}=p.node AND NOT EXISTS(SELECT 1 FROM graph_view_links k WHERE k.view_id=l.view_id AND k.unit_key=e.unit_key AND k.edge_id=e.edge_id)), linked AS (SELECT l.repo,l.view_id,l.priority,k.generation_id,k.unit_key,k.edge_id,k.source_node_id,k.target_node_id,e.kind,k.payload_json FROM probes p CROSS JOIN layers l CROSS JOIN graph_view_links k INDEXED BY {linked} CROSS JOIN graph_edges e ON k.view_id=l.view_id AND k.{node}=p.node AND k.generation_id=l.generation_id AND e.generation_id=k.generation_id AND e.unit_key=k.unit_key AND e.edge_id=k.edge_id), candidates AS (SELECT * FROM stored UNION ALL SELECT * FROM linked) SELECT c.repo,c.view_id,c.generation_id,u.content_digest,c.unit_key,c.edge_id,c.source_node_id,c.target_node_id,c.kind,c.payload_json FROM candidates c JOIN source_units u ON u.generation_id=c.generation_id AND u.unit_key=c.unit_key WHERE u.action='Replace' AND NOT EXISTS(SELECT 1 FROM layers h JOIN source_units hu ON hu.generation_id=h.generation_id AND hu.unit_key=c.unit_key WHERE h.view_id=c.view_id AND h.priority<c.priority) AND (json_array_length(?2,'$.kinds')=0 OR c.kind IN(SELECT value FROM json_each(?2,'$.kinds'))) AND EXISTS(SELECT 1 FROM wanted w WHERE {identity}) AND (json_extract(?3,'$.repository_id') IS NULL OR (c.repo,c.unit_key,c.edge_id)>(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'),json_extract(?3,'$.item_id'))) ORDER BY c.repo,c.unit_key,c.edge_id LIMIT ?4"
+        "{LAYERS}, stored AS (SELECT l.repo,l.view_id,l.priority,e.generation_id,e.unit_key,e.edge_id,e.source_node_id,e.target_node_id,e.kind,e.payload_json FROM probes p CROSS JOIN layers l CROSS JOIN graph_edges e INDEXED BY {index} WHERE e.generation_id=l.generation_id AND {stored_match} AND NOT EXISTS(SELECT 1 FROM graph_view_links k WHERE k.view_id=l.view_id AND k.unit_key=e.unit_key AND k.edge_id=e.edge_id)), {candidates} SELECT c.repo,c.view_id,c.generation_id,u.content_digest,c.unit_key,c.edge_id,c.source_node_id,c.target_node_id,c.kind,c.payload_json FROM candidates c JOIN source_units u ON u.generation_id=c.generation_id AND u.unit_key=c.unit_key WHERE u.action='Replace' AND NOT EXISTS(SELECT 1 FROM layers h JOIN source_units hu ON hu.generation_id=h.generation_id AND hu.unit_key=c.unit_key WHERE h.view_id=c.view_id AND h.priority<c.priority) AND (json_array_length(?2,'$.kinds')=0 OR c.kind IN(SELECT value FROM json_each(?2,'$.kinds'))) AND EXISTS(SELECT 1 FROM wanted w WHERE {identity}) AND (json_extract(?3,'$.repository_id') IS NULL OR (c.repo,c.unit_key,c.edge_id)>(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'),json_extract(?3,'$.item_id'))) ORDER BY c.repo,c.unit_key,c.edge_id LIMIT ?4"
     )
 }
 macro_rules! graph_reads {($t:ty)=>{impl GraphRead for $t {
@@ -418,6 +501,7 @@ macro_rules! graph_reads {($t:ty)=>{impl GraphRead for $t {
     fn graph_pin(&self,key:&Id)->Result<Option<StoredGraphReadPin>,StorageError>{pin(self.conn,key)}
     fn graph_source_capture(&self,key:&Id)->Result<Option<StoredGraphSourceCapture>,StorageError>{capture(self.conn,key)}
     fn graph_incident_edges(&self,scope:&GraphScope,filter:&GraphIncidentFilter,after:Option<&GraphPosition>,limit:u16)->Result<Option<GraphPage<GraphEdge>>,StorageError>{incident(self.conn,scope,filter,after,limit)}
+    fn graph_candidate_edges(&self,scope:&GraphScope,filter:&GraphCandidateFilter,after:Option<&GraphPosition>,limit:u16)->Result<Option<GraphPage<GraphEdge>>,StorageError>{candidates(self.conn,scope,filter,after,limit)}
     fn graph_unlinked_views(&self,after:Option<&Id>,limit:u16)->Result<GraphPage<StoredView>,StorageError>{
         let(n,_)=bounded(limit,None)?;
         let mut statement=db(self.conn.prepare_cached("SELECT v.id FROM index_views v WHERE (v.branch_id IS NOT NULL OR v.worktree_id IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM graph_view_link_sets s WHERE s.view_id=v.id) AND (?1 IS NULL OR v.id>?1) ORDER BY v.id LIMIT ?2"))?;
@@ -811,20 +895,20 @@ mod tests {
         for migration in MIGRATIONS {
             conn.execute_batch(migration.sql).unwrap();
         }
-        for (end, stored, linked) in [
-            (
-                GraphEdgeEnd::Target,
-                "graph_reverse (generation_id=? AND target_node_id=?)",
-                "graph_view_links_target (view_id=? AND target_node_id=?)",
-            ),
-            (
-                GraphEdgeEnd::Source,
-                "graph_forward (generation_id=? AND source_node_id=?)",
-                "graph_view_links_source (view_id=? AND source_node_id=?)",
-            ),
+        let reverse = "graph_reverse (generation_id=? AND target_node_id=?)";
+        let forward = "graph_forward (generation_id=? AND source_node_id=?)";
+        let linked_target = Some("graph_view_links_target (view_id=? AND target_node_id=?)");
+        let linked_source = Some("graph_view_links_source (view_id=? AND source_node_id=?)");
+        let qualified = "graph_edges_target_qualified (generation_id=? AND <expr>=?)";
+        for (end, probe, stored, linked) in [
+            (GraphEdgeEnd::Target, Probe::Exact, reverse, linked_target),
+            (GraphEdgeEnd::Source, Probe::Exact, forward, linked_source),
+            (GraphEdgeEnd::Target, Probe::NodeId, reverse, linked_target),
+            (GraphEdgeEnd::Source, Probe::NodeId, forward, linked_source),
+            (GraphEdgeEnd::Target, Probe::Qualified, qualified, None),
         ] {
             let mut statement = conn
-                .prepare(&format!("EXPLAIN QUERY PLAN {}", incident_sql(end)))
+                .prepare(&format!("EXPLAIN QUERY PLAN {}", incident_sql(end, probe)))
                 .unwrap();
             let plan: Vec<String> = statement
                 .query_map(params!["{}", "{}", "null", 1], |r| r.get::<_, String>(3))
@@ -834,12 +918,14 @@ mod tests {
             let text = plan.join("\n");
             assert!(
                 text.contains(&format!("INDEX {stored}")),
-                "{end:?}:\n{text}"
+                "{end:?} {probe:?}:\n{text}"
             );
-            assert!(
-                text.contains(&format!("INDEX {linked}")),
-                "{end:?}:\n{text}"
-            );
+            if let Some(linked) = linked {
+                assert!(
+                    text.contains(&format!("INDEX {linked}")),
+                    "{end:?} {probe:?}:\n{text}"
+                );
+            }
             for line in &plan {
                 // Only the request's own JSON lists and the selected views are scanned.
                 for table in [
@@ -850,7 +936,7 @@ mod tests {
                 ] {
                     assert!(
                         !(line.starts_with("SCAN") && line.contains(table)),
-                        "{end:?} scans {table}:\n{text}"
+                        "{end:?} {probe:?} scans {table}:\n{text}"
                     );
                 }
             }

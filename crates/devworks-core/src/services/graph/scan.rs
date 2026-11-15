@@ -164,6 +164,126 @@ pub(super) struct Unmapped {
     pub original: GraphEdge,
 }
 
+/// The stored edge kinds a read of `kinds` needs. The package reference is the retained source
+/// of a derived dependency, not an endpoint filter: keep it whenever that derived relationship is
+/// requested.
+pub(super) fn stored_kinds(kinds: &[&str]) -> Vec<String> {
+    let mut stored = kinds
+        .iter()
+        .map(|kind| (*kind).to_owned())
+        .collect::<Vec<_>>();
+    if kinds.contains(&"DEPENDS_ON") && !kinds.contains(&"REFERENCES_PACKAGE") {
+        stored.push("REFERENCES_PACKAGE".into());
+    }
+    stored
+}
+
+/// One composed edge as the graph reads it.
+pub(super) enum Resolved {
+    /// Its view is not one of the selected layers.
+    Skip,
+    /// The budget ran out while relinking it.
+    Stop,
+    Edge(Result<Edge, Unmapped>),
+}
+
+type Linkers = std::collections::HashMap<String, crate::services::indexing::worker::ViewLinker>;
+
+/// Resolves both endpoints of one composed edge inside `scope`. With `linkers`, an overlay
+/// view's inherited edge is first relinked against that view; without, `raw` is already linked
+/// (a stored view link).
+pub(super) fn resolve(
+    read: &dyn ReadSnapshot,
+    scope: &GraphScope,
+    layers: &[ViewLayers],
+    linkers: Option<&mut Linkers>,
+    mut raw: GraphEdge,
+    budget: &mut Budget,
+) -> Result<Resolved, Failure> {
+    let Some(view) = layers.iter().find(|v| v.view.view_id == raw.view_id) else {
+        return Ok(Resolved::Skip);
+    };
+    let original = raw.clone();
+    if let Some(linkers) = linkers
+        && view.layers.len() > 1
+        && raw
+            .edge
+            .payload
+            .get("targetRepositoryId")
+            .is_none_or(|id| id.as_str() == Some(raw.repository_id.as_str()))
+    {
+        // The shared index linker retains language/receiver/import ambiguity rules.
+        let unit_key = raw.edge.unit_key.clone();
+        let linked = super::linking::link(
+            read,
+            view,
+            linkers
+                .entry(view.view.view_id.as_str().to_owned())
+                .or_default(),
+            &unit_key,
+            vec![raw.edge],
+            budget,
+        )?;
+        let Some(linked) = linked else {
+            return Ok(Resolved::Stop);
+        };
+        let Some(edge) = linked.into_iter().next() else {
+            return Ok(Resolved::Skip);
+        };
+        raw.edge = edge;
+    }
+    let payload = &raw.edge.payload;
+    let repository = |key: &str| match payload.get(key) {
+        None => Some(raw.repository_id.clone()),
+        Some(value) => serde_json::from_value(value.clone()).ok(),
+    };
+    let (Some(source_repo), Some(target_repo)) = (
+        repository("sourceRepositoryId"),
+        repository("targetRepositoryId"),
+    ) else {
+        return Ok(Resolved::Edge(Err(Unmapped { raw, original })));
+    };
+    if ["sourceUnit", "targetUnit"]
+        .iter()
+        .any(|key| payload.get(*key).is_some_and(|value| !value.is_string()))
+    {
+        return Ok(Resolved::Edge(Err(Unmapped { raw, original })));
+    }
+    let source = endpoint(
+        read,
+        scope,
+        &source_repo,
+        payload
+            .get("sourceUnit")
+            .and_then(serde_json::Value::as_str),
+        &raw.edge.source_node_id,
+        budget,
+    )?;
+    let target = if target_repo != raw.repository_id && payload.get("targetQualifiedName").is_some()
+    {
+        qualified_endpoint(read, scope, &target_repo, payload, budget)?
+    } else {
+        endpoint(
+            read,
+            scope,
+            &target_repo,
+            payload
+                .get("targetUnit")
+                .and_then(serde_json::Value::as_str),
+            &raw.edge.target_node_id,
+            budget,
+        )?
+    };
+    Ok(Resolved::Edge(match (source, target) {
+        (Some(source), Some(target)) => Ok(Edge {
+            raw,
+            source,
+            target,
+        }),
+        _ => Err(Unmapped { raw, original }),
+    }))
+}
+
 /// Raw edges are streamed before endpoint filtering: inherited names may have rebound in
 /// this composition, and SQL's old target index must not hide those incoming references.
 pub(super) fn edges(
@@ -179,19 +299,9 @@ pub(super) fn edges(
     let mut declared = std::collections::BTreeSet::new();
     let mut pinned = Vec::new();
     let mut derived_seen = std::collections::BTreeSet::new();
-    let mut sessions =
-        std::collections::HashMap::<String, crate::services::indexing::worker::ViewLinker>::new();
-    let mut stored_kinds = kinds
-        .iter()
-        .map(|kind| (*kind).to_owned())
-        .collect::<Vec<_>>();
-    // The package reference is the retained source of a derived dependency, not an
-    // endpoint filter. Keep it whenever that derived relationship is requested.
-    if kinds.contains(&"DEPENDS_ON") && !kinds.contains(&"REFERENCES_PACKAGE") {
-        stored_kinds.push("REFERENCES_PACKAGE".into());
-    }
+    let mut linkers = Linkers::new();
     let filter = GraphEdgeFilter {
-        kinds: stored_kinds,
+        kinds: stored_kinds(kinds),
         ..Default::default()
     };
     loop {
@@ -199,7 +309,7 @@ pub(super) fn edges(
             .graph()
             .graph_edges(scope, &filter, after.as_ref(), READ_PAGE)?;
         let more = page.has_more;
-        for mut raw in page.items {
+        for raw in page.items {
             if !budget.visit() {
                 return Ok(());
             }
@@ -208,93 +318,16 @@ pub(super) fn edges(
                 unit_key: raw.edge.unit_key.clone(),
                 item_id: raw.edge.edge_id.clone(),
             });
-            let Some(view) = layers.iter().find(|v| v.view.view_id == raw.view_id) else {
-                continue;
-            };
-            let original = raw.clone();
-            if view.layers.len() > 1
-                && raw
-                    .edge
-                    .payload
-                    .get("targetRepositoryId")
-                    .is_none_or(|id| id.as_str() == Some(raw.repository_id.as_str()))
-            {
-                // The shared index linker retains language/receiver/import ambiguity rules.
-                let unit_key = raw.edge.unit_key.clone();
-                let linked = super::linking::link(
-                    read,
-                    view,
-                    sessions
-                        .entry(view.view.view_id.as_str().to_owned())
-                        .or_default(),
-                    &unit_key,
-                    vec![raw.edge],
-                    budget,
-                )?;
-                let Some(linked) = linked else {
-                    return Ok(());
-                };
-                let Some(edge) = linked.into_iter().next() else {
+            let linked = match resolve(read, scope, layers, Some(&mut linkers), raw, budget)? {
+                Resolved::Skip => continue,
+                Resolved::Stop => return Ok(()),
+                Resolved::Edge(Err(unmapped)) => {
+                    if !visit(Err(unmapped), budget)? {
+                        return Ok(());
+                    }
                     continue;
-                };
-                raw.edge = edge;
-            }
-            let payload = &raw.edge.payload;
-            let repository = |key: &str| match payload.get(key) {
-                None => Some(raw.repository_id.clone()),
-                Some(value) => serde_json::from_value(value.clone()).ok(),
-            };
-            let (Some(source_repo), Some(target_repo)) = (
-                repository("sourceRepositoryId"),
-                repository("targetRepositoryId"),
-            ) else {
-                if !visit(Err(Unmapped { raw, original }), budget)? {
-                    return Ok(());
                 }
-                continue;
-            };
-            if ["sourceUnit", "targetUnit"]
-                .iter()
-                .any(|key| payload.get(*key).is_some_and(|value| !value.is_string()))
-            {
-                if !visit(Err(Unmapped { raw, original }), budget)? {
-                    return Ok(());
-                }
-                continue;
-            }
-            let source = endpoint(
-                read,
-                scope,
-                &source_repo,
-                payload
-                    .get("sourceUnit")
-                    .and_then(serde_json::Value::as_str),
-                &raw.edge.source_node_id,
-                budget,
-            )?;
-            let target = if target_repo != raw.repository_id
-                && payload.get("targetQualifiedName").is_some()
-            {
-                qualified_endpoint(read, scope, &target_repo, payload, budget)?
-            } else {
-                endpoint(
-                    read,
-                    scope,
-                    &target_repo,
-                    payload
-                        .get("targetUnit")
-                        .and_then(serde_json::Value::as_str),
-                    &raw.edge.target_node_id,
-                    budget,
-                )?
-            };
-            let linked = match (source, target) {
-                (Some(source), Some(target)) => Ok(Edge {
-                    raw,
-                    source,
-                    target,
-                }),
-                _ => Err(Unmapped { raw, original }),
+                Resolved::Edge(Ok(edge)) => Ok::<_, Unmapped>(edge),
             };
             let derived = if let Ok(edge) = &linked {
                 if edge.raw.edge.kind == "REFERENCES_PACKAGE" {
