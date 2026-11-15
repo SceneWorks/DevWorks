@@ -370,7 +370,7 @@ fn data_delivery_fixtures_match_recorded_outcomes() {
 #[test]
 fn provider_and_package_fixtures_match_recorded_outcomes() {
     // 66 package/codec cases are asserted by devworks-extension-protocol's tests.
-    assert_eq!(run("provider-package-fixtures.json", 120), 54);
+    assert_eq!(run("provider-package-fixtures.json", 121), 55);
 }
 
 /// Every (operation, mode, schema revision) binding is admitted for at least one recorded message.

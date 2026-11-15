@@ -728,6 +728,115 @@ fn append_message_saves_one_user_message_with_resolved_attachments() {
 // ---------------------------------------------------------------------------------------------
 // The session writer
 
+// A transcript read at revision 1 has the frozen revision-1 shape: the dispatch fence is left
+// out and an accepted operation reads as an unknown outcome of the same operation, while every
+// call keeps its response. A revision-8 read carries both entries as recorded (DW-315).
+#[test]
+fn a_revision_1_transcript_read_keeps_the_frozen_shape_and_revision_8_carries_the_new_entries() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let worker = fx.worker("agent-a", "session-a");
+    accepted(fx.append(
+        &worker,
+        SessionBatch::entries(tbatch(
+            "batch-fence",
+            "session-a",
+            0,
+            1,
+            vec![
+                entry(
+                    "c-a",
+                    1,
+                    json!({"kind": "ToolCallRecorded", "toolCall": call("call:a", 0)}),
+                ),
+                entry(
+                    "d-a",
+                    2,
+                    json!({"kind": "ToolDispatchStarted", "call": key("call:a", 0)}),
+                ),
+                entry(
+                    "r-a",
+                    3,
+                    json!({"kind": "ToolResponseRecorded", "call": key("call:a", 0),
+                        "outcome": {"kind": "OperationAccepted", "operationId": "op-c",
+                            "artifacts": []}}),
+                ),
+            ],
+        )),
+    ));
+    let user = fx.user();
+    let read = |revision: Option<u32>| -> Value {
+        let mut frame = json!({"protocol": "1.0-draft.1", "queryId": "q-t",
+            "sessionId": "session-a", "limit": 50});
+        if let Some(r) = revision {
+            frame["schemaRevision"] = json!(r);
+        }
+        match result(fx.raw_query(&user, "sessions.transcript", frame)) {
+            OperationResult::SessionsTranscript { value } => serde_json::to_value(value).unwrap(),
+            other => panic!("{other:?}"),
+        }
+    };
+    let contract = |file: &str| -> Value {
+        serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../docs/architecture/contracts")
+                    .join(file),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let bodies = |page: &Value| -> Vec<Value> {
+        page["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["body"].clone())
+            .collect()
+    };
+    let frozen = jsonschema::validator_for(&contract("transcript-page.schema.json")).unwrap();
+    let current = jsonschema::validator_for(&contract("transcript-page.r8.schema.json")).unwrap();
+    // Revision 1 (the frame names none): no fence; the response reads as an unknown outcome.
+    let old = read(None);
+    let old_bodies = bodies(&old);
+    assert_eq!(
+        old_bodies
+            .iter()
+            .map(|b| b["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["ToolCallRecorded", "ToolResponseRecorded"]
+    );
+    assert_eq!(
+        old_bodies[1]["outcome"],
+        json!({"kind": "OutcomeUnknown", "operationId": "op-c"})
+    );
+    assert!(
+        frozen.is_valid(&old),
+        "the revision-1 read fits the frozen schema"
+    );
+    // Revision 8: both entries as recorded, valid at revision 8 and not at revision 1.
+    let new = read(Some(8));
+    let new_bodies = bodies(&new);
+    assert_eq!(
+        new_bodies
+            .iter()
+            .map(|b| b["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "ToolCallRecorded",
+            "ToolDispatchStarted",
+            "ToolResponseRecorded"
+        ]
+    );
+    assert_eq!(new_bodies[2]["outcome"]["kind"], "OperationAccepted");
+    assert!(current.is_valid(&new));
+    assert!(
+        !frozen.is_valid(&new),
+        "the new entries are outside the frozen revision-1 schema"
+    );
+}
+
 #[test]
 fn a_batch_commits_entries_calls_responses_checkpoint_and_usage_together() {
     let fx = Fx::new();

@@ -56,7 +56,7 @@ SUPPORT = set('Check Label Text DefaultValueText Content Cursor PlanItems PlanFe
               'Depth Port ByteLimit TokenBudget PathSet Url RelativePath Money SignedCounter PositiveCounter Finite Probability '
               'DynamicJson SavedCommandInput GraphText GraphUnitKey DomainErrorCode DomainFault'.split())
 # Hand-written support types that gate a member by schema revision themselves.
-GATED_SUPPORT = {'HistoryPage', 'GraphPage'}
+GATED_SUPPORT = {'HistoryPage', 'GraphPage', 'TranscriptPage'}
 PRIMITIVE = {'bool', 'i32', 'Option'}
 
 SPECIALIZED = {
@@ -636,7 +636,8 @@ def gen_results(ops):
     out += ['        }', '    }', '}', 'impl Check for OperationResult {', '    fn check(&self) -> Result<(), String> {',
             '        match self {']
     out += [f'            Self::{pascal(n)} {{ value }} => value.check()?,' for n, _ in results]
-    # HistoryPage is a support type with its own revision-2 member (the tail checkpoint).
+    # HistoryPage is a support type with its own revision-2 member (the tail checkpoint);
+    # TranscriptPage leaves out or maps the transcript entries introduced at revision 8.
     projected = [n for n, t in results if tokens(t) & (RC | GATED_SUPPORT)]
     out += ['        }',
             '        crate::protocol::rules::result(self.operation(), &serde_json::to_value(self).map_err(|e| e.to_string())?)',

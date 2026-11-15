@@ -427,6 +427,14 @@ pub enum ToolOutcome {
         #[schemars(length(max = 128))]
         artifacts: Vec<ArtifactRef>,
     },
+    /// The command receipt is final, while the accepted operation may complete later.
+    /// Schema revision 8; earlier revisions read it as `OutcomeUnknown`.
+    #[schemars(extend("x-since" = 8))]
+    OperationAccepted {
+        operation_id: OperationId,
+        #[schemars(length(max = 128))]
+        artifacts: Vec<ArtifactRef>,
+    },
     Failed {
         code: Id,
     },
@@ -470,6 +478,13 @@ pub enum TranscriptBody {
     },
     ToolCallRecorded {
         tool_call: CompleteToolCall,
+    },
+    /// Durable fence before the gateway sees a call; cancellation cannot claim no dispatch
+    /// after this marker, even if the process crashes before the gateway returns.
+    /// Schema revision 8; earlier revisions leave it out.
+    #[schemars(extend("x-since" = 8))]
+    ToolDispatchStarted {
+        call: ToolCallKey,
     },
     ToolResponseRecorded {
         call: ToolCallKey,
@@ -535,6 +550,7 @@ impl TranscriptBatch {
             expected = expected.checked_add(1).ok_or("sequence exhausted")?;
             match &entry.body {
                 TranscriptBody::ToolCallRecorded { tool_call } => tool_call.call.validate()?,
+                TranscriptBody::ToolDispatchStarted { call } => call.validate()?,
                 TranscriptBody::ToolResponseRecorded { call, .. } => call.validate()?,
                 _ => {}
             }
@@ -707,6 +723,50 @@ impl StreamModel {
     }
 }
 
+/// Schema revision that introduced the dispatch fence and the accepted-operation outcome.
+pub const TRANSCRIPT_FENCE_REVISION: u32 = 8;
+/// A transcript read at a revision before [`TRANSCRIPT_FENCE_REVISION`] gets the shape that
+/// revision documents: a `ToolDispatchStarted` fence is left out (it reports progress only; the
+/// call's response records what happened), and an `OperationAccepted` outcome reads as
+/// `OutcomeUnknown` for the same operation. That is the one earlier outcome that claims neither
+/// success nor failure: the operation was accepted and its result is not known yet. A tool
+/// response is never left out, so every recorded call keeps its response.
+impl crate::domain_support::Revisioned for TranscriptPage {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision >= TRANSCRIPT_FENCE_REVISION {
+            return;
+        }
+        self.entries
+            .retain(|e| !matches!(e.body, TranscriptBody::ToolDispatchStarted { .. }));
+        for e in &mut self.entries {
+            if let TranscriptBody::ToolResponseRecorded { outcome, .. } = &mut e.body
+                && let ToolOutcome::OperationAccepted { operation_id, .. } = outcome
+            {
+                *outcome = ToolOutcome::OutcomeUnknown {
+                    operation_id: operation_id.clone(),
+                };
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        let later = self.entries.iter().any(|e| {
+            matches!(
+                &e.body,
+                TranscriptBody::ToolDispatchStarted { .. }
+                    | TranscriptBody::ToolResponseRecorded {
+                        outcome: ToolOutcome::OperationAccepted { .. },
+                        ..
+                    }
+            )
+        });
+        if later && revision < TRANSCRIPT_FENCE_REVISION {
+            return Err(format!(
+                "a transcript entry introduced at schema revision {TRANSCRIPT_FENCE_REVISION} is present"
+            ));
+        }
+        Ok(())
+    }
+}
 /// Untrusted inference input; host fills purpose, attribution and request identity separately.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
