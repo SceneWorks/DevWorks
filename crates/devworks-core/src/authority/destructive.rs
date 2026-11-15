@@ -245,6 +245,9 @@ pub struct EffectPlan {
     pub targets: Vec<String>,
     pub working_directory: Option<String>,
     pub scope: IntendedScope,
+    /// The targets name themselves (wildcard characters quoted in a POSIX shell, or a
+    /// PowerShell `-LiteralPath`): checked as written, never expanded as patterns.
+    pub literal: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -612,12 +615,18 @@ pub fn preflight(
             .chain(skills.iter())
     };
 
+    // A target that cannot be checked holds the plan, but only after every other target was
+    // checked: a refused target anywhere in the plan blocks it, whatever else is held.
+    let mut held: Option<(InputNeeded, String)> = None;
+    let mut hold = |n: InputNeeded, requested: &str| {
+        held.get_or_insert_with(|| (n, requested.to_owned()));
+    };
+
     // Expand globs into a bounded explicit set; whole-content erasure of a protected directory
     // is refused even though the directory itself would survive.
     let mut expanded = Vec::new();
-    let mut unmatched: Option<&String> = None;
     for requested in &plan.targets {
-        if !has_wildcard(requested) {
+        if plan.literal || !has_wildcard(requested) {
             expanded.push(requested.clone());
             continue;
         }
@@ -650,38 +659,26 @@ pub fn preflight(
             }
         }
         match fs.expand(requested, cwd, MAX_TARGETS) {
-            // A write whose pattern matches nothing creates the name as written (a quoted
-            // POSIX word, or a path the shell does not expand), which may lie inside a protected
-            // root that the pattern does not match: held rather than allowed with no target. The
-            // other targets are still checked, so a refused one blocks the step.
+            // A write whose pattern matches nothing may still reach a protected file (a shell
+            // option such as `nocaseglob` changes matching): held, and the other targets are
+            // still checked.
             Ok(paths) if paths.is_empty() && plan.kind == DestructiveKind::Truncate => {
-                unmatched.get_or_insert(requested);
+                hold(InputNeeded::UnresolvedTarget, requested);
+            }
+            // A removal pattern that matches nothing is passed on as written (a POSIX shell's
+            // default), so the name itself is checked. On Windows `*` and `?` cannot be in a
+            // name.
+            Ok(paths) if paths.is_empty() => {
+                if !(cfg!(windows) && requested.contains(['*', '?'])) {
+                    expanded.push(requested.clone());
+                }
             }
             Ok(paths) => expanded.extend(paths),
-            Err(ResolveError::TooMany { .. }) => {
-                return decide(
-                    PreflightVerdict::NeedsInput(InputNeeded::UnboundedExpansion),
-                    Some(requested),
-                    Vec::new(),
-                    Vec::new(),
-                );
-            }
-            Err(_) => {
-                return decide(
-                    PreflightVerdict::NeedsInput(InputNeeded::UnresolvedTarget),
-                    Some(requested),
-                    Vec::new(),
-                    Vec::new(),
-                );
-            }
+            Err(ResolveError::TooMany { .. }) => hold(InputNeeded::UnboundedExpansion, requested),
+            Err(_) => hold(InputNeeded::UnresolvedTarget, requested),
         }
         if expanded.len() > MAX_TARGETS {
-            return decide(
-                PreflightVerdict::NeedsInput(InputNeeded::UnboundedExpansion),
-                Some(requested),
-                Vec::new(),
-                Vec::new(),
-            );
+            hold(InputNeeded::UnboundedExpansion, requested);
         }
     }
     if plan.targets.is_empty() {
@@ -698,12 +695,8 @@ pub fn preflight(
         let resolved = match fs.resolve(requested, cwd) {
             Ok(r) => r,
             Err(_) => {
-                return decide(
-                    PreflightVerdict::NeedsInput(InputNeeded::UnresolvedTarget),
-                    Some(requested),
-                    Vec::new(),
-                    Vec::new(),
-                );
+                hold(InputNeeded::UnresolvedTarget, requested);
+                continue;
             }
         };
         match classify(
@@ -733,10 +726,10 @@ pub fn preflight(
             }
         }
     }
-    if let Some(requested) = unmatched {
+    if let Some((n, requested)) = held {
         return decide(
-            PreflightVerdict::NeedsInput(InputNeeded::UnresolvedTarget),
-            Some(requested),
+            PreflightVerdict::NeedsInput(n),
+            Some(&requested),
             Vec::new(),
             Vec::new(),
         );
