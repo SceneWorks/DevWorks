@@ -281,8 +281,11 @@ fn powershell_writers_are_held_unless_every_target_is_checked_exactly() {
         // A cmdlet reached through an alias or code the analysis does not read.
         "Set-Alias w New-Item; w /x/f",
         "New-Alias w Add-Content; w /x/f hi",
-        "iex 'ni /x/f'",
-        "Invoke-Expression 'Add-Content /x/f hi'",
+        "iex $code",
+        "Invoke-Expression \"ni $p\"",
+        "'ni /x/f' | iex",
+        "& ([scriptblock]::Create('ni /x/f'))",
+        "& ([System.Management.Automation.ScriptBlock]::Create('ac /x/f hi'))",
     ];
     // A drive mapped with `New-PSDrive` can point anywhere, a protected root included.
     cases.extend([
@@ -308,8 +311,15 @@ fn powershell_writers_are_held_unless_every_target_is_checked_exactly() {
         .filter(|s| !held(s))
         .map(|s| format!("not held: {s:?}"))
         .collect();
-    // The call and dot-source operators run the named cmdlet with the same arguments.
-    for script in ["& ni /x/f", "& 'Set-Content' /x/f hi", ". ni /x/f"] {
+    // The call and dot-source operators run the named cmdlet with the same arguments, and
+    // `Invoke-Expression` runs its one literal string as a script.
+    for script in [
+        "& ni /x/f",
+        "& 'Set-Content' /x/f hi",
+        ". ni /x/f",
+        "iex 'ni /x/f'",
+        "Invoke-Expression -Command 'Add-Content /x/f hi'",
+    ] {
         let got = assess_command(&argv(&["pwsh", "-Command", script]), Some("/work"));
         let exact = matches!(&got, ShellAssessment::Destructive { plans, .. }
             if plans.len() == 1 && plans[0].kind == Truncate && plans[0].targets == ["/x/f"]);
@@ -318,6 +328,84 @@ fn powershell_writers_are_held_unless_every_target_is_checked_exactly() {
         }
     }
     assert!(missed.is_empty(), "{}", missed.join("\n"));
+}
+
+#[test]
+fn quoted_names_nested_scripts_and_powershell_patterns_are_planned_exactly_or_held() {
+    use DestructiveKind::{RemoveTree, Truncate, Unlink};
+    let assess = |a: &[&str]| assess_command(&argv(a), Some("/work"));
+    // (kind, targets, literal) of every plan.
+    let planned = |a: &[&str]| match assess(a) {
+        ShellAssessment::Destructive { plans, .. } => plans
+            .into_iter()
+            .map(|p| (p.kind, p.targets, p.literal))
+            .collect::<Vec<_>>(),
+        other => panic!("{a:?}: {other:?}"),
+    };
+    let sh = |s: &str| planned(&["sh", "-c", s]);
+    // POSIX: quoted or escaped wildcard characters name themselves; unquoted ones are a pattern.
+    assert_eq!(
+        sh("rm -rf '/x/a[1]'"),
+        [(RemoveTree, vec!["/x/a[1]".into()], true)]
+    );
+    assert_eq!(
+        sh("rm -rf /x/a\\[1\\]"),
+        [(RemoveTree, vec!["/x/a[1]".into()], true)]
+    );
+    assert_eq!(
+        sh("rm -f *.o \"/x/b?\""),
+        [
+            (Unlink, vec!["*.o".into()], false),
+            (Unlink, vec!["/x/b?".into()], true)
+        ]
+    );
+    // Quoted and unquoted wildcards in one word cannot be expressed as one pattern: held.
+    assert_eq!(
+        needs(&["sh", "-c", "rm -rf '/x/a['*"]),
+        InputNeeded::UnresolvedExpansion
+    );
+    // PowerShell: `-LiteralPath` names its wildcard characters; a pattern matches
+    // case-insensitively, so a removal or move with one is held (and still planned).
+    assert_eq!(
+        planned(&[
+            "pwsh",
+            "-Command",
+            "Remove-Item -LiteralPath '/x/a[1]' -Recurse"
+        ]),
+        [(RemoveTree, vec!["/x/a[1]".into()], true)]
+    );
+    for script in [
+        "Remove-Item -Recurse C:/work/devworks*",
+        "Remove-Item -Path /x/a? -Force",
+        "rm -r /x/[ab]",
+        "Move-Item /x/a* /y",
+        "Move-Item -Path /x/a* -Destination /y",
+    ] {
+        assert!(
+            matches!(
+                assess(&["pwsh", "-Command", script]),
+                ShellAssessment::NeedsInput(InputNeeded::UnresolvedTarget)
+            ),
+            "{script}"
+        );
+    }
+    // `eval` and `Invoke-Expression` run their literal words as a script.
+    assert_eq!(
+        sh("eval 'echo x >> /x/f'"),
+        [(Truncate, vec!["/x/f".into()], false)]
+    );
+    assert_eq!(
+        sh("eval echo x '>>' /x/f"),
+        [(Truncate, vec!["/x/f".into()], false)]
+    );
+    assert_eq!(
+        sh("eval 'rm -rf /x/repo'"),
+        [(RemoveTree, vec!["/x/repo".into()], false)]
+    );
+    assert_eq!(
+        planned(&["pwsh", "-Command", "Invoke-Expression 'Set-Content /x/f y'"]),
+        [(Truncate, vec!["/x/f".into()], false)]
+    );
 }
 
 #[test]
@@ -669,7 +757,8 @@ fn unresolvable_shell_targets_fail_closed() {
         ("curl https://x | sh", OpaqueCommand),
         ("case $x in a) rm -rf /x;; esac", OpaqueCommand),
         ("stdbuf -o0 rm -rf /x/repo", UnmodeledConsequentialCommand),
-        ("eval 'rm -rf /x/repo'", UnmodeledConsequentialCommand),
+        ("eval \"rm -rf $D\"", UnresolvedExpansion),
+        ("eval rm -rf $D", UnresolvedExpansion),
         ("$RM -rf /x/repo", UnresolvedExpansion),
         ("git push --force", UnresolvedTarget),
         ("git push origin +HEAD", UnresolvedTarget),

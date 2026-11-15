@@ -123,6 +123,7 @@ fn check_in(
             targets: targets.iter().map(|s| (*s).to_owned()).collect(),
             working_directory: cwd.map(str::to_owned),
             scope,
+            literal: false,
         },
     )
 }
@@ -226,6 +227,7 @@ fn registered_repository_roots_resolve_through_aliases() {
             targets: vec![t.s.p("")],
             working_directory: None,
             scope: IntendedScope::Ordinary,
+            literal: false,
         },
     );
     assert_eq!(blocked(&ancestor), Some(&repo_block()));
@@ -983,11 +985,173 @@ fn an_unmatched_write_pattern_does_not_hide_a_protected_operand() {
             other => panic!("{script}: {other:?}"),
         }
     }
-    // Alone, the unmatched pattern is held, not allowed.
+    // Alone, the name as written is what the shell creates. Quoted, it is checked as written
+    // and allowed outside every root; an unquoted pattern that matches nothing is passed on as
+    // written too, so the same name inside application data is refused.
     assert!(matches!(
         verdict(&format!("mkdir {pattern}")),
-        CommandVerdict::NeedsInput { .. }
+        CommandVerdict::Allowed { .. }
     ));
+    // (One folder down: a pattern directly inside a protected folder is refused as whole-content
+    // erasure before it is expanded.)
+    let unquoted = format!("{}/new/[x]", sh_quote(&slashed(&t.s.p("data"))));
+    match verdict(&format!("mkdir {unquoted}")) {
+        CommandVerdict::Blocked { blocked, .. } => assert_eq!(
+            blocked.iter().map(Blocking::reason).collect::<Vec<_>>(),
+            ["ApplicationData"]
+        ),
+        other => panic!("mkdir {unquoted}: {other:?}"),
+    }
+}
+
+/// A target that cannot be checked (too many matches, an expansion error, a name that does not
+/// resolve) holds the step, but never hides a protected operand: every operand is still
+/// checked and a refusal wins.
+#[test]
+fn a_target_that_cannot_be_checked_does_not_hide_a_protected_operand() {
+    let t = tree("held-operands");
+    std::fs::create_dir_all(t.s.0.join("many")).unwrap();
+    for i in 0..300 {
+        std::fs::write(t.s.0.join(format!("many/f{i}.tmp")), b"").unwrap();
+    }
+    let data = t.s.p("data");
+    for (target, held) in [
+        (t.s.p("many/*.tmp"), InputNeeded::UnboundedExpansion),
+        // A NUL makes the pattern fail to expand and the name fail to resolve.
+        (
+            format!("{}/a\0*", t.s.p("outside")),
+            InputNeeded::UnresolvedTarget,
+        ),
+        (
+            format!("{}/a\0b", t.s.p("outside")),
+            InputNeeded::UnresolvedTarget,
+        ),
+    ] {
+        for targets in [[&target, &data], [&data, &target]] {
+            let d = check(
+                &t,
+                DestructiveKind::RemoveTree,
+                &targets.map(String::as_str),
+                None,
+            );
+            assert_eq!(
+                blocked(&d),
+                Some(&BlockReason::ApplicationData),
+                "{targets:?}: {:?}",
+                d.verdict
+            );
+        }
+        assert_eq!(
+            check(&t, DestructiveKind::RemoveTree, &[&target], None).verdict,
+            PreflightVerdict::NeedsInput(held),
+            "{target:?}"
+        );
+    }
+}
+
+/// A quoted POSIX name and a PowerShell `-LiteralPath` are checked as written, never expanded:
+/// a protected root named with brackets is refused. A PowerShell pattern matches
+/// case-insensitively, so one that reaches a protected root only that way is never allowed,
+/// while POSIX globbing stays case-sensitive. `eval` and `Invoke-Expression` strings are checked
+/// like the script they run.
+#[test]
+fn literal_names_case_insensitive_patterns_and_nested_scripts_are_checked() {
+    use devworks_core::authority::shell::{Blocking, CommandVerdict, preflight_command};
+    let s = Scratch::new("literal-names");
+    let data = s.p("devworks[prod]");
+    let cased = s.p("DevWorks");
+    let other = s.p("devworks-other");
+    let work = s.p("work");
+    for d in [&data, &cased, &other, &work] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let fs = NativeFilesystem::new();
+    let verdict = |roots: &ProtectedRoots, argv: &[&str], cwd: &str| {
+        let argv: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();
+        preflight_command(&fs, roots, &argv, Some(cwd), &[])
+    };
+    let flag = |shell: &str| if shell == "pwsh" { "-Command" } else { "-c" };
+    let reasons = |v: &CommandVerdict| match v {
+        CommandVerdict::Blocked { blocked, .. } => blocked.iter().map(Blocking::reason).collect(),
+        _ => Vec::new(),
+    };
+    let slashed = |p: &str| p.replace('\\', "/");
+    let ps_quote = |p: &str| format!("'{}'", p.replace('\'', "''"));
+    let bracketed = ProtectedRoots::new(Vec::new(), Vec::new(), Some(data.clone()));
+    let base = sh_quote(&slashed(&s.p("")));
+    // Every case is checked; the test reports all that fail.
+    let mut missed: Vec<String> = Vec::new();
+    let mut expect = |ok: bool, case: String, v: &CommandVerdict| {
+        if !ok {
+            missed.push(format!("{case}: {v:?}"));
+        }
+    };
+    for (shell, script) in [
+        ("bash", format!("rm -rf {}", sh_quote(&slashed(&data)))),
+        ("bash", format!("rm -rf {base}/devworks\\[prod\\]")),
+        // Unquoted and matching nothing, the shell passes the name on as written.
+        ("bash", format!("rm -rf {base}/devworks[prod]")),
+        (
+            "pwsh",
+            format!("Remove-Item -LiteralPath {} -Recurse", ps_quote(&data)),
+        ),
+    ] {
+        let v = verdict(&bracketed, &[shell, flag(shell), &script], &work);
+        expect(reasons(&v) == ["ApplicationData"], script, &v);
+    }
+    // An unquoted pattern that matches nothing removes nothing a protected root holds.
+    for script in ["rm -f *.tmp", "rm -f *.o"] {
+        let v = verdict(&bracketed, &["bash", "-c", script], &work);
+        expect(
+            matches!(v, CommandVerdict::Allowed { .. }),
+            script.to_owned(),
+            &v,
+        );
+    }
+    // Case: `DevWorks` is protected; `devworks*` matches it only case-insensitively.
+    let cased_roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some(cased.clone()));
+    let pattern = format!("{}/devworks*", slashed(&s.p("")));
+    for script in [
+        format!("Remove-Item -Recurse {}", ps_quote(&pattern)),
+        format!("Remove-Item -Path {} -Recurse -Force", ps_quote(&pattern)),
+        format!(
+            "Move-Item {} {}",
+            ps_quote(&pattern),
+            ps_quote(&s.p("work/moved"))
+        ),
+    ] {
+        let v = verdict(&cased_roots, &["pwsh", "-Command", &script], &work);
+        let allowed = matches!(
+            v,
+            CommandVerdict::Allowed { .. } | CommandVerdict::Residual { .. }
+        );
+        expect(!allowed, script, &v);
+    }
+    let script = format!("rm -rf {base}/devworks*");
+    let v = verdict(&cased_roots, &["bash", "-c", &script], &work);
+    expect(matches!(v, CommandVerdict::Allowed { .. }), script, &v);
+    // Nested scripts: a write into the root is refused, the same write outside allowed.
+    let inside = slashed(&format!("{cased}/x"));
+    let outside = slashed(&format!("{work}/x"));
+    for (target, refused) in [(&inside, true), (&outside, false)] {
+        for (shell, script) in [
+            ("bash", format!("eval \"echo x >> '{target}'\"")),
+            (
+                "pwsh",
+                format!("Invoke-Expression \"Set-Content '{target}' y\""),
+            ),
+            ("pwsh", format!("iex \"ni '{target}'\"")),
+        ] {
+            let v = verdict(&cased_roots, &[shell, flag(shell), &script], &work);
+            let ok = if refused {
+                reasons(&v) == ["ApplicationData"]
+            } else {
+                matches!(v, CommandVerdict::Allowed { .. })
+            };
+            expect(ok, script, &v);
+        }
+    }
+    assert!(missed.is_empty(), "{}", missed.join("\n"));
 }
 
 #[test]
@@ -1244,6 +1408,7 @@ fn a_gitfile_points_protection_at_the_real_git_directory() {
                 targets: vec![target],
                 working_directory: None,
                 scope: IntendedScope::Ordinary,
+                literal: false,
             },
         )
     };
@@ -1295,6 +1460,7 @@ fn an_unresolvable_protected_root_fails_closed() {
             targets: vec!["relative/repo".into()],
             working_directory: Some(s.p("")),
             scope: IntendedScope::Ordinary,
+            literal: false,
         },
     );
     assert_eq!(
@@ -1311,6 +1477,7 @@ fn an_unresolvable_protected_root_fails_closed() {
             targets: vec![s.p("x")],
             working_directory: None,
             scope: IntendedScope::Ordinary,
+            literal: false,
         },
     );
     assert_eq!(
@@ -1715,7 +1882,7 @@ mod probe {
         for case in [
             "trap 'rm -rf {R}' EXIT",
             "alias x='rm -rf {R}'; x",
-            "eval 'rm -rf {R}'",
+            "printf '%s' 'rm -rf {R}'",
             "echo 'git clean -fdx'",
         ] {
             let a = argv(&["sh", "-c", &case.replace("{R}", &f.repo)]);

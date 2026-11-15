@@ -612,6 +612,8 @@ impl ArtifactService {
             targets: vec![destination.to_owned()],
             working_directory: None,
             scope: IntendedScope::Ordinary,
+            // The export writes exactly this path.
+            literal: true,
         };
         let decision = destructive::preflight(resolver, &roots, &plan);
         let target = match (&decision.verdict, decision.allowed_targets()) {

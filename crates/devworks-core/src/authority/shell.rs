@@ -124,6 +124,7 @@ fn plan(kind: DestructiveKind, targets: Vec<String>, cwd: Option<&str>) -> Effec
         targets,
         working_directory: cwd.map(str::to_owned),
         scope: IntendedScope::Ordinary,
+        literal: false,
     }
 }
 
@@ -204,16 +205,20 @@ enum Dialect {
     PowerShell,
 }
 
-/// One shell word: its literal text and whether it depends on runtime or brace expansion.
+/// One shell word: its literal text, whether it depends on runtime or brace expansion, and
+/// whether its wildcard characters name themselves (quoted or escaped in a POSIX shell, or a
+/// PowerShell `-LiteralPath`) rather than form a pattern.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Word {
     text: String,
     dynamic: bool,
+    literal: bool,
 }
 fn literal(s: &str) -> Word {
     Word {
         text: s.to_owned(),
         dynamic: false,
+        literal: false,
     }
 }
 
@@ -273,9 +278,15 @@ fn tokenize(script: &str, dialect: Dialect) -> Lexed {
                     '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}', '\u{201C}', '\u{201D}',
                     '\u{201E}',
                 ]);
+            // POSIX: wildcard characters inside quotes or after `\` name themselves; unquoted
+            // ones form a pattern. A word with both is not one the plan can express: held.
+            let wild = |c: &char| matches!(c, '*' | '?' | '[');
+            let open = unquoted.chars().filter(wild).count();
+            let quoted = dialect == Dialect::Posix && word.chars().filter(wild).count() > open;
             lx.tokens.push(Token::Word(Word {
                 text: std::mem::take(word),
-                dynamic: *dynamic || brace || tilde || array || smart,
+                dynamic: *dynamic || brace || tilde || array || smart || (quoted && open > 0),
+                literal: quoted && open == 0,
             }));
         }
         unquoted.clear();
@@ -614,6 +625,7 @@ impl Collector<'_> {
     /// refused is refused whatever else the command holds.
     fn push(&mut self, kind: DestructiveKind, words: &[Word]) -> bool {
         let mut resolved = Vec::new();
+        let mut literal = Vec::new();
         let mut complete = true;
         for w in words {
             if drive_relative(&w.text) {
@@ -627,13 +639,21 @@ impl Collector<'_> {
             } else if self.cwd == Cwd::Unknown && !absolute(&w.text) {
                 self.hold(InputNeeded::UnresolvedWorkingDirectory);
                 complete = false;
+            } else if w.literal {
+                literal.push(w.text.clone());
             } else {
                 resolved.push(w.text.clone());
             }
         }
+        let cwd = self.cwd().map(str::to_owned);
         if !resolved.is_empty() {
-            let cwd = self.cwd().map(str::to_owned);
             self.plans.push(plan(kind, resolved, cwd.as_deref()));
+        }
+        // Names whose wildcard characters are quoted are checked as written, never expanded.
+        if !literal.is_empty() {
+            let mut p = plan(kind, literal, cwd.as_deref());
+            p.literal = true;
+            self.plans.push(p);
         }
         complete
     }
@@ -1236,20 +1256,31 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
         if dialect == Dialect::PowerShell
             && matches!(
                 t.to_ascii_lowercase().as_str(),
-                "set-alias"
-                    | "sal"
-                    | "new-alias"
-                    | "nal"
-                    | "invoke-expression"
-                    | "iex"
-                    | "new-psdrive"
-                    | "ndr"
-                    | "mount"
+                "set-alias" | "sal" | "new-alias" | "nal" | "new-psdrive" | "ndr" | "mount"
             )
         {
-            // An alias can name any command, code run from a string is not read here, and a
-            // new drive can map any letter onto a protected root.
+            // An alias can name any command, and a new drive can map any letter onto a protected
+            // root.
             c.hold(InputNeeded::OpaqueCommand);
+            return;
+        }
+        if dialect == Dialect::PowerShell
+            && matches!(t.to_ascii_lowercase().as_str(), "invoke-expression" | "iex")
+        {
+            // `Invoke-Expression 'code'` runs its one literal string as a script.
+            let mut rest = &words[i + 1..];
+            if rest
+                .first()
+                .is_some_and(|w| w.text.eq_ignore_ascii_case("-command"))
+            {
+                rest = &rest[1..];
+            }
+            nested(rest, Dialect::PowerShell, c, depth);
+            return;
+        }
+        if dialect == Dialect::Posix && t == "eval" {
+            // `eval` joins its words with spaces and runs the result as a script.
+            nested(&words[i + 1..], Dialect::Posix, c, depth);
             return;
         }
         if dialect == Dialect::PowerShell
@@ -1504,6 +1535,13 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
                 return;
             }
             _ => {
+                if dialect == Dialect::PowerShell
+                    && t.to_ascii_lowercase().contains("scriptblock]::create")
+                {
+                    // A script block built from a string runs code this analysis does not read.
+                    c.hold(InputNeeded::OpaqueCommand);
+                    return;
+                }
                 if dialect == Dialect::PowerShell && t.contains("::") {
                     // A .NET static call: modeled (or held) by the API scan of the script,
                     // and any API left unmodeled is held by the backstop.
@@ -1574,6 +1612,7 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
                     a.text.strip_prefix("of=").map(|t| Word {
                         text: t.to_owned(),
                         dynamic: a.dynamic,
+                        literal: a.literal,
                     })
                 })
                 .collect();
@@ -1609,6 +1648,23 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
     } else if consequential_token(&name) {
         c.unmodeled();
     }
+}
+
+/// The words of `eval` or `Invoke-Expression`, joined with spaces, analyzed as a nested script;
+/// a computed word (or none, when the code arrives on the pipeline) holds the command.
+fn nested(words: &[Word], dialect: Dialect, c: &mut Collector, depth: u8) {
+    if words.is_empty() {
+        if dialect == Dialect::PowerShell {
+            c.hold(InputNeeded::OpaqueCommand);
+        }
+        return;
+    }
+    if words.iter().any(|w| w.dynamic) {
+        c.hold(InputNeeded::UnresolvedExpansion);
+        return;
+    }
+    let code: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+    script(&code.join(" "), dialect, c, depth + 1);
 }
 
 fn shell(name: &str, args: &[Word], piped: bool, c: &mut Collector, depth: u8) {
@@ -2212,12 +2268,16 @@ fn move_item(args: &[Word], c: &mut Collector) -> bool {
     while let Some(a) = args.get(j) {
         let l = a.text.to_ascii_lowercase();
         match l.as_str() {
-            "-path" | "-literalpath" => {
+            "-path" => {
                 sources.extend(args.get(j + 1).cloned());
                 j += 2;
             }
+            "-literalpath" => {
+                sources.extend(args.get(j + 1).cloned().map(name_only));
+                j += 2;
+            }
             "-destination" => {
-                destination = args.get(j + 1).cloned();
+                destination = args.get(j + 1).cloned().map(name_only);
                 j += 2;
             }
             "-force" | "-confirm" | "-whatif" | "-passthru" => j += 1,
@@ -2226,7 +2286,7 @@ fn move_item(args: &[Word], c: &mut Collector) -> bool {
                 if sources.is_empty() {
                     sources.push(a.clone());
                 } else if destination.is_none() {
-                    destination = Some(a.clone());
+                    destination = Some(name_only(a.clone()));
                 } else {
                     return false;
                 }
@@ -2237,6 +2297,7 @@ fn move_item(args: &[Word], c: &mut Collector) -> bool {
     let Some(destination) = destination else {
         return false;
     };
+    ps_pattern_hold(&sources, c);
     !sources.is_empty()
         && c.push(DestructiveKind::Move, &sources)
         && c.push(DestructiveKind::Truncate, &[destination])
@@ -2559,6 +2620,7 @@ fn ps_write(writer: PsWriter, args: &[Word], piped: bool, c: &mut Collector) -> 
             (_, Some(v)) => Some(Word {
                 text: v,
                 dynamic: a.dynamic,
+                literal: false,
             }),
             (_, None) => {
                 j += 1;
@@ -2678,6 +2740,7 @@ fn ps_target(w: Word, literal: bool, c: &mut Collector) -> Option<Word> {
     Some(Word {
         text,
         dynamic: w.dynamic,
+        literal: w.literal,
     })
 }
 
@@ -2737,13 +2800,17 @@ fn remove_item(args: &[Word], piped: bool, c: &mut Collector) -> bool {
         let is = |full: &str, min: usize| opt.len() >= min && full.starts_with(opt);
         if is("path", 1) || is("literalpath", 1) {
             let joined = attached.is_some();
-            match attached {
-                Some(v) => operands.push(Word {
+            let operand = match attached {
+                Some(v) => Some(Word {
                     text: v,
                     dynamic: a.dynamic,
+                    literal: false,
                 }),
-                None => operands.extend(args.get(j + 1).cloned()),
-            }
+                None => args.get(j + 1).cloned(),
+            };
+            // `-LiteralPath` names its wildcard characters; `-Path` is a pattern.
+            let literal = is("literalpath", 1);
+            operands.extend(operand.map(|w| if literal { name_only(w) } else { w }));
             j += if joined { 1 } else { 2 };
         } else if is("recurse", 1) {
             recursive = true;
@@ -2775,7 +2842,26 @@ fn remove_item(args: &[Word], piped: bool, c: &mut Collector) -> bool {
     } else {
         DestructiveKind::Unlink
     };
+    ps_pattern_hold(&operands, c);
     c.push(kind, &operands)
+}
+
+/// A PowerShell path whose wildcard characters name themselves (`-LiteralPath`, `-Destination`).
+fn name_only(w: Word) -> Word {
+    Word { literal: true, ..w }
+}
+
+/// PowerShell wildcard patterns match case-insensitively (and, with `-Force`, hidden entries),
+/// while the preflight expands patterns case-sensitively: a PowerShell removal or move with a
+/// pattern operand is held. The pattern is still planned, so a match that is refused (or a
+/// pattern over a protected folder's whole content) blocks the step.
+fn ps_pattern_hold(words: &[Word], c: &mut Collector) {
+    if words
+        .iter()
+        .any(|w| !w.literal && w.text.contains(['*', '?', '[']))
+    {
+        c.hold(InputNeeded::UnresolvedTarget);
+    }
 }
 
 /// Records the assessment of a dispatched command in history, attributed to the invoking
