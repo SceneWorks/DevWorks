@@ -206,10 +206,8 @@ pub struct ProjectPurgeReference {
     pub kind: ProjectPurgeReferenceKind,
     pub from_table: ProjectRecordKind,
     pub from_key_digest: String,
-    pub from_columns: Vec<String>,
     pub to_table: ProjectRecordKind,
     pub to_key_digest: String,
-    pub to_columns: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]

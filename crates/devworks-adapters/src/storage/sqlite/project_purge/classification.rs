@@ -1,8 +1,9 @@
 //! Native ownership assessment. Explicit unresolved rows keep incomplete or
 //! unknown partitions out of any reviewed preparation or execution permit.
 use super::super::conn::db;
+use super::references::ColumnReference;
 use devworks_core::ports::storage::{
-    ProjectPurgeCandidate, ProjectPurgePlanning, ProjectPurgeReference, ProjectPurgeReferenceKind,
+    ProjectPurgeCandidate, ProjectPurgePlanning, ProjectPurgeReferenceKind,
     ProjectPurgeRowAction as Action, ProjectPurgeRowReason as Reason, ProjectPurgeRowWitness,
     ProjectPurgeUnresolved, ProjectPurgeUnresolvedReason as Unresolved, StorageError,
 };
@@ -319,7 +320,8 @@ pub(super) fn assign(
     );
     true
 }
-fn content_lineage(edge: &ProjectPurgeReference) -> bool {
+fn content_lineage(reference: &ColumnReference) -> bool {
+    let edge = &reference.edge;
     if edge.kind != ProjectPurgeReferenceKind::ForeignKey {
         return false;
     }
@@ -328,7 +330,7 @@ fn content_lineage(edge: &ProjectPurgeReference) -> bool {
         ("artifact_links", "artifact_versions") => "artifact_version_id",
         _ => return false,
     };
-    edge.from_columns.len() == 1 && edge.from_columns[0] == column
+    reference.from_columns.len() == 1 && reference.from_columns[0] == column
 }
 fn content_partitions(
     conn: &Connection,
@@ -389,6 +391,7 @@ fn content_partitions(
 }
 fn propagate_content(
     snapshot: &devworks_core::ports::storage::ProjectPurgeCandidates,
+    references: &[ColumnReference],
     rows: &mut BTreeMap<Key, ProjectPurgeRowWitness>,
     unresolved: &mut BTreeMap<Key, ProjectPurgeUnresolved>,
 ) -> Result<(), StorageError> {
@@ -401,10 +404,10 @@ fn propagate_content(
         .collect::<BTreeMap<_, _>>();
     loop {
         let mut changed = false;
-        for edge in snapshot
-            .references
+        for edge in references
             .iter()
-            .filter(|edge| content_lineage(edge))
+            .filter(|reference| content_lineage(reference))
+            .map(|reference| &reference.edge)
         {
             let Some(parent) = rows
                 .get(&(edge.to_table, edge.to_key_digest.clone()))
@@ -443,7 +446,7 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
     project: &ProjectId,
     keepers: &[devworks_core::protocol::provider::ArtifactRef],
 ) -> Result<Option<ProjectPurgePlanning>, StorageError> {
-    let Some(snapshot) = super::candidates::snapshot(conn, project)? else {
+    let Some((snapshot, references)) = super::candidates::scoped(conn, project)? else {
         return Ok(None);
     };
     let known = policies(conn)?;
@@ -524,12 +527,13 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
             );
         }
     }
-    propagate_content(&snapshot, &mut rows, &mut unresolved)?;
+    propagate_content(&snapshot, &references, &mut rows, &mut unresolved)?;
     super::client_keepers::retain(conn, keepers, &snapshot, &mut rows, &mut unresolved)?;
     // Only retention decisions propagate. A reference can never add a deletion.
     loop {
         let mut changed = false;
-        for edge in &snapshot.references {
+        for reference in &references {
+            let edge = &reference.edge;
             let source = (edge.from_table, edge.from_key_digest.clone());
             let target = (edge.to_table, edge.to_key_digest.clone());
             if unresolved.contains_key(&source) {
@@ -550,7 +554,7 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
                     Some(true)
                 }
                 Some(_) if edge.kind == ProjectPurgeReferenceKind::ForeignKey => {
-                    scrub_reference(edge.from_table.as_str(), &edge.from_columns)
+                    scrub_reference(edge.from_table.as_str(), &reference.from_columns)
                 }
                 Some(_) => None,
             };
@@ -612,10 +616,10 @@ pub(in crate::storage::sqlite) fn planning_with_client_keepers(
         .iter()
         .filter(|row| row.reason != Reason::PurgeControlAudit)
         .collect::<Vec<_>>();
-    let references = snapshot
-        .references
+    let references = references
         .iter()
-        .filter(|edge| {
+        .filter(|reference| {
+            let edge = &reference.edge;
             !control_keys.contains(&(edge.from_table.as_str(), edge.from_key_digest.as_str()))
                 && !matches!(
                     edge.from_table.as_str(),
