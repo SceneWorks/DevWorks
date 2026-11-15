@@ -926,3 +926,109 @@ fn native_small_signed_package_approves_owner_review_without_rendering_binary_so
 
 #[path = "decisions/late_reply.rs"]
 mod late_reply;
+
+/// A feature whose plan names a project artifact holding `text`; `Err` carries the refusal's
+/// target kind.
+fn plan_with_document(
+    b: &dyn Backend,
+    root: &Root,
+    title: &str,
+    text: &str,
+) -> Result<WorkRecord, Option<String>> {
+    let p =
+        ops::project_changed(b.command("projects.create", &ops::project_create(b, title, "", &[])))
+            .unwrap();
+    let statuses = wops::workflow_page(b.query(
+        "workflows.list",
+        &wops::workflow_list(b, p.id.0.as_str(), None),
+    ))
+    .unwrap()
+    .0;
+    let status = statuses.iter().find(|s| s.category.0 == "Backlog").unwrap();
+    let artifact = document(b, root, &p.id, title, text);
+    wops::work_changed(b.command("features.create",&wops::work_command(b,"features.create",json!({"projectId":p.id,"creation":{"kind":"Single","title":title,"description":"A plan document fixture.","repositoryIds":[],"statusId":status.id,"priority":10,"plan":{"content":artifact,"goals":["Ship the documented plan"],"requirements":[],"acceptance":[],"acceptanceTests":[],"repositoryIds":[]}}}))))
+        .map_err(|e| match e {
+            ops::Failure::Refused(fault) => fault.target_kind.map(|k| k.0),
+            _ => None,
+        })
+}
+/// A saved project artifact holding `text`, as a plan document reference.
+fn document(
+    b: &dyn Backend,
+    root: &Root,
+    project: &devworks_core::protocol::ProjectId,
+    name: &str,
+    text: &str,
+) -> devworks_core::protocol::provider::ArtifactRef {
+    let path = root.file(&format!("{}.md", name.replace(' ', "-")), text.as_bytes());
+    let ticket = b.mint_project_upload(project, &path).unwrap();
+    ops::saved_artifact(b.command(
+        "artifacts.save",
+        &ops::save_project_artifact(
+            b,
+            project.0.as_str(),
+            ticket.as_str(),
+            "Plan document",
+            "text/markdown",
+            &devworks_core::fingerprint::sha256_hex(text.as_bytes()),
+            text.len() as u64,
+        ),
+    ))
+    .unwrap()
+    .artifact
+}
+
+/// The plan document is shown exactly, page by page, in the plan approval's detail, so a draft
+/// naming one whose text the shared redaction would change is refused at save, on creation and
+/// on edit. An ordinary document is shown exactly and its plan approves.
+#[test]
+fn plan_documents_with_text_the_redaction_would_change_are_refused_at_save() {
+    let root = Root::new("approval-plan-document");
+    let engine = start(&root);
+    let b = engine.backend();
+    let secret = "# Plan\nDeploy with password: hunter2-plain-value\nThen ship.";
+    assert_eq!(
+        plan_with_document(&*b, &root, "Document with a password", secret).map(|_| ()),
+        Err(Some("feature_plan_unreviewable".to_owned()))
+    );
+    // An ordinary document saves, and the approval detail shows its text exactly.
+    let text = "# Ordinary plan\nShip the documented plan in small reviewed steps.";
+    let feature = plan_with_document(&*b, &root, "Ordinary document", text).unwrap();
+    // Editing the draft to name a document holding a password in a URL is refused too.
+    let current = get(&*b, &feature);
+    let mut revised = serde_json::to_value(&current.pending_plan.as_ref().unwrap().draft).unwrap();
+    revised["content"] = json!(document(
+        &*b,
+        &root,
+        &feature.project_id,
+        "Edited document",
+        "# Plan\nClone https://bot:hunter2-plain-value@git.example/repo first."
+    ));
+    match wops::work_changed(b.command(
+        "features.edit_plan",
+        &wops::work_command(
+            &*b,
+            "features.edit_plan",
+            json!({"featureId":feature.id,"expectedRevision":current.revision,"plan":revised}),
+        ),
+    )) {
+        Err(ops::Failure::Refused(fault)) => assert_eq!(
+            fault.target_kind.map(|k| k.0),
+            Some("feature_plan_unreviewable".to_owned())
+        ),
+        other => panic!("a document with a URL password was saved: {other:?}"),
+    }
+    let p = request(&*b, &feature);
+    let mut h = open(&engine, &root, &p);
+    click(
+        &mut h,
+        Role::DisclosureTriangle,
+        "Exact proposal artifact text",
+    );
+    assert!(has_text(&h, text), "the ordinary document is shown exactly");
+    rationale(&mut h, "I reviewed this exact plan document.");
+    press(&mut h, "Approve exact proposal");
+    let approved = get(&*b, &feature);
+    assert!(approved.pending_plan.is_none());
+    assert!(approved.approval.is_some());
+}
