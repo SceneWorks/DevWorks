@@ -2892,8 +2892,11 @@ impl Runtime {
                     .as_ref()
                     .is_some_and(devworks_core::ports::storage::Cancellation::is_cancelled)
             };
-            // A scan that fails leaves the recorded registrations to answer.
-            let _ = devworks_core::services::indexing::discover::scan(&env, ctx, None, &cancelled);
+            // A scan that fails leaves the recorded registrations to answer; what it could not
+            // do is recorded on the indexing channel.
+            let scan =
+                devworks_core::services::indexing::discover::scan(&env, ctx, None, &cancelled);
+            devworks_core::services::indexing::discover::log_scan(&env, &scan);
             drop(open);
             return self.use_cases.query_with(
                 &self.gateway(),
