@@ -732,10 +732,11 @@ impl WorkRepository for Unit<'_> {
             || w.kind != current.kind
             || w.project_id != current.project_id
             || w.created_at_ms != current.created_at_ms
+            || w.created_by != current.created_by
             || w.scope_revision < current.scope_revision
         {
             return Err(invalid(
-                "a work update advances its revision by one and keeps its kind, project and creation",
+                "a work update advances its revision by one and keeps its kind, project, creation and creator",
             ));
         }
         check_parent(self.conn, w)?;
