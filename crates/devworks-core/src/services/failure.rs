@@ -1,7 +1,7 @@
 //! The typed refusal and failure every core use case returns, and the one mapping from a storage
 //! error to its wire fault code and retry advice. The gateway, the services' query faults and
 //! the web store all answer a storage error through [`storage_fault`].
-use crate::ports::storage::StorageError;
+use crate::ports::storage::{StorageError, Unavailable};
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, HoldId, Id, RetryAdvice};
 
@@ -104,9 +104,15 @@ impl Failure {
 
 /// The wire fault code and retry advice of a storage error. Only what a later identical request
 /// can outlive retries: an expired cursor needs a new request from a refreshed position, and a
-/// cancellation, an unpublished view or a schema this build cannot use repeats the same way.
+/// cancellation, an unpublished view, a schema this build cannot use, a request that breaks a
+/// persistence invariant and a stored row that cannot be read all repeat the same way.
 pub fn storage_fault(e: &StorageError) -> (DomainErrorCode, RetryAdvice) {
     match e {
+        StorageError::InvalidRecord(_)
+        | StorageError::StorageUnavailable {
+            cause: Unavailable::Corrupt,
+            ..
+        } => (DomainErrorCode::StorageUnavailable, RetryAdvice::Never),
         StorageError::IncompatibleSchema(_) => {
             (DomainErrorCode::SchemaMismatch, RetryAdvice::Never)
         }
@@ -122,7 +128,6 @@ pub fn storage_fault(e: &StorageError) -> (DomainErrorCode, RetryAdvice) {
         | StorageError::Busy
         | StorageError::LeaseLost { .. }
         | StorageError::Duplicate { .. }
-        | StorageError::InvalidRecord(_)
         | StorageError::StorageUnavailable { .. }
         | StorageError::CommitUnknown => (
             DomainErrorCode::StorageUnavailable,
@@ -134,7 +139,6 @@ pub fn storage_fault(e: &StorageError) -> (DomainErrorCode, RetryAdvice) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::storage::Unavailable;
     use crate::protocol::{Revision, RevisionDimension};
 
     /// One error of every variant. The match has no wildcard arm, so a new variant does not
@@ -168,6 +172,7 @@ mod tests {
             StorageError::InvalidRecord("bad row".into()),
             StorageError::IncompatibleSchema("newer".into()),
             StorageError::unavailable(Unavailable::Io, "disk"),
+            StorageError::unavailable(Unavailable::Corrupt, "unreadable row"),
             StorageError::CommitUnknown,
         ];
         for error in &all {
@@ -204,9 +209,10 @@ mod tests {
             (C::CursorExpired, R::RefreshAndNewRequest),
             (C::StorageUnavailable, R::SameCommand),
             (C::StorageUnavailable, R::SameCommand),
-            (C::StorageUnavailable, R::SameCommand),
+            (C::StorageUnavailable, R::Never),
             (C::SchemaMismatch, R::Never),
             (C::StorageUnavailable, R::SameCommand),
+            (C::StorageUnavailable, R::Never),
             (C::StorageUnavailable, R::SameCommand),
         ];
         let all = every_variant();

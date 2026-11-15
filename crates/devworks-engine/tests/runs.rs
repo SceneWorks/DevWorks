@@ -1062,6 +1062,40 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
             .delegate(tx, &agent_for_rejection, &elevated)
             .is_err())
     }));
+    // A storage failure while delegating rolls the command back with the shared storage fault's
+    // code and retry advice: a write that breaks a persistence invariant repeats the same way.
+    let raw = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
+    raw.busy_timeout(Duration::from_secs(30)).unwrap();
+    raw.execute_batch(
+        "CREATE TRIGGER refuse_delegate_context BEFORE INSERT ON agent_assignment_context \
+         BEGIN SELECT RAISE(ABORT,'controlled delegate storage failure'); END;",
+    )
+    .unwrap();
+    let delegate_frame = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":1,
+        "requestKey":fx.key(),"body":{"kind":"agents.delegate","rootId":"root-i",
+        "expectedControlRevision":request.expected_control_revision,"taskIds":[],
+        "roleId":"worker","instruction":"Investigate"}});
+    let (code, retry) = devworks_core::services::failure::storage_fault(
+        &StorageError::InvalidRecord("trigger".into()),
+    );
+    assert_eq!(
+        (code, retry),
+        (
+            DomainErrorCode::StorageUnavailable,
+            devworks_core::protocol::RetryAdvice::Never
+        )
+    );
+    match fx.command(&agent, "agents.delegate", delegate_frame) {
+        DomainCommandReply::Rejected {
+            code: devworks_core::protocol::Rejection::StorageUnavailable,
+            retry,
+            ..
+        } => assert_eq!(retry, devworks_core::protocol::RetryAdvice::Never),
+        other => panic!("unexpected delegate reply: {other:?}"),
+    }
+    raw.execute_batch("DROP TRIGGER refuse_delegate_context;")
+        .unwrap();
+    drop(raw);
     let agents =
         devworks_core::services::agents::AgentService::new(fx.h.ids.clone(), fx.service.clone());
     let child = fx.tx(move |_, tx| {

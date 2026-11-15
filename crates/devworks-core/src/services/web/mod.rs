@@ -267,7 +267,7 @@ fn checked_scope(
     s: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     scope: &DataScope,
-) -> Result<Option<ProjectId>, (DomainErrorCode, &'static str)> {
+) -> Result<Result<Option<ProjectId>, (DomainErrorCode, &'static str)>, StorageError> {
     let project = match scope {
         DataScope::Project { project_id } => Some(project_id.clone()),
         DataScope::Workspace => None,
@@ -275,20 +275,16 @@ fn checked_scope(
     match crate::services::artifacts::named_scope(s.authority(), ctx, project.as_ref()) {
         Ok(_) => {}
         Err(crate::services::artifacts::Failure::Refused(r)) => {
-            return Err((r.code, r.target_kind));
+            return Ok(Err((r.code, r.target_kind)));
         }
-        Err(crate::services::artifacts::Failure::Storage(_)) => {
-            return Err((DomainErrorCode::StorageUnavailable, "web_store"));
-        }
+        Err(crate::services::artifacts::Failure::Storage(e)) => return Err(e),
     }
-    if let Some(p) = &project {
-        match s.artifacts().project_exists(p) {
-            Ok(true) => {}
-            Ok(false) => return Err((DomainErrorCode::NotFound, "project")),
-            Err(_) => return Err((DomainErrorCode::StorageUnavailable, "web_store")),
-        }
+    if let Some(p) = &project
+        && !s.artifacts().project_exists(p)?
+    {
+        return Ok(Err((DomainErrorCode::NotFound, "project")));
     }
-    Ok(project)
+    Ok(Ok(project))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -320,8 +316,8 @@ impl QueryHandler for WebService {
         let read = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
             let policy = read_policy(s.configuration());
             let scope = match input {
-                ops::Input::Search(i) => checked_scope(s, ctx, &i.scope),
-                ops::Input::Fetch(i) => checked_scope(s, ctx, &i.scope),
+                ops::Input::Search(i) => checked_scope(s, ctx, &i.scope)?,
+                ops::Input::Fetch(i) => checked_scope(s, ctx, &i.scope)?,
             };
             Ok((policy, scope))
         });

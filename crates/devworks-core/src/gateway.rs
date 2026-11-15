@@ -594,14 +594,10 @@ impl Gateway<'_> {
             Ok(prepared) => admitted.prepared = prepared,
             Err(e) => {
                 // Same mapping as a write that was not admitted: nothing durable decided.
-                let retry = match e {
-                    StorageError::IncompatibleSchema(_) => RetryAdvice::Never,
-                    _ => RetryAdvice::SameCommand,
-                };
                 return Err(Ok(self.rejected(
                     request_key,
                     Rejection::StorageUnavailable,
-                    retry,
+                    command_retry(&e),
                 )));
             }
         }
@@ -693,16 +689,11 @@ impl Gateway<'_> {
                 request_key,
                 correlation_id: self.correlation(),
             },
-            Err(StorageError::IncompatibleSchema(_)) => self.rejected(
-                request_key,
-                Rejection::StorageUnavailable,
-                RetryAdvice::Never,
-            ),
             // Not admitted, cancelled, or rolled back before commit: nothing was written.
-            Err(_) => self.rejected(
+            Err(e) => self.rejected(
                 request_key,
                 Rejection::StorageUnavailable,
-                RetryAdvice::SameCommand,
+                command_retry(&e),
             ),
         };
         settle.settle(ctx, prepared.as_ref(), Some(&reply), &env);
@@ -854,6 +845,16 @@ impl Gateway<'_> {
 /// Fault target kind of a policy denial: `authority:<DenialReason>`.
 pub fn denial_target(reason: crate::authority::DenialReason) -> String {
     format!("authority:{}", reason.as_str())
+}
+
+/// The retry advice of a command the store did not admit or rolled back. It is the storage
+/// fault's advice, except that a cancelled command wrote nothing and left its request key unused,
+/// so the same command may be sent again.
+fn command_retry(e: &StorageError) -> RetryAdvice {
+    match e {
+        StorageError::Cancelled => RetryAdvice::SameCommand,
+        e => storage_fault(e).1,
+    }
 }
 
 /// The command's write unit of work. Runs on the sole write owner inside one transaction.
