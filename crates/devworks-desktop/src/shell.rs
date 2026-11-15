@@ -3,7 +3,7 @@
 //! view state only; every record comes through [`Client`] from the runtime's gateway.
 use crate::attachments;
 use crate::backend::{Backend, Client, Reply, Slot, TaskOutput, Unresolved, is_unknown};
-use crate::chat::{self, AttachState, Attachment, Chat, ChatAction, StartReason, Surface};
+use crate::chat::Chat;
 use crate::knowledge_screen::{self, KnowledgeAction, KnowledgeScreen};
 use crate::mcp_panel::McpAction;
 use crate::memory::{Memory, RouteMemory};
@@ -22,15 +22,14 @@ use devworks_core::protocol::records::{ConnectionLifecycle, ItemState, LifeState
 use devworks_core::protocol::{DomainErrorCode, Id};
 use devworks_core::settings::validate::codes;
 use devworks_core::settings::view::Health;
-use eframe::egui::{
-    self, Align, Event, Frame, Layout, Panel, RichText, Ui, ViewportCommand, accesskit,
-};
+use eframe::egui::{self, Align, Frame, Layout, Panel, RichText, Ui, ViewportCommand, accesskit};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+pub mod chat;
 mod conventions;
 mod databases;
 pub mod decisions;
@@ -39,7 +38,6 @@ pub mod help;
 pub mod indexing;
 mod instructions;
 pub mod jobs;
-mod live_text;
 mod project_purge;
 pub mod projects;
 mod settings_secrets;
@@ -186,9 +184,6 @@ pub struct Shell {
     version: String,
     route: Route,
     intelligence_open: bool,
-    coordinator_open: bool,
-    /// Last screen context attempted for one selected conversation while the sidebar is open.
-    last_coordinator_notice: Option<(String, String)>,
     routes: BTreeMap<Route, RouteMemory>,
     pub chat: Chat,
     pub settings: SettingsScreen,
@@ -229,15 +224,8 @@ pub struct Shell {
     purge_reviews: BTreeMap<String, serde_json::Value>,
     last_save: Instant,
     last_poll: Instant,
-    last_preview_poll: Option<Instant>,
-    preview_target: Option<String>,
-    preview_generation: u64,
-    restored_selection: Option<String>,
-    /// Applied session mutations (start, message). A list query started before the latest
-    /// mutation may miss it: its reply is dropped and the list re-queried, so it never
-    /// overwrites newer records. Artifacts counts its own mutations the same way.
-    session_mutations: u64,
-    sessions_list_at: u64,
+    /// The window's context, from the first frame on (screens make textures through it).
+    egui: Option<egui::Context>,
     /// The drafts the pending `settings.validate` checked; a report for other drafts is stale.
     validated_drafts: Option<BTreeMap<String, serde_json::Value>>,
     /// The settings revision each pending `settings.explain_source` was asked at; a chain read
@@ -254,20 +242,22 @@ pub struct Shell {
 
 /// The migrated screens: `screens!(Id => field, ...)` binds each [`ScreenId`] to the `Shell`
 /// field holding that screen. Indexing (`projects.indexing`) is bound in the macro itself: every
-/// other screen's context reads it.
+/// other screen's context reads it. So is Chat: every other screen's context reads its router
+/// catalog, and its own context lends it the watcher lists its sidebar shows.
 macro_rules! screens {
     ($($id:ident => $($field:ident).+),* $(,)?) => {
         impl Shell {
             fn screens(&self) -> Vec<&dyn DynScreen> {
-                vec![$(&self.$($field).+,)* &self.projects.indexing]
+                vec![$(&self.$($field).+,)* &self.projects.indexing, &self.chat]
             }
             fn screens_mut(&mut self) -> Vec<&mut dyn DynScreen> {
-                vec![$(&mut self.$($field).+,)* &mut self.projects.indexing]
+                vec![$(&mut self.$($field).+,)* &mut self.projects.indexing, &mut self.chat]
             }
             fn screen(&self, id: ScreenId) -> Option<&dyn DynScreen> {
                 match id {
                     $(ScreenId::$id => Some(&self.$($field).+),)*
                     ScreenId::Indexing => Some(&self.projects.indexing),
+                    ScreenId::Chat => Some(&self.chat),
                     ScreenId::Legacy => None,
                 }
             }
@@ -293,18 +283,30 @@ macro_rules! screens {
                         members_of: self.projects.members_of.as_deref(),
                         indexing: None,
                     },
-                    catalog: &self.chat.routing.catalog,
+                    catalog: &[],
                     job_status: &self.jobs.project_status,
                     archive_counts: &self.work.archive_counts,
+                    ctx: self.egui.clone(),
+                    watchers: None,
                     effects: Vec::new(),
                 };
                 match id {
                     $(ScreenId::$id => {
                         cx.projects.indexing = Some(&self.projects.indexing);
+                        cx.catalog = &self.chat.routing.catalog;
                         Some((&mut self.$($field).+, cx))
                     })*
                     // The Indexing screen's own context does not hold its state.
-                    ScreenId::Indexing => Some((&mut self.projects.indexing, cx)),
+                    ScreenId::Indexing => {
+                        cx.catalog = &self.chat.routing.catalog;
+                        Some((&mut self.projects.indexing, cx))
+                    }
+                    // Nor does Chat's: it reads its own catalog.
+                    ScreenId::Chat => {
+                        cx.projects.indexing = Some(&self.projects.indexing);
+                        cx.watchers = Some(&self.watchers);
+                        Some((&mut self.chat, cx))
+                    }
                     ScreenId::Legacy => None,
                 }
             }
@@ -339,77 +341,7 @@ impl Shell {
             }
             Err(reason) => (None, Some(reason), None),
         };
-        let mut chat = Chat::new();
-        chat.tab = memory.sidebar_tab;
-        chat.history_query = memory.history_query.clone();
-        for (key, d) in &memory.drafts {
-            let mut draft = chat::Draft {
-                text: d.text.clone(),
-                attachments: Vec::new(),
-            };
-            for a in &d.attachments {
-                let Ok(r) = serde_json::from_value::<ArtifactRef>(a.artifact.clone()) else {
-                    continue;
-                };
-                let local = chat.next_local();
-                draft.attachments.push(Attachment {
-                    local,
-                    name: a.name.clone(),
-                    media_type: a.media_type.clone(),
-                    path: None,
-                    owned: false,
-                    state: AttachState::Stored(r),
-                    preview: None,
-                    preview_note: None,
-                });
-            }
-            // Attachments that never started storing: stored once their conversation is known.
-            for a in &d.uploads {
-                let local = chat.next_local();
-                draft.attachments.push(Attachment {
-                    local,
-                    name: a.name.clone(),
-                    media_type: a.media_type.clone(),
-                    path: Some(a.path.clone()),
-                    owned: a.owned,
-                    state: AttachState::WaitingForConversation,
-                    preview: None,
-                    preview_note: None,
-                });
-            }
-            // Saves whose outcome was unknown at close: confirmed with their exact frames.
-            for a in &d.unconfirmed {
-                let local = chat.next_local();
-                draft.attachments.push(Attachment {
-                    local,
-                    name: a.name.clone(),
-                    media_type: a.media_type.clone(),
-                    path: a.path.clone(),
-                    owned: a.owned,
-                    state: AttachState::Unconfirmed(a.frame.clone()),
-                    preview: None,
-                    preview_note: None,
-                });
-            }
-            // Saves that failed: shown failed with their file, retried on request.
-            for a in &d.failed {
-                let local = chat.next_local();
-                draft.attachments.push(Attachment {
-                    local,
-                    name: a.name.clone(),
-                    media_type: a.media_type.clone(),
-                    path: a.path.clone(),
-                    owned: a.owned,
-                    state: AttachState::Failed(a.error.clone()),
-                    preview: None,
-                    preview_note: None,
-                });
-            }
-            chat.drafts.insert(key.clone(), draft);
-        }
-        chat.scrolls = Scrolls::restoring(&memory.scroll);
-        chat.routing.selections = memory.routing.clone();
-        chat.routing.first_route = memory.routing_first.clone();
+        let chat = Chat::from_memory(&memory);
         let mut settings = SettingsScreen::default();
         settings.restore(&memory.settings);
         settings.scrolls = Scrolls::restoring(&memory.scroll);
@@ -421,9 +353,6 @@ impl Shell {
             version: init.version,
             route: memory.route,
             intelligence_open: memory.intelligence_open,
-            // The sidebar never reopens on its own on the Home screen (UI-13).
-            coordinator_open: memory.coordinator_open && memory.route != Route::Chat,
-            last_coordinator_notice: None,
             routes: memory.routes.clone(),
             chat,
             settings,
@@ -456,12 +385,7 @@ impl Shell {
             purge_reviews: memory.purge_reviews.clone(),
             last_save: Instant::now(),
             last_poll: Instant::now(),
-            last_preview_poll: None,
-            preview_target: None,
-            preview_generation: 0,
-            restored_selection: memory.selected_session,
-            session_mutations: 0,
-            sessions_list_at: 0,
+            egui: None,
             validated_drafts: None,
             explained_at: BTreeMap::new(),
             notifications_open: false,
@@ -481,7 +405,7 @@ impl Shell {
         self.route
     }
     pub fn coordinator_open(&self) -> bool {
-        self.coordinator_open
+        self.chat.coordinator_open
     }
     pub fn lifecycle(&self) -> &Lifecycle {
         &self.lifecycle
@@ -557,11 +481,7 @@ impl Shell {
             match effect {
                 Effect::Navigate(route) => self.navigate(route),
                 Effect::OpenWork(id) => self.open_work(&id),
-                Effect::OpenSession(id) => {
-                    self.chat.selected = Some(id.clone());
-                    self.load_transcript(&id);
-                    self.navigate(Route::Chat);
-                }
+                Effect::OpenSession(id) => self.open_session(id),
                 Effect::LoadProjects => self.load_projects(),
                 Effect::LoadRepositories => self.load_repositories(),
                 Effect::ProjectChanged(p) => {
@@ -608,6 +528,16 @@ impl Shell {
                 }
                 Effect::ConfirmOutcomes => self.confirm_outcomes(),
                 Effect::OpenEmbeddingSetup => self.open_embedding_setup(),
+                Effect::OpenInstructions => {
+                    self.settings.category =
+                        Some(devworks_core::settings::catalog::Category::Instructions);
+                    if let Some(v) = &mut self.settings.view {
+                        v.set_category(self.settings.category);
+                    }
+                    self.navigate(Route::Settings);
+                }
+                Effect::ArtifactsChanged => self.artifacts.mutations += 1,
+                Effect::Watch(actions) => self.watch_act(actions),
             }
         }
     }
@@ -631,33 +561,52 @@ impl Shell {
             self.databases.generated_key = None;
         }
         if route == Route::Chat {
-            self.coordinator_open = false;
+            self.chat.coordinator_open = false;
         }
         self.route = route;
         self.load_route();
     }
 
+    /// Shows conversation `id` on Home.
+    fn open_session(&mut self, id: String) {
+        self.with_typed(|c: &mut Chat, cx| c.open_session(cx, id));
+        self.navigate(Route::Chat);
+    }
+    pub fn load_sessions(&mut self) {
+        self.with_typed(|c: &mut Chat, cx| c.load_sessions(cx));
+    }
+    fn load_transcript(&mut self, id: &str) {
+        self.with_typed(|c: &mut Chat, cx| c.load_transcript(cx, id));
+    }
+    fn load_router_catalog(&mut self) {
+        self.with_typed(|c: &mut Chat, cx| c.load_router_catalog(cx));
+    }
+    fn invalidate_routing(&mut self) {
+        self.with_typed(|c: &mut Chat, cx| c.invalidate_routing(cx));
+    }
+    /// Attaches the user's files to the active conversation's draft (dialog, drop and pasted
+    /// paths). The shell never removes these files.
+    pub fn attach(&mut self, paths: Vec<PathBuf>) {
+        self.with_typed(|c: &mut Chat, cx| c.attach(cx, paths));
+    }
+    /// Attaches a pasted image: it is written as a PNG beside the store, attached, and the
+    /// temporary file removed once the artifact service holds its copy.
+    pub fn attach_pasted_image(&mut self, image: &egui::ColorImage) {
+        self.with_typed(|c: &mut Chat, cx| c.attach_pasted_image(cx, image));
+    }
+
     /// The toolbar chat icon: away from Home it toggles the coordinator sidebar; on Home the
     /// conversation is already in the centre, so it focuses the composer.
     pub fn toggle_coordinator(&mut self, ctx: &egui::Context) {
-        if self.route == Route::Chat {
-            ctx.memory_mut(|m| m.request_focus(egui::Id::unique(("composer", "home"))));
-            return;
-        }
-        self.coordinator_open = !self.coordinator_open;
-        if self.coordinator_open {
-            self.last_coordinator_notice = None;
-            self.ensure_conversation_loaded();
-        }
+        self.with_typed(|c: &mut Chat, cx| c.toggle_coordinator(cx, ctx));
     }
 
+    /// Tells the coordinator beside the screen which screen, project, item and selection the
+    /// user is looking at (the conversation sends it once per change).
     fn append_coordinator_context_if_changed(&mut self) {
-        if !self.coordinator_open || self.route == Route::Chat || self.online().is_err() {
+        if !self.chat.coordinator_open || self.route == Route::Chat {
             return;
         }
-        let Some(session) = self.chat.selected.clone() else {
-            return;
-        };
         let screen = self.route.screen();
         let (board, card) = if matches!(
             self.route,
@@ -709,9 +658,6 @@ impl Shell {
             selection,
             knowledge_project
         );
-        if self.last_coordinator_notice.as_ref() == Some(&(session.clone(), key.clone())) {
-            return;
-        }
         let context = format!(
             "Current screen: {}. {}\nProject: {}\nFeature: {}\nItem: {}\nSubview: {}\nSelection: {}\nKnowledge scope: {}\nLocal Help topic: {}",
             screen.title,
@@ -732,19 +678,7 @@ impl Shell {
             },
             screen.help_topic
         );
-        let Some(backend) = self.backend() else {
-            return;
-        };
-        match Id::new(session.clone()) {
-            Ok(id) => match backend.append_coordinator_notice(&id, screen.id, &context) {
-                Ok(()) => {
-                    self.last_coordinator_notice = Some((session.clone(), key));
-                    self.load_transcript(&session);
-                }
-                Err(error) => self.status = Some(error),
-            },
-            Err(_) => self.status = Some("Coordinator conversation identity is invalid".into()),
-        }
+        self.with_typed(|c: &mut Chat, cx| c.notify_coordinator(cx, key, context));
     }
 
     fn load_route(&mut self) {
@@ -753,7 +687,6 @@ impl Shell {
             return;
         }
         match self.route {
-            Route::Chat => self.ensure_conversation_loaded(),
             Route::Approvals => {
                 self.decisions.tab = self.routes.entry(Route::Approvals).or_default().tab;
                 self.load_approvals();
@@ -798,20 +731,6 @@ impl Shell {
                 self.load_work();
             }
             _ => {}
-        }
-    }
-
-    fn ensure_conversation_loaded(&mut self) {
-        if !self.chat.sessions_loaded && !self.pending(&Slot::SessionsList) {
-            self.load_sessions();
-        }
-        if !self.chat.routing.catalog_loaded && self.chat.routing.catalog_load.is_none() {
-            self.load_router_catalog();
-        }
-        if let Some(id) = self.chat.selected.clone()
-            && !self.chat.transcripts.contains_key(&id)
-        {
-            self.load_transcript(&id);
         }
     }
 
@@ -972,41 +891,6 @@ impl Shell {
         )
     }
 
-    pub fn load_sessions(&mut self) {
-        self.sessions_list_at = self.session_mutations;
-        self.query(
-            Slot::SessionsList,
-            "Loading conversations",
-            "sessions.list",
-            ops::sessions_list,
-        );
-    }
-    fn load_transcript(&mut self, id: &str) {
-        let t = self.chat.transcripts.entry(id.to_owned()).or_default();
-        t.loading = true;
-        let after = t.cursor.clone();
-        let sid = id.to_owned();
-        self.query(
-            Slot::Transcript(id.to_owned()),
-            "Loading the conversation",
-            "sessions.transcript",
-            move |b| ops::transcript(b, &sid, after.as_deref()),
-        );
-    }
-    fn start_session(&mut self, reason: StartReason) {
-        if self.chat.starting.is_some() {
-            return;
-        }
-        self.chat.starting = Some(reason);
-        let n = self.chat.sessions.len() + 1;
-        let title = format!("Conversation {n}");
-        self.command(
-            Slot::SessionStart,
-            "Starting a conversation",
-            "sessions.start",
-            move |b| ops::session_start(b, &title),
-        );
-    }
     pub fn load_settings(&mut self) {
         if let Some(backend) = self.backend() {
             self.settings.connections.secret_store = Some(backend.secret_store());
@@ -1449,406 +1333,6 @@ impl Shell {
             }
         }
     }
-    /// Drops the catalog and availability derived from routing settings, reloading what is
-    /// visible.
-    fn invalidate_routing(&mut self) {
-        self.chat.routing.invalidate();
-        // A load still paging may predate the change: it is replaced, not completed. So may an
-        // availability query in flight for the visible conversation.
-        if self.route == Route::Chat || self.coordinator_open || self.route == Route::Jobs {
-            self.load_router_catalog();
-            let key = self.chat.draft_key();
-            if self.pending(&Slot::RouteStatus(key.clone())) {
-                self.reask_route_status_of(key);
-            }
-        } else {
-            self.chat.routing.catalog_load = None;
-        }
-    }
-
-    /// Loads the whole catalog, page by page, as a new load (replacing one still paging).
-    fn load_router_catalog(&mut self) {
-        if self.online().is_err() {
-            return;
-        }
-        let generation = self.chat.routing.begin_catalog_load();
-        if !self.query(
-            Slot::RouterCatalog(generation),
-            "Loading models and tiers",
-            "router.catalog",
-            |b| ops::router_catalog(b, None),
-        ) {
-            // Never left "loading": the next visible load (or launch) starts it again.
-            self.chat.routing.abandon_catalog_load(generation);
-        }
-    }
-
-    /// Asks the router about the active conversation's selection (and pin).
-    fn refresh_route_status(&mut self) -> bool {
-        let key = self.chat.draft_key();
-        self.refresh_route_status_of(key)
-    }
-
-    /// Asks the router about one conversation's selection (and pin), unless a query for that
-    /// same selection is already in flight (its answer is as fresh). Periodic and hint-driven
-    /// refreshes therefore never stack identical queries on a slow router, which would occupy
-    /// every client worker and starve other requests (a message's save among them).
-    fn refresh_route_status_of(&mut self, key: String) -> bool {
-        let sel = self
-            .chat
-            .routing
-            .selections
-            .get(&key)
-            .cloned()
-            .unwrap_or_default();
-        if self.pending(&Slot::RouteStatus(key.clone()))
-            && self.chat.routing.status_asked.get(&key) == Some(&sel)
-        {
-            return true;
-        }
-        self.ask_route_status(key, sel)
-    }
-
-    /// Asks again even when a query for the same selection is in flight: that query may predate
-    /// a change it cannot see (a route or pin just decided, routing settings just saved). The
-    /// newer query supersedes it.
-    fn reask_route_status_of(&mut self, key: String) -> bool {
-        let sel = self
-            .chat
-            .routing
-            .selections
-            .get(&key)
-            .cloned()
-            .unwrap_or_default();
-        self.ask_route_status(key, sel)
-    }
-
-    fn ask_route_status(&mut self, key: String, sel: crate::routing::Selection) -> bool {
-        let session = (key != chat::NEW_DRAFT).then(|| key.clone());
-        let asked = sel.clone();
-        let submitted = self.query(
-            Slot::RouteStatus(key.clone()),
-            "Checking model availability",
-            "router.availability",
-            move |b| ops::router_availability(b, &sel.intent, &sel.effort, session.as_deref()),
-        );
-        if submitted {
-            self.chat.routing.status_asked.insert(key, asked);
-        }
-        submitted
-    }
-
-    /// A new route or effort for the active conversation: the explicit `router.pin` change of a
-    /// pinned conversation, otherwise the selection its first routed request uses.
-    fn select_route(&mut self, sel: crate::routing::Selection) {
-        let key = self.chat.draft_key();
-        if self.chat.selection() == sel {
-            return;
-        }
-        if self.chat.routing.selection_locked(&key) {
-            self.chat.notice = Some((
-                Tone::Attention,
-                "The conversation's first route is still being saved; choose again once it \
-                 is pinned."
-                    .into(),
-            ));
-            return;
-        }
-        let pin = self
-            .chat
-            .routing
-            .status
-            .get(&key)
-            .and_then(|s| s.availability.as_ref())
-            .and_then(|a| a.pin.as_ref())
-            .map(|p| p.pin_revision.get());
-        match pin {
-            Some(revision) if key != chat::NEW_DRAFT => {
-                if self.chat.routing.pin_in_flight.contains(&key)
-                    || self.pending(&Slot::RoutePin(key.clone()))
-                {
-                    self.chat.notice = Some((
-                        Tone::Attention,
-                        "The previous model change is still being saved; choose again once it \
-                         is confirmed."
-                            .into(),
-                    ));
-                    return;
-                }
-                let session = key.clone();
-                let submitted = sel.clone();
-                if self.command(
-                    Slot::RoutePin(key.clone()),
-                    "Changing the conversation's model",
-                    "router.pin",
-                    move |b| {
-                        ops::router_pin(b, &session, revision, &submitted.intent, &submitted.effort)
-                    },
-                ) {
-                    self.chat.routing.pin_in_flight.insert(key.clone());
-                    self.chat.routing.selections.insert(key, sel);
-                } else {
-                    // Not submitted: the pin (and so the selection) is unchanged.
-                    self.chat.notice = Some((
-                        Tone::Attention,
-                        "The model selection was not changed: DevWorks is offline or closing."
-                            .into(),
-                    ));
-                }
-            }
-            _ => {
-                self.chat.routing.selections.insert(key, sel);
-                self.refresh_route_status();
-            }
-        }
-    }
-
-    /// Routes a conversation that has no pin yet with its selection, so the selection becomes
-    /// its durable pin at its first message (ROUTE-14). With nothing eligible the router refuses
-    /// and the selection stays as it is; the status line says why.
-    fn route_first(&mut self, session: &str) {
-        let pinned = self
-            .chat
-            .routing
-            .status
-            .get(session)
-            .and_then(|s| s.availability.as_ref())
-            .map(|a| a.pin.is_some());
-        let Some(epoch) = self.chat.session(session).map(|r| r.context_epoch.get()) else {
-            // Its record may not be on the listed page: read it, then route.
-            if self.chat.routing.first_route.contains(session)
-                && !self.pending(&Slot::RouteSession(session.to_owned()))
-            {
-                let sid = session.to_owned();
-                self.query(
-                    Slot::RouteSession(session.to_owned()),
-                    "Reading the conversation",
-                    "sessions.get",
-                    move |b| ops::session_get(b, &sid),
-                );
-            }
-            return;
-        };
-        // A route submitted for it is authoritative until its decided reply is applied. The
-        // slot alone is not: a reply already collected in this frame's batch, but applied after
-        // the reply that called us, is no longer pending.
-        if self.chat.routing.first_in_flight.contains(session)
-            || self.chat.routing.pin_in_flight.contains(session)
-            || self.pending(&Slot::RouteFirst(session.to_owned()))
-            || self.pending(&Slot::RoutePin(session.to_owned()))
-        {
-            return;
-        }
-        match pinned {
-            Some(true) => {
-                self.chat.routing.first_route.remove(session);
-                return;
-            }
-            // Not known yet whether it is pinned: routed once the router says (this reply or
-            // a later one, also after a restart), never over a pin it does not know about.
-            None => {
-                if self.chat.routing.first_route.insert(session.to_owned())
-                    && !self.pending(&Slot::RouteStatus(session.to_owned()))
-                {
-                    self.refresh_route_status_of(session.to_owned());
-                }
-                return;
-            }
-            Some(false) => {
-                self.chat.routing.first_route.remove(session);
-            }
-        }
-        let sel = self
-            .chat
-            .routing
-            .selections
-            .get(session)
-            .cloned()
-            .unwrap_or_default();
-        let sid = session.to_owned();
-        if self.command(
-            Slot::RouteFirst(session.to_owned()),
-            "Routing the conversation",
-            "router.route",
-            move |b| ops::router_route(b, &sid, epoch, &sel.intent, &sel.effort),
-        ) {
-            self.chat.routing.first_in_flight.insert(session.to_owned());
-        } else {
-            // Not submitted (offline, or the window is closing): it keeps waiting in the
-            // persisted list and is routed when the router next answers (or at the next launch).
-            self.chat.routing.first_route.insert(session.to_owned());
-        }
-    }
-
-    fn send(&mut self) {
-        let Some(session) = self.chat.selected_session().cloned() else {
-            // The first message starts the conversation, then is sent.
-            if self.chat.draft().is_some_and(|d| !d.is_empty()) {
-                self.chat.send_after_start = true;
-                self.start_session(StartReason::ForDraft);
-            }
-            return;
-        };
-        let draft = self.chat.draft_mut();
-        if draft.is_empty() || draft.busy() {
-            return;
-        }
-        let (text, refs) = (draft.text.clone(), draft.stored());
-        let submitted = draft.submission();
-        let id = session.id.as_str().to_owned();
-        let revision = session.revision.get();
-        self.chat.sending = Some(id.clone());
-        self.chat.submitted = Some(submitted);
-        let sid = id.clone();
-        self.command(
-            Slot::Append(id),
-            "Saving your message",
-            "sessions.append_message",
-            move |b| ops::append_message(b, &sid, revision, &text, &refs),
-        );
-    }
-
-    /// Attaches the user's files to the active conversation's draft (dialog, drop and pasted
-    /// paths). The shell never removes these files.
-    pub fn attach(&mut self, paths: Vec<PathBuf>) {
-        self.attach_files(paths.into_iter().map(|p| (p, false)).collect());
-    }
-
-    /// Attaches files; `owned` marks one the shell created itself (a pasted image).
-    fn attach_files(&mut self, files: Vec<(PathBuf, bool)>) {
-        if self.online().is_err() || files.is_empty() {
-            return;
-        }
-        let waiting = self.chat.selected.is_none();
-        let key = self.chat.draft_key();
-        for (path, owned) in files {
-            let local = self.chat.next_local();
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("attachment")
-                .to_owned();
-            let media = attachments::media_type(&path).to_owned();
-            let note = (!attachments::previewable(&media)).then(|| {
-                "No preview. The file is stored, not analyzed: nothing has read its content yet."
-                    .to_owned()
-            });
-            self.chat.draft_mut().attachments.push(Attachment {
-                local,
-                name,
-                media_type: media.clone(),
-                path: Some(path.clone()),
-                owned,
-                // Storing once its save is submitted (below, or when its conversation starts).
-                state: AttachState::WaitingForConversation,
-                preview: None,
-                preview_note: note,
-            });
-            if attachments::previewable(&media)
-                && let Some(c) = &mut self.client
-            {
-                let p = path.clone();
-                c.task(
-                    Slot::Preview(key.clone(), local),
-                    "Preparing a preview",
-                    move |_| attachments::preview(&p),
-                );
-            }
-        }
-        if waiting {
-            self.start_session(StartReason::ForDraft);
-        } else {
-            self.store_pending();
-        }
-    }
-
-    /// Attaches a pasted image: it is written as a PNG beside the store, attached, and the
-    /// temporary file removed once the artifact service holds its copy.
-    pub fn attach_pasted_image(&mut self, image: &egui::ColorImage) {
-        let Some(b) = self.backend() else { return };
-        let session = self
-            .chat
-            .selected
-            .as_deref()
-            .map(devworks_core::protocol::Id::new)
-            .transpose();
-        let result = session.map_err(|e| e.to_string()).and_then(|session| {
-            let png = attachments::encode_paste(image)?;
-            b.stage_pasted_image(session.as_ref(), &png)
-        });
-        match result {
-            Ok(path) => self.attach_files(vec![(path, true)]),
-            Err(e) => self.announce(format!("The pasted image could not be attached: {e}")),
-        }
-    }
-
-    /// Removes a pending attachment from its draft. One already stored is deleted through
-    /// `artifacts.delete`; one still being stored is deleted when its save completes.
-    fn remove_attachment(&mut self, local: u64) {
-        let Some(a) = self.chat.take_attachment(local) else {
-            return;
-        };
-        let owned = a.path.clone().filter(|_| a.owned);
-        match a.state {
-            // Nothing was admitted: only a file the shell created is left to remove.
-            AttachState::WaitingForConversation | AttachState::Failed(_) => {
-                self.remove_owned(owned.as_deref());
-            }
-            // Being prepared: its reply finds it removed and admits nothing.
-            AttachState::Storing => {
-                self.chat.removed.insert(
-                    local,
-                    chat::Removed {
-                        path: owned,
-                        frame: None,
-                        in_flight: true,
-                    },
-                );
-            }
-            // Admitted: its reply decides (a stored copy is deleted, an unknown outcome kept).
-            AttachState::Saving(frame) => {
-                self.chat.removed.insert(
-                    local,
-                    chat::Removed {
-                        path: owned,
-                        frame: Some(frame),
-                        in_flight: true,
-                    },
-                );
-            }
-            // It may have committed: confirmed by "Confirm outcomes", then deleted.
-            AttachState::Unconfirmed(frame) => {
-                self.chat.removed.insert(
-                    local,
-                    chat::Removed {
-                        path: owned,
-                        frame: Some(frame),
-                        in_flight: false,
-                    },
-                );
-            }
-            AttachState::Stored(r) => {
-                let in_flight = self
-                    .chat
-                    .submitted
-                    .as_ref()
-                    .is_some_and(|s| s.locals.contains(&local));
-                if in_flight {
-                    // The message being saved references it: decide once the append settles.
-                    self.chat.removed_while_sending.push(r);
-                } else {
-                    self.delete_removed(r);
-                }
-            }
-        }
-    }
-
-    /// Removes a file the shell created (recorded as owned when it was created).
-    fn remove_owned(&self, path: Option<&std::path::Path>) {
-        if let (Some(p), Some(b)) = (path, self.backend()) {
-            attachments::remove_owned(p, &b.scratch_dir());
-        }
-    }
 
     /// Admits a Knowledge import file's exact save frame (prepared, or unconfirmed).
     fn submit_import_save(&mut self, frame: Vec<u8>) -> bool {
@@ -1861,131 +1345,10 @@ impl Shell {
         })
     }
 
-    /// Admits an attachment's save frame (prepared, or unconfirmed) under `slot`.
-    fn submit_save(
-        &mut self,
-        slot: Slot,
-        label: &str,
-        frame: Vec<u8>,
-        owned: Option<PathBuf>,
-    ) -> bool {
-        self.client.as_mut().is_some_and(|c| {
-            c.task(slot, label, move |b| {
-                attachments::save(b, frame, owned.as_deref())
-            })
-        })
-    }
-
-    fn delete_removed(&mut self, artifact: ArtifactRef) {
-        // Cleanup the user already asked for, so it is not refused while closing: a closed
-        // client keeps the frame unresolved, and the next launch submits it.
-        if self.offline.is_some() {
-            return;
-        }
-        let Some(b) = self.backend() else { return };
-        let frame = ops::delete_unsent_attachment(&*b, &artifact);
-        if let Some(c) = &mut self.client {
-            c.command(
-                Slot::DeleteAttachment(artifact.artifact_id.as_str().to_owned()),
-                "Deleting a removed attachment",
-                "artifacts.delete",
-                frame,
-            );
-        }
-    }
-
-    /// Re-derives the previews of restored image attachments from their stored artifacts.
-    fn restore_previews(&mut self) {
-        let jobs: Vec<(String, u64, ArtifactRef)> = self
-            .chat
-            .drafts
-            .iter()
-            .flat_map(|(key, d)| {
-                d.attachments.iter().filter_map(move |a| match &a.state {
-                    AttachState::Stored(r)
-                        if a.preview.is_none() && attachments::previewable(&a.media_type) =>
-                    {
-                        Some((key.clone(), a.local, r.clone()))
-                    }
-                    _ => None,
-                })
-            })
-            .collect();
-        if self.online().is_err() {
-            return;
-        }
-        for (key, local, r) in jobs {
-            if let Some(c) = &mut self.client {
-                c.task(Slot::Preview(key, local), "Restoring a preview", move |b| {
-                    attachments::preview_stored(b, &r)
-                });
-            }
-        }
-    }
-
-    /// Starts storing every attachment of the selected conversation's draft that waits.
-    /// Stores a failed attachment afresh from its file (a new save, never the failed one).
-    fn retry_attachment(&mut self, local: u64) {
-        let Some(a) = self.chat.attachment_mut(local) else {
-            return;
-        };
-        if !matches!(a.state, AttachState::Failed(_)) || a.path.is_none() {
-            return;
-        }
-        a.state = AttachState::WaitingForConversation;
-        match self.chat.owner(local) {
-            Some(key) if key != chat::NEW_DRAFT => self.store_waiting(&key),
-            _ => self.start_session(StartReason::ForDraft),
-        }
-    }
-
-    fn store_pending(&mut self) {
-        if let Some(session) = self.chat.selected.clone() {
-            self.store_waiting(&session);
-        }
-    }
-
-    /// Starts storing every attachment of `session`'s draft that waits. One becomes Storing
-    /// only once its save is submitted (closing refuses it: it stays waiting, and is kept).
-    fn store_waiting(&mut self, session: &str) {
-        let jobs: Vec<(u64, PathBuf, String, String)> = self
-            .chat
-            .drafts
-            .get(session)
-            .map(|d| {
-                d.attachments
-                    .iter()
-                    .filter(|a| matches!(a.state, AttachState::WaitingForConversation))
-                    .filter_map(|a| {
-                        Some((
-                            a.local,
-                            a.path.clone()?,
-                            a.name.clone(),
-                            a.media_type.clone(),
-                        ))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        for (local, path, name, media) in jobs {
-            let sid = session.to_owned();
-            let submitted = self.client.as_mut().is_some_and(|c| {
-                c.task(
-                    Slot::Attach(session.to_owned(), local),
-                    &format!("Storing {name}"),
-                    move |b| attachments::prepare(b, &path, &name, &media, &sid),
-                )
-            });
-            if submitted && let Some(a) = self.chat.attachment_mut(local) {
-                a.state = AttachState::Storing;
-            }
-        }
-    }
-
     // -----------------------------------------------------------------------------------------
     // Replies
 
-    fn drain(&mut self, ctx: &egui::Context) {
+    fn drain(&mut self) {
         let Some(client) = &mut self.client else {
             return;
         };
@@ -2003,11 +1366,11 @@ impl Shell {
             {
                 continue;
             }
-            self.apply(ctx, slot, reply);
+            self.apply(slot, reply);
         }
     }
 
-    fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
+    fn apply(&mut self, slot: Slot, reply: Reply) {
         let owner = slot.screen();
         if owner != ScreenId::Legacy {
             self.with_screen(owner, |s, cx| s.apply(cx, slot, reply));
@@ -2087,413 +1450,6 @@ impl Shell {
                 }
             }
             // Started before a session mutation was applied: it may lack that change.
-            (Slot::SessionsList, Reply::Query(_))
-                if self.sessions_list_at != self.session_mutations =>
-            {
-                self.load_sessions();
-            }
-            (Slot::SessionsList, Reply::Query(q)) => match ops::sessions(q) {
-                Ok((items, more)) => {
-                    self.chat.sessions = items;
-                    self.chat.sessions_more = more;
-                    self.chat.sessions_loaded = true;
-                    self.chat.sessions_error = None;
-                    self.reconcile_selection();
-                    // A waiting first route needs its session's record (its context epoch).
-                    let waiting: Vec<String> =
-                        self.chat.routing.first_route.iter().cloned().collect();
-                    for key in waiting {
-                        self.route_first(&key);
-                    }
-                }
-                Err(e) => self.chat.sessions_error = Some(e.describe()),
-            },
-            (Slot::RouterCatalog(generation), Reply::Query(q)) => match ops::route_models(q) {
-                Ok((models, next)) => {
-                    if let crate::routing::CatalogPage::More(cursor) =
-                        self.chat.routing.catalog_page(generation, models, next)
-                        && !self.query(
-                            Slot::RouterCatalog(generation),
-                            "Loading models and tiers",
-                            "router.catalog",
-                            move |b| ops::router_catalog(b, Some(&cursor)),
-                        )
-                    {
-                        self.chat.routing.abandon_catalog_load(generation);
-                    }
-                }
-                Err(e) => self.chat.routing.catalog_failed(
-                    generation,
-                    format!("Named models are unavailable: {}", e.describe()),
-                ),
-            },
-            (Slot::RouteSession(id), Reply::Query(q)) => {
-                if let Ok(record) = ops::session_record(q) {
-                    self.chat.upsert(record);
-                    if self.chat.routing.first_route.contains(&id) {
-                        self.route_first(&id);
-                    }
-                }
-            }
-            (Slot::RouteStatus(key), Reply::Query(_))
-                if self.pending(&Slot::RouteStatus(key.clone())) =>
-            {
-                // A newer query was issued after this reply was collected (by a reply applied
-                // before it in the same batch): it may predate a route or pin just applied.
-            }
-            (Slot::RouteStatus(key), Reply::Query(q)) => {
-                let status = match ops::availability(q) {
-                    Ok(a) => {
-                        // A pinned conversation's selection is its durable pin.
-                        if let Some(pin) = &a.pin
-                            && !self.chat.routing.pin_in_flight.contains(&key)
-                            && !self.pending(&Slot::RoutePin(key.clone()))
-                        {
-                            self.chat.routing.selections.insert(
-                                key.clone(),
-                                crate::routing::Selection {
-                                    intent: pin.intent.clone(),
-                                    effort: pin.requested_effort.clone(),
-                                },
-                            );
-                        }
-                        crate::routing::Status {
-                            availability: Some(a),
-                            error: None,
-                        }
-                    }
-                    Err(e) => crate::routing::Status {
-                        availability: None,
-                        error: Some(e.describe()),
-                    },
-                };
-                let known = status.availability.is_some();
-                self.chat.routing.status_asked.remove(&key);
-                self.chat.routing.status.insert(key.clone(), status);
-                if known && self.chat.routing.first_route.contains(&key) {
-                    self.route_first(&key);
-                }
-            }
-            (Slot::RouteFirst(key), Reply::Command(c)) => {
-                if matches!(ops::routed(c), Err(Failure::Unknown)) {
-                    // Confirmed with its identical frame by Confirm outcomes or the next launch;
-                    // the selection stays locked until then.
-                    return;
-                }
-                self.chat.routing.first_in_flight.remove(&key);
-                // Decided: a wait recorded for it (it was also kept while the window closed) is
-                // over, so it is never routed a second time.
-                self.chat.routing.first_route.remove(&key);
-                // Pinned, or refused because nothing is eligible: the status line says which. It
-                // is reread even when not shown, so no older reply stands for it.
-                self.chat.routing.status.remove(&key);
-                self.reask_route_status_of(key);
-            }
-            (Slot::RoutePin(key), Reply::Command(c)) => {
-                match ops::pinned(c) {
-                    Ok(choice) => {
-                        self.chat.routing.selections.insert(
-                            key.clone(),
-                            crate::routing::Selection {
-                                intent: choice.intent,
-                                effort: choice.requested_effort,
-                            },
-                        );
-                        self.announce("The conversation's model selection was saved.");
-                    }
-                    Err(Failure::Unknown) => {
-                        self.chat.notice = Some((
-                            Tone::Attention,
-                            "Not yet confirmed whether the model change was saved. Use Confirm \
-                             outcomes to check again; it is never applied twice."
-                                .into(),
-                        ));
-                        return;
-                    }
-                    Err(e) => {
-                        self.chat.notice = Some(chat::failure_notice(
-                            "The model selection was not changed",
-                            &e,
-                        ));
-                        self.announce("The model selection was not changed.");
-                    }
-                }
-                // Decided: the pin (or the unchanged one) is re-read, shown or not, and its
-                // selection adopted.
-                self.chat.routing.pin_in_flight.remove(&key);
-                self.chat.routing.status.remove(&key);
-                self.reask_route_status_of(key);
-            }
-            (Slot::SessionStart, Reply::Command(c)) => {
-                let reason = self.chat.starting.take();
-                match ops::started(c) {
-                    Err(Failure::Unknown) => {
-                        // Not known whether it started: keep waiting for it (no second start);
-                        // "Confirm outcomes" resubmits the identical request.
-                        self.chat.starting = reason;
-                        self.chat.notice = Some((
-                            Tone::Attention,
-                            "Not yet confirmed whether the conversation started. Use Confirm \
-                             outcomes to check again; nothing is started twice."
-                                .into(),
-                        ));
-                        self.announce("Starting a conversation: outcome not confirmed.");
-                    }
-                    Ok(record) => {
-                        self.session_mutations += 1;
-                        self.chat.notice = None;
-                        let id = record.id.as_str().to_owned();
-                        self.chat.upsert(record);
-                        self.chat.selected = Some(id.clone());
-                        self.chat.adopt_new_draft(&id);
-                        self.load_transcript(&id);
-                        self.store_pending();
-                        if reason == Some(StartReason::NewChat) {
-                            self.announce("New conversation started.");
-                        }
-                        if std::mem::take(&mut self.chat.send_after_start) {
-                            self.send();
-                        }
-                    }
-                    Err(e) => {
-                        self.chat.send_after_start = false;
-                        for a in &mut self.chat.draft_mut().attachments {
-                            if matches!(a.state, AttachState::WaitingForConversation) {
-                                a.state =
-                                    AttachState::Failed("no conversation could be started".into());
-                            }
-                        }
-                        self.chat.notice =
-                            Some(chat::failure_notice("Starting a conversation", &e));
-                    }
-                }
-            }
-            (Slot::Transcript(id), Reply::Query(q)) => {
-                match ops::transcript_page(q) {
-                    Ok(page) => {
-                        let more = self
-                            .chat
-                            .transcripts
-                            .entry(id.clone())
-                            .or_default()
-                            .apply(page);
-                        // The texts shown: every watcher notice's and the latest other one's.
-                        let notices: Vec<_> = self
-                            .chat
-                            .transcripts
-                            .get(&id)
-                            .map(|transcript| {
-                                let mut latest_other = false;
-                                transcript
-                                    .entries
-                                    .iter()
-                                    .rev()
-                                    .filter_map(|entry| match &entry.body {
-                                        body @ devworks_core::protocol::provider::TranscriptBody::HostNotice {
-                                            artifact,
-                                            ..
-                                        } if chat::watcher_notice(body)
-                                            || !std::mem::replace(&mut latest_other, true) =>
-                                        {
-                                            Some(artifact.clone())
-                                        }
-                                        _ => None,
-                                    })
-                                    .filter(|a| {
-                                        !self.chat.notice_texts.contains_key(a.version_id.as_str())
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        if let Some(backend) = self.backend() {
-                            for artifact in notices {
-                                if let Ok(text) = backend.read_coordinator_notice(&artifact) {
-                                    self.chat
-                                        .notice_texts
-                                        .insert(artifact.version_id.as_str().into(), text);
-                                }
-                            }
-                        }
-                        self.chat.reconcile_text_preview();
-                        if more {
-                            self.load_transcript(&id);
-                        }
-                    }
-                    Err(e) => {
-                        let t = self.chat.transcripts.entry(id).or_default();
-                        t.loading = false;
-                        t.error = Some(e.describe());
-                    }
-                }
-            }
-            (Slot::TextPreview(id, generation), Reply::Task(result)) => {
-                self.apply_live_text(&id, generation, result);
-            }
-            (Slot::Append(id), Reply::Command(c)) => {
-                self.chat.sending = None;
-                let outcome = ops::appended(c);
-                if matches!(outcome, Err(Failure::Unknown)) {
-                    // Not known whether the message was saved: the composer keeps it as
-                    // submitted until the identical request is confirmed.
-                    self.chat.sending = Some(id.clone());
-                    self.chat.notice = Some((
-                        Tone::Attention,
-                        "Not yet confirmed whether your message was saved. Use Confirm \
-                         outcomes to check again; it is never saved twice."
-                            .into(),
-                    ));
-                    self.announce("Your message: outcome not confirmed.");
-                    return;
-                }
-                let submitted = self.chat.submitted.take();
-                let removed = std::mem::take(&mut self.chat.removed_while_sending);
-                if outcome.is_err() {
-                    // Not committed (and should it ever have been, the artifact service refuses
-                    // deleting an artifact a committed message references).
-                    for r in removed {
-                        self.delete_removed(r);
-                    }
-                }
-                match outcome {
-                    Ok(record) => {
-                        self.session_mutations += 1;
-                        self.chat.upsert(record);
-                        if let (Some(d), Some(sent)) = (self.chat.drafts.get_mut(&id), &submitted) {
-                            d.settle_sent(sent);
-                        }
-                        self.chat.notice = None;
-                        self.announce("Message saved to the conversation. No coordinator is connected to reply (DW-16).");
-                        self.load_transcript(&id);
-                        self.route_first(&id);
-                    }
-                    Err(e) => {
-                        if let Failure::Refused(f) = &e
-                            && f.code == DomainErrorCode::RevisionConflict
-                        {
-                            self.load_sessions();
-                        }
-                        self.chat.notice =
-                            Some(chat::failure_notice("Your message was not saved", &e));
-                        self.announce("Your message was not saved; the draft is kept.");
-                    }
-                }
-            }
-            (Slot::Attach(key, local), Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {
-                if let Some(a) = self.chat.attachment_mut(local) {
-                    let owned = a.path.clone().filter(|_| a.owned);
-                    let label = format!("Storing {}", a.name);
-                    // The frame is in the state before it is admitted: a close from here on
-                    // keeps it, and the next launch confirms this same request.
-                    a.state = AttachState::Saving(frame.clone());
-                    // Not submitted (closing): nothing was admitted, and its upload ticket lives
-                    // only in this process, so the next launch prepares a fresh one.
-                    if !self.submit_save(Slot::Attach(key, local), &label, frame, owned)
-                        && let Some(a) = self.chat.attachment_mut(local)
-                    {
-                        a.state = AttachState::Storing;
-                    }
-                } else if let Some(r) = self.chat.removed.remove(&local) {
-                    // Removed while it was being prepared: nothing was admitted.
-                    self.remove_owned(r.path.as_deref());
-                }
-            }
-            (Slot::Attach(_, local), Reply::Task(t)) => {
-                let state = match t {
-                    Ok(TaskOutput::Stored { outcome, frame }) if is_unknown(&outcome) => {
-                        AttachState::Unconfirmed(frame)
-                    }
-                    Ok(TaskOutput::Stored { outcome, .. }) => match ops::saved_artifact(outcome) {
-                        Ok(record) => {
-                            self.artifacts.mutations += 1;
-                            AttachState::Stored(record.artifact)
-                        }
-                        Err(e) => AttachState::Failed(e.describe()),
-                    },
-                    Ok(
-                        TaskOutput::Preview { .. }
-                        | TaskOutput::Prepared { .. }
-                        | TaskOutput::SettingSecret { .. }
-                        | TaskOutput::PackagePrepared { .. }
-                        | TaskOutput::Refreshed
-                        | TaskOutput::TextPreview(_)
-                        | TaskOutput::Convention(_)
-                        | TaskOutput::Instruction(_)
-                        | TaskOutput::McpContent(_)
-                        | TaskOutput::RepositoryDeletionPreview(_)
-                        | TaskOutput::RepositoryDeleted(_),
-                    ) => AttachState::Failed("unexpected reply".into()),
-                    Err(e) => AttachState::Failed(e),
-                };
-                let stored = matches!(state, AttachState::Stored(_));
-                let unconfirmed = matches!(state, AttachState::Unconfirmed(_));
-                match self.chat.attachment_mut(local) {
-                    Some(a) => {
-                        self.status = Some(if stored {
-                            format!("{} stored.", a.name)
-                        } else if unconfirmed {
-                            format!("{}: not yet confirmed whether it was stored.", a.name)
-                        } else {
-                            format!("{} could not be stored.", a.name)
-                        });
-                        a.state = state;
-                    }
-                    // Removed while it was being stored: nothing the user removed survives.
-                    None => match state {
-                        // (The save removed the shell's own file once it was stored.)
-                        AttachState::Stored(r) => {
-                            self.chat.removed.remove(&local);
-                            self.delete_removed(r);
-                        }
-                        // Kept, with its file, until "Confirm outcomes" resolves it.
-                        AttachState::Unconfirmed(frame) => {
-                            let r = self.chat.removed.entry(local).or_insert(chat::Removed {
-                                path: None,
-                                frame: None,
-                                in_flight: false,
-                            });
-                            r.frame = Some(frame);
-                            r.in_flight = false;
-                        }
-                        // Not saved: the shell's own file is no longer needed.
-                        AttachState::Failed(_)
-                        | AttachState::Storing
-                        | AttachState::Saving(_)
-                        | AttachState::WaitingForConversation => {
-                            if let Some(r) = self.chat.removed.remove(&local) {
-                                self.remove_owned(r.path.as_deref());
-                            }
-                        }
-                    },
-                }
-            }
-            (Slot::Preview(_, local), Reply::Task(t)) => {
-                if let Some(a) = self.chat.attachment_mut(local) {
-                    match t {
-                        Ok(TaskOutput::Preview { size, rgba }) => {
-                            let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
-                            a.preview = Some(ctx.load_texture(
-                                format!("attachment-preview-{local}"),
-                                image,
-                                egui::TextureOptions::LINEAR,
-                            ));
-                        }
-                        Ok(
-                            TaskOutput::Stored { .. }
-                            | TaskOutput::Prepared { .. }
-                            | TaskOutput::SettingSecret { .. }
-                            | TaskOutput::PackagePrepared { .. }
-                            | TaskOutput::Refreshed
-                            | TaskOutput::TextPreview(_)
-                            | TaskOutput::Convention(_)
-                            | TaskOutput::Instruction(_)
-                            | TaskOutput::McpContent(_)
-                            | TaskOutput::RepositoryDeletionPreview(_)
-                            | TaskOutput::RepositoryDeleted(_),
-                        ) => {}
-                        Err(e) => a.preview_note = Some(format!("No preview: {e}")),
-                    }
-                }
-            }
             (Slot::ContainerCapabilities, Reply::Query(q)) => {
                 match ops::container_capability_entries(q) {
                     Ok(entries) => {
@@ -2806,19 +1762,6 @@ impl Shell {
                     self.settings.explained.insert(key);
                 }
                 Err(e) => self.settings.message = Some((Tone::Bad, e.describe())),
-            },
-            (Slot::DeleteAttachment(_), Reply::Command(c)) => match ops::deleted(c) {
-                Ok(()) => {
-                    self.artifacts.mutations += 1;
-                    self.announce("The removed attachment was deleted.");
-                }
-                Err(Failure::Unknown) => {
-                    self.announce("Deleting a removed attachment: outcome not confirmed.")
-                }
-                Err(e) => self.announce(format!(
-                    "The removed attachment could not be deleted: {}",
-                    e.describe()
-                )),
             },
             (Slot::AddonsList, Reply::Query(q)) => match crate::addons::catalog(q) {
                 Ok((items, registry, next)) => {
@@ -3195,43 +2138,6 @@ impl Shell {
         }
     }
 
-    /// Restores the selected conversation once sessions are listed: the restored one when it
-    /// still exists, otherwise the most recent open one. A missing selection is dropped.
-    fn reconcile_selection(&mut self) {
-        if self.chat.starting.is_some() {
-            // A start is pending: the new draft (and anything waiting in it) belongs to that
-            // conversation, which its reply selects. A list reply never re-homes it.
-            return;
-        }
-        let wanted = self
-            .chat
-            .selected
-            .clone()
-            .or_else(|| self.restored_selection.take());
-        let exists = |id: &str| self.chat.sessions.iter().any(|s| s.id.as_str() == id);
-        let pick = match wanted {
-            Some(id) if exists(&id) => Some(id),
-            _ => self
-                .chat
-                .sessions
-                .iter()
-                .filter(|s| !s.closed)
-                .max_by_key(|s| chat::last_activity(s))
-                .map(|s| s.id.as_str().to_owned()),
-        };
-        if pick != self.chat.selected
-            || pick
-                .as_ref()
-                .is_some_and(|p| !self.chat.transcripts.contains_key(p))
-        {
-            self.chat.selected = pick.clone();
-            if let Some(id) = pick {
-                self.chat.adopt_new_draft(&id);
-                self.load_transcript(&id);
-            }
-        }
-    }
-
     fn settings_revision(&self) -> Option<i64> {
         self.settings.view.as_ref().map(|v| v.revision)
     }
@@ -3307,22 +2213,7 @@ impl Shell {
         if self.online().is_err() {
             return;
         }
-        if (self.route == Route::Chat || self.coordinator_open)
-            && let Some(id) = self.chat.selected.clone()
-            && !self.pending(&Slot::Transcript(id.clone()))
-        {
-            self.load_transcript(&id);
-        }
-        if self.route == Route::Chat || self.coordinator_open || self.route == Route::Jobs {
-            if self.route == Route::Chat || self.coordinator_open {
-                self.refresh_route_status();
-            }
-            // Catalog edits and membership changes made elsewhere reach the selectors too.
-            if self.chat.routing.catalog_load.is_none() {
-                self.load_router_catalog();
-            }
-        }
-        self.refresh_waiting_first_routes();
+        self.with_typed(|c: &mut Chat, cx| c.refresh_conversation(cx));
         self.load_completion_notifications();
         if self.route == Route::Approvals
             && !self.pending(&Slot::ApprovalsList)
@@ -3374,51 +2265,6 @@ impl Shell {
 
     // -----------------------------------------------------------------------------------------
     // Actions
-
-    fn chat_actions(&mut self, ctx: &egui::Context, actions: Vec<ChatAction>) {
-        for a in actions {
-            match a {
-                ChatAction::NewChat => self.start_session(StartReason::NewChat),
-                ChatAction::Select(id) => {
-                    self.chat.selected = Some(id.clone());
-                    self.chat.notice = None;
-                    if self.chat.routing.status.contains_key(&id) {
-                        // Shown as last known while its pin is read again.
-                        self.refresh_route_status();
-                    }
-                    if !self.chat.transcripts.contains_key(&id) {
-                        self.load_transcript(&id);
-                    }
-                }
-                ChatAction::Send => self.send(),
-                ChatAction::AttachDialog => {
-                    let picked = self.dialogs.pick_files();
-                    self.attach(picked);
-                }
-                ChatAction::Attach(paths) => self.attach(paths),
-                ChatAction::Remove(local) => self.remove_attachment(local),
-                ChatAction::OpenInstructions => {
-                    self.settings.category =
-                        Some(devworks_core::settings::catalog::Category::Instructions);
-                    if let Some(v) = &mut self.settings.view {
-                        v.set_category(self.settings.category);
-                    }
-                    self.navigate(Route::Settings);
-                }
-                ChatAction::RetrySessions => self.load_sessions(),
-                ChatAction::RetryTranscript => {
-                    if let Some(id) = self.chat.selected.clone() {
-                        self.load_transcript(&id);
-                    }
-                }
-                ChatAction::CloseSidebar => self.coordinator_open = false,
-                ChatAction::ConfirmAttachment(local) => self.confirm_attachment(local),
-                ChatAction::RetryAttachment(local) => self.retry_attachment(local),
-                ChatAction::SetSelection(sel) => self.select_route(sel),
-            }
-        }
-        let _ = ctx;
-    }
 
     fn settings_actions(&mut self, actions: Vec<SettingsAction>) {
         for a in actions {
@@ -4025,7 +2871,7 @@ impl Shell {
     }
 
     pub fn memory(&self) -> Memory {
-        Memory {
+        let mut memory = Memory {
             version: crate::memory::VERSION,
             purge_live: None,
             purge_reviews: self.purge_reviews.clone(),
@@ -4036,24 +2882,7 @@ impl Shell {
                 .unwrap_or_default(),
             route: self.route,
             intelligence_open: self.intelligence_open,
-            coordinator_open: self.coordinator_open,
-            selected_session: self.chat.selected.clone(),
             selected_project: self.selected_project.clone(),
-            sidebar_tab: self.chat.tab,
-            history_query: self.chat.history_query.clone(),
-            drafts: self
-                .chat
-                .drafts
-                .iter()
-                .map(|(k, d)| (k.clone(), d.memory()))
-                .filter(|(_, d)| {
-                    !d.text.is_empty()
-                        || !d.attachments.is_empty()
-                        || !d.unconfirmed.is_empty()
-                        || !d.uploads.is_empty()
-                        || !d.failed.is_empty()
-                })
-                .collect(),
             routes: self.routes.clone(),
             settings: self.settings.memory(),
             scroll: [&self.scrolls, &self.chat.scrolls, &self.settings.scrolls]
@@ -4061,16 +2890,17 @@ impl Shell {
                 .flat_map(|s| s.offsets().iter().map(|(k, v)| (k.clone(), *v)))
                 .collect(),
             pending: self.pending_memory(),
-            routing: self.chat.routing.selections.clone(),
-            routing_first: self.chat.routing.first_route.clone(),
-        }
+            ..Memory::default()
+        };
+        self.chat.save_memory(&mut memory);
+        memory
     }
 
     /// Requests whose outcome is not known yet (including commands still running when the
     /// bounded quiesce gave up), with what their replies settle, so the next launch confirms
     /// them with their exact frames.
     fn pending_memory(&self) -> crate::memory::PendingMemory {
-        use crate::memory::{PendingCommand, PendingMemory, RemovedMemory, SubmittedMemory};
+        use crate::memory::{ChatPendingMemory, PendingCommand, PendingMemory};
         let unconfirmed = self
             .client
             .as_ref()
@@ -4098,31 +2928,11 @@ impl Shell {
                 Some((screen.id().key().to_owned(), saved))
             })
             .collect();
-        let has = |f: &dyn Fn(&Slot) -> bool| commands.iter().any(|c| f(&c.slot));
-        let submitted = match (&self.chat.submitted, &self.chat.sending) {
-            (Some(sent), Some(id)) if has(&|s| *s == Slot::Append(id.clone())) => {
-                let artifacts = self
-                    .chat
-                    .drafts
-                    .get(id)
-                    .map(|d| {
-                        d.attachments
-                            .iter()
-                            .filter(|a| sent.locals.contains(&a.local))
-                            .filter_map(|a| match &a.state {
-                                AttachState::Stored(r) => Some(r.artifact_id.as_str().to_owned()),
-                                _ => None,
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Some(SubmittedMemory {
-                    text: sent.text.clone(),
-                    artifacts,
-                })
-            }
-            _ => None,
-        };
+        // The conversation keeps the named fields its state had before it had its own screen.
+        let chat: ChatPendingMemory = screens
+            .remove(ScreenId::Chat.key())
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
         PendingMemory {
             conventions: screens
                 .remove(ScreenId::Conventions.key())
@@ -4130,33 +2940,10 @@ impl Shell {
             databases: screens
                 .remove(ScreenId::Databases.key())
                 .unwrap_or_default(),
-            starting: self
-                .chat
-                .starting
-                .filter(|_| has(&|s| *s == Slot::SessionStart)),
-            submitted,
-            removed_while_sending: if self.chat.sending.is_some()
-                && has(&|s| matches!(s, Slot::Append(_)))
-            {
-                self.chat
-                    .removed_while_sending
-                    .iter()
-                    .filter_map(|r| serde_json::to_value(r).ok())
-                    .collect()
-            } else {
-                Vec::new()
-            },
-            removed: self
-                .chat
-                .removed
-                .values()
-                .filter_map(|r| {
-                    Some(RemovedMemory {
-                        path: r.path.clone(),
-                        frame: r.frame.clone()?,
-                    })
-                })
-                .collect(),
+            starting: chat.starting,
+            submitted: chat.submitted,
+            removed_while_sending: chat.removed_while_sending,
+            removed: chat.removed,
             knowledge_import: self
                 .knowledge
                 .import_frame(false)
@@ -4174,8 +2961,19 @@ impl Shell {
 
     /// Puts back what [`Self::pending_memory`] kept; the first frame confirms it.
     fn restore_pending(&mut self, mut pending: crate::memory::PendingMemory) {
-        // Conventions and Databases keep the named fields their state had before the
+        // Conventions, Databases and Chat keep the named fields their state had before the
         // per-screen map, so earlier files read back unchanged.
+        let chat = crate::memory::ChatPendingMemory {
+            starting: pending.starting.take(),
+            submitted: pending.submitted.take(),
+            removed_while_sending: std::mem::take(&mut pending.removed_while_sending),
+            removed: std::mem::take(&mut pending.removed),
+        };
+        if let Ok(chat) = serde_json::to_value(chat) {
+            pending
+                .screens
+                .insert(ScreenId::Chat.key().to_owned(), chat);
+        }
         for (id, saved) in [
             (ScreenId::Conventions, &mut pending.conventions),
             (ScreenId::Databases, &mut pending.databases),
@@ -4212,38 +3010,6 @@ impl Shell {
             }
             match &slot {
                 Slot::WorkPlan(id) => confirming.push(id.clone()),
-                Slot::SessionStart => {
-                    self.chat.starting = Some(pending.starting.unwrap_or(StartReason::ForDraft));
-                }
-                Slot::Append(id) => {
-                    self.chat.sending = Some(id.clone());
-                    if let Some(sent) = &pending.submitted {
-                        let locals = self
-                            .chat
-                            .drafts
-                            .get(id)
-                            .map(|d| {
-                                d.attachments
-                                    .iter()
-                                    .filter(|a| {
-                                        matches!(&a.state, AttachState::Stored(r)
-                                            if sent.artifacts.iter().any(|x| x == r.artifact_id.as_str()))
-                                    })
-                                    .map(|a| a.local)
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        self.chat.submitted = Some(chat::Submitted {
-                            text: sent.text.clone(),
-                            locals,
-                        });
-                        self.chat.removed_while_sending = pending
-                            .removed_while_sending
-                            .iter()
-                            .filter_map(|r| serde_json::from_value(r.clone()).ok())
-                            .collect();
-                    }
-                }
                 Slot::AddonsSave { .. } | Slot::AddonsCommand => self.addons.busy = true,
                 Slot::Configure(n) => {
                     let p = &mut self.settings.connections;
@@ -4254,12 +3020,6 @@ impl Shell {
                 Slot::SettingsSave => {
                     self.settings.saving = true;
                     self.settings.unconfirmed = true;
-                }
-                Slot::RouteFirst(id) => {
-                    self.chat.routing.first_in_flight.insert(id.clone());
-                }
-                Slot::RoutePin(id) => {
-                    self.chat.routing.pin_in_flight.insert(id.clone());
                 }
                 // Knowledge changes stay blocked until the earlier write's outcome is known.
                 Slot::KnowledgeWrite => {
@@ -4280,17 +3040,6 @@ impl Shell {
         let ids: Vec<ScreenId> = self.screens().iter().map(|s| s.id()).collect();
         for id in ids {
             self.with_screen(id, |s, cx| s.restored(cx));
-        }
-        for r in pending.removed {
-            let local = self.chat.next_local();
-            self.chat.removed.insert(
-                local,
-                chat::Removed {
-                    path: r.path,
-                    frame: Some(r.frame),
-                    in_flight: false,
-                },
-            );
         }
     }
 
@@ -4333,6 +3082,7 @@ impl Shell {
     /// Renders one frame of the whole application into `ui` (the root viewport's UI).
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.egui = Some(ctx.clone());
         if let Some(b) = self.backend() {
             b.set_application_focus(ctx.input(|i| i.viewport().focused));
         }
@@ -4353,37 +3103,17 @@ impl Shell {
                 self.load_projects();
             }
             self.load_route();
-            self.restore_previews();
-            // First messages saved before their routing was known, at the last close.
-            self.refresh_waiting_first_routes();
+            self.with_typed(|c: &mut Chat, cx| c.resume(cx));
             // Outcomes left unknown at the last close: confirmed with their exact frames.
             if self.unconfirmed_count() > 0 {
                 self.confirm_outcomes();
             }
-            // Attachments that never started storing: their conversation's, or a new one's.
-            let waiting: Vec<String> = self
-                .chat
-                .drafts
-                .iter()
-                .filter(|(_, d)| {
-                    d.attachments
-                        .iter()
-                        .any(|a| matches!(a.state, AttachState::WaitingForConversation))
-                })
-                .map(|(k, _)| k.clone())
-                .collect();
-            for key in waiting {
-                if key == chat::NEW_DRAFT {
-                    self.start_session(StartReason::ForDraft);
-                } else {
-                    self.store_waiting(&key);
-                }
-            }
+            self.with_typed(|c: &mut Chat, cx| c.store_waiting_drafts(cx));
         }
         self.apply_text_scale(&ctx);
         self.advance_lifecycle(&ctx);
         let input = ctx.input(|i| !i.events.is_empty() || !i.raw.dropped_files.is_empty());
-        self.drain(&ctx);
+        self.drain();
         // Building the snapshot reads every draft and editor, so it is published only when
         // input or a reply may have changed one, or while a purge review inspects it.
         if (self.editors_changed || input || self.purge.frozen || self.purge.project.is_some())
@@ -4396,11 +3126,11 @@ impl Shell {
         if self.lifecycle == Lifecycle::Open && !self.purge.frozen {
             self.poll_hints(&ctx);
             self.input(&ctx);
-            self.poll_live_text(&ctx);
+            self.with_typed(|c: &mut Chat, cx| c.frame(cx, &ctx));
         }
         if self.lifecycle == Lifecycle::Open {
             self.append_coordinator_context_if_changed();
-            self.route_status_due(&ctx);
+            self.with_typed(|c: &mut Chat, cx| c.route_status_due(cx, &ctx));
         }
         if self.purge.frozen {
             ui.disable();
@@ -4408,8 +3138,8 @@ impl Shell {
         self.toolbar(ui);
         self.statusbar(ui);
         self.navigation(ui);
-        if self.coordinator_open && self.route != Route::Chat {
-            self.coordinator_sidebar(ui);
+        if self.chat.coordinator_open && self.route != Route::Chat {
+            self.with_typed(|c: &mut Chat, cx| c.coordinator_sidebar(cx, ui));
         }
         egui::CentralPanel::default()
             .frame(Frame::new().fill(theme::BG).inner_margin(theme::GUTTER))
@@ -4421,56 +3151,6 @@ impl Shell {
         }
         // Periodic re-query of visible data (missed-hint repair) needs a frame now and then.
         ctx.request_repaint_after(Duration::from_secs(5));
-    }
-
-    /// Asks again about conversations whose first message still waits to be routed.
-    fn refresh_waiting_first_routes(&mut self) {
-        let waiting: Vec<String> = self.chat.routing.first_route.iter().cloned().collect();
-        for key in waiting {
-            if !self.pending(&Slot::RouteStatus(key.clone()))
-                && !self.pending(&Slot::RouteFirst(key.clone()))
-            {
-                self.refresh_route_status_of(key);
-            }
-        }
-    }
-
-    /// Asks about the visible conversation's selection when nothing is known yet, and again when
-    /// the earliest cooldown it waits for has ended (never earlier).
-    fn route_status_due(&mut self, ctx: &egui::Context) {
-        if !(self.route == Route::Chat || self.coordinator_open) || self.online().is_err() {
-            return;
-        }
-        let key = self.chat.draft_key();
-        if self.pending(&Slot::RouteStatus(key.clone())) {
-            return;
-        }
-        let retry = match self.chat.routing.status.get(&key) {
-            None => {
-                self.refresh_route_status();
-                return;
-            }
-            Some(s) => s
-                .availability
-                .as_ref()
-                .filter(|a| !a.available)
-                .and_then(|a| a.retry_at_ms.as_ref().map(|t| t.get())),
-        };
-        if let Some(at) = retry {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_millis() as i64);
-            if now >= at {
-                // Once per reported expiry: a router still reporting it (its clock may lag) is
-                // asked again by the periodic refresh, not every frame.
-                if self.chat.routing.rechecked.get(&key) != Some(&at) && self.refresh_route_status()
-                {
-                    self.chat.routing.rechecked.insert(key, at);
-                }
-            } else {
-                ctx.request_repaint_after(Duration::from_millis((at - now) as u64));
-            }
-        }
     }
 
     /// Clamps the text scale to [`theme::MAX_TEXT_SCALE`] and keeps the native minimum window
@@ -4490,15 +3170,8 @@ impl Shell {
         }
     }
 
-    fn composer_focused(&self, ctx: &egui::Context) -> bool {
-        ctx.memory(|m| {
-            m.has_focus(egui::Id::unique(("composer", "home")))
-                || m.has_focus(egui::Id::unique(("composer", "sidebar")))
-        })
-    }
-
     fn input(&mut self, ctx: &egui::Context) {
-        let conversation_visible = self.route == Route::Chat || self.coordinator_open;
+        let conversation_visible = self.chat.visible(self.route);
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
                 .dropped_files
@@ -4521,30 +3194,7 @@ impl Shell {
                 self.announce("Open the workspace coordinator to attach dropped files.");
             }
         }
-        if self.composer_focused(ctx) {
-            let mut images = Vec::new();
-            let mut files = Vec::new();
-            ctx.input_mut(|i| {
-                i.events.retain(|e| match e {
-                    Event::PasteImage(img) => {
-                        images.push(img.clone());
-                        false
-                    }
-                    Event::Paste(text) => match attachments::pasted_path(text) {
-                        Some(p) => {
-                            files.push(p);
-                            false
-                        }
-                        None => true,
-                    },
-                    _ => true,
-                });
-            });
-            for img in images {
-                self.attach_pasted_image(&img);
-            }
-            self.attach(files);
-        }
+        self.with_typed(|c: &mut Chat, cx| c.paste(cx, ctx));
     }
 
     fn toolbar(&mut self, ui: &mut Ui) {
@@ -4606,7 +3256,7 @@ impl Shell {
                             };
                             self.open_help_context(screen);
                         }
-                        let open = self.coordinator_open;
+                        let open = self.chat.coordinator_open;
                         let tip = if self.route == Route::Chat {
                             "The workspace conversation is open in the centre"
                         } else if open {
@@ -4718,22 +3368,9 @@ impl Shell {
 
     /// Commands and attachment saves whose outcome is not confirmed yet.
     pub fn unconfirmed_count(&self) -> usize {
-        let attachments = self
-            .chat
-            .drafts
-            .values()
-            .flat_map(|d| d.attachments.iter())
-            .filter(|a| matches!(a.state, AttachState::Unconfirmed(_)))
-            .count();
         self.client.as_ref().map_or(0, |c| c.unresolved().len())
-            + attachments
+            + self.chat.unconfirmed_count()
             + usize::from(self.knowledge.import_frame(true).is_some())
-            + self
-                .chat
-                .removed
-                .values()
-                .filter(|r| r.frame.is_some() && !r.in_flight)
-                .count()
     }
 
     /// Resubmits every unconfirmed request with its identical frame (same request key).
@@ -4743,17 +3380,7 @@ impl Shell {
         }
         // The resubmitted save runs again (and says so) until its outcome arrives.
         self.settings.unconfirmed = false;
-        let locals: Vec<u64> = self
-            .chat
-            .drafts
-            .values()
-            .flat_map(|d| d.attachments.iter())
-            .filter(|a| matches!(a.state, AttachState::Unconfirmed(_)))
-            .map(|a| a.local)
-            .collect();
-        for local in locals {
-            self.confirm_attachment(local);
-        }
+        self.with_typed(|c: &mut Chat, cx| c.confirm_attachments(cx));
         // A Knowledge import file's save: its identical frame (not submitted while closing: it
         // stays unconfirmed, its frame kept).
         if let Some((name, frame)) = self.knowledge.import_frame(true)
@@ -4761,43 +3388,7 @@ impl Shell {
         {
             self.knowledge.import = Some(knowledge_screen::ImportStage::Storing { name, frame });
         }
-        let removed: Vec<(u64, Vec<u8>, Option<PathBuf>)> = self
-            .chat
-            .removed
-            .iter()
-            .filter(|(_, r)| !r.in_flight)
-            .filter_map(|(l, r)| Some((*l, r.frame.clone()?, r.path.clone())))
-            .collect();
-        for (local, frame, path) in removed {
-            // A removed attachment, under its own local ID (which no draft holds any more):
-            // confirmed, then deleted by its reply.
-            let slot = Slot::Attach(String::new(), local);
-            if self.submit_save(slot, "Confirming a removed attachment", frame, path)
-                && let Some(r) = self.chat.removed.get_mut(&local)
-            {
-                r.in_flight = true;
-            }
-        }
-    }
-
-    fn confirm_attachment(&mut self, local: u64) {
-        let Some(a) = self.chat.attachment_mut(local) else {
-            return;
-        };
-        let AttachState::Unconfirmed(frame) = &a.state else {
-            return;
-        };
-        let frame = frame.clone();
-        let owned = a.path.clone().filter(|_| a.owned);
-        // Its own draft's slot, wherever the user is now.
-        let key = self.chat.owner(local).unwrap_or_default();
-        let slot = Slot::Attach(key, local);
-        // Not submitted (closing): it stays unconfirmed, its frame kept.
-        if self.submit_save(slot, "Confirming an attachment", frame.clone(), owned)
-            && let Some(a) = self.chat.attachment_mut(local)
-        {
-            a.state = AttachState::Saving(frame);
-        }
+        self.with_typed(|c: &mut Chat, cx| c.confirm_removed(cx));
     }
 
     fn navigation(&mut self, ui: &mut Ui) {
@@ -4935,60 +3526,6 @@ impl Shell {
         }
     }
 
-    fn coordinator_sidebar(&mut self, ui: &mut Ui) {
-        let online = self.online();
-        let mut actions = Vec::new();
-        // The screen beside it keeps at least MIN_SCREEN of the width, down to the minimum
-        // window (where the sidebar narrows instead of crushing the screen).
-        let widest = (ui.available_width() - theme::MIN_SCREEN).clamp(260.0, 560.0);
-        Panel::right("coordinator-sidebar")
-            .resizable(true)
-            .default_size(380.0_f32.min(widest))
-            .size_range(260.0_f32.min(widest)..=widest)
-            .frame(
-                Frame::new()
-                    .fill(theme::PANEL)
-                    .stroke(theme::line())
-                    .inner_margin(theme::margin(14, 12)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Workspace coordinator").strong());
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let label = "Close the workspace coordinator sidebar";
-                        let r = ui.small_button("×").on_hover_text(label);
-                        r.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::Role::Button, true, label)
-                        });
-                        if r.clicked() {
-                            actions.push(ChatAction::CloseSidebar);
-                        }
-                    });
-                });
-                widgets::caption(
-                    ui,
-                    match self.chat.selected_session() {
-                        Some(s) => format!("{} · same conversation as Chat", s.title.0),
-                        None => "The conversation selected on Chat".to_owned(),
-                    },
-                );
-                widgets::divider(ui);
-                ui.add_space(6.0);
-                if let Some((tone, text)) = &self.chat.notice {
-                    chip(ui, text.clone(), *tone);
-                }
-                chat::conversation(
-                    ui,
-                    &mut self.chat,
-                    Surface::Sidebar,
-                    online.as_ref().map(|_| ()).map_err(String::as_str),
-                    &mut actions,
-                );
-            });
-        let ctx = ui.ctx().clone();
-        self.chat_actions(&ctx, actions);
-    }
-
     fn content(&mut self, ui: &mut Ui) {
         let route = self.route;
         self.sync_watch_projects();
@@ -4996,7 +3533,6 @@ impl Shell {
             return;
         }
         match self.route {
-            Route::Chat => self.home(ui),
             Route::Settings => {
                 let online = self.online();
                 let mut actions = Vec::new();
@@ -5065,98 +3601,6 @@ impl Shell {
             Route::Issues => self.issues_screen(ui),
             _ => self.pending_screen(ui),
         }
-    }
-
-    fn home(&mut self, ui: &mut Ui) {
-        let online = self.online();
-        let online_ref = online.as_ref().map(|_| ()).map_err(String::as_str);
-        let mut actions: Vec<ChatAction> = Vec::new();
-        let narrow = ui.available_width() < theme::NARROW + theme::SIDEBAR;
-        let screen = Route::Chat.screen();
-        let notice = self.chat.notice.clone();
-        let conversation = |ui: &mut Ui, st: &mut (&mut Chat, &mut Vec<ChatAction>)| {
-            widgets::pane(
-                ui,
-                Header {
-                    title: screen.title,
-                    summary: "All projects",
-                    tabs: &[],
-                    tab: 0,
-                },
-                st,
-                |ui, st| chat::header_actions(ui, online_ref.is_ok(), st.1),
-                |ui, st, _| {
-                    if let Some((tone, text)) = &notice {
-                        chip(ui, text.clone(), *tone);
-                    }
-                    chat::conversation(ui, st.0, Surface::Home, online_ref, st.1);
-                },
-            );
-        };
-        let watch = &self.watchers;
-        let mut watch_actions = Vec::new();
-        let mut watchers = |ui: &mut Ui, session: &str| {
-            watch.section(
-                ui,
-                crate::watch_ops::WatchView::Session,
-                crate::watch_ops::WatchScope::Session(session.to_owned()),
-                online_ref,
-                &mut watch_actions,
-            );
-        };
-        let mut st = (&mut self.chat, &mut actions);
-        if narrow {
-            let label = if st.0.narrow_sidebar_open {
-                "Hide Current and Chat History"
-            } else {
-                "Show Current and Chat History"
-            };
-            if widgets::secondary_button(ui, label).clicked() {
-                st.0.narrow_sidebar_open = !st.0.narrow_sidebar_open;
-            }
-            conversation(ui, &mut st);
-            if st.0.narrow_sidebar_open {
-                // A narrow layout overlays the right edge without changing the conversation.
-                let rect = ui.max_rect();
-                let width = theme::SIDEBAR.min(rect.width());
-                egui::Area::new(egui::Id::unique("home-sidebar-overlay"))
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(egui::pos2(rect.max.x - width, rect.min.y))
-                    .show(ui.ctx(), |ui| {
-                        Frame::new()
-                            .fill(theme::PANEL)
-                            .stroke(theme::line())
-                            .corner_radius(theme::radius())
-                            .inner_margin(theme::margin(14, 12))
-                            .show(ui, |ui| {
-                                ui.set_width(width - 28.0);
-                                ui.set_height(rect.height() - 24.0);
-                                chat::sidebar(ui, st.0, online_ref, st.1, &mut watchers);
-                            });
-                    });
-            }
-        } else {
-            widgets::with_right_sidebar(
-                ui,
-                theme::SIDEBAR,
-                &mut st,
-                |ui, st| conversation(ui, st),
-                |ui, st| {
-                    Frame::new()
-                        .fill(theme::PANEL)
-                        .stroke(theme::line())
-                        .corner_radius(theme::radius())
-                        .inner_margin(theme::margin(14, 12))
-                        .show(ui, |ui| {
-                            ui.set_min_size(ui.available_size());
-                            chat::sidebar(ui, st.0, online_ref, st.1, &mut watchers);
-                        });
-                },
-            );
-        }
-        let ctx = ui.ctx().clone();
-        self.chat_actions(&ctx, actions);
-        self.watch_act(watch_actions);
     }
 
     /// A screen whose content belongs to a later item: the full shell, integrated header,
@@ -5307,9 +3751,7 @@ impl Shell {
                 );
             });
         }
-        if ctx.input(|i| !i.raw.hovered_files.is_empty())
-            && (self.route == Route::Chat || self.coordinator_open)
-        {
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) && self.chat.visible(self.route) {
             egui::Area::new(egui::Id::unique("drop-hint"))
                 .order(egui::Order::Tooltip)
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)

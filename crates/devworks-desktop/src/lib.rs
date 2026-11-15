@@ -79,6 +79,7 @@ pub mod watchers_screen;
 pub mod web_panel;
 pub mod widgets;
 pub mod work_ops;
+pub mod work_screen;
 
 /// The application version shown in the sidebar footer.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

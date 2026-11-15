@@ -1966,6 +1966,12 @@ fn approved_container_build_pull_start_and_exec_review_replay_and_refuse_changes
                         !shown.to_string().contains("s3cr3t-value-1234"),
                         "{what}: {shown}"
                     );
+                    // An argv with no secret is shown exactly.
+                    assert_eq!(
+                        shown["payload"]["input"]["command"],
+                        json!(["sh", "-c", "make test"]),
+                        "{what}"
+                    );
                     assert_eq!(
                         shown["payload"]["input"]["environment"],
                         json!([{"name":"API_TOKEN","value":"[REDACTED]"},
@@ -2124,23 +2130,55 @@ fn approved_container_build_pull_start_and_exec_review_replay_and_refuse_changes
         .unwrap();
     let mut with_key = build("app:6");
     with_key["definition"] = json!(hidden);
-    let mut with_password = exec("c-exec");
-    with_password["command"] = json!(["tool", "--password=hunter2"]);
-    for (key, operation, input, target) in [
+    let exec_running = |command: Value| {
+        let mut input = exec("c-exec");
+        input["command"] = command;
+        input
+    };
+    let create_running = |command: Value| {
+        json!({"spec":{"engineId":"docker","projectId":"project-a","image":"alpine:3.20",
+            "command":command,"mounts":[],"ports":[],"environment":[],"resourceIds":[]}})
+    };
+    // (key, operation, schema revision, input, target)
+    for (key, operation, revision, input, target) in [
         (
             "unreviewable-build",
             "containers.build",
+            1,
             with_key,
             ("project-a".to_owned(), project_revision()),
         ),
         (
             "unreviewable-exec",
             "containers.exec",
-            with_password,
-            ("c-exec".to_owned(), 2),
+            1,
+            exec_running(json!(["tool", "--password=hunter2"])),
+            ("c-exec".to_owned(), 1),
+        ),
+        // A secret flag and its value as separate arguments read as `--password hunter2`.
+        (
+            "unreviewable-exec-split",
+            "containers.exec",
+            1,
+            exec_running(json!(["tool", "--password", "hunter2"])),
+            ("c-exec".to_owned(), 1),
+        ),
+        (
+            "unreviewable-create-split",
+            "containers.create",
+            8,
+            create_running(json!(["tool", "--password", "hunter2"])),
+            ("project-a".to_owned(), project_revision()),
+        ),
+        (
+            "unreviewable-create",
+            "containers.create",
+            8,
+            create_running(json!(["tool", "--password=hunter2"])),
+            ("project-a".to_owned(), project_revision()),
         ),
     ] {
-        let digest = requests::decode(operation, 1, &input, true)
+        let digest = requests::decode(operation, revision, &input, true)
             .unwrap()
             .fingerprint
             .as_str()
@@ -2153,7 +2191,7 @@ fn approved_container_build_pull_start_and_exec_review_replay_and_refuse_changes
                 "operationKind":operation,
                 "target":{"id":target.0,"revision":target.1.to_string()},
                 "contentDigest":digest,"summary":"Run a container operation",
-                "payload":{"kind":"SavedOperation","schemaRevision":"1","input":input}}),
+                "payload":{"kind":"SavedOperation","schemaRevision":revision.to_string(),"input":input}}),
             Some(3),
         );
         match recorded(proposed).0 {

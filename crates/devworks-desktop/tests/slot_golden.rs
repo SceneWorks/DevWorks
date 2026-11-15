@@ -5,6 +5,7 @@ mod common;
 use common::*;
 use devworks_desktop::artifacts_screen::{ArtifactsSlot, BrowserSlot, ResourcesSlot};
 use devworks_desktop::backend::{CommandDispatch, Slot};
+use devworks_desktop::chat::ChatSlot;
 use devworks_desktop::conventions_ops::ConventionsSlot;
 use devworks_desktop::databases_ops::DatabasesSlot;
 use devworks_desktop::graph_ops::GraphSlot;
@@ -69,14 +70,14 @@ fn samples() -> Vec<Slot> {
         Slot::SettingsSave,
         Slot::SettingsSecret("s".into()),
         Slot::SettingsExplain("s".into()),
-        Slot::SessionsList,
-        Slot::SessionStart,
-        Slot::Transcript("s".into()),
-        Slot::TextPreview("s".into(), 7),
-        Slot::Append("s".into()),
-        Slot::Attach("s".into(), 7),
-        Slot::Preview("s".into(), 7),
-        Slot::DeleteAttachment("s".into()),
+        Slot::Chat(ChatSlot::SessionsList),
+        Slot::Chat(ChatSlot::SessionStart),
+        Slot::Chat(ChatSlot::Transcript("s".into())),
+        Slot::Chat(ChatSlot::TextPreview("s".into(), 7)),
+        Slot::Chat(ChatSlot::Append("s".into())),
+        Slot::Chat(ChatSlot::Attach("s".into(), 7)),
+        Slot::Chat(ChatSlot::Preview("s".into(), 7)),
+        Slot::Chat(ChatSlot::DeleteAttachment("s".into())),
         Slot::Artifacts(ArtifactsSlot::ArtifactsList),
         Slot::Resources(ResourcesSlot::ResourcesList),
         Slot::Browser(BrowserSlot::BrowserSessions),
@@ -96,11 +97,11 @@ fn samples() -> Vec<Slot> {
             download: None,
         },
         Slot::AddonsDiscovery,
-        Slot::RouterCatalog(7),
-        Slot::RouteSession("s".into()),
-        Slot::RouteStatus("s".into()),
-        Slot::RoutePin("s".into()),
-        Slot::RouteFirst("s".into()),
+        Slot::Chat(ChatSlot::RouterCatalog(7)),
+        Slot::Chat(ChatSlot::RouteSession("s".into())),
+        Slot::Chat(ChatSlot::RouteStatus("s".into())),
+        Slot::Chat(ChatSlot::RoutePin("s".into())),
+        Slot::Chat(ChatSlot::RouteFirst("s".into())),
         Slot::WebFetch,
         Slot::WebSearch,
         Slot::WebActivity,
@@ -241,6 +242,7 @@ fn screen_variants() -> Vec<(ScreenId, Vec<String>)> {
         (ScreenId::Projects, variant_names::<ProjectsSlot>()),
         (ScreenId::Indexing, variant_names::<IndexingSlot>()),
         (ScreenId::Watchers, variant_names::<WatchSlot>()),
+        (ScreenId::Chat, variant_names::<ChatSlot>()),
     ]
 }
 
@@ -273,6 +275,7 @@ fn reported(slot: &Slot) -> String {
         ScreenId::Projects => format!("{:?}", ProjectsSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Indexing => format!("{:?}", IndexingSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Watchers => format!("{:?}", WatchSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Chat => format!("{:?}", ChatSlot::try_from(slot.clone()).unwrap()),
     }
 }
 

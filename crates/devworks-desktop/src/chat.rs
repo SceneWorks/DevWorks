@@ -26,6 +26,35 @@ use devworks_core::services::watch::WATCHER_NOTICE_MEDIA_TYPE;
 use eframe::egui::{self, Align, Key, Layout, Modifiers, RichText, TextureHandle, Ui};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::time::Instant;
+
+/// The requests the conversation waits for. The names are persisted (see
+/// [`crate::backend::Slot`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ChatSlot {
+    SessionsList,
+    SessionStart,
+    Transcript(String),
+    TextPreview(String, u64),
+    Append(String),
+    /// An attachment being stored for a draft (`draft`, local attachment ID).
+    Attach(String, u64),
+    /// A decoded preview for a pending attachment.
+    Preview(String, u64),
+    /// Deleting an attachment removed from its draft (artifact ID).
+    DeleteAttachment(String),
+    /// A page of the router catalog for the composer's selectors (its load generation).
+    RouterCatalog(u64),
+    /// A conversation whose first route needs its session record (session ID).
+    RouteSession(String),
+    /// The availability (and pin) of a conversation's selection (conversation key).
+    RouteStatus(String),
+    /// An explicit route/effort change of a pinned conversation (session ID).
+    RoutePin(String),
+    /// The first routed request of a conversation (session ID): its selection becomes its pin.
+    RouteFirst(String),
+}
+crate::backend::screen_slot!(ChatSlot, Chat);
 
 /// A removed attachment whose save may have committed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -286,6 +315,22 @@ pub struct Chat {
     pub scrolls: Scrolls,
     /// The composer's route and effort selection, catalog and status (shared by both surfaces).
     pub routing: Routing,
+    /// The app-level coordinator sidebar is open (never on Home, which shows the conversation).
+    pub coordinator_open: bool,
+    /// Last screen context attempted for one selected conversation while the sidebar is open.
+    pub(crate) last_coordinator_notice: Option<(String, String)>,
+    pub(crate) last_preview_poll: Option<Instant>,
+    pub(crate) preview_target: Option<String>,
+    pub(crate) preview_generation: u64,
+    /// The conversation selected at the last close, chosen once the list arrives.
+    pub(crate) restored_selection: Option<String>,
+    /// Applied session mutations (start, message). A list query started before the latest
+    /// mutation may miss it: its reply is dropped and the list re-queried, so it never
+    /// overwrites newer records.
+    pub(crate) session_mutations: u64,
+    pub(crate) sessions_list_at: u64,
+    /// What the last close kept for unconfirmed commands, until they are restored.
+    pub(crate) restoring: Option<crate::memory::ChatPendingMemory>,
     next_local: u64,
 }
 
@@ -316,6 +361,15 @@ impl Chat {
             narrow_sidebar_open: false,
             scrolls: Scrolls::default(),
             routing: Routing::default(),
+            coordinator_open: false,
+            last_coordinator_notice: None,
+            last_preview_poll: None,
+            preview_target: None,
+            preview_generation: 0,
+            restored_selection: None,
+            session_mutations: 0,
+            sessions_list_at: 0,
+            restoring: None,
             next_local: 0,
         }
     }

@@ -1,4 +1,5 @@
 //! Native Human decisions through the real gateway; no provider or inference execution.
+#![allow(clippy::result_large_err)]
 mod common;
 use common::*;
 use devworks_core::protocol::records::{ApprovalViewRecord, WorkRecord};
@@ -36,6 +37,14 @@ fn feature_plan_source(
     title: &str,
     requirements: serde_json::Value,
 ) -> WorkRecord {
+    try_feature_plan_source(b, root, title, requirements).unwrap()
+}
+fn try_feature_plan_source(
+    b: &dyn Backend,
+    root: &Root,
+    title: &str,
+    requirements: serde_json::Value,
+) -> Result<WorkRecord, ops::Failure> {
     let p =
         ops::project_changed(b.command("projects.create", &ops::project_create(b, title, "", &[])))
             .unwrap();
@@ -62,7 +71,7 @@ fn feature_plan_source(
         ),
     ))
     .unwrap();
-    wops::work_changed(b.command("features.create",&wops::work_command(b,"features.create",json!({"projectId":p.id,"creation":{"kind":"Single","title":title,"description":"A concrete native approval fixture.","repositoryIds":[],"statusId":status.id,"priority":10,"plan":{"content":artifact.artifact,"goals":["Ship the inspected plan"],"requirements":requirements,"acceptance":[],"acceptanceTests":[],"repositoryIds":[]}}})))).unwrap()
+    wops::work_changed(b.command("features.create",&wops::work_command(b,"features.create",json!({"projectId":p.id,"creation":{"kind":"Single","title":title,"description":"A concrete native approval fixture.","repositoryIds":[],"statusId":status.id,"priority":10,"plan":{"content":artifact.artifact,"goals":["Ship the inspected plan"],"requirements":requirements,"acceptance":[],"acceptanceTests":[],"repositoryIds":[]}}}))))
 }
 fn request(b: &dyn Backend, feature: &WorkRecord) -> ApprovalViewRecord {
     let pending = feature.pending_plan.as_ref().unwrap();
@@ -132,6 +141,77 @@ fn native_approval_inspects_frozen_content_and_promotes_only_through_trusted_hum
         "approval alone never starts inference or execution"
     );
 }
+/// A plan draft is shown exactly in `features.get` and the plan approval, so text the shared
+/// redaction would change is refused when the draft is saved, by `features.create` and by
+/// `features.edit_plan`. An ordinary plan saves, shows exactly in both, and approves as stored.
+#[test]
+fn plan_drafts_with_text_the_redaction_would_change_are_refused_at_save() {
+    let root = Root::new("approval-plan-secrets");
+    let engine = start(&root);
+    let b = engine.backend();
+    let refused = |outcome: Result<WorkRecord, ops::Failure>, case: &str| match outcome {
+        Err(ops::Failure::Refused(fault)) => {
+            assert_eq!(
+                fault.code,
+                devworks_core::protocol::DomainErrorCode::InvalidArgument,
+                "{case}"
+            );
+            assert_eq!(
+                fault.target_kind.map(|k| k.0),
+                Some("feature_plan_unreviewable".to_owned()),
+                "{case}"
+            );
+        }
+        other => panic!("{case}: a plan with secret text was saved: {other:?}"),
+    };
+    // At creation: a `password: …` requirement statement.
+    refused(
+        try_feature_plan_source(
+            &*b,
+            &root,
+            "Plan with a password line",
+            json!([{"id":"E1","statement":"Sign in with password: hunter2-plain-value","status":"Confirmed","coveredByTaskIds":[]}]),
+        ),
+        "create with a password line",
+    );
+    // At edit: a URL carrying a password, in a goal of an ordinary feature's draft.
+    let feature = feature_plan(&*b, &root, "Ordinary plan");
+    let current = get(&*b, &feature);
+    let mut revised = serde_json::to_value(&current.pending_plan.as_ref().unwrap().draft).unwrap();
+    revised["goals"] = json!(["Clone https://bot:hunter2-plain-value@git.example/repo first"]);
+    refused(
+        wops::work_changed(b.command(
+            "features.edit_plan",
+            &wops::work_command(
+                &*b,
+                "features.edit_plan",
+                json!({"featureId":feature.id,"expectedRevision":current.revision,"plan":revised}),
+            ),
+        )),
+        "edit_plan with a URL password",
+    );
+    // Nothing was stored: features.get still shows the ordinary draft, exactly.
+    let current = get(&*b, &feature);
+    let draft = &current.pending_plan.as_ref().unwrap().draft;
+    assert!(!serde_json::to_string(&current).unwrap().contains("hunter2"));
+    assert_eq!(
+        serde_json::to_value(draft).unwrap()["goals"],
+        json!(["Ship the inspected plan"])
+    );
+    // The ordinary plan's approval shows the same draft exactly and approves it as stored.
+    let p = request(&*b, &feature);
+    assert_eq!(
+        serde_json::to_value(&p).unwrap()["reviewedSource"]["plan"],
+        serde_json::to_value(draft).unwrap()
+    );
+    let mut h = open(&engine, &root, &p);
+    rationale(&mut h, "I reviewed this exact pending plan.");
+    press(&mut h, "Approve exact proposal");
+    let approved = get(&*b, &feature);
+    assert!(approved.pending_plan.is_none());
+    assert!(approved.approval.is_some());
+}
+
 #[test]
 fn a_refreshed_inbox_keeps_the_inspected_draft_and_reports_target_staleness() {
     let root = Root::new("approval-native-stale");

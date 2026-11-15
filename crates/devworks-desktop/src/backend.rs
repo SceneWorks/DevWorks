@@ -304,17 +304,6 @@ pub enum Slot {
     /// Transient native credential intake; no raw value is serialized with this slot.
     SettingsSecret(String),
     SettingsExplain(String),
-    SessionsList,
-    SessionStart,
-    Transcript(String),
-    TextPreview(String, u64),
-    Append(String),
-    /// An attachment being stored for a draft (`draft`, local attachment ID).
-    Attach(String, u64),
-    /// A decoded preview for a pending attachment.
-    Preview(String, u64),
-    /// Deleting an attachment removed from its draft (artifact ID).
-    DeleteAttachment(String),
     /// The Add-ons catalog.
     AddonsList,
     /// One package's logs.
@@ -330,16 +319,6 @@ pub enum Slot {
     },
     /// The runtime probe and index refresh behind the Add-ons screen.
     AddonsDiscovery,
-    /// A page of the router catalog for the composer's selectors (its load generation).
-    RouterCatalog(u64),
-    /// A conversation whose first route needs its session record (session ID).
-    RouteSession(String),
-    /// The availability (and pin) of a conversation's selection (conversation key).
-    RouteStatus(String),
-    /// An explicit route/effort change of a pinned conversation (session ID).
-    RoutePin(String),
-    /// The first routed request of a conversation (session ID): its selection becomes its pin.
-    RouteFirst(String),
     /// A page fetch from Settings > Agent tools.
     WebFetch,
     /// A search from Settings > Agent tools.
@@ -471,6 +450,8 @@ pub enum Slot {
     Indexing(crate::indexing_ops::IndexingSlot),
     #[serde(untagged)]
     Watch(crate::watch_ops::WatchSlot),
+    #[serde(untagged)]
+    Chat(crate::chat::ChatSlot),
 }
 impl Slot {
     /// The screen whose replies this slot waits for.
@@ -489,6 +470,7 @@ impl Slot {
             Self::Projects(_) => ScreenId::Projects,
             Self::Indexing(_) => ScreenId::Indexing,
             Self::Watch(_) => ScreenId::Watchers,
+            Self::Chat(_) => ScreenId::Chat,
             _ => ScreenId::Legacy,
         }
     }
@@ -1476,7 +1458,7 @@ mod human_dispatch_tests {
             }));
         }
         assert!(client.query(
-            Slot::Transcript("session-a".into()),
+            Slot::Chat(crate::chat::ChatSlot::Transcript("session-a".into())),
             "Reading the transcript",
             "sessions.transcript",
             b"frame".to_vec(),
@@ -1486,7 +1468,8 @@ mod human_dispatch_tests {
         let mut answered = false;
         while !answered && Instant::now() < deadline {
             answered = client.poll().into_iter().any(|(slot, _, reply)| {
-                slot == Slot::Transcript("session-a".into()) && matches!(reply, Reply::Query(_))
+                slot == Slot::Chat(crate::chat::ChatSlot::Transcript("session-a".into()))
+                    && matches!(reply, Reply::Query(_))
             });
             std::thread::sleep(Duration::from_millis(5));
         }
