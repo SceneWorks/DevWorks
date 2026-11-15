@@ -2081,7 +2081,7 @@ pub(super) static CATALOG: [OperationDescriptor; 376] = [
         result_type: "HistoryPage<LineageRecord>",
         result_schema: schema_of::<HistoryPage<LineageRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
         native_execution: false,
         approval_required: false,
         human_only: false,
