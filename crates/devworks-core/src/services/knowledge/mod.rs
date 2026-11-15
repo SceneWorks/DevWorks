@@ -1246,37 +1246,46 @@ impl KnowledgeService {
         project: Option<&ProjectId>,
         activity: Option<&str>,
     ) -> Result<Vec<KnowledgeClaim>, StorageError> {
-        let mut scopes = vec![KnowledgeScope::Workspace];
-        if let Some(p) = project {
-            scopes.insert(0, KnowledgeScope::Project(p.clone()));
+        rules_for(snapshot, project, activity)
+    }
+}
+
+/// Every effective rule a session of `project` may be given (see [`KnowledgeService::rules_for`]).
+pub fn rules_for(
+    snapshot: &dyn ReadSnapshot,
+    project: Option<&ProjectId>,
+    activity: Option<&str>,
+) -> Result<Vec<KnowledgeClaim>, StorageError> {
+    let mut scopes = vec![KnowledgeScope::Workspace];
+    if let Some(p) = project {
+        scopes.insert(0, KnowledgeScope::Project(p.clone()));
+    }
+    let th = thresholds(snapshot.configuration(), &scopes)?;
+    let query = ClaimQuery {
+        scopes: scopes.iter().map(KnowledgeScope::key).collect(),
+        lifecycles: vec!["Active".into()],
+        kinds: vec!["Lesson".into()],
+        lesson: Some(LessonFilter {
+            rule_states: vec!["Effective".into()],
+            thresholds: th.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+            activity: activity.map(model::fold),
+            view: None,
+        }),
+        ..ClaimQuery::default()
+    };
+    let k = knowledge_read(snapshot);
+    let mut out = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let rows = claims(k, &query, after.as_deref(), KNOWLEDGE_PAGE_MAX)?;
+        for c in &rows {
+            out.push(claim_wire(k, c, &th)?);
         }
-        let th = thresholds(snapshot.configuration(), &scopes)?;
-        let query = ClaimQuery {
-            scopes: scopes.iter().map(KnowledgeScope::key).collect(),
-            lifecycles: vec!["Active".into()],
-            kinds: vec!["Lesson".into()],
-            lesson: Some(LessonFilter {
-                rule_states: vec!["Effective".into()],
-                thresholds: th.iter().map(|(k, v)| (k.clone(), *v)).collect(),
-                activity: activity.map(model::fold),
-                view: None,
-            }),
-            ..ClaimQuery::default()
-        };
-        let k = knowledge_read(snapshot);
-        let mut out = Vec::new();
-        let mut after: Option<String> = None;
-        loop {
-            let rows = claims(k, &query, after.as_deref(), KNOWLEDGE_PAGE_MAX)?;
-            for c in &rows {
-                out.push(claim_wire(k, c, &th)?);
+        match rows.last() {
+            Some(last) if rows.len() == usize::from(KNOWLEDGE_PAGE_MAX) => {
+                after = Some(claim_position(&query, last))
             }
-            match rows.last() {
-                Some(last) if rows.len() == usize::from(KNOWLEDGE_PAGE_MAX) => {
-                    after = Some(claim_position(&query, last))
-                }
-                _ => return Ok(out),
-            }
+            _ => return Ok(out),
         }
     }
 }
