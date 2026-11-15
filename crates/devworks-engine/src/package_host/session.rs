@@ -450,6 +450,21 @@ impl Session {
             .retain(|_, slot| slot.invocation_id != invocation_id);
     }
 
+    /// Whether the session still holds `invocation_id`: its slot or its unanswered
+    /// `host.invoke` request.
+    pub fn holds(&self, invocation_id: &str) -> bool {
+        self.slots
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains_key(invocation_id)
+            || self
+                .invokes
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .values()
+                .any(|slot| slot.invocation_id == invocation_id)
+    }
+
     fn respond(&self, id: &str, outcome: Result<RpcResult, RpcError>) {
         let v = match outcome {
             Ok(result) => serde_json::to_value(RpcResponse::Success(RpcSuccess {
