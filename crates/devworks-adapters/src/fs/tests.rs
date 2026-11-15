@@ -894,6 +894,47 @@ fn powershell_writes_through_provider_quote_and_bracket_forms_are_never_allowed(
     ));
 }
 
+/// PowerShell wildcards match case-insensitively, but the pattern expansion is case-sensitive:
+/// a pattern that matches only an unprotected folder here may also write into a mixed-case
+/// protected root, so a PowerShell writer with a wildcard target is held, never allowed.
+#[test]
+fn powershell_wildcard_writes_are_held_whatever_the_case_of_a_protected_root() {
+    use devworks_core::authority::shell::{CommandVerdict, preflight_command};
+    let s = Scratch::new("ps-case");
+    let data = s.p("DevWorks-Data");
+    let other = s.p("devworks-other");
+    let work = s.p("work");
+    for d in [&data, &other, &work] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(format!("{data}/state.json"), "{}").unwrap();
+    std::fs::write(format!("{other}/state.json"), "{}").unwrap();
+    let roots = ProtectedRoots::new(Vec::new(), Vec::new(), Some(data.clone()));
+    let fs = NativeFilesystem::new();
+    let ps_quote = |p: &str| format!("'{}'", p.replace('\'', "''"));
+    let pattern = ps_quote(&s.p("devworks*/state.json"));
+    let mut leaks = Vec::new();
+    for script in [
+        format!("Set-Content -Path {pattern} -Value x"),
+        format!("Set-Content {pattern} x"),
+        format!("Add-Content -Path {pattern} x"),
+        format!("'x' | Out-File {pattern}"),
+        format!("New-Item {pattern} -Force"),
+    ] {
+        let argv = ["pwsh", "-Command", &script].map(str::to_owned);
+        match preflight_command(&fs, &roots, &argv, Some(&work), &[]) {
+            CommandVerdict::NeedsInput { .. } | CommandVerdict::Blocked { .. } => {}
+            other => leaks.push(format!("{script}: {other:?}")),
+        }
+    }
+    assert!(
+        leaks.is_empty(),
+        "{} leaks:\n{}",
+        leaks.len(),
+        leaks.join("\n")
+    );
+}
+
 /// A write pattern that matches nothing is held, but never hides a protected operand of the same
 /// step: every operand is still checked and a refusal wins.
 #[test]

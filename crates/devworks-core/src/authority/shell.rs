@@ -2519,7 +2519,6 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
     let mut words = Vec::new();
     let mut known = true;
     let mut rest_positional = false;
-    let mut force = false;
     // Forms whose effect the words do not show: splatting (`@p`, `@(…)`) binds parameters,
     // any computed argument (`$v`, `$(…)`), and a backtick escape or line continuation anywhere
     // in the script.
@@ -2565,7 +2564,6 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
         } else {
             param
         });
-        force |= param == "force";
         match role {
             Path => paths.extend(value.map(|v| (v, false))),
             LiteralPath => paths.extend(value.map(|v| (v, true))),
@@ -2617,14 +2615,6 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
         // The path arrives on the pipeline or at a prompt.
         c.hold(InputNeeded::UnresolvedTarget);
     }
-    // `-Force` expands wildcards over hidden entries too, which the pattern expansion skips.
-    if force
-        && targets
-            .iter()
-            .any(|(w, _)| w.text.contains(['*', '?', '[']))
-    {
-        c.hold(InputNeeded::UnresolvedTarget);
-    }
     let targets: Vec<Word> = targets
         .into_iter()
         .filter_map(|(w, literal)| ps_target(w, literal, c))
@@ -2641,8 +2631,8 @@ fn ps_write(writer: PsWriter, args: &[Word], c: &mut Collector) -> bool {
 /// A PowerShell write target as a file-system path the resolver can check, or `None` (held for
 /// its target) when it cannot be checked exactly: a `FileSystem::` provider prefix is removed;
 /// any other provider (`Registry::`, …) or a drive name longer than one letter (`Env:`,
-/// `Variable:`, `Temp:`, a custom drive) is not a path the resolver reads; and a literal path with
-/// wildcard characters would be expanded as a pattern by the preflight. A `\` separator on Unix,
+/// `Variable:`, `Temp:`, a custom drive) is not a path the resolver reads; and a wildcard target
+/// (literal, or a case-insensitive pattern) cannot be checked by the case-sensitive expansion. A `\` separator on Unix,
 /// a backtick in the script or a line break in the word holds the command but is still planned.
 fn ps_target(w: Word, literal: bool, c: &mut Collector) -> Option<Word> {
     let lower = w.text.to_ascii_lowercase();
@@ -2653,7 +2643,15 @@ fn ps_target(w: Word, literal: bool, c: &mut Collector) -> Option<Word> {
     let drive = rest.split_once(':').map(|(d, _)| d);
     let qualified = rest.contains("::")
         || drive.is_some_and(|d| d.chars().count() > 1 && !d.contains(['/', '\\']));
-    if qualified || (literal && rest.contains(['*', '?', '[', ']'])) {
+    // A literal path names wildcard characters literally; a pattern matches case-insensitively
+    // and (with `-Force`) over hidden entries. The pattern expansion does neither, so no
+    // wildcard target is checked exactly: held, never expanded.
+    let wildcard = if literal {
+        &['*', '?', '[', ']'][..]
+    } else {
+        &['*', '?', '['][..]
+    };
+    if qualified || rest.contains(wildcard) {
         c.hold(InputNeeded::UnresolvedTarget);
         return None;
     }

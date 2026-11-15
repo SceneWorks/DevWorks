@@ -220,7 +220,7 @@ fn powershell_write_targets_are_read_as_powershell_reads_them() {
         [(Unlink, vec!["ab".into()])]
     );
     // `-LiteralPath` (and every path of `New-Item` and `Out-File`) names wildcard characters
-    // literally, which a pattern expansion cannot check: held. `-Path` stays a pattern.
+    // literally, which a pattern expansion cannot check: held.
     for script in [
         "Set-Content -LiteralPath '/x/a[1]/f' hi",
         "Add-Content -lp /x/a*/f hi",
@@ -231,10 +231,6 @@ fn powershell_write_targets_are_read_as_powershell_reads_them() {
     ] {
         assert_eq!(held(script), InputNeeded::UnresolvedTarget, "{script}");
     }
-    assert_eq!(
-        ps("Set-Content -Path '/x/a[1]/f' hi"),
-        [(Truncate, vec!["/x/a[1]/f".into()])]
-    );
 }
 
 #[test]
@@ -251,6 +247,14 @@ fn powershell_writers_are_held_unless_every_target_is_checked_exactly() {
         "Set-Content `\n/x/f hi",
         "Set-Content -Path /x/f `\n -Value hi",
         "'hi' > `\n/x/f",
+        // PowerShell wildcards match case-insensitively, which the pattern expansion does not:
+        // every wildcard target is held, under `-Path` or positional.
+        "Set-Content -Path C:/work/devworks*/state.json -Value x",
+        "Set-Content -Path '/x/a[1]/f' hi",
+        "Add-Content /x/a?/f hi",
+        "'hi' | Out-File -FilePath /x/*.log",
+        "New-Item /x/[ab]",
+        "mkdir /x/new*",
         // `-Force` expands wildcards over hidden entries too.
         "Set-Content -Path /x/*/f -Value hi -Force",
         "Add-Content -Force /x/s?/f hi",
