@@ -6,17 +6,16 @@
 //! client or schedule cannot mint one. A staged file is removed as soon as its save is decided
 //! ([`ExportStaging::release`]); one whose outcome stayed unknown is removed by the sweep once
 //! older than the ticket lifetime ([`ExportStaging::sweep`], run by the runtime's diagnostics
-//! monitor). The artifact keeps its own copy.
+//! monitor). The artifact keeps its own copy. Store decisions about a staged file's custody
+//! belong to [`ManagedFileCustody`]; this adapter performs only the filesystem I/O.
 use crate::fs::sources::{HostArtifactSources, IssueRefusal};
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::ports::diagnostics::{ExportRefused, ExportStaging};
 use devworks_core::ports::project_purge::PurgeFileOwner;
-use devworks_core::ports::storage::{
-    ApplicationStore, ProjectManagedFileReservation, ReadOptions, StoredProjectManagedFile,
-    WriteOptions, read_snapshot, run_write,
-};
+use devworks_core::ports::storage::{ApplicationStore, ProjectManagedFileReservation};
 use devworks_core::protocol::data::ArtifactSource;
 use devworks_core::protocol::{Id, ProjectId};
+use devworks_core::services::projects::managed_files::ManagedFileCustody;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -48,7 +47,7 @@ pub struct DiagnosticExports {
     next: AtomicU64,
     /// Staged files by upload ticket, until released.
     staged: Mutex<HashMap<String, PathBuf>>,
-    store: Option<Arc<dyn ApplicationStore>>,
+    custody: Option<Arc<ManagedFileCustody>>,
     managed: Mutex<HashMap<String, (ProjectId, Id)>>,
 }
 
@@ -85,13 +84,9 @@ impl Drop for StagingAttempt<'_> {
         }
         if (missing
             || matches!(std::fs::symlink_metadata(&self.path),Err(e) if e.kind()==std::io::ErrorKind::NotFound))
-            && let (Some(store), Some(r)) = (&self.owner.store, &self.reservation)
+            && let (Some(custody), Some(r)) = (&self.owner.custody, &self.reservation)
         {
-            let project = r.project_id.clone();
-            let id = r.id.clone();
-            let _ = run_write(store.as_ref(), WriteOptions::default(), move |tx| {
-                tx.projects().finish_project_managed_file(&project, &id)
-            });
+            let _ = custody.settle_diagnostic_export(r.project_id.clone(), r.id.clone());
         }
     }
 }
@@ -104,14 +99,14 @@ impl DiagnosticExports {
             sources,
             next: AtomicU64::new(0),
             staged: Mutex::new(HashMap::new()),
-            store: None,
+            custody: None,
             managed: Mutex::new(HashMap::new()),
         }
     }
 
     /// Production attribution is reserved before external creation and survives restart.
     pub fn with_store(mut self, store: Arc<dyn ApplicationStore>) -> Self {
-        self.store = Some(store);
+        self.custody = Some(Arc::new(ManagedFileCustody::new(store)));
         self
     }
 
@@ -121,51 +116,22 @@ impl DiagnosticExports {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(ticket)
-            && let Some(store) = &self.store
+            && let Some(custody) = &self.custody
         {
-            let _ = run_write(store.as_ref(), WriteOptions::default(), move |tx| {
-                tx.projects().finish_project_managed_file(&project, &id)
-            });
+            let _ = custody.settle_diagnostic_export(project, id);
         }
     }
     fn reconcile_missing(&self) {
-        let Some(store) = &self.store else { return };
+        let Some(custody) = &self.custody else { return };
         let Some(root) = std::fs::symlink_metadata(&self.dir)
             .ok()
             .and_then(|m| crate::fs::identity_at(&self.dir, &m))
         else {
             return;
         };
-        let boot = store.info().boot_id;
-        let mut after = None;
-        loop {
-            let Ok(rows) = read_snapshot(store.as_ref(), &ReadOptions::default(), |r| {
-                r.projects()
-                    .managed_file_recovery("DiagnosticExport", after.as_ref(), 500)
-            }) else {
-                return;
-            };
-            if rows.is_empty() {
-                return;
-            }
-            after = rows.last().map(|r| r.id.clone());
-            for row in rows {
-                // A current-boot reservation still being written belongs to an in-flight
-                // `stage`, which reserves before it creates the file; retiring it here would
-                // make that export's registration fail.
-                if row.writing && row.boot_id == boot {
-                    continue;
-                }
-                if row.root == root
-                    && matches!(std::fs::symlink_metadata(self.dir.join(&row.relative_path)),Err(e) if e.kind()==std::io::ErrorKind::NotFound)
-                {
-                    let _ = run_write(store.as_ref(), WriteOptions::default(), move |tx| {
-                        tx.projects()
-                            .finish_project_managed_file(&row.project_id, &row.id)
-                    });
-                }
-            }
-        }
+        let _ = custody.recover_diagnostic_exports(root, |relative| {
+            matches!(std::fs::symlink_metadata(self.dir.join(relative)),Err(e) if e.kind()==std::io::ErrorKind::NotFound)
+        });
     }
     fn staged(&self) -> std::sync::MutexGuard<'_, HashMap<String, PathBuf>> {
         self.staged.lock().unwrap_or_else(|p| p.into_inner())
@@ -248,35 +214,29 @@ impl ExportStaging for DiagnosticExports {
             std::process::id(),
             self.next.fetch_add(1, Ordering::Relaxed)
         ));
-        let attribution = if let Some(store) = &self.store {
+        let attribution = if let Some(custody) = &self.custody {
             let project = ctx.project_id().cloned().ok_or(ExportRefused::NoProject)?;
-            let id = self.sources.new_managed_file_id();
             let metadata = std::fs::symlink_metadata(&self.dir).map_err(io)?;
             let root = crate::fs::identity_at(&self.dir, &metadata)
                 .ok_or_else(|| ExportRefused::Io("managed root identity unavailable".into()))?;
-            let info = store.info();
-            let reservation = ProjectManagedFileReservation {
-                id: id.clone(),
-                project_id: project.clone(),
-                kind: "DiagnosticExport".into(),
-                relative_path: path
-                    .file_name()
-                    .and_then(|v| v.to_str())
-                    .ok_or_else(|| ExportRefused::Io("managed file name unavailable".into()))?
-                    .into(),
-                root,
-                created_identity: None,
-                store_id: info.store_id,
-                restore_epoch: info.restore_epoch,
-                boot_id: info.boot_id,
-                created_at_ms: self.sources.now_ms(),
-            };
-            let saved = reservation.clone();
-            run_write(store.as_ref(), WriteOptions::default(), move |tx| {
-                tx.projects().reserve_project_managed_file(&saved)
-            })
-            .map_err(|_| ExportRefused::Io("export staging is closed or unavailable".into()))?;
-            Some(reservation)
+            let relative_path = path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .ok_or_else(|| ExportRefused::Io("managed file name unavailable".into()))?
+                .into();
+            Some(
+                custody
+                    .reserve_diagnostic_export(
+                        project,
+                        self.sources.new_managed_file_id(),
+                        relative_path,
+                        root,
+                        self.sources.now_ms(),
+                    )
+                    .map_err(|_| {
+                        ExportRefused::Io("export staging is closed or unavailable".into())
+                    })?,
+            )
         } else {
             None
         };
@@ -296,7 +256,7 @@ impl ExportStaging for DiagnosticExports {
         file.write_all(bytes).map_err(io)?;
         file.sync_all().map_err(io)?;
         drop(file);
-        if let (Some(store), Some(reserved)) = (&self.store, &attribution) {
+        if let (Some(custody), Some(reserved)) = (&self.custody, &attribution) {
             let owner = PurgeFileOwner::DiagnosticExport {
                 file_id: reserved.id.clone(),
             };
@@ -313,18 +273,9 @@ impl ExportStaging for DiagnosticExports {
                 &mut || false,
             )
             .map_err(|_| ExportRefused::Io("export staging identity changed".into()))?;
-            let published = StoredProjectManagedFile {
-                id: reserved.id.clone(),
-                project_id: reserved.project_id.clone(),
-                kind: reserved.kind.clone(),
-                relative_path: reserved.relative_path.clone(),
-                witness,
-                created_at_ms: reserved.created_at_ms,
-            };
-            if run_write(store.as_ref(), WriteOptions::default(), move |tx| {
-                tx.projects().register_project_managed_file(&published)
-            })
-            .is_err()
+            if custody
+                .publish_diagnostic_export(reserved, witness)
+                .is_err()
             {
                 return Err(ExportRefused::Io("export staging expired or closed".into()));
             }

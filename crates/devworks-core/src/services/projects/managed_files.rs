@@ -52,6 +52,7 @@ impl StagingKind {
 }
 
 const PREVIEW_KIND: &str = "Preview";
+const DIAGNOSTIC_EXPORT_KIND: &str = "DiagnosticExport";
 
 pub struct ManagedFileCustody {
     store: Arc<dyn ApplicationStore>,
@@ -104,6 +105,90 @@ impl ManagedFileCustody {
         run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
             tx.projects().finish_project_managed_file(&project, &id)
         })
+    }
+
+    /// Reserve a diagnostic export of `project` at `relative_path` under `root` before the
+    /// file is created, so its attribution survives a restart.
+    pub fn reserve_diagnostic_export(
+        &self,
+        project: ProjectId,
+        id: Id,
+        relative_path: String,
+        root: FileIdentity,
+        created_at_ms: i64,
+    ) -> Result<ProjectManagedFileReservation, StorageError> {
+        let info = self.store.info();
+        let reservation = ProjectManagedFileReservation {
+            id,
+            project_id: project,
+            kind: DIAGNOSTIC_EXPORT_KIND.into(),
+            relative_path,
+            root,
+            created_identity: None,
+            store_id: info.store_id,
+            restore_epoch: info.restore_epoch,
+            boot_id: info.boot_id,
+            created_at_ms,
+        };
+        let saved = reservation.clone();
+        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+            tx.projects().reserve_project_managed_file(&saved)
+        })?;
+        Ok(reservation)
+    }
+
+    /// Publish a written diagnostic export with the witness of its bytes.
+    pub fn publish_diagnostic_export(
+        &self,
+        reserved: &ProjectManagedFileReservation,
+        witness: PurgeFileWitness,
+    ) -> Result<(), StorageError> {
+        let published = StoredProjectManagedFile {
+            id: reserved.id.clone(),
+            project_id: reserved.project_id.clone(),
+            kind: reserved.kind.clone(),
+            relative_path: reserved.relative_path.clone(),
+            witness,
+            created_at_ms: reserved.created_at_ms,
+        };
+        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+            tx.projects().register_project_managed_file(&published)
+        })
+    }
+
+    /// Settle a diagnostic export whose file is gone.
+    pub fn settle_diagnostic_export(&self, project: ProjectId, id: Id) -> Result<(), StorageError> {
+        self.finish(project, id)
+    }
+
+    /// Settle every diagnostic export recorded under `root` whose file `missing` reports gone.
+    /// A reservation of this boot still being written belongs to an in-flight export, which
+    /// reserves before it creates the file, so it is left alone.
+    pub fn recover_diagnostic_exports(
+        &self,
+        root: FileIdentity,
+        missing: impl Fn(&str) -> bool,
+    ) -> Result<(), StorageError> {
+        let boot = self.store.info().boot_id;
+        let mut after = None;
+        loop {
+            let rows = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |r| {
+                r.projects()
+                    .managed_file_recovery(DIAGNOSTIC_EXPORT_KIND, after.as_ref(), 500)
+            })?;
+            if rows.is_empty() {
+                return Ok(());
+            }
+            after = rows.last().map(|r| r.id.clone());
+            for row in rows {
+                if row.writing && row.boot_id == boot {
+                    continue;
+                }
+                if row.root == root && missing(&row.relative_path) {
+                    let _ = self.finish(row.project_id, row.id);
+                }
+            }
+        }
     }
 
     /// Stage a pasted PNG for `session`'s stored project.
