@@ -1103,6 +1103,7 @@ fn ending_the_owning_session_cancels_its_watchers_and_stops_their_processes() {
             fx.h.advance(10_000);
             watchers.settle().unwrap();
         }
+        // A probe run would append to the file. No event marks that this did not happen, so the test waits a fixed time.
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(
             std::fs::read_to_string(work.join("work").join("runs")).unwrap(),

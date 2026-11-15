@@ -386,7 +386,7 @@ fn a_held_tool_call_is_submitted_once_and_again_only_after_a_state_change() {
                 "the held call was never submitted"
             );
 
-            // Nothing changes for 10 s: the held call is not submitted again.
+            // Nothing changes for 10 s: the held call is not submitted again. No event marks that this did not happen, so the test waits a fixed time.
             tokio::time::sleep(Duration::from_secs(10)).await;
             assert_eq!(submissions.load(Ordering::SeqCst), 1);
             assert!(!turn.is_finished());

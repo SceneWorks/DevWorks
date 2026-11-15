@@ -6,8 +6,8 @@
 //! shapes the client relies on; the browser "process" is a real owned sleeping tree, so its
 //! launch, stop and recovery are the real ones. No browser, network or inference is used.
 //!
-//! An opt-in test drives an installed Chromium-family browser instead
-//! (`DEVWORKS_BROWSER_TESTS=1`, optionally `DEVWORKS_BROWSER=<path>`); it is skipped otherwise.
+//! Ignored tests drive an installed Chromium-family browser instead (run them with `--ignored`,
+//! optionally with `DEVWORKS_BROWSER=<path>`).
 mod common;
 
 use common::*;
@@ -2247,7 +2247,24 @@ fn an_unknown_input_outcome_holds_the_session_until_a_person_resolves_it() {
     assert!(
         matches!(Fx::decision(&again), DomainDecision::Accepted { operation_id } if *operation_id == op)
     );
-    fx.drive(200);
+    // Only a delivery dispatches: the replay added none, and the one there is held for
+    // reconciliation, which never dispatches.
+    let held = {
+        let op = op.clone();
+        read(&**fx.app().store(), move |s| {
+            s.queue().deliveries(
+                &DeliveryFilter {
+                    consumer: None,
+                    operation_id: Some(op),
+                },
+                None,
+                10,
+            )
+        })
+        .entries
+    };
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].state, QueueState::Reconciling, "{held:?}");
     assert_eq!(
         requests(&b, "Input.insertText"),
         1,
@@ -2575,7 +2592,7 @@ fn git_fx() -> (Fx, Arc<devworks_core::services::git::GitService>) {
 fn shutdown_with_git_composed_joins_the_git_loop_without_waiting_out_the_bound() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let (mut fx, git) = git_fx();
-    fx.drive(100);
+    // Only shutdown or dropping the runtime stops the Git loop.
     assert!(!git.is_stopped());
     let started = Instant::now();
     fx.shutdown();
@@ -2592,7 +2609,7 @@ fn shutdown_with_git_composed_joins_the_git_loop_without_waiting_out_the_bound()
 fn dropping_the_runtime_with_git_composed_stops_the_git_loop() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let (mut fx, git) = git_fx();
-    fx.drive(100);
+    // Only shutdown or dropping the runtime stops the Git loop.
     assert!(!git.is_stopped());
     drop(fx.app.take());
     assert!(git.is_stopped());
@@ -2751,6 +2768,7 @@ fn close_while_launching(
         json!({"action": {"kind": "Close", "sessionId": session.as_str(), "expectedRevision": s.revision.to_string()}}),
     );
     // The Close's own effect runs meanwhile; it waits for the Create, settling nothing.
+    // No event marks that this did not happen, so the test waits a fixed time.
     fx.drive(200);
     let s = fx.session(&session);
     assert_eq!(s.phase, BrowserPhase::Starting, "{s:?}");
@@ -2970,6 +2988,7 @@ fn an_action_waits_for_its_predecessor_to_settle_before_anything_is_sent() {
     let s = fx.session(&session);
     let op = fx.accepted(&user, "browser.input", json!({"sessionId": session.as_str(), "expectedRevision": s.revision.to_string(), "action": {"kind": "Text", "node": node(&snap, &ax, "Name"), "text": "z"}}));
     let b = fx.platform.browser(&session);
+    // The input waits for its predecessor. No event marks that this did not happen, so the test waits a fixed time.
     fx.drive(600);
     assert_eq!(
         requests(&b, "Input.insertText"),
@@ -4951,14 +4970,11 @@ fn navigation_without_a_target_registers_a_new_one_and_artifact_pages_are_staged
 // Opt-in: an installed browser
 
 /// Drives an installed Chromium-family browser end to end through the native platform and
-/// transport. Opt-in (`DEVWORKS_BROWSER_TESTS=1`, optionally `DEVWORKS_BROWSER=<path>`); skipped
-/// otherwise, which is not a pass. Not run in CI (no browser is installed there).
+/// transport. Ignored unless asked for (`--ignored`, optionally `DEVWORKS_BROWSER=<path>`); it
+/// fails without an installed browser. No CI lane runs it.
 #[test]
+#[ignore = "needs an installed Chromium-family browser; run with --ignored"]
 fn an_installed_browser_end_to_end_when_opted_in() {
-    if std::env::var("DEVWORKS_BROWSER_TESTS").ok().as_deref() != Some("1") {
-        eprintln!("skipped: set DEVWORKS_BROWSER_TESTS=1 to drive an installed browser");
-        return;
-    }
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let h = Harness::new();
     let configured = std::env::var_os("DEVWORKS_BROWSER").map(PathBuf::from);
@@ -5290,6 +5306,7 @@ fn an_installed_browser_end_to_end_when_opted_in() {
         "{}",
         trapped.url.0
     );
+    // A real browser may follow the refresh at any time. No event marks that this did not happen, so the test waits a fixed time.
     fx.drive(1500);
     let (now, nax) = fresh(&target_json(&trapped));
     assert!(!nax.to_string().contains("DW46-LOCAL-SECRET"), "{nax}");
@@ -5304,6 +5321,7 @@ fn an_installed_browser_end_to_end_when_opted_in() {
             &session,
             json!({"kind": "Click", "node": node(&now, &nax, "Local file"), "button": "Primary"}),
         );
+        // As above: no event marks that this did not happen, so the test waits a fixed time.
         fx.drive(1500);
     }
     let (_, after) = fresh(&target_json(&now));
@@ -5546,10 +5564,8 @@ fn browser_evidence_records_source_when_a_load_event_is_missing() {
     browser_source_case(false, true);
 }
 #[test]
+#[ignore = "needs an installed Chromium-family browser; run with --ignored"]
 fn installed_browser_records_real_worktree_provenance_when_opted_in() {
-    if std::env::var("DEVWORKS_BROWSER_TESTS").ok().as_deref() != Some("1") {
-        return;
-    }
     browser_source_case(true, false);
 }
 fn browser_source_case(native: bool, missing_load: bool) {

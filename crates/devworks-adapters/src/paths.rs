@@ -135,10 +135,9 @@ mod tests {
 
     #[test]
     fn home_relative_paths_expand_with_either_separator() {
-        let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
-        else {
-            return;
-        };
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .expect("HOME or USERPROFILE is set");
         let home = PathBuf::from(home);
         assert_eq!(expand("~"), Some(home.clone()));
         assert_eq!(expand("~/work"), Some(home.join("work")));

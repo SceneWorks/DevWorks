@@ -1,7 +1,6 @@
 //! Native shared-owner regressions: no test handler, direct catalog inserts or model execution.
-#[path = "../../src/conventions/indexing.rs"]
-mod actual_index_consumer;
 use super::*;
+use devworks_engine::conventions::indexing as actual_index_consumer;
 fn imported_order(f: &Fx, name: &str, order: Option<i32>) -> StoredConvention {
     let mut value = manifest(0);
     value["slug"] = json!(name);
