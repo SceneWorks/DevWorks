@@ -438,12 +438,19 @@ impl Backend for Gated {
         }
         out
     }
-    fn human_decision(&self, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
+    fn control_epoch(&self) -> devworks_core::services::desktop::ControlEpoch {
+        self.inner.control_epoch()
+    }
+    fn human_decision(
+        &self,
+        frame: &[u8],
+        received: devworks_core::services::desktop::ControlEpoch,
+    ) -> devworks_core::gateway::CommandOutcome {
         let operation = "approvals.record_human_decision";
         if !self.gate.after {
             self.gate.wait(operation, frame);
         }
-        let out = self.inner.human_decision(frame);
+        let out = self.inner.human_decision(frame, received);
         if self.gate.after {
             self.gate.wait(operation, frame);
         }
@@ -462,12 +469,13 @@ impl Backend for Gated {
     fn delete_repository(
         &self,
         reviewed: &devworks_core::authority::deletion::DeletionPreview,
+        received: devworks_core::services::desktop::ControlEpoch,
     ) -> Result<devworks_core::authority::destructive::RemovalOutcome, String> {
         let operation = "delete_repository";
         if !self.gate.after {
             self.gate.wait(operation, b"{}");
         }
-        let out = self.inner.delete_repository(reviewed);
+        let out = self.inner.delete_repository(reviewed, received);
         if self.gate.after {
             self.gate.wait(operation, b"{}");
         }
@@ -633,9 +641,16 @@ impl Backend for LoseAcks {
             .unwrap(),
         )
     }
-    fn human_decision(&self, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
+    fn control_epoch(&self) -> devworks_core::services::desktop::ControlEpoch {
+        self.inner.control_epoch()
+    }
+    fn human_decision(
+        &self,
+        frame: &[u8],
+        received: devworks_core::services::desktop::ControlEpoch,
+    ) -> devworks_core::gateway::CommandOutcome {
         if self.operation != "approvals.record_human_decision" {
-            return self.inner.human_decision(frame);
+            return self.inner.human_decision(frame, received);
         }
         self.frames.lock().unwrap().push(frame.to_vec());
         let lose = self
@@ -643,7 +658,7 @@ impl Backend for LoseAcks {
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok();
         if !lose || !self.requests {
-            let out = self.inner.human_decision(frame);
+            let out = self.inner.human_decision(frame, received);
             if !lose {
                 return out;
             }
