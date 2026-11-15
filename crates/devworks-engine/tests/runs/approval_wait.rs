@@ -468,6 +468,37 @@ struct Takeover {
 }
 
 async fn takeover(fx: &Fx, calls: usize) -> Takeover {
+    let wire = Arc::new(HeldWire::new(
+        "desktop_request_control_command",
+        "{}",
+        calls,
+    ));
+    let (app, context, primary, arguments) = takeover_with(fx, wire.clone()).await;
+    *wire.call.lock().unwrap() = (
+        "desktop_request_control_command".into(),
+        arguments.to_string(),
+    );
+    Takeover {
+        app,
+        wire,
+        context,
+        primary,
+        arguments,
+    }
+}
+
+/// A booted runtime whose provider is `wire`, with a scripted desktop, the host's own authority
+/// and the desktop takeover tool selected for agents; the agent's context and record; and the
+/// takeover arguments.
+pub(super) async fn takeover_with(
+    fx: &Fx,
+    wire: Arc<dyn StreamingHttp>,
+) -> (
+    Arc<devworks_engine::Runtime>,
+    InvocationContext,
+    AgentRecord,
+    Value,
+) {
     let descriptor = devworks_core::settings::catalog::descriptor("tools.overrides").unwrap();
     let schema = descriptor.schema_ref();
     fx.tx(move |_, tx| {
@@ -481,11 +512,6 @@ async fn takeover(fx: &Fx, calls: usize) -> Takeover {
         )?;
         Ok(())
     });
-    let wire = Arc::new(HeldWire::new(
-        "desktop_request_control_command",
-        "{}",
-        calls,
-    ));
     let app = runtime_with(
         fx,
         Arc::new(Counting {
@@ -493,7 +519,7 @@ async fn takeover(fx: &Fx, calls: usize) -> Takeover {
             submissions: Arc::new(AtomicUsize::new(0)),
             real: Some((fx.store.clone(), fx.h.clock())),
         }),
-        wire.clone(),
+        wire,
         |composed| {
             composed.config.desktop = Some(devworks_engine::runtime::DesktopComposition {
                 platform: Arc::new(ScriptedDesktop),
@@ -515,17 +541,7 @@ async fn takeover(fx: &Fx, calls: usize) -> Takeover {
     let arguments = json!({"desktopId": desktop["desktopId"],
         "expectedRevision": desktop["revision"], "reason": "Test the local UI",
         "leaseMs": "30000"});
-    *wire.call.lock().unwrap() = (
-        "desktop_request_control_command".into(),
-        arguments.to_string(),
-    );
-    Takeover {
-        app,
-        wire,
-        context,
-        primary,
-        arguments,
-    }
+    (app, context, primary, arguments)
 }
 
 /// The JSON object (anywhere in `value`) that has a `desktopId`.
@@ -581,7 +597,7 @@ fn tool_results(wire: &HeldWire) -> Vec<(String, String)> {
 }
 
 /// The approval and operation a tool call was answered with, from its durable response.
-fn answered(fx: &Fx, context: &InvocationContext, call: &str) -> (Id, OperationId) {
+pub(super) fn answered(fx: &Fx, context: &InvocationContext, call: &str) -> (Id, OperationId) {
     let session = context.session_id().unwrap().clone();
     let linked = read(&*fx.store, |s| {
         s.sessions().linked_operations(&session, 500)

@@ -12,11 +12,20 @@ const SUMMARY: &str = "SUMMARY-OF-THE-WORK-SO-FAR";
 /// Each generation answers with this marker padded to about 64,000 estimated tokens.
 const LONG_ANSWER: &str = "LONG-ANSWER";
 
-/// Answers a compaction request with [`SUMMARY`] and every other request with a long answer.
-/// Every request body is kept.
+fn long_answer() -> String {
+    format!("{LONG_ANSWER} {}", "x".repeat(256 * 1024))
+}
+
+/// Answers a compaction request with the next of `summaries`, then [`SUMMARY`], and every other
+/// request with the next of `answers`, then a long answer. With `crash`, a compaction request
+/// panics the worker that sends it, as a process that stops mid-request would leave it. Every
+/// request body is kept.
 #[derive(Default)]
 struct CompactionWire {
     bodies: Mutex<Vec<String>>,
+    summaries: Mutex<std::collections::VecDeque<String>>,
+    answers: Mutex<std::collections::VecDeque<String>>,
+    crash: AtomicBool,
 }
 impl StreamingHttp for CompactionWire {
     fn open(
@@ -26,12 +35,23 @@ impl StreamingHttp for CompactionWire {
         _: &Cancellation,
     ) -> Result<Box<dyn HttpStream>, TransportError> {
         let body = String::from_utf8(request.body.clone().unwrap_or_default()).unwrap();
-        let text = if body.contains(COMPACTION_REQUEST) {
-            SUMMARY.to_owned()
-        } else {
-            format!("{LONG_ANSWER} {}", "x".repeat(256 * 1024))
-        };
+        let compaction = body.contains(COMPACTION_REQUEST);
         self.bodies.lock().unwrap().push(body);
+        if compaction && self.crash.load(Ordering::SeqCst) {
+            panic!("the process stops while the compaction request runs");
+        }
+        let text = if compaction {
+            self.summaries.lock().unwrap().pop_front()
+        } else {
+            self.answers.lock().unwrap().pop_front()
+        }
+        .unwrap_or_else(|| {
+            if compaction {
+                SUMMARY.to_owned()
+            } else {
+                long_answer()
+            }
+        });
         let delta =
             json!({"choices":[{"index":0,"delta":{"content":text},"finish_reason":"stop"}]});
         Ok(Box::new(Body(Some(
@@ -41,7 +61,50 @@ impl StreamingHttp for CompactionWire {
 }
 
 async fn compaction_runtime(fx: &Fx, wire: Arc<CompactionWire>) -> Arc<devworks_engine::Runtime> {
-    let mut composed = composition(fx, None, Arc::new(FakePower::default()));
+    runtime_on(fx, wire, Arc::new(FakeHost::default())).await
+}
+
+/// A host process with an identity, so that a later boot can tell it has stopped.
+#[derive(Default)]
+struct StoppingHost(FakeHost);
+impl ProcessHost for StoppingHost {
+    fn platform(&self) -> &'static str {
+        self.0.platform()
+    }
+    fn environment(&self) -> Vec<(String, String)> {
+        self.0.environment()
+    }
+    fn spawn(&self, spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessError> {
+        self.0.spawn(spec)
+    }
+    fn current_identity(&self) -> Option<NativeIdentity> {
+        Some(NativeIdentity {
+            pid: 4343,
+            birth: "stopping-host".into(),
+            group: None,
+        })
+    }
+    /// Every earlier boot's process has stopped.
+    fn probe(&self, identity: &NativeIdentity) -> Probe {
+        self.0.probe(identity)
+    }
+    fn terminate(&self, identity: &NativeIdentity) -> Probe {
+        self.0.terminate(identity)
+    }
+}
+
+async fn runtime_on(
+    fx: &Fx,
+    wire: Arc<CompactionWire>,
+    host: Arc<dyn ProcessHost>,
+) -> Arc<devworks_engine::Runtime> {
+    let mut composed = composition_with(
+        fx,
+        None,
+        Arc::new(FakePower::default()),
+        Arc::new(Authority),
+        host,
+    );
     let connections = Arc::new(
         devworks_core::services::router::connections::ConnectionService::new(
             fx.h.ids.clone(),
@@ -87,13 +150,21 @@ fn set_threshold(fx: &Fx, percent: i64) {
         .unwrap()
         .schema_ref();
     fx.tx(move |_, tx| {
+        // Keeps the workspace's other settings.
+        let current = tx
+            .configuration()
+            .current(&ConfigScope::Workspace, "settings")?;
+        let mut body = current
+            .as_ref()
+            .map_or_else(|| json!({"values": {}}), |current| current.body.clone());
+        body["values"]["agents.compactionThresholdPercent"] =
+            json!({"schema": schema, "value": percent});
         tx.configuration().append_revision(
             &ConfigScope::Workspace,
             "settings",
+            current.map_or(1, |current| current.revision),
             1,
-            1,
-            json!({"values": {"agents.compactionThresholdPercent": {"schema": schema,
-                "value": percent}}}),
+            body,
         )?;
         Ok(())
     });
@@ -301,4 +372,416 @@ fn a_context_under_the_threshold_is_not_compacted() {
     assert!(turn.epochs.is_empty(), "{:?}", turn.epochs);
     assert!(turn.compacted_tokens.is_none());
     assert!(turn.tokens_after > turn.tokens_before);
+}
+
+fn in_runtime(test: impl AsyncFnOnce()) {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(test());
+}
+
+async fn shut_down(app: Arc<devworks_engine::Runtime>) {
+    Arc::try_unwrap(app)
+        .ok()
+        .expect("runtime has one owner")
+        .shutdown()
+        .await;
+}
+
+async fn run_turn(
+    app: &Arc<devworks_engine::Runtime>,
+    context: &InvocationContext,
+    primary: &devworks_core::protocol::records::AgentRecord,
+) -> LaunchEnd {
+    let (_stop_tx, stop) = tokio::sync::watch::channel(false);
+    tokio::time::timeout(
+        Duration::from_secs(180),
+        NativeAgentTurnExecutor::new(app).run(context.clone(), primary.clone(), stop),
+    )
+    .await
+    .expect("the agent turn did not end within the bound")
+}
+
+/// The context epochs the session's transcript records.
+fn epochs(fx: &Fx, session_id: &Id) -> Vec<(i64, ContextChangeReason)> {
+    read(&*fx.store, |s| s.sessions().entries(session_id, 0, 500))
+        .into_iter()
+        .filter_map(
+            |entry| match serde_json::from_value::<TranscriptBody>(entry.body).unwrap() {
+                TranscriptBody::ContextEpochChanged {
+                    next_epoch, reason, ..
+                } => Some((next_epoch.get(), reason)),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
+/// The compaction requests the host recorded, by ID.
+fn compaction_requests(fx: &Fx) -> Vec<Id> {
+    read(&*fx.store, |s| s.router().route_requests(None, 100))
+        .into_iter()
+        .map(|request| request.request_id)
+        .filter(|id| id.as_str().starts_with("agent-compaction-"))
+        .collect()
+}
+
+/// After one completed turn under a large window: a window at which the next request is 60%
+/// full and a 50% threshold.
+async fn over_the_threshold(
+    fx: &Fx,
+    app: &Arc<devworks_engine::Runtime>,
+    context: &InvocationContext,
+    primary: &devworks_core::protocol::records::AgentRecord,
+) {
+    set_context_window(fx, 10_000_000);
+    completed_turn(app, context, primary).await;
+    let (head, _, _) = app
+        .recover_native_context_head(context, context.session_id().unwrap())
+        .unwrap()
+        .unwrap();
+    let tokens = devworks_engine::agent_turns::context_tokens(app, context, &head, 0).unwrap();
+    set_context_window(fx, tokens * 100 / 60);
+    set_threshold(fx, 50);
+}
+
+/// Claims the root's current activation after a restart and binds the primary agent's context
+/// to it: the earlier boot's activation no longer runs turns.
+fn bind_after_restart(
+    fx: &Fx,
+) -> (
+    InvocationContext,
+    devworks_core::protocol::records::AgentRecord,
+) {
+    applied(&fx.resume(&fx.user, "root-i"));
+    let activation = fx.launch("compaction-after-restart");
+    let host = principal(&*fx.store, "compaction-host", PrincipalKind::Host);
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let (execution_id, epoch) = (activation.id.clone(), activation.owner_epoch);
+    let primary = fx.tx(move |_, tx| {
+        agents
+            .materialize_primary(tx, &host, &execution_id, epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("primary: {error:?}")))
+    });
+    let assignment = read(&*fx.store, |s| s.runs().assignment(&primary.assignment_id)).unwrap();
+    let session = read(&*fx.store, |s| s.sessions().session(&assignment.session_id)).unwrap();
+    let context = devworks_core::context::HostIngress::new(&*fx.store)
+        .context(
+            session.agent_id.clone(),
+            PrincipalKind::Agent,
+            id("compaction-invocation"),
+            id("compaction-ingress"),
+            devworks_core::protocol::Counter::new(fx.store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(session.id.clone())
+        .with_lineage(
+            session.project_id.clone(),
+            session.root_id.clone(),
+            Some(primary.assignment_id.clone()),
+        )
+        .with_activation(activation.id.clone(), epoch);
+    (context, primary)
+}
+
+#[test]
+fn a_restart_between_compaction_admission_and_epoch_publication_compacts_after_the_restart() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let (session_id, admitted) = {
+        let fx = &fx;
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                let wire = Arc::new(CompactionWire::default());
+                let app = runtime_on(fx, wire.clone(), Arc::new(StoppingHost::default())).await;
+                let (context, primary) = pinned_agent_session(fx);
+                let session_id = context.session_id().unwrap().clone();
+                over_the_threshold(fx, &app, &context, &primary).await;
+                // The compaction request is admitted and sent; the process stops before its
+                // summary arrives, so no epoch is published.
+                wire.crash.store(true, Ordering::SeqCst);
+                let end = run_turn(&app, &context, &primary).await;
+                assert!(
+                    !matches!(
+                        end,
+                        LaunchEnd::Finished {
+                            outcome: ActivationOutcome::Completed,
+                            ..
+                        }
+                    ),
+                    "{end:?}"
+                );
+                let admitted = compaction_requests(fx);
+                assert_eq!(admitted.len(), 1, "{admitted:?}");
+                assert!(epochs(fx, &session_id).is_empty());
+                shut_down(app).await;
+                (session_id, admitted)
+            })
+    };
+    // The next boot opens the store again.
+    let (h, store) = fx.into_parts();
+    drop(store);
+    let store = h.open();
+    let fx = Fx::over(h, store);
+    in_runtime(async || {
+        let wire = Arc::new(CompactionWire::default());
+        let app = runtime_on(&fx, wire.clone(), Arc::new(StoppingHost::default())).await;
+        // Boot recovery settles the stopped boot's attempt as an unknown tail.
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while !read(&*fx.store, |s| {
+            s.runs().inference_quiescent(&RootId(id("root-i")))
+        }) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{:?}",
+                read(&*fx.store, |s| s.usage().inference_attempts(
+                    &UsageAttemptFilter::default(),
+                    None,
+                    100
+                ))
+                .iter()
+                .map(|attempt| (&attempt.request_id, &attempt.state))
+                .collect::<Vec<_>>()
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let (context, primary) = bind_after_restart(&fx);
+        let end = run_turn(&app, &context, &primary).await;
+        assert!(
+            matches!(
+                end,
+                LaunchEnd::Finished {
+                    outcome: ActivationOutcome::Completed,
+                    ..
+                }
+            ),
+            "{end:?}"
+        );
+        assert!(
+            matches!(
+                epochs(&fx, &session_id).as_slice(),
+                [(1, ContextChangeReason::Compaction)]
+            ),
+            "{:?}",
+            epochs(&fx, &session_id)
+        );
+        let bodies = wire.bodies.lock().unwrap().clone();
+        assert_eq!(
+            bodies.len(),
+            2,
+            "a compaction request, then the turn's request"
+        );
+        assert!(bodies[0].contains(COMPACTION_REQUEST));
+        assert!(bodies[1].contains(SUMMARY) && !bodies[1].contains(LONG_ANSWER));
+        // The restarted compaction is its own request: the stopped one ended with an unknown
+        // tail, which a replay would return again instead of a summary.
+        let requests = compaction_requests(&fx);
+        assert_eq!(requests.len(), 2, "{requests:?}");
+        assert!(requests.contains(&admitted[0]));
+        shut_down(app).await;
+    });
+}
+
+#[test]
+fn a_context_whose_summary_alone_reaches_the_threshold_is_compacted_again() {
+    const LONG_SUMMARY: &str = "LONG-SUMMARY";
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    in_runtime(async || {
+        let wire = Arc::new(CompactionWire::default());
+        let app = compaction_runtime(&fx, wire.clone()).await;
+        let (context, primary) = pinned_agent_session(&fx);
+        let session_id = context.session_id().unwrap().clone();
+        over_the_threshold(&fx, &app, &context, &primary).await;
+        // The first summary alone is about 60% of the window; later answers are short.
+        wire.summaries
+            .lock()
+            .unwrap()
+            .push_back(format!("{LONG_SUMMARY} {}", "y".repeat(256 * 1024)));
+        wire.answers
+            .lock()
+            .unwrap()
+            .extend(["short".to_owned(), "short".to_owned()]);
+        completed_turn(&app, &context, &primary).await;
+        let (head, _, _) = app
+            .recover_native_context_head(&context, &session_id)
+            .unwrap()
+            .unwrap();
+        let tokens =
+            devworks_engine::agent_turns::context_tokens(&app, &context, &head, 0).unwrap();
+        let window = read(&*fx.store, |s| {
+            s.router().route_model(&id("approval-wait-model"))
+        })
+        .unwrap()
+        .context_tokens
+        .unwrap();
+        assert!(tokens * 2 >= window, "{tokens} of {window}");
+        completed_turn(&app, &context, &primary).await;
+        let bodies = wire.bodies.lock().unwrap().clone();
+        // The first turn's request; the second turn's compaction request and its request from
+        // the long summary; the third turn's compaction request and its request.
+        assert_eq!(bodies.len(), 5, "{:?}", epochs(&fx, &session_id));
+        assert!(bodies[3].contains(COMPACTION_REQUEST) && bodies[3].contains(LONG_SUMMARY));
+        assert!(bodies[4].contains(SUMMARY) && !bodies[4].contains(LONG_SUMMARY));
+        assert!(
+            matches!(
+                epochs(&fx, &session_id).as_slice(),
+                [
+                    (1, ContextChangeReason::Compaction),
+                    (2, ContextChangeReason::Compaction)
+                ]
+            ),
+            "{:?}",
+            epochs(&fx, &session_id)
+        );
+        shut_down(app).await;
+    });
+}
+
+/// The first request gets one call to the desktop takeover tool, which needs approval. The
+/// first compaction request moves the call's operation to a terminal state, as a person's
+/// rejection would, without publishing its final update. A compaction request gets
+/// [`SUMMARY`]. Every other
+/// request gets a long answer. Every request body is kept.
+struct SettlingWire {
+    store: Arc<dyn ApplicationStore>,
+    arguments: Mutex<String>,
+    operation: Mutex<Option<OperationId>>,
+    bodies: Mutex<Vec<String>>,
+}
+impl StreamingHttp for SettlingWire {
+    fn open(
+        &self,
+        request: &HttpRequest,
+        _: &StreamLimits,
+        _: &Cancellation,
+    ) -> Result<Box<dyn HttpStream>, TransportError> {
+        let body = String::from_utf8(request.body.clone().unwrap_or_default()).unwrap();
+        let compaction = body.contains(COMPACTION_REQUEST);
+        let first = {
+            let mut bodies = self.bodies.lock().unwrap();
+            bodies.push(body);
+            bodies.len() == 1
+        };
+        let delta = if first {
+            let arguments = self.arguments.lock().unwrap().clone();
+            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-held-0",
+                "type":"function","function":{"name":"desktop_request_control_command",
+                "arguments":arguments}}]},"finish_reason":"tool_calls"}]})
+        } else {
+            let text = if compaction {
+                if let Some(operation) = self.operation.lock().unwrap().take() {
+                    write(self.store.as_ref(), move |tx| {
+                        let current = tx.operations().operation(&operation)?.unwrap();
+                        tx.operations().transition(
+                            &operation,
+                            current.revision,
+                            None,
+                            devworks_core::protocol::OperationState::CancelledBeforeDispatch,
+                            None,
+                        )?;
+                        Ok(())
+                    })
+                    .unwrap();
+                }
+                SUMMARY.to_owned()
+            } else {
+                long_answer()
+            };
+            json!({"choices":[{"index":0,"delta":{"content":text},"finish_reason":"stop"}]})
+        };
+        Ok(Box::new(Body(Some(
+            format!("data: {delta}\n\ndata: [DONE]\n\n").into_bytes(),
+        ))))
+    }
+}
+
+#[test]
+fn a_call_whose_operation_turns_terminal_during_the_summary_request_keeps_its_final_result() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    in_runtime(async || {
+        let wire = Arc::new(SettlingWire {
+            store: fx.store.clone(),
+            arguments: Mutex::new("{}".into()),
+            operation: Mutex::new(None),
+            bodies: Mutex::new(Vec::new()),
+        });
+        let (app, context, primary, arguments) =
+            super::approval_wait::takeover_with(&fx, wire.clone()).await;
+        *wire.arguments.lock().unwrap() = arguments.to_string();
+        let session_id = context.session_id().unwrap().clone();
+        // The call is answered ApprovalRequired; its operation awaits a person.
+        over_the_threshold(&fx, &app, &context, &primary).await;
+        let (_, operation) = super::approval_wait::answered(&fx, &context, "call-held-0");
+        *wire.operation.lock().unwrap() = Some(operation);
+
+        let end = run_turn(&app, &context, &primary).await;
+        assert!(
+            matches!(
+                end,
+                LaunchEnd::Finished {
+                    outcome: ActivationOutcome::Completed,
+                    ..
+                }
+            ),
+            "{end:?}"
+        );
+        assert!(
+            matches!(
+                epochs(&fx, &session_id).as_slice(),
+                [(1, ContextChangeReason::Compaction)]
+            ),
+            "{:?}",
+            epochs(&fx, &session_id)
+        );
+        let bodies = wire.bodies.lock().unwrap().clone();
+        assert_eq!(
+            bodies.len(),
+            4,
+            "two requests, a compaction request, a request"
+        );
+        assert!(bodies[2].contains(COMPACTION_REQUEST));
+        let next: Value = serde_json::from_str(&bodies[3]).unwrap();
+        let messages = next["messages"].as_array().unwrap();
+        assert!(
+            messages.iter().any(|message| message["tool_calls"]
+                .as_array()
+                .is_some_and(|calls| calls.iter().any(|call| call["id"] == "call-held-0"))),
+            "{messages:?}"
+        );
+        let result = messages
+            .iter()
+            .find(|message| message["role"] == "tool" && message["tool_call_id"] == "call-held-0")
+            .unwrap_or_else(|| panic!("no result for the call: {messages:?}"))["content"]
+            .to_string();
+        assert!(result.contains("ApprovalRequired"), "{result}");
+        assert!(result.contains("CancelledBeforeDispatch"), "{result}");
+        assert!(bodies[3].contains(SUMMARY) && !bodies[3].contains(LONG_ANSWER));
+
+        // The next compaction summarizes the settled call with the rest: its update was
+        // published before that summary request, so the call is not kept again.
+        let end = run_turn(&app, &context, &primary).await;
+        let bodies = wire.bodies.lock().unwrap().clone();
+        assert!(
+            matches!(
+                end,
+                LaunchEnd::Finished {
+                    outcome: ActivationOutcome::Completed,
+                    ..
+                }
+            ),
+            "{end:?} after {} requests",
+            bodies.len()
+        );
+        assert_eq!(bodies.len(), 6, "a compaction request, then a request");
+        assert!(bodies[4].contains(COMPACTION_REQUEST) && bodies[4].contains("call-held-0"));
+        assert!(!bodies[5].contains("call-held-0"), "{}", bodies[5]);
+        shut_down(app).await;
+    });
 }

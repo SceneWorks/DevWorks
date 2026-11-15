@@ -7,7 +7,7 @@ use devworks_core::{
     ports::storage::*,
     protocol::{
         Counter, Id, OperationState,
-        provider::{ArtifactRef, ContextChangeReason, NativeBinding},
+        provider::{ArtifactRef, ContextChangeReason, NativeBinding, TranscriptBody},
     },
     providers::context::{ContentBlock, Message, MessageRole, ProviderContext},
     services::artifacts::{ArtifactService, host::HostArtifactPublication, version_ref},
@@ -180,8 +180,10 @@ pub(crate) fn omitted_native(
     Ok((next, omitted))
 }
 
-/// Calls whose linked operation can still change: a later update is appended to their tool
-/// result, so a compacted context keeps the call and its result.
+/// Calls whose tool result can still receive an update: the linked operation can still change,
+/// or it reached a terminal state whose update the transcript does not hold yet (an operation
+/// can finish while the summary request runs). A compacted context keeps the call and its
+/// result, so that update is appended to them.
 fn outstanding_calls(
     store: &dyn ApplicationStore,
     ctx: &InvocationContext,
@@ -190,6 +192,7 @@ fn outstanding_calls(
     let linked = crate::tool_turn::linked_operations(store, ctx, session_id)?;
     read_snapshot(store, &ReadOptions::default(), |read| {
         let mut outstanding = BTreeSet::new();
+        let mut terminal = Vec::new();
         for call in &linked {
             let Some(operation_id) = &call.operation_id else {
                 continue;
@@ -198,17 +201,86 @@ fn outstanding_calls(
                 .operations()
                 .operation(operation_id)?
                 .ok_or(StorageError::ScopeDenied)?;
-            if !matches!(
+            if matches!(
                 operation.state,
                 OperationState::ObservedComplete
                     | OperationState::Failed
                     | OperationState::CancelledBeforeDispatch
             ) {
+                terminal.push((call, operation.revision));
+            } else {
+                outstanding.insert(call.native_call_id.clone());
+            }
+        }
+        let published = published_updates(read, session_id, &terminal)?;
+        for (call, revision) in terminal {
+            let operation_id = call
+                .operation_id
+                .as_ref()
+                .ok_or(StorageError::ScopeDenied)?;
+            if !published.contains(&(operation_id.0.as_str().to_owned(), revision)) {
                 outstanding.insert(call.native_call_id.clone());
             }
         }
         Ok(outstanding)
     })
+}
+
+/// The operation updates (operation and revision) the transcript holds after the first response
+/// of `calls`, read with the same bound as recording an update.
+fn published_updates(
+    read: &dyn ReadSnapshot,
+    session_id: &Id,
+    calls: &[(&StoredToolCall, i64)],
+) -> Result<BTreeSet<(String, i64)>, StorageError> {
+    let mut published = BTreeSet::new();
+    let Some(first) = calls
+        .iter()
+        .filter_map(|(call, _)| call.response_sequence)
+        .min()
+    else {
+        return Ok(published);
+    };
+    let last = read
+        .sessions()
+        .session(session_id)?
+        .ok_or(StorageError::ScopeDenied)?
+        .last_durable_sequence();
+    let mut position = first;
+    while position < last {
+        if position - first >= 10_000 {
+            return Err(StorageError::InvalidRecord(
+                "operation update transcript exceeds scan bound".into(),
+            ));
+        }
+        let page = read.sessions().entries(session_id, position, 500)?;
+        if page.is_empty() {
+            return Err(StorageError::InvalidRecord(
+                "operation update transcript gap".into(),
+            ));
+        }
+        for entry in page {
+            if entry.sequence != position + 1 {
+                return Err(StorageError::InvalidRecord(
+                    "operation update transcript gap".into(),
+                ));
+            }
+            position = entry.sequence;
+            if entry.kind != "OperationUpdate" {
+                continue;
+            }
+            if let TranscriptBody::OperationUpdate {
+                operation_id,
+                revision,
+                ..
+            } = serde_json::from_value(entry.body)
+                .map_err(|error| StorageError::InvalidRecord(error.to_string()))?
+            {
+                published.insert((operation_id.0.as_str().to_owned(), revision.get()));
+            }
+        }
+    }
+    Ok(published)
 }
 
 /// The block carrying an earlier compaction summary, which the next compaction replaces.
