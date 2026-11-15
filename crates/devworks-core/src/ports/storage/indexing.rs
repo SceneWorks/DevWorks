@@ -290,6 +290,13 @@ pub struct EdgeTargetUpdate {
     pub payload: Value,
 }
 
+/// An edge as one overlay view links it: the layer that stores it and its linked endpoints.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewLink {
+    pub generation_id: Id,
+    pub link: EdgeTargetUpdate,
+}
+
 /// An immutable view: one repository's baseline plus optional branch and worktree layers.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredView {
@@ -518,6 +525,10 @@ pub trait IndexRepository: IndexRead {
     fn reclaim_generation(&mut self, generation: &Id, limit: u32) -> Result<u64, StorageError>;
     /// Records an immutable view.
     fn insert_view(&mut self, view: &StoredView) -> Result<(), StorageError>;
+    /// Records the links of an overlay view (one with a branch or worktree layer): each edge of
+    /// a visible unit whose endpoints or payload the view's linker changes, keyed by the layer
+    /// that stores the edge. Recorded once per view, also when there are none.
+    fn insert_view_links(&mut self, view: &Id, links: &[ViewLink]) -> Result<(), StorageError>;
     /// Moves the repository's published pointer to `view` (already inserted) when the pointer
     /// is still at `expected_revision` (0: none published); returns the new revision. A stale
     /// revision is a `Source` revision conflict: a slower builder never overwrites a newer

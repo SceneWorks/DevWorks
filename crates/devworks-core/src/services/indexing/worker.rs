@@ -833,6 +833,8 @@ pub struct Housekeeping {
     pub expired_read_pins: usize,
     /// Superseded overlay views retired after their last browsing lease ended.
     pub retired_read_views: usize,
+    /// Overlay views published without stored links that this pass linked.
+    pub linked_views: usize,
 }
 
 pub struct IndexWorker {
@@ -1139,6 +1141,37 @@ impl IndexWorker {
                 Ok(true)
             })?;
             report.retired_read_views += usize::from(removed);
+        }
+        // An overlay view published before its links were stored (by an earlier build) gets
+        // them here, a bounded batch per pass.
+        let unlinked = read_snapshot(&*self.env.store, &ReadOptions::default(), |s| {
+            s.graph().graph_unlinked_views(None, 16)
+        })?;
+        for view in unlinked.items {
+            if stop() {
+                return Ok(report);
+            }
+            let layers: Vec<Id> = [
+                view.worktree_id.clone(),
+                view.branch_id.clone(),
+                Some(view.baseline_id.clone()),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            let repository = view.repository_id.clone();
+            let links = read_snapshot(&*self.env.store, &ReadOptions::default(), |s| {
+                view_links(s.indexing(), &repository, &layers)
+            })?;
+            let linked = run_write(&*self.env.store, WriteOptions::default(), move |tx| {
+                // The view may have been retired meanwhile.
+                if tx.indexing().view(&view.view_id)?.as_ref() != Some(&view) {
+                    return Ok(false);
+                }
+                tx.indexing().insert_view_links(&view.view_id, &links)?;
+                Ok(true)
+            })?;
+            report.linked_views += usize::from(linked);
         }
         let due = read_snapshot(&*self.env.store, &ReadOptions::default(), |s| {
             s.indexing().overlays_due(self.env.now(), 64)
@@ -2564,6 +2597,145 @@ pub(crate) fn link_view_edges(
     edges: Vec<StoredEdge>,
 ) -> Result<Vec<StoredEdge>, StorageError> {
     ViewLinker::default().link(read, repository, layers, unit, edges)
+}
+
+/// An index read of one view's layers with its whole-unit masking: a unit's nodes and edges are
+/// read only from the highest layer that mentions the unit, and only when that layer replaces
+/// it. This is what the graph reader links an inherited edge against.
+struct Masked<'a> {
+    read: &'a dyn IndexRead,
+    layers: &'a [Id],
+}
+impl Masked<'_> {
+    fn visible_in(&self, generation: &Id, unit_key: &str) -> Result<bool, StorageError> {
+        for layer in self.layers {
+            if let Some(unit) = self.read.unit(layer, unit_key)? {
+                return Ok(layer == generation && unit.action == UNIT_REPLACE);
+            }
+        }
+        Ok(false)
+    }
+}
+macro_rules! forward_index_reads {
+    ($($name:ident($($arg:ident:$ty:ty),*) -> $out:ty;)*) => {$ (
+        fn $name(&self, $($arg:$ty),*) -> Result<$out, StorageError> { self.read.$name($($arg),*) }
+    )*};
+}
+impl IndexRead for Masked<'_> {
+    forward_index_reads! {
+        source_config(scope_key:&str) -> Option<StoredSourceConfig>;
+        repository_source(repository:&Id) -> Option<StoredRepositorySource>;
+        repository_at(location:&str) -> Option<Id>;
+        worktrees(repository:&Id) -> Vec<StoredWorktree>;
+        run(id:&Id) -> Option<StoredIndexRun>;
+        runs(filter:&IndexRunFilter,after:Option<&RunPosition>,limit:u16) -> Vec<StoredIndexRun>;
+        active_run(repository:&Id,overlay:Option<&Id>) -> Option<StoredIndexRun>;
+        batch_runs(batch:&Id) -> Vec<StoredIndexRun>;
+        latest_run(repository:&Id,overlay:Option<&Id>) -> Option<StoredIndexRun>;
+        claimable_runs(now_ms:i64,limit:u16) -> Vec<StoredIndexRun>;
+        running_runs(limit:u16) -> Vec<StoredIndexRun>;
+        generation(id:&Id) -> Option<StoredGeneration>;
+        generations(repository:&Id) -> Vec<StoredGeneration>;
+        generation_in_view(generation:&Id) -> bool;
+        generations_in_state(state:&str,limit:u16) -> Vec<StoredGeneration>;
+        units(generation:&Id,after:Option<&str>,limit:u16) -> Vec<StoredUnit>;
+        unit(generation:&Id,unit_key:&str) -> Option<StoredUnit>;
+        nodes_named(generation:&Id,name:&str,limit:u16) -> Vec<StoredNode>;
+        nodes_qualified(generation:&Id,qualified_name:&str,limit:u16) -> Vec<StoredNode>;
+        published(repository:&Id) -> Option<StoredPublished>;
+        view(view:&Id) -> Option<StoredView>;
+        live_pins(view:&Id,now_ms:i64) -> i64;
+        overlay(id:&Id) -> Option<StoredOverlay>;
+        overlay_for(repository:&Id,worktree:&Id) -> Option<StoredOverlay>;
+        overlay_at(repository:&Id,commit:&str) -> Option<StoredOverlay>;
+        overlays(repository:&Id) -> Vec<StoredOverlay>;
+        overlays_due(now_ms:i64,limit:u16) -> Vec<StoredOverlay>;
+        prunable_ref_overlays(ended_before_ms:i64,keep:u32,limit:u16) -> Vec<StoredOverlay>;
+    }
+    fn nodes(&self, generation: &Id, unit_key: &str) -> Result<Vec<StoredNode>, StorageError> {
+        if self.visible_in(generation, unit_key)? {
+            self.read.nodes(generation, unit_key)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+    fn edges(&self, generation: &Id, unit_key: &str) -> Result<Vec<StoredEdge>, StorageError> {
+        if self.visible_in(generation, unit_key)? {
+            self.read.edges(generation, unit_key)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+}
+
+/// The links of an overlay view of `layers` (highest first): every edge of a visible unit that
+/// the graph reader relinks against the composed view (one of this repository, or naming no
+/// other one) and whose endpoints or payload that changes, with the layer that stores it.
+/// Empty for a single-layer view, whose stored edges are already its links.
+pub fn view_links(
+    read: &dyn IndexRead,
+    repository: &Id,
+    layers: &[Id],
+) -> Result<Vec<ViewLink>, StorageError> {
+    if layers.len() < 2 {
+        return Ok(Vec::new());
+    }
+    // The highest layer that mentions each unit decides it.
+    let mut units = BTreeMap::<String, Option<Id>>::new();
+    for layer in layers {
+        let mut after: Option<String> = None;
+        loop {
+            let page = read.units(layer, after.as_deref(), MAX_PAGE)?;
+            for unit in &page {
+                units
+                    .entry(unit.unit_key.clone())
+                    .or_insert_with(|| (unit.action == UNIT_REPLACE).then(|| layer.clone()));
+            }
+            if page.len() < usize::from(MAX_PAGE) {
+                break;
+            }
+            after = page.last().map(|u| u.unit_key.clone());
+        }
+    }
+    let masked = Masked { read, layers };
+    let mut linker = ViewLinker::default();
+    let mut links = Vec::new();
+    for (unit, layer) in units {
+        let Some(layer) = layer else {
+            continue;
+        };
+        let stored: Vec<StoredEdge> = read
+            .edges(&layer, &unit)?
+            .into_iter()
+            .filter(|e| {
+                e.payload
+                    .get("targetRepositoryId")
+                    .is_none_or(|id| id.as_str() == Some(repository.as_str()))
+            })
+            .collect();
+        if stored.is_empty() {
+            continue;
+        }
+        let linked = linker.link(&masked, repository.as_str(), layers, &unit, stored.clone())?;
+        for (before, after) in stored.into_iter().zip(linked) {
+            if before.source_node_id != after.source_node_id
+                || before.target_node_id != after.target_node_id
+                || before.payload != after.payload
+            {
+                links.push(ViewLink {
+                    generation_id: layer.clone(),
+                    link: EdgeTargetUpdate {
+                        unit_key: after.unit_key,
+                        edge_id: after.edge_id,
+                        source_node_id: after.source_node_id,
+                        target_node_id: after.target_node_id,
+                        payload: after.payload,
+                    },
+                });
+            }
+        }
+    }
+    Ok(links)
 }
 
 /// A reader's per-immutable-view cache. Reusing this across bounded pages avoids rescanning

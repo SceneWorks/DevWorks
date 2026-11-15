@@ -90,6 +90,8 @@ record_kinds! {
     GraphSourceCaptures,
     GraphTrust,
     GraphTrustChanges,
+    GraphViewLinkSets,
+    GraphViewLinks,
     HelpContents,
     HelpGenerations,
     HelpHead,

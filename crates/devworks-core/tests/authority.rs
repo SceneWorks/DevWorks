@@ -281,8 +281,11 @@ fn powershell_writers_are_held_unless_every_target_is_checked_exactly() {
         // A cmdlet reached through an alias or code the analysis does not read.
         "Set-Alias w New-Item; w /x/f",
         "New-Alias w Add-Content; w /x/f hi",
-        "iex 'ni /x/f'",
-        "Invoke-Expression 'Add-Content /x/f hi'",
+        "iex $code",
+        "Invoke-Expression \"ni $p\"",
+        "'ni /x/f' | iex",
+        "& ([scriptblock]::Create('ni /x/f'))",
+        "& ([System.Management.Automation.ScriptBlock]::Create('ac /x/f hi'))",
     ];
     // A drive mapped with `New-PSDrive` can point anywhere, a protected root included.
     cases.extend([
@@ -308,13 +311,312 @@ fn powershell_writers_are_held_unless_every_target_is_checked_exactly() {
         .filter(|s| !held(s))
         .map(|s| format!("not held: {s:?}"))
         .collect();
-    // The call and dot-source operators run the named cmdlet with the same arguments.
-    for script in ["& ni /x/f", "& 'Set-Content' /x/f hi", ". ni /x/f"] {
+    // The call and dot-source operators run the named cmdlet with the same arguments, and
+    // `Invoke-Expression` runs its one literal string as a script.
+    for script in [
+        "& ni /x/f",
+        "& 'Set-Content' /x/f hi",
+        ". ni /x/f",
+        "iex 'ni /x/f'",
+        "Invoke-Expression -Command 'Add-Content /x/f hi'",
+        "iex -C 'ni /x/f'",
+        "Invoke-Expression -Comm 'ni /x/f'",
+        "iex -Command:'ni /x/f'",
+    ] {
         let got = assess_command(&argv(&["pwsh", "-Command", script]), Some("/work"));
         let exact = matches!(&got, ShellAssessment::Destructive { plans, .. }
             if plans.len() == 1 && plans[0].kind == Truncate && plans[0].targets == ["/x/f"]);
         if !exact {
             missed.push(format!("not planned: {script:?}: {got:?}"));
+        }
+    }
+    assert!(missed.is_empty(), "{}", missed.join("\n"));
+}
+
+#[test]
+fn quoted_names_nested_scripts_and_powershell_patterns_are_planned_exactly_or_held() {
+    use DestructiveKind::{RemoveTree, Truncate, Unlink};
+    let assess = |a: &[&str]| assess_command(&argv(a), Some("/work"));
+    // (kind, targets, literal) of every plan.
+    let planned = |a: &[&str]| match assess(a) {
+        ShellAssessment::Destructive { plans, .. } => plans
+            .into_iter()
+            .map(|p| (p.kind, p.targets, p.literal))
+            .collect::<Vec<_>>(),
+        other => panic!("{a:?}: {other:?}"),
+    };
+    let sh = |s: &str| planned(&["sh", "-c", s]);
+    // POSIX: quoted or escaped wildcard characters name themselves; unquoted ones are a pattern.
+    assert_eq!(
+        sh("rm -rf '/x/a[1]'"),
+        [(RemoveTree, vec!["/x/a[1]".into()], true)]
+    );
+    assert_eq!(
+        sh("rm -rf /x/a\\[1\\]"),
+        [(RemoveTree, vec!["/x/a[1]".into()], true)]
+    );
+    assert_eq!(
+        sh("rm -f *.o \"/x/b?\""),
+        [
+            (Unlink, vec!["*.o".into()], false),
+            (Unlink, vec!["/x/b?".into()], true)
+        ]
+    );
+    // Quoted and unquoted wildcards in one word cannot be expressed as one pattern: held.
+    assert_eq!(
+        needs(&["sh", "-c", "rm -rf '/x/a['*"]),
+        InputNeeded::UnresolvedExpansion
+    );
+    // PowerShell: `-LiteralPath` names its wildcard characters; a pattern matches
+    // case-insensitively, so a removal or move with one is held (and still planned).
+    assert_eq!(
+        planned(&[
+            "pwsh",
+            "-Command",
+            "Remove-Item -LiteralPath '/x/a[1]' -Recurse"
+        ]),
+        [(RemoveTree, vec!["/x/a[1]".into()], true)]
+    );
+    for script in [
+        "Remove-Item -Recurse C:/work/devworks*",
+        "Remove-Item -Path /x/a? -Force",
+        "rm -r /x/[ab]",
+        "Move-Item /x/a* /y",
+        "Move-Item -Path /x/a* -Destination /y",
+    ] {
+        assert!(
+            matches!(
+                assess(&["pwsh", "-Command", script]),
+                ShellAssessment::NeedsInput(InputNeeded::UnresolvedTarget)
+            ),
+            "{script}"
+        );
+    }
+    // `eval` and `Invoke-Expression` run their literal words as a script.
+    assert_eq!(
+        sh("eval 'echo x >> /x/f'"),
+        [(Truncate, vec!["/x/f".into()], false)]
+    );
+    assert_eq!(
+        sh("eval echo x '>>' /x/f"),
+        [(Truncate, vec!["/x/f".into()], false)]
+    );
+    assert_eq!(
+        sh("eval 'rm -rf /x/repo'"),
+        [(RemoveTree, vec!["/x/repo".into()], false)]
+    );
+    assert_eq!(
+        planned(&["pwsh", "-Command", "Invoke-Expression 'Set-Content /x/f y'"]),
+        [(Truncate, vec!["/x/f".into()], false)]
+    );
+}
+
+#[test]
+fn git_pathspecs_and_first_pass_expansions_are_held_unless_checked_exactly() {
+    use DestructiveKind::EraseContents;
+    let assess = |a: &[&str]| assess_command(&argv(a), Some("/work"));
+    let held = |a: &[&str]| matches!(assess(a), ShellAssessment::NeedsInput(_));
+    let mut missed = Vec::new();
+    // Git matches pathspecs itself (`*` crosses `/`, magic such as `:(glob)`), quoted or not:
+    // a wildcard or magic pathspec is held.
+    for script in [
+        "git clean -fdx 'cache*'",
+        "git clean -fdx cache*",
+        "git clean -fdx -- \"*.db\"",
+        "git clean -fd 'a[1]'",
+        "git clean -fdx ':(glob)**/x'",
+        "git clean -fdx ':!keep'",
+        "git clean -fdx ':(icase)cache'",
+    ] {
+        if !held(&["sh", "-c", script]) {
+            missed.push(format!(
+                "not held: {script}: {:?}",
+                assess(&["sh", "-c", script])
+            ));
+        }
+    }
+    // A plain pathspec, or one made literal by `--literal-pathspecs`, is a path.
+    for (script, target) in [
+        ("git clean -fdx cache", "cache"),
+        ("git --literal-pathspecs clean -fdx 'a[1]'", "a[1]"),
+    ] {
+        match assess(&["sh", "-c", script]) {
+            ShellAssessment::Destructive { plans, .. }
+                if plans.len() == 1
+                    && plans[0].kind == EraseContents
+                    && plans[0].targets == [target] => {}
+            other => missed.push(format!("not planned: {script}: {other:?}")),
+        }
+    }
+    // `eval` runs its words after the shell expanded them: an unquoted glob can name files
+    // whose names are code, so only words the first pass leaves as written are reparsed.
+    for script in [
+        "eval \"rm -rf /x/cache\\ data\"",
+        "eval rm -rf /x/cache\\\\\\ data",
+        "eval rm -rf /outside/*",
+        "eval echo x '>>' /x/f?",
+        "eval rm -rf ~user/x",
+        "eval rm -rf /x/{a,b}",
+    ] {
+        if !held(&["sh", "-c", script]) {
+            missed.push(format!(
+                "not held: {script}: {:?}",
+                assess(&["sh", "-c", script])
+            ));
+        }
+    }
+    // `Invoke-Expression` takes one string: extra words or parameters are not modeled.
+    for script in [
+        "iex 'ni /x/f' extra",
+        "Invoke-Expression -Verbose 'ni /x/f'",
+        "iex \"ni $(Get-Location)/f\"",
+        // `-C` binds `-Command`; anything beyond the plain form is held.
+        "iex -C 'ac /x/f x' -Verbose",
+        "iex -Command:'ni /x/f' -ErrorAction Stop",
+        "iex -Command 'ni /x/f' 'more'",
+        "iex @a",
+        // A writer alias the structured analysis does not reach is held by the backstop.
+        "Write-Output 'ac /x/f x'",
+        "Write-Output 'ni /x/f'",
+        "Write-Output 'md /x/f'",
+        "Write-Output 'Add-Content /x/f x'",
+        "Write-Output 'New-Item /x/f'",
+    ] {
+        if !held(&["pwsh", "-Command", script]) {
+            missed.push(format!(
+                "not held: {script}: {:?}",
+                assess(&["pwsh", "-Command", script])
+            ));
+        }
+    }
+    // Shell options and variables that change glob matching (case, null/fail globs, `**`,
+    // extended globs, `noglob`, ignored names) hold every later glob target.
+    for script in [
+        "shopt -s nocaseglob; rm -rf /x/devworks*",
+        "shopt -s globstar && rm -rf /x/**/cache",
+        "set -f; rm -f /x/*.o",
+        "set -o noglob; rm -f /x/*",
+        "set -ef; echo x > /x/*.log",
+        "GLOBIGNORE='*.keep' rm -f /x/*",
+        "GLOBIGNORE=x; rm -f /x/*",
+        "setopt NO_CASE_GLOB; rm -rf /x/d*",
+        "unsetopt CASE_GLOB; rm -rf /x/d*",
+    ] {
+        if !held(&["sh", "-c", script]) {
+            missed.push(format!(
+                "not held: {script}: {:?}",
+                assess(&["sh", "-c", script])
+            ));
+        }
+    }
+    if !held(&["bash", "-O", "nocaseglob", "-c", "rm -rf /x/d*"]) {
+        missed.push("not held: bash -O nocaseglob -c 'rm -rf /x/d*'".to_owned());
+    }
+    // Options that leave globbing alone, or a glob before the change, are still planned.
+    for script in [
+        "set -euo pipefail; rm -f /x/*.o",
+        "set -x; rm -f /x/*.o",
+        "rm -f /x/*.o; shopt -s nullglob",
+        "shopt -s nocaseglob; rm -rf /x/plain",
+    ] {
+        if held(&["sh", "-c", script]) {
+            missed.push(format!(
+                "held: {script}: {:?}",
+                assess(&["sh", "-c", script])
+            ));
+        }
+    }
+    // A held source never drops the destination's plan (so a refused destination still
+    // blocks the step).
+    for (shell, script, target) in [
+        (
+            "sh",
+            "shopt -s nocaseglob; mv -f /outside/* /protected/file",
+            "/protected/file",
+        ),
+        ("pwsh", "Move-Item /x/a* /protected/file", "/protected/file"),
+        (
+            "sh",
+            "dd of=/protected/file conv=notrunc -x",
+            "/protected/file",
+        ),
+    ] {
+        let flag = if shell == "pwsh" { "-Command" } else { "-c" };
+        let a = devworks_core::authority::shell::analyze_command(
+            &argv(&[shell, flag, script]),
+            Some("/work"),
+            &[],
+        );
+        if !a.plans.iter().any(|p| p.targets == [target]) {
+            missed.push(format!("{target} not planned: {script}: {:?}", a.plans));
+        }
+    }
+    // Extended glob syntax (zsh `^`, `#`, `~`; ksh/bash `@( )`, `!( )`): after a glob option
+    // change, or under zsh (whose options can come from its startup files), such a target is
+    // held, and so is every later `eval` or nested shell script.
+    for (shell, script) in [
+        ("sh", "setopt EXTENDED_GLOB; eval 'rm -rf /parent/^work'"),
+        ("sh", "setopt EXTENDED_GLOB; rm -rf /parent/^work"),
+        ("sh", "setopt EXTENDED_GLOB; rm -rf /parent/a#"),
+        ("sh", "setopt EXTENDED_GLOB; rm -rf /parent/a~b"),
+        ("sh", "shopt -s extglob; rm -rf /parent/!(work)"),
+        ("sh", "shopt -s extglob; sh -c 'rm -rf /x/y'"),
+        ("zsh", "rm -rf /parent/^work"),
+        ("zsh", "rm -rf /parent/a#"),
+        ("zsh", "rm -rf /parent/a~b"),
+        ("zsh", "eval 'rm -rf /parent/^work'"),
+    ] {
+        if !held(&[shell, "-c", script]) {
+            missed.push(format!(
+                "not held: {shell} -c {script}: {:?}",
+                assess(&[shell, "-c", script])
+            ));
+        }
+    }
+    // The same characters are plain under sh with no option change, and a leading `~` is home.
+    for (shell, script) in [("sh", "rm -rf /parent/a^b"), ("zsh", "rm -rf ~/x")] {
+        if held(&[shell, "-c", script]) {
+            missed.push(format!(
+                "held: {shell} -c {script}: {:?}",
+                assess(&[shell, "-c", script])
+            ));
+        }
+    }
+    // Tilde expansion happens before `eval` joins its words (a home path can hold code).
+    for script in [
+        "eval rm -rf ~/x",
+        "eval echo x '>>' ~",
+        "eval rm -rf a:~/x",
+        "eval X=~/x rm -rf y",
+    ] {
+        if !held(&["sh", "-c", script]) {
+            missed.push(format!(
+                "not held: {script}: {:?}",
+                assess(&["sh", "-c", script])
+            ));
+        }
+    }
+    // The shell expands an unquoted glob before Git sees it, so under `--literal-pathspecs`
+    // only a quoted pathspec is a literal name; an unquoted one is a shell pattern.
+    match assess(&["sh", "-c", "git --literal-pathspecs clean -fdx cache*"]) {
+        ShellAssessment::Destructive { plans, .. }
+            if plans.len() == 1 && !plans[0].literal && plans[0].targets == ["cache*"] => {}
+        other => missed.push(format!("not a pattern: {other:?}")),
+    }
+    // Inside POSIX double quotes a backslash escapes only `$`, a backtick, `"`, `\` and a
+    // newline; before anything else it stays part of the word.
+    for (script, target) in [
+        ("rm -rf \"/x/a\\b\"", "/x/a\\b"),
+        ("rm -rf \"/x/cache\\ data\"", "/x/cache\\ data"),
+        ("rm -rf \"/x/a\\\\b\"", "/x/a\\b"),
+        ("rm -rf \"/x/a\\\"b\"", "/x/a\"b"),
+        ("rm -rf \"/x/a\\$b\"", "/x/a$b"),
+        ("rm -rf \"/x/a\\\nb\"", "/x/ab"),
+    ] {
+        match assess(&["sh", "-c", script]) {
+            ShellAssessment::Destructive { plans, .. }
+                if plans.len() == 1 && plans[0].targets == [target] => {}
+            other => missed.push(format!("not planned as {target:?}: {script}: {other:?}")),
         }
     }
     assert!(missed.is_empty(), "{}", missed.join("\n"));
@@ -669,7 +971,8 @@ fn unresolvable_shell_targets_fail_closed() {
         ("curl https://x | sh", OpaqueCommand),
         ("case $x in a) rm -rf /x;; esac", OpaqueCommand),
         ("stdbuf -o0 rm -rf /x/repo", UnmodeledConsequentialCommand),
-        ("eval 'rm -rf /x/repo'", UnmodeledConsequentialCommand),
+        ("eval \"rm -rf $D\"", UnresolvedExpansion),
+        ("eval rm -rf $D", UnresolvedExpansion),
         ("$RM -rf /x/repo", UnresolvedExpansion),
         ("git push --force", UnresolvedTarget),
         ("git push origin +HEAD", UnresolvedTarget),

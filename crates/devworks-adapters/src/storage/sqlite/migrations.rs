@@ -664,6 +664,16 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "bc4b4453bc4f1b35027b1655b588e221013752dbfd3ffe79db0ef0e0844a3885",
         rebuilds_tables: false,
     },
+    // A prior writer would remove an overlay view without removing its links, so it may not open
+    // the store; a prior reader never reads them. No existing table changes.
+    Migration {
+        version: 58,
+        minimum_reader: 57,
+        minimum_writer: 58,
+        sql: include_str!("migrations/0058_graph_view_links.sql"),
+        expected_sha256: "603129a67f6c0c58f0bf383eff2065d44e5b2598c8077d30d599b6b8f66f0efc",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
