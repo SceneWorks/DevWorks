@@ -55,6 +55,23 @@ fn features(b: &dyn Backend, p: &str) -> Vec<WorkRecord> {
 fn feature(b: &dyn Backend, id: &str) -> WorkRecord {
     wops::work_record(b.query("features.get", &wops::work_get(b, "features.get", id))).unwrap()
 }
+/// The feature's budget once usage accounting is ready. Readiness is the engine's usage
+/// bootstrap, which completes in the background after start, so a budget read right after
+/// creating a feature can still say `accountingReady: false`.
+fn ready_budget(b: &dyn Backend, id: &str) -> FeatureBudgetView {
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    loop {
+        let budget = feature(b, id).budget.expect("the feature has a budget");
+        if budget.accounting_ready {
+            return budget;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "usage accounting never became ready"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
 fn select_feature(h: &mut Ui, prefix: &str) {
     h.query_all_by_label_contains(prefix)
         .find(|n| {
@@ -210,7 +227,8 @@ fn withdrawing_a_reopened_pending_cap_preserves_active_budget_and_off_remains_ex
     replace(&mut h, "Feature spending limit USD", "5");
     press(&mut h, "Create");
     let f = features(&*b, &p).remove(0);
-    let active_budget = f.budget.as_ref().unwrap().clone();
+    // The active policy is compared in full later, so it is read once accounting is ready.
+    let active_budget = ready_budget(&*b, f.id.as_str());
     select_feature(&mut h, "Withdraw captured cap  ·");
     press(&mut h, "Edit plan");
     replace(&mut h, "Plan text", "The exact retained plan scope.");
