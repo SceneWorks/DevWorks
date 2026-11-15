@@ -38,7 +38,10 @@ struct Fx {
 }
 impl Fx {
     fn new() -> Self {
-        let h = Harness::new();
+        Self::on(Harness::new())
+    }
+    /// Opens the fixture on an existing data root.
+    fn on(h: Harness) -> Self {
         let files = Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
             h.root.with_extension("import-cache"),
