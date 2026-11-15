@@ -22,7 +22,7 @@ use devworks_core::protocol::{
     ActorId, CommandReply, Counter, DomainErrorCode, DomainFault, Id, ProjectId, Revision, RootId,
 };
 use devworks_core::services::UseCases;
-use devworks_core::services::history::{LinkKind, NewHistoryLink, record_link};
+use devworks_core::services::history::{HistoryService, LinkKind, NewHistoryLink, record_link};
 use devworks_core::services::projects::{ProjectService, RepositoryService};
 use devworks_core::services::runs::{ControlService, Target};
 use devworks_core::services::work::plans::{StagedPlans, decide_plan_approval};
@@ -81,7 +81,8 @@ impl Fx {
                 ProjectService::new(h.ids.clone(), runs.clone()).with_work(work.clone()),
             ))
             .with_repositories(Arc::new(RepositoryService::new(h.ids.clone())))
-            .with_work(work);
+            .with_work(work)
+            .with_history(Arc::new(HistoryService::new(h.ids.clone())));
         let fx = Self {
             h,
             store,
@@ -3735,6 +3736,8 @@ fn repository_scope_removal_fences_only_cards_outside_the_active_plan() {
 mod metadata;
 
 mod notifications;
+
+mod creator;
 #[test]
 fn legacy_plan_approval_can_be_re_requested_with_a_new_exact_snapshot() {
     let fx = Fx::new();

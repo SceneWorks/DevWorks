@@ -1255,6 +1255,13 @@ pub struct LineageRecord {
     )]
     #[schemars(with = "Text", extend("x-since" = 2))]
     pub revision: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorAttribution", extend("x-since" = 3))]
+    pub actor_attribution: Option<ActorAttribution>,
 }
 impl Check for LineageRecord {
     fn check(&self) -> Result<(), String> {
@@ -1267,6 +1274,7 @@ impl Check for LineageRecord {
         self.occurred_at_ms.check()?;
         self.repository_id.check()?;
         self.revision.check()?;
+        self.actor_attribution.check()?;
         crate::protocol::rules::record(
             "LineageRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -1289,6 +1297,20 @@ impl Revisioned for LineageRecord {
         if revision < 2 {
             self.revision = None;
         }
+        if revision < 3 {
+            self.actor_attribution = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ActorAttribution {
+    Recorded,
+    Unknown,
+}
+impl Check for ActorAttribution {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
     }
 }
 

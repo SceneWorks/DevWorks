@@ -25,7 +25,7 @@ pub struct WorkRoot {
     /// Advances whenever who can see the work changes; history cursors bind it.
     pub scope_revision: i64,
     pub parent_feature_id: Option<RootId>,
-    /// When the work item was created (UTC ms). Work items record no creator.
+    /// When the work item was created (UTC ms).
     pub created_at_ms: i64,
 }
 
@@ -315,6 +315,8 @@ pub enum LineageRow {
     Work {
         key: SequenceKey,
         work: WorkRoot,
+        /// The principal that created the item; `None` for an item stored without a creator.
+        creator: Option<ActorId>,
     },
     Link {
         key: SequenceKey,

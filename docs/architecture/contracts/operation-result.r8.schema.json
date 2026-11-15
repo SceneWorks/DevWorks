@@ -52,6 +52,13 @@
       ],
       "type": "object"
     },
+    "ActorAttribution": {
+      "enum": [
+        "Recorded",
+        "Unknown"
+      ],
+      "type": "string"
+    },
     "AgentMessage": {
       "additionalProperties": false,
       "properties": {
@@ -9674,6 +9681,10 @@
     "LineageRecord": {
       "additionalProperties": false,
       "properties": {
+        "actorAttribution": {
+          "$ref": "#/$defs/ActorAttribution",
+          "x-since": 3
+        },
         "actorId": {
           "$ref": "#/$defs/Id",
           "x-since": 2
