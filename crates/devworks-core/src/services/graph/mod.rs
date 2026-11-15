@@ -15,6 +15,7 @@ mod modules;
 mod properties;
 mod read;
 mod scan;
+pub(crate) mod schema_refs;
 #[doc(hidden)]
 pub use scan::scanned_edges;
 mod scope;

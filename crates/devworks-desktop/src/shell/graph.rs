@@ -30,6 +30,25 @@ impl Shell {
     }
 }
 
+impl Shell {
+    /// Opens a repository's graph on the detail of one of its nodes (a use another screen
+    /// found). The repository's name is not known there, so its ID names it.
+    pub fn open_graph_node(&mut self, repository: &str, node: &str) {
+        self.open_repository_graph(repository, repository);
+        let node = node.to_owned();
+        self.with_typed(|graph: &mut GraphScreen, cx| {
+            GraphCtl { graph, cx }.open_graph_read(
+                Read::new(
+                    "code.node_detail",
+                    "Node details",
+                    json!({"kind":"Node","nodeId":node}),
+                ),
+                true,
+            )
+        });
+    }
+}
+
 controller!(GraphCtl, graph: GraphScreen);
 
 /// The repository graph is drawn inside Repositories while it is open.
@@ -440,6 +459,9 @@ impl GraphCtl<'_, '_> {
                     self.graph.selected = Some(node);
                     self.graph.target_name.clear();
                 }
+                Action::FindTable(table) => self
+                    .effects
+                    .push(crate::screen::Effect::FindDatabaseTable(table)),
                 Action::Endpoint { id, repository } => {
                     self.open_graph_read(
                         Read::new(

@@ -164,6 +164,150 @@ impl SchemaService {
         Ok((source, view))
     }
 }
+/// One object of `view` by its identifier.
+fn object(read: &dyn ReadSnapshot, view: &Id, id: &Id) -> Result<SchemaObject, Failure> {
+    let filter = SchemaObjectFilter {
+        object_id: Some(id.clone()),
+        ..Default::default()
+    };
+    read.schemas()
+        .schema_objects(view, &filter, None, 1)?
+        .pop()
+        .ok_or_else(|| {
+            Refusal::new(DomainErrorCode::NotFound, "schema_object", Some(id.clone())).into()
+        })
+}
+
+/// The names code may use for a table: its own, and qualified by its schema (lowercased).
+fn table_names(table: &SchemaObject) -> Vec<String> {
+    let Some(metadata) = &table.metadata else {
+        return Vec::new();
+    };
+    let name = metadata.name.0.to_lowercase();
+    let mut names = vec![name.clone()];
+    if let Some(schema) = &metadata.schema {
+        names.push(format!("{}.{name}", schema.0.to_lowercase()));
+    }
+    names
+}
+
+impl SchemaService {
+    /// The code that uses one table, view or column of the selected view, with its evidence.
+    fn code_references(
+        &self,
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        input: &ops::CodeReferencesInput,
+    ) -> Result<(OperationResult, i64), Failure> {
+        let (source, view) =
+            self.selected(read, ctx, &input.scope, &input.connection_id, &input.views)?;
+        let revision = source.configuration_revision;
+        let binding = binding(
+            ctx,
+            "schemas.code_references",
+            input,
+            revision,
+            &format!(
+                "{}:{}:{}",
+                view.id.as_str(),
+                view.digest,
+                source.configuration_revision
+            ),
+        )?;
+        let selected = object(read, &view.id, &input.object_id)?;
+        let (table, column) = match selected.kind {
+            MetadataObjectKind::Table | MetadataObjectKind::View => (selected, None),
+            MetadataObjectKind::Column => {
+                let parent = selected.parent_id.as_ref().ok_or_else(|| {
+                    Refusal::new(
+                        DomainErrorCode::InvalidArgument,
+                        "schema_object_kind",
+                        Some(selected.id.clone()),
+                    )
+                })?;
+                let column = selected.metadata.as_ref().map(|m| m.name.0.to_lowercase());
+                (object(read, &view.id, parent)?, column)
+            }
+            _ => {
+                return Err(Refusal::new(
+                    DomainErrorCode::InvalidArgument,
+                    "schema_object_kind",
+                    Some(selected.id.clone()),
+                )
+                .into());
+            }
+        };
+        let found = crate::services::graph::schema_refs::code_references(
+            read,
+            ctx,
+            &input.scope,
+            &table_names(&table),
+            column.as_deref(),
+        )?;
+        let mut rows = found
+            .into_iter()
+            .map(|r| {
+                let id = format!(
+                    "code-reference-{}",
+                    &crate::fingerprint::sha256_hex(
+                        format!(
+                            "{}\0{}\0{}",
+                            r.repository_id.as_str(),
+                            r.unit_key,
+                            r.edge_id
+                        )
+                        .as_bytes()
+                    )[..32]
+                );
+                serde_json::from_value::<SchemaCodeReference>(serde_json::json!({
+                    "id": id,
+                    "objectId": input.object_id,
+                    "repositoryId": r.repository_id,
+                    "graphViewId": r.view_id,
+                    "unitKey": r.unit_key,
+                    "nodeId": r.node_id,
+                    "nodeName": r.node_name,
+                    "nodeKind": r.node_kind,
+                    "edgeKind": r.edge_kind,
+                    "table": r.table,
+                    "column": r.column,
+                    "extractor": r.extractor,
+                    "line": r.line.to_string(),
+                    "snippet": r.snippet,
+                    "statement": r.statement,
+                }))
+                .map_err(|e| invalid(format!("code reference: {e}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+        let result = page(
+            &binding,
+            &input.page,
+            |after, n| {
+                Ok(rows
+                    .iter()
+                    .filter(|r| after.is_none_or(|a| r.id.as_str() > a.as_str()))
+                    .take(usize::from(n))
+                    .cloned()
+                    .collect())
+            },
+            |r: &SchemaCodeReference| &r.id,
+            Ok::<_, StorageError>,
+            |r: &SchemaCodeReference| &r.id,
+        )?;
+        Ok((
+            OperationResult::SchemasCodeReferences {
+                value: SchemaCodeReferencePage {
+                    items: result.items,
+                    has_more: result.has_more,
+                    next_cursor: result.next_cursor,
+                },
+            },
+            revision,
+        ))
+    }
+}
+
 impl QueryHandler for SchemaService {
     fn prepare(
         &self,
@@ -266,6 +410,9 @@ impl QueryHandler for SchemaService {
                     |r: &SchemaObject| &r.id,
                 )?;
                 Ok((OperationResult::SchemasObjects { value: result }, revision))
+            }
+            OperationInput::Schemas(ops::Input::CodeReferences(input)) => {
+                self.code_references(read, ctx, input)
             }
             OperationInput::Schemas(ops::Input::Relationships(input)) => {
                 let (source, view) =

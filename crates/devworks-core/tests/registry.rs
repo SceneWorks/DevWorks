@@ -404,6 +404,7 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "router.route",
             "router.configure",
             "router.connections",
+            "schemas.code_references",
             "schemas.configure",
             "schemas.connections",
             "schemas.index",

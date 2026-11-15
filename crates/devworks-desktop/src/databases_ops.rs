@@ -15,6 +15,8 @@ pub enum DatabasesSlot {
     DatabaseObjects(u64, bool),
     /// A relationship page (read sequence, appended).
     DatabaseRelations(u64, bool),
+    /// A page of the code that uses an object (read sequence, appended).
+    DatabaseCodeReferences(u64, bool),
     /// Staging a source's password before its configure command.
     DatabasePrepare,
     /// Preparing a certificate file before its `artifacts.save`.

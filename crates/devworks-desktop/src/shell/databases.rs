@@ -6,7 +6,7 @@ use crate::{
     memory::RouteMemory,
     ops::{self, Failure},
     route::Route,
-    screen::{Cx, Screen, ScreenContext, ScreenId, controller},
+    screen::{Cx, Effect, Screen, ScreenContext, ScreenId, controller},
 };
 use devworks_core::{
     ports::{secrets::Secret, storage::ProjectPurgeClientScope},
@@ -249,6 +249,9 @@ impl DatabasesCtl<'_, '_> {
                 ReadIntent::Relationships { ids, append } => {
                     self.load_database_relations(ids, append)
                 }
+                ReadIntent::CodeReferences { id, append } => {
+                    self.load_database_code_references(id, append)
+                }
             }
         } else if self.databases.next.is_some() {
             // The selected source can be on a later inventory page. Never substitute the
@@ -291,6 +294,40 @@ impl DatabasesCtl<'_, '_> {
             "Reading schema relationships",
             "schemas.relationships",
             move |b| query(b, "schemas.relationships", body),
+        ) {
+            self.databases.read_loading = false;
+        }
+    }
+    fn load_database_code_references(&mut self, id: String, append: bool) {
+        let Some(source) = self.databases.source().cloned() else {
+            return;
+        };
+        self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
+        let n = self.databases.read_sequence;
+        let Some(pin) = self.database_read_pin(
+            &source,
+            ReadIntent::CodeReferences {
+                id: id.clone(),
+                append,
+            },
+        ) else {
+            return;
+        };
+        if !append || self.databases.code_object.as_deref() != Some(id.as_str()) {
+            self.databases.code_references.clear();
+            self.databases.code_next = None;
+            self.databases.code_object = Some(id.clone());
+        }
+        let mut body = json!({"scope":self.databases.scope(),"views":{"kind":"Pinned","pinId":pin},"connectionId":source.id,"objectId":id,"page":{"limit":100}});
+        if let Some(cursor) = self.databases.code_next.clone().filter(|_| append) {
+            body["page"]["cursor"] = json!(cursor);
+        }
+        self.databases.read_loading = true;
+        if !self.query(
+            DatabasesSlot::DatabaseCodeReferences(n, append),
+            "Reading the code that uses a schema object",
+            "schemas.code_references",
+            move |b| query(b, "schemas.code_references", body),
         ) {
             self.databases.read_loading = false;
         }
@@ -523,6 +560,11 @@ impl DatabasesCtl<'_, '_> {
                 self.databases.tab = 1;
                 self.load_database_relations(ids, append);
             }
+            Action::CodeReferences(id, append) => self.load_database_code_references(id, append),
+            Action::OpenCode(r) => self.effects.push(Effect::OpenGraphNode {
+                repository: r.repository_id.as_str().into(),
+                node: r.node_id.as_str().into(),
+            }),
             Action::ConfirmOutcome => self.confirm_outcomes(),
         }
     }
@@ -572,8 +614,30 @@ impl DatabasesCtl<'_, '_> {
                     }
                 }
             }
-            (DatabasesSlot::DatabaseObjects(n, _) | DatabasesSlot::DatabaseRelations(n, _), _)
-                if n != self.databases.read_sequence => {}
+            (
+                DatabasesSlot::DatabaseObjects(n, _)
+                | DatabasesSlot::DatabaseRelations(n, _)
+                | DatabasesSlot::DatabaseCodeReferences(n, _),
+                _,
+            ) if n != self.databases.read_sequence => {}
+            (DatabasesSlot::DatabaseCodeReferences(_, append), Reply::Query(result)) => {
+                self.databases.read_loading = false;
+                match ops::query_result(result) {
+                    Ok((OperationResult::SchemasCodeReferences { value }, _)) => {
+                        if !append {
+                            self.databases.code_references.clear();
+                        }
+                        self.databases.code_references.extend(value.items.0);
+                        self.databases.code_next =
+                            value.next_cursor.filter(|_| value.has_more).map(|c| c.0);
+                    }
+                    Ok((o, _)) => {
+                        self.databases.error =
+                            Some(ops::unexpected("schemas.code_references", &o).describe())
+                    }
+                    Err(e) => self.databases.error = Some(e.describe()),
+                }
+            }
             (DatabasesSlot::DatabaseObjects(_, append), Reply::Query(result)) => {
                 self.databases.read_loading = false;
                 match ops::query_result(result) {

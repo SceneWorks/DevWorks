@@ -37,10 +37,17 @@ def append_metadata_cases(case, sample, request, artifact):
     relation = sample('SchemaRelation')
     relation.update(id='schema-relation', viewId='schema-view', fromObjectId='schema-object',
                     toObjectId='schema-parent', relation='FOREIGN_KEY', inferred=False)
+    reference = sample('SchemaCodeReference')
+    reference.update(id='code-reference', objectId='schema-object', repositoryId='repo-a',
+                     graphViewId='view-a', unitKey='src/orders.py', nodeId='node-a', nodeName='load',
+                     nodeKind='Function', edgeKind='USES_COLUMN', table='public.child', column='parent_id',
+                     extractor='sql-literal', line='12', snippet='SELECT parent_id FROM public.child',
+                     statement='select')
     operations = ['schemas.connections','schemas.objects','schemas.relationships','schemas.index',
-                  'schemas.refresh','schemas.remove_index','schemas.configure','database.configure_sensitive_columns']
+                  'schemas.refresh','schemas.remove_index','schemas.configure','database.configure_sensitive_columns',
+                  'schemas.code_references']
     for name in operations:
-        mode = 'Query' if name in operations[:3] else 'Command'
+        mode = 'Query' if name in operations[:3] or name == 'schemas.code_references' else 'Command'
         frame = request(name,mode)
         frame['schemaRevision'] = 5
         body = frame['body']
@@ -55,6 +62,7 @@ def append_metadata_cases(case, sample, request, artifact):
         if name == 'schemas.connections': value=dict(items=[connection],hasMore=False)
         elif name == 'schemas.objects': value=dict(items=[obj],hasMore=False)
         elif name == 'schemas.relationships': value=dict(items=[relation],hasMore=False)
+        elif name == 'schemas.code_references': value=dict(items=[reference],hasMore=False)
         elif name in ['schemas.configure','database.configure_sensitive_columns']: value=connection
         elif name == 'schemas.remove_index': value=sample('MutationSummary')
         else: value=sample('IndexRunRecord')

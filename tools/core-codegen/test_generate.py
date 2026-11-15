@@ -85,7 +85,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'conventions.import', 'conventions.retire', 'conventions.index', 'conventions.search',
             'conventions.resources', 'conventions.version',
             'schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
-            'schemas.configure', 'database.configure_sensitive_columns',
+            'schemas.configure', 'database.configure_sensitive_columns', 'schemas.code_references',
             'projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
             'projects.purge_status', 'history.command_receipt', 'agents.post', 'agents.receive', 'agents.ack',
             'agents.history', 'agents.events', 'skills.resources', *MCP,
@@ -101,7 +101,8 @@ class SchemaRevisionRules(unittest.TestCase):
                      'projects.purge_status', 'history.command_receipt'):
             self.assertEqual(carried[name], {6})
         for name in ('schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
-                     'schemas.configure', 'database.configure_sensitive_columns'):
+                     'schemas.configure', 'database.configure_sensitive_columns',
+                     'schemas.code_references'):
             self.assertEqual(carried[name], {5})
         self.assertEqual(carried['features.edit'], {2, 3})
         self.assertEqual(carried['resources.renew'], {2})

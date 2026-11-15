@@ -76,6 +76,30 @@ struct Fx {
 }
 impl Fx {
     fn new(name: &str) -> Self {
+        let mut rust = String::from(
+            "pub fn target() {}\npub fn caller(){target();}\npub fn outer(){caller();}\n",
+        );
+        for i in 0..120 {
+            rust.push_str(&format!("pub fn item_{i}() {{}}\n"));
+        }
+        Self::with(
+            name,
+            &[
+                ("src/lib.rs", rust),
+                (
+                    "README.md",
+                    "# Original guide\nCaptured repository instructions.\n".into(),
+                ),
+                (
+                    "long.txt",
+                    format!("{}\nsecond line\n", "世界".repeat(40000)),
+                ),
+                ("empty.txt", String::new()),
+            ],
+        )
+    }
+    /// A registered, discovered repository `svc` of `files` (path and text).
+    fn with(name: &str, files: &[(&str, String)]) -> Self {
         let root = Root::new(name);
         let base = devworks_core::ports::indexing::SourceTree::canonical_dir(
             &devworks_adapters::index::NativeSourceTree::new(),
@@ -83,25 +107,11 @@ impl Fx {
         )
         .unwrap();
         let repo = base.join("svc");
-        std::fs::create_dir_all(repo.join("src")).unwrap();
-        let mut rust = String::from(
-            "pub fn target() {}\npub fn caller(){target();}\npub fn outer(){caller();}\n",
-        );
-        for i in 0..120 {
-            rust.push_str(&format!("pub fn item_{i}() {{}}\n"));
+        for (path, text) in files {
+            let path = repo.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
         }
-        std::fs::write(repo.join("src/lib.rs"), rust).unwrap();
-        std::fs::write(
-            repo.join("README.md"),
-            "# Original guide\nCaptured repository instructions.\n",
-        )
-        .unwrap();
-        std::fs::write(
-            repo.join("long.txt"),
-            format!("{}\nsecond line\n", "世界".repeat(40000)),
-        )
-        .unwrap();
-        std::fs::write(repo.join("empty.txt"), "").unwrap();
         git(&repo, &["init", "-q"]);
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-q", "-m", "original"]);
@@ -763,4 +773,270 @@ fn native_recorded_module_pages_are_retained_without_inventing_source_or_program
     assert!(
         matches!(&h.state().graph.read.as_ref().unwrap().page.as_ref().unwrap().result,GraphResult::CodeNodes{value}if value.nodes.0.iter().all(|node|node.node_kind.0==kind))
     );
+}
+
+/// A schema read of `op` at revision 5, answered.
+fn schema_read(engine: &Engine, op: &str, body: serde_json::Value) -> serde_json::Value {
+    use devworks_core::protocol::results::DomainQueryReply;
+    let b = engine.backend();
+    match b
+        .query(op, &devworks_desktop::databases_ops::query(&*b, op, body))
+        .unwrap()
+    {
+        DomainQueryReply::Result { result, .. } => {
+            serde_json::to_value(result).unwrap()["value"].clone()
+        }
+        other => panic!("{op}: {other:?}"),
+    }
+}
+/// A schema command of `op` at revision 5, applied.
+fn schema_command(engine: &Engine, op: &str, body: serde_json::Value) -> serde_json::Value {
+    use devworks_core::protocol::{CommandReply, results::DomainDecision};
+    let b = engine.backend();
+    let CommandReply::Recorded { receipt, .. } = b
+        .command(op, &devworks_desktop::databases_ops::command(&*b, op, body))
+        .unwrap()
+    else {
+        panic!("{op}: no receipt")
+    };
+    match receipt.decision {
+        DomainDecision::Applied { result } => {
+            serde_json::to_value(result).unwrap()["value"].clone()
+        }
+        // A capture runs in the background; the caller waits for its view.
+        DomainDecision::Accepted { .. } => serde_json::Value::Null,
+        other => panic!("{op}: {other:?}"),
+    }
+}
+
+/// Indexing code that queries a table a schema source knows records the link with its evidence,
+/// and both the schema reads and the graph's node detail return it.
+#[test]
+fn indexed_code_that_queries_a_known_table_links_to_it_in_schema_and_graph_reads() {
+    let _native_case = native_runtime_case();
+    let f = Fx::with(
+        "graph-schema-links",
+        &[(
+            "src/orders.py",
+            "class Order(Base):\n    __tablename__ = \"orders\"\n\ndef load(cur, order_id):\n    return cur.execute(\"SELECT o.id, o.total FROM orders o WHERE o.id = ?\", (order_id,))\n\ndef label(text):\n    return \"Select an order from the list\"\n".into(),
+        )],
+    );
+    f.index(false);
+    // The known table: a SQLite source with `orders`, indexed and published.
+    let path = f.root.file("shop.sqlite", b"");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE orders(id INTEGER PRIMARY KEY, total INTEGER); CREATE TABLE refunds(id INTEGER);")
+        .unwrap();
+    let source = schema_command(
+        &f.engine,
+        "schemas.configure",
+        json!({"scope":{"kind":"Workspace"},"config":{"name":"Shop","engine":"Sqlite","endpoint":path,
+            "catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"projectAccess":[],"workspaceExposed":false,"exposureMode":"SchemaOnly","authentication":"File"}}),
+    );
+    let connection = source["id"].as_str().unwrap().to_owned();
+    schema_command(
+        &f.engine,
+        "schemas.refresh",
+        json!({"connectionId":connection,"expectedRevision":source["revision"],"scope":{"kind":"Workspace"},"testOnly":false}),
+    );
+    let until = Instant::now() + SETTLE_BOUND;
+    while schema_read(
+        &f.engine,
+        "schemas.connections",
+        json!({"scope":{"kind":"Workspace"},"page":{"limit":10}}),
+    )["items"][0]["currentViewId"]
+        .is_null()
+    {
+        assert!(Instant::now() < until, "the schema view publishes");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let views = json!({"kind":"SchemaPublished","connectionIds":[connection]});
+    let objects = schema_read(
+        &f.engine,
+        "schemas.objects",
+        json!({"scope":{"kind":"Workspace"},"views":views,"connectionId":connection,"kinds":[],"text":"orders","page":{"limit":100}}),
+    );
+    let named = |objects: &serde_json::Value, kind: &str, name: &str| {
+        objects["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["kind"] == kind && o["metadata"]["name"] == name)
+            .unwrap_or_else(|| panic!("{kind} {name} in {objects}"))["id"]
+            .clone()
+    };
+    let table = named(&objects, "Table", "orders");
+    let columns = schema_read(
+        &f.engine,
+        "schemas.objects",
+        json!({"scope":{"kind":"Workspace"},"views":views,"connectionId":connection,"kinds":["Column"],"parentId":table,"page":{"limit":100}}),
+    );
+    let total = named(&columns, "Column", "total");
+
+    // The schema read returns each use of the table with its evidence.
+    let references = schema_read(
+        &f.engine,
+        "schemas.code_references",
+        json!({"scope":{"kind":"Workspace"},"views":views,"connectionId":connection,"objectId":table,"page":{"limit":100}}),
+    );
+    let items = references["items"].as_array().unwrap();
+    let by = |extractor: &str| {
+        items
+            .iter()
+            .find(|r| r["extractor"] == extractor)
+            .unwrap_or_else(|| panic!("a {extractor} use of orders: {references}"))
+    };
+    let literal = by("sql-literal");
+    assert_eq!(literal["nodeName"], "load", "{literal}");
+    assert_eq!(literal["unitKey"], "src/orders.py");
+    assert_eq!(literal["line"], "5");
+    assert_eq!(literal["statement"], "select");
+    assert_eq!(literal["edgeKind"], "USES_TABLE");
+    assert_eq!(literal["repositoryId"], f.record.id.as_str());
+    assert!(
+        literal["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("FROM orders o")
+    );
+    let mapping = by("orm:sqlalchemy");
+    assert_eq!(mapping["nodeName"], "Order", "{mapping}");
+    assert_eq!(items.len(), 2, "prose is not a query: {references}");
+    // A column's read returns only the uses that name it.
+    let columns = schema_read(
+        &f.engine,
+        "schemas.code_references",
+        json!({"scope":{"kind":"Workspace"},"views":views,"connectionId":connection,"objectId":total,"page":{"limit":100}}),
+    );
+    let columns = columns["items"].as_array().unwrap();
+    assert_eq!(columns.len(), 1, "{columns:?}");
+    assert_eq!(columns[0]["column"], "total");
+    assert_eq!(columns[0]["edgeKind"], "USES_COLUMN");
+    // A table no code names has no uses.
+    let refunds = schema_read(
+        &f.engine,
+        "schemas.objects",
+        json!({"scope":{"kind":"Workspace"},"views":views,"connectionId":connection,"kinds":["Table"],"text":"refunds","page":{"limit":10}}),
+    )["items"][0]["id"]
+        .clone();
+    assert!(
+        schema_read(
+            &f.engine,
+            "schemas.code_references",
+            json!({"scope":{"kind":"Workspace"},"views":views,"connectionId":connection,"objectId":refunds,"page":{"limit":100}}),
+        )["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // The graph's node detail of `load` returns the same link to the file's table node.
+    let b = f.engine.backend();
+    let detail = {
+        use devworks_core::protocol::results::DomainQueryReply;
+        let frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"schema-links","scope":{"kind":"Workspace"},"current":true,
+            "query":{"kind":"Node","nodeId":literal["nodeId"]},"limits":{"maxResults":100,"maxVisited":100000,"deadlineMs":30000}});
+        match b
+            .query("code.node_detail", frame.to_string().as_bytes())
+            .unwrap()
+        {
+            DomainQueryReply::Result { result, .. } => {
+                serde_json::to_value(result).unwrap()["value"]["result"]["value"].clone()
+            }
+            other => panic!("node detail: {other:?}"),
+        }
+    };
+    let edge = detail["outgoing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["edgeKind"] == "USES_TABLE")
+        .unwrap_or_else(|| panic!("the USES_TABLE edge: {detail}"));
+    let property = |name: &str| {
+        edge["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .map(|p| p["jsonText"].as_str().unwrap().to_owned())
+            .unwrap_or_else(|| panic!("{name} in {edge}"))
+    };
+    assert_eq!(property("extractor"), "\"sql-literal\"");
+    assert_eq!(property("line"), "5");
+    assert_eq!(property("table"), "\"orders\"");
+    let neighbor = detail["neighbors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["nodeId"] == edge["targetId"])
+        .unwrap_or_else(|| panic!("the table node: {detail}"));
+    assert_eq!(neighbor["nodeKind"], "DatabaseTable");
+    assert_eq!(neighbor["qualifiedName"], "db-table:orders");
+
+    // The graph screen shows the use and leads to the table in Databases.
+    let mut h = f.ui(f.engine.backend());
+    let captured = pin(&h);
+    h.state_mut().graph.search_mode = 0;
+    h.state_mut().graph.filter = "load".into();
+    read(&mut h, "Search graph", "code.search", &captured);
+    read(&mut h, "load", "code.node_detail", &captured);
+    assert!(has_text(&h, "Database tables"));
+    assert!(
+        has_text(&h, "orders.id · line 5 · sql-literal")
+            || has_text(&h, "orders · line 5 · sql-literal")
+    );
+    click(&mut h, Role::Button, "Find orders in Databases");
+    assert_eq!(h.state().route(), Route::Databases);
+    assert_eq!(h.state().databases.filter, "orders");
+    // Databases lists the code that uses the table and opens a use in the graph.
+    step_until(&mut h, "the source is listed", |s| {
+        !s.databases.loading && !s.databases.connections.is_empty()
+    });
+    h.query_by_label("Shop").expect("the source").click();
+    settle(&mut h);
+    click(&mut h, Role::Button, "Search schema objects");
+    step_until(&mut h, "orders is found", |s| {
+        !s.databases.read_loading
+            && s.databases
+                .objects
+                .iter()
+                .any(|o| o.metadata.as_ref().is_some_and(|m| m.name.0 == "orders"))
+    });
+    let orders = h
+        .state()
+        .databases
+        .objects
+        .iter()
+        .find(|o| o.metadata.as_ref().is_some_and(|m| m.name.0 == "orders"))
+        .unwrap()
+        .clone();
+    click(
+        &mut h,
+        Role::Button,
+        &format!("{:?} {}", orders.kind, orders.qualified_name.0),
+    );
+    click(&mut h, Role::Button, "Find code using this object");
+    step_until(&mut h, "the code that uses orders", |s| {
+        !s.databases.read_loading && s.databases.code_references.len() == 2
+    });
+    assert!(has_text(&h, "Used by code"));
+    assert!(
+        has_text(
+            &h,
+            "src/orders.py:5 · Function load · USES_TABLE · sql-literal"
+        ),
+        "{:?}",
+        h.state().databases.code_references
+    );
+    assert!(has_text(&h, "FROM orders o WHERE"));
+    click(&mut h, Role::Button, "Open in code graph: load");
+    step_until(&mut h, "the use opens in the graph", |s| {
+        s.graph
+            .read
+            .as_ref()
+            .is_some_and(|r| r.operation == "code.node_detail" && r.page.is_some())
+    });
+    assert_eq!(h.state().route(), Route::Repositories);
+    assert!(has_text(&h, "Database tables"));
 }

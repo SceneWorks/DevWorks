@@ -1001,6 +1001,34 @@
         "inferred": "bool"
       }
     },
+    "SchemaCodeReference": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "object_id": "Id",
+        "repository_id": "Id",
+        "graph_view_id": "Id",
+        "unit_key": "GraphUnitKey",
+        "node_id": "Id",
+        "node_name": "Content",
+        "node_kind": "Label",
+        "edge_kind": "Label",
+        "table": "Text",
+        "column": "?Text",
+        "extractor": "Label",
+        "line": "Counter",
+        "snippet": "Content",
+        "statement": "?Label"
+      }
+    },
+    "SchemaCodeReferencePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<SchemaCodeReference>",
+        "has_more": "bool",
+        "next_cursor": "?Cursor"
+      }
+    },
     "DbScalar": {
       "kind": "union",
       "variants": {
@@ -11347,6 +11375,22 @@
       "authority": "Scoped",
       "rules": "Without stop_process the watcher stops observing and delivers nothing; the process keeps running under its owner. With stop_process the launched process is cancelled through process.cancel and the observed Cancelled outcome is delivered. Reviewer roles cannot stop a process through a watcher.",
       "introducedRevision": 8
+    },
+    "schemas.code_references": {
+      "operation": "schemas.code_references",
+      "introducedRevision": 5,
+      "mode": "Query",
+      "fields": {
+        "scope": "DataScope",
+        "views": "ViewSelection",
+        "connection_id": "Id",
+        "object_id": "Id",
+        "page": "PageRequest"
+      },
+      "result": "SchemaCodeReferencePage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": " The code that uses one table or column of the selected view: the SQL literals and explicit ORM mappings recorded in the published graph view of each repository the caller may read in scope, with their evidence. A name matches without case, qualified by its schema or not. No source row values are read."
     }
   },
   "earlierInputResults": {
@@ -12196,6 +12240,9 @@
       1,
       5
     ],
+    "schemas.code_references": [
+      5
+    ],
     "schemas.index": [
       1,
       5
@@ -12462,6 +12509,7 @@
     "schemas.connections": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "schemas.objects": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "schemas.relationships": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "schemas.code_references": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "schemas.index": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "schemas.refresh": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "schemas.remove_index": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

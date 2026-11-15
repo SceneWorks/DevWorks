@@ -10700,6 +10700,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_SchemaCodeReference_0_500": {
+      "items": {
+        "$ref": "#/$defs/SchemaCodeReference"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_SchemaConnection_0_500": {
       "items": {
         "$ref": "#/$defs/SchemaConnection"
@@ -16334,6 +16342,112 @@
         "Password"
       ],
       "type": "string"
+    },
+    "SchemaCodeReference": {
+      "additionalProperties": false,
+      "properties": {
+        "column": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "edgeKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "extractor": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "graphViewId": {
+          "$ref": "#/$defs/Id"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "line": {
+          "$ref": "#/$defs/Counter"
+        },
+        "nodeId": {
+          "$ref": "#/$defs/Id"
+        },
+        "nodeKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "nodeName": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "objectId": {
+          "$ref": "#/$defs/Id"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "snippet": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "statement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "unitKey": {
+          "$ref": "#/$defs/GraphUnitKey"
+        }
+      },
+      "required": [
+        "id",
+        "objectId",
+        "repositoryId",
+        "graphViewId",
+        "unitKey",
+        "nodeId",
+        "nodeName",
+        "nodeKind",
+        "edgeKind",
+        "table",
+        "extractor",
+        "line",
+        "snippet"
+      ],
+      "type": "object"
+    },
+    "SchemaCodeReferencePage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_SchemaCodeReference_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
+      ],
+      "type": "object"
     },
     "SchemaConnection": {
       "additionalProperties": false,
@@ -24837,6 +24951,24 @@
       ],
       "type": "object",
       "x-since": 3
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "schemas.code_references",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/SchemaCodeReferencePage"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object",
+      "x-since": 5
     },
     {
       "additionalProperties": false,

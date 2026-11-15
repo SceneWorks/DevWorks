@@ -289,6 +289,9 @@ pub enum OperationResult {
     SchemasObjects { value: Page<SchemaObject> },
     #[serde(rename = "schemas.relationships")]
     SchemasRelationships { value: Page<SchemaRelation> },
+    #[schemars(extend("x-since" = 5))]
+    #[serde(rename = "schemas.code_references")]
+    SchemasCodeReferences { value: SchemaCodeReferencePage },
     #[serde(rename = "schemas.index")]
     SchemasIndex { value: IndexRunRecord },
     #[serde(rename = "schemas.refresh")]
@@ -926,6 +929,7 @@ impl OperationResult {
             Self::SchemasConnections { .. } => "schemas.connections",
             Self::SchemasObjects { .. } => "schemas.objects",
             Self::SchemasRelationships { .. } => "schemas.relationships",
+            Self::SchemasCodeReferences { .. } => "schemas.code_references",
             Self::SchemasIndex { .. } => "schemas.index",
             Self::SchemasRefresh { .. } => "schemas.refresh",
             Self::SchemasRemoveIndex { .. } => "schemas.remove_index",
@@ -1312,6 +1316,7 @@ impl Check for OperationResult {
             Self::SchemasConnections { value } => value.check()?,
             Self::SchemasObjects { value } => value.check()?,
             Self::SchemasRelationships { value } => value.check()?,
+            Self::SchemasCodeReferences { value } => value.check()?,
             Self::SchemasIndex { value } => value.check()?,
             Self::SchemasRefresh { value } => value.check()?,
             Self::SchemasRemoveIndex { value } => value.check()?,
@@ -1773,6 +1778,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::SchemasCodeReferences { .. } if revision < 5 => {
                 Err("operation result predates its introduction".into())
             }
             Self::ApprovalsReviewQueue { .. } if revision < 3 => {

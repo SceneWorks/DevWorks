@@ -33,7 +33,7 @@ mod swift;
 pub(super) const MAX_NODES: usize = 10_000;
 pub(super) const MAX_EDGES: usize = 40_000;
 /// Deepest syntax nesting walked.
-const MAX_DEPTH: usize = 2_000;
+pub(super) const MAX_DEPTH: usize = 2_000;
 
 /// What the C#, JavaScript and TypeScript specs read.
 const FULL_INHERIT: &[&str] = &[
@@ -544,6 +544,9 @@ impl StructuralParser for TreeSitterParser {
                 edge
             }));
             x.incomplete.extend(e.incomplete);
+        }
+        if super::schema_refs::covers(grammar_id) {
+            super::schema_refs::extract(grammar_id, source, root, &mut x);
         }
         Ok(x)
     }

@@ -100,8 +100,61 @@ pub enum Action {
     },
     Page(bool),
     Trust(CodeNode, bool),
+    /// Opens Databases searching for a table a node uses.
+    FindTable(String),
     Registration,
     Indexing,
+}
+
+/// The database tables a node uses (its `USES_TABLE` and `USES_COLUMN` edges), each with the
+/// line and excerpt that show the use.
+fn database_tables(ui: &mut Ui, outgoing: &[CodeEdge], actions: &mut Vec<Action>) {
+    let uses: Vec<&CodeEdge> = outgoing
+        .iter()
+        .filter(|e| matches!(e.edge_kind.0.as_str(), "USES_TABLE" | "USES_COLUMN"))
+        .collect();
+    if uses.is_empty() {
+        return;
+    }
+    let text = |edge: &CodeEdge, name: &str| {
+        edge.properties
+            .0
+            .iter()
+            .find(|p| p.name.0 == name)
+            .and_then(|p| serde_json::from_str::<serde_json::Value>(&p.json_text.0).ok())
+            .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned))
+    };
+    let mut tables: std::collections::BTreeMap<String, Vec<&CodeEdge>> = Default::default();
+    for edge in uses {
+        tables
+            .entry(text(edge, "table").unwrap_or_default())
+            .or_default()
+            .push(edge);
+    }
+    egui::CollapsingHeader::new("Database tables")
+        .default_open(true)
+        .show(ui, |ui| {
+            for (table, edges) in tables {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(&table).strong());
+                    if ui.button(format!("Find {table} in Databases")).clicked() {
+                        actions.push(Action::FindTable(table.clone()));
+                    }
+                });
+                for edge in edges {
+                    ui.label(format!(
+                        "{}{} · line {} · {}",
+                        table,
+                        text(edge, "column").map_or(String::new(), |c| format!(".{c}")),
+                        text(edge, "line").unwrap_or_default(),
+                        text(edge, "extractor").unwrap_or_default()
+                    ));
+                    if let Some(snippet) = text(edge, "snippet") {
+                        ui.add(egui::Label::new(egui::RichText::new(snippet).monospace()).wrap());
+                    }
+                }
+            }
+        });
 }
 
 fn field(ui: &mut Ui, label: &str, value: &mut String, hint: &str) {
@@ -1128,6 +1181,7 @@ fn render(
                 &value.neighbors.0,
                 actions,
             );
+            database_tables(ui, &value.outgoing.0, actions);
         }
         GraphResult::SourceText { value } => {
             ui.heading(&value.source.path.0);

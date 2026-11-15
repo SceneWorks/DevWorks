@@ -589,6 +589,19 @@ impl Shell {
                 Effect::ForgetArchiveCount(p) => self.work.forget_archive_count(&p),
                 Effect::ReviewPurge(p) => self.start_purge_review(p),
                 Effect::OpenGraph(id, name) => self.open_repository_graph(&id, &name),
+                Effect::OpenGraphNode { repository, node } => {
+                    self.open_graph_node(&repository, &node)
+                }
+                Effect::FindDatabaseTable(table) => {
+                    self.with_typed(|d: &mut crate::databases_screen::DatabasesScreen, _| {
+                        d.tab = 0;
+                        d.filter = table;
+                        d.kind = "Table".into();
+                        d.object_id = None;
+                        d.parent = None;
+                    });
+                    self.navigate(Route::Databases);
+                }
                 Effect::LoadRouterCatalog => self.load_router_catalog(),
                 Effect::Index(action) => {
                     self.with_typed(|s: &mut indexing::IndexingScreen, cx| s.act(cx, vec![action]))

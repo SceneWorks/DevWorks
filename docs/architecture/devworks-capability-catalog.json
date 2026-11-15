@@ -247,6 +247,7 @@
         "connections",
         "objects",
         "relationships",
+        "code_references",
         "index",
         "refresh",
         "remove_index",

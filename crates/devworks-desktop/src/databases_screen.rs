@@ -40,11 +40,16 @@ pub struct DatabasesScreen {
     pub read_loading: bool,
     pub pending_read: Option<(String, ReadIntent)>,
     pub relation_ids: Vec<String>,
+    /// The code that uses the object `code_object` (from `schemas.code_references`).
+    pub code_references: Vec<SchemaCodeReference>,
+    pub code_next: Option<String>,
+    pub code_object: Option<String>,
 }
 #[derive(Clone)]
 pub enum ReadIntent {
     Objects(bool),
     Relationships { ids: Vec<String>, append: bool },
+    CodeReferences { id: String, append: bool },
 }
 impl DatabasesScreen {
     pub fn clear_explorer(&mut self) {
@@ -57,6 +62,9 @@ impl DatabasesScreen {
         self.relation_ids.clear();
         self.objects.clear();
         self.relations.clear();
+        self.code_references.clear();
+        self.code_next = None;
+        self.code_object = None;
         self.selected_object = None;
         self.pending_read = None;
         self.read_loading = false;
@@ -110,6 +118,9 @@ impl Draft {
         })
     }
 }
+/// Shown when no indexed code names the selected object.
+pub const NO_CODE_REFERENCES: &str =
+    "No indexed code names this object in a SQL literal or an explicit ORM mapping.";
 pub enum Action {
     GenerateKey,
     ClearKey,
@@ -132,6 +143,10 @@ pub enum Action {
     Children(String),
     Endpoint(String),
     Relations(Vec<String>, bool),
+    /// The code that uses an object (its ID), or the next page of it.
+    CodeReferences(String, bool),
+    /// Opens a use's definition in the code graph.
+    OpenCode(SchemaCodeReference),
     ConfirmOutcome,
 }
 // Explicit UI roots keep control identity independent of conditional metadata and live hints.
@@ -697,7 +712,24 @@ impl DatabasesScreen {
                     if button(ui, "Inspect schema relationships").clicked() {
                         actions.push(Action::Relations(vec![object.id.as_str().into()], false));
                     }
+                    if matches!(
+                        object.kind,
+                        MetadataObjectKind::Table
+                            | MetadataObjectKind::View
+                            | MetadataObjectKind::Column
+                    ) && button_enabled(
+                        ui,
+                        "Find code using this object",
+                        online && !self.read_loading,
+                    )
+                    .clicked()
+                    {
+                        actions.push(Action::CodeReferences(object.id.as_str().into(), false));
+                    }
                 });
+                if self.code_object.as_deref() == Some(object.id.as_str()) {
+                    self.code_ui(ui, actions);
+                }
             }
         }
         if self.tab != 1 {
@@ -743,6 +775,41 @@ impl DatabasesScreen {
     }
 }
 impl DatabasesScreen {
+    /// The code that uses the selected object, each use with its evidence.
+    fn code_ui(&self, ui: &mut Ui, actions: &mut Vec<Action>) {
+        ui.label(egui::RichText::new("Used by code").strong());
+        if self.code_references.is_empty() && !self.read_loading {
+            ui.label(NO_CODE_REFERENCES);
+        }
+        for r in &self.code_references {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!(
+                    "{}:{} · {} {} · {}{} · {}",
+                    r.unit_key.0,
+                    r.line.get(),
+                    r.node_kind.0,
+                    r.node_name.0,
+                    r.edge_kind.0,
+                    r.column
+                        .as_ref()
+                        .map_or(String::new(), |c| format!(" {}", c.0)),
+                    r.extractor.0
+                ));
+                if button(ui, format!("Open in code graph: {}", r.node_name.0)).clicked() {
+                    actions.push(Action::OpenCode(r.clone()));
+                }
+            });
+            ui.add(egui::Label::new(egui::RichText::new(&r.snippet.0).monospace()).wrap());
+        }
+        if let Some(id) = self
+            .code_object
+            .clone()
+            .filter(|_| self.code_next.is_some())
+            && button(ui, "More code uses").clicked()
+        {
+            actions.push(Action::CodeReferences(id, true));
+        }
+    }
     fn sources_ui(&mut self, ui: &mut Ui, online: bool, actions: &mut Vec<Action>) {
         ui.scope_builder(
             egui::UiBuilder::new().scope_id(ui.make_persistent_id("database-toolbar")),

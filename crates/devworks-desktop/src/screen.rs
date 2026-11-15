@@ -86,6 +86,13 @@ pub enum Effect {
     ReviewPurge(ProjectRecord),
     /// Opens a repository's graph (its ID and name).
     OpenGraph(String, String),
+    /// Opens a repository's graph on the detail of one of its nodes.
+    OpenGraphNode {
+        repository: String,
+        node: String,
+    },
+    /// Opens Databases searching for a table by name.
+    FindDatabaseTable(String),
     LoadRouterCatalog,
     /// Work for the Indexing screen.
     Index(IndexAction),

@@ -448,6 +448,7 @@ impl UseCases {
             "schemas.connections",
             "schemas.objects",
             "schemas.relationships",
+            "schemas.code_references",
             "schemas.index",
             "schemas.refresh",
             "schemas.remove_index",
