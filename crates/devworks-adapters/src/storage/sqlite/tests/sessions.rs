@@ -12,6 +12,7 @@ use devworks_core::authority::HostAuthority;
 use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
+use devworks_core::ports::retrieval::NoVectorIndex;
 use devworks_core::ports::storage::contract::StoreHarness;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::provider::{
@@ -34,6 +35,7 @@ use devworks_core::services::UseCases;
 use devworks_core::services::history::{
     GitFacts, HistoryService, LinkKind, NewHistoryLink, RECEIPT_REPLY_UNAVAILABLE, record_link,
 };
+use devworks_core::services::knowledge::KnowledgeService;
 use devworks_core::services::sessions::transcript::{
     AppendPath, BatchOutcome, BatchReceipt, BatchRefusal, ContextSourceInput, SessionBatch,
     SessionWriter, SourceDisposition, append_session_batch, epoch_identity,
@@ -242,7 +244,13 @@ impl Fx {
                 SessionService::new(h.ids.clone(), store.clone())
                     .with_coordinator(actor("coordinator-a")),
             ))
-            .with_history(Arc::new(HistoryService::new(h.ids.clone())));
+            .with_history(Arc::new(HistoryService::new(h.ids.clone())))
+            .with_knowledge(Arc::new(KnowledgeService::new(
+                h.ids.clone(),
+                h.clock.clone(),
+                None,
+                Arc::new(NoVectorIndex),
+            )));
         Self { h, store, cases, n }
     }
     /// A process restart: every handle is dropped, then the store is reopened.
@@ -3619,6 +3627,98 @@ fn revision_two_briefings_take_an_item_paths_and_a_token_budget() {
         fault(brief(json!({}), Some(3))).code,
         DomainErrorCode::SchemaMismatch
     );
+}
+
+#[test]
+fn a_briefing_naming_paths_serves_the_rules_scoped_to_them() {
+    let fx = Fx::new();
+    fx.seed_session("session-a", "agent-a", Some("root-a"));
+    let user = fx.user();
+    // Effective rules of project A (a prompt lesson is effective at once), each scoped to paths.
+    let rule = |text: &str, paths: Value| -> Id {
+        let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "schemaRevision": 2,
+            "requestKey": fx.key(), "body": {"kind": "knowledge.record",
+            "scope": {"kind": "Project", "projectId": "project-a"},
+            "batch": {"entities": [{"clientId": "s", "label": text, "entityType": "topic",
+                "aliases": []}], "evidence": [],
+                "claims": [{"kind": "Lesson", "subjectId": "s", "predicate": "states",
+                    "value": text, "confidence": 0.7, "evidenceIds": [], "tags": [],
+                    "lesson": {"source": "Prompt", "applicability": {"activities": [],
+                        "paths": paths, "tools": [], "repositoryIds": []}}}]}}});
+        match applied(fx.raw_command(&user, "knowledge.record", frame)) {
+            OperationResult::KnowledgeRecord { value } => value.claim_ids.0[0].clone(),
+            other => panic!("{other:?}"),
+        }
+    };
+    let directory = rule(
+        "briefings read sessions",
+        json!(["crates/core/src/sessions"]),
+    );
+    let file = rule(
+        "keep the budget",
+        json!(["crates/core/src/sessions/mod.rs"]),
+    );
+    let beneath = rule(
+        "check fixtures",
+        json!(["crates/core/src/sessions/fixtures/a.json"]),
+    );
+    let unrelated = rule(
+        "help pages",
+        json!(["docs/help", "crates/core/src/session"]),
+    );
+    let general = rule("run fmt", json!([]));
+    let brief = |extra: Value| -> Vec<ContextSource> {
+        let mut body = json!({"sessionId": "session-a", "expectedContextEpoch": "0"});
+        for (k, v) in extra.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        match result(fx.at(&user, "sessions.briefing", body, Some(2))) {
+            OperationResult::SessionsBriefing { value } => value.items.0,
+            other => panic!("{other:?}"),
+        }
+    };
+    let served = |paths: Option<Value>| -> Vec<Id> {
+        let extra = paths.map_or(json!({}), |p| json!({ "paths": p }));
+        brief(extra).into_iter().map(|s| s.id).collect()
+    };
+    // A file path serves the rules of that file and of the directories holding it, never
+    // a rule scoped only elsewhere (a sibling with a shared name prefix included).
+    let named = served(Some(json!(["crates/core/src/sessions/mod.rs"])));
+    assert!(
+        named.contains(&directory) && named.contains(&file),
+        "{named:?}"
+    );
+    assert!(
+        !named.contains(&unrelated) && !named.contains(&beneath),
+        "{named:?}"
+    );
+    // A directory path also serves the rules of paths beneath it; either separator splits.
+    let dir = served(Some(json!(["crates\\core\\src\\sessions"])));
+    for r in [&directory, &file, &beneath] {
+        assert!(dir.contains(r), "{dir:?}");
+    }
+    assert!(!dir.contains(&unrelated), "{dir:?}");
+    // A rule with no path scope is not path knowledge: no briefing serves it, as before, and
+    // a briefing naming no paths serves no rules.
+    assert!(!named.contains(&general) && !dir.contains(&general));
+    let plain = served(None);
+    for r in [&directory, &file, &beneath, &unrelated, &general] {
+        assert!(!plain.contains(r), "{plain:?}");
+    }
+    // A rule is a `rule` source estimated over its text, and the budget bounds it like any other:
+    // the work item (3) and the newest rule (4) fit in 7, the older rule does not.
+    let paths = json!(["crates/core/src/sessions/mod.rs"]);
+    let rules = brief(json!({ "paths": paths }));
+    let newest = rules.iter().find(|s| s.id == file).unwrap();
+    assert_eq!(
+        (newest.kind.0.as_str(), newest.token_estimate.get()),
+        ("rule", 4)
+    );
+    let capped: Vec<Id> = brief(json!({"paths": paths, "budgetTokens": 7}))
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(capped, [id("root-a"), file.clone()]);
 }
 
 // ---------------------------------------------------------------------------------------------
