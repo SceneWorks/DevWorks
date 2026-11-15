@@ -112,6 +112,8 @@ pub struct DeletionPreview {
 #[derive(Clone, Debug)]
 pub enum DeletionRefusal {
     NotRegistered,
+    /// This platform's filesystem adapter performs no destructive steps.
+    Unsupported,
     /// The registered location cannot be resolved to a stable directory identity.
     Unresolvable,
     FilesystemRoot,
@@ -152,6 +154,10 @@ pub fn prepare(
     repository_id: &Id,
     dependencies: RepositoryDependencies,
 ) -> Result<DeletionPreview, DeletionRefusal> {
+    // Refused before anything is confirmed where the folder could not actually be removed.
+    if !fs.destructive_steps_supported() {
+        return Err(DeletionRefusal::Unsupported);
+    }
     let repo = roots
         .repositories
         .iter()
@@ -344,10 +350,14 @@ pub fn delete<F: FilesystemResolver + DestructiveExecutor>(
         (PreflightVerdict::Allowed, Some([target])) => target,
         _ => return Err(DeletionRefusal::Guarded(decision.rationale())),
     };
-    // The protected roots are read again immediately before the step: a repository registered
-    // (or a worktree recorded) since the preflight changes their revision and refuses it.
-    let now = current_roots(store, app_data_root, repository)?;
-    let step = destructive::revalidate(fs, &decision, &now.revision)
+    // Everything the preview binds is read again immediately before the step: a repository
+    // registered, a worktree recorded or a project membership or live work added since the
+    // preflight changes it and refuses the step.
+    let now = preview(store, fs, app_data_root, repository)?;
+    if now.digest != current.digest {
+        return Err(DeletionRefusal::Changed);
+    }
+    let step = destructive::revalidate(fs, &decision, &now.registry_revision)
         .map_err(|_| DeletionRefusal::Changed)
         .and_then(|()| {
             fs.execute(

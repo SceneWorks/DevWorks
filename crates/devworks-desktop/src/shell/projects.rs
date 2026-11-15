@@ -927,6 +927,11 @@ impl ProjectsCtl<'_, '_> {
     // Repositories
 
     fn repositories_screen(&mut self, ui: &mut Ui) {
+        if self.projects.deletion_supported.is_none()
+            && let Some(b) = self.backend()
+        {
+            self.projects.deletion_supported = Some(b.repository_deletion_supported());
+        }
         let screen = Route::Repositories.screen();
         let mut actions: Vec<Action> = Vec::new();
         let mut mem = self.routes.remove(&Route::Repositories).unwrap_or_default();

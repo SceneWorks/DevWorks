@@ -90,6 +90,11 @@ pub trait Backend: Send + Sync {
             "trusted native project purge confirmation ingress".into(),
         ))
     }
+    /// Whether this host can delete a repository folder at all (its filesystem adapter performs
+    /// destructive steps on this platform).
+    fn repository_deletion_supported(&self) -> bool {
+        false
+    }
     /// What deleting a registered primary repository's folder would remove (SEC-04). It
     /// confers nothing.
     fn repository_deletion_preview(

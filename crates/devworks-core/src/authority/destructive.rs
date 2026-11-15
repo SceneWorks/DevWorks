@@ -105,6 +105,12 @@ pub trait FilesystemResolver: Send + Sync {
     fn home(&self) -> Option<PathBuf>;
     /// The `gitdir:` pointer of a `.git` file (linked worktrees and submodules), unresolved.
     fn gitfile_target(&self, gitfile: &Path) -> Option<String>;
+    /// Whether this adapter's [`DestructiveExecutor`] performs destructive steps on this
+    /// platform. Without it the dedicated repository deletion is refused before anything is
+    /// confirmed (fail closed: an adapter that does not say so performs none).
+    fn destructive_steps_supported(&self) -> bool {
+        false
+    }
 }
 
 /// An owned task worktree as recorded by its owner.

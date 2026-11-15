@@ -1082,6 +1082,10 @@ impl Backend for DesktopBackend {
             .runtime
             .confirm_project_purge(&self.host.ctx, frame)
     }
+    fn repository_deletion_supported(&self) -> bool {
+        use devworks_core::authority::destructive::FilesystemResolver;
+        NativeFilesystem::new().destructive_steps_supported()
+    }
     fn repository_deletion_preview(
         &self,
         repository: &Id,

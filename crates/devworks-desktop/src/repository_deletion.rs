@@ -7,6 +7,10 @@ use devworks_core::authority::deletion::{DeletionPreview, DeletionRefusal};
 use devworks_core::protocol::records::RepositoryRecord;
 use eframe::egui;
 
+/// Why the action is not offered where the filesystem adapter performs no destructive steps.
+pub const UNSUPPORTED: &str = "Deleting a repository folder is not available on this platform (DevWorks cannot yet remove \
+     it safely here).";
+
 /// A repository folder deletion being reviewed.
 #[derive(Clone, Debug)]
 pub struct DeletionReview {
@@ -32,6 +36,7 @@ impl DeletionReview {
 pub fn refusal_text(refusal: &DeletionRefusal) -> String {
     match refusal {
         DeletionRefusal::NotRegistered => "This repository is not registered.".into(),
+        DeletionRefusal::Unsupported => UNSUPPORTED.into(),
         DeletionRefusal::Unresolvable => {
             "The repository folder cannot be found or identified, so nothing was deleted.".into()
         }

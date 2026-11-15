@@ -1934,7 +1934,11 @@ struct Interfering {
     inner: NativeFilesystem,
     store: Arc<SqliteStore>,
     register_inside: Option<String>,
+    /// A project takes the repository as a member once the deletion is authorized.
+    add_membership: bool,
     fail_history_after_execute: bool,
+    /// The adapter reports that it performs no destructive steps (as on Windows).
+    unsupported: bool,
     fired: std::sync::atomic::AtomicBool,
 }
 #[cfg(unix)]
@@ -1944,7 +1948,9 @@ impl Interfering {
             inner: NativeFilesystem::new(),
             store,
             register_inside: None,
+            add_membership: false,
             fail_history_after_execute: false,
+            unsupported: false,
             fired: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -1983,7 +1989,14 @@ impl destructive::FilesystemResolver for Interfering {
                 "INSERT INTO repositories(id,canonical_location,revision) VALUES('repo-n','{nested}',1)"
             ));
         }
+        if self.add_membership && !self.fired.load(Ordering::SeqCst) && self.authorized() {
+            self.fired.store(true, Ordering::SeqCst);
+            self.sql("INSERT INTO project_repositories VALUES('project-b','repo-a');".into());
+        }
         self.inner.resolve(path, working_directory)
+    }
+    fn destructive_steps_supported(&self) -> bool {
+        !self.unsupported && self.inner.destructive_steps_supported()
     }
     fn expand(
         &self,
@@ -2099,6 +2112,51 @@ fn a_repository_registered_inside_the_target_after_the_preflight_refuses_the_del
     assert!(std::path::Path::new(&format!("{nested}/.git")).exists());
     assert!(std::path::Path::new(&format!("{repo}/src.txt")).exists());
     assert_eq!(fx.count("RepositoryDeletionCompleted"), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_project_membership_added_after_the_review_refuses_the_deletion() {
+    let fx = Fx::new();
+    let scratch = Scratch::new("deletion-membership");
+    let repo = deletable(&fx, &scratch);
+    let mut fs = Interfering::new(fx.store.clone());
+    fs.add_membership = true;
+    let user = fx.ctx("user-a", PrincipalKind::Human);
+    let reviewed = deletion::preview(&*fx.store, &fs, None, &id("repo-a")).unwrap();
+    assert!(reviewed.dependencies.project_references.is_empty());
+    let refused = deletion::delete(&*fx.store, &fs, None, &user, &reviewed);
+    assert!(fs.fired.load(Ordering::SeqCst), "the membership was added");
+    assert!(
+        matches!(refused, Err(DeletionRefusal::Changed)),
+        "{refused:?}"
+    );
+    assert!(std::path::Path::new(&format!("{repo}/src.txt")).exists());
+    assert_eq!(fx.count("RepositoryDeletionCompleted"), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_deletion_is_refused_before_any_confirmation_where_destructive_steps_are_unsupported() {
+    let fx = Fx::new();
+    let scratch = Scratch::new("deletion-unsupported");
+    let repo = deletable(&fx, &scratch);
+    let supported = NativeFilesystem::new();
+    let mut fs = Interfering::new(fx.store.clone());
+    fs.unsupported = true;
+    let user = fx.ctx("user-a", PrincipalKind::Human);
+    assert!(matches!(
+        deletion::preview(&*fx.store, &fs, None, &id("repo-a")),
+        Err(DeletionRefusal::Unsupported)
+    ));
+    // Even a preview reviewed elsewhere spends no confirmation here.
+    let reviewed = deletion::preview(&*fx.store, &supported, None, &id("repo-a")).unwrap();
+    assert!(matches!(
+        deletion::delete(&*fx.store, &fs, None, &user, &reviewed),
+        Err(DeletionRefusal::Unsupported)
+    ));
+    assert_eq!(fx.count("RepositoryDeletionConfirmed"), 0);
+    assert!(std::path::Path::new(&format!("{repo}/src.txt")).exists());
 }
 
 #[cfg(unix)]

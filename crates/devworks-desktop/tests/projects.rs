@@ -1117,3 +1117,23 @@ fn a_person_reviews_and_confirms_a_repository_folder_deletion() {
         ]
     );
 }
+
+// Where the filesystem adapter performs no destructive steps (Windows), the action is not
+// offered; the screen says why instead.
+#[test]
+fn the_folder_deletion_is_not_offered_where_the_host_cannot_perform_it() {
+    let root = Root::new("repository-deletion-unsupported");
+    let engine = start(&root);
+    register(&engine, "repo-a", "engine");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    h.state_mut().projects.deletion_supported = Some(false);
+    settle(&mut h);
+    click_nav(&mut h, "Repositories");
+    click_row(&mut h, "engine  ·");
+    assert!(has_text(&h, "not available on this platform"));
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Delete repository folder…")
+            .is_none(),
+        "the action is not offered"
+    );
+}

@@ -151,6 +151,8 @@ pub struct ProjectsScreen {
     pub confirm: Option<Confirm>,
     /// A repository folder deletion under review (SEC-04).
     pub deletion: Option<crate::repository_deletion::DeletionReview>,
+    /// Whether the host can delete a repository folder (read from the backend once).
+    pub deletion_supported: Option<bool>,
     pub message: Option<(Tone, String)>,
     pub base: BTreeMap<String, BaseDirectory>,
     pub texts: BTreeMap<(String, bool), TextState>,
@@ -1453,7 +1455,9 @@ fn repository_detail(
             {
                 projects.confirm = Some(Confirm::RemoveIndex(r.clone()));
             }
-            if r.primary
+            if r.primary && projects.deletion_supported != Some(true) {
+                widgets::caption(ui, crate::repository_deletion::UNSUPPORTED);
+            } else if r.primary
                 && ui
                     .add_enabled(
                         enabled && projects.deletion.is_none(),
