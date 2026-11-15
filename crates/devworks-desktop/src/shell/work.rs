@@ -4744,6 +4744,28 @@ fn card_detail(
         if !w.attempts.0.is_empty() {
             widgets::caption(ui, "An agent is working on it now.");
         }
+        // The card records the agent working on it through its live assignment, or clears that.
+        let working = w.attempts.0.iter().find_map(|a| a.assignment_id.as_ref());
+        if w.assigned_agent_id.is_some() {
+            if ui.add_enabled(enabled, egui::Button::new("Clear assignment")).clicked() {
+                actions.push(Action::Command(
+                    w.id.as_str().to_owned(),
+                    "tasks.assign",
+                    json!({"taskId": w.id, "expectedRevision": w.revision, "clearAssignment": true}),
+                ));
+            }
+        } else if let Some(assignment) = working {
+            if ui.add_enabled(enabled, egui::Button::new("Assign to the working agent")).clicked() {
+                actions.push(Action::Command(
+                    w.id.as_str().to_owned(),
+                    "tasks.assign",
+                    json!({"taskId": w.id, "expectedRevision": w.revision,
+                        "assignmentId": assignment, "clearAssignment": false}),
+                ));
+            }
+        } else {
+            widgets::caption(ui, "An agent can be assigned while one is working on it.");
+        }
         // Run controls of a root (a standalone issue, or a card with controls of its own).
         if let Some(s) = work.runs.get(w.id.as_str()).cloned() {
             let held = s.blockers.items.iter().any(|b| wops::manual_hold(&b.cause));

@@ -21,10 +21,12 @@ use std::sync::mpsc;
 fn a_host_side_failure_reaches_the_package_as_its_class_and_a_fixed_message() {
     let _s = serial();
     let a = App::new();
-    let mut spec = Spec::new("fault-pack", "1.0.0");
+    // Per process: concurrent copies of this binary never share the fixture's script file.
+    let name = format!("fault-pack-{}", std::process::id());
+    let mut spec = Spec::new(&name, "1.0.0");
     spec.contributions = vec!["call"];
     package(a.install(&a.user, &spec));
-    a.ready("fault-pack");
+    a.ready(&name);
     // This composition registers no use case for `agents.inbox`: the gateway fails the query.
     let args = a.save(&a.user, br#"{"assignmentId":"assignment-a","page":{"limit":10},"unacknowledgedOnly":false,"direction":"Inbound"}"#);
     let mut step = json!({"actionKey": "list", "call": application("agents.inbox",
@@ -32,7 +34,7 @@ fn a_host_side_failure_reaches_the_package_as_its_class_and_a_fixed_message() {
     step["reportMessage"] = json!(true);
     let (progress, _) = run_calls(
         &a,
-        "fault-pack",
+        &name,
         json!({"calls": [step]}),
         &args,
         Some(a.agent.clone()),
@@ -141,9 +143,11 @@ fn a_finished_invocation_is_forgotten_even_when_its_session_ended_it() {
         slot.wait(Duration::from_secs(10)),
         Some(Reply::Lost(_))
     ));
+    assert!(session.holds("i-1"));
     session.forget("i-1");
-    // Nothing of the session still holds the finished invocation.
-    assert_eq!(Arc::strong_count(&slot), 1);
+    // Nothing of the session still holds the finished invocation. (Its reference count is no
+    // evidence: the reader thread that ended the slot may still hold a clone for a moment.)
+    assert!(!session.holds("i-1"));
 }
 
 #[test]
