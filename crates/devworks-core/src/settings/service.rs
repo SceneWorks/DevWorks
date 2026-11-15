@@ -559,6 +559,26 @@ pub fn mirror_role_instructions(
 /// exactly like a save, writes nothing to the effective configuration and records the proposal
 /// plus its `SettingsProposalStaged` history. Read-only roles, packages, schedules and the host
 /// cannot propose; humans save directly but may also propose.
+/// A pending proposal's entries are shown exactly wherever it is reviewed: in Approvals, in the
+/// settings proposal list and in the decision audit. A value the shared redaction would change (a
+/// credential in an index URL, a token pasted into role instructions) cannot be shown both safely
+/// and in full, so the proposal is refused rather than shown redacted or cut. A secret belongs in
+/// a secret reference (`{"secretRef": "dwsecret-…"}`), which is not itself a secret and is kept.
+fn reviewable_entries(entries: &[SettingAssignment]) -> Result<(), Failure> {
+    let redactor = crate::authority::redact::Redactor::new();
+    let shown =
+        serde_json::to_value(entries).map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+    if redactor.redact_json(&shown) != shown {
+        return Err(Refusal::new(
+            DomainErrorCode::InvalidArgument,
+            "settings_proposal_unreviewable",
+            None,
+        )
+        .into());
+    }
+    Ok(())
+}
+
 pub fn stage_proposal(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
@@ -582,6 +602,7 @@ pub fn stage_proposal(
             return Err(denied("settings_proposal"));
         }
     }
+    reviewable_entries(entries)?;
     let current = current_layer(&*tx.configuration(), scope)?;
     if current.revision != expected_revision {
         return Err(stale(scope, expected_revision, current.revision));
@@ -829,6 +850,7 @@ pub fn reconcile_proposal(
         Some(e) => e,
         None => proposal_entries(&p)?,
     };
+    reviewable_entries(&entries)?;
     let planned = plan_for_write(tx, &current, &entries)?;
     let blocking: Vec<&Issue> = planned.blocking().collect();
     if !blocking.is_empty() {

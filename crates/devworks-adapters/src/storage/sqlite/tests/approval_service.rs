@@ -200,6 +200,127 @@ fn settings_decision_requires_exact_host_human_witness_and_persists_reviewed_sna
     );
     assert_eq!(audit.actor, actor("user"));
 }
+/// A settings proposal is shown exactly wherever it is reviewed, so a value the shared redaction
+/// would change (a token in role instructions, a credential in a package index URL) is refused
+/// before it is staged, and never appears in `approvals.inspect` or the decision audit. An
+/// ordinary value is staged, shown exactly and approved as stored.
+#[test]
+fn settings_proposals_whose_values_would_be_redacted_are_refused_before_review() {
+    let f = Fx::new();
+    let instructions = descriptor(AgentRole::ALL[0].instructions_key()).unwrap();
+    let index = descriptor("packages.indexSources").unwrap();
+    let entry = |d: &devworks_core::settings::catalog::SettingDescriptor, value: Value| {
+        serde_json::from_value::<SettingAssignment>(
+            json!({"key":d.key,"value":{"schema":d.schema_ref(),"value":value}}),
+        )
+        .unwrap()
+    };
+    let stage = |entries: Vec<SettingAssignment>| {
+        let ctx = f.ctx("agent");
+        run_write(&f.s, WriteOptions::default(), move |tx| {
+            Ok(
+                match devworks_core::settings::service::stage_proposal(
+                    tx,
+                    &ctx,
+                    &Roles,
+                    &ConfigScope::Workspace,
+                    1,
+                    &entries,
+                ) {
+                    Ok(p) => Ok(p),
+                    Err(devworks_core::settings::service::Failure::Refused(r)) => Err(r),
+                    Err(devworks_core::settings::service::Failure::Storage(e)) => return Err(e),
+                },
+            )
+        })
+        .unwrap()
+    };
+    // A high-confidence token is already refused by settings validation (`credential_value`).
+    // A password in a URL or a `password:` value in prose is not a recognised token shape, but
+    // the shared redaction would rewrite it: that is now refused too.
+    let token = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+    let password = "hunter2-plain-value";
+    for (entries, expected) in [
+        (
+            vec![entry(
+                instructions,
+                json!(format!("Push with the token {token} when asked.")),
+            )],
+            ["credential_value", "settings_proposal_unreviewable"].as_slice(),
+        ),
+        (
+            vec![entry(
+                index,
+                json!([{"location":format!("https://agent:{password}@index.example/devworks"),
+                    "publicKey":"a".repeat(64)}]),
+            )],
+            ["settings_proposal_unreviewable"].as_slice(),
+        ),
+        (
+            vec![entry(
+                instructions,
+                json!(format!("Log in with password: {password} when asked.")),
+            )],
+            ["settings_proposal_unreviewable"].as_slice(),
+        ),
+    ] {
+        match stage(entries.clone()) {
+            Err(refusal) => {
+                assert_eq!(refusal.code, DomainErrorCode::InvalidArgument);
+                assert!(
+                    expected.contains(&refusal.target_kind),
+                    "{}",
+                    refusal.target_kind
+                );
+            }
+            Ok(p) => panic!(
+                "a value the redaction would change was staged: {:?}",
+                p.body
+            ),
+        }
+    }
+    let listed = serde_json::to_string(&f.query(
+        "approvals.list",
+        json!({"scope":{"kind":"Workspace"},"page":{"limit":20}}),
+    ))
+    .unwrap();
+    assert!(
+        !listed.contains(token) && !listed.contains(password),
+        "{listed}"
+    );
+
+    // An ordinary value is staged, inspected exactly, and approved as stored.
+    let plain = vec![entry(
+        instructions,
+        json!("Prefer small, reviewed changes."),
+    )];
+    let p = stage(plain.clone()).expect("ordinary instructions are staged");
+    let inspected = proposal(f.query("approvals.inspect", json!({"proposalId":p.id})));
+    assert_eq!(
+        serde_json::to_value(&inspected).unwrap()["reviewedSource"]["entries"],
+        serde_json::to_value(&plain).unwrap()
+    );
+    let input = json!({"proposalId":p.id,"expectedRevision":"1","contentDigest":p.body["contentDigest"],"decision":"Approve","rationale":"Reviewed"});
+    let typed = serde_json::from_value(input.clone()).unwrap();
+    let bound = HostIngress::new(&f.s)
+        .human_decision_context(&f.ctx("user"), &typed)
+        .unwrap();
+    assert!(matches!(
+        f.command(&bound, "approvals.record_human_decision", input),
+        DomainDecision::Applied { .. }
+    ));
+    let audit = read_snapshot(&f.s, &ReadOptions::default(), |s| {
+        s.decisions()
+            .human_decision(ApprovalSource::Settings, &p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        audit.reviewed_snapshot["reviewedSource"]["entries"],
+        serde_json::to_value(&plain).unwrap()
+    );
+}
+
 #[test]
 fn stale_settings_content_cannot_approve_a_new_revision() {
     let f = Fx::new();
