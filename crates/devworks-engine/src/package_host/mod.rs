@@ -1786,6 +1786,7 @@ impl PackageHost {
             package_id: req.package_id.clone(),
             contribution_id: req.contribution_id.clone(),
             revoked: AtomicBool::new(false),
+            cancellation: Default::default(),
             state: Mutex::new(Default::default()),
             changed: Condvar::new(),
             context: Box::new(SlotContext {

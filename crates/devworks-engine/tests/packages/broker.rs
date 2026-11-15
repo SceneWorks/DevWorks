@@ -228,3 +228,144 @@ fn a_mutating_tool_runs_commands_as_its_invoking_principal() {
         "{actors:?}"
     );
 }
+
+/// A booted app whose use cases include the agent inbox (`agents.receive`, `agents.post`).
+fn with_inbox() -> App {
+    let mut a = App::unbooted(Harness::new(), None, None);
+    let mut composition = a.composition();
+    let runs = Arc::new(devworks_core::services::runs::ControlService::new(
+        a.h.ids.clone(),
+    ));
+    composition.use_cases = UseCases::new().with_agents(Arc::new(
+        devworks_core::services::agents::AgentService::new(a.h.ids.clone(), runs),
+    ));
+    a.app = Some(a.rt.block_on(boot(composition)).expect("boot"));
+    a
+}
+
+/// The journaled brokered calls in `states`.
+fn broker_calls(a: &App, states: &[OperationState]) -> Vec<OperationRecord> {
+    read(&*a.store, |s| {
+        s.operations()
+            .operations_for_capability(APPLICATION_CAPABILITY, states, None, 10)
+    })
+}
+
+/// A mutating tool brokers a person's `agents.receive`, which waits on the empty inbox; `end`
+/// ends the invocation (a cancellation or its deadline). The invocation must end well inside
+/// the receive's 55 s wait, and a message posted after it ended is never delivered to it.
+fn a_waiting_receive_ends_with_its_invocation(
+    deadline: Duration,
+    end: impl FnOnce(&devworks_engine::package_host::InvocationHandle) + Send,
+) {
+    /// Far below the receive's 55 s wait, far above a loaded machine's cancellation grace.
+    const PROMPTLY: Duration = Duration::from_secs(10);
+    let _s = serial();
+    let a = with_inbox();
+    // Per process: concurrent copies of this binary never share the fixture's script file.
+    let name = format!("recv-pack-{}", std::process::id());
+    let mut spec = Spec::new(&name, "1.0.0");
+    spec.contributions = vec!["call"];
+    spec.effect = "Mutation";
+    package(a.install(&a.user, &spec));
+    a.ready(&name);
+    let args = a.save(&a.user, br#"{"projectId":"project-a","waitSeconds":55}"#);
+    let script = json!({"calls": [{"actionKey": "receive", "call": application(
+        "agents.receive",
+        input_schema("agents.receive", Mode::Command, None),
+        json!("$input"),
+    )}]});
+    let path = std::env::temp_dir().join(format!("devworks-fixture-{name}-call.json"));
+    std::fs::write(&path, script.to_string()).unwrap();
+    let h = a
+        .app()
+        .packages()
+        .unwrap()
+        .invoke(InvokeRequest {
+            package_id: name.clone(),
+            contribution_id: format!("{name}/call"),
+            scope: InvocationScope::Workspace,
+            input: serde_json::from_value(args).unwrap(),
+            operation_id: id(&a.key("op")),
+            deadline,
+            allowed_operations: vec![],
+            kind: InvocationKind::Ordinary,
+            principal: Some(a.user.clone()),
+            expected_digest: None,
+        })
+        .unwrap();
+    // The call is journaled just before the gateway admits it; then its preparation waits.
+    let until = Instant::now() + PATIENCE;
+    while broker_calls(&a, &[OperationState::Dispatching]).is_empty() {
+        assert!(Instant::now() < until, "the receive was never brokered");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Lets the gateway enter the receive's wait (what is asserted below holds either way).
+    std::thread::sleep(Duration::from_millis(300));
+    let started = Instant::now();
+    let ended = std::thread::scope(|scope| {
+        let ending = scope.spawn(|| end(&h));
+        while !ending.is_finished() && started.elapsed() < PROMPTLY {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let ended = ending.is_finished().then(|| started.elapsed());
+        // A message that arrives once the invocation is over (or should have been).
+        let post = json!({"protocol": "1.0-draft.1", "mode": "Command", "schemaRevision": 7,
+            "requestKey": a.key("post"), "body": {"kind": "agents.post",
+            "projectId": "project-a", "body": "After the invocation", "toHuman": true}});
+        assert!(matches!(
+            a.app()
+                .command(&a.user, "agents.post", post.to_string().as_bytes())
+                .unwrap(),
+            CommandReply::Recorded { .. }
+        ));
+        ended
+    });
+    let _ = std::fs::remove_file(&path);
+    // The brokered receive settles without delivering the message.
+    let until = Instant::now() + PATIENCE;
+    while !broker_calls(&a, &[OperationState::Dispatching]).is_empty() {
+        assert!(Instant::now() < until, "the brokered receive never settled");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let settled = broker_calls(
+        &a,
+        &[OperationState::Failed, OperationState::ObservedComplete],
+    );
+    assert!(
+        ended.is_some_and(|e| e < PROMPTLY)
+            && settled.len() == 1
+            && settled[0].state == OperationState::Failed,
+        "ended after {ended:?} (bound {PROMPTLY:?}); brokered receive: {settled:?}"
+    );
+    // The message still waits for the person.
+    let receive = json!({"protocol": "1.0-draft.1", "mode": "Command", "schemaRevision": 7,
+        "requestKey": a.key("receive"), "body": {"kind": "agents.receive",
+        "projectId": "project-a"}});
+    let reply = a
+        .app()
+        .command(&a.user, "agents.receive", receive.to_string().as_bytes())
+        .unwrap();
+    assert!(
+        matches!(&reply, CommandReply::Recorded { receipt, .. }
+            if matches!(&receipt.decision, DomainDecision::Applied {
+                result: OperationResult::AgentsReceive { value }
+            } if value.items.0.len() == 1 && value.items.0[0].body.0 == "After the invocation")),
+        "{reply:?}"
+    );
+}
+
+#[test]
+fn cancelling_an_invocation_stops_its_waiting_brokered_receive() {
+    a_waiting_receive_ends_with_its_invocation(Duration::from_secs(30), |h| {
+        h.cancel();
+    });
+}
+
+#[test]
+fn an_expired_invocation_stops_its_waiting_brokered_receive() {
+    a_waiting_receive_ends_with_its_invocation(Duration::from_secs(2), |h| {
+        // The host enforces the deadline; the invocation is over once it is terminal.
+        let _ = h.wait(Duration::from_secs(60));
+    });
+}
