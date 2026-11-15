@@ -146,6 +146,15 @@ fn clean(s: &str) -> bool {
 
 impl HopTransport for NativeTransport {
     fn get(&self, request: &HopRequest<'_>) -> Result<HopResponse, NetFault> {
+        self.send(request, "GET", &[])
+    }
+
+    fn send(
+        &self,
+        request: &HopRequest<'_>,
+        method: &str,
+        body: &[u8],
+    ) -> Result<HopResponse, NetFault> {
         let not_sent = |reason: String, timed_out: bool| NetFault::NotSent { reason, timed_out };
         if cancelled(&request.cancel) {
             return Err(NetFault::Cancelled { sent: false });
@@ -160,7 +169,7 @@ impl HopTransport for NativeTransport {
                 .headers
                 .iter()
                 .all(|(k, v)| clean(k) && clean(v) && !k.contains(':'));
-        if !fields_ok {
+        if !fields_ok || !matches!(method, "GET" | "POST" | "PUT" | "DELETE" | "PATCH") {
             return Err(not_sent("the request has an invalid field".into(), false));
         }
         let tcp = self.connect(request)?;
@@ -182,14 +191,20 @@ impl HopTransport for NativeTransport {
         };
         // From the first request byte on, a failure is after dispatch.
         let mut head = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {}\r\nAccept: {}\r\nAccept-Encoding: identity\r\nConnection: close\r\n",
+            "{method} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {}\r\nAccept: {}\r\nAccept-Encoding: identity\r\nConnection: close\r\n",
             request.target, request.host_header, request.user_agent, request.accept
         );
         for (k, v) in request.headers {
             head.push_str(&format!("{k}: {v}\r\n"));
         }
+        if !body.is_empty() || method != "GET" {
+            head.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        }
         head.push_str("\r\n");
         write_all(&mut conn, head.as_bytes(), request)?;
+        if !body.is_empty() {
+            write_all(&mut conn, body, request)?;
+        }
         let (status, headers, rest) = read_head(&mut conn, request)?;
         let framing = framing(status, &headers)?;
         let body = Body {

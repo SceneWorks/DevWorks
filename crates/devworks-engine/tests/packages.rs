@@ -4636,3 +4636,6 @@ mod broker_limits;
 
 #[path = "packages/event_intents.rs"]
 mod event_intents;
+
+#[path = "packages/http_connections.rs"]
+mod http_connections;

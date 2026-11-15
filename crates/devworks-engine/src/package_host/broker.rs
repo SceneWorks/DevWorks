@@ -37,8 +37,8 @@ use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::ports::IdKind;
 use devworks_core::ports::packages::Inspection;
 use devworks_core::ports::storage::{
-    ArtifactScope, AttemptBinding, Cancellation, NewEvent, NewOperation, StorageError,
-    WriteOptions, WriteTransaction, run_write,
+    ArtifactScope, AttemptBinding, Cancellation, NewEvent, NewOperation, OperationRecord,
+    StorageError, WriteOptions, WriteTransaction, run_write,
 };
 use devworks_core::protocol::provider::ArtifactRef as HostArtifact;
 use devworks_core::protocol::results::DomainQueryReply;
@@ -200,10 +200,7 @@ pub(super) fn call(
                     "the approved manifest grants no network access to this endpoint",
                 ));
             }
-            Err(rpc_error(
-                RpcErrorClass::Unavailable,
-                "brokered HTTP calls are not yet active",
-            ))
+            super::http::call(host, ctx, slot, params)
         }
         BrokerCall::Inference { .. } => {
             if !grants.inference {
@@ -465,10 +462,14 @@ fn application(
         host,
         ctx,
         slot,
-        &operation,
-        action,
-        admitted.descriptor.name,
-        &digest,
+        &Journal {
+            operation: &operation,
+            capability: APPLICATION_CAPABILITY,
+            action,
+            name: admitted.descriptor.name,
+            digest: &digest,
+            detail: json!({}),
+        },
     )?;
     // A command's final decision is made under the invocation's revocation lock (as a state
     // compare-and-set is): a cancelled or expired invocation never applies one afterwards. Its
@@ -501,7 +502,7 @@ fn application(
                 &ports.artifacts,
                 principal,
                 &operation,
-                Some(state),
+                Some((state, json!({}))),
                 &reply,
             )
             .map_err(|e| {
@@ -589,31 +590,43 @@ pub(super) fn decide(
     }
 }
 
+/// One brokered call to journal: its stable operation, journal capability, action key, the
+/// operation or endpoint it names, the digest of its arguments and further payload fields.
+pub(super) struct Journal<'a> {
+    pub(super) operation: &'a OperationId,
+    pub(super) capability: &'static str,
+    pub(super) action: &'a str,
+    pub(super) name: &'a str,
+    pub(super) digest: &'a str,
+    pub(super) detail: Value,
+}
+
 /// Journals an admitted call before it runs: its operation (`Dispatching`) and a history event
 /// attributed to the package's actor. A call already journaled under the same identity (a
-/// retried invocation) is not journaled again; a different call under it is a conflict.
-fn journal(
+/// retried invocation) is not journaled again and is returned; a different call under it is a
+/// conflict. An application call needs the invoking principal; a call without one is journaled
+/// without lineage.
+pub(super) fn journal(
     host: &PackageHost,
     ctx: &SlotContext,
     slot: &Arc<Slot>,
-    operation: &OperationId,
-    action: &str,
-    name: &str,
-    digest: &str,
-) -> Result<(), RpcError> {
+    call: &Journal<'_>,
+) -> Result<Option<OperationRecord>, RpcError> {
     let principal = ctx.grants.principal().cloned();
-    let (operation, action, name, digest) = (
-        operation.clone(),
-        action.to_owned(),
-        name.to_owned(),
-        digest.to_owned(),
+    let (operation, capability, action, name, digest, detail) = (
+        call.operation.clone(),
+        call.capability,
+        call.action.to_owned(),
+        call.name.to_owned(),
+        call.digest.to_owned(),
+        call.detail.clone(),
     );
     let (package, invocation, contribution) = (
         ctx.package_id.clone(),
         ctx.operation_id.clone(),
         slot.contribution_id.clone(),
     );
-    let slot = slot.clone();
+    let (slot, invocation_id) = (slot.clone(), slot.invocation_id.clone());
     let written = run_write(&*host.store, WriteOptions::default(), move |tx| {
         // Serialized with revocation: a cancelled invocation journals nothing new.
         let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
@@ -621,10 +634,8 @@ fn journal(
             return Err(StorageError::ScopeDenied);
         }
         if let Some(existing) = tx.operations().operation(&operation)? {
-            return if existing.capability == APPLICATION_CAPABILITY
-                && existing.args_digest == digest
-            {
-                Ok(())
+            return if existing.capability == capability && existing.args_digest == digest {
+                Ok(Some(existing))
             } else {
                 Err(StorageError::Duplicate {
                     kind: "package_broker_call",
@@ -632,23 +643,30 @@ fn journal(
                 })
             };
         }
-        let principal = principal.as_ref().ok_or(StorageError::ScopeDenied)?;
+        if capability == APPLICATION_CAPABILITY && principal.is_none() {
+            return Err(StorageError::ScopeDenied);
+        }
         let actor = package_actor(&package);
         tx.actors()
             .register(&actor, PrincipalKind::Package, &package)?;
+        let mut payload = json!({
+            "packageId": package, "contributionId": contribution,
+            "invocationOperationId": invocation, "invocationId": invocation_id,
+            "actionKey": action, "operation": name,
+            "principal": principal.as_ref().map(|p| p.principal().clone()),
+            "principalKind": principal.as_ref().map(|p| format!("{:?}", p.principal_kind())),
+        });
+        if let (Some(fields), Value::Object(more)) = (payload.as_object_mut(), detail) {
+            fields.extend(more);
+        }
         tx.operations().record_intent(NewOperation {
             id: operation.clone(),
-            root_id: principal.root_id().cloned(),
-            assignment_id: principal.assignment_id().cloned(),
-            capability: APPLICATION_CAPABILITY.into(),
+            root_id: principal.as_ref().and_then(|p| p.root_id().cloned()),
+            assignment_id: principal.as_ref().and_then(|p| p.assignment_id().cloned()),
+            capability: capability.into(),
             schema_version: 1,
             args_digest: digest.clone(),
-            payload: json!({
-                "packageId": package, "contributionId": contribution,
-                "invocationOperationId": invocation, "actionKey": action, "operation": name,
-                "principal": principal.principal(),
-                "principalKind": format!("{:?}", principal.principal_kind()),
-            }),
+            payload,
         })?;
         let attempt = tx
             .operations()
@@ -664,8 +682,8 @@ fn journal(
         tx.history().append(NewEvent {
             id: event,
             actor,
-            project_id: principal.project_id().cloned(),
-            root_id: principal.root_id().cloned(),
+            project_id: principal.as_ref().and_then(|p| p.project_id().cloned()),
+            root_id: principal.as_ref().and_then(|p| p.root_id().cloned()),
             operation_id: Some(operation.clone()),
             aggregate_kind: "package".into(),
             aggregate_id: package.clone(),
@@ -674,10 +692,10 @@ fn journal(
             payload: json!({"operation": name, "actionKey": action,
                 "invocationOperationId": invocation}),
         })?;
-        Ok(())
+        Ok(None)
     });
     match written {
-        Ok(()) => Ok(()),
+        Ok(existing) => Ok(existing),
         Err(StorageError::ScopeDenied) => Err(denied("the invocation is no longer live")),
         Err(StorageError::Duplicate { .. }) => Err(rpc_error(
             RpcErrorClass::Conflict,
@@ -695,7 +713,7 @@ fn journal(
 
 /// Moves a journaled call that is still `Dispatching` to its outcome (a replayed call's earlier
 /// outcome stays).
-fn settle(
+pub(super) fn settle(
     tx: &mut dyn WriteTransaction,
     operation: &OperationId,
     to: OperationState,
@@ -714,14 +732,15 @@ fn settle(
 }
 
 /// Publishes a call's typed reply as an artifact owned by the invoking principal and, with a
-/// `state`, settles its journal in the same transaction (a dispatched intent's journal is settled
-/// by the dispatcher instead).
+/// `settled` state and observation, settles its journal in the same transaction, recording the
+/// artifact as the observation's `result` (a dispatched intent's journal is settled by the
+/// dispatcher instead).
 pub(super) fn publish(
     host: &PackageHost,
     artifacts: &Arc<ArtifactService>,
     principal: &InvocationContext,
     operation: &OperationId,
-    state: Option<OperationState>,
+    settled: Option<(OperationState, Value)>,
     reply: &[u8],
 ) -> Result<HostArtifact, StorageError> {
     let staged = artifacts
@@ -754,8 +773,12 @@ pub(super) fn publish(
             },
         )?;
         let produced = version_ref(&version);
-        if let Some(state) = state {
-            settle(tx, &operation, state, json!({"result": produced}))?;
+        if let Some((state, observation)) = &settled {
+            let mut observation = observation.clone();
+            if let Some(fields) = observation.as_object_mut() {
+                fields.insert("result".into(), json!(produced));
+            }
+            settle(tx, &operation, *state, observation)?;
         }
         Ok(produced)
     });
