@@ -64,6 +64,10 @@ pub struct ContainerIntent {
     source_binding: Option<SourceBinding>,
     pub container_id: Option<Id>,
     pub command: ContainerCommand,
+    /// The build context digest a person approved; the build effect refuses a context that no
+    /// longer matches it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_context_digest: Option<String>,
 }
 
 impl ContainerIntent {
@@ -87,6 +91,7 @@ impl ContainerIntent {
             source_binding,
             container_id: None,
             command,
+            approved_context_digest: None,
         }
     }
 
