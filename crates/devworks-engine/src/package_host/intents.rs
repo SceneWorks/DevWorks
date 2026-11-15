@@ -21,7 +21,7 @@
 //! The grant was checked when the intent was committed; it is checked again here against the
 //! committing version, so nothing outside it ever executes. A refusal fails the operation with a
 //! cause naming its [`Refusal`] code.
-use super::{PackageHost, broker, recovery};
+use super::{PackageHost, broker, http, recovery};
 use crate::dispatch::{
     Consumer, Delivery, DeliveryHandler, EffectExecutor, EffectFuture, EffectResult, Outcome,
     RetryPolicy,
@@ -35,7 +35,7 @@ use devworks_core::ports::storage::{
 use devworks_core::protocol::provider::ArtifactRef as HostArtifact;
 use devworks_core::protocol::{ActorId, Counter, Id, OperationState, Revision};
 use devworks_core::services::packages::policy;
-use devworks_extension_protocol::package::BrokerCall;
+use devworks_extension_protocol::package::{BrokerCall, RpcErrorClass};
 use serde_json::{Value, json};
 use std::sync::{Arc, OnceLock, Weak};
 
@@ -167,6 +167,15 @@ fn execute(
         }
     }
     let grants = broker::Grants::resolve(&inspection, contribution, Some(principal), &[]);
+    if let BrokerCall::Http { endpoint_id, .. } = &call {
+        if !grants.network_granted(endpoint_id.as_str()) {
+            return refused(
+                Refusal::OutsideGrant,
+                "the approved manifest grants no network access to this endpoint",
+            );
+        }
+        return http_intent(&host, package, &call, &op.id, &grants);
+    }
     let BrokerCall::Application {
         operation,
         input_schema,
@@ -235,7 +244,7 @@ fn execute(
                 &ports.artifacts,
                 admitted.principal,
                 &op.id,
-                None,
+                broker::Journaling::None,
                 &reply,
             ) {
                 Ok(produced) => produced,
@@ -256,6 +265,63 @@ fn execute(
             EffectResult::Unknown(detail)
         }
         broker::Ended::Failed(_, _, detail) => EffectResult::Failed(detail),
+    }
+}
+
+/// Runs a committed HTTP intent through its named connection as `grants`' principal (the
+/// approving person), with the egress rules and bounded reads of a live call. The answer and its
+/// record on the operation's attempt commit together; the dispatcher then settles the operation,
+/// so a crash in between holds it for reconciliation and it is never sent again.
+fn http_intent(
+    host: &Arc<PackageHost>,
+    package: &str,
+    call: &BrokerCall,
+    operation: &devworks_core::protocol::OperationId,
+    grants: &broker::Grants,
+) -> EffectResult {
+    // The body was checked to be the committing invocation's when the intent was committed.
+    let request = match http::prepare(host, package, call, &|_| true) {
+        Ok(request) => request,
+        Err(e) if matches!(e.data.class, RpcErrorClass::PermissionDenied) => {
+            return refused(Refusal::OutsideGrant, &e.message);
+        }
+        Err(e) if matches!(e.data.class, RpcErrorClass::Unavailable) => {
+            return EffectResult::NotApplied(e.message);
+        }
+        Err(e) => return EffectResult::Failed(e.message),
+    };
+    let (Some(network), Some(ports), Some(principal)) =
+        (host.network.get(), host.broker.get(), grants.principal())
+    else {
+        return EffectResult::NotApplied("brokered HTTP calls are not composed".into());
+    };
+    match http::exchange(network, &request, &Cancellation::default()) {
+        Ok(answer) => match broker::publish(
+            host,
+            &ports.artifacts,
+            principal,
+            operation,
+            broker::Journaling::Observe(answer.observation.clone()),
+            &answer.envelope,
+        ) {
+            Ok(produced) => {
+                let mut evidence = answer.observation;
+                if let Some(fields) = evidence.as_object_mut() {
+                    fields.insert("reply".into(), json!(produced));
+                    fields.insert("request".into(), request.detail());
+                }
+                EffectResult::Completed(evidence)
+            }
+            Err(e) => EffectResult::Unknown(format!("the answer was not published: {e:?}")),
+        },
+        Err(http::Failure::Refused(observation, why)) => {
+            EffectResult::Failed(format!("{why}: {observation}"))
+        }
+        // Nothing reached the server: safe to try again under the consumer's policy.
+        Err(http::Failure::NotSent(_, why)) => EffectResult::NotApplied(why),
+        Err(http::Failure::Sent(observation)) => EffectResult::Unknown(format!(
+            "the request may have reached the server: {observation}"
+        )),
     }
 }
 

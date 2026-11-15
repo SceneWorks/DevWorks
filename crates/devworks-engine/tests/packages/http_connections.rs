@@ -14,11 +14,11 @@ use devworks_engine::package_host::http::{HTTP_CAPABILITY, NetworkPorts};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const SECRET: &str = "s3cret-connection-token-0f9e8d7c";
-const SECRET_REF: &str = "dwsecret-0123456789abcdef0123456789abcdef";
+pub(super) const SECRET: &str = "s3cret-connection-token-0f9e8d7c";
+pub(super) const SECRET_REF: &str = "dwsecret-0123456789abcdef0123456789abcdef";
 
 /// Resolves the test hosts: the API to a public address, the metadata host to link-local.
-struct Names;
+pub(super) struct Names;
 impl NameResolver for Names {
     fn resolve(
         &self,
@@ -40,12 +40,12 @@ impl NameResolver for Names {
 
 /// One request the server saw.
 #[derive(Clone, Debug)]
-struct Seen {
+pub(super) struct Seen {
     method: String,
     addr: SocketAddr,
     host: String,
-    target: String,
-    headers: Vec<(String, String)>,
+    pub(super) target: String,
+    pub(super) headers: Vec<(String, String)>,
     body: Vec<u8>,
 }
 
@@ -54,8 +54,8 @@ struct Seen {
 /// one for `/stall` sends one chunk and then waits until the call is cancelled, after which every
 /// read is `Interrupted` (as the native transport answers), counting the reads.
 #[derive(Default)]
-struct Server {
-    seen: Mutex<Vec<Seen>>,
+pub(super) struct Server {
+    pub(super) seen: Mutex<Vec<Seen>>,
     big: Mutex<Vec<u8>>,
     reads: Arc<AtomicUsize>,
 }
@@ -134,7 +134,7 @@ impl HopTransport for Server {
     }
 }
 
-struct Secrets;
+pub(super) struct Secrets;
 impl SecretResolver for Secrets {
     fn resolve(&self, reference: &SecretRef) -> Result<Secret, SecretUnavailable> {
         (reference.as_str() == SECRET_REF)
@@ -143,7 +143,7 @@ impl SecretResolver for Secrets {
     }
 }
 
-fn set_connections(store: &dyn ApplicationStore, connections: Value) {
+pub(super) fn set_connections(store: &dyn ApplicationStore, connections: Value) {
     write(store, move |tx| {
         let current = model::current_layer(tx.configuration(), &ConfigScope::Workspace)?;
         let schema =
@@ -171,7 +171,13 @@ fn set_connections(store: &dyn ApplicationStore, connections: Value) {
     .unwrap();
 }
 
-fn http(connection: &str, endpoint: &str, method: &str, path: &str, body: Option<Value>) -> Value {
+pub(super) fn http(
+    connection: &str,
+    endpoint: &str,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Value {
     let mut call = json!({"kind": "Http", "connectionHandle": connection, "endpointId": endpoint,
         "httpMethod": method, "relativePath": path});
     if let Some(body) = body {

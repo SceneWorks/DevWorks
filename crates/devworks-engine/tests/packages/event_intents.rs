@@ -38,7 +38,7 @@ fn disable_intent(args: &Value) -> Value {
 }
 
 /// A claimed delivery of a subscription of `package` no consumer handles (the test drives it).
-fn claimed(a: &App, package: &str, n: usize) -> QueueEntry {
+pub(super) fn claimed(a: &App, package: &str, n: usize) -> QueueEntry {
     let consumer = format!("pkg-{package}-sub-{n}");
     enqueue(&*a.store, &consumer, None, json!({}));
     write(&*a.store, move |tx| {
@@ -53,7 +53,7 @@ fn claimed(a: &App, package: &str, n: usize) -> QueueEntry {
     .remove(0)
 }
 
-fn invocation(a: &App, claimed: &QueueEntry, n: usize) -> PackageInvocation {
+pub(super) fn invocation(a: &App, claimed: &QueueEntry, n: usize) -> PackageInvocation {
     PackageInvocation {
         package_id: String::new(),
         subscription_id: id(&format!("sub-{n}")),
@@ -70,7 +70,13 @@ fn invocation(a: &App, claimed: &QueueEntry, n: usize) -> PackageInvocation {
 }
 
 /// The commit of `intents` for `claimed`, as the fixture's `event` contribution sends it.
-fn commit(a: &App, package: &str, claimed: &QueueEntry, n: usize, intents: Value) -> Value {
+pub(super) fn commit(
+    a: &App,
+    package: &str,
+    claimed: &QueueEntry,
+    n: usize,
+    intents: Value,
+) -> Value {
     let pkg = package.to_owned();
     let state = read(&*a.store, move |s| s.packages().package_state(&pkg)).unwrap();
     json!({"subscriptionId": format!("sub-{n}"), "eventId": claimed.event_id.0.as_str(),
@@ -79,7 +85,13 @@ fn commit(a: &App, package: &str, claimed: &QueueEntry, n: usize, intents: Value
 }
 
 /// Runs `package`'s `event` contribution on `input`, committing `intents`; its progress.
-fn run_event(a: &App, package: &str, n: usize, input: &Value, intents: Value) -> Vec<String> {
+pub(super) fn run_event(
+    a: &App,
+    package: &str,
+    n: usize,
+    input: &Value,
+    intents: Value,
+) -> Vec<String> {
     let delivery = claimed(a, package, n);
     let path = std::env::temp_dir().join(format!("devworks-fixture-{package}-commit.json"));
     std::fs::write(&path, commit(a, package, &delivery, n, intents).to_string()).unwrap();
@@ -141,7 +153,7 @@ fn settled(a: &App, state: OperationState) -> OperationRecord {
 
 /// Lets the app's background loops (the dispatcher among them) run for `d`: the test runtime is
 /// single-threaded and runs them only while blocked on.
-fn drive(a: &App, d: Duration) {
+pub(super) fn drive(a: &App, d: Duration) {
     a.rt.block_on(async { tokio::time::sleep(d).await });
 }
 
@@ -198,7 +210,7 @@ fn a_committed_intent_runs_once_as_the_approving_person_and_never_again_after_re
 
 /// Commits `intents` for `package` directly, as `broker.commit_event` does, from `contribution`
 /// of the version `digest` (without the commit-time grant check).
-fn commit_directly(
+pub(super) fn commit_directly(
     a: &App,
     package: &str,
     digest: &str,

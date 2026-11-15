@@ -4642,3 +4642,6 @@ mod event_intents;
 
 #[path = "packages/http_connections.rs"]
 mod http_connections;
+
+#[path = "packages/event_http_intents.rs"]
+mod event_http_intents;
