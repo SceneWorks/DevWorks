@@ -524,7 +524,11 @@ async fn compose(
         std::iter::empty(),
         config.process_working_roots.clone(),
     )
-    .map(|bindings| bindings.with_path_executables(executables, None))
+    .map(|bindings| {
+        bindings
+            .with_path_executables(executables, None)
+            .with_install_environments(config.data_root.join("install-environments"))
+    })
     .and_then(|bindings| bindings.with_credentials(config.process_credentials.clone()))
     .map_err(|reason| StartError::Thread(reason.into()))?;
     runtime_config.process_tools = Some(devworks_engine::runtime::ProcessToolComposition {
